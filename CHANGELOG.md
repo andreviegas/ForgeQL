@@ -9,6 +9,26 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.19.1] - 2026-03-17
+
+### Fixed
+
+- **`--data-dir` tilde expansion**: paths like `~/forgeql-data` passed with
+  single quotes (e.g. in MCP host configs or scripts) were not expanded by the
+  shell. ForgeQL now resolves `~` internally via the `dirs` crate, which handles
+  `$HOME` on Linux/macOS and `USERPROFILE`/`FOLDERID_Profile` on Windows.
+- **Lexical `..` normalization**: `--data-dir '~/../../some/path'` and similar
+  traversals are now collapsed to a clean absolute path before the engine starts,
+  making logs and error messages unambiguous.
+
+### Added
+
+- **`path_utils` module** (`crates/forgeql/src/path_utils.rs`): new internal
+  module with `resolve_data_dir`, `expand_tilde`, and `normalize_lexically`
+  helpers, covered by 5 unit tests.
+
+---
+
 ## [0.19.0] - 2026-03-17
 
 ### Added

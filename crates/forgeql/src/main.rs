@@ -15,6 +15,7 @@
 #![allow(clippy::redundant_pub_crate)]
 
 mod mcp;
+mod path_utils;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -128,16 +129,12 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let engine = ForgeQLEngine::new(cli.data_dir.clone()).with_context(|| {
-        format!(
-            "initialising engine with data_dir '{}'",
-            cli.data_dir.display()
-        )
-    })?;
+    let data_dir = path_utils::resolve_data_dir(&cli.data_dir);
 
-    let logger = cli
-        .log_queries
-        .then(|| QueryLogger::new(cli.data_dir.clone()));
+    let engine = ForgeQLEngine::new(data_dir.clone())
+        .with_context(|| format!("initialising engine with data_dir '{}'", data_dir.display()))?;
+
+    let logger = cli.log_queries.then(|| QueryLogger::new(data_dir.clone()));
 
     match detect_mode(&cli) {
         Mode::Mcp => run_mcp_stdio(engine, logger).await,

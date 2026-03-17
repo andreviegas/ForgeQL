@@ -36,6 +36,7 @@ tracing-subscriber = { workspace = true }
 # CLI args + REPL
 clap      = { workspace = true }
 rustyline = { workspace = true }
+dirs      = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
