@@ -356,9 +356,11 @@ fn find_symbols_without_session_fails() {
 fn disconnect_unknown_session_fails() {
     let tmp = tempdir().unwrap();
     let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
-    assert!(engine
-        .execute(Some("s_ghost"), &ForgeQLIR::Disconnect)
-        .is_err());
+    assert!(
+        engine
+            .execute(Some("s_ghost"), &ForgeQLIR::Disconnect)
+            .is_err()
+    );
 }
 
 // -----------------------------------------------------------------------

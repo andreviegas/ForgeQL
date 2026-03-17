@@ -1,4 +1,4 @@
-edition    = "2021"
+edition    = "2024"
 max_width  = 100
 
 # fn_params_layout: how to lay out function parameters when they wrap.

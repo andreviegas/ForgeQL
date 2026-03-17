@@ -1,4 +1,3 @@
-use std::collections::hash_map::Entry;
 /// Bare-repository management — Phase B of the v2 architecture.
 ///
 /// A `Source` is a bare git clone: the "database" in the v2 model.
@@ -9,10 +8,11 @@ use std::collections::hash_map::Entry;
 ///   `SHOW SOURCES`                     →  `SourceRegistry::names()`
 ///   `DROP SOURCE 'name'`               →  `SourceRegistry::remove()`
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use git2::{BranchType, Cred, FetchOptions, RemoteCallbacks, Repository};
 use tracing::{debug, info};
 

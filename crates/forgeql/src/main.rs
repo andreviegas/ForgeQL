@@ -25,8 +25,8 @@ use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::parser;
 use forgeql_core::result::{ForgeQLResult, SourceOpResult};
-use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 

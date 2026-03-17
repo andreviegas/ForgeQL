@@ -376,11 +376,7 @@ fn extract_name(node: tree_sitter::Node<'_>, source: &[u8], language_name: &str)
         // Both `// line comments` and `/* block comments */` use this node kind.
         ("cpp", "comment") => {
             let text = node_text(source, node);
-            if text.is_empty() {
-                None
-            } else {
-                Some(text)
-            }
+            if text.is_empty() { None } else { Some(text) }
         }
 
         _ => None,
@@ -398,12 +394,12 @@ fn extract_fields(
 
     #[allow(clippy::cast_possible_truncation)]
     for field_id in 1..=(field_count as u16) {
-        if let Some(child) = node.child_by_field_id(field_id) {
-            if let Some(field_name) = language.field_name_for_id(field_id) {
-                let text = node_text(source, child);
-                if !text.is_empty() {
-                    drop(fields.insert(field_name.to_string(), text));
-                }
+        if let Some(child) = node.child_by_field_id(field_id)
+            && let Some(field_name) = language.field_name_for_id(field_id)
+        {
+            let text = node_text(source, child);
+            if !text.is_empty() {
+                drop(fields.insert(field_name.to_string(), text));
             }
         }
     }

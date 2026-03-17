@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use crate::{
@@ -115,21 +115,20 @@ pub(crate) fn find_function_node_for_symbol(
         if node.kind() == "template_declaration" && node.start_byte() == def_start {
             // Return the first function_definition direct child.
             for i in 0..node.child_count() {
-                if let Some(child) = node.child(i) {
-                    if child.kind() == "function_definition" {
-                        return Some(child);
-                    }
+                if let Some(child) = node.child(i)
+                    && child.kind() == "function_definition"
+                {
+                    return Some(child);
                 }
             }
         }
         // Recurse into children that could contain def_start.
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                if child.byte_range().contains(&def_start) || child.start_byte() == def_start {
-                    if let Some(found) = walk_template(child, def_start) {
-                        return Some(found);
-                    }
-                }
+            if let Some(child) = node.child(i)
+                && (child.byte_range().contains(&def_start) || child.start_byte() == def_start)
+                && let Some(found) = walk_template(child, def_start)
+            {
+                return Some(found);
             }
         }
         None
@@ -160,12 +159,11 @@ fn find_type_node_by_name<'t>(
         if matches!(
             node.kind(),
             "struct_specifier" | "class_specifier" | "enum_specifier"
-        ) {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let node_name = std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("");
-                if node_name == name {
-                    return Some(node);
-                }
+        ) && let Some(name_node) = node.child_by_field_name("name")
+        {
+            let node_name = std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("");
+            if node_name == name {
+                return Some(node);
             }
         }
         if cursor.goto_first_child() {
@@ -303,21 +301,21 @@ fn emit_body_lines(
 /// Uses `child_count()` / `child(i)` instead of a `TreeCursor` to avoid
 /// any cursor-state issues when starting from a non-root node.
 fn collect_callees_walk(source: &[u8], node: tree_sitter::Node<'_>, out: &mut Vec<String>) {
-    if node.kind() == "call_expression" {
-        if let Some(fn_node) = node.child_by_field_name("function") {
-            let raw = std::str::from_utf8(&source[fn_node.byte_range()]).unwrap_or("");
-            // Strip object/pointer prefix: `obj.method` → `method`,
-            // `ptr->method` → `method`; `ns::fn` stays as-is.
-            let callee = raw
-                .rsplit('.')
-                .next()
-                .and_then(|s| s.rsplit("->").next())
-                .unwrap_or(raw)
-                .trim()
-                .to_string();
-            if !callee.is_empty() {
-                out.push(callee);
-            }
+    if node.kind() == "call_expression"
+        && let Some(fn_node) = node.child_by_field_name("function")
+    {
+        let raw = std::str::from_utf8(&source[fn_node.byte_range()]).unwrap_or("");
+        // Strip object/pointer prefix: `obj.method` → `method`,
+        // `ptr->method` → `method`; `ns::fn` stays as-is.
+        let callee = raw
+            .rsplit('.')
+            .next()
+            .and_then(|s| s.rsplit("->").next())
+            .unwrap_or(raw)
+            .trim()
+            .to_string();
+        if !callee.is_empty() {
+            out.push(callee);
         }
     }
     // Visit every child (named and unnamed) to catch all nested call sites.

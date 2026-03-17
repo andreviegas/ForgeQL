@@ -33,7 +33,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use tracing::{info, warn};
 
 use crate::{
@@ -52,7 +52,7 @@ use crate::{
         SourceOpResult, SuggestionEntry, SymbolMatch, TransactionResult,
     },
     session::Session,
-    transforms::{plan_from_ir, TransformPlan},
+    transforms::{TransformPlan, plan_from_ir},
     verify,
     workspace::Workspace,
 };
@@ -216,10 +216,10 @@ impl ForgeQLEngine {
         self.commands_served += 1;
 
         // Keep session alive on every request.
-        if let Some(sid) = session_id {
-            if let Some(session) = self.sessions.get_mut(sid) {
-                session.touch();
-            }
+        if let Some(sid) = session_id
+            && let Some(session) = self.sessions.get_mut(sid)
+        {
+            session.touch();
         }
 
         // Look up worktree root once — used to relativize paths in results.
@@ -475,10 +475,10 @@ impl ForgeQLEngine {
         }
         // Only auto-delete the forgeql/* branch.  Named branches (from USE … AS)
         // are intentionally kept for senior developer review.
-        if custom_branch.is_none() {
-            if let Err(err) = worktree::delete_session_branch(&repo_path, wt_name) {
-                warn!(%wt_name, error = %err, "disconnect: branch delete failed");
-            }
+        if custom_branch.is_none()
+            && let Err(err) = worktree::delete_session_branch(&repo_path, wt_name)
+        {
+            warn!(%wt_name, error = %err, "disconnect: branch delete failed");
         }
 
         info!(%sid, "session disconnected and cleaned up");
@@ -922,16 +922,15 @@ impl ForgeQLEngine {
                     );
                 }
                 // Named branches (from USE … AS) are kept for review.
-                if session.custom_branch.is_none() {
-                    if let Err(err) =
+                if session.custom_branch.is_none()
+                    && let Err(err) =
                         worktree::delete_session_branch(&repo_path, &session.worktree_name)
-                    {
-                        warn!(
-                            worktree = %session.worktree_name,
-                            error = %err,
-                            "TTL eviction: branch delete failed"
-                        );
-                    }
+                {
+                    warn!(
+                        worktree = %session.worktree_name,
+                        error = %err,
+                        "TTL eviction: branch delete failed"
+                    );
                 }
             }
         }
@@ -974,10 +973,10 @@ impl ForgeQLEngine {
                     }
                 }
                 let path = entry.path();
-                if path.exists() {
-                    if let Err(err) = std::fs::remove_dir_all(&path) {
-                        warn!(%session_id, path = %path.display(), error = %err, "remove_dir_all failed");
-                    }
+                if path.exists()
+                    && let Err(err) = std::fs::remove_dir_all(&path)
+                {
+                    warn!(%session_id, path = %path.display(), error = %err, "remove_dir_all failed");
                 }
             }
         }
@@ -1057,14 +1056,14 @@ impl ForgeQLEngine {
     ///
     /// Errors are logged but never propagated — re-indexing is best-effort.
     fn reindex_session(&mut self, session_id: &str, paths: &[PathBuf]) {
-        if let Some(session) = self.sessions.get_mut(session_id) {
-            if let Err(err) = session.reindex_files(paths) {
-                warn!(
-                    session = %session_id,
-                    error = %err,
-                    "reindex after mutation failed"
-                );
-            }
+        if let Some(session) = self.sessions.get_mut(session_id)
+            && let Err(err) = session.reindex_files(paths)
+        {
+            warn!(
+                session = %session_id,
+                error = %err,
+                "reindex after mutation failed"
+            );
         }
     }
 

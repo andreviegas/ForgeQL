@@ -440,7 +440,7 @@ fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, Forg
         r => {
             return Err(ForgeError::DslParse(format!(
                 "change: unhandled target rule {r:?}"
-            )))
+            )));
         }
     };
 

@@ -5,7 +5,7 @@
 /// `Permission::Admin` and implementations do not check it. In Phase E the
 /// `Permission` enum gains a `Scoped` variant and `check_permission()` is
 /// injected into each method body — a **local** change, not a signature refactor.
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 // -----------------------------------------------------------------------
 // Permission

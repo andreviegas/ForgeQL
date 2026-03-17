@@ -9,7 +9,7 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, ErrorData, ServerCapabilities, ServerInfo};
 use rmcp::schemars;
-use rmcp::{tool, tool_handler, tool_router, ServerHandler};
+use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use serde::Deserialize;
 use tracing::{debug, error};
 
@@ -46,19 +46,19 @@ impl ForgeQlMcp {
 
     /// Append a log row for a completed FQL statement (no-op when logger is disabled).
     fn log_query(&self, fql: &str, output: &str) {
-        if let Ok(mut guard) = self.logger.lock() {
-            if let Some(ref mut l) = *guard {
-                l.log(fql, output);
-            }
+        if let Ok(mut guard) = self.logger.lock()
+            && let Some(ref mut l) = *guard
+        {
+            l.log(fql, output);
         }
     }
 
     /// Update the logger's source name (called after a successful USE).
     fn set_log_source(&self, source: &str) {
-        if let Ok(mut guard) = self.logger.lock() {
-            if let Some(ref mut l) = *guard {
-                l.set_source(source);
-            }
+        if let Ok(mut guard) = self.logger.lock()
+            && let Some(ref mut l) = *guard
+        {
+            l.set_source(source);
         }
     }
 }

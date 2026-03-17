@@ -5,7 +5,7 @@
 /// replacement, and deletion.
 use std::path::Path;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use tracing::debug;
 
 use crate::ast::index::SymbolTable;

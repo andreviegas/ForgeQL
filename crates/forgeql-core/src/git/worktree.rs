@@ -10,7 +10,7 @@
 ///   (session ends)        →  `remove()`
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use git2::{BranchType, Repository, WorktreeLockStatus};
 use tracing::{debug, info};
 
@@ -278,15 +278,14 @@ mod tests {
     /// (either "main" or "master" depending on git config).
     fn default_branch(path: &Path) -> String {
         let repo = Repository::open_bare(path).unwrap();
-        let branch = repo
-            .branches(Some(BranchType::Local))
+
+        repo.branches(Some(BranchType::Local))
             .unwrap()
             .find_map(|b| {
                 let (br, _) = b.ok()?;
                 br.name().ok()?.map(str::to_owned)
             })
-            .expect("bare repo must have one branch");
-        branch
+            .expect("bare repo must have one branch")
     }
 
     #[test]
