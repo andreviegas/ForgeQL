@@ -49,7 +49,7 @@ use crate::{
     result::{
         CallDirection, CallGraphEntry, FileEntry, ForgeQLResult, MemberEntry, MutationResult,
         OutlineEntry, QueryResult, RollbackResult, ShowContent, ShowResult, SourceLine,
-        SourceOpResult, SuggestionEntry, SymbolMatch, TransactionResult,
+        SourceOpResult, SuggestionEntry, SymbolMatch, TransactionResult, VerifyBuildResult,
     },
     session::Session,
     transforms::{TransformPlan, plan_from_ir},
@@ -267,6 +267,7 @@ impl ForgeQLEngine {
                 self.exec_transaction(session_id, name, ops, verify.as_deref(), message.as_deref())
             }
             ForgeQLIR::Rollback { name } => self.exec_rollback(session_id, name.as_deref()),
+            ForgeQLIR::VerifyBuild { step } => self.exec_verify_build(session_id, step),
         }?;
 
         // Strip absolute worktree prefixes so results carry only relative paths.
@@ -893,6 +894,34 @@ impl ForgeQLEngine {
         Ok(ForgeQLResult::Rollback(RollbackResult {
             name: name.unwrap_or("last").to_string(),
             files_restored,
+        }))
+    }
+
+    /// Run a named verify step from `.forgeql.yaml` as a standalone command.
+    ///
+    /// # Errors
+    /// Returns `Err` if the step name is not found in `.forgeql.yaml`.
+    fn exec_verify_build(
+        &self,
+        session_id: Option<&str>,
+        step_name: &str,
+    ) -> Result<ForgeQLResult> {
+        let search_path = session_id
+            .and_then(|sid| self.sessions.get(sid))
+            .map_or_else(|| self.data_dir.clone(), |s| s.worktree_path.clone());
+        let step = ForgeConfig::find(&search_path)
+            .and_then(|p| ForgeConfig::load(&p).ok())
+            .and_then(|cfg| cfg.verify_steps.into_iter().find(|s| s.name == step_name))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
+                )
+            })?;
+        let result = verify::run_standalone(&step);
+        Ok(ForgeQLResult::VerifyBuild(VerifyBuildResult {
+            step: result.step,
+            success: result.success,
+            output: result.output,
         }))
     }
 

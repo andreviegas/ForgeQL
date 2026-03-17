@@ -619,6 +619,44 @@ COMMIT MESSAGE 'remove deprecated legacyHelper'
 
 ---
 
+### `VERIFY build` (standalone)
+
+`VERIFY build` can also be used as a **top-level statement** — outside any
+transaction — to run a named step from `.forgeql.yaml` on demand.
+
+**Syntax**
+
+```sql
+VERIFY build 'step'
+```
+
+| Part | Description |
+|---|---|
+| `'step'` | Name of a `verify_steps` entry in the project's `.forgeql.yaml` |
+
+The command runs the step's shell command in the worktree directory (or the
+data directory when no session is active) and returns a `VerifyBuildResult`
+with `step`, `success`, and `output` fields.
+
+**Example**
+
+```sql
+-- Check that all unit tests pass right now, without modifying anything
+VERIFY build 'test'
+```
+
+Result (JSON in MCP mode):
+
+```json
+{
+  "step": "test",
+  "success": true,
+  "output": "All 257 tests passed."
+}
+```
+
+---
+
 ### `ROLLBACK`
 
 Restore the session to the state before the last applied transaction. Optionally specify a transaction name.
@@ -978,10 +1016,12 @@ FIND symbols
   WHERE node_kind = 'preproc_def'
   WHERE value >= 1000
 
--- System includes (angle-bracket form)
+-- System includes
+-- Note: Angle brackets (<...>) are not preserved in the index.
+-- Match by name pattern instead (e.g., 'std%' for standard library)
 FIND symbols
   WHERE node_kind = 'preproc_include'
-  WHERE name LIKE '<%>'
+  WHERE name LIKE 'std%'
 ```
 
 ### Prefer CSV output for AI agents
@@ -1003,7 +1043,6 @@ FIND symbols
 
 | Area | Description | Workaround |
 |---|---|---|
-| `FIND globals` | Always returns zero results on C/C++ — injected predicate `node_kind = 'Variable'` never matches tree-sitter nodes | Use `FIND symbols WHERE node_kind = 'declaration'` |
 | Template functions | `SHOW callees OF` / `FIND callees OF` returns empty for C++ template functions | Use `FIND usages OF 'name'` to find all reference sites |
 | Numeric coercion | `value >= N` silently skips rows where `value` is non-decimal (hex, symbolic constants) | Use `WHERE value LIKE 'pattern'` for non-integer values |
 | Escape sequences | `CHANGE … WITH 'text'` interprets content literally — `\n` is two characters, not a newline | Write actual newlines inside the string literal |

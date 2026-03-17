@@ -1,9 +1,7 @@
-/// Build verification pipeline — Phase 2.
+/// Build verification pipeline.
 ///
 /// Runs named build/test steps from `.forgeql.yaml`, streams output,
 /// and triggers rollback on failure.
-///
-/// Phase 1 stub: enough to compile, real implementation in Phase 2.
 use anyhow::Result;
 
 use crate::config::VerifyStep;
@@ -17,7 +15,34 @@ pub struct VerifyResult {
     pub output: String,
 }
 
-/// Run a single named build step synchronously.
+/// Run a single named build step and return its result.
+/// Does **not** roll back anything — use this for standalone `VERIFY build`.
+#[must_use]
+pub fn run_standalone(step: &VerifyStep) -> VerifyResult {
+    use std::process::Command;
+
+    match Command::new("sh").args(["-c", &step.command]).output() {
+        Err(e) => VerifyResult {
+            step: step.name.clone(),
+            success: false,
+            output: format!("failed to spawn: {e}"),
+        },
+        Ok(output) => {
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            VerifyResult {
+                step: step.name.clone(),
+                success: output.status.success(),
+                output: combined,
+            }
+        }
+    }
+}
+
+/// Run a single named build step synchronously inside a transaction.
 /// On failure, rolls back `result` and returns an error.
 ///
 /// # Errors

@@ -9,6 +9,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.19.0] - 2026-03-17
+
+### Added
+
+- **Standalone `VERIFY build 'step'`**: `VERIFY build` is now a top-level
+  statement (not just a `BEGIN TRANSACTION … COMMIT` clause).  Run any verify
+  step defined in `.forgeql.yaml` on demand — outside a transaction — to check
+  the current state of the worktree.
+
+- **`VerifyBuildResult`**: new result type exposed in the MCP / programmatic API
+  with `step`, `success`, and `output` fields.
+
+---
+
 ## [0.18.0] - 2026-03-17
 
 Initial public release.

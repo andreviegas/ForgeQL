@@ -42,6 +42,8 @@ pub enum ForgeQLResult {
     Plan(PlanResult),
     /// Rollback: ROLLBACK [TRANSACTION 'name']
     Rollback(RollbackResult),
+    /// Standalone verify: VERIFY build 'step'
+    VerifyBuild(VerifyBuildResult),
 }
 
 // -----------------------------------------------------------------------
@@ -326,6 +328,21 @@ pub struct RollbackResult {
 }
 
 // -----------------------------------------------------------------------
+// Verify build result
+// -----------------------------------------------------------------------
+
+/// Result of a standalone `VERIFY build 'step'` command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyBuildResult {
+    /// The verify step name that was run.
+    pub step: String,
+    /// Whether the step command exited successfully.
+    pub success: bool,
+    /// Combined stdout + stderr output from the command.
+    pub output: String,
+}
+
+// -----------------------------------------------------------------------
 // Plan results (DRY_RUN, EXPLAIN)
 // -----------------------------------------------------------------------
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -430,7 +447,7 @@ impl ForgeQLResult {
                     relativize(&mut s.path, worktree_root);
                 }
             }
-            Self::SourceOp(_) => {}
+            Self::SourceOp(_) | Self::VerifyBuild(_) => {}
             Self::Rollback(r) => {
                 for p in &mut r.files_restored {
                     relativize(p, worktree_root);
@@ -454,6 +471,7 @@ impl fmt::Display for ForgeQLResult {
             Self::Transaction(result) => write!(formatter, "{result}"),
             Self::Plan(result) => write!(formatter, "{result}"),
             Self::Rollback(result) => write!(formatter, "{result}"),
+            Self::VerifyBuild(result) => write!(formatter, "{result}"),
         }
     }
 }
@@ -661,6 +679,17 @@ impl fmt::Display for RollbackResult {
         writeln!(formatter, "Rolled back transaction '{}'", self.name)?;
         for path in &self.files_restored {
             writeln!(formatter, "  restored: {}", path.display())?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for VerifyBuildResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let status = if self.success { "PASSED" } else { "FAILED" };
+        writeln!(formatter, "VERIFY build '{}': {status}", self.step)?;
+        if !self.output.is_empty() {
+            writeln!(formatter, "{}", self.output.trim_end())?;
         }
         Ok(())
     }

@@ -176,6 +176,15 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
             Ok(ForgeQLIR::Rollback { name })
         }
 
+        Rule::verify_stmt => {
+            let step = pair
+                .into_inner()
+                .next()
+                .map(|l| unquote(l.as_str()))
+                .ok_or_else(|| ForgeError::DslParse("verify: expected step name".into()))?;
+            Ok(ForgeQLIR::VerifyBuild { step })
+        }
+
         r => Err(ForgeError::DslParse(format!("unhandled rule: {r:?}"))),
     }
 }

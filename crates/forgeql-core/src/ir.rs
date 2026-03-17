@@ -296,6 +296,12 @@ pub enum ForgeQLIR {
         #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
+    /// `VERIFY build 'step'` — run a named verify step from `.forgeql.yaml`
+    /// as a standalone command (outside a transaction).
+    VerifyBuild {
+        /// Name of the verify step to run.
+        step: String,
+    },
 }
 
 /// Targeting mode for the `CHANGE FILE[S]` command.

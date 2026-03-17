@@ -223,8 +223,25 @@ Transactions group multiple commands atomically. If `VERIFY` fails, every modifi
 BEGIN TRANSACTION 'rename-process'
   CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
     MATCHING 'PiscoCode::process' WITH 'PiscoCode::run'
-  VERIFY 'release', 'test'
+  VERIFY build 'test'
 COMMIT MESSAGE 'rename PiscoCode::process to PiscoCode::run'
+```
+
+
+### Run a verify step on demand
+
+`VERIFY build` can also be used as a standalone command — outside a transaction
+— to check the current state of the worktree against any step in `.forgeql.yaml`.
+
+```sql
+VERIFY build 'test'
+```
+
+```yaml
+# .forgeql.yaml
+verify_steps:
+  - name: test
+    command: "cmake --build build && ctest --test-dir build -R unit"
 ```
 
 ### Edit a specific function body
@@ -251,7 +268,7 @@ BEGIN TRANSACTION 'remove-legacyHelper'
   CHANGE FILE 'src/PiscoCode.cpp'
     LINES 200-214
     WITH NOTHING
-  VERIFY 'test'
+  VERIFY build 'test'
 COMMIT MESSAGE 'remove deprecated legacyHelper'
 ```
 

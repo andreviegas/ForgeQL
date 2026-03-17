@@ -43,6 +43,7 @@ program   = { SOI ~ statement+ ~ EOI }
 statement = {
     transaction_stmt
   | rollback_stmt
+  | verify_stmt
   | create_source_stmt
   | refresh_source_stmt
   | use_stmt
