@@ -1,0 +1,42 @@
+[package]
+name        = "forgeql"
+description = "ForgeQL — AST-aware code transformation (MCP server, REPL, CLI)"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[[bin]]
+name = "forgeql"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+forgeql-core = { workspace = true }
+
+# async (MCP transport)
+tokio = { workspace = true }
+
+# MCP protocol
+rmcp = { workspace = true }
+
+# serialization
+serde      = { workspace = true }
+serde_json = { workspace = true }
+
+# errors
+anyhow = { workspace = true }
+
+# logging
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# CLI args + REPL
+clap      = { workspace = true }
+rustyline = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+forgeql-core = { path = "../forgeql-core", features = ["test-helpers"] }

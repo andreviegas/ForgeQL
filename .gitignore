@@ -1,0 +1,16 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# IDE / editor
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ForgeQL runtime
+.forgeql-cache/
+data/

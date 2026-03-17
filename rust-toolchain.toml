@@ -1,0 +1,7 @@
+# Pin the exact Rust toolchain for the whole repo.
+# Everyone who runs `cargo build` or `rustup` in this directory gets this version.
+# Update deliberately — don't let toolchain drift introduce silent behaviour changes.
+[toolchain]
+channel  = "1.94.0"   # upgraded for rmcp (MCP SDK) dependency chain
+profile  = "default"
+components = ["rustfmt", "clippy", "rust-src"]

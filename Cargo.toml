@@ -1,0 +1,96 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/forgeql-core",
+    "crates/forgeql",
+]
+
+[workspace.package]
+version   = "0.18.0"
+edition   = "2024"
+authors   = ["Andre Viegas"]
+license   = "Apache-2.0"
+
+# -----------------------------------------------------------------------
+# Workspace-wide lint configuration (Rust 1.73+).
+# All crates inherit these automatically — no per-file #![deny(...)] needed.
+# -----------------------------------------------------------------------
+[workspace.lints.rust]
+# Deny common correctness pitfalls.
+unsafe_code            = "deny"    # override per-crate if FFI is needed
+missing_docs           = "warn"
+unused_results         = "warn"
+unreachable_pub        = "warn"
+
+[workspace.lints.clippy]
+# Pedantic catches non-idiomatic code (wrong iterator usage, naming, etc.)
+pedantic               = { level = "warn", priority = -1 }
+
+# Nursery is experimental but useful — some rules will graduate to pedantic.
+nursery                = { level = "warn", priority = -1 }
+
+# Hard errors — these indicate real bugs:
+unwrap_used            = "deny"    # use `?` or `expect("reason")` in library code
+expect_used            = "warn"    # allowed in tests; warn in lib code
+panic                  = "warn"
+todo                   = "warn"
+unimplemented          = "warn"
+
+# Style rules:
+wildcard_imports       = "deny"    # no `use foo::*;` (use explicit imports)
+enum_glob_use          = "deny"
+manual_string_new      = "warn"
+
+# -----------------------------------------------------------------------
+[workspace.dependencies]
+# Shared dependency versions — crates inherit these with
+# `dependency = { workspace = true }` in their own Cargo.toml.
+# This ensures every crate in the workspace uses the same version.
+
+# --- async runtime (server/CLI only — core is synchronous) ---
+tokio            = { version = "1",    features = ["full"] }
+
+# --- MCP protocol ---
+rmcp             = { version = "1.2", features = ["server", "transport-io"] }
+
+# --- serialization ---
+serde            = { version = "1",    features = ["derive"] }
+serde_json       = "1"
+serde_yml        = "0.0.12"
+
+# --- AST parsing ---
+tree-sitter      = "0.25"
+tree-sitter-cpp  = "0.23"
+
+# --- DSL parsing ---
+pest             = "2"
+pest_derive      = "2"
+
+# --- file operations ---
+tempfile         = "3"
+ignore           = "0.4"
+
+# --- git ---
+# vendored-openssl compiles OpenSSL from source — required for cross-compilation
+git2             = { version = "0.19", features = ["vendored-openssl"] }
+
+# --- index serialization ---
+bincode          = "1"
+
+# --- error handling ---
+anyhow           = "1"
+thiserror        = "1"
+
+# --- logging ---
+tracing              = "0.1"
+tracing-subscriber   = { version = "0.3", features = ["env-filter"] }
+
+# --- CLI ---
+clap             = { version = "4", features = ["derive", "env"] }
+rustyline        = "15"
+
+# --- internal crates ---
+forgeql-core     = { path = "crates/forgeql-core" }
+
+# --- testing ---
+insta            = "1"

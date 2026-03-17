@@ -1,0 +1,208 @@
+// ForgeQL v2 — canonical grammar
+//
+// Design:
+//   • Silent rules (prefixed _) are consumed but never appear in the parse tree.
+//   • Every command that accepts filtering/sorting/pagination accepts the same
+//     `clauses` block.  Inapplicable clauses are silently ignored by the engine.
+//   • The clause set is open: new clauses can be added without changing any
+//     existing command grammar rule.
+
+// Silent rules (whitespace and comments)
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+COMMENT    = _{ "--" ~ (!"\n" ~ ANY)* ~ "\n"? }
+
+// -----------------------------------------------------------------------
+// Terminals
+// -----------------------------------------------------------------------
+
+/// Single-quoted string literal: `'value'`.
+string_literal = { "'" ~ inner_string ~ "'" }
+inner_string   = @{ (!"'" ~ ANY)* }
+
+/// Unquoted identifier — letters, digits, underscores, colons.
+/// Atomic: no implicit WHITESPACE inside the token (pest footgun guard).
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | ":")* }
+
+/// Unsigned integer literal (for LIMIT, OFFSET, DEPTH, LINES, SHOW LINES).
+number = @{ ASCII_DIGIT+ }
+
+/// Signed integer literal for predicate values (allows negative numbers).
+signed_number = @{ "-"? ~ ASCII_DIGIT+ }
+
+/// Boolean literal.
+boolean_literal = { "true" | "false" }
+
+/// Source name — like identifier but also allows hyphens (e.g. `pisco-code`).
+source_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | "-")* }
+
+// -----------------------------------------------------------------------
+// Top-level program
+// -----------------------------------------------------------------------
+
+program   = { SOI ~ statement+ ~ EOI }
+statement = {
+    transaction_stmt
+  | rollback_stmt
+  | create_source_stmt
+  | refresh_source_stmt
+  | use_stmt
+  | disconnect_stmt
+  | show_body_stmt
+  | show_context_stmt
+  | show_signature_stmt
+  | show_outline_stmt
+  | show_members_stmt
+  | show_callees_stmt
+  | show_lines_stmt
+  | show_sources_stmt
+  | show_branches_stmt
+  | change_stmt
+  | find_stmt
+}
+
+// -----------------------------------------------------------------------
+// Source / session management
+// -----------------------------------------------------------------------
+
+create_source_stmt  = { "CREATE" ~ "SOURCE" ~ string_literal ~ "FROM" ~ string_literal }
+refresh_source_stmt = { "REFRESH" ~ "SOURCE" ~ string_literal }
+
+/// `USE pisco-code.main [AS 'agent/refactor-signal-api']`
+/// Source names allow hyphens; AS target is string_literal to allow '/' in branch names.
+use_stmt = { "USE" ~ source_name ~ "." ~ identifier ~ ("AS" ~ string_literal)? }
+
+show_sources_stmt  = { "SHOW" ~ "SOURCES" }
+show_branches_stmt = { "SHOW" ~ "BRANCHES" ~ ("OF" ~ string_literal)? }
+
+/// DISCONNECT — ends the caller's session, deletes its worktree and branch.
+/// No arguments: session_id comes from HTTP params / CLI state.
+disconnect_stmt = { "DISCONNECT" }
+
+// -----------------------------------------------------------------------
+// Code Exposure API — SHOW commands
+// -----------------------------------------------------------------------
+
+/// `SHOW body OF 'func' [DEPTH n]`
+show_body_stmt = { "SHOW" ~ "body" ~ "OF" ~ string_literal ~ clauses }
+
+/// `SHOW context OF 'symbol' [IN 'file'] [LINES n]`
+show_context_stmt = { "SHOW" ~ "context" ~ "OF" ~ string_literal ~ clauses }
+
+/// `SHOW signature OF 'symbol'`
+show_signature_stmt = { "SHOW" ~ "signature" ~ "OF" ~ string_literal ~ clauses }
+
+/// `SHOW outline OF 'file'`
+show_outline_stmt = { "SHOW" ~ "outline" ~ "OF" ~ string_literal ~ clauses }
+
+/// `SHOW members OF 'ClassName'`
+show_members_stmt = { "SHOW" ~ "members" ~ "OF" ~ string_literal ~ clauses }
+
+/// `SHOW callees OF 'func'`
+show_callees_stmt = { "SHOW" ~ "callees" ~ "OF" ~ string_literal ~ clauses }
+
+/// `SHOW LINES n-m OF 'file'`
+show_lines_stmt = { "SHOW" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ string_literal ~ clauses }
+
+// -----------------------------------------------------------------------
+// Queries
+// -----------------------------------------------------------------------
+
+find_stmt   = { "FIND" ~ find_target ~ clauses }
+find_target = {
+    (("usages" | "callees") ~ "OF" ~ string_literal)
+  | "files"
+  | "globals"
+  | "symbols"
+}
+
+// -----------------------------------------------------------------------
+// Mutations
+// -----------------------------------------------------------------------
+
+change_stmt = { "CHANGE" ~ ("FILES" | "FILE") ~ file_list ~ change_target ~ clauses }
+file_list   = { string_literal ~ ("," ~ string_literal)* }
+
+change_target = {
+    change_matching
+  | change_lines_delete
+  | change_lines_range
+  | change_delete
+  | change_with_content
+}
+
+change_matching     = { "MATCHING" ~ string_literal ~ "WITH" ~ string_literal }
+change_lines_delete = { "LINES" ~ number ~ "-" ~ number ~ "NOTHING" }
+change_lines_range  = { "LINES" ~ number ~ "-" ~ number ~ "WITH" ~ string_literal }
+change_delete       = { "WITH" ~ "NOTHING" }
+change_with_content = { "WITH" ~ string_literal }
+
+// -----------------------------------------------------------------------
+// Transactions
+// -----------------------------------------------------------------------
+
+transaction_body_stmt = {
+    change_stmt
+  | find_stmt
+  | verify_stmt
+  | commit_stmt
+}
+
+transaction_stmt = {
+    "BEGIN" ~ "TRANSACTION" ~ string_literal
+    ~ transaction_body_stmt+
+}
+
+rollback_stmt = { "ROLLBACK" ~ ("TRANSACTION" ~ string_literal)? }
+
+verify_stmt = { "VERIFY" ~ "build" ~ string_literal }
+commit_stmt = { "COMMIT" ~ "MESSAGE" ~ string_literal }
+
+// -----------------------------------------------------------------------
+// Universal clause block
+//
+// Accepted by every command.  Inapplicable clauses are silently ignored
+// by the execution engine.  The clause set is open: new clauses may be
+// added here without changing any existing command grammar rule.
+// -----------------------------------------------------------------------
+
+clauses = {
+    (where_clause
+  | having_clause
+  | in_clause
+  | exclude_clause
+  | order_clause
+  | group_clause
+  | limit_clause
+  | offset_clause
+  | depth_clause
+  | lines_clause)*
+}
+
+where_clause  = { "WHERE"  ~ predicate }
+having_clause = { "HAVING" ~ predicate }
+
+/// A single predicate: `field op value`.
+///
+/// `field` is any string key: core fields (`name`, `node_kind`, `path`, `line`)
+/// or dynamic fields from the flat index (`type`, `value`, etc.).
+predicate       = { field_name ~ compare_op ~ predicate_value }
+field_name      = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+compare_op      = { ">=" | "<=" | "!=" | "NOT" ~ "LIKE" | "LIKE" | ">" | "<" | "=" }
+predicate_value = { string_literal | signed_number | boolean_literal }
+
+in_clause      = { "IN"      ~ string_literal }
+exclude_clause = { "EXCLUDE" ~ string_literal }
+
+order_clause   = { "ORDER"   ~ "BY" ~ field_name ~ sort_dir? }
+sort_dir       = { "ASC" | "DESC" }
+
+group_clause   = { "GROUP"   ~ "BY" ~ field_name }
+
+limit_clause   = { "LIMIT"   ~ number }
+offset_clause  = { "OFFSET"  ~ number }
+
+/// `DEPTH n` — collapse AST blocks deeper than `n` levels (`SHOW body`).
+depth_clause   = { "DEPTH"   ~ number }
+
+/// `LINES n` — context window size for `SHOW context` (lines above/below).
+lines_clause   = { "LINES"   ~ number }

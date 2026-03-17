@@ -1,0 +1,48 @@
+[package]
+name        = "forgeql-core"
+description = "ForgeQL transform engine — AST parsing, transforms, workspace management"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[features]
+test-helpers = []
+
+[lints]
+workspace = true
+
+[dependencies]
+# serialization
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+serde_yml   = { workspace = true }
+
+# AST parsing
+tree-sitter     = { workspace = true }
+tree-sitter-cpp = { workspace = true }
+
+# DSL parsing
+pest        = { workspace = true }
+pest_derive = { workspace = true }
+
+# file ops
+tempfile    = { workspace = true }
+ignore      = { workspace = true }
+
+# git
+git2        = { workspace = true }
+
+# index serialization
+bincode     = { workspace = true }
+
+# errors
+anyhow      = { workspace = true }
+thiserror   = { workspace = true }
+
+# logging — no tokio dep; core is sync
+tracing     = { workspace = true }
+
+[dev-dependencies]
+insta       = { workspace = true }
+forgeql-core = { path = ".", features = ["test-helpers"] }

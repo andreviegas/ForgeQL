@@ -1,0 +1,50 @@
+# .cargo/config.toml — project-wide Cargo configuration.
+#
+# Applies to every `cargo` invocation inside this workspace.
+# Do NOT commit secrets here. Credentials go in $CARGO_HOME/config.toml.
+
+# -----------------------------------------------------------------------
+# Useful command aliases
+# -----------------------------------------------------------------------
+[alias]
+# Run clippy at pedantic level — treat ALL warnings as errors.
+lint    = "clippy --workspace --all-targets -- -D warnings -W clippy::pedantic -W clippy::nursery"
+
+# Quick type-check without codegen (much faster than `build` while editing).
+chk     = "check --workspace --all-targets"
+
+# Run every test in the workspace.
+t       = "test --workspace"
+
+# Build release binaries.
+rel     = "build --workspace --release"
+
+# Format check (CI-friendly — fails if anything needs reformatting).
+fmt-chk = "fmt --all -- --check"
+
+# Apply all automatic clippy fixes.
+fix     = "clippy --workspace --fix --allow-dirty --allow-staged"
+
+# -----------------------------------------------------------------------
+# Build settings
+# -----------------------------------------------------------------------
+[build]
+# Use all CPU cores for parallel compilation.
+# Uncomment and set to a specific number if you need to cap resource usage:
+# jobs = 4
+
+# -----------------------------------------------------------------------
+# Profile tweaks
+# -----------------------------------------------------------------------
+[profile.dev]
+# Faster incremental builds in dev. Keep debug info.
+opt-level     = 0
+debug         = true
+incremental   = true
+
+[profile.release]
+# Optimise for speed; strip debug symbols for a lean binary.
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+strip         = "symbols"

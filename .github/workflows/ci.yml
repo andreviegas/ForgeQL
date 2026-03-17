@@ -1,0 +1,98 @@
+name: CI
+
+# Run on every push to main and on every pull request that targets main.
+#
+# Push to main  → catches regressions after a merge.
+# PR to main    → blocks bad code before it lands.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail the build if cargo outputs any warnings about unused dependencies.
+  CARGO_INCREMENTAL: 0
+  # Keep the Rust toolchain version in sync with rust-toolchain.toml.
+  # GitHub Actions caches this automatically once downloaded.
+  RUST_BACKTRACE: 1
+
+jobs:
+  # -----------------------------------------------------------------------
+  # fmt — reject commits that are not formatted with rustfmt
+  # -----------------------------------------------------------------------
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # -----------------------------------------------------------------------
+  # clippy — enforce all workspace lint rules (pedantic + nursery)
+  # -----------------------------------------------------------------------
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+          components: clippy
+
+      - name: Cache Cargo registry and build artefacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-clippy-
+
+      - name: Run Clippy
+        # --deny warnings turns every clippy warning into a build error,
+        # consistent with the pedantic/nursery settings in Cargo.toml.
+        run: cargo clippy --workspace --all-targets -- --deny warnings
+
+  # -----------------------------------------------------------------------
+  # test — build the workspace in release mode and run all tests
+  # -----------------------------------------------------------------------
+  test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+
+      - name: Cache Cargo registry and build artefacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
+
+      - name: Build (release)
+        run: cargo build --workspace --release
+
+      - name: Run tests
+        run: cargo test --workspace

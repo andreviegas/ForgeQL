@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            artifact_name: forgeql-linux-x86_64
+            archive_ext: tar.gz
+
+          - target: aarch64-unknown-linux-gnu
+            artifact_name: forgeql-linux-aarch64
+            apt_package: gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+            cross_linker: aarch64-linux-gnu-gcc
+            archive_ext: tar.gz
+
+          - target: x86_64-pc-windows-gnu
+            artifact_name: forgeql-windows-x86_64
+            apt_package: gcc-mingw-w64-x86-64
+            cross_linker: x86_64-w64-mingw32-gcc
+            binary_ext: .exe
+            archive_ext: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.94.0'
+          targets: ${{ matrix.target }}
+          components: rustfmt,clippy
+
+      - name: Install cross-compiler
+        if: matrix.apt_package != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt_package }}
+
+      - name: Set linker for cross-compilation
+        if: matrix.cross_linker != ''
+        run: |
+          TARGET_KEY=$(echo '${{ matrix.target }}' | tr '[:lower:]-' '[:upper:]_')
+          echo "CARGO_TARGET_${TARGET_KEY}_LINKER=${{ matrix.cross_linker }}" >> "$GITHUB_ENV"
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} --bin forgeql
+
+      - name: Package binary (Linux / tar.gz)
+        if: matrix.archive_ext == 'tar.gz'
+        run: |
+          cp target/${{ matrix.target }}/release/forgeql forgeql
+          tar czf "${{ matrix.artifact_name }}.tar.gz" forgeql
+          rm forgeql
+
+      - name: Package binary (Windows / zip)
+        if: matrix.archive_ext == 'zip'
+        run: |
+          cp "target/${{ matrix.target }}/release/forgeql${{ matrix.binary_ext }}" "forgeql.exe"
+          zip "${{ matrix.artifact_name }}.zip" forgeql.exe
+          rm forgeql.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: List downloaded files
+        run: find dist/ -type f
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
