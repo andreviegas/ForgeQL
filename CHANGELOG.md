@@ -9,6 +9,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.19.2] - 2026-03-17
+
+### Fixed
+
+- **`FIND files` now honours all universal clauses**: `WHERE`, `ORDER BY`,
+  `LIMIT`, and `OFFSET` were silently ignored on `FIND files` results because
+  `apply_clauses()` was never called.  The engine now builds typed `FileEntry`
+  values, runs the full clause pipeline, and only then performs depth-grouping.
+
+### Added
+
+- **`extension` and `size` fields on `FileEntry`**: `FIND files` results now
+  expose `extension` (string, without the leading `.`) and `size` (bytes,
+  integer) as filterable, sortable fields — e.g.
+  `FIND files WHERE extension NOT LIKE 'cpp' WHERE extension NOT LIKE 'h'`.
+
+---
+
 ## [0.19.1] - 2026-03-17
 
 ### Fixed

@@ -293,6 +293,33 @@ impl ClauseTarget for IndexRow {
     }
 }
 
+impl ClauseTarget for crate::result::FileEntry {
+    fn field_str(&self, field: &str) -> Option<&str> {
+        match field {
+            "path" | "file" => self.path.to_str(),
+            "extension" | "ext" => Some(&self.extension),
+            _ => None,
+        }
+    }
+
+    fn field_num(&self, field: &str) -> Option<i64> {
+        match field {
+            "size" => Some(i64::try_from(self.size).unwrap_or(i64::MAX)),
+            "depth" => self.depth.map(|d| i64::try_from(d).unwrap_or(i64::MAX)),
+            "count" => self.count.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
+            _ => None,
+        }
+    }
+
+    fn path(&self) -> Option<&Path> {
+        Some(&self.path)
+    }
+
+    fn set_count(&mut self, count: usize) {
+        self.count = Some(count);
+    }
+}
+
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------

@@ -260,10 +260,21 @@ FIND callees OF 'PiscoCode::process'
 ### `FIND files`
 
 Return files in the worktree, optionally filtered by path glob or tree depth.
+All universal clauses — including `WHERE`, `ORDER BY`, `LIMIT`, and `OFFSET` —
+are fully supported.
 
 ```sql
 FIND files [clauses]
 ```
+
+**Filterable fields**
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | string | Relative file path (also used by `IN` / `EXCLUDE` globs) |
+| `extension` | string | File extension without the leading `.` — empty string for extension-less files |
+| `size` | integer | File size in bytes |
+| `depth` | integer | Directory depth relative to the workspace root |
 
 **Examples**
 
@@ -282,6 +293,29 @@ FIND files DEPTH 2
 FIND files
   ORDER BY count DESC
   LIMIT 20
+
+-- Find all non-C/C++ files (e.g. CMake, Markdown, config)
+FIND files IN 'src/**'
+  WHERE extension NOT LIKE 'cpp'
+  WHERE extension NOT LIKE 'c'
+  WHERE extension NOT LIKE 'h'
+  WHERE extension NOT LIKE 'hpp'
+
+-- Filter by path pattern instead
+FIND files
+  WHERE path NOT LIKE '%.cpp'
+  WHERE path NOT LIKE '%.h'
+
+-- Find unusually large files
+FIND files
+  WHERE size > 100000
+  ORDER BY size DESC
+  LIMIT 10
+
+-- Only markdown files, sorted by path
+FIND files
+  WHERE extension = 'md'
+  ORDER BY path ASC
 ```
 
 ---
@@ -826,7 +860,7 @@ FIND files IN 'src/**' DEPTH 2
 
 ## Filterable Fields
 
-These fields are available on every `IndexRow` result:
+### Symbol results (`FIND symbols`, `FIND usages OF`, `FIND callees OF`)
 
 | Field | Type | Description |
 |---|---|---|
@@ -835,6 +869,15 @@ These fields are available on every `IndexRow` result:
 | `path` | string | Relative file path — also used by `IN` / `EXCLUDE` globs |
 | `line` | integer | 1-based start line of the node |
 | `usages` | integer | Number of identifier references to this symbol in the index |
+
+### File results (`FIND files`)
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | string | Relative file path — also used by `IN` / `EXCLUDE` globs |
+| `extension` | string | File extension without the leading `.` (empty string for extension-less files) |
+| `size` | integer | File size in bytes |
+| `depth` | integer | Directory depth relative to the workspace root |
 
 In addition every row carries **dynamic fields** auto-extracted from the tree-sitter grammar. You can filter on any of them without recompiling ForgeQL:
 

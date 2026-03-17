@@ -217,6 +217,16 @@ pub struct FileEntry {
     pub path: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub depth: Option<usize>,
+    /// File extension without the leading `.` (e.g. `"cpp"`, `"h"`, `""`
+    /// for extension-less files).
+    #[serde(default)]
+    pub extension: String,
+    /// File size in bytes.
+    #[serde(default)]
+    pub size: u64,
+    /// Per-group file count populated after `GROUP BY` aggregation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
 }
 
 // -----------------------------------------------------------------------

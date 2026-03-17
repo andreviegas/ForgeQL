@@ -643,6 +643,7 @@ impl ForgeQLEngine {
     ///
     /// Formerly delegated through `executor::execute_show`; the JSON bridge
     /// is now inlined here to eliminate the middle layer.
+    #[allow(clippy::too_many_lines)]
     fn exec_show(&self, session_id: Option<&str>, op: &ForgeQLIR) -> Result<ForgeQLResult> {
         let (workspace, index) = self.require_workspace_and_index(session_id)?;
 
@@ -684,15 +685,74 @@ impl ForgeQLEngine {
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
             ForgeQLIR::FindFiles { clauses } => {
                 let glob = clauses.in_glob.as_deref().unwrap_or("**");
-                let results = query::find_files(&workspace, glob, clauses.exclude_glob.as_deref());
+                // IN / EXCLUDE are applied by find_files(); build typed entries
+                // so the full clause pipeline (WHERE, GROUP BY, HAVING, ORDER BY,
+                // LIMIT, OFFSET) can run against individual file rows.
+                let raw = query::find_files(&workspace, glob, clauses.exclude_glob.as_deref());
+                let mut entries: Vec<FileEntry> = raw
+                    .iter()
+                    .filter_map(|v| {
+                        let path = v.get("path").and_then(|p| p.as_str()).map(PathBuf::from)?;
+                        let extension = v
+                            .get("extension")
+                            .and_then(|e| e.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let size = v
+                            .get("size")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0);
+                        Some(FileEntry {
+                            path,
+                            extension,
+                            size,
+                            depth: None,
+                            count: None,
+                        })
+                    })
+                    .collect();
+                // Apply the full clause pipeline.  IN / EXCLUDE are already
+                // handled above so they become no-ops here; GROUP BY, HAVING,
+                // WHERE, ORDER BY, LIMIT, OFFSET all run normally.
+                crate::filter::apply_clauses(&mut entries, clauses);
                 let max_depth = clauses.depth.unwrap_or(0);
-                let grouped = query::group_files_by_depth(&results, max_depth);
-                let count = grouped.len();
+                // When GROUP BY was requested the pipeline has already
+                // aggregated entries and stored per-group counts; skip the
+                // depth-grouping step so those results are not disturbed.
+                let results: Vec<serde_json::Value> = if clauses.group_by.is_some() {
+                    entries
+                        .iter()
+                        .map(|fe| {
+                            let mut obj = serde_json::json!({
+                                "path":      fe.path.display().to_string(),
+                                "extension": fe.extension,
+                                "size":      fe.size,
+                            });
+                            if let Some(n) = fe.count {
+                                obj["count"] = serde_json::Value::from(n);
+                            }
+                            obj
+                        })
+                        .collect()
+                } else {
+                    let file_json: Vec<serde_json::Value> = entries
+                        .iter()
+                        .map(|fe| {
+                            serde_json::json!({
+                                "path":      fe.path.display().to_string(),
+                                "extension": fe.extension,
+                                "size":      fe.size,
+                            })
+                        })
+                        .collect();
+                    query::group_files_by_depth(&file_json, max_depth)
+                };
+                let count = results.len();
                 serde_json::json!({
                     "op":      "find_files",
                     "glob":    glob,
                     "depth":   max_depth,
-                    "results": grouped,
+                    "results": results,
                     "count":   count,
                 })
             }
@@ -1402,9 +1462,22 @@ fn convert_show_content(op: &ForgeQLIR, json: &serde_json::Value) -> Result<Show
                             let path_str = entry
                                 .as_str()
                                 .or_else(|| entry.get("path").and_then(|v| v.as_str()))?;
+                            let extension = entry
+                                .get("extension")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let size = entry.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let count = entry
+                                .get("count")
+                                .and_then(|v| v.as_u64())
+                                .map(|n| n as usize);
                             Some(FileEntry {
                                 path: PathBuf::from(path_str),
                                 depth: clauses.depth,
+                                extension,
+                                size,
+                                count,
                             })
                         })
                         .collect::<Vec<_>>()

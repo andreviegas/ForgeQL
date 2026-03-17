@@ -1,7 +1,7 @@
 # ForgeQL Quick Reference for AI Agents
 
 **Last Updated**: March 17, 2026  
-**ForgeQL Version**: 2.0+
+**ForgeQL Version**: 0.19.2
 
 This guide is for AI coding agents (GitHub Copilot, Claude, etc.) working with ForgeQL via MCP.
 
@@ -46,7 +46,7 @@ echo "CREATE SOURCE 'myproject' FROM 'https://github.com/.../repo.git'" | forgeq
 | `FIND symbols [WHERE ...]` | Query AST nodes (functions, classes, macros, includes, comments, etc.) |
 | `FIND usages OF 'name' [GROUP BY file]` | Find all references + blast radius |
 | `FIND callees OF 'name'` | What does `name` call? |
-| `FIND files [DEPTH N]` | List/explore directory tree |
+| `FIND files [WHERE ...] [ORDER BY ...] [LIMIT N]` | List/explore directory tree — all clauses supported |
 
 ### Inspect (Return formatted content)
 | Command | Purpose |
@@ -98,12 +98,18 @@ DEPTH N                              -- For SHOW body / FIND files
 
 ### Filterable Fields
 
-**Always available:**
+**Always available (symbol results):**
 - `name` (string) — symbol name
 - `node_kind` (string) — tree-sitter kind (any kind is filterable)
 - `path` (string) — relative file path
 - `line` (integer) — 1-based start line
 - `usages` (integer) — reference count
+
+**FIND files results:**
+- `path` (string) — relative file path
+- `extension` (string) — file extension without the leading `.` (e.g. `cpp`, `h`, `md`)
+- `size` (integer) — file size in bytes
+- `depth` (integer) — directory depth
 
 **Dynamic (any tree-sitter field):**
 - `type` — return type / variable type
@@ -195,6 +201,26 @@ COMMIT MESSAGE 'refactor: rename OldName → NewName'
 FIND symbols WHERE node_kind = 'function_definition' WHERE usages >= 10 
   ORDER BY usages DESC LIMIT 10
 -- Shows hotspots worth refactoring
+```
+
+### Find Non-Code Files in the Source Tree
+```sql
+-- All files that are NOT C/C++ source or headers
+FIND files IN 'src/**'
+  WHERE extension NOT LIKE 'cpp'
+  WHERE extension NOT LIKE 'c'
+  WHERE extension NOT LIKE 'h'
+  WHERE extension NOT LIKE 'hpp'
+
+-- Equivalent: match by path pattern
+FIND files WHERE path NOT LIKE '%.cpp' WHERE path NOT LIKE '%.h'
+
+-- Find large files (e.g. generated or binary assets)
+FIND files WHERE size > 100000 ORDER BY size DESC LIMIT 20
+
+-- Only CMake and markdown files
+FIND files WHERE extension = 'cmake'
+FIND files WHERE extension = 'md'
 ```
 
 ### Update Configuration Values
