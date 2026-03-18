@@ -300,7 +300,35 @@ fn collect_nodes(
 
     // Every named node becomes a row.
     if let Some(name) = extract_name(node, source, language_name) {
-        let fields = extract_fields(node, source, language);
+        let mut fields = extract_fields(node, source, language);
+
+        // For C++ `declaration` nodes, add scope and storage dynamic fields
+        // so queries can distinguish file-scope globals from local variables.
+        if language_name == "cpp" && node.kind() == "declaration" {
+            let scope = if node
+                .parent()
+                .is_some_and(|p| p.kind() == "translation_unit")
+            {
+                "file"
+            } else {
+                "local"
+            };
+            drop(fields.insert("scope".to_string(), scope.to_string()));
+
+            // Extract storage class specifier (static, extern, etc.) if present.
+            for i in 0..node.named_child_count() {
+                if let Some(child) = node.named_child(i)
+                    && child.kind() == "storage_class_specifier"
+                {
+                    let text = node_text(source, child);
+                    if !text.is_empty() {
+                        drop(fields.insert("storage".to_string(), text));
+                    }
+                    break;
+                }
+            }
+        }
+
         let row = IndexRow {
             name,
             node_kind: node.kind().to_string(),
@@ -371,6 +399,20 @@ fn extract_name(node: tree_sitter::Node<'_>, source: &[u8], language_name: &str)
             })
             .filter(|s| !s.is_empty()),
 
+        // C++ variable declarations: name lives inside the declarator tree
+        // (e.g. `int x = 5;` → declaration → declarator → identifier "x").
+        // Skip function forward declarations (e.g. `void foo(int);`) whose
+        // declarator tree contains a `function_declarator` node.
+        ("cpp", "declaration") => {
+            let decl = node.child_by_field_name("declarator")?;
+            if contains_function_declarator(decl) {
+                return None;
+            }
+            find_function_name(decl)
+                .map(|n| node_text(source, n))
+                .filter(|s| !s.is_empty())
+        }
+
         // Comments: the node text IS the name — enabling text search via
         //   FIND symbols WHERE node_kind = 'comment' WHERE name LIKE '%keyword%'
         // Both `// line comments` and `/* block comments */` use this node kind.
@@ -410,6 +452,23 @@ fn extract_fields(
 // -----------------------------------------------------------------------
 // LANG(cpp) — function name extraction helper
 // -----------------------------------------------------------------------
+
+/// Return `true` if the declarator subtree contains a `function_declarator`,
+/// indicating this `declaration` is a function forward declaration rather
+/// than a variable declaration.
+fn contains_function_declarator(node: tree_sitter::Node<'_>) -> bool {
+    if node.kind() == "function_declarator" {
+        return true;
+    }
+    for i in 0..node.named_child_count() {
+        if let Some(child) = node.named_child(i)
+            && contains_function_declarator(child)
+        {
+            return true;
+        }
+    }
+    false
+}
 
 /// Drill into nested declarators to find the identifier holding the function name.
 fn find_function_name(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {

@@ -158,8 +158,8 @@ A bare `FIND symbols` returns everything in the index. Use `WHERE node_kind = '.
 
 | `node_kind` | What it matches |
 |---|---|
+| `declaration` | Variable declarations — file-scope and local (`int x = 5;`, `static Foo bar;`). Function forward declarations are *not* indexed. |
 | `function_definition` | Function definitions with body |
-| `function_declarator` | Forward declarations |
 | `struct_specifier` | `struct` declarations |
 | `class_specifier` | `class` declarations |
 | `enum_specifier` | `enum` declarations |
@@ -200,11 +200,31 @@ FIND symbols
   WHERE node_kind = 'function_definition'
   WHERE type LIKE 'void%'
 
--- Effective substitute for FIND globals
+-- All variable declarations (globals, statics, locals)
 FIND symbols
   WHERE node_kind = 'declaration'
   ORDER BY usages DESC
   LIMIT 20
+
+-- Shorthand: FIND globals → file-scope declarations only
+FIND globals
+  ORDER BY usages DESC
+  LIMIT 20
+
+-- Only file-scope declarations with external linkage (exclude static)
+FIND globals
+  WHERE storage != 'static'
+
+-- Local variable declarations only
+FIND symbols
+  WHERE node_kind = 'declaration'
+  WHERE scope = 'local'
+  LIMIT 20
+
+-- Symbol distribution across node kinds
+FIND symbols
+  GROUP BY node_kind
+  ORDER BY count DESC
 ```
 
 ---
@@ -888,6 +908,8 @@ In addition every row carries **dynamic fields** auto-extracted from the tree-si
 | `declarator` | C/C++ | Full declarator including pointer/reference qualifiers |
 | `parameters` | C/C++ | Parameter list text |
 | `body` | C/C++ | Body text — large; prefer `SHOW body` |
+| `scope` | C/C++ `declaration` | `"file"` (parent is translation unit) or `"local"` (inside a function body) |
+| `storage` | C/C++ `declaration` | Storage class specifier if present: `"static"`, `"extern"`. Absent for default linkage. |
 
 If a field does not exist on a row, a `WHERE` predicate on that field evaluates to false and the row is excluded — identical to SQL `NULL` semantics.
 
@@ -1087,5 +1109,6 @@ FIND symbols
 | Area | Description | Workaround |
 |---|---|---|
 | Template functions | `SHOW callees OF` / `FIND callees OF` returns empty for C++ template functions | Use `FIND usages OF 'name'` to find all reference sites |
+| Scope filtering | `FIND globals` returns file-scope declarations only. C++ has no `extern`-vs-`static` distinction in the AST; use `WHERE storage != 'static'` to exclude internal linkage. | Filter with `scope` and `storage` dynamic fields |
 | Numeric coercion | `value >= N` silently skips rows where `value` is non-decimal (hex, symbolic constants) | Use `WHERE value LIKE 'pattern'` for non-integer values |
 | Escape sequences | `CHANGE … WITH 'text'` interprets content literally — `\n` is two characters, not a newline | Write actual newlines inside the string literal |

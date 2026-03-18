@@ -848,3 +848,167 @@ fn find_usages_csv_count_column_is_non_empty() {
         );
     }
 }
+
+// -----------------------------------------------------------------------
+// Declaration indexing (FIND globals / WHERE node_kind = 'declaration')
+// -----------------------------------------------------------------------
+
+/// FIND globals returns file-scope declaration nodes (variable declarations).
+#[test]
+fn find_globals_returns_declarations() {
+    let (mut engine, sid, _dir) = engine_with_session();
+    let result = execute_fql(&mut engine, &sid, "FIND globals LIMIT 200");
+    match result {
+        ForgeQLResult::Query(qr) => {
+            assert!(!qr.results.is_empty(), "FIND globals should return results");
+            for row in &qr.results {
+                assert_eq!(
+                    row.node_kind.as_deref(),
+                    Some("declaration"),
+                    "FIND globals must only return declaration nodes, got {:?} for '{}'",
+                    row.node_kind,
+                    row.name,
+                );
+                assert_eq!(
+                    row.fields.get("scope").map(String::as_str),
+                    Some("file"),
+                    "FIND globals must only return file-scope decls, got scope={:?} for '{}'",
+                    row.fields.get("scope"),
+                    row.name,
+                );
+            }
+            let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
+            assert!(
+                names.contains(&"motorPrincipal"),
+                "expected motorPrincipal in {names:?}"
+            );
+            // Local variables must NOT appear.
+            for local in ["vel", "velocidad"] {
+                assert!(
+                    !names.contains(&local),
+                    "local variable '{local}' must NOT appear in FIND globals; got: {names:?}"
+                );
+            }
+        }
+        other => panic!("expected Query, got: {other:?}"),
+    }
+}
+
+/// FIND symbols WHERE node_kind = 'declaration' returns ALL declarations (file + local).
+#[test]
+fn find_symbols_where_node_kind_declaration() {
+    let (mut engine, sid, _dir) = engine_with_session();
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE node_kind = 'declaration' LIMIT 200",
+    );
+    match result {
+        ForgeQLResult::Query(qr) => {
+            assert!(!qr.results.is_empty(), "should return declaration nodes");
+            let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
+            // File-scope declarations.
+            for expected in ["motorPrincipal", "motorSecundario", "gCallbackEncendido"] {
+                assert!(
+                    names.contains(&expected),
+                    "expected '{expected}' in declarations; got: {names:?}",
+                );
+            }
+            // Local declarations should also appear (unlike FIND globals).
+            let has_local = qr
+                .results
+                .iter()
+                .any(|r| r.fields.get("scope").map(String::as_str) == Some("local"));
+            assert!(
+                has_local,
+                "WHERE node_kind='declaration' should include local declarations"
+            );
+        }
+        other => panic!("expected Query, got: {other:?}"),
+    }
+}
+
+/// FIND symbols GROUP BY node_kind returns one row per node kind with counts.
+#[test]
+fn find_symbols_group_by_node_kind() {
+    let (mut engine, sid, _dir) = engine_with_session();
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols GROUP BY node_kind ORDER BY count DESC LIMIT 50",
+    );
+    match result {
+        ForgeQLResult::Query(qr) => {
+            assert!(
+                !qr.results.is_empty(),
+                "GROUP BY node_kind should return groups"
+            );
+            // Every row must have a count > 0.
+            for row in &qr.results {
+                assert!(
+                    row.count.unwrap_or(0) > 0,
+                    "each group must have count > 0, got {:?} for {:?}",
+                    row.count,
+                    row.node_kind,
+                );
+            }
+            // "declaration" must now appear as a group.
+            let kinds: Vec<&str> = qr
+                .results
+                .iter()
+                .filter_map(|r| r.node_kind.as_deref())
+                .collect();
+            assert!(
+                kinds.contains(&"declaration"),
+                "declaration must appear in GROUP BY node_kind results; got: {kinds:?}",
+            );
+            assert!(
+                kinds.contains(&"function_definition"),
+                "function_definition must appear in GROUP BY node_kind results; got: {kinds:?}",
+            );
+        }
+        other => panic!("expected Query, got: {other:?}"),
+    }
+}
+
+/// Scope and storage dynamic fields can be filtered via WHERE clauses.
+#[test]
+fn find_declarations_filter_by_scope_and_storage() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    // File-scope declarations only (same as FIND globals).
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE node_kind = 'declaration' WHERE scope = 'file' LIMIT 200",
+    );
+    let file_names: Vec<String> = match result {
+        ForgeQLResult::Query(qr) => qr.results.iter().map(|r| r.name.clone()).collect(),
+        other => panic!("expected Query, got: {other:?}"),
+    };
+    assert!(
+        file_names.contains(&"motorPrincipal".to_string()),
+        "file-scope filter should include motorPrincipal; got: {file_names:?}"
+    );
+
+    // Storage = 'static' filter.
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE node_kind = 'declaration' WHERE storage = 'static' LIMIT 200",
+    );
+    match result {
+        ForgeQLResult::Query(qr) => {
+            for row in &qr.results {
+                assert_eq!(
+                    row.fields.get("storage").map(String::as_str),
+                    Some("static"),
+                    "storage filter should only return static declarations, got {:?} for '{}'",
+                    row.fields.get("storage"),
+                    row.name,
+                );
+            }
+        }
+        other => panic!("expected Query, got: {other:?}"),
+    }
+}

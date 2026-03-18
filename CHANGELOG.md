@@ -9,6 +9,58 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.19.3] - 2026-03-18
+
+### Fixed
+
+- **C/C++ variable declarations are now indexed**: the tree-sitter
+  `declaration` node kind (e.g. `int x = 5;`, `static Foo bar;`) is now
+  processed by the indexer via a language-specific extraction rule in
+  `extract_name`.  Previously these nodes were silently skipped because they
+  lack a direct `name` grammar field.  `FIND symbols WHERE node_kind =
+  'declaration'` now returns results.
+
+- **`FIND globals` now works**: the parser predicate was changed from
+  `kind = 'Variable'` (a non-existent node kind that always matched nothing)
+  to `node_kind = 'declaration'` with `scope = 'file'`.  `FIND globals` is
+  now a convenience alias for
+  `FIND symbols WHERE node_kind = 'declaration' WHERE scope = 'file'`,
+  returning only file-scope variable declarations.
+
+- **`VERIFY build` now runs in the correct directory**: `run_standalone` and
+  `run_step` were executing the shell command without setting a working
+  directory, so relative paths like `./scripts/Build.sh` failed with
+  "not found".  Both functions now receive the workspace root (derived from
+  the `.forgeql.yaml` location) and pass it via `.current_dir()`.
+
+### Added
+
+- **`scope` and `storage` dynamic fields** for C/C++ `declaration` nodes:
+  - `scope`: `"file"` when the declaration's parent is the translation unit,
+    `"local"` when inside a function body.
+  - `storage`: the storage class specifier text (`"static"`, `"extern"`) when
+    present; absent for default linkage.
+  - Use `WHERE storage != 'static'` to exclude internal-linkage variables, or
+    `WHERE scope = 'local'` to find only local variable declarations.
+
+- **Function forward declaration filtering**: `declaration` nodes whose
+  declarator tree contains a `function_declarator` (e.g. `void foo(int);`)
+  are now skipped during indexing so they don't pollute variable results.
+
+- **`declaration` in the `node_kind` table** (syntax.md): documented alongside
+  the other common C/C++ node kinds.
+
+- **Integration tests**: `find_globals_returns_declarations`,
+  `find_symbols_where_node_kind_declaration`, and
+  `find_symbols_group_by_node_kind` verify the new indexing end-to-end.
+
+### Changed
+
+- **Known Limitations**: the "Scope filtering" note now reflects that `scope`
+  and `storage` dynamic fields are available for filtering.
+
+---
+
 ## [0.19.2] - 2026-03-17
 
 ### Fixed

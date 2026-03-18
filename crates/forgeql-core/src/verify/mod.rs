@@ -2,6 +2,8 @@
 ///
 /// Runs named build/test steps from `.forgeql.yaml`, streams output,
 /// and triggers rollback on failure.
+use std::path::Path;
+
 use anyhow::Result;
 
 use crate::config::VerifyStep;
@@ -18,10 +20,14 @@ pub struct VerifyResult {
 /// Run a single named build step and return its result.
 /// Does **not** roll back anything — use this for standalone `VERIFY build`.
 #[must_use]
-pub fn run_standalone(step: &VerifyStep) -> VerifyResult {
+pub fn run_standalone(step: &VerifyStep, workdir: &Path) -> VerifyResult {
     use std::process::Command;
 
-    match Command::new("sh").args(["-c", &step.command]).output() {
+    match Command::new("sh")
+        .args(["-c", &step.command])
+        .current_dir(workdir)
+        .output()
+    {
         Err(e) => VerifyResult {
             step: step.name.clone(),
             success: false,
@@ -48,11 +54,12 @@ pub fn run_standalone(step: &VerifyStep) -> VerifyResult {
 /// # Errors
 /// Returns `Err` if the command cannot be spawned, or if it exits with a
 /// non-zero status (in which case `result` is rolled back first).
-pub fn run_step(step: &VerifyStep, result: TransformResult) -> Result<()> {
+pub fn run_step(step: &VerifyStep, workdir: &Path, result: TransformResult) -> Result<()> {
     use std::process::Command;
 
     let output = Command::new("sh")
         .args(["-c", &step.command])
+        .current_dir(workdir)
         .output()
         .map_err(|e| crate::error::ForgeError::io(".", e))?;
 

@@ -848,15 +848,21 @@ impl ForgeQLEngine {
         // Step 3: Run VERIFY if requested.
         // `verify::run_step` consumes `apply_result` and calls rollback on failure.
         if let Some(step_name) = verify {
-            let step = ForgeConfig::find(&worktree_path)
-                .and_then(|p| ForgeConfig::load(&p).ok())
+            let config_path = ForgeConfig::find(&worktree_path).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "VERIFY step '{step_name}' not found in .forgeql.yaml \u{2014} add it under verify_steps:"
+                )
+            })?;
+            let workdir = config_path.parent().unwrap_or(&worktree_path);
+            let step = ForgeConfig::load(&config_path)
+                .ok()
                 .and_then(|cfg| cfg.verify_steps.into_iter().find(|s| s.name == step_name))
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "VERIFY step '{step_name}' not found in .forgeql.yaml \u{2014} add it under verify_steps:"
                     )
                 })?;
-            if verify::run_step(&step, apply_result).is_err() {
+            if verify::run_step(&step, workdir, apply_result).is_err() {
                 // Files already rolled back by run_step; discard staged originals.
                 return Ok(ForgeQLResult::Transaction(TransactionResult {
                     name: name.to_string(),
@@ -969,15 +975,21 @@ impl ForgeQLEngine {
         let search_path = session_id
             .and_then(|sid| self.sessions.get(sid))
             .map_or_else(|| self.data_dir.clone(), |s| s.worktree_path.clone());
-        let step = ForgeConfig::find(&search_path)
-            .and_then(|p| ForgeConfig::load(&p).ok())
+        let config_path = ForgeConfig::find(&search_path).ok_or_else(|| {
+            anyhow::anyhow!(
+                "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
+            )
+        })?;
+        let workdir = config_path.parent().unwrap_or(&search_path).to_path_buf();
+        let step = ForgeConfig::load(&config_path)
+            .ok()
             .and_then(|cfg| cfg.verify_steps.into_iter().find(|s| s.name == step_name))
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
                 )
             })?;
-        let result = verify::run_standalone(&step);
+        let result = verify::run_standalone(&step, &workdir);
         Ok(ForgeQLResult::VerifyBuild(VerifyBuildResult {
             step: result.step,
             success: result.success,
@@ -1730,16 +1742,16 @@ mod tests {
         assert!(validate_order_by_field(&Clauses::default(), &results).is_ok());
     }
 
-    /// Regression test for Bug #10: static file-scope variables must NOT
-    /// appear in `FIND globals` results.
+    /// `FIND globals` now maps to `FIND symbols WHERE node_kind = 'declaration'`
+    /// and correctly returns variable declarations from the index.
     ///
     /// `motor_control.cpp` declares several `static` variables at file scope
     /// (`motorPrincipal`, `motorSecundario`, `gCallbackEncendido`, `kMotorLabel`).
-    /// Before the fix, their `is_global` flag was incorrectly set to `true`
-    /// because the indexer only filtered out `extern`, not `static`.
+    /// These are `declaration` nodes in the tree-sitter AST and must now
+    /// appear in results.
     #[cfg(feature = "test-helpers")]
     #[test]
-    fn find_globals_excludes_static_variables() {
+    fn find_globals_returns_declaration_nodes() {
         use std::fs;
 
         let tmp = tempfile::tempdir().unwrap();
@@ -1761,26 +1773,62 @@ mod tests {
         let mut engine = ForgeQLEngine::new(data_dir).unwrap();
         let session_id = engine.register_local_session(tmp.path()).unwrap();
 
-        let op = ForgeQLIR::FindSymbols {
-            clauses: Clauses::default(),
-        };
-        let result = engine.execute(Some(&session_id), &op).unwrap();
-        let names: Vec<String> = match result {
-            ForgeQLResult::Query(qr) => qr.results.into_iter().map(|r| r.name).collect(),
+        // FIND globals → FIND symbols WHERE node_kind = 'declaration'
+        let op = crate::parser::parse("FIND globals LIMIT 200").unwrap();
+        let result = engine.execute(Some(&session_id), &op[0]).unwrap();
+        let results = match result {
+            ForgeQLResult::Query(qr) => qr.results,
             other => panic!("expected Query, got: {other:?}"),
         };
 
-        // These are declared `static` — internal linkage, not globals.
-        let statics = [
+        // All returned rows must be file-scope declaration nodes.
+        for r in &results {
+            assert_eq!(
+                r.node_kind.as_deref(),
+                Some("declaration"),
+                "FIND globals must only return declaration nodes, got {:?} for '{}'",
+                r.node_kind,
+                r.name,
+            );
+            assert_eq!(
+                r.fields.get("scope").map(String::as_str),
+                Some("file"),
+                "FIND globals must only return file-scope declarations, got scope={:?} for '{}'",
+                r.fields.get("scope"),
+                r.name,
+            );
+        }
+
+        // The known file-scope static variables should appear.
+        let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+        for expected in [
             "motorPrincipal",
             "motorSecundario",
             "gCallbackEncendido",
             "kMotorLabel",
-        ];
-        for s in &statics {
+        ] {
             assert!(
-                !names.contains(&s.to_string()),
-                "static variable '{s}' must not appear in FIND globals results; got: {names:?}"
+                names.contains(&expected),
+                "declaration '{expected}' must appear in FIND globals; got: {names:?}"
+            );
+        }
+
+        // All file-scope declarations in the fixture are static.
+        for r in &results {
+            assert_eq!(
+                r.fields.get("storage").map(String::as_str),
+                Some("static"),
+                "expected storage='static' for '{}'; got {:?}",
+                r.name,
+                r.fields.get("storage"),
+            );
+        }
+
+        // Local variables must NOT appear.
+        for local in ["vel", "velocidad"] {
+            assert!(
+                !names.contains(&local),
+                "local variable '{local}' must NOT appear in FIND globals; got: {names:?}"
             );
         }
     }

@@ -346,14 +346,21 @@ fn parse_find(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeE
 
     match target_str {
         "globals" => {
-            // Inject a kind predicate so the engine filters to variables/globals.
+            // Convenience alias: FIND globals →
+            //   FIND symbols WHERE node_kind = 'declaration' WHERE scope = 'file'
             let kind_pred = Predicate {
-                field: "kind".into(),
+                field: "node_kind".into(),
                 op: CompareOp::Eq,
-                value: PredicateValue::String("Variable".into()),
+                value: PredicateValue::String("declaration".into()),
+            };
+            let scope_pred = Predicate {
+                field: "scope".into(),
+                op: CompareOp::Eq,
+                value: PredicateValue::String("file".into()),
             };
             let mut clauses = clauses;
             clauses.where_predicates.push(kind_pred);
+            clauses.where_predicates.push(scope_pred);
             Ok(ForgeQLIR::FindSymbols { clauses })
         }
         "files" => Ok(ForgeQLIR::FindFiles { clauses }),
@@ -989,11 +996,23 @@ mod tests {
         let ops = parse("FIND globals").unwrap();
         match &ops[0] {
             ForgeQLIR::FindSymbols { clauses } => {
-                let kind_pred = clauses.where_predicates.iter().find(|p| p.field == "kind");
-                assert!(kind_pred.is_some(), "globals should add a kind predicate");
+                let kind_pred = clauses
+                    .where_predicates
+                    .iter()
+                    .find(|p| p.field == "node_kind");
+                assert!(
+                    kind_pred.is_some(),
+                    "globals should add a node_kind predicate"
+                );
                 let kp = kind_pred.unwrap();
                 assert_eq!(kp.op, CompareOp::Eq);
-                assert_eq!(kp.value, PredicateValue::String("Variable".into()));
+                assert_eq!(kp.value, PredicateValue::String("declaration".into()));
+
+                let scope_pred = clauses.where_predicates.iter().find(|p| p.field == "scope");
+                assert!(scope_pred.is_some(), "globals should add a scope predicate");
+                let sp = scope_pred.unwrap();
+                assert_eq!(sp.op, CompareOp::Eq);
+                assert_eq!(sp.value, PredicateValue::String("file".into()));
             }
             _ => panic!("wrong variant"),
         }
@@ -1004,8 +1023,16 @@ mod tests {
         let ops = parse("FIND globals ORDER BY usages DESC LIMIT 20").unwrap();
         match &ops[0] {
             ForgeQLIR::FindSymbols { clauses } => {
-                let kind_pred = clauses.where_predicates.iter().find(|p| p.field == "kind");
-                assert!(kind_pred.is_some(), "globals should add a kind predicate");
+                let kind_pred = clauses
+                    .where_predicates
+                    .iter()
+                    .find(|p| p.field == "node_kind");
+                assert!(
+                    kind_pred.is_some(),
+                    "globals should add a node_kind predicate"
+                );
+                let scope_pred = clauses.where_predicates.iter().find(|p| p.field == "scope");
+                assert!(scope_pred.is_some(), "globals should add a scope predicate");
                 let order = clauses.order_by.as_ref().expect("order_by should be Some");
                 assert_eq!(order.field, "usages");
                 assert_eq!(order.direction, SortDirection::Desc);
@@ -1020,8 +1047,16 @@ mod tests {
         let ops = parse("FIND globals ORDER BY name LIMIT 50 OFFSET 50").unwrap();
         match &ops[0] {
             ForgeQLIR::FindSymbols { clauses } => {
-                let kind_pred = clauses.where_predicates.iter().find(|p| p.field == "kind");
-                assert!(kind_pred.is_some(), "globals should add a kind predicate");
+                let kind_pred = clauses
+                    .where_predicates
+                    .iter()
+                    .find(|p| p.field == "node_kind");
+                assert!(
+                    kind_pred.is_some(),
+                    "globals should add a node_kind predicate"
+                );
+                let scope_pred = clauses.where_predicates.iter().find(|p| p.field == "scope");
+                assert!(scope_pred.is_some(), "globals should add a scope predicate");
                 let order = clauses.order_by.as_ref().expect("order_by should be Some");
                 assert_eq!(order.field, "name");
                 assert_eq!(order.direction, SortDirection::Desc); // default
