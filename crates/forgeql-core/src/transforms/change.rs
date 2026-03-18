@@ -37,16 +37,74 @@ impl ChangeFiles {
         workspace: &Workspace,
         _index: &SymbolTable,
     ) -> Result<TransformPlan> {
-        validate_multi_file(&self.files, &self.target)?;
+        // Expand any glob patterns in the file list before validation.
+        let (resolved, from_glob) = resolve_file_globs(&self.files, workspace)?;
+
+        validate_multi_file(&resolved, &self.target)?;
 
         let mut plan = TransformPlan::default();
-        for rel_path in &self.files {
+        for rel_path in &resolved {
             let abs_path = workspace.root().join(rel_path);
             let fe = resolve_target(rel_path, &abs_path, &self.target)?;
+            // For literal (non-glob) paths, an empty edit means the pattern
+            // was not found — that is an error the user should see.
+            if !from_glob
+                && fe.edits.is_empty()
+                && let ChangeTarget::Matching { pattern, .. } = &self.target
+            {
+                bail!("{rel_path}: pattern not found: '{pattern}'");
+            }
             plan.file_edits.push(fe);
         }
+
+        // When files came from glob expansion the pattern may legitimately be
+        // absent in some of them.  Drop no-op edits but error if nothing
+        // matched anywhere.
+        if from_glob {
+            plan.file_edits.retain(|fe| !fe.edits.is_empty());
+            if plan.file_edits.is_empty() {
+                bail!("pattern not found in any file matched by the glob(s)");
+            }
+        }
+
         Ok(plan)
     }
+}
+
+// -----------------------------------------------------------------------
+// Glob expansion
+// -----------------------------------------------------------------------
+
+/// Return `true` when a path string contains glob metacharacters.
+fn is_glob(s: &str) -> bool {
+    s.contains('*') || s.contains('?') || s.contains('[')
+}
+
+/// Expand glob patterns in the file list against the workspace.
+///
+/// Entries without wildcards are kept as-is.  Entries with `*`, `?`, or `[`
+/// are matched against every file in the workspace using the same glob engine
+/// as `IN` / `EXCLUDE`.
+fn resolve_file_globs(raw: &[String], workspace: &Workspace) -> Result<(Vec<String>, bool)> {
+    let mut out = Vec::new();
+    let mut any_glob = false;
+    for entry in raw {
+        if is_glob(entry) {
+            any_glob = true;
+            let matched: Vec<String> = workspace
+                .files()
+                .filter(|p| crate::ast::query::glob_matches(p, entry))
+                .map(|p| workspace.relative(&p).display().to_string())
+                .collect();
+            if matched.is_empty() {
+                bail!("glob '{entry}' matched no files in the workspace");
+            }
+            out.extend(matched);
+        } else {
+            out.push(entry.clone());
+        }
+    }
+    Ok((out, any_glob))
 }
 
 // -----------------------------------------------------------------------
@@ -122,7 +180,11 @@ fn resolve_matching(
         .collect();
 
     if ranges.is_empty() {
-        bail!("{rel_path}: pattern not found: '{pattern}'");
+        // Return an empty FileEdit — the caller decides whether to skip or error.
+        return Ok(FileEdit {
+            path: abs_path.to_path_buf(),
+            edits: vec![],
+        });
     }
 
     // Apply edits in REVERSE byte order so earlier offsets stay valid.
@@ -365,10 +427,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_matching_not_found_is_error() {
+    fn resolve_matching_not_found_returns_empty_edits() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("miss.cpp");
         std::fs::write(&path, "nothing here").expect("write");
-        assert!(resolve_matching("miss.cpp", &path, "nonexistent", "x").is_err());
+        let fe = resolve_matching("miss.cpp", &path, "nonexistent", "x")
+            .expect("should succeed with empty edits");
+        assert!(fe.edits.is_empty());
     }
 }

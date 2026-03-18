@@ -7,6 +7,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`CHANGE FILES` now expands glob patterns**: the `file_list` entries
+  (e.g. `'src/**/*.cpp'`) were treated as literal paths instead of being
+  expanded against the workspace.  Globs are now resolved using the same
+  matching engine as `IN` / `EXCLUDE` clauses.  A glob that matches no files
+  returns an error.
+
+- **`MATCHING` is tolerant of glob-expanded files missing the pattern**:
+  when `CHANGE FILES` uses glob patterns, files that do not contain the
+  `MATCHING` text are silently skipped instead of aborting the whole
+  transaction.  An error is still raised when *no* glob-matched file
+  contains the pattern, or when a literal (non-glob) path is missing it.
+
 ---
 
 ## [0.19.3] - 2026-03-18

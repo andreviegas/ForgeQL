@@ -193,3 +193,60 @@ fn change_multi_file_with_content_rejected() {
     );
     assert!(c.plan(&ctx(), &ws, &idx).is_err());
 }
+
+// -----------------------------------------------------------------------
+// Glob expansion in file_list
+// -----------------------------------------------------------------------
+
+#[test]
+fn change_matching_with_glob_expands_to_matching_files() {
+    let (_dir, ws, idx) = setup_workspace();
+
+    // Both fixture files contain "motor" somewhere in their content.
+    let c = ChangeFiles::new(
+        vec!["*.h".to_string(), "*.cpp".to_string()],
+        ChangeTarget::Matching {
+            pattern: "encenderMotor".to_string(),
+            replacement: "startMotor".to_string(),
+        },
+    );
+    let plan = c.plan(&ctx(), &ws, &idx).expect("glob plan");
+    // Should have edits for both .h and .cpp files.
+    assert!(
+        plan.file_edits.len() >= 2,
+        "glob should expand to at least 2 files, got {}",
+        plan.file_edits.len()
+    );
+    plan.apply().expect("apply");
+
+    // Verify both files were changed.
+    let h = fs::read_to_string(ws.root().join("motor_control.h")).expect("read .h");
+    let cpp = fs::read_to_string(ws.root().join("motor_control.cpp")).expect("read .cpp");
+    assert!(h.contains("startMotor"), ".h should contain startMotor");
+    assert!(cpp.contains("startMotor"), ".cpp should contain startMotor");
+    assert!(
+        !h.contains("encenderMotor"),
+        ".h should not contain encenderMotor"
+    );
+    assert!(
+        !cpp.contains("encenderMotor"),
+        ".cpp should not contain encenderMotor"
+    );
+}
+
+#[test]
+fn change_glob_no_match_returns_error() {
+    let (_dir, ws, idx) = setup_workspace();
+    let c = ChangeFiles::new(
+        vec!["*.nonexistent".to_string()],
+        ChangeTarget::Matching {
+            pattern: "x".to_string(),
+            replacement: "y".to_string(),
+        },
+    );
+    let err = c.plan(&ctx(), &ws, &idx).unwrap_err();
+    assert!(
+        err.to_string().contains("matched no files"),
+        "expected 'matched no files' error, got: {err}"
+    );
+}
