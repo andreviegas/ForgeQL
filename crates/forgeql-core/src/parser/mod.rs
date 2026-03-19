@@ -17,12 +17,17 @@ use crate::ir::{
 #[grammar = "parser/forgeql.pest"]
 pub struct ForgeQLParser;
 
-/// Parse a `ForgeQL` string and return a list of operations.
+/// Parse a `ForgeQL` string and return each statement together with its
+/// original source text.
+///
+/// The source text is trimmed whitespace from the pest `statement` span,
+/// so multi-statement inputs like `"CMD1\nCMD2"` yield two pairs, each
+/// carrying only its own command text — ready for logging.
 ///
 /// # Errors
 /// Returns `Err` if the input does not conform to the `ForgeQL` grammar, or
 /// if an unhandled grammar rule is encountered during dispatch.
-pub fn parse(input: &str) -> Result<Vec<ForgeQLIR>, ForgeError> {
+pub fn parse_with_source(input: &str) -> Result<Vec<(String, ForgeQLIR)>, ForgeError> {
     let pairs = ForgeQLParser::parse(Rule::program, input)
         .map_err(|e| ForgeError::DslParse(e.to_string()))?;
 
@@ -33,16 +38,29 @@ pub fn parse(input: &str) -> Result<Vec<ForgeQLIR>, ForgeError> {
             if statement.as_rule() == Rule::EOI {
                 continue;
             }
+            let source_text = statement.as_str().trim().to_string();
             // Each `statement` rule has exactly one inner variant.
             let inner = statement
                 .into_inner()
                 .next()
                 .ok_or_else(|| ForgeError::DslParse("empty statement wrapper".into()))?;
-            ops.push(parse_statement(inner)?);
+            ops.push((source_text, parse_statement(inner)?));
         }
     }
 
     Ok(ops)
+}
+
+/// Parse a `ForgeQL` string and return a list of operations.
+///
+/// Convenience wrapper around [`parse_with_source`] that discards the
+/// per-statement source text.
+///
+/// # Errors
+/// Returns `Err` if the input does not conform to the `ForgeQL` grammar, or
+/// if an unhandled grammar rule is encountered during dispatch.
+pub fn parse(input: &str) -> Result<Vec<ForgeQLIR>, ForgeError> {
+    parse_with_source(input).map(|v| v.into_iter().map(|(_, ir)| ir).collect())
 }
 
 // parse_statement is inherently long: one match arm per grammar rule.
@@ -396,7 +414,9 @@ fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, Forg
         Rule::change_matching => {
             let mut m = target_inner.into_inner();
             let pattern = next_str(&mut m, "change_matching: expected pattern")?;
-            let replacement = next_str(&mut m, "change_matching: expected replacement")?;
+            let replacement = m.next().map(|p| unquote(p.as_str())).ok_or_else(|| {
+                ForgeError::DslParse("change_matching: expected replacement".into())
+            })?;
             ChangeTarget::Matching {
                 pattern,
                 replacement,
@@ -437,7 +457,10 @@ fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, Forg
                 .as_str()
                 .parse()
                 .map_err(|e| ForgeError::DslParse(format!("change_lines end: {e}")))?;
-            let content = next_str(&mut m, "change_lines: expected content")?;
+            let content = m
+                .next()
+                .map(|p| unquote(p.as_str()))
+                .ok_or_else(|| ForgeError::DslParse("change_lines: expected content".into()))?;
             ChangeTarget::Lines {
                 start,
                 end,

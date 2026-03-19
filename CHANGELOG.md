@@ -9,6 +9,36 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.19.7] - 2026-03-19
+
+### Fixed
+
+- **`VERIFY` via MCP now requires `session_id`** — previously, calling
+  `VERIFY build '<step>'` through the MCP `run_fql` tool without a
+  `session_id` silently fell back to a filesystem search rooted at the
+  engine's data directory, which never found `.forgeql.yaml` and always
+  returned *"step not found"*.
+  `VERIFY` now calls `require_session_id` exactly like `FIND`, `SHOW`, and
+  mutations do — a missing `session_id` produces a clear error:
+  *"session_id required — run USE <source>.<branch> first"*.
+  Pass the `session_id` returned by `use_source` (or `USE` via `run_fql`).
+
+- **Multi-statement `run_fql` now executes all operations, not just the first**.
+  When an agent sends multiple FQL statements in a single `run_fql` call
+  (separated by `\n` or real newlines), all of them are now executed in
+  sequence.  Previously only the first was executed and the rest were silently
+  dropped.
+
+- **Query log gets one row per statement** (both MCP and CLI).  The log
+  previously wrote one row for the entire input string, which was truncated
+  at 80 chars and mixed all statements together, making `source_lines` and
+  token counts meaningless for multi-statement inputs.  Each executed
+  operation now produces its own log row with a compact label derived from
+  the parsed IR (e.g. `FIND symbols`, `SHOW body OF 'Foo::bar'`,
+  `CHANGE FILE 'src/f.cpp' LINES 10-20`).
+
+---
+
 ## [0.19.6] - 2026-03-19
 
 ### Changed

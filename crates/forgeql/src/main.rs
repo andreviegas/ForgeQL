@@ -383,7 +383,7 @@ fn execute_and_print(
         fql.to_string()
     };
 
-    let ops = match parser::parse(&fql_text) {
+    let ops = match parser::parse_with_source(&fql_text) {
         Ok(ops) => ops,
         Err(err) => {
             eprintln!("parse error: {err}");
@@ -395,7 +395,7 @@ fn execute_and_print(
     // it across the loop without re-borrowing for each iteration.
     let mut log = logger;
 
-    for op in &ops {
+    for (source_text, op) in &ops {
         match engine.execute(session.session_id.as_deref(), op) {
             Ok(result) => {
                 // Capture session info from USE results.
@@ -426,7 +426,7 @@ fn execute_and_print(
                 }
                 let output = format!("{result}");
                 if let Some(ref mut l) = log {
-                    l.log(&fql_text, &result, &output);
+                    l.log(source_text, &result, &output);
                 }
                 println!("{output}");
             }

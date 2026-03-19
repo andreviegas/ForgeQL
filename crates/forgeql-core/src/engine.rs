@@ -1046,48 +1046,23 @@ impl ForgeQLEngine {
         session_id: Option<&str>,
         step_name: &str,
     ) -> Result<ForgeQLResult> {
-        // Use frozen verify steps when available — prevents config tampering
+        let session = self.require_session(require_session_id(session_id)?)?;
+        // Use the verify steps frozen at USE time — prevents config tampering
         // between session start and VERIFY execution.
-        let (step, workdir) = if let Some(session) = session_id
-            .and_then(|sid| self.sessions.get(sid))
-            .filter(|s| s.frozen_verify_steps.is_some())
-        {
-            let frozen_steps = session.frozen_verify_steps.as_deref().unwrap_or(&[]);
-            let wd = session
-                .frozen_workdir
-                .clone()
-                .unwrap_or_else(|| session.worktree_path.clone());
-            let s = frozen_steps
-                    .iter()
-                    .find(|s| s.name == step_name)
-                    .cloned()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
-                        )
-                    })?;
-            (s, wd)
-        } else {
-            // Fallback: no session with frozen config — load from disk.
-            let search_path = session_id
-                .and_then(|sid| self.sessions.get(sid))
-                .map_or_else(|| self.data_dir.clone(), |s| s.worktree_path.clone());
-            let config_path = ForgeConfig::find(&search_path).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
-                    )
-                })?;
-            let wd = config_path.parent().unwrap_or(&search_path).to_path_buf();
-            let s = ForgeConfig::load(&config_path)
-                    .ok()
-                    .and_then(|cfg| cfg.verify_steps.into_iter().find(|s| s.name == step_name))
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
-                        )
-                    })?;
-            (s, wd)
-        };
+        let frozen_steps = session.frozen_verify_steps.as_deref().unwrap_or(&[]);
+        let workdir = session
+            .frozen_workdir
+            .clone()
+            .unwrap_or_else(|| session.worktree_path.clone());
+        let step = frozen_steps
+            .iter()
+            .find(|s| s.name == step_name)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
+                )
+            })?;
         let result = verify::run_standalone(&step, &workdir);
         Ok(ForgeQLResult::VerifyBuild(VerifyBuildResult {
             step: result.step,

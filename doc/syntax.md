@@ -520,8 +520,6 @@ Replace a specific line range with new content. Typically chained after a `SHOW 
 CHANGE FILE 'file_path' LINES n-m WITH 'new_content'
 ```
 
-> **Escape sequences** — the content string is interpreted literally. Backslash sequences (`\n`, `\t`, etc.) are **not** expanded. Use actual newlines and tabs inside the string literal.
-
 **Examples**
 
 ```sql
@@ -1111,4 +1109,4 @@ FIND symbols
 | Template functions | `SHOW callees OF` / `FIND callees OF` returns empty for C++ template functions | Use `FIND usages OF 'name'` to find all reference sites |
 | Scope filtering | `FIND globals` returns file-scope declarations only. C++ has no `extern`-vs-`static` distinction in the AST; use `WHERE storage != 'static'` to exclude internal linkage. | Filter with `scope` and `storage` dynamic fields |
 | Numeric coercion | `value >= N` silently skips rows where `value` is non-decimal (hex, symbolic constants) | Use `WHERE value LIKE 'pattern'` for non-integer values |
-| Escape sequences | `CHANGE … WITH 'text'` interprets content literally — `\n` is two characters, not a newline | Write actual newlines inside the string literal |
+

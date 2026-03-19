@@ -270,36 +270,49 @@ impl ForgeQlMcp {
         Parameters(params): Parameters<RunFqlParams>,
     ) -> Result<CallToolResult, ErrorData> {
         debug!(fql = %params.fql, format = ?params.format, "run_fql");
-        let ops = parser::parse(&params.fql).map_err(parse_error)?;
-        // Execute only the first parsed operation (MCP is call-response, not batch).
-        let op = ops
-            .first()
-            .ok_or_else(|| ErrorData::invalid_params("empty FQL statement", None))?;
-        // Source management is administrator-only — agents may not clone
-        // arbitrary repositories or mutate the source registry via MCP.
-        if matches!(
-            op,
-            ForgeQLIR::CreateSource { .. } | ForgeQLIR::RefreshSource { .. }
-        ) {
-            return Err(ErrorData::invalid_params(
-                "CREATE SOURCE and REFRESH SOURCE are not permitted via MCP. \
-                 Sources are managed by the server administrator. \
-                 Use USE to connect to an existing source.",
-                None,
-            ));
+        let ops = parser::parse_with_source(&params.fql).map_err(parse_error)?;
+        if ops.is_empty() {
+            return Err(ErrorData::invalid_params("empty FQL statement", None));
         }
-        let result = exec_engine(&self.engine, params.session_id.as_deref(), op)?;
-        // Update logger source name when a USE operation succeeds.
-        if let ForgeQLIR::UseSource { source, .. } = op {
-            self.set_log_source(source);
+        // Validate all ops before executing any — fail fast on forbidden ops.
+        for (_, op) in &ops {
+            if matches!(
+                op,
+                ForgeQLIR::CreateSource { .. } | ForgeQLIR::RefreshSource { .. }
+            ) {
+                return Err(ErrorData::invalid_params(
+                    "CREATE SOURCE and REFRESH SOURCE are not permitted via MCP. \
+                     Sources are managed by the server administrator. \
+                     Use USE to connect to an existing source.",
+                    None,
+                ));
+            }
         }
-        let output = match params.format.unwrap_or_default() {
-            OutputFormat::Csv => result.to_csv(),
-            OutputFormat::Json => result.to_json(),
-        };
-        let output = append_meta(output);
-        self.log_query(&params.fql, &result, &output);
-        Ok(json_result(&output))
+        // Execute each statement individually — one log row per command,
+        // exactly as if each were sent in a separate run_fql call.
+        let format = params.format.unwrap_or_default();
+        let mut outputs: Vec<String> = Vec::with_capacity(ops.len());
+        for (source_text, op) in &ops {
+            let result = exec_engine(&self.engine, params.session_id.as_deref(), op)?;
+            if let ForgeQLIR::UseSource { source, .. } = op {
+                self.set_log_source(source);
+            }
+            let output = match format {
+                OutputFormat::Csv => result.to_csv(),
+                OutputFormat::Json => result.to_json(),
+            };
+            let output = append_meta(output);
+            self.log_query(source_text, &result, &output);
+            outputs.push(output);
+        }
+        // Single statement → return its result directly (no wrapping).
+        // Multiple statements → return a JSON array so the agent sees every result.
+        if let [single] = outputs.as_slice() {
+            Ok(json_result(single))
+        } else {
+            let combined = format!("[{}]", outputs.join(","));
+            Ok(json_result(&combined))
+        }
     }
 
     /// Start or resume a session on a source branch.
