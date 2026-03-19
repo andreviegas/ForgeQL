@@ -47,9 +47,10 @@ use crate::{
     },
     ir::{Clauses, ForgeQLIR},
     result::{
-        CallDirection, CallGraphEntry, FileEntry, ForgeQLResult, MemberEntry, MutationResult,
-        OutlineEntry, QueryResult, RollbackResult, ShowContent, ShowResult, SourceLine,
-        SourceOpResult, SuggestionEntry, SymbolMatch, TransactionResult, VerifyBuildResult,
+        BeginTransactionResult, CallDirection, CallGraphEntry, CommitResult, FileEntry,
+        ForgeQLResult, MemberEntry, MutationResult, OutlineEntry, QueryResult, RollbackResult,
+        ShowContent, ShowResult, SourceLine, SourceOpResult, SuggestionEntry, SymbolMatch,
+        VerifyBuildResult,
     },
     session::Session,
     transforms::{TransformPlan, plan_from_ir},
@@ -257,15 +258,9 @@ impl ForgeQLEngine {
             // --- Mutations ---
             ForgeQLIR::ChangeContent { .. } => self.exec_mutation(session_id, op),
 
-            // --- Composite operations ---
-            ForgeQLIR::Transaction {
-                name,
-                ops,
-                message,
-                verify,
-            } => {
-                self.exec_transaction(session_id, name, ops, verify.as_deref(), message.as_deref())
-            }
+            // --- Checkpoint-based transactions ---
+            ForgeQLIR::BeginTransaction { name } => self.exec_begin_transaction(session_id, name),
+            ForgeQLIR::Commit { message } => self.exec_commit(session_id, message),
             ForgeQLIR::Rollback { name } => self.exec_rollback(session_id, name.as_deref()),
             ForgeQLIR::VerifyBuild { step } => self.exec_verify_build(session_id, step),
         }?;
@@ -857,138 +852,59 @@ impl ForgeQLEngine {
     }
 
     // ===================================================================
-    // Composite operations
+    // Checkpoint-based transactions
     // ===================================================================
 
-    /// `BEGIN TRANSACTION 'name' ... COMMIT MESSAGE '...'`
+    /// `BEGIN TRANSACTION 'name'` — create a named git checkpoint.
     ///
-    /// Plans all inner ops, applies atomically, reindexes, and optionally
-    /// commits to git.
-    fn exec_transaction(
+    /// Auto-commits any dirty working-tree state so the checkpoint OID
+    /// always represents a complete snapshot.
+    ///
+    /// # Errors
+    /// Returns `Err` if the session is missing, git open fails, or the
+    /// internal savepoint commit fails.
+    fn exec_begin_transaction(
         &mut self,
         session_id: Option<&str>,
         name: &str,
-        ops: &[ForgeQLIR],
-        verify: Option<&str>,
-        message: Option<&str>,
     ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
+        let worktree_path = self.require_session(sid)?.worktree_path.clone();
 
-        // Step 1: Plan all ops (pure, no I/O beyond reading source files).
-        let (combined_plan, worktree_path, frozen_verify_steps, frozen_workdir) = {
-            let (workspace, index) = self.require_workspace_and_index(session_id)?;
-            let ctx = RequestContext::admin();
-            let mut combined = TransformPlan::default();
-            for op in ops {
-                let plan = plan_from_ir(op, &ctx, &workspace, index)?;
-                combined.file_edits.extend(plan.file_edits);
-            }
-            let session = self.require_session(sid)?;
-            let wt_path = session.worktree_path.clone();
-            let frozen = session.frozen_verify_steps.clone();
-            let frozen_wd = session.frozen_workdir.clone();
-            (combined, wt_path, frozen, frozen_wd)
-        };
+        let repo = git::open(&worktree_path)?;
 
-        let files_changed: Vec<PathBuf> = combined_plan
-            .file_edits
-            .iter()
-            .map(|fe| fe.path.clone())
-            .collect();
+        // Auto-commit dirty state so the checkpoint OID is a complete snapshot.
+        // Ignore errors from stage_and_commit (e.g. nothing to commit).
+        let checkpoint_msg = format!("forgeql: checkpoint '{name}'");
+        let _ = git::stage_and_commit(&repo, &checkpoint_msg);
 
-        // Step 2: Apply all file edits atomically.
-        let apply_result = combined_plan.apply()?;
-        // Clone originals now — needed for the session rollback slot after apply.
-        let originals = apply_result.originals.clone();
+        let oid = git::head_oid(&repo)?;
 
-        // Step 3: Run VERIFY if requested.
-        // `verify::run_step` consumes `apply_result` and calls rollback on failure.
-        // Always use the steps frozen at session start — prevents an attacker
-        // from overwriting .forgeql.yaml inside the transaction to inject commands.
-        if let Some(step_name) = verify {
-            let (step, workdir_buf) = if let Some(ref frozen) = frozen_verify_steps {
-                let wd = frozen_workdir.unwrap_or_else(|| worktree_path.clone());
-                let s = frozen
-                    .iter()
-                    .find(|s| s.name == step_name)
-                    .cloned()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "VERIFY step '{step_name}' not found in .forgeql.yaml \u{2014} add it under verify_steps:"
-                        )
-                    })?;
-                (s, wd)
-            } else {
-                // Fallback: no frozen config (config was absent at session start).
-                let config_path = ForgeConfig::find(&worktree_path).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "VERIFY step '{step_name}' not found in .forgeql.yaml \u{2014} add it under verify_steps:"
-                    )
-                })?;
-                let wd = config_path.parent().unwrap_or(&worktree_path).to_path_buf();
-                let s = ForgeConfig::load(&config_path)
-                    .ok()
-                    .and_then(|cfg| cfg.verify_steps.into_iter().find(|s| s.name == step_name))
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "VERIFY step '{step_name}' not found in .forgeql.yaml \u{2014} add it under verify_steps:"
-                        )
-                    })?;
-                (s, wd)
-            };
-            if verify::run_step(&step, &workdir_buf, apply_result).is_err() {
-                // Files already rolled back by run_step; discard staged originals.
-                return Ok(ForgeQLResult::Transaction(TransactionResult {
-                    name: name.to_string(),
-                    committed: false,
-                    steps: Vec::new(),
-                    commit_hash: None,
-                    message: message.map(String::from),
-                    verify_step: Some(step_name.to_string()),
-                    verified: Some(false),
-                }));
-            }
-        } else {
-            // No verify — release apply_result (files stay modified on disk).
-            drop(apply_result);
-        }
-
-        // Step 4: Reindex touched files.
-        self.reindex_session(sid, &files_changed);
-
-        // Step 5: Store originals in session for a subsequent ROLLBACK command.
         if let Some(session) = self.sessions.get_mut(sid) {
-            session.last_rollback_data = Some(originals);
+            session.checkpoints.push((name.to_string(), oid.clone()));
         }
 
-        // Step 6: Git commit (only when COMMIT MESSAGE clause is present).
-        let mut commit_hash = None;
-        if let Some(msg) = message {
-            match git::open(&worktree_path) {
-                Err(err) => {
-                    warn!(error = %err, "transaction: transforms applied but git open failed");
-                }
-                Ok(repo) => {
-                    match git::stage_paths_and_commit(&repo, &worktree_path, &files_changed, msg) {
-                        Ok(oid) => {
-                            commit_hash = Some(oid);
-                        }
-                        Err(err) => {
-                            warn!(error = %err, "transaction: transforms applied but git commit failed");
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(ForgeQLResult::Transaction(TransactionResult {
+        Ok(ForgeQLResult::BeginTransaction(BeginTransactionResult {
             name: name.to_string(),
-            committed: commit_hash.is_some(),
-            steps: Vec::new(),
+            checkpoint_oid: oid,
+        }))
+    }
+
+    /// `COMMIT MESSAGE 'msg'` — stage all changes and create a git commit.
+    ///
+    /// # Errors
+    /// Returns `Err` if the session is missing, git open or commit fails.
+    fn exec_commit(&self, session_id: Option<&str>, message: &str) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let worktree_path = self.require_session(sid)?.worktree_path.clone();
+
+        let repo = git::open(&worktree_path)?;
+        git::stage_and_commit(&repo, message)?;
+        let commit_hash = git::head_oid(&repo)?;
+
+        Ok(ForgeQLResult::Commit(CommitResult {
+            message: message.to_string(),
             commit_hash,
-            message: message.map(String::from),
-            verify_step: verify.map(String::from),
-            verified: verify.map(|_| true),
         }))
     }
 
@@ -996,12 +912,15 @@ impl ForgeQLEngine {
     // Session lifecycle helpers
     // ===================================================================
 
-    /// Undo the last applied transaction in the session by restoring the
-    /// original file bytes saved in `session.last_rollback_data`.
+    /// Revert to a named checkpoint via `git reset --hard`.
+    ///
+    /// If `name` is given, reverts to that specific checkpoint (and pops all
+    /// checkpoints created after it).  If `name` is `None`, reverts to the
+    /// most recent checkpoint on the stack.
     ///
     /// # Errors
-    /// Returns `Err` if the session has no rollback data (no transaction
-    /// has been applied yet) or if any file write fails.
+    /// Returns `Err` if no matching checkpoint exists, git open fails, or
+    /// the reset itself fails.
     fn exec_rollback(
         &mut self,
         session_id: Option<&str>,
@@ -1009,31 +928,48 @@ impl ForgeQLEngine {
     ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
 
-        // Take rollback data (releases borrow so we can call reindex_session after).
-        let originals = {
+        // Pop the checkpoint (releases mutable borrow before reindex).
+        let (label, oid, worktree_path) = {
             let session = self
                 .sessions
                 .get_mut(sid)
                 .ok_or_else(|| anyhow::anyhow!("session '{sid}' not found"))?;
-            session.last_rollback_data.take()
+
+            let (label, oid) = if let Some(target) = name {
+                // Find the named checkpoint and pop everything from that point onward.
+                let pos = session
+                    .checkpoints
+                    .iter()
+                    .rposition(|(l, _)| l == target)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("no checkpoint named '{target}' in this session")
+                    })?;
+                let (l, o) = session.checkpoints.remove(pos);
+                session.checkpoints.truncate(pos);
+                (l, o)
+            } else {
+                // Pop the most recent checkpoint.
+                session.checkpoints.pop().ok_or_else(|| {
+                    anyhow::anyhow!("no checkpoints available \u{2014} run BEGIN TRANSACTION first")
+                })?
+            };
+            (label, oid, session.worktree_path.clone())
+        };
+
+        // Git reset --hard to the checkpoint OID.
+        let repo = git::open(&worktree_path)?;
+        git::reset_hard(&repo, &oid)?;
+
+        // Full reindex — we cannot know exactly which files changed.
+        if let Some(session) = self.sessions.get_mut(sid)
+            && let Err(err) = session.build_index()
+        {
+            warn!(error = %err, "rollback: index rebuild failed");
         }
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-            "no rollback data available \u{2014} no transaction has been applied in this session"
-        )
-        })?;
-
-        let files_restored: Vec<PathBuf> = originals.keys().cloned().collect();
-
-        for (path, bytes) in &originals {
-            crate::workspace::file_io::write_atomic(path, bytes)?;
-        }
-
-        self.reindex_session(sid, &files_restored);
 
         Ok(ForgeQLResult::Rollback(RollbackResult {
-            name: name.unwrap_or("last").to_string(),
-            files_restored,
+            name: label,
+            reset_to_oid: oid,
         }))
     }
 

@@ -178,8 +178,8 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
 
         Rule::find_stmt => parse_find(pair),
 
-        // `transaction_body_stmt` and `statement` are grammar wrappers — unwrap one level.
-        Rule::transaction_body_stmt | Rule::statement => {
+        // `statement` is a grammar wrapper — unwrap one level.
+        Rule::statement => {
             let inner = pair
                 .into_inner()
                 .next()
@@ -201,6 +201,15 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
                 .map(|l| unquote(l.as_str()))
                 .ok_or_else(|| ForgeError::DslParse("verify: expected step name".into()))?;
             Ok(ForgeQLIR::VerifyBuild { step })
+        }
+
+        Rule::commit_stmt => {
+            let message = pair
+                .into_inner()
+                .next()
+                .map(|l| unquote(l.as_str()))
+                .ok_or_else(|| ForgeError::DslParse("commit: expected message".into()))?;
+            Ok(ForgeQLIR::Commit { message })
         }
 
         r => Err(ForgeError::DslParse(format!("unhandled rule: {r:?}"))),
@@ -496,36 +505,7 @@ fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, Forg
 fn parse_transaction(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
     let mut inner = pair.into_inner();
     let name = next_str(&mut inner, "transaction: expected name")?;
-    let mut ops = Vec::new();
-    let mut verify = None;
-    let mut message = None;
-
-    for p in inner {
-        // Each child is a `transaction_body_stmt` wrapper.
-        let unwrapped = if p.as_rule() == Rule::transaction_body_stmt {
-            p.into_inner()
-                .next()
-                .ok_or_else(|| ForgeError::DslParse("empty transaction_body_stmt".into()))?
-        } else {
-            p
-        };
-        match unwrapped.as_rule() {
-            Rule::verify_stmt => {
-                verify = unwrapped.into_inner().next().map(|l| unquote(l.as_str()));
-            }
-            Rule::commit_stmt => {
-                message = unwrapped.into_inner().next().map(|l| unquote(l.as_str()));
-            }
-            _ => ops.push(parse_statement(unwrapped)?),
-        }
-    }
-
-    Ok(ForgeQLIR::Transaction {
-        name,
-        ops,
-        verify,
-        message,
-    })
+    Ok(ForgeQLIR::BeginTransaction { name })
 }
 
 /// Strip the surrounding single-quotes from a `string_literal` token.
@@ -595,25 +575,40 @@ mod tests {
 
     #[test]
     fn parse_transaction() {
+        let fql = "BEGIN TRANSACTION 'refactor-signal'";
+        let ops = parse(fql).unwrap();
+        match &ops[0] {
+            ForgeQLIR::BeginTransaction { name } => {
+                assert_eq!(name, "refactor-signal");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_commit_standalone() {
+        let fql = "COMMIT MESSAGE 'Refactor signal controller'";
+        let ops = parse(fql).unwrap();
+        match &ops[0] {
+            ForgeQLIR::Commit { message } => {
+                assert_eq!(message, "Refactor signal controller");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_checkpoint_sequence() {
         let fql = "BEGIN TRANSACTION 'refactor-signal'\n\
                    CHANGE FILE 'src/signal.cpp' MATCHING 'setPeakLevel' WITH 'setMaxIntensity'\n\
                    VERIFY build 'release'\n\
                    COMMIT MESSAGE 'Refactor signal controller'";
         let ops = parse(fql).unwrap();
-        match &ops[0] {
-            ForgeQLIR::Transaction {
-                name,
-                ops,
-                verify,
-                message,
-            } => {
-                assert_eq!(name, "refactor-signal");
-                assert_eq!(ops.len(), 1);
-                assert_eq!(verify.as_deref(), Some("release"));
-                assert_eq!(message.as_deref(), Some("Refactor signal controller"));
-            }
-            _ => panic!("wrong variant"),
-        }
+        assert_eq!(ops.len(), 4);
+        assert!(matches!(&ops[0], ForgeQLIR::BeginTransaction { .. }));
+        assert!(matches!(&ops[1], ForgeQLIR::ChangeContent { .. }));
+        assert!(matches!(&ops[2], ForgeQLIR::VerifyBuild { .. }));
+        assert!(matches!(&ops[3], ForgeQLIR::Commit { .. }));
     }
 
     #[test]
@@ -921,18 +916,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_change_in_transaction() {
+    fn parse_change_in_transaction_sequence() {
         let fql = "BEGIN TRANSACTION 'test-change'\n\
                    CHANGE FILE 'file.cpp' MATCHING 'old' WITH 'new'\n\
                    COMMIT MESSAGE 'test'";
         let ops = parse(fql).unwrap();
-        match &ops[0] {
-            ForgeQLIR::Transaction { ops, .. } => {
-                assert_eq!(ops.len(), 1);
-                assert!(matches!(&ops[0], ForgeQLIR::ChangeContent { .. }));
-            }
-            _ => panic!("wrong variant"),
-        }
+        assert_eq!(ops.len(), 3);
+        assert!(matches!(&ops[0], ForgeQLIR::BeginTransaction { .. }));
+        assert!(matches!(&ops[1], ForgeQLIR::ChangeContent { .. }));
+        assert!(matches!(&ops[2], ForgeQLIR::Commit { .. }));
     }
 
     // ── SHOW LINES / FIND files ──────────────────────────────────────────────

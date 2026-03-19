@@ -598,27 +598,65 @@ CHANGE FILE 'src/generated/stale_output.cpp' WITH NOTHING
 
 ## Transaction Commands
 
-Transactions group multiple commands atomically. If any step fails (including build verification), all file changes are rolled back automatically.
+Transactions use a **checkpoint-based** model.  Each command is a standalone
+top-level statement that executes independently and returns its own result.
+This gives AI agents full per-step visibility and the freedom to decide how
+to react to failures (e.g. whether to ROLLBACK after a VERIFY failure).
 
 ---
 
-### `BEGIN TRANSACTION … COMMIT MESSAGE`
+### `BEGIN TRANSACTION`
+
+Create a named git checkpoint.  Any dirty working-tree state is
+auto-committed so the checkpoint always represents a complete snapshot.
 
 ```sql
 BEGIN TRANSACTION 'name'
-  statement
-  [statement ...]
-  [VERIFY build 'target']
+```
+
+| Part | Description |
+|---|---|
+| `'name'` | Checkpoint label — used by `ROLLBACK TRANSACTION 'name'` to revert to this point |
+
+Checkpoints are stored as a stack on the session.  Multiple
+`BEGIN TRANSACTION` calls push new checkpoints; `ROLLBACK` pops back.
+
+---
+
+### `COMMIT MESSAGE`
+
+Stage all changes in the worktree and create a git commit.
+
+```sql
 COMMIT MESSAGE 'message'
 ```
 
 | Part | Description |
 |---|---|
-| `'name'` | Transaction identifier used in logs and rollback messages |
-| `VERIFY build 'target'` | Run a build target defined in `.forgeql.yaml`; the transaction aborts and rolls back if it fails |
-| `COMMIT MESSAGE` | Descriptive message written to the log (and optionally to a git commit) |
+| `'message'` | Git commit message |
 
-Note: `VERIFY` requires the `build` keyword and accepts a single target name. The target must be defined in the project's `.forgeql.yaml` under `verify_steps`. Place the file in the repository root (ForgeQL walks up from the working directory to find it).
+---
+
+### `VERIFY build`
+
+Run a named build/test step from `.forgeql.yaml`.
+
+```sql
+VERIFY build 'step'
+```
+
+| Part | Description |
+|---|---|
+| `'step'` | Name of a `verify_steps` entry in the project's `.forgeql.yaml` |
+
+The command runs the step's shell command in the worktree directory and
+returns a `VerifyBuildResult` with `step`, `success`, and `output` fields.
+VERIFY does **not** auto-rollback on failure — the caller decides.
+
+Note: `VERIFY` requires the `build` keyword and accepts a single target
+name.  The target must be defined in the project's `.forgeql.yaml` under
+`verify_steps`.  Place the file in the repository root (ForgeQL walks up
+from the working directory to find it).
 
 **`.forgeql.yaml` example**
 
@@ -634,97 +672,84 @@ verify_steps:
   - name: release
     command: "./scripts/Build.sh release"
     timeout_secs: 300
-
-# Additional glob patterns to exclude from indexing.
-ignore_patterns:
-  - "build/**"
-  - "third_party/**"
-```
-
-**Examples**
-
-```sql
--- Safe symbol rename with build verification
-BEGIN TRANSACTION 'rename-process'
-  CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
-    MATCHING 'PiscoCode::process' WITH 'PiscoCode::run'
-  VERIFY build 'test'
-COMMIT MESSAGE 'rename PiscoCode::process to PiscoCode::run'
-
--- Multi-step refactor: bump version constant in two files
-BEGIN TRANSACTION 'bump-version'
-  CHANGE FILE 'include/config.h'
-    MATCHING 'PISCO_VERSION "1.3.0"' WITH 'PISCO_VERSION "1.4.0"'
-  CHANGE FILE 'src/generated/version.h'
-    MATCHING '1.3.0' WITH '1.4.0'
-  VERIFY build 'test'
-COMMIT MESSAGE 'bump version to 1.4.0'
-
--- Remove a deprecated helper after verifying nothing breaks
-BEGIN TRANSACTION 'remove-legacyHelper'
-  CHANGE FILE 'src/PiscoCode.cpp'
-    LINES 200-214
-    WITH NOTHING
-  VERIFY build 'test'
-COMMIT MESSAGE 'remove deprecated legacyHelper'
-```
-
----
-
-### `VERIFY build` (standalone)
-
-`VERIFY build` can also be used as a **top-level statement** — outside any
-transaction — to run a named step from `.forgeql.yaml` on demand.
-
-**Syntax**
-
-```sql
-VERIFY build 'step'
-```
-
-| Part | Description |
-|---|---|
-| `'step'` | Name of a `verify_steps` entry in the project's `.forgeql.yaml` |
-
-The command runs the step's shell command in the worktree directory (or the
-data directory when no session is active) and returns a `VerifyBuildResult`
-with `step`, `success`, and `output` fields.
-
-**Example**
-
-```sql
--- Check that all unit tests pass right now, without modifying anything
-VERIFY build 'test'
-```
-
-Result (JSON in MCP mode):
-
-```json
-{
-  "step": "test",
-  "success": true,
-  "output": "All 257 tests passed."
-}
 ```
 
 ---
 
 ### `ROLLBACK`
 
-Restore the session to the state before the last applied transaction. Optionally specify a transaction name.
+Revert the worktree to a previously created checkpoint via `git reset --hard`.
 
 ```sql
 ROLLBACK [TRANSACTION 'name']
 ```
 
-**Examples**
+If `'name'` is given, reverts to that specific checkpoint (and removes all
+checkpoints created after it).  Without a name, reverts to the most recent
+checkpoint on the stack.
+
+---
+
+### Typical workflow
+
+Each statement is sent individually; the AI agent sees every result and
+decides whether to proceed, verify, commit, or rollback.
 
 ```sql
--- Roll back the most recent transaction
-ROLLBACK
+-- 1. Create a checkpoint before making changes
+BEGIN TRANSACTION 'rename-process'
 
--- Roll back a specific named transaction
+-- 2. Apply mutations (each returns its own result)
+CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
+  MATCHING 'PiscoCode::process' WITH 'PiscoCode::run'
+
+-- 3. Verify the build still passes
+VERIFY build 'test'
+
+-- 4a. If VERIFY passed → commit
+COMMIT MESSAGE 'rename PiscoCode::process to PiscoCode::run'
+
+-- 4b. If VERIFY failed → rollback to the checkpoint
 ROLLBACK TRANSACTION 'rename-process'
+```
+
+**Multi-step refactor**
+
+```sql
+BEGIN TRANSACTION 'bump-version'
+
+CHANGE FILE 'include/config.h'
+  MATCHING 'PISCO_VERSION "1.3.0"' WITH 'PISCO_VERSION "1.4.0"'
+CHANGE FILE 'src/generated/version.h'
+  MATCHING '1.3.0' WITH '1.4.0'
+
+VERIFY build 'test'
+COMMIT MESSAGE 'bump version to 1.4.0'
+```
+
+**Checkpoint stack (selective rollback)**
+
+Multiple `BEGIN TRANSACTION` calls push checkpoints. `ROLLBACK` can target
+any earlier checkpoint by name, discarding all checkpoints created after it.
+
+```sql
+-- Phase 1: rename the symbol
+BEGIN TRANSACTION 'phase-1-rename'
+CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
+  MATCHING 'OldName' WITH 'NewName'
+VERIFY build 'test'
+COMMIT MESSAGE 'rename OldName to NewName'
+
+-- Phase 2: add a new parameter
+BEGIN TRANSACTION 'phase-2-add-param'
+CHANGE FILE 'include/NewName.h'
+  LINES 12-12
+  WITH 'void NewName::run(Buffer& buf, int flags);'
+VERIFY build 'test'
+
+-- Phase 2 failed — roll back to phase-1 checkpoint only;
+-- the rename commit from phase 1 is preserved.
+ROLLBACK TRANSACTION 'phase-2-add-param'
 ```
 
 ---

@@ -132,11 +132,14 @@ fn change_ranges(old: &[&str], new: &[&str]) -> Vec<ChangeRange> {
 /// Complexity: O(m·n) time and space.  For very large files the function
 /// returns an empty vec (→ whole-file replacement diff).
 fn lcs_matches(old: &[&str], new: &[&str]) -> Vec<(usize, usize)> {
+    /// Maximum O(m·n) cell count before falling back to whole-file diff.
+    const MYERS_CELL_CAP: usize = 4_000_000;
+
     let m = old.len();
     let n = new.len();
 
-    // Guard against pathological inputs.
-    if m.saturating_mul(n) > 4_000_000 {
+    // Guard against pathological inputs (O(m·n) space).
+    if m.saturating_mul(n) > MYERS_CELL_CAP {
         return Vec::new();
     }
 

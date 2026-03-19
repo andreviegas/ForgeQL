@@ -179,7 +179,9 @@ fn json_result(json: &str) -> CallToolResult {
 /// All `ForgeQL` responses are single top-level JSON objects, so we splice
 /// the field in before the closing `}`.
 fn append_meta(json: String) -> String {
-    let tokens_approx = json.len().div_ceil(4);
+    /// Approximate number of UTF-8 characters per LLM token.
+    const CHARS_PER_TOKEN: usize = 4;
+    let tokens_approx = json.len().div_ceil(CHARS_PER_TOKEN);
     if json.ends_with('}') {
         format!(
             "{},\"tokens_approx\":{tokens_approx}}}",

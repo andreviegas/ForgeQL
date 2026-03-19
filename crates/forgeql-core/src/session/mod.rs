@@ -10,7 +10,6 @@
 ///   2. On resume: reload from disk if the HEAD commit hash matches;
 ///      otherwise fall back to a full rebuild.
 ///      (True incremental re-index is deferred to Phase D.)
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -59,10 +58,12 @@ pub struct Session {
     /// Monotonic timestamp of the last request that touched this session.
     /// Used by the TTL eviction task to detect idle sessions.
     last_active: std::time::Instant,
-    /// Original file bytes from the last successfully applied transaction.
-    /// Set by `exec_transaction` after apply; consumed by `exec_rollback`.
-    /// `None` if no transaction has been applied in this session, or after a rollback.
-    pub last_rollback_data: Option<HashMap<PathBuf, Vec<u8>>>,
+    /// Named checkpoint stack for the checkpoint-based transaction model.
+    ///
+    /// Each entry is `(label, git_oid)`.  `BEGIN TRANSACTION 'label'` pushes
+    /// a new entry; `ROLLBACK [TRANSACTION 'label']` pops back to (and
+    /// including) the named checkpoint.
+    pub checkpoints: Vec<(String, String)>,
     /// Verify steps frozen from `.forgeql.yaml` at session start (`USE` time).
     /// VERIFY build uses these instead of re-reading the file, so a CHANGE
     /// command cannot inject malicious commands by overwriting `.forgeql.yaml`.
@@ -98,7 +99,7 @@ impl Session {
             index: None,
             cached_commit: None,
             last_active: std::time::Instant::now(),
-            last_rollback_data: None,
+            checkpoints: Vec::new(),
             frozen_verify_steps: None,
             frozen_workdir: None,
         }

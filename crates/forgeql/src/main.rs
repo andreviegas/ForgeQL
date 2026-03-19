@@ -31,6 +31,13 @@ use rustyline::error::ReadlineError;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+/// Maximum characters kept in the CSV log command preview column.
+const LOG_PREVIEW_MAX_CHARS: usize = 160;
+
+/// Approximate number of UTF-8 characters per LLM token (used for
+/// rough token-count estimates in the query log).
+const CHARS_PER_TOKEN: usize = 4;
+
 // -----------------------------------------------------------------------
 // CLI definition
 // -----------------------------------------------------------------------
@@ -508,18 +515,18 @@ impl QueryLogger {
             );
         }
 
-        // Clip command to 80 chars, flatten newlines, and CSV-escape quotes.
-        let preview: String = fql
+        // Use only the first line of the command (transactions span multiple
+        // lines but the opening line is the meaningful label).
+        let first_line = fql.lines().next().unwrap_or(fql).trim();
+        let preview: String = first_line
             .chars()
-            .take(80)
+            .take(LOG_PREVIEW_MAX_CHARS)
             .collect::<String>()
-            .replace(['\n', '\r', '\t'], " ")
             .replace('"', "\"\"");
 
         let source_lines = result.source_lines_count();
-        // Token approximation: 1 token ≈ 4 UTF-8 characters.
-        let tokens_sent = fql.len().div_ceil(4);
-        let tokens_received = result_output.len().div_ceil(4);
+        let tokens_sent = fql.len().div_ceil(CHARS_PER_TOKEN);
+        let tokens_received = result_output.len().div_ceil(CHARS_PER_TOKEN);
 
         let _ = writeln!(
             file,

@@ -9,6 +9,40 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.20.0] - 2026-03-19
+
+### Changed
+
+- **Transactions redesigned as checkpoint-based model** (breaking change).
+  `BEGIN TRANSACTION 'name'` is now a **standalone statement** that creates a
+  named git checkpoint (records the current HEAD OID after auto-committing any
+  dirty working-tree state).  `COMMIT MESSAGE 'msg'` is now a **standalone
+  statement** that stages all changes and creates a git commit.  `ROLLBACK
+  [TRANSACTION 'name']` reverts to a named checkpoint via `git reset --hard`.
+  Each command executes independently and returns its own result, giving AI
+  agents full per-step visibility and decision-making control.
+
+  **Before (0.19.x):** `BEGIN TRANSACTION ... COMMIT` was a single compound
+  grammar block.  All inner operations were planned and applied atomically.
+  VERIFY auto-rolled back on failure.
+
+  **After (0.20.0):** Each statement is sent individually.  The AI sees every
+  result and decides whether to proceed, verify, commit, or rollback.
+
+  ```sql
+  BEGIN TRANSACTION 'rename-api'
+  CHANGE FILES 'src/**/*.cpp' MATCHING 'oldName' WITH 'newName'
+  VERIFY build 'test'
+  COMMIT MESSAGE 'rename oldName to newName'
+  ```
+
+- **`ROLLBACK` now uses `git reset --hard`** instead of restoring in-memory
+  file snapshots.  Session checkpoints are stored as `(label, git_oid)` pairs
+  on a stack.  `ROLLBACK TRANSACTION 'name'` also removes all checkpoints
+  created after the named one.
+
+---
+
 ## [0.19.7] - 2026-03-19
 
 ### Fixed

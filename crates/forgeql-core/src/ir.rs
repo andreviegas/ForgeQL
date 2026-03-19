@@ -279,19 +279,16 @@ pub enum ForgeQLIR {
     },
 
     // ------------------------------------------------------------------
-    // Composite operations
+    // Checkpoint-based transactions
     // ------------------------------------------------------------------
-    Transaction {
-        name: String,
-        ops: Vec<Self>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        verify: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        message: Option<String>,
-    },
+    /// `BEGIN TRANSACTION 'name'` — create a named git checkpoint.
+    BeginTransaction { name: String },
 
-    /// `ROLLBACK [TRANSACTION 'name']` — restore the session to the state
-    /// before the last applied transaction.
+    /// `COMMIT MESSAGE 'msg'` — stage all changes and create a git commit.
+    Commit { message: String },
+
+    /// `ROLLBACK [TRANSACTION 'name']` — revert to a named checkpoint
+    /// via `git reset --hard`.
     Rollback {
         #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,

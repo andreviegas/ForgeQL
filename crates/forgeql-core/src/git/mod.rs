@@ -51,6 +51,31 @@ pub fn create_branch(repo: &Repository, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Return the current HEAD commit OID as a hex string.
+///
+/// # Errors
+/// Returns `Err` if HEAD cannot be resolved.
+pub fn head_oid(repo: &Repository) -> Result<String> {
+    let oid = repo.head()?.peel_to_commit()?.id();
+    Ok(oid.to_string())
+}
+
+/// Hard-reset the repository to the commit identified by `oid_hex`.
+///
+/// This is equivalent to `git reset --hard <oid>`.  It moves HEAD, updates
+/// the index, and checks out the tree — any uncommitted changes are lost.
+///
+/// # Errors
+/// Returns `Err` if the OID cannot be resolved or the reset fails.
+pub fn reset_hard(repo: &Repository, oid_hex: &str) -> Result<()> {
+    let oid = git2::Oid::from_str(oid_hex)?;
+    let commit = repo.find_commit(oid)?;
+    let obj = commit.into_object();
+    repo.reset(&obj, git2::ResetType::Hard, None)?;
+    debug!(oid = oid_hex, "git reset --hard");
+    Ok(())
+}
+
 /// Stage all modified files and commit with the given message.
 ///
 /// # Errors

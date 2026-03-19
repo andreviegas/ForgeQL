@@ -44,6 +44,7 @@ statement = {
     transaction_stmt
   | rollback_stmt
   | verify_stmt
+  | commit_stmt
   | create_source_stmt
   | refresh_source_stmt
   | use_stmt
@@ -141,16 +142,8 @@ change_with_content = { "WITH" ~ string_literal }
 // Transactions
 // -----------------------------------------------------------------------
 
-transaction_body_stmt = {
-    change_stmt
-  | find_stmt
-  | verify_stmt
-  | commit_stmt
-}
-
 transaction_stmt = {
     "BEGIN" ~ "TRANSACTION" ~ string_literal
-    ~ transaction_body_stmt+
 }
 
 rollback_stmt = { "ROLLBACK" ~ ("TRANSACTION" ~ string_literal)? }

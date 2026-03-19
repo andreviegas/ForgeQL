@@ -36,8 +36,10 @@ pub enum ForgeQLResult {
     Mutation(MutationResult),
     /// Source and session lifecycle: CREATE SOURCE, USE, DISCONNECT, etc.
     SourceOp(SourceOpResult),
-    /// Transaction: BEGIN TRANSACTION ... COMMIT
-    Transaction(TransactionResult),
+    /// Checkpoint: BEGIN TRANSACTION 'name'
+    BeginTransaction(BeginTransactionResult),
+    /// Commit: COMMIT MESSAGE 'msg'
+    Commit(CommitResult),
     /// Plan preview: `DRY_RUN` and `EXPLAIN` (never writes files).
     Plan(PlanResult),
     /// Rollback: ROLLBACK [TRANSACTION 'name']
@@ -301,27 +303,22 @@ pub struct SourceOpResult {
 // Transaction results
 // -----------------------------------------------------------------------
 
-/// Result of a BEGIN TRANSACTION ... COMMIT block.
+/// Result of a `BEGIN TRANSACTION 'name'` — checkpoint created.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TransactionResult {
-    /// Transaction name.
+pub struct BeginTransactionResult {
+    /// Checkpoint label.
     pub name: String,
-    /// Whether the transaction was committed (false if rolled back).
-    pub committed: bool,
-    /// Results from each inner mutation step.
-    pub steps: Vec<MutationResult>,
-    /// Git commit hash (if committed).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commit_hash: Option<String>,
-    /// Commit message (if committed).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    /// Name of the VERIFY build step that was run (if any).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verify_step: Option<String>,
-    /// Whether VERIFY passed (`None` if no VERIFY clause was used).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verified: Option<bool>,
+    /// Git commit OID recorded as the checkpoint.
+    pub checkpoint_oid: String,
+}
+
+/// Result of a `COMMIT MESSAGE 'msg'` — git commit created.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitResult {
+    /// Commit message.
+    pub message: String,
+    /// Git commit hash of the new commit.
+    pub commit_hash: String,
 }
 
 // -----------------------------------------------------------------------
@@ -331,10 +328,10 @@ pub struct TransactionResult {
 /// Result of a `ROLLBACK [TRANSACTION 'name']` operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RollbackResult {
-    /// The transaction name (or `"last"` if none was specified).
+    /// The checkpoint label (or `"last"` if none was specified).
     pub name: String,
-    /// Paths of files whose content was restored.
-    pub files_restored: Vec<PathBuf>,
+    /// Git commit OID that was reset to.
+    pub reset_to_oid: String,
 }
 
 // -----------------------------------------------------------------------
@@ -439,16 +436,6 @@ impl ForgeQLResult {
                     relativize(&mut s.path, worktree_root);
                 }
             }
-            Self::Transaction(t) => {
-                for step in &mut t.steps {
-                    for p in &mut step.files_changed {
-                        relativize(p, worktree_root);
-                    }
-                    for s in &mut step.suggestions {
-                        relativize(&mut s.path, worktree_root);
-                    }
-                }
-            }
             Self::Plan(p) => {
                 for fe in &mut p.file_edits {
                     relativize(&mut fe.path, worktree_root);
@@ -457,12 +444,11 @@ impl ForgeQLResult {
                     relativize(&mut s.path, worktree_root);
                 }
             }
-            Self::SourceOp(_) | Self::VerifyBuild(_) => {}
-            Self::Rollback(r) => {
-                for p in &mut r.files_restored {
-                    relativize(p, worktree_root);
-                }
-            }
+            Self::BeginTransaction(_)
+            | Self::Commit(_)
+            | Self::SourceOp(_)
+            | Self::VerifyBuild(_)
+            | Self::Rollback(_) => {}
         }
     }
 
@@ -499,7 +485,8 @@ impl fmt::Display for ForgeQLResult {
             Self::Show(result) => write!(formatter, "{result}"),
             Self::Mutation(result) => write!(formatter, "{result}"),
             Self::SourceOp(result) => write!(formatter, "{result}"),
-            Self::Transaction(result) => write!(formatter, "{result}"),
+            Self::BeginTransaction(result) => write!(formatter, "{result}"),
+            Self::Commit(result) => write!(formatter, "{result}"),
             Self::Plan(result) => write!(formatter, "{result}"),
             Self::Rollback(result) => write!(formatter, "{result}"),
             Self::VerifyBuild(result) => write!(formatter, "{result}"),
@@ -665,53 +652,36 @@ impl fmt::Display for SourceOpResult {
     }
 }
 
-impl fmt::Display for TransactionResult {
+impl fmt::Display for BeginTransactionResult {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let status = if self.committed {
-            "Committed"
-        } else {
-            "Rolled back"
-        };
         writeln!(
             formatter,
-            "Transaction '{name}': {status}",
-            name = self.name
-        )?;
-        for (index, step) in self.steps.iter().enumerate() {
-            writeln!(
-                formatter,
-                "  Step {step_num}: {op} — {edits} edit(s)",
-                step_num = index + 1,
-                op = step.op,
-                edits = step.edit_count,
-            )?;
-        }
-        if let Some(verified) = self.verified {
-            let vstatus = if verified {
-                "PASSED"
-            } else {
-                "FAILED (rolled back)"
-            };
-            let step = self.verify_step.as_deref().unwrap_or("");
-            writeln!(formatter, "Verify '{step}': {vstatus}")?;
-        }
-        if let Some(ref hash) = self.commit_hash {
-            writeln!(formatter, "Commit: {hash}")?;
-        }
-        if let Some(ref message) = self.message {
-            writeln!(formatter, "Message: {message}")?;
-        }
-        Ok(())
+            "Checkpoint '{name}' created (oid: {oid})",
+            name = self.name,
+            oid = self.checkpoint_oid,
+        )
+    }
+}
+
+impl fmt::Display for CommitResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            formatter,
+            "Committed: {hash}\nMessage: {msg}",
+            hash = self.commit_hash,
+            msg = self.message,
+        )
     }
 }
 
 impl fmt::Display for RollbackResult {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(formatter, "Rolled back transaction '{}'", self.name)?;
-        for path in &self.files_restored {
-            writeln!(formatter, "  restored: {}", path.display())?;
-        }
-        Ok(())
+        writeln!(
+            formatter,
+            "Rolled back to checkpoint '{name}' (oid: {oid})",
+            name = self.name,
+            oid = self.reset_to_oid,
+        )
     }
 }
 
@@ -1081,34 +1051,40 @@ mod tests {
     }
 
     #[test]
-    fn transaction_result_round_trips_through_json() {
-        let result = ForgeQLResult::Transaction(TransactionResult {
+    fn begin_transaction_result_round_trips_through_json() {
+        let result = ForgeQLResult::BeginTransaction(BeginTransactionResult {
             name: "rename-signal-api".to_string(),
-            committed: true,
-            steps: vec![MutationResult {
-                op: "rename_symbol".to_string(),
-                applied: true,
-                files_changed: vec![PathBuf::from("src/signal.cpp")],
-                edit_count: 2,
-                diff: None,
-                suggestions: vec![],
-            }],
-            commit_hash: Some("abc123def456".to_string()),
-            message: Some("Rename signal controller API".to_string()),
-            verify_step: None,
-            verified: None,
+            checkpoint_oid: "abc123def456".to_string(),
         });
 
         let json_string = result.to_json();
         let deserialized: ForgeQLResult = serde_json::from_str(&json_string).unwrap();
 
         match deserialized {
-            ForgeQLResult::Transaction(tx_result) => {
-                assert!(tx_result.committed);
-                assert_eq!(tx_result.steps.len(), 1);
-                assert_eq!(tx_result.commit_hash.as_deref(), Some("abc123def456"));
+            ForgeQLResult::BeginTransaction(bt) => {
+                assert_eq!(bt.name, "rename-signal-api");
+                assert_eq!(bt.checkpoint_oid, "abc123def456");
             }
-            other => panic!("expected Transaction variant, got: {other:?}"),
+            other => panic!("expected BeginTransaction variant, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn commit_result_round_trips_through_json() {
+        let result = ForgeQLResult::Commit(CommitResult {
+            message: "Rename signal controller API".to_string(),
+            commit_hash: "abc123def456".to_string(),
+        });
+
+        let json_string = result.to_json();
+        let deserialized: ForgeQLResult = serde_json::from_str(&json_string).unwrap();
+
+        match deserialized {
+            ForgeQLResult::Commit(c) => {
+                assert_eq!(c.message, "Rename signal controller API");
+                assert_eq!(c.commit_hash, "abc123def456");
+            }
+            other => panic!("expected Commit variant, got: {other:?}"),
         }
     }
 
