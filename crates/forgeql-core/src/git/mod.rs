@@ -12,8 +12,23 @@ pub mod worktree;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use git2::Repository;
+use git2::{BranchType, Repository};
 use tracing::debug;
+
+/// Return the current HEAD commit hash of a local branch in a bare repo.
+///
+/// Returns `None` if the repo cannot be opened or the branch does not exist.
+#[must_use]
+pub fn branch_head(repo_path: &Path, branch: &str) -> Option<String> {
+    let repo = git2::Repository::open_bare(repo_path).ok()?;
+    let commit = repo
+        .find_branch(branch, BranchType::Local)
+        .ok()?
+        .into_reference()
+        .peel_to_commit()
+        .ok()?;
+    Some(commit.id().to_string())
+}
 
 /// Open the git repository containing `workspace_root`.
 ///

@@ -197,6 +197,12 @@ impl Session {
         self.index.as_mut()
     }
 
+    /// The commit hash the current index was built from, if available.
+    #[must_use]
+    pub fn cached_commit(&self) -> Option<&str> {
+        self.cached_commit.as_deref()
+    }
+
     /// Incrementally re-index the given files after a mutation.
     ///
     /// Each path is purged (all stale entries removed) then re-parsed.

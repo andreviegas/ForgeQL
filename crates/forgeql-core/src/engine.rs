@@ -385,30 +385,73 @@ impl ForgeQLEngine {
         info!(%source_name, %branch, ?as_branch, "starting session");
 
         // Session resume: if an in-memory session already exists for this
-        // source + branch + as_branch combination, return it immediately.
-        if let Some((existing_id, existing_session)) = self.sessions.iter().find(|(_, s)| {
-            s.source_name == source_name
-                && as_branch.map_or_else(
-                    || s.branch == branch && s.custom_branch.is_none(),
-                    |ab| s.custom_branch.as_deref() == Some(ab),
-                )
-        }) {
-            let symbols_indexed = existing_session.index().map_or(0, |idx| idx.rows.len());
-            info!(
-                session_id = %existing_id,
-                %source_name,
-                %branch,
-                "session resume — reusing existing in-memory session"
-            );
-            return Ok(ForgeQLResult::SourceOp(SourceOpResult {
-                op: "use_source".to_string(),
-                source_name: Some(source_name.to_string()),
-                session_id: Some(existing_id.clone()),
-                branches: Vec::new(),
-                symbols_indexed: Some(symbols_indexed),
-                resumed: true,
-                message: as_branch.map(|ab| format!("as_branch: {ab}")),
-            }));
+        // source + branch + as_branch combination, reuse it — unless the
+        // branch HEAD in the bare repo has moved (e.g. after REFRESH SOURCE),
+        // in which case evict the stale session and fall through to create a
+        // fresh one.
+        //
+        // We collect the decision into `resume_outcome` before mutating
+        // `self.sessions` to avoid holding a shared borrow across a mutable one.
+        let resume_outcome: Option<(String, Option<usize>)> = {
+            if let Some((existing_id, existing_session)) = self.sessions.iter().find(|(_, s)| {
+                s.source_name == source_name
+                    && as_branch.map_or_else(
+                        || s.branch == branch && s.custom_branch.is_none(),
+                        |ab| s.custom_branch.as_deref() == Some(ab),
+                    )
+            }) {
+                // Compare the bare repo's current branch tip to what we
+                // indexed.  If `branch_head` returns None (repo unavailable
+                // or branch missing) we treat the session as fresh to avoid
+                // spurious evictions.
+                let is_stale = self
+                    .registry
+                    .get(source_name)
+                    .and_then(|src| git::branch_head(src.path(), branch))
+                    .is_some_and(|head| {
+                        existing_session.cached_commit().is_some_and(|c| c != head)
+                    });
+                if is_stale {
+                    info!(
+                        session_id = %existing_id,
+                        %source_name,
+                        %branch,
+                        "branch HEAD moved after REFRESH — evicting stale session"
+                    );
+                    Some((existing_id.clone(), None))
+                } else {
+                    let symbols_indexed = existing_session.index().map_or(0, |idx| idx.rows.len());
+                    info!(
+                        session_id = %existing_id,
+                        %source_name,
+                        %branch,
+                        "session resume — reusing existing in-memory session"
+                    );
+                    Some((existing_id.clone(), Some(symbols_indexed)))
+                }
+            } else {
+                None
+            }
+        };
+        match resume_outcome {
+            Some((id, Some(symbols_indexed))) => {
+                return Ok(ForgeQLResult::SourceOp(SourceOpResult {
+                    op: "use_source".to_string(),
+                    source_name: Some(source_name.to_string()),
+                    session_id: Some(id),
+                    branches: Vec::new(),
+                    symbols_indexed: Some(symbols_indexed),
+                    resumed: true,
+                    message: as_branch.map(|ab| format!("as_branch: {ab}")),
+                }));
+            }
+            Some((stale_id, None)) => {
+                drop(self.sessions.remove(&stale_id));
+                // Fall through to create a new session at the updated HEAD.
+            }
+            None => {
+                // No existing session — fall through to create one.
+            }
         }
 
         // Verify source exists.

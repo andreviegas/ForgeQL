@@ -249,8 +249,12 @@ impl Source {
             let mut fetch_opts = FetchOptions::new();
             let _ = fetch_opts.remote_callbacks(callbacks);
 
-            // Fetch all refs (equivalent to `git fetch --all`).
-            remote.fetch(&[] as &[&str], Some(&mut fetch_opts), None)?;
+            // Fetch all refs — explicitly update local branch refs so that
+            // worktree::create sees the new commits via find_branch(Local).
+            // Using an empty refspec list relies on whatever the bare repo's
+            // remote config has, which may map to refs/remotes/origin/* instead
+            // of refs/heads/*.  The explicit refspec below is deterministic.
+            remote.fetch(&["+refs/heads/*:refs/heads/*"], Some(&mut fetch_opts), None)?;
             info!(source = %self.name, remote = %remote_name, "fetch complete");
         }
 

@@ -9,6 +9,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.19.5] - 2026-03-19
+
+### Fixed
+
+- **`REFRESH SOURCE` now visible to open sessions**: after `REFRESH SOURCE`,
+  the next `USE source.branch` call detects that the bare repo's branch HEAD
+  has moved past the session's indexed commit and automatically evicts the
+  stale in-memory session.  A fresh session is then created from the updated
+  HEAD, triggering a re-index.  Previously, the stale in-memory session was
+  returned unconditionally even when new commits had been fetched.
+
+- **`fetch_all` uses an explicit refspec**: `REFRESH SOURCE` now passes
+  `+refs/heads/*:refs/heads/*` to the remote fetch instead of an empty
+  refspec.  An empty refspec relied on the bare repo's configured remote
+  mapping, which in some libgit2 bare-clone setups maps to
+  `refs/remotes/origin/*` rather than `refs/heads/*`.  With the explicit
+  refspec, local branch refs are always updated and `worktree::create` can
+  reliably find the new commits via `find_branch(Local)`.
+
+---
+
 ## [0.19.4] - 2026-03-19
 
 ### Security
