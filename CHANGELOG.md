@@ -7,6 +7,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.19.4] - 2026-03-19
+
+### Security
+
+- **`CHANGE` commands cannot modify `.forgeql.yaml`**: the mutation planner
+  now rejects any file target whose filename is `.forgeql.yaml` before any
+  I/O is performed.  This closes a command-injection vector where an AI agent
+  could use a `CHANGE` command to overwrite the config file and then trigger
+  `VERIFY build` to execute the tampered shell command.
+
+- **`verify_steps` are frozen at session start**: when `USE source.branch` is
+  executed, the engine reads `.forgeql.yaml` once and stores the `verify_steps`
+  in the session.  Both `VERIFY build` (standalone) and `VERIFY build` inside
+  a transaction now use these frozen steps instead of re-reading the file from
+  disk.  Changes to `.forgeql.yaml` after a session is opened have no effect
+  on which commands `VERIFY` will execute—mirroring how CI systems work.
+
 ### Fixed
 
 - **`CHANGE FILES` now expands glob patterns**: the `file_list` entries

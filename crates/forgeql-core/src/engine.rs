@@ -438,6 +438,16 @@ impl ForgeQLEngine {
         // <worktree>/.forgeql-index is reused when HEAD matches.
         session.resume_index()?;
 
+        // Freeze .forgeql.yaml at session start.  Any later CHANGE command
+        // that modifies the config file on disk has no effect on VERIFY —
+        // the engine always uses these snapshots captured here.
+        if let Some(config_path) = ForgeConfig::find(&session.worktree_path)
+            && let Ok(config) = ForgeConfig::load(&config_path)
+        {
+            session.frozen_workdir = config_path.parent().map(std::path::Path::to_path_buf);
+            session.frozen_verify_steps = Some(config.verify_steps);
+        }
+
         let symbols_indexed = session.index().map_or(0, |idx| idx.rows.len());
         let sid = session_id.clone();
         drop(self.sessions.insert(session_id, session));
@@ -822,7 +832,7 @@ impl ForgeQLEngine {
         let sid = require_session_id(session_id)?;
 
         // Step 1: Plan all ops (pure, no I/O beyond reading source files).
-        let (combined_plan, worktree_path) = {
+        let (combined_plan, worktree_path, frozen_verify_steps, frozen_workdir) = {
             let (workspace, index) = self.require_workspace_and_index(session_id)?;
             let ctx = RequestContext::admin();
             let mut combined = TransformPlan::default();
@@ -830,8 +840,11 @@ impl ForgeQLEngine {
                 let plan = plan_from_ir(op, &ctx, &workspace, index)?;
                 combined.file_edits.extend(plan.file_edits);
             }
-            let wt_path = self.require_session(sid)?.worktree_path.clone();
-            (combined, wt_path)
+            let session = self.require_session(sid)?;
+            let wt_path = session.worktree_path.clone();
+            let frozen = session.frozen_verify_steps.clone();
+            let frozen_wd = session.frozen_workdir.clone();
+            (combined, wt_path, frozen, frozen_wd)
         };
 
         let files_changed: Vec<PathBuf> = combined_plan
@@ -847,22 +860,40 @@ impl ForgeQLEngine {
 
         // Step 3: Run VERIFY if requested.
         // `verify::run_step` consumes `apply_result` and calls rollback on failure.
+        // Always use the steps frozen at session start — prevents an attacker
+        // from overwriting .forgeql.yaml inside the transaction to inject commands.
         if let Some(step_name) = verify {
-            let config_path = ForgeConfig::find(&worktree_path).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "VERIFY step '{step_name}' not found in .forgeql.yaml \u{2014} add it under verify_steps:"
-                )
-            })?;
-            let workdir = config_path.parent().unwrap_or(&worktree_path);
-            let step = ForgeConfig::load(&config_path)
-                .ok()
-                .and_then(|cfg| cfg.verify_steps.into_iter().find(|s| s.name == step_name))
-                .ok_or_else(|| {
+            let (step, workdir_buf) = if let Some(ref frozen) = frozen_verify_steps {
+                let wd = frozen_workdir.unwrap_or_else(|| worktree_path.clone());
+                let s = frozen
+                    .iter()
+                    .find(|s| s.name == step_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "VERIFY step '{step_name}' not found in .forgeql.yaml \u{2014} add it under verify_steps:"
+                        )
+                    })?;
+                (s, wd)
+            } else {
+                // Fallback: no frozen config (config was absent at session start).
+                let config_path = ForgeConfig::find(&worktree_path).ok_or_else(|| {
                     anyhow::anyhow!(
                         "VERIFY step '{step_name}' not found in .forgeql.yaml \u{2014} add it under verify_steps:"
                     )
                 })?;
-            if verify::run_step(&step, workdir, apply_result).is_err() {
+                let wd = config_path.parent().unwrap_or(&worktree_path).to_path_buf();
+                let s = ForgeConfig::load(&config_path)
+                    .ok()
+                    .and_then(|cfg| cfg.verify_steps.into_iter().find(|s| s.name == step_name))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "VERIFY step '{step_name}' not found in .forgeql.yaml \u{2014} add it under verify_steps:"
+                        )
+                    })?;
+                (s, wd)
+            };
+            if verify::run_step(&step, &workdir_buf, apply_result).is_err() {
                 // Files already rolled back by run_step; discard staged originals.
                 return Ok(ForgeQLResult::Transaction(TransactionResult {
                     name: name.to_string(),
@@ -972,23 +1003,48 @@ impl ForgeQLEngine {
         session_id: Option<&str>,
         step_name: &str,
     ) -> Result<ForgeQLResult> {
-        let search_path = session_id
+        // Use frozen verify steps when available — prevents config tampering
+        // between session start and VERIFY execution.
+        let (step, workdir) = if let Some(session) = session_id
             .and_then(|sid| self.sessions.get(sid))
-            .map_or_else(|| self.data_dir.clone(), |s| s.worktree_path.clone());
-        let config_path = ForgeConfig::find(&search_path).ok_or_else(|| {
-            anyhow::anyhow!(
-                "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
-            )
-        })?;
-        let workdir = config_path.parent().unwrap_or(&search_path).to_path_buf();
-        let step = ForgeConfig::load(&config_path)
-            .ok()
-            .and_then(|cfg| cfg.verify_steps.into_iter().find(|s| s.name == step_name))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
-                )
-            })?;
+            .filter(|s| s.frozen_verify_steps.is_some())
+        {
+            let frozen_steps = session.frozen_verify_steps.as_deref().unwrap_or(&[]);
+            let wd = session
+                .frozen_workdir
+                .clone()
+                .unwrap_or_else(|| session.worktree_path.clone());
+            let s = frozen_steps
+                    .iter()
+                    .find(|s| s.name == step_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
+                        )
+                    })?;
+            (s, wd)
+        } else {
+            // Fallback: no session with frozen config — load from disk.
+            let search_path = session_id
+                .and_then(|sid| self.sessions.get(sid))
+                .map_or_else(|| self.data_dir.clone(), |s| s.worktree_path.clone());
+            let config_path = ForgeConfig::find(&search_path).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
+                    )
+                })?;
+            let wd = config_path.parent().unwrap_or(&search_path).to_path_buf();
+            let s = ForgeConfig::load(&config_path)
+                    .ok()
+                    .and_then(|cfg| cfg.verify_steps.into_iter().find(|s| s.name == step_name))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
+                        )
+                    })?;
+            (s, wd)
+        };
         let result = verify::run_standalone(&step, &workdir);
         Ok(ForgeQLResult::VerifyBuild(VerifyBuildResult {
             step: result.step,

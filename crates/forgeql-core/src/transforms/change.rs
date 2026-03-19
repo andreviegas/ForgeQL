@@ -40,6 +40,19 @@ impl ChangeFiles {
         // Expand any glob patterns in the file list before validation.
         let (resolved, from_glob) = resolve_file_globs(&self.files, workspace)?;
 
+        // Security guard: .forgeql.yaml is a protected file.
+        // Allowing CHANGE to overwrite it would let an AI agent inject arbitrary
+        // shell commands that VERIFY build would then execute.
+        for rel_path in &resolved {
+            if std::path::Path::new(rel_path).file_name()
+                == Some(std::ffi::OsStr::new(".forgeql.yaml"))
+            {
+                bail!(
+                    "'.forgeql.yaml' is a protected file and cannot be modified by CHANGE commands"
+                );
+            }
+        }
+
         validate_multi_file(&resolved, &self.target)?;
 
         let mut plan = TransformPlan::default();

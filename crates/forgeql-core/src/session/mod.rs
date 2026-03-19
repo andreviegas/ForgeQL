@@ -18,6 +18,7 @@ use tracing::{debug, info};
 
 use crate::ast::cache::CachedIndex;
 use crate::ast::index::SymbolTable;
+use crate::config::VerifyStep;
 use crate::workspace::Workspace;
 
 // -----------------------------------------------------------------------
@@ -62,6 +63,13 @@ pub struct Session {
     /// Set by `exec_transaction` after apply; consumed by `exec_rollback`.
     /// `None` if no transaction has been applied in this session, or after a rollback.
     pub last_rollback_data: Option<HashMap<PathBuf, Vec<u8>>>,
+    /// Verify steps frozen from `.forgeql.yaml` at session start (`USE` time).
+    /// VERIFY build uses these instead of re-reading the file, so a CHANGE
+    /// command cannot inject malicious commands by overwriting `.forgeql.yaml`.
+    pub frozen_verify_steps: Option<Vec<VerifyStep>>,
+    /// Working directory captured alongside `frozen_verify_steps` — the
+    /// directory that contained `.forgeql.yaml` when the session was opened.
+    pub frozen_workdir: Option<PathBuf>,
 }
 
 impl Session {
@@ -91,6 +99,8 @@ impl Session {
             cached_commit: None,
             last_active: std::time::Instant::now(),
             last_rollback_data: None,
+            frozen_verify_steps: None,
+            frozen_workdir: None,
         }
     }
 
