@@ -426,7 +426,7 @@ fn execute_and_print(
                 }
                 let output = format!("{result}");
                 if let Some(ref mut l) = log {
-                    l.log(&fql_text, &output);
+                    l.log(&fql_text, &result, &output);
                 }
                 println!("{output}");
             }
@@ -482,8 +482,9 @@ impl QueryLogger {
     /// Append one CSV row for the completed FQL statement.
     ///
     /// `fql`           — the raw statement text.
-    /// `result_output` — the serialized JSON output (from `to_csv()` or `to_json()`).
-    pub(crate) fn log(&self, fql: &str, result_output: &str) {
+    /// `result`        — the typed result, used to count disclosed source lines.
+    /// `result_output` — the serialized output string, used to estimate token usage.
+    pub(crate) fn log(&self, fql: &str, result: &ForgeQLResult, result_output: &str) {
         use std::io::Write;
 
         let log_dir = self.data_dir.join("log");
@@ -503,7 +504,7 @@ impl QueryLogger {
         if needs_header {
             let _ = writeln!(
                 file,
-                "timestamp,lines_returned,tokens_sent,tokens_received,command_preview"
+                "timestamp,source_lines,tokens_sent,tokens_received,command_preview"
             );
         }
 
@@ -515,7 +516,7 @@ impl QueryLogger {
             .replace(['\n', '\r', '\t'], " ")
             .replace('"', "\"\"");
 
-        let lines_returned = count_result_rows(result_output);
+        let source_lines = result.source_lines_count();
         // Token approximation: 1 token ≈ 4 UTF-8 characters.
         let tokens_sent = fql.len().div_ceil(4);
         let tokens_received = result_output.len().div_ceil(4);
@@ -524,53 +525,12 @@ impl QueryLogger {
             file,
             r#""{}",{},{},{},"{}""#,
             iso_timestamp(),
-            lines_returned,
+            source_lines,
             tokens_sent,
             tokens_received,
             preview,
         );
     }
-}
-
-/// Count meaningful result rows from a serialized `ForgeQL` output string.
-///
-/// Both `to_csv()` and `to_json()` produce compact single-line JSON, so
-/// `str::lines().count()` always returns 1 — useless in the query log.
-///
-/// Priority order:
-/// 1. `"total"` key — present in query results (CSV and JSON formats).
-///    Reports the number of result rows before LIMIT truncation.
-/// 2. First array among `"results"`, `"members"`, `"entries"`, `"files"` —
-///    fallback for SHOW ops that don't have a `"total"`.
-/// 3. `1` — non-tabular responses (mutations, source ops, errors).
-fn count_result_rows(output: &str) -> usize {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(output) else {
-        return output.lines().count().max(1);
-    };
-    // 1. Explicit total (QueryResult in both CSV and JSON formats).
-    if let Some(total) = v.get("total").and_then(serde_json::Value::as_u64) {
-        return usize::try_from(total).unwrap_or(usize::MAX);
-    }
-    // 2. Largest named array (SHOW ops).
-    for key in &["results", "members", "entries", "files"] {
-        if let Some(arr) = v.get(*key).and_then(serde_json::Value::as_array) {
-            // Subtract 1 for the CSV header row when present.
-            let len = arr.len();
-            let first_is_header = arr
-                .first()
-                .and_then(serde_json::Value::as_array)
-                .and_then(|r| r.first())
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|s| s == "name");
-            return if first_is_header {
-                len.saturating_sub(1)
-            } else {
-                len
-            };
-        }
-    }
-    // 3. Non-tabular result.
-    1
 }
 
 /// Return the current UTC time as an ISO 8601–style string (`YYYY-MM-DD HH:MM:SS`).
@@ -672,41 +632,71 @@ fn save_session_file(sf: &SessionFile) {
 
 #[cfg(test)]
 mod tests {
-    use super::count_result_rows;
+    use forgeql_core::result::{
+        ForgeQLResult, MemberEntry, QueryResult, ShowContent, ShowResult, SourceLine,
+    };
+    use std::path::PathBuf;
 
-    #[test]
-    fn count_result_rows_uses_total_field() {
-        // to_csv() format — {"total": N, "results": [header, ...rows]}
-        let csv = r#"{"total":5,"results":[["name","kind","path","count"],["foo","function_definition","src/a.cpp","3"]]}"#;
-        assert_eq!(
-            count_result_rows(csv),
-            5,
-            "must read 'total' field from CSV format"
-        );
+    fn show_lines_result(n: usize) -> ForgeQLResult {
+        ForgeQLResult::Show(ShowResult {
+            op: "show_lines".to_string(),
+            symbol: None,
+            file: Some(PathBuf::from("src/foo.cpp")),
+            content: ShowContent::Lines {
+                lines: (1..=n)
+                    .map(|i| SourceLine {
+                        line: i,
+                        text: format!("line {i}"),
+                        marker: None,
+                    })
+                    .collect(),
+                byte_start: None,
+                depth: None,
+            },
+            start_line: Some(1),
+            end_line: Some(n),
+        })
     }
 
     #[test]
-    fn count_result_rows_uses_total_from_json_format() {
-        // to_json() Query format
-        let json = r#"{"type":"query","op":"find_symbols","results":[],"total":12}"#;
-        assert_eq!(count_result_rows(json), 12);
+    fn source_lines_count_show_lines() {
+        assert_eq!(show_lines_result(70).source_lines_count(), 70);
     }
 
     #[test]
-    fn count_result_rows_falls_back_to_array_length_for_show_ops() {
-        // SHOW members — no 'total', has 'members' array
-        let json = r#"{"op":"show_members","members":[{"kind":"field","text":"int x;","line":1},{"kind":"method","text":"void foo();","line":2}]}"#;
-        assert_eq!(count_result_rows(json), 2);
+    fn source_lines_count_zero_for_query() {
+        let r = ForgeQLResult::Query(QueryResult {
+            op: "find_symbols".to_string(),
+            results: vec![],
+            total: 0,
+        });
+        assert_eq!(r.source_lines_count(), 0);
     }
 
     #[test]
-    fn count_result_rows_non_tabular_returns_one() {
-        let json = r#"{"type":"mutation","op":"change_content","applied":true,"edit_count":1}"#;
-        assert_eq!(count_result_rows(json), 1);
+    fn source_lines_count_zero_for_show_members() {
+        let r = ForgeQLResult::Show(ShowResult {
+            op: "show_members".to_string(),
+            symbol: Some("MyClass".to_string()),
+            file: None,
+            content: ShowContent::Members {
+                members: vec![MemberEntry {
+                    kind: "field".to_string(),
+                    text: "int x;".to_string(),
+                    line: 1,
+                }],
+                byte_start: 0,
+            },
+            start_line: None,
+            end_line: None,
+        });
+        assert_eq!(r.source_lines_count(), 0);
     }
 
     #[test]
-    fn count_result_rows_non_json_falls_back_to_line_count() {
-        assert_eq!(count_result_rows("plain error message"), 1);
+    fn source_lines_count_increments_with_depth() {
+        // Simulates SHOW BODY DEPTH 1 (10 lines) vs DEPTH 2 (13 lines).
+        assert_eq!(show_lines_result(10).source_lines_count(), 10);
+        assert_eq!(show_lines_result(13).source_lines_count(), 13);
     }
 }

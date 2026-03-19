@@ -45,11 +45,11 @@ impl ForgeQlMcp {
     }
 
     /// Append a log row for a completed FQL statement (no-op when logger is disabled).
-    fn log_query(&self, fql: &str, output: &str) {
+    fn log_query(&self, fql: &str, result: &ForgeQLResult, output: &str) {
         if let Ok(mut guard) = self.logger.lock()
             && let Some(ref mut l) = *guard
         {
-            l.log(fql, output);
+            l.log(fql, result, output);
         }
     }
 
@@ -298,7 +298,7 @@ impl ForgeQlMcp {
             OutputFormat::Json => result.to_json(),
         };
         let output = append_meta(output);
-        self.log_query(&params.fql, &output);
+        self.log_query(&params.fql, &result, &output);
         Ok(json_result(&output))
     }
 
@@ -325,7 +325,7 @@ impl ForgeQlMcp {
         let result = exec_engine(&self.engine, None, &op)?;
         self.set_log_source(&params.source);
         let output = result.to_json();
-        self.log_query(&fql, &output);
+        self.log_query(&fql, &result, &output);
         Ok(json_result(&output))
     }
 

@@ -465,6 +465,27 @@ impl ForgeQLResult {
             }
         }
     }
+
+    /// Count the number of raw source-code lines contained in this result.
+    ///
+    /// Used by the query logger to track how much source code was disclosed
+    /// to the AI agent per operation.  Only `SHOW` results that return actual
+    /// file lines contribute (`SHOW LINES`, `SHOW body`, `SHOW context`).
+    /// Structured metadata results (outline, members, call graph) and all
+    /// query / mutation results return `0` because they carry no raw source
+    /// code.
+    #[must_use]
+    pub const fn source_lines_count(&self) -> usize {
+        if let Self::Show(ShowResult {
+            content: ShowContent::Lines { lines, .. },
+            ..
+        }) = self
+        {
+            lines.len()
+        } else {
+            0
+        }
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -772,8 +793,17 @@ impl ForgeQLResult {
         let Self::Query(query) = self else {
             return self.to_json();
         };
+        // For FIND usages (no GROUP BY) there is no count — each row is one
+        // call site and the 4th column carries the line number. Label it
+        // honestly so callers are not confused by a "count" that is actually
+        // a line number.
+        let count_col = if query.op == "find_usages" {
+            "line"
+        } else {
+            "count"
+        };
         let mut all_rows: Vec<serde_json::Value> =
-            vec![serde_json::json!(["name", "kind", "path", "count"])];
+            vec![serde_json::json!(["name", "kind", "path", count_col])];
         all_rows.extend(query.results.iter().map(|row| {
             // `usages_count` is populated by FIND queries;
             // `count` is populated by COUNT … GROUP BY;
@@ -871,6 +901,36 @@ mod tests {
         assert_eq!(v["results"][1][0], "setPeakLevel");
         assert_eq!(v["results"][1][3], "7");
         assert_eq!(v["total"], 1);
+    }
+
+    #[test]
+    fn csv_find_usages_header_says_line_not_count() {
+        // FIND usages without GROUP BY: each row is a call site; the 4th
+        // column is the line number, so the header must say "line".
+        let result = ForgeQLResult::Query(QueryResult {
+            op: "find_usages".to_string(),
+            results: vec![SymbolMatch {
+                name: "processData".to_string(),
+                node_kind: Some("identifier".to_string()),
+                path: Some(PathBuf::from("src/main.cpp")),
+                line: Some(42),
+                usages_count: None,
+                fields: HashMap::new(),
+                count: None,
+            }],
+            total: 1,
+        });
+        let csv = result.to_csv();
+        let v: serde_json::Value = serde_json::from_str(&csv).unwrap();
+        assert_eq!(
+            v["results"][0],
+            serde_json::json!(["name", "kind", "path", "line"]),
+            "header must say 'line' for find_usages op"
+        );
+        assert_eq!(
+            v["results"][1][3], "42",
+            "line number must appear in column 4"
+        );
     }
 
     #[test]

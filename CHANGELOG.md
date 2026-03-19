@@ -9,6 +9,39 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.19.6] - 2026-03-19
+
+### Changed
+
+- **`source_lines` replaces `lines_returned` in the query log**: the CSV log
+  column now counts the number of raw **source-code lines** actually returned
+  by each operation, not the number of result rows.
+  - `SHOW LINES 61-130` → `70`
+  - `SHOW body` / `SHOW context` → number of lines in the rendered body
+  - `FIND symbols`, `FIND usages`, mutations, source ops → `0` (no source code
+    was disclosed)
+
+  This is tracked to measure how much of a codebase the AI agent has
+  inspected during a session.
+
+### Fixed
+
+- **`SHOW LINES` line count in the query log**: `SHOW LINES` results were
+  always logged as `source_lines=1` because the previous approach parsed the
+  serialised JSON output and did not recognise the `"lines"` array key.
+  Replaced the JSON-parsing `count_result_rows` function entirely with
+  `ForgeQLResult::source_lines_count()`, which works directly on the typed
+  result and handles all current and future result variants correctly.
+
+- **CSV `count` column header is now `line` for `FIND usages`**: when
+  `FIND usages OF 'symbol'` is used without `GROUP BY`, each result row is
+  one call site and the 4th CSV column contains the line number (not a count).
+  The header now says `"line"` instead of `"count"` for this operation so
+  callers are not confused.  All other operations (`FIND symbols`,
+  `COUNT … GROUP BY`, etc.) continue to use `"count"`.
+
+---
+
 ## [0.19.5] - 2026-03-19
 
 ### Fixed
