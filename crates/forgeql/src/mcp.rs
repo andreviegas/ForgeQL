@@ -17,6 +17,7 @@ use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::error::ForgeError;
 use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::parser;
+use forgeql_core::query_logger::QueryLogger;
 use forgeql_core::result::ForgeQLResult;
 
 // -----------------------------------------------------------------------
@@ -31,12 +32,12 @@ use forgeql_core::result::ForgeQLResult;
 pub(crate) struct ForgeQlMcp {
     engine: Mutex<ForgeQLEngine>,
     tool_router: ToolRouter<Self>,
-    logger: Mutex<Option<crate::QueryLogger>>,
+    logger: Mutex<Option<QueryLogger>>,
 }
 
 impl ForgeQlMcp {
     /// Create a new MCP handler wrapping the given engine.
-    pub(crate) fn new(engine: ForgeQLEngine, logger: Option<crate::QueryLogger>) -> Self {
+    pub(crate) fn new(engine: ForgeQLEngine, logger: Option<QueryLogger>) -> Self {
         Self {
             engine: Mutex::new(engine),
             tool_router: Self::tool_router(),

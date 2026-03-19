@@ -9,6 +9,39 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.21.0] - 2026-03-19
+
+### Added
+
+- **`QueryLogger` moved to `forgeql-core`** — the query logger is now a public
+  module (`forgeql_core::query_logger`) in the core library, making it
+  available for integration testing and downstream consumers. Zero new
+  dependencies; the CLI binary now re-exports from core.
+
+- **Comprehensive syntax-coverage test suite** — 156 new integration tests in
+  `syntax_coverage.rs` covering every ForgeQL command, clause, and operator
+  combination documented in `doc/syntax.md`:
+  - FIND symbols with every WHERE operator (`=`, `!=`, `LIKE`, `NOT LIKE`,
+    `>`, `>=`, `<`, `<=`), dynamic fields, ORDER BY, LIMIT, OFFSET, IN,
+    EXCLUDE, GROUP BY, and multi-WHERE combinations.
+  - FIND usages, callees, files, and globals with all clause variants.
+  - SHOW body (depth 0/1/99), signature, outline, members, context, callees,
+    and LINES ranges.
+  - CHANGE + ROLLBACK round-trips: MATCHING, LINES WITH, WITH content,
+    LINES NOTHING, WITH NOTHING, and multi-file glob.
+  - Transaction lifecycle: BEGIN/ROLLBACK named and anonymous, nested
+    transactions.
+  - Error cases: malformed FQL, missing sessions, nonexistent
+    symbols/files/checkpoints.
+  - Parser-only coverage for every clause combination and command variant.
+  - QueryLogger integration: CSV creation, multi-row append, source-name
+    sanitization.
+  - Display and serialization: `to_json` roundtrip, `to_csv`, `Display`.
+
+  Total workspace tests: **427** (was 271).
+
+---
+
 ## [0.20.0] - 2026-03-19
 
 ### Changed

@@ -28,6 +28,7 @@ pub mod filter;
 pub mod git;
 pub mod ir;
 pub mod parser;
+pub mod query_logger;
 pub mod result;
 pub mod session;
 pub mod transforms;
