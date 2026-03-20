@@ -60,7 +60,8 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
         "motor_control.cpp",
         "enrichment_patterns.cpp",
     ] {
-        fs::copy(src.join(file), dir.path().join(file)).expect(&format!("copy {file}"));
+        fs::copy(src.join(file), dir.path().join(file))
+            .unwrap_or_else(|e| panic!("copy {file}: {e}"));
     }
 
     let data_dir = dir.path().join("data");
@@ -93,11 +94,11 @@ fn engine_enrichment_only() -> (ForgeQLEngine, String, tempfile::TempDir) {
 }
 
 fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
-    let ops = parser::parse(fql).expect(&format!("parse failed for: {fql}"));
+    let ops = parser::parse(fql).unwrap_or_else(|e| panic!("parse failed for: {fql}: {e}"));
     let op = ops.first().expect("at least one op");
     engine
         .execute(Some(sid), op)
-        .expect(&format!("execute failed for: {fql}"))
+        .unwrap_or_else(|e| panic!("execute failed for: {fql}: {e}"))
 }
 
 fn as_query(r: &ForgeQLResult) -> &forgeql_core::result::QueryResult {

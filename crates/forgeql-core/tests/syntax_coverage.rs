@@ -34,7 +34,6 @@ use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
 use forgeql_core::result::{ForgeQLResult, ShowContent};
-use git2;
 use tempfile::tempdir;
 
 // -----------------------------------------------------------------------
@@ -121,16 +120,16 @@ fn engine_with_git_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
 
 /// Parse FQL and execute the first op.
 fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
-    let ops = parser::parse(fql).expect(&format!("parse failed for: {fql}"));
+    let ops = parser::parse(fql).unwrap_or_else(|e| panic!("parse failed for: {fql}: {e}"));
     let op = ops.first().expect("at least one op");
     engine
         .execute(Some(sid), op)
-        .expect(&format!("execute failed for: {fql}"))
+        .unwrap_or_else(|e| panic!("execute failed for: {fql}: {e}"))
 }
 
 /// Parse FQL and execute, expecting an engine error.
 fn exec_err(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> String {
-    let ops = parser::parse(fql).expect(&format!("parse failed for: {fql}"));
+    let ops = parser::parse(fql).unwrap_or_else(|e| panic!("parse failed for: {fql}: {e}"));
     let op = ops.first().expect("at least one op");
     engine
         .execute(Some(sid), op)
@@ -1273,7 +1272,7 @@ fn show_body_depth_99() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW body OF 'encenderMotor' DEPTH 99");
     let sr = as_show(&r);
-    let text = format!("{}", r);
+    let text = format!("{r}");
     assert!(
         text.contains("encenderMotor"),
         "full body should contain the function name"

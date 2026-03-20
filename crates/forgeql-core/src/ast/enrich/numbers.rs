@@ -199,9 +199,9 @@ mod tests {
     #[test]
     fn magic_number_boundary() {
         // 0, 1 are not magic
-        assert!(!matches!(0_i64, v if !matches!(v, -1 | 0 | 1)));
-        assert!(!matches!(1_i64, v if !matches!(v, -1 | 0 | 1)));
+        assert!(!matches!(0_i64, v if !matches!(v, -1..=1)));
+        assert!(!matches!(1_i64, v if !matches!(v, -1..=1)));
         // 2 is magic
-        assert!(matches!(2_i64, v if !matches!(v, -1 | 0 | 1)));
+        assert!(matches!(2_i64, v if !matches!(v, -1..=1)));
     }
 }
