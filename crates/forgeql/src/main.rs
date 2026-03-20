@@ -21,7 +21,8 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use forgeql_core::compact;
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::parser;
@@ -59,8 +60,24 @@ struct Cli {
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
 
+    /// Output format: compact (default), text, json.
+    #[arg(long, default_value = "compact", global = true)]
+    format: CliFormat,
+
     #[command(subcommand)]
     command: Option<Commands>,
+}
+
+/// CLI output format.
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum CliFormat {
+    /// Human-friendly terminal output.
+    Text,
+    /// Token-efficient compact CSV (default).
+    #[default]
+    Compact,
+    /// Full structured JSON.
+    Json,
 }
 
 #[derive(Subcommand, Debug)]
@@ -139,10 +156,10 @@ async fn main() -> Result<()> {
 
     match detect_mode(&cli) {
         Mode::Mcp => run_mcp_stdio(engine, logger).await,
-        Mode::Repl => run_repl(engine, logger),
-        Mode::Pipe => run_pipe(engine, logger),
+        Mode::Repl => run_repl(engine, logger, cli.format),
+        Mode::Pipe => run_pipe(engine, logger, cli.format),
         Mode::OneShot { fql, session } => {
-            run_one_shot(engine, &fql, session.as_deref(), logger);
+            run_one_shot(engine, &fql, session.as_deref(), logger, cli.format);
             Ok(())
         }
     }
@@ -176,7 +193,11 @@ async fn run_mcp_stdio(engine: ForgeQLEngine, logger: Option<QueryLogger>) -> Re
 // REPL mode — interactive terminal
 // -----------------------------------------------------------------------
 
-fn run_repl(mut engine: ForgeQLEngine, mut logger: Option<QueryLogger>) -> Result<()> {
+fn run_repl(
+    mut engine: ForgeQLEngine,
+    mut logger: Option<QueryLogger>,
+    format: CliFormat,
+) -> Result<()> {
     let mut editor = DefaultEditor::new().context("failed to initialise line editor")?;
 
     // Load history from config dir.
@@ -222,7 +243,7 @@ fn run_repl(mut engine: ForgeQLEngine, mut logger: Option<QueryLogger>) -> Resul
                     _ => {}
                 }
 
-                execute_and_print(&mut engine, trimmed, &mut session, logger.as_mut());
+                execute_and_print(&mut engine, trimmed, &mut session, logger.as_mut(), format);
             }
             Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
             Err(err) => {
@@ -262,7 +283,11 @@ fn print_repl_help() {
 // Pipe mode — read from stdin, human output to stdout
 // -----------------------------------------------------------------------
 
-fn run_pipe(mut engine: ForgeQLEngine, mut logger: Option<QueryLogger>) -> Result<()> {
+fn run_pipe(
+    mut engine: ForgeQLEngine,
+    mut logger: Option<QueryLogger>,
+    format: CliFormat,
+) -> Result<()> {
     use std::io::BufRead;
 
     let mut session = load_session_file();
@@ -279,7 +304,7 @@ fn run_pipe(mut engine: ForgeQLEngine, mut logger: Option<QueryLogger>) -> Resul
             continue;
         }
 
-        execute_and_print(&mut engine, trimmed, &mut session, logger.as_mut());
+        execute_and_print(&mut engine, trimmed, &mut session, logger.as_mut(), format);
     }
 
     save_session_file(&session);
@@ -295,6 +320,7 @@ fn run_one_shot(
     fql: &str,
     session_override: Option<&str>,
     mut logger: Option<QueryLogger>,
+    format: CliFormat,
 ) {
     let mut session = load_session_file();
     if let Some(sid) = session_override {
@@ -305,7 +331,7 @@ fn run_one_shot(
         log.set_source(src);
     }
 
-    execute_and_print(&mut engine, fql, &mut session, logger.as_mut());
+    execute_and_print(&mut engine, fql, &mut session, logger.as_mut(), format);
 
     save_session_file(&session);
 }
@@ -366,6 +392,7 @@ fn execute_and_print(
     fql: &str,
     session: &mut SessionFile,
     logger: Option<&mut QueryLogger>,
+    format: CliFormat,
 ) {
     // Check if it's an .fql file path.
     let fql_text = if std::path::Path::new(fql)
@@ -425,7 +452,11 @@ fn execute_and_print(
                 if matches!(op, ForgeQLIR::Disconnect) {
                     *session = SessionFile::default();
                 }
-                let output = format!("{result}");
+                let output = match format {
+                    CliFormat::Text => format!("{result}"),
+                    CliFormat::Compact => compact::to_compact(&result),
+                    CliFormat::Json => result.to_json_pretty(),
+                };
                 if let Some(ref mut l) = log {
                     l.log(source_text, &result, &output);
                 }

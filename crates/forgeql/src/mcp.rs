@@ -13,6 +13,7 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use serde::Deserialize;
 use tracing::{debug, error};
 
+use forgeql_core::compact;
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::error::ForgeError;
 use forgeql_core::ir::ForgeQLIR;
@@ -70,8 +71,8 @@ impl ForgeQlMcp {
 
 /// Output format for `run_fql` responses.
 ///
-/// `Csv` (default) — compact flat-array rows; ~60% fewer tokens than JSON.
-/// Non-query results (mutations, SHOW, source ops) always use JSON regardless.
+/// `Csv` (default) — compact grouped CSV; deduplicates repeated fields
+/// (e.g. `node_kind` appears once per group, not per row).
 /// `Json` — full structured JSON; use only when you need to parse specific fields.
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
@@ -89,11 +90,9 @@ pub(crate) struct RunFqlParams {
     /// Session ID from a previous USE command.  Required for queries
     /// and mutations; optional for CREATE SOURCE.
     pub session_id: Option<String>,
-    /// Output format: "CSV" (default, ~60% fewer tokens) or "JSON" (structured parsing).
-    /// CSV format: `{"total": N, "results": [["name","kind","path","count"], ...]}`.
-    /// The `count` column holds `usages_count` for FIND results and the
-    /// per-file hit count for `COUNT … GROUP BY file` results.
-    /// Non-query results (mutations, SHOW, source ops) always return JSON.
+    /// Output format: "CSV" (default, compact grouped CSV) or "JSON" (full structured).
+    /// CSV groups repeated fields and drops derivable data for minimum token usage.
+    /// Mutations, transactions, and source ops always return JSON.
     pub format: Option<OutputFormat>,
 }
 
@@ -179,18 +178,16 @@ fn json_result(json: &str) -> CallToolResult {
 ///
 /// All `ForgeQL` responses are single top-level JSON objects, so we splice
 /// the field in before the closing `}`.
-fn append_meta(json: String) -> String {
+fn append_meta(output: &str) -> String {
     /// Approximate number of UTF-8 characters per LLM token.
     const CHARS_PER_TOKEN: usize = 4;
-    let tokens_approx = json.len().div_ceil(CHARS_PER_TOKEN);
-    if json.ends_with('}') {
-        format!(
-            "{},\"tokens_approx\":{tokens_approx}}}",
-            &json[..json.len() - 1]
-        )
-    } else {
-        json
-    }
+    let tokens_approx = output.len().div_ceil(CHARS_PER_TOKEN);
+    output.strip_suffix('}').map_or_else(
+        // Compact CSV — append as final row.
+        || format!("{output}\n\"tokens_approx\",{tokens_approx}"),
+        // JSON object — splice field before closing brace.
+        |prefix| format!("{prefix},\"tokens_approx\":{tokens_approx}}}"),
+    )
 }
 
 /// Execute a parsed `ForgeQLIR` operation and return the raw result.
@@ -301,10 +298,10 @@ impl ForgeQlMcp {
                 self.set_log_source(source);
             }
             let output = match format {
-                OutputFormat::Csv => result.to_csv(),
+                OutputFormat::Csv => compact::to_compact(&result),
                 OutputFormat::Json => result.to_json(),
             };
-            let output = append_meta(output);
+            let output = append_meta(&output);
             self.log_query(source_text, &result, &output);
             outputs.push(output);
         }
@@ -560,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn run_fql_csv_format_returns_flat_rows() {
+    fn run_fql_csv_format_returns_compact_output() {
         let (mcp, session_id, _dir) = mcp_with_session();
         let result = mcp.run_fql(Parameters(RunFqlParams {
             fql: "FIND symbols WHERE name LIKE 'encender%'".to_string(),
@@ -569,22 +566,22 @@ mod tests {
         }));
         let call_result = result.expect("should succeed");
         let text = first_text(&call_result);
-        // CSV envelope has "total" and "results" as flat arrays, no "op" key.
+        // Compact CSV: header row with op and total, schema hint, grouped data.
         assert!(
-            text.contains("\"total\""),
-            "CSV output should have total field: {text}"
+            text.contains("\"find_symbols\""),
+            "compact output should have op in header: {text}"
         );
         assert!(
-            text.contains("\"results\""),
-            "CSV output should have results field: {text}"
-        );
-        assert!(
-            !text.contains("\"op\""),
-            "CSV output should not have op field: {text}"
+            text.contains("\"kind\""),
+            "compact output should have schema row: {text}"
         );
         assert!(
             text.contains("encenderMotor"),
-            "CSV output should contain symbol name: {text}"
+            "compact output should contain symbol name: {text}"
+        );
+        assert!(
+            text.contains("tokens_approx"),
+            "compact output should have tokens_approx: {text}"
         );
     }
 

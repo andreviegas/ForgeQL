@@ -20,6 +20,7 @@
 )]
 
 pub mod ast;
+pub mod compact;
 pub mod config;
 pub mod context;
 pub mod engine;

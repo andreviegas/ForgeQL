@@ -9,6 +9,38 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.23.0] - 2026-03-20
+
+### Added
+
+- **Compact output module** (`compact.rs`) — token-efficient CSV format that
+  deduplicates repeated fields by grouping rows that share a key.  Now the
+  default for MCP `run_fql` (CSV mode).
+
+  - FIND symbols: grouped by `node_kind` — kind appears once per group.
+  - FIND usages: grouped by file — line numbers collapsed per file.
+  - SHOW outline: grouped by kind, comments compressed to `len:N`.
+  - SHOW members: grouped by kind.
+  - SHOW callees/callers: grouped by file.
+  - SHOW body/lines/context: 2-column `line,text` with line range spans.
+  - SHOW signature: single flat row.
+  - FIND files: 2-column `path,size` (dropped `depth`, `extension`).
+  - Mutations, transactions, source ops: fall back to JSON (already small).
+
+- **CLI `--format` flag** — `text` (default), `compact`, or `json`.
+  Available globally across REPL, pipe, and one-shot modes.
+
+- **`tokens_approx` for compact output** — appended as a final CSV row
+  (`"tokens_approx",N`) when output is compact; spliced into JSON when
+  output is JSON.
+
+### Changed
+
+- MCP `run_fql` default output changed from JSON-wrapped flat arrays to
+  compact grouped CSV.  Pass `format=JSON` to get full structured JSON.
+
+---
+
 ## [0.22.0] - 2026-03-20
 
 ### Added

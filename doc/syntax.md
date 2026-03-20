@@ -1260,15 +1260,87 @@ FIND symbols
 
 ### Prefer CSV output for AI agents
 
-When querying inside an AI agent context (MCP mode), request CSV format to reduce token usage significantly. JSON is the default for programmatic consumption; plain text is the default for interactive use.
+When querying inside an AI agent context (MCP mode), the default output format is **compact CSV** — a token-efficient representation that groups repeated fields and drops derivable data. JSON is available via `format=JSON` for programmatic parsing; plain text is the default for interactive CLI use.
 
-```sql
--- Each row is a compact comma-separated line instead of a JSON object
-FIND symbols
-  WHERE node_kind = 'function_definition'
-  ORDER BY usages DESC
-  LIMIT 50
-  FORMAT CSV
+#### Compact format overview
+
+All compact output follows a uniform 2-column CSV structure:
+
+| Row | Content |
+|-----|---------|
+| 1   | Command header: `"op","meta1","meta2"` |
+| 2   | Schema hint: `"group_key","[field1,field2]"` |
+| 3+  | Grouped data: `"kind_a","[v1,v2],[v3,v4]"` |
+
+**FIND symbols** — grouped by `node_kind`:
+```csv
+"find_symbols",8
+"kind","[name,path,usages]"
+"function_definition","[encenderMotor,src/motor_control.cpp,7],[apagarMotor,src/motor_control.cpp,5]"
+"class_specifier","[MotorControl,include/motor_control.hpp,2]"
+```
+
+**FIND usages** — grouped by file:
+```csv
+"find_usages","encenderMotor",5
+"file","[lines]"
+"src/motor_control.cpp","45,89"
+"include/motor_control.hpp","34"
+```
+
+**SHOW outline** — grouped by kind, comments compressed to `len:N`:
+```csv
+"show_outline","include/types.hpp"
+"kind","[name,line]"
+"comment","[len:18,1],[len:23,55]"
+"type_alias","[int16_t,17],[int32_t,18]"
+```
+
+**SHOW members** — grouped by kind:
+```csv
+"show_members","MotorControl","include/motor_control.hpp"
+"type","[declaration,line]"
+"field","[uint16_t rpm_setpoint;,28],[bool is_locked;,51]"
+"method","[void setRPM(uint16_t);,35]"
+```
+
+**SHOW body / lines / context** — 2 columns (line, text):
+```csv
+"show_body","convertByte2Volts","src/adc.cpp","42-44"
+"line","text"
+42,"float convertByte2Volts(uint8_t raw) {"
+43,"    return raw * 3.3f / 255.0f;"
+44,"}"
+```
+
+**SHOW signature** — single flat row:
+```csv
+"show_signature","setPeakLevel","src/signal.cpp",125,"void setPeakLevel(int level)"
+```
+
+**SHOW callees / callers** — grouped by file:
+```csv
+"show_callees","setPWMDuty"
+"file","[name,line]"
+"src/pwm_driver.cpp","[writePWM,189]"
+"src/timer.cpp","[updateTimer,405]"
+```
+
+**FIND files** — 2 flat columns:
+```csv
+"find_files",142
+"path","size"
+"src/motor_control.cpp",12847
+```
+
+Mutations, transactions, and source ops keep their JSON format (already small).
+
+#### CLI `--format` flag
+
+```bash
+forgeql --format compact run "FIND symbols WHERE name LIKE 'set%'"
+forgeql --format json    run "SHOW body OF 'convert'"
+forgeql --format text    run "FIND usages OF 'init'"   # default
 ```
 
 ---
