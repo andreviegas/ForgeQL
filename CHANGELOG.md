@@ -9,6 +9,41 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.22.0] - 2026-03-20
+
+### Added
+
+- **Enrichment pipeline** — 9 trait-based `NodeEnricher` implementations that
+  compute ~30 new metadata fields at index time, queryable with `WHERE` just
+  like dynamic fields.  Enrichers run in a single pass over the AST plus a
+  post-pass for cross-row aggregations (e.g. `branch_count`,
+  `duplicate_condition`).
+
+  | Enricher | Key fields |
+  |---|---|
+  | **ScopeEnricher** | `scope` (`file`/`local`), `storage` (`static`/`extern`) |
+  | **NamingEnricher** | `naming` (camelCase, PascalCase, snake_case, UPPER_SNAKE, flatcase), `name_length` |
+  | **CommentEnricher** | `comment_style` (doc_line, doc_block, block, line), `has_doc` |
+  | **NumberEnricher** | `num_format`, `is_magic`, `num_value`, `num_suffix`, `has_separator` |
+  | **ControlFlowEnricher** | `condition_tests`, `paren_depth`, `has_default`, `has_assignment_in_condition`, `mixed_logic`, `branch_count` |
+  | **OperatorEnricher** | `increment_style`, `compound_op`, `shift_direction`, `shift_amount` |
+  | **MetricsEnricher** | `lines`, `param_count`, `return_count`, `goto_count`, `string_count`, `member_count`, `is_const`, `is_static`, `is_inline` |
+  | **CastEnricher** | `cast_style`, `cast_target_type` |
+  | **RedundancyEnricher** | `has_repeated_condition_calls`, `repeated_condition_calls`, `null_check_count`, `duplicate_condition` |
+
+- **`field_num()` fallback** — `SymbolMatch` and `IndexRow` now parse dynamic
+  string fields as integers on the fly, so `ORDER BY lines DESC` works on
+  enrichment fields without dedicated numeric columns.
+
+- **Enrichment integration tests** — 104 new tests in
+  `enrichment_integration.rs` covering all 9 enrichers, cross-enricher
+  queries, and `field_num()` fallback.
+
+- **`doc/syntax.md` updated** — full Enrichment Fields reference with per-
+  enricher tables, example queries, and 7 Known Limitations entries.
+
+---
+
 ## [0.21.0] - 2026-03-19
 
 ### Added

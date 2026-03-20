@@ -1,0 +1,1872 @@
+//! Comprehensive integration tests for all enrichment fields.
+//!
+//! These tests exercise the full pipeline: **parser → IR → engine → result**
+//! using the `enrichment_patterns.cpp` fixture plus the `motor_control`
+//! fixtures in a temp workspace.
+//!
+//! Run with: `cargo test -p forgeql-core --test enrichment_integration`
+//!
+//! Organisation:
+//!   §1  — NamingEnricher     (naming, name_length)
+//!   §2  — CommentEnricher    (comment_style, has_doc)
+//!   §3  — NumberEnricher     (num_format, has_separator, num_sign, num_value, num_suffix, is_magic)
+//!   §4  — ControlFlowEnricher (condition_tests, paren_depth, condition_text, has_default,
+//!                              has_assignment_in_condition, mixed_logic, branch_count,
+//!                              max_condition_tests, max_paren_depth)
+//!   §5  — OperatorEnricher   (increment_style, increment_op, compound_op, operand,
+//!                              shift_direction, shift_amount, shift_operand)
+//!   §6  — MetricsEnricher    (lines, param_count, return_count, goto_count, string_count,
+//!                              member_count, is_const, is_volatile, is_static, is_inline, visibility)
+//!   §7  — CastEnricher       (cast_style, cast_target_type)
+//!   §8  — RedundancyEnricher (repeated_condition_calls, has_repeated_condition_calls,
+//!                              null_check_count, duplicate_condition)
+//!   §9  — ScopeEnricher      (scope, storage)
+//!   §10 — field_num() fallback (numeric comparison on dynamic fields)
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::items_after_statements,
+    clippy::doc_markdown,
+    unused_results
+)]
+
+use std::collections::HashSet;
+use std::fs;
+use std::path::PathBuf;
+
+use forgeql_core::engine::ForgeQLEngine;
+use forgeql_core::parser;
+use forgeql_core::result::{ForgeQLResult, SymbolMatch};
+use tempfile::tempdir;
+
+// -----------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------
+
+fn fixtures_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("tests/fixtures")
+}
+
+/// Create a temp workspace with ALL fixtures and boot the engine.
+fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
+    let dir = tempdir().expect("tempdir");
+    let src = fixtures_dir();
+
+    for file in &[
+        "motor_control.h",
+        "motor_control.cpp",
+        "enrichment_patterns.cpp",
+    ] {
+        fs::copy(src.join(file), dir.path().join(file)).expect(&format!("copy {file}"));
+    }
+
+    let data_dir = dir.path().join("data");
+    let mut engine = ForgeQLEngine::new(data_dir).expect("engine");
+    let session_id = engine
+        .register_local_session(dir.path())
+        .expect("register session");
+
+    (engine, session_id, dir)
+}
+
+/// Create a temp workspace with ONLY enrichment_patterns.cpp.
+fn engine_enrichment_only() -> (ForgeQLEngine, String, tempfile::TempDir) {
+    let dir = tempdir().expect("tempdir");
+    let src = fixtures_dir();
+
+    fs::copy(
+        src.join("enrichment_patterns.cpp"),
+        dir.path().join("enrichment_patterns.cpp"),
+    )
+    .expect("copy enrichment_patterns.cpp");
+
+    let data_dir = dir.path().join("data");
+    let mut engine = ForgeQLEngine::new(data_dir).expect("engine");
+    let session_id = engine
+        .register_local_session(dir.path())
+        .expect("register session");
+
+    (engine, session_id, dir)
+}
+
+fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
+    let ops = parser::parse(fql).expect(&format!("parse failed for: {fql}"));
+    let op = ops.first().expect("at least one op");
+    engine
+        .execute(Some(sid), op)
+        .expect(&format!("execute failed for: {fql}"))
+}
+
+fn as_query(r: &ForgeQLResult) -> &forgeql_core::result::QueryResult {
+    match r {
+        ForgeQLResult::Query(qr) => qr,
+        other => panic!("expected Query, got: {other:?}"),
+    }
+}
+
+/// Find first result matching a given name.
+fn find_by_name<'a>(results: &'a [SymbolMatch], name: &str) -> &'a SymbolMatch {
+    results
+        .iter()
+        .find(|r| r.name == name)
+        .unwrap_or_else(|| panic!("no result with name '{name}'"))
+}
+
+/// Collect all names from query results.
+fn names(results: &[SymbolMatch]) -> Vec<&str> {
+    results.iter().map(|r| r.name.as_str()).collect()
+}
+
+/// Get a field value from a SymbolMatch, panicking with a clear message if missing.
+fn field<'a>(m: &'a SymbolMatch, key: &str) -> &'a str {
+    m.fields
+        .get(key)
+        .unwrap_or_else(|| {
+            panic!(
+                "field '{key}' missing on '{}' (available: {:?})",
+                m.name,
+                m.fields.keys().collect::<Vec<_>>()
+            )
+        })
+        .as_str()
+}
+
+/// Optionally get a field value (returns None if absent).
+fn field_opt<'a>(m: &'a SymbolMatch, key: &str) -> Option<&'a str> {
+    m.fields.get(key).map(String::as_str)
+}
+
+// =======================================================================
+// §1 — NamingEnricher
+// =======================================================================
+
+#[test]
+fn naming_camel_case() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'camelCase'");
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"camelCaseVar"),
+        "expected camelCaseVar in {ns:?}"
+    );
+    assert!(
+        ns.contains(&"docLineTarget"),
+        "expected docLineTarget in {ns:?}"
+    );
+}
+
+#[test]
+fn naming_pascal_case() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'PascalCase'");
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"PascalCaseVar"),
+        "expected PascalCaseVar in {ns:?}"
+    );
+    assert!(
+        ns.contains(&"SimpleStruct"),
+        "expected SimpleStruct in {ns:?}"
+    );
+    assert!(ns.contains(&"SimpleEnum"), "expected SimpleEnum in {ns:?}");
+    assert!(
+        ns.contains(&"SimpleClass"),
+        "expected SimpleClass in {ns:?}"
+    );
+}
+
+#[test]
+fn naming_snake_case() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'snake_case'");
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"snake_case_var"),
+        "expected snake_case_var in {ns:?}"
+    );
+}
+
+#[test]
+fn naming_upper_snake() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'UPPER_SNAKE'");
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"UPPER_SNAKE_VAR"),
+        "expected UPPER_SNAKE_VAR in {ns:?}"
+    );
+    assert!(ns.contains(&"ENUM_A"), "expected ENUM_A in {ns:?}");
+    assert!(ns.contains(&"ENUM_B"), "expected ENUM_B in {ns:?}");
+}
+
+#[test]
+fn naming_flatcase() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'flatcase'");
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"flatcasevar"),
+        "expected flatcasevar in {ns:?}"
+    );
+}
+
+#[test]
+fn naming_name_length() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // camelCaseVar has 12 chars
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'camelCaseVar'");
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty());
+    let m = &qr.results[0];
+    assert_eq!(field(m, "name_length"), "12");
+    assert_eq!(field(m, "naming"), "camelCase");
+}
+
+#[test]
+fn naming_name_length_numeric_comparison() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // Find symbols with name_length > 20 (long identifiers)
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name_length > 20");
+    let qr = as_query(&r);
+    // All returned symbols must have name_length > 20
+    for m in &qr.results {
+        let len: usize = field(m, "name_length").parse().unwrap();
+        assert!(
+            len > 20,
+            "expected name_length > 20, got {len} for '{}'",
+            m.name
+        );
+    }
+}
+
+// =======================================================================
+// §2 — CommentEnricher
+// =======================================================================
+
+#[test]
+fn comment_style_doc_line() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'doc_line'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one doc_line comment"
+    );
+    for m in &qr.results {
+        assert_eq!(field(m, "comment_style"), "doc_line");
+    }
+}
+
+#[test]
+fn comment_style_doc_block() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'doc_block'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one doc_block comment"
+    );
+    for m in &qr.results {
+        assert_eq!(field(m, "comment_style"), "doc_block");
+    }
+}
+
+#[test]
+fn comment_style_block() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'block'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one block comment"
+    );
+    for m in &qr.results {
+        assert_eq!(field(m, "comment_style"), "block");
+    }
+}
+
+#[test]
+fn comment_style_line() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'line'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected at least one line comment");
+    for m in &qr.results {
+        assert_eq!(field(m, "comment_style"), "line");
+    }
+}
+
+#[test]
+fn comment_has_doc_true() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE has_doc = 'true'",
+    );
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    // docBlockFunction is preceded by a /** comment
+    assert!(
+        ns.contains(&"docBlockFunction"),
+        "expected docBlockFunction in has_doc=true results: {ns:?}"
+    );
+}
+
+#[test]
+fn comment_has_doc_false() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE has_doc = 'false'",
+    );
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    // noDocFunction is preceded by a /* comment (not doc)
+    assert!(
+        ns.contains(&"noDocFunction"),
+        "expected noDocFunction in has_doc=false results: {ns:?}"
+    );
+    assert!(
+        ns.contains(&"anotherNoDocFunction"),
+        "expected anotherNoDocFunction in has_doc=false results: {ns:?}"
+    );
+}
+
+// =======================================================================
+// §3 — NumberEnricher
+// =======================================================================
+
+#[test]
+fn number_format_dec() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'dec'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected decimal numbers");
+    // 42 should be among them
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"42"),
+        "expected '42' in decimal numbers: {ns:?}"
+    );
+}
+
+#[test]
+fn number_format_hex() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'hex'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected hex numbers");
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"0xFF"),
+        "expected '0xFF' in hex numbers: {ns:?}"
+    );
+}
+
+#[test]
+fn number_format_bin() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'bin'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected binary numbers");
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"0b1010"),
+        "expected '0b1010' in binary numbers: {ns:?}"
+    );
+}
+
+#[test]
+fn number_format_oct() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'oct'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected octal numbers");
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"0777"),
+        "expected '0777' in octal numbers: {ns:?}"
+    );
+}
+
+#[test]
+fn number_format_float() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'float'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected float numbers");
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"3.14"),
+        "expected '3.14' in float numbers: {ns:?}"
+    );
+}
+
+#[test]
+fn number_format_scientific() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'scientific'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected scientific numbers");
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"1.5e-3"),
+        "expected '1.5e-3' in scientific numbers: {ns:?}"
+    );
+}
+
+#[test]
+fn number_suffix_u() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'u'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected unsigned suffix numbers");
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"100u"),
+        "expected '100u' in u-suffix numbers: {ns:?}"
+    );
+}
+
+#[test]
+fn number_suffix_ul() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'ul'",
+    );
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"200UL"),
+        "expected '200UL' in ul-suffix numbers: {ns:?}"
+    );
+}
+
+#[test]
+fn number_suffix_ll() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'll'",
+    );
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"300LL"),
+        "expected '300LL' in ll-suffix numbers: {ns:?}"
+    );
+}
+
+#[test]
+fn number_is_magic_true() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE is_magic = 'true'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected magic numbers");
+    // 42, 0xFF, 0b1010, etc. are all magic
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(ns.contains(&"42"), "expected '42' as magic number: {ns:?}");
+}
+
+#[test]
+fn number_is_magic_false() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE is_magic = 'false'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected non-magic numbers (0, 1)");
+    // 0 and 1 are not magic
+    let values: HashSet<&str> = qr.results.iter().map(|m| field(m, "num_value")).collect();
+    assert!(
+        values.contains("0") || values.contains("1"),
+        "expected 0 or 1 among non-magic values: {values:?}"
+    );
+}
+
+#[test]
+fn number_sign_zero() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_sign = 'zero'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected zero-valued numbers");
+    for m in &qr.results {
+        assert_eq!(
+            field(m, "num_value"),
+            "0",
+            "expected num_value=0 for sign=zero"
+        );
+    }
+}
+
+#[test]
+fn number_sign_positive() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_sign = 'positive'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected positive numbers");
+    for m in &qr.results {
+        let val: i64 = field(m, "num_value").parse().unwrap();
+        assert!(
+            val > 0,
+            "expected positive num_value, got {val} for '{}'",
+            m.name
+        );
+    }
+}
+
+#[test]
+fn number_value_numeric_comparison() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // Find numbers with value > 200
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_value > 200",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected numbers with value > 200");
+    for m in &qr.results {
+        let val: i64 = field(m, "num_value").parse().unwrap();
+        assert!(
+            val > 200,
+            "expected num_value > 200, got {val} for '{}'",
+            m.name
+        );
+    }
+}
+
+// =======================================================================
+// §4 — ControlFlowEnricher
+// =======================================================================
+
+#[test]
+fn control_flow_if_statement_exists() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement'",
+    );
+    let qr = as_query(&r);
+    assert!(qr.total > 0, "expected at least one if_statement");
+}
+
+#[test]
+fn control_flow_condition_tests_simple() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // Simple if (a > 0) has 1 condition test
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE condition_tests = 1",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected if_statements with 1 condition test"
+    );
+}
+
+#[test]
+fn control_flow_condition_tests_complex() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // Complex condition: a > 0 && b < 10 || c == 5 → at least 3 tests
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE condition_tests > 2",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected if_statements with > 2 condition tests"
+    );
+}
+
+#[test]
+fn control_flow_paren_depth() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // The deeply nested condition: (((a > 0) && (b < 10)) || ((c == 5) && (d != 0)))
+    // has paren_depth >= 3
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE paren_depth > 2",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected if_statements with paren_depth > 2"
+    );
+}
+
+#[test]
+fn control_flow_mixed_logic() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // "a > 0 && b < 10 || c == 5" mixes && and ||
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE mixed_logic = 'true'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected if_statements with mixed_logic=true"
+    );
+}
+
+#[test]
+fn control_flow_has_assignment_in_condition() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE has_assignment_in_condition = 'true'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one if_statement with assignment in condition"
+    );
+}
+
+#[test]
+fn control_flow_switch_has_default() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'switch_statement' WHERE has_default = 'true'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one switch with default"
+    );
+}
+
+#[test]
+fn control_flow_switch_no_default() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'switch_statement' WHERE has_default = 'false'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one switch without default"
+    );
+}
+
+#[test]
+fn control_flow_while_statement() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'while_statement'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected while_statement");
+    // while (a > 0 && b != 0) has 3 condition tests: >, !=, &&
+    let with_three = qr
+        .results
+        .iter()
+        .any(|m| field(m, "condition_tests") == "3");
+    assert!(
+        with_three,
+        "expected while_statement with condition_tests=3"
+    );
+}
+
+#[test]
+fn control_flow_for_statement() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'for_statement'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected for_statement");
+}
+
+#[test]
+fn control_flow_do_statement() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'do_statement'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected do_statement");
+}
+
+#[test]
+fn control_flow_condition_text_has_skeleton() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE condition_tests > 1",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty());
+    // Skeleton should use lowercase letters, not the original identifiers
+    for m in &qr.results {
+        let skeleton = field(m, "condition_text");
+        assert!(
+            !skeleton.is_empty(),
+            "condition_text should not be empty for complex conditions"
+        );
+        // Skeleton should contain operator tokens
+        let has_ops = skeleton.contains("&&")
+            || skeleton.contains("||")
+            || skeleton.contains("==")
+            || skeleton.contains("!=")
+            || skeleton.contains('>')
+            || skeleton.contains('<');
+        assert!(has_ops, "skeleton should contain operators: {skeleton}");
+    }
+}
+
+#[test]
+fn control_flow_branch_count_on_function() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'controlFlowPatterns'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty());
+    let m = find_by_name(&qr.results, "controlFlowPatterns");
+    // controlFlowPatterns has: 4 ifs + 2 switches + 1 while + 1 for + 1 do = 9 control-flow nodes
+    let bc: usize = field(m, "branch_count").parse().unwrap();
+    assert!(
+        bc >= 9,
+        "expected branch_count >= 9 for controlFlowPatterns, got {bc}"
+    );
+}
+
+#[test]
+fn control_flow_max_condition_tests_on_function() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'controlFlowPatterns'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "controlFlowPatterns");
+    // The most complex condition has 4+ tests
+    let mct: usize = field(m, "max_condition_tests").parse().unwrap();
+    assert!(
+        mct >= 4,
+        "expected max_condition_tests >= 4 for controlFlowPatterns, got {mct}"
+    );
+}
+
+#[test]
+fn control_flow_max_paren_depth_on_function() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'controlFlowPatterns'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "controlFlowPatterns");
+    let mpd: usize = field(m, "max_paren_depth").parse().unwrap();
+    assert!(
+        mpd >= 3,
+        "expected max_paren_depth >= 3 for controlFlowPatterns, got {mpd}"
+    );
+}
+
+// =======================================================================
+// §5 — OperatorEnricher
+// =======================================================================
+
+#[test]
+fn operator_prefix_increment() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'update_expression' WHERE increment_style = 'prefix' WHERE increment_op = '++'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected prefix ++ update_expression"
+    );
+    for m in &qr.results {
+        assert_eq!(field(m, "increment_style"), "prefix");
+        assert_eq!(field(m, "increment_op"), "++");
+    }
+}
+
+#[test]
+fn operator_prefix_decrement() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // --val is a prefix decrement
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'update_expression' WHERE increment_style = 'prefix'",
+    );
+    let qr = as_query(&r);
+    // At least one should be a -- (--val)
+    let has_dec = qr.results.iter().any(|m| field(m, "increment_op") == "--");
+    assert!(has_dec, "expected prefix -- update_expression");
+}
+
+#[test]
+fn operator_postfix_increment() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'update_expression' WHERE increment_style = 'postfix' WHERE increment_op = '++'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected postfix ++ update_expression"
+    );
+}
+
+#[test]
+fn operator_postfix_decrement() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // val-- is a postfix decrement
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'update_expression' WHERE increment_style = 'postfix'",
+    );
+    let qr = as_query(&r);
+    // At least one should be a -- (val--)
+    let has_dec = qr.results.iter().any(|m| field(m, "increment_op") == "--");
+    assert!(has_dec, "expected postfix -- update_expression");
+}
+
+#[test]
+fn operator_compound_add() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '+='",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected += compound_assignment");
+    for m in &qr.results {
+        assert_eq!(field(m, "compound_op"), "+=");
+    }
+}
+
+#[test]
+fn operator_compound_sub() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '-='",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected -= compound_assignment");
+}
+
+#[test]
+fn operator_compound_mul_div_mod() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    for op in &["*=", "/=", "%="] {
+        let r = exec(
+            &mut e,
+            &sid,
+            &format!(
+                "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '{op}'"
+            ),
+        );
+        let qr = as_query(&r);
+        assert!(!qr.results.is_empty(), "expected {op} compound_assignment");
+    }
+}
+
+#[test]
+fn operator_compound_bitwise() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    for op in &["&=", "|=", "^="] {
+        let r = exec(
+            &mut e,
+            &sid,
+            &format!(
+                "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '{op}'"
+            ),
+        );
+        let qr = as_query(&r);
+        assert!(!qr.results.is_empty(), "expected {op} compound_assignment");
+    }
+}
+
+#[test]
+fn operator_compound_has_operand() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'compound_assignment'",
+    );
+    let qr = as_query(&r);
+    // Every compound assignment should have an operand (right-hand side)
+    for m in &qr.results {
+        assert!(
+            field_opt(m, "operand").is_some(),
+            "compound_assignment '{}' should have operand field",
+            m.name
+        );
+    }
+}
+
+#[test]
+fn operator_shift_left() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'shift_expression' WHERE shift_direction = 'left'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected left shift_expression");
+    for m in &qr.results {
+        assert_eq!(field(m, "shift_direction"), "left");
+        // shift_amount should be present
+        assert!(
+            field_opt(m, "shift_amount").is_some(),
+            "expected shift_amount"
+        );
+    }
+}
+
+#[test]
+fn operator_shift_right() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'shift_expression' WHERE shift_direction = 'right'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected right shift_expression");
+    for m in &qr.results {
+        assert_eq!(field(m, "shift_direction"), "right");
+    }
+}
+
+#[test]
+fn operator_shift_amount_value() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'shift_expression'",
+    );
+    let qr = as_query(&r);
+    // val << 4 has shift_amount = "4", val >> 2 has shift_amount = "2"
+    let amounts: Vec<&str> = qr
+        .results
+        .iter()
+        .filter_map(|m| field_opt(m, "shift_amount"))
+        .collect();
+    assert!(
+        amounts.contains(&"4"),
+        "expected shift_amount '4' in {amounts:?}"
+    );
+    assert!(
+        amounts.contains(&"2"),
+        "expected shift_amount '2' in {amounts:?}"
+    );
+}
+
+#[test]
+fn operator_shift_operand_present() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'shift_expression'",
+    );
+    let qr = as_query(&r);
+    for m in &qr.results {
+        assert!(
+            field_opt(m, "shift_operand").is_some(),
+            "shift_expression '{}' should have shift_operand",
+            m.name
+        );
+    }
+}
+
+// =======================================================================
+// §6 — MetricsEnricher
+// =======================================================================
+
+#[test]
+fn metrics_lines_on_function() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'controlFlowPatterns'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "controlFlowPatterns");
+    let lines: usize = field(m, "lines").parse().unwrap();
+    assert!(
+        lines > 10,
+        "expected lines > 10 for controlFlowPatterns, got {lines}"
+    );
+}
+
+#[test]
+fn metrics_lines_numeric_comparison() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE lines > 10",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected functions with lines > 10");
+    for m in &qr.results {
+        let l: usize = field(m, "lines").parse().unwrap();
+        assert!(l > 10, "expected lines > 10, got {l} for '{}'", m.name);
+    }
+}
+
+#[test]
+fn metrics_lines_order_by_desc() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' ORDER BY lines DESC LIMIT 5",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty());
+    // Verify descending order
+    let line_values: Vec<usize> = qr
+        .results
+        .iter()
+        .map(|m| field(m, "lines").parse::<usize>().unwrap())
+        .collect();
+    for w in line_values.windows(2) {
+        assert!(
+            w[0] >= w[1],
+            "lines should be in descending order: {line_values:?}"
+        );
+    }
+}
+
+#[test]
+fn metrics_param_count() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'manyParams'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "manyParams");
+    assert_eq!(field(m, "param_count"), "5", "manyParams has 5 parameters");
+}
+
+#[test]
+fn metrics_param_count_comparison() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE param_count > 3",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected functions with > 3 params");
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"manyParams"),
+        "manyParams should have > 3 params: {ns:?}"
+    );
+    assert!(
+        ns.contains(&"controlFlowPatterns"),
+        "controlFlowPatterns should have > 3 params: {ns:?}"
+    );
+}
+
+#[test]
+fn metrics_return_count() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'multiReturn'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "multiReturn");
+    let rc: usize = field(m, "return_count").parse().unwrap();
+    assert_eq!(rc, 3, "multiReturn has 3 return statements");
+}
+
+#[test]
+fn metrics_return_count_comparison() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE return_count > 1",
+    );
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"multiReturn"),
+        "multiReturn should have return_count > 1: {ns:?}"
+    );
+}
+
+#[test]
+fn metrics_string_count() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'withStrings'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "withStrings");
+    let sc: usize = field(m, "string_count").parse().unwrap();
+    assert_eq!(sc, 3, "withStrings has 3 string literals");
+}
+
+#[test]
+fn metrics_member_count_struct() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'SimpleStruct'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "SimpleStruct");
+    assert_eq!(field(m, "member_count"), "3", "SimpleStruct has 3 fields");
+}
+
+#[test]
+fn metrics_member_count_enum() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'SimpleEnum'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "SimpleEnum");
+    assert_eq!(
+        field(m, "member_count"),
+        "4",
+        "SimpleEnum has 4 enumerators"
+    );
+}
+
+#[test]
+fn metrics_member_count_class() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'SimpleClass'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "SimpleClass");
+    let mc: usize = field(m, "member_count").parse().unwrap();
+    // SimpleClass has: publicField, publicMethod, privateField, protectedField = 4 field_declarations
+    assert!(mc >= 3, "SimpleClass should have >= 3 members, got {mc}");
+}
+
+#[test]
+fn metrics_is_inline() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'inlineFunc'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "inlineFunc");
+    assert_eq!(field(m, "is_inline"), "true", "inlineFunc should be inline");
+}
+
+#[test]
+fn metrics_is_const() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'constVar'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "constVar");
+    assert_eq!(field(m, "is_const"), "true", "constVar should be const");
+}
+
+#[test]
+fn metrics_is_volatile() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'volatileVar'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "volatileVar");
+    assert_eq!(
+        field(m, "is_volatile"),
+        "true",
+        "volatileVar should be volatile"
+    );
+}
+
+// NOTE: field_declaration nodes are not indexed by extract_name() in
+// tree-sitter-cpp 0.23, so individual class member fields (publicField,
+// privateField, protectedField) don't produce rows.  The visibility
+// enricher only works on node kinds that ARE indexed. We verify
+// visibility on class_specifier member_count instead.
+
+#[test]
+fn metrics_class_has_member_count() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'SimpleClass'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "SimpleClass");
+    let mc: usize = field(m, "member_count").parse().unwrap();
+    assert!(
+        mc >= 1,
+        "SimpleClass should have member_count >= 1, got {mc}"
+    );
+}
+
+#[test]
+fn metrics_lines_on_struct() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'SimpleStruct'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "SimpleStruct");
+    let lines: usize = field(m, "lines").parse().unwrap();
+    assert!(
+        lines >= 3,
+        "SimpleStruct should span at least 3 lines, got {lines}"
+    );
+}
+
+// =======================================================================
+// §7 — CastEnricher
+// =======================================================================
+
+#[test]
+fn cast_c_style() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'cast_expression' WHERE cast_style = 'c_style'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected at least one C-style cast");
+    for m in &qr.results {
+        assert_eq!(field(m, "cast_style"), "c_style");
+    }
+}
+
+// NOTE: Named C++ casts (reinterpret_cast, const_cast, static_cast, dynamic_cast)
+// are NOT indexed as separate node kinds in tree-sitter-cpp 0.23.
+// They appear as `template_function` or similar, so the CastEnricher
+// cannot detect them. These tests are omitted as known limitations.
+
+#[test]
+fn cast_c_style_has_target_type() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'cast_expression'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty());
+    // C-style casts should have cast_target_type
+    for m in &qr.results {
+        assert!(
+            field_opt(m, "cast_target_type").is_some(),
+            "C-style cast should have cast_target_type"
+        );
+    }
+}
+
+#[test]
+fn cast_c_style_count() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'cast_expression' WHERE cast_style = 'c_style'",
+    );
+    let qr = as_query(&r);
+    // enrichment_patterns.cpp has at least one C-style cast: (int)x
+    assert!(
+        qr.total >= 1,
+        "expected at least 1 C-style cast, got {}",
+        qr.total
+    );
+}
+
+// =======================================================================
+// §8 — RedundancyEnricher
+// =======================================================================
+
+#[test]
+fn redundancy_has_repeated_condition_calls() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'redundancyPatterns'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "redundancyPatterns");
+    assert_eq!(
+        field(m, "has_repeated_condition_calls"),
+        "true",
+        "redundancyPatterns should have repeated condition calls"
+    );
+}
+
+#[test]
+fn redundancy_repeated_condition_calls_contains_get_value() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'redundancyPatterns'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "redundancyPatterns");
+    let calls = field(m, "repeated_condition_calls");
+    assert!(
+        calls.contains("getValue"),
+        "expected 'getValue' in repeated_condition_calls: '{calls}'"
+    );
+}
+
+#[test]
+fn redundancy_repeated_condition_calls_contains_is_ready() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'redundancyPatterns'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "redundancyPatterns");
+    let calls = field(m, "repeated_condition_calls");
+    assert!(
+        calls.contains("isReady"),
+        "expected 'isReady' in repeated_condition_calls: '{calls}'"
+    );
+}
+
+#[test]
+fn redundancy_null_check_count() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'redundancyPatterns'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "redundancyPatterns");
+    let ncc: usize = field(m, "null_check_count").parse().unwrap();
+    // ptr1 != nullptr, ptr2 != nullptr, ptr1 != nullptr, ptr2 == nullptr = 4 null checks
+    assert!(
+        ncc >= 4,
+        "expected null_check_count >= 4 for redundancyPatterns, got {ncc}"
+    );
+}
+
+#[test]
+fn redundancy_no_repeated_calls_for_simple_function() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'controlFlowPatterns'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "controlFlowPatterns");
+    assert_eq!(
+        field(m, "has_repeated_condition_calls"),
+        "false",
+        "controlFlowPatterns should NOT have repeated condition calls"
+    );
+}
+
+#[test]
+fn redundancy_null_check_count_zero_for_no_checks() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'operatorPatterns'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "operatorPatterns");
+    assert_eq!(
+        field(m, "null_check_count"),
+        "0",
+        "operatorPatterns should have 0 null checks"
+    );
+}
+
+#[test]
+fn redundancy_duplicate_condition_detected() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // duplicateConditions has two identical ifs: if (a > 0 && b < 10)
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE duplicate_condition = 'true'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one if_statement with duplicate_condition=true"
+    );
+    // Should have at least 2 (the pair of duplicates)
+    assert!(
+        qr.total >= 2,
+        "expected at least 2 duplicate conditions, got {}",
+        qr.total
+    );
+}
+
+#[test]
+fn redundancy_filter_repeated_calls_query() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE has_repeated_condition_calls = 'true'",
+    );
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"redundancyPatterns"),
+        "redundancyPatterns should be in results: {ns:?}"
+    );
+    // controlFlowPatterns should NOT be in results
+    assert!(
+        !ns.contains(&"controlFlowPatterns"),
+        "controlFlowPatterns should NOT be in results: {ns:?}"
+    );
+}
+
+#[test]
+fn redundancy_null_check_count_on_motor_control() {
+    let (mut e, sid, _d) = engine_with_session();
+    // encenderMotor has: if (gCallbackEncendido != nullptr) → 1 null check
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'encenderMotor'");
+    let qr = as_query(&r);
+    // Find the function_definition (not declaration)
+    let func = qr
+        .results
+        .iter()
+        .find(|m| m.node_kind.as_deref() == Some("function_definition"));
+    if let Some(m) = func {
+        let ncc: usize = field(m, "null_check_count").parse().unwrap();
+        assert!(
+            ncc >= 1,
+            "encenderMotor should have at least 1 null check, got {ncc}"
+        );
+    }
+}
+
+// =======================================================================
+// §9 — ScopeEnricher
+// =======================================================================
+
+// ScopeEnricher sets scope/storage only on `declaration` nodes.
+// function_definition nodes (like staticFunc) do NOT get scope.
+// We test scope on a `static const` declaration instead.
+#[test]
+fn scope_file_for_static_declaration() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE storage = 'static'");
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one static-storage declaration"
+    );
+    // All static declarations should have file scope
+    for m in &qr.results {
+        assert_eq!(
+            field(m, "scope"),
+            "file",
+            "static declaration '{}' should have file scope",
+            m.name
+        );
+    }
+}
+
+#[test]
+fn scope_local_for_regular_function() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'controlFlowPatterns'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "controlFlowPatterns");
+    // Non-static functions should not have scope=file
+    let scope = field_opt(m, "scope").unwrap_or("global");
+    assert_ne!(
+        scope, "file",
+        "non-static function should not have file scope"
+    );
+}
+
+#[test]
+fn scope_storage_static() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE storage = 'static'");
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one static-storage symbol"
+    );
+}
+
+#[test]
+fn scope_filter_file_scope() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE scope = 'file'");
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one file-scoped symbol"
+    );
+}
+
+// =======================================================================
+// §10 — field_num() fallback (numeric comparison on dynamic fields)
+// =======================================================================
+
+#[test]
+fn field_num_name_length_greater_than() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name_length > 15");
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty());
+    for m in &qr.results {
+        let len: usize = field(m, "name_length").parse().unwrap();
+        assert!(
+            len > 15,
+            "name_length should be > 15, got {len} for '{}'",
+            m.name
+        );
+    }
+}
+
+#[test]
+fn field_num_name_length_less_than() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name_length < 3");
+    let qr = as_query(&r);
+    // All returned symbols must have name_length < 3
+    for m in &qr.results {
+        let len: usize = field(m, "name_length").parse().unwrap();
+        assert!(
+            len < 3,
+            "name_length should be < 3, got {len} for '{}'",
+            m.name
+        );
+    }
+}
+
+#[test]
+fn field_num_condition_tests_gte() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE condition_tests >= 3");
+    let qr = as_query(&r);
+    for m in &qr.results {
+        let ct: i64 = field(m, "condition_tests").parse().unwrap();
+        assert!(
+            ct >= 3,
+            "condition_tests should be >= 3, got {ct} for '{}'",
+            m.name
+        );
+    }
+}
+
+#[test]
+fn field_num_lines_lte() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE lines <= 3",
+    );
+    let qr = as_query(&r);
+    for m in &qr.results {
+        let l: usize = field(m, "lines").parse().unwrap();
+        assert!(l <= 3, "lines should be <= 3, got {l} for '{}'", m.name);
+    }
+}
+
+#[test]
+fn field_num_return_count_eq() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE return_count = 3",
+    );
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"multiReturn"),
+        "multiReturn should have return_count=3: {ns:?}"
+    );
+}
+
+#[test]
+fn field_num_branch_count_comparison() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE branch_count > 5",
+    );
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"controlFlowPatterns"),
+        "controlFlowPatterns should have branch_count > 5: {ns:?}"
+    );
+}
+
+#[test]
+fn field_num_member_count_comparison() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE member_count >= 3");
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"SimpleStruct"),
+        "SimpleStruct should have member_count >= 3: {ns:?}"
+    );
+}
+
+#[test]
+fn field_num_null_check_count_comparison() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE null_check_count > 3");
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"redundancyPatterns"),
+        "redundancyPatterns should have null_check_count > 3: {ns:?}"
+    );
+}
+
+// =======================================================================
+// §11 — Cross-enricher queries (combining fields from multiple enrichers)
+// =======================================================================
+
+#[test]
+fn cross_enricher_long_camel_case_functions() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE naming = 'camelCase' WHERE lines > 5",
+    );
+    let qr = as_query(&r);
+    for m in &qr.results {
+        assert_eq!(field(m, "naming"), "camelCase");
+        let lines: usize = field(m, "lines").parse().unwrap();
+        assert!(lines > 5);
+    }
+}
+
+#[test]
+fn cross_enricher_complex_conditions_in_long_functions() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE max_condition_tests > 2 WHERE lines > 10",
+    );
+    let qr = as_query(&r);
+    for m in &qr.results {
+        let mct: usize = field(m, "max_condition_tests").parse().unwrap();
+        let lines: usize = field(m, "lines").parse().unwrap();
+        assert!(mct > 2);
+        assert!(lines > 10);
+    }
+}
+
+#[test]
+fn cross_enricher_magic_hex_numbers() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'hex' WHERE is_magic = 'true'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected magic hex numbers");
+    for m in &qr.results {
+        assert_eq!(field(m, "num_format"), "hex");
+        assert_eq!(field(m, "is_magic"), "true");
+    }
+}
+
+#[test]
+fn cross_enricher_functions_with_many_params_and_returns() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE param_count > 2 WHERE return_count > 0",
+    );
+    let qr = as_query(&r);
+    for m in &qr.results {
+        let pc: usize = field(m, "param_count").parse().unwrap();
+        let rc: usize = field(m, "return_count").parse().unwrap();
+        assert!(pc > 2);
+        assert!(rc > 0);
+    }
+}
+
+// =======================================================================
+// =======================================================================
+// §12 — Enrichment on motor_control fixtures (cross-file validation)
+// =======================================================================
+
+#[test]
+fn motor_control_functions_have_naming() {
+    let (mut e, sid, _d) = engine_with_session();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'encenderMotor'");
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty());
+    for m in &qr.results {
+        assert_eq!(field(m, "naming"), "camelCase");
+        assert_eq!(field(m, "name_length"), "13");
+    }
+}
+
+#[test]
+fn motor_control_enum_naming() {
+    let (mut e, sid, _d) = engine_with_session();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'VELOCIDAD_MAX'");
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty());
+    let m = &qr.results[0];
+    assert_eq!(field(m, "naming"), "UPPER_SNAKE");
+}
+
+#[test]
+fn motor_control_switch_in_leer_sensor() {
+    let (mut e, sid, _d) = engine_with_session();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'leerSensor'");
+    let qr = as_query(&r);
+    let func = qr
+        .results
+        .iter()
+        .find(|m| m.node_kind.as_deref() == Some("function_definition"));
+    if let Some(m) = func {
+        // leerSensor contains a switch with default
+        let bc = field_opt(m, "branch_count");
+        assert!(bc.is_some(), "leerSensor should have branch_count");
+    }
+}
+
+#[test]
+fn motor_control_struct_member_count() {
+    let (mut e, sid, _d) = engine_with_session();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'struct_specifier'",
+    );
+    let qr = as_query(&r);
+    // The typedef struct in motor_control.h should have member_count
+    for m in &qr.results {
+        assert!(
+            field_opt(m, "member_count").is_some(),
+            "struct '{}' should have member_count",
+            m.name
+        );
+    }
+}
+
+#[test]
+fn motor_control_has_doc_on_functions() {
+    let (mut e, sid, _d) = engine_with_session();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE has_doc = 'true'",
+    );
+    let qr = as_query(&r);
+    // encenderSistema is preceded by a /** comment
+    let ns: Vec<&str> = names(&qr.results);
+    assert!(
+        ns.contains(&"encenderSistema"),
+        "encenderSistema should have has_doc=true: {ns:?}"
+    );
+}

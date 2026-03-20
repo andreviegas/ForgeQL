@@ -13,6 +13,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use crate::ast::enrich::{EnrichContext, NodeEnricher, default_enrichers};
 use crate::error::ForgeError;
 use crate::workspace::Workspace;
 
@@ -95,6 +96,7 @@ impl SymbolTable {
     pub fn build(workspace: &Workspace) -> Result<Self> {
         let mut table = Self::default();
         let mut parser = tree_sitter::Parser::new();
+        let enrichers = default_enrichers();
 
         parser
             .set_language(&tree_sitter_cpp::LANGUAGE.into())
@@ -108,7 +110,7 @@ impl SymbolTable {
                 continue;
             }
 
-            match index_file(&mut parser, &path, &mut table) {
+            match index_file(&mut parser, &path, &mut table, &enrichers) {
                 Ok(count) => {
                     debug!(
                         path = %workspace.relative(&path).display(),
@@ -129,6 +131,11 @@ impl SymbolTable {
             kinds = table.kind_index.len(),
             "index built"
         );
+
+        // Run post_pass for each enricher (aggregation, cross-row metrics).
+        for enricher in &enrichers {
+            enricher.post_pass(&mut table);
+        }
 
         Ok(table)
     }
@@ -217,6 +224,7 @@ impl SymbolTable {
     /// fails to parse.
     pub fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
         let mut parser = tree_sitter::Parser::new();
+        let enrichers = default_enrichers();
         parser
             .set_language(&tree_sitter_cpp::LANGUAGE.into())
             .map_err(|e| ForgeError::TreeSitterLanguage(e.to_string()))?;
@@ -224,7 +232,7 @@ impl SymbolTable {
         for path in paths {
             self.purge_file(path);
             if path.exists() {
-                match index_file(&mut parser, path, self) {
+                match index_file(&mut parser, path, self, &enrichers) {
                     Ok(count) => {
                         debug!(path = %path.display(), rows = count, "reindexed");
                     }
@@ -235,6 +243,11 @@ impl SymbolTable {
             } else {
                 debug!(path = %path.display(), "purged (file deleted)");
             }
+        }
+
+        // Run post_pass for each enricher after reindexing.
+        for enricher in &enrichers {
+            enricher.post_pass(self);
         }
 
         Ok(())
@@ -253,6 +266,7 @@ pub fn index_file(
     parser: &mut tree_sitter::Parser,
     path: &Path,
     table: &mut SymbolTable,
+    enrichers: &[Box<dyn NodeEnricher>],
 ) -> Result<usize> {
     let source = crate::workspace::file_io::read_bytes(path)?;
     let tree = parser
@@ -265,7 +279,15 @@ pub fn index_file(
     let before = table.rows.len();
 
     let mut cursor = tree.root_node().walk();
-    collect_nodes(&source, path, &mut cursor, &language, "cpp", table);
+    collect_nodes(
+        &source,
+        path,
+        &mut cursor,
+        &language,
+        "cpp",
+        table,
+        enrichers,
+    );
 
     Ok(table.rows.len() - before)
 }
@@ -290,6 +312,7 @@ fn collect_nodes(
     language: &tree_sitter::Language,
     language_name: &str,
     table: &mut SymbolTable,
+    enrichers: &[Box<dyn NodeEnricher>],
 ) {
     let node = cursor.node();
 
@@ -298,35 +321,21 @@ fn collect_nodes(
         return;
     }
 
+    // Build the enrichment context once for this node.
+    let ctx = EnrichContext {
+        node,
+        source,
+        path,
+        language_name,
+    };
+
     // Every named node becomes a row.
     if let Some(name) = extract_name(node, source, language_name) {
         let mut fields = extract_fields(node, source, language);
 
-        // For C++ `declaration` nodes, add scope and storage dynamic fields
-        // so queries can distinguish file-scope globals from local variables.
-        if language_name == "cpp" && node.kind() == "declaration" {
-            let scope = if node
-                .parent()
-                .is_some_and(|p| p.kind() == "translation_unit")
-            {
-                "file"
-            } else {
-                "local"
-            };
-            drop(fields.insert("scope".to_string(), scope.to_string()));
-
-            // Extract storage class specifier (static, extern, etc.) if present.
-            for i in 0..node.named_child_count() {
-                if let Some(child) = node.named_child(i)
-                    && child.kind() == "storage_class_specifier"
-                {
-                    let text = node_text(source, child);
-                    if !text.is_empty() {
-                        drop(fields.insert("storage".to_string(), text));
-                    }
-                    break;
-                }
-            }
+        // Run all enrichers on this row.
+        for enricher in enrichers {
+            enricher.enrich_row(&ctx, &name, &mut fields);
         }
 
         let row = IndexRow {
@@ -338,6 +347,13 @@ fn collect_nodes(
             fields,
         };
         table.push_row(row);
+    }
+
+    // Run extra_rows() for every node (even if extract_name returned None).
+    for enricher in enrichers {
+        for row in enricher.extra_rows(&ctx) {
+            table.push_row(row);
+        }
     }
 
     // All identifier tokens become usage sites.
@@ -355,7 +371,15 @@ fn collect_nodes(
     // Recurse into children.
     if cursor.goto_first_child() {
         loop {
-            collect_nodes(source, path, cursor, language, language_name, table);
+            collect_nodes(
+                source,
+                path,
+                cursor,
+                language,
+                language_name,
+                table,
+                enrichers,
+            );
             if !cursor.goto_next_sibling() {
                 break;
             }
@@ -619,7 +643,7 @@ mod tests {
         parser
             .set_language(&tree_sitter_cpp::LANGUAGE.into())
             .unwrap();
-        index_file(&mut parser, &file, &mut table).unwrap();
+        index_file(&mut parser, &file, &mut table, &default_enrichers()).unwrap();
         assert!(table.find_def("alpha").is_some());
 
         std::fs::write(&file, "void beta() {}").unwrap();
@@ -641,7 +665,7 @@ mod tests {
         parser
             .set_language(&tree_sitter_cpp::LANGUAGE.into())
             .unwrap();
-        index_file(&mut parser, &file, &mut table).unwrap();
+        index_file(&mut parser, &file, &mut table, &default_enrichers()).unwrap();
         table
     }
 

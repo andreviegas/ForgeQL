@@ -257,7 +257,7 @@ impl ClauseTarget for crate::result::SymbolMatch {
                 .map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
             "count" => self.count.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
             "line" => self.line.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
-            _ => None,
+            _ => self.fields.get(field)?.parse().ok(),
         }
     }
 
@@ -284,7 +284,7 @@ impl ClauseTarget for IndexRow {
         match field {
             "line" => Some(i64::try_from(self.line).unwrap_or(i64::MAX)),
             // "usages" requires the index; annotate via SymbolMatch instead.
-            _ => None,
+            _ => self.fields.get(field)?.parse().ok(),
         }
     }
 

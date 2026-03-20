@@ -17,6 +17,7 @@ Commands are grouped into four families. Every command accepts the [universal cl
 7. [Universal Clauses](#universal-clauses)
 8. [Operators and Values](#operators-and-values)
 9. [Filterable Fields](#filterable-fields)
+   - [Enrichment Fields](#enrichment-fields)
 10. [Use Cases: Pisco Code v1.3.0](#use-cases-pisco-code-v130)
 
 ---
@@ -934,6 +935,151 @@ In addition every row carries **dynamic fields** auto-extracted from the tree-si
 | `scope` | C/C++ `declaration` | `"file"` (parent is translation unit) or `"local"` (inside a function body) |
 | `storage` | C/C++ `declaration` | Storage class specifier if present: `"static"`, `"extern"`. Absent for default linkage. |
 
+### Enrichment Fields
+
+Enrichment fields are computed by the enrichment pipeline at index time. They provide rich metadata about naming conventions, control flow complexity, operators, code metrics, casts, and redundancy patterns. All enrichment fields are queryable with `WHERE` just like dynamic fields.
+
+#### NamingEnricher
+
+| Field | Applies to | Description |
+|---|---|---|
+| `naming` | all named symbols | Naming convention: `camelCase`, `PascalCase`, `snake_case`, `UPPER_SNAKE`, `flatcase`, or `other` |
+| `name_length` | all named symbols | Character count of the symbol name |
+
+```sql
+FIND symbols WHERE naming = 'UPPER_SNAKE'
+FIND symbols WHERE name_length >= 20
+```
+
+#### CommentEnricher
+
+| Field | Applies to | Description |
+|---|---|---|
+| `comment_style` | `comment` | One of `doc_line` (`///`), `doc_block` (`/** */`), `block` (`/* */`), or `line` (`//`) |
+| `has_doc` | `function_definition` | `"true"` if the immediately preceding sibling is a doc comment (`///` or `/** */`) |
+
+```sql
+-- Find all doc comments
+FIND symbols WHERE comment_style = 'doc_line'
+-- Functions with documentation
+FIND symbols WHERE has_doc = 'true'
+```
+
+#### NumberEnricher
+
+| Field | Applies to | Description |
+|---|---|---|
+| `num_format` | `number_literal` | `decimal`, `hex`, `binary`, `octal`, `float`, or `scientific` |
+| `has_separator` | `number_literal` | `"true"` if the literal contains digit separators (`'`) |
+| `num_sign` | `number_literal` | `"positive"` or `"negative"` |
+| `num_value` | `number_literal` | Raw text of the literal |
+| `num_suffix` | `number_literal` | Type suffix if present: `u`, `l`, `ll`, `ul`, `ull`, `f`, `ld` |
+| `is_magic` | `number_literal` | `"true"` for unexplained numeric constants (not 0, 1, -1, 2, powers of 2, or common bitmasks) |
+
+```sql
+-- Find magic numbers
+FIND symbols WHERE is_magic = 'true'
+-- Find hex literals
+FIND symbols WHERE num_format = 'hex'
+```
+
+#### ControlFlowEnricher
+
+| Field | Applies to | Description |
+|---|---|---|
+| `condition_tests` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Number of Boolean sub-expressions in the condition (counts comparisons and logical operators) |
+| `paren_depth` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Maximum nesting depth of parentheses in the condition |
+| `condition_text` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Raw text of the condition expression |
+| `has_default` | `switch_statement` | `"true"` if the switch has a `default:` case |
+| `has_assignment_in_condition` | `if_statement`, `while_statement`, `for_statement` | `"true"` if the condition contains an assignment operator (`=` but not `==`) |
+| `mixed_logic` | `if_statement`, `while_statement`, `for_statement` | `"true"` if the condition mixes `&&` and `\|\|` without grouping parentheses |
+| `branch_count` | `function_definition` | Total number of control-flow branch points inside the function (aggregated via post-pass) |
+
+```sql
+-- Complex conditions (many sub-tests)
+FIND symbols WHERE condition_tests >= 4
+-- Switch statements missing default
+FIND symbols WHERE node_kind = 'switch_statement' WHERE has_default = 'false'
+-- Suspicious assignments in conditions
+FIND symbols WHERE has_assignment_in_condition = 'true'
+```
+
+#### OperatorEnricher
+
+| Field | Applies to | Description |
+|---|---|---|
+| `increment_style` | `update_expression` | `"prefix"` (`++i`) or `"postfix"` (`i++`) |
+| `increment_op` | `update_expression` | `"++"` or `"--"` |
+| `compound_op` | `compound_assignment` | The operator: `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` |
+| `operand` | `compound_assignment` | Left-hand side text of the compound assignment |
+| `shift_direction` | `shift_expression` | `"left"` or `"right"` |
+| `shift_amount` | `shift_expression` | Right-hand side operand text |
+| `shift_operand` | `shift_expression` | Left-hand side operand text |
+
+```sql
+-- All postfix increments (potential performance concern in iterators)
+FIND symbols WHERE increment_style = 'postfix'
+-- Compound assignments on a specific variable
+FIND symbols WHERE compound_op = '+=' WHERE operand LIKE 'total%'
+```
+
+#### MetricsEnricher
+
+| Field | Applies to | Description |
+|---|---|---|
+| `lines` | `function_definition`, `struct_specifier`, `class_specifier`, `enum_specifier` | Span of the node in lines |
+| `param_count` | `function_definition` | Number of parameters |
+| `return_count` | `function_definition` | Number of `return` statements in the body |
+| `goto_count` | `function_definition` | Number of `goto` statements in the body |
+| `string_count` | `function_definition` | Number of string literals in the body |
+| `member_count` | `struct_specifier`, `class_specifier`, `enum_specifier` | Number of members / enumerators |
+| `is_const` | `function_definition`, `declaration` | `"true"` if the declaration or return type includes `const` |
+| `is_volatile` | `function_definition`, `declaration` | `"true"` if the declaration or return type includes `volatile` |
+| `is_static` | `function_definition` | `"true"` if the function is declared `static` |
+| `is_inline` | `function_definition` | `"true"` if the function is declared `inline` |
+| `visibility` | `class_specifier` members | `"public"`, `"private"`, or `"protected"` (currently only on class-level indexed nodes) |
+
+```sql
+-- Long functions (potential refactoring candidates)
+FIND symbols WHERE node_kind = 'function_definition' WHERE lines >= 50
+-- Functions with goto
+FIND symbols WHERE goto_count >= 1
+-- Structs with many members
+FIND symbols WHERE node_kind = 'struct_specifier' WHERE member_count >= 10
+```
+
+#### CastEnricher
+
+| Field | Applies to | Description |
+|---|---|---|
+| `cast_style` | `cast_expression` | `"c_style"` for C-style casts `(int)x` |
+| `cast_target_type` | `cast_expression` | Target type text of the cast |
+
+> **Limitation:** Named C++ casts (`static_cast`, `reinterpret_cast`, `const_cast`, `dynamic_cast`) are not indexed as separate node kinds in tree-sitter-cpp 0.23. Only C-style casts are detected.
+
+```sql
+-- Find all C-style casts (potential modernization targets)
+FIND symbols WHERE cast_style = 'c_style'
+```
+
+#### RedundancyEnricher
+
+| Field | Applies to | Description |
+|---|---|---|
+| `has_repeated_condition_calls` | `function_definition` | `"true"` if the same function call appears in 2+ different conditions within this function |
+| `repeated_condition_calls` | `function_definition` | Comma-separated list of function names that appear in multiple conditions |
+| `null_check_count` | `function_definition` | Number of null-check patterns (`== NULL`, `!= NULL`, `== nullptr`, `!= nullptr`, `== 0`, `!= 0`) in the function body |
+| `duplicate_condition` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | `"true"` if the exact same condition skeleton appears in another control-flow statement within the same function (set via post-pass) |
+
+```sql
+-- Functions with repeated condition calls (extract-variable candidates)
+FIND symbols WHERE has_repeated_condition_calls = 'true'
+-- Conditions that are duplicated within their function
+FIND symbols WHERE duplicate_condition = 'true'
+-- Functions with many null checks
+FIND symbols WHERE null_check_count >= 5
+```
+
 If a field does not exist on a row, a `WHERE` predicate on that field evaluates to false and the row is excluded — identical to SQL `NULL` semantics.
 
 **Numeric operator coercion** — dynamic fields are stored as strings. When you write `WHERE value >= 1000`, ForgeQL attempts to parse the stored text as an integer. If parsing fails (e.g. the value is `"some_constant"` or `"0x1F"`), the predicate silently evaluates to false for that row. Use `LIKE` patterns for non-decimal values.
@@ -1134,4 +1280,8 @@ FIND symbols
 | Template functions | `SHOW callees OF` / `FIND callees OF` returns empty for C++ template functions | Use `FIND usages OF 'name'` to find all reference sites |
 | Scope filtering | `FIND globals` returns file-scope declarations only. C++ has no `extern`-vs-`static` distinction in the AST; use `WHERE storage != 'static'` to exclude internal linkage. | Filter with `scope` and `storage` dynamic fields |
 | Numeric coercion | `value >= N` silently skips rows where `value` is non-decimal (hex, symbolic constants) | Use `WHERE value LIKE 'pattern'` for non-integer values |
+| Named C++ casts | `static_cast`, `reinterpret_cast`, `const_cast`, `dynamic_cast` are not indexed as separate node kinds in tree-sitter-cpp 0.23. The CastEnricher only detects C-style casts. | Search by name pattern: `WHERE name LIKE '%_cast%'` or use `FIND usages OF 'static_cast'` |
+| Member visibility | `field_declaration` nodes inside classes are not indexed by `extract_name()`, so individual field visibility (`public`/`private`/`protected`) is not available. | Use `member_count` on `class_specifier` to count total members |
+| Scope on functions | The `scope` and `storage` enrichment fields apply only to `declaration` nodes, not `function_definition`. A `static` function will have `is_static = 'true'` (MetricsEnricher) but not `scope = 'file'`. | Use `WHERE is_static = 'true'` to find static functions |
+| FQL `--` literal | The FQL parser does not accept `'--'` as a string predicate value. | Filter by `increment_style` and check `increment_op` programmatically |
 
