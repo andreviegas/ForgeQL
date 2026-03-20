@@ -320,6 +320,49 @@ impl ClauseTarget for crate::result::FileEntry {
     }
 }
 
+impl ClauseTarget for crate::result::OutlineEntry {
+    fn field_str(&self, field: &str) -> Option<&str> {
+        match field {
+            "name" => Some(&self.name),
+            "kind" | "node_kind" => Some(&self.kind),
+            "path" | "file" => self.path.to_str(),
+            _ => None,
+        }
+    }
+
+    fn field_num(&self, field: &str) -> Option<i64> {
+        match field {
+            "line" => Some(i64::try_from(self.line).unwrap_or(i64::MAX)),
+            _ => None,
+        }
+    }
+
+    fn path(&self) -> Option<&Path> {
+        Some(&self.path)
+    }
+}
+
+impl ClauseTarget for crate::result::MemberEntry {
+    fn field_str(&self, field: &str) -> Option<&str> {
+        match field {
+            "kind" | "node_kind" | "type" => Some(&self.kind),
+            "text" | "declaration" | "name" => Some(&self.text),
+            _ => None,
+        }
+    }
+
+    fn field_num(&self, field: &str) -> Option<i64> {
+        match field {
+            "line" => Some(i64::try_from(self.line).unwrap_or(i64::MAX)),
+            _ => None,
+        }
+    }
+
+    fn path(&self) -> Option<&Path> {
+        None
+    }
+}
+
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------

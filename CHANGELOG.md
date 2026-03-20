@@ -9,6 +9,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.23.1] - 2026-03-20
+
+### Fixed
+
+- **WHERE clauses on SHOW outline / SHOW members** — WHERE predicates were
+  silently ignored; only LIMIT/OFFSET were applied.  Now the full clause
+  pipeline (WHERE, ORDER BY, LIMIT, OFFSET) runs on outline and member
+  entries via `ClauseTarget` implementations for `OutlineEntry` and
+  `MemberEntry`.
+
+---
+
 ## [0.23.0] - 2026-03-20
 
 ### Added

@@ -97,37 +97,6 @@ pub struct ForgeQLEngine {
 // SHOW helpers
 // -----------------------------------------------------------------------
 
-/// Apply LIMIT and OFFSET from `clauses` to the named JSON array field
-/// inside a SHOW result value.
-///
-/// Used by `ShowOutline` (`"results"`) and `ShowMembers` (`"members"`) so
-/// that agents can paginate or preview large lists without receiving the
-/// entire member/declaration set.
-fn apply_show_list_clauses(
-    json: &mut serde_json::Value,
-    array_key: &str,
-    clauses: &crate::ir::Clauses,
-) {
-    let offset = clauses.offset.unwrap_or(0);
-    let limit = clauses.limit;
-
-    if offset == 0 && limit.is_none() {
-        return; // nothing to do
-    }
-
-    let Some(arr) = json.get_mut(array_key).and_then(|v| v.as_array_mut()) else {
-        return;
-    };
-
-    if offset > 0 {
-        let skip = offset.min(arr.len());
-        drop(arr.drain(..skip));
-    }
-    if let Some(max) = limit {
-        arr.truncate(max);
-    }
-}
-
 impl ForgeQLEngine {
     /// Create a new engine rooted at `data_dir`.
     ///
@@ -706,18 +675,10 @@ impl ForgeQLEngine {
                 show::show_signature(index, &workspace, symbol)
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
-            ForgeQLIR::ShowOutline { file, clauses } => {
-                let mut json = show::show_outline(index, &workspace, file)
-                    .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }));
-                apply_show_list_clauses(&mut json, "results", clauses);
-                json
-            }
-            ForgeQLIR::ShowMembers { symbol, clauses } => {
-                let mut json = show::show_members(index, &workspace, symbol)
-                    .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }));
-                apply_show_list_clauses(&mut json, "members", clauses);
-                json
-            }
+            ForgeQLIR::ShowOutline { file, .. } => show::show_outline(index, &workspace, file)
+                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+            ForgeQLIR::ShowMembers { symbol, .. } => show::show_members(index, &workspace, symbol)
+                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
             ForgeQLIR::ShowBody { symbol, clauses } => {
                 show::show_body(index, &workspace, symbol, Some(clauses.depth.unwrap_or(0)))
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
@@ -813,7 +774,20 @@ impl ForgeQLEngine {
         }
 
         // Convert the JSON value to a typed ShowResult.
-        let show_result = convert_show_json(op, &json)?;
+        let mut show_result = convert_show_json(op, &json)?;
+
+        // Apply the full clause pipeline (WHERE, ORDER BY, LIMIT, OFFSET, …)
+        // to outline and member entries — previously only LIMIT/OFFSET ran.
+        match (&mut show_result.content, op) {
+            (ShowContent::Outline { entries }, ForgeQLIR::ShowOutline { clauses, .. }) => {
+                crate::filter::apply_clauses(entries, clauses);
+            }
+            (ShowContent::Members { members, .. }, ForgeQLIR::ShowMembers { clauses, .. }) => {
+                crate::filter::apply_clauses(members, clauses);
+            }
+            _ => {}
+        }
+
         Ok(ForgeQLResult::Show(show_result))
     }
 

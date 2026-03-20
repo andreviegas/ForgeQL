@@ -1012,3 +1012,151 @@ fn find_declarations_filter_by_scope_and_storage() {
         other => panic!("expected Query, got: {other:?}"),
     }
 }
+
+// -----------------------------------------------------------------------
+// SHOW outline / SHOW members — WHERE clause filtering
+// -----------------------------------------------------------------------
+
+#[test]
+fn show_outline_where_filters_by_kind() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    // motor_control.h has preproc_def entries AND other kinds (enums, comments, macros).
+    // WHERE kind = 'preproc_def' must return only preproc_def entries.
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "SHOW outline OF 'motor_control.h' WHERE kind = 'preproc_def'",
+    );
+    match &result {
+        ForgeQLResult::Show(sr) => match &sr.content {
+            ShowContent::Outline { entries } => {
+                assert!(
+                    !entries.is_empty(),
+                    "motor_control.h must have preproc_def entries"
+                );
+                for entry in entries {
+                    assert_eq!(
+                        entry.kind, "preproc_def",
+                        "WHERE kind = 'preproc_def' returned '{}' with kind '{}'",
+                        entry.name, entry.kind
+                    );
+                }
+            }
+            other => panic!("expected Outline, got {other:?}"),
+        },
+        other => panic!("expected Show, got {other:?}"),
+    }
+
+    // Unfiltered outline must have MORE entries (other kinds exist).
+    let unfiltered = execute_fql(&mut engine, &sid, "SHOW outline OF 'motor_control.h'");
+    let unfiltered_count = match &unfiltered {
+        ForgeQLResult::Show(sr) => match &sr.content {
+            ShowContent::Outline { entries } => entries.len(),
+            other => panic!("expected Outline, got {other:?}"),
+        },
+        other => panic!("expected Show, got {other:?}"),
+    };
+    let filtered_count = match &result {
+        ForgeQLResult::Show(sr) => match &sr.content {
+            ShowContent::Outline { entries } => entries.len(),
+            _ => unreachable!(),
+        },
+        _ => unreachable!(),
+    };
+    assert!(
+        filtered_count < unfiltered_count,
+        "WHERE must reduce the result set ({filtered_count} < {unfiltered_count})"
+    );
+}
+
+#[test]
+fn show_outline_where_name_like_filters() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "SHOW outline OF 'motor_control.h' WHERE name LIKE 'VELOCIDAD%'",
+    );
+    match &result {
+        ForgeQLResult::Show(sr) => match &sr.content {
+            ShowContent::Outline { entries } => {
+                assert!(
+                    !entries.is_empty(),
+                    "motor_control.h must have entries matching 'VELOCIDAD%'"
+                );
+                for entry in entries {
+                    assert!(
+                        entry.name.starts_with("VELOCIDAD"),
+                        "WHERE name LIKE 'VELOCIDAD%' returned unexpected entry '{}'",
+                        entry.name
+                    );
+                }
+            }
+            other => panic!("expected Outline, got {other:?}"),
+        },
+        other => panic!("expected Show, got {other:?}"),
+    }
+}
+
+#[test]
+fn show_outline_where_with_limit_applies_both() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "SHOW outline OF 'motor_control.h' WHERE kind = 'preproc_def' LIMIT 2",
+    );
+    match &result {
+        ForgeQLResult::Show(sr) => match &sr.content {
+            ShowContent::Outline { entries } => {
+                assert_eq!(
+                    entries.len(),
+                    2,
+                    "WHERE + LIMIT 2 must return exactly 2 entries"
+                );
+                for entry in entries {
+                    assert_eq!(
+                        entry.kind, "preproc_def",
+                        "WHERE filter must still apply with LIMIT"
+                    );
+                }
+            }
+            other => panic!("expected Outline, got {other:?}"),
+        },
+        other => panic!("expected Show, got {other:?}"),
+    }
+}
+
+#[test]
+fn show_members_where_filters_by_kind() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    // ErrorMotor has enumerator members.  WHERE kind = 'enumerator' must include them.
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "SHOW members OF 'ErrorMotor' WHERE kind = 'enumerator'",
+    );
+    match &result {
+        ForgeQLResult::Show(sr) => match &sr.content {
+            ShowContent::Members { members, .. } => {
+                assert!(
+                    !members.is_empty(),
+                    "ErrorMotor must have enumerator members"
+                );
+                for m in members {
+                    assert_eq!(
+                        m.kind, "enumerator",
+                        "WHERE kind = 'enumerator' returned member with kind '{}'",
+                        m.kind
+                    );
+                }
+            }
+            other => panic!("expected Members, got {other:?}"),
+        },
+        other => panic!("expected Show, got {other:?}"),
+    }
+}
