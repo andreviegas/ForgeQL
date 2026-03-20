@@ -1,24 +1,29 @@
 # ForgeQL Syntax Reference
 
-This document is the authoritative reference for every command and clause accepted by ForgeQL.
-
-Commands are grouped into four families. Every command accepts the [universal clause set](#universal-clauses); inapplicable clauses are silently skipped.
+Authoritative grammar for every ForgeQL command and clause.
+Optimized for AI agent consumption — syntax first, advanced patterns second.
 
 ---
 
 ## Table of Contents
 
 1. [Notation](#notation)
-2. [Session Commands](#session-commands)
-3. [Query Commands — FIND](#query-commands--find)
-4. [Content Commands — SHOW](#content-commands--show)
-5. [Mutation Commands — CHANGE](#mutation-commands--change)
-6. [Transaction Commands](#transaction-commands)
-7. [Universal Clauses](#universal-clauses)
-8. [Operators and Values](#operators-and-values)
-9. [Filterable Fields](#filterable-fields)
+2. [Command Syntax](#command-syntax)
+   - [Session Commands](#session-commands)
+   - [FIND Commands](#find-commands)
+   - [SHOW Commands](#show-commands)
+   - [CHANGE Commands](#change-commands)
+   - [Transaction Commands](#transaction-commands)
+3. [Universal Clauses](#universal-clauses)
+4. [Operators and Values](#operators-and-values)
+5. [Filterable Fields](#filterable-fields)
+   - [Symbol Fields](#symbol-fields)
+   - [Outline Fields](#outline-fields)
+   - [Member Fields](#member-fields)
+   - [File Fields](#file-fields)
+   - [Dynamic Fields](#dynamic-fields)
    - [Enrichment Fields](#enrichment-fields)
-10. [Use Cases: Pisco Code v1.3.0](#use-cases-pisco-code-v130)
+6. [Advanced Patterns](#advanced-patterns)
 
 ---
 
@@ -32,135 +37,63 @@ Commands are grouped into four families. Every command accepts the [universal cl
 | `n-m` | Inclusive line range, e.g. `10-25` |
 | `[ … ]` | Optional element |
 | `( A \| B )` | Choose one |
-| `…` | Repeat one or more |
+| `…` | Repeatable |
 
 ---
 
-## Session Commands
+## Command Syntax
 
-Session commands connect ForgeQL to a remote repository, switch branches, and manage the active source.
-
----
-
-### `CREATE SOURCE`
-
-Register a remote repository and clone it locally.
+### Session Commands
 
 ```sql
 CREATE SOURCE 'name' FROM 'url'
-```
 
-| Parameter | Description |
-|---|---|
-| `'name'` | Logical alias used in subsequent `USE` commands |
-| `'url'` | Any URL accepted by `git clone` (HTTPS, SSH, local path) |
-
-**Example**
-
-```sql
-CREATE SOURCE 'pisco' FROM 'https://github.com/pisco-de-luz/Pisco-Code.git'
-```
-
----
-
-### `REFRESH SOURCE`
-
-Re-fetch and re-index a registered source (equivalent to `git fetch` + rebuild index).
-
-```sql
 REFRESH SOURCE 'name'
-```
 
-**Example**
+USE source_name.branch [AS 'alias']
 
-```sql
-REFRESH SOURCE 'pisco'
-```
-
----
-
-### `USE`
-
-Set the active worktree to a specific branch or tag of a registered source. All subsequent queries operate on this worktree.
-
-```sql
-USE source.branch [AS 'alias']
-```
-
-| Parameter | Description |
-|---|---|
-| `source.branch` | Dot-separated source name and branch/tag name |
-| `AS 'alias'` | Optional human-readable label for the session |
-
-**Examples**
-
-```sql
-USE pisco.main
-USE pisco.v1.3.0
-USE pisco.v1.3.0 AS 'pisco-stable'
-```
-
----
-
-### `SHOW SOURCES`
-
-List all registered sources and their local clone paths.
-
-```sql
 SHOW SOURCES
-```
 
----
-
-### `SHOW BRANCHES`
-
-List all branches and tags available for a source.
-
-```sql
 SHOW BRANCHES [OF 'source']
-```
 
-**Examples**
-
-```sql
-SHOW BRANCHES
-SHOW BRANCHES OF 'pisco'
-```
-
----
-
-### `DISCONNECT`
-
-Close the active session and release the worktree lock.
-
-```sql
 DISCONNECT
 ```
 
----
-
-## Query Commands — FIND
-
-`FIND` commands query the index and return rows. All `FIND` commands accept the full [universal clause set](#universal-clauses).
+`source_name` is an unquoted identifier that may contain hyphens (e.g. `pisco-code`).
+`branch` is an unquoted identifier (e.g. `main`, `v1_3_0`).
 
 ---
 
-### `FIND symbols`
-
-Return indexed AST nodes — functions, classes, macros, variables, includes, enums, and any other named node tree-sitter can identify.
+### FIND Commands
 
 ```sql
 FIND symbols [clauses]
+
+FIND globals [clauses]
+
+FIND usages OF 'symbol_name' [clauses]
+
+FIND callees OF 'symbol_name' [clauses]
+
+FIND files [clauses]
 ```
 
-A bare `FIND symbols` returns everything in the index. Use `WHERE node_kind = '...'` to narrow to a specific kind.
+**clauses**: see [Universal Clauses](#universal-clauses).
+
+| Command | Returns |
+|---|---|
+| `FIND symbols` | All indexed AST nodes. Use `WHERE node_kind = '...'` to narrow. |
+| `FIND globals` | Shorthand for file-scope `declaration` nodes only. |
+| `FIND usages OF` | Every identifier reference to the named symbol. |
+| `FIND callees OF` | Symbols called from inside the named function body. Alias for `SHOW callees OF`. |
+| `FIND files` | Files in the worktree. Supports `WHERE`, `DEPTH`, `ORDER BY size`, etc. |
 
 **Common `node_kind` values (C/C++)**
 
-| `node_kind` | What it matches |
+| `node_kind` | Matches |
 |---|---|
-| `declaration` | Variable declarations — file-scope and local (`int x = 5;`, `static Foo bar;`). Function forward declarations are *not* indexed. |
 | `function_definition` | Function definitions with body |
+| `declaration` | Variable declarations (file-scope and local) |
 | `struct_specifier` | `struct` declarations |
 | `class_specifier` | `class` declarations |
 | `enum_specifier` | `enum` declarations |
@@ -168,603 +101,120 @@ A bare `FIND symbols` returns everything in the index. Use `WHERE node_kind = '.
 | `preproc_include` | `#include` directives |
 | `field_declaration` | Member variable declarations |
 | `parameter_declaration` | Function parameter declarations |
-| `comment` | Single-line (`//`) and block (`/* */`) comments |
-
-**Examples**
-
-```sql
--- All symbols in the index
-FIND symbols
-
--- Only function definitions
-FIND symbols
-  WHERE node_kind = 'function_definition'
-
--- Functions whose name starts with "get"
-FIND symbols
-  WHERE node_kind = 'function_definition'
-  WHERE name LIKE 'get%'
-
--- All #define macros in headers
-FIND symbols
-  WHERE node_kind = 'preproc_def'
-  IN 'include/**'
-
--- Top 10 most-referenced functions
-FIND symbols
-  WHERE node_kind = 'function_definition'
-  ORDER BY usages DESC
-  LIMIT 10
-
--- Functions with a void return type (dynamic field)
-FIND symbols
-  WHERE node_kind = 'function_definition'
-  WHERE type LIKE 'void%'
-
--- All variable declarations (globals, statics, locals)
-FIND symbols
-  WHERE node_kind = 'declaration'
-  ORDER BY usages DESC
-  LIMIT 20
-
--- Shorthand: FIND globals → file-scope declarations only
-FIND globals
-  ORDER BY usages DESC
-  LIMIT 20
-
--- Only file-scope declarations with external linkage (exclude static)
-FIND globals
-  WHERE storage != 'static'
-
--- Local variable declarations only
-FIND symbols
-  WHERE node_kind = 'declaration'
-  WHERE scope = 'local'
-  LIMIT 20
-
--- Symbol distribution across node kinds
-FIND symbols
-  GROUP BY node_kind
-  ORDER BY count DESC
-```
+| `comment` | Single-line and block comments |
 
 ---
 
-### `FIND usages OF`
-
-Return every identifier reference to the named symbol.
+### SHOW Commands
 
 ```sql
-FIND usages OF 'symbol_name' [clauses]
-```
+SHOW body OF 'symbol_name' [DEPTH N] [clauses]
 
-**Examples**
-
-```sql
--- All references to PiscoCode::process
-FIND usages OF 'PiscoCode::process'
-
--- Usage count per file (replaces a dedicated COUNT command)
-FIND usages OF 'PiscoCode::process'
-  GROUP BY file
-  ORDER BY count DESC
-
--- References inside src/ only
-FIND usages OF 'PiscoCode::process'
-  IN 'src/**'
-```
-
----
-
-### `FIND callees OF`
-
-Syntactic alias for `SHOW callees OF`. Returns all symbols directly called or referenced from inside the named function's body. The parser routes this to the same handler as `SHOW callees OF`.
-
-```sql
-FIND callees OF 'symbol_name' [clauses]
-```
-
-**Examples**
-
-```sql
--- What does PiscoCode::process call?
-FIND callees OF 'PiscoCode::process'
-
--- Callees restricted to a subtree
-FIND callees OF 'PiscoCode::process'
-  IN 'src/**'
-  ORDER BY name ASC
-```
-
----
-
-### `FIND files`
-
-Return files in the worktree, optionally filtered by path glob or tree depth.
-All universal clauses — including `WHERE`, `ORDER BY`, `LIMIT`, and `OFFSET` —
-are fully supported.
-
-```sql
-FIND files [clauses]
-```
-
-**Filterable fields**
-
-| Field | Type | Description |
-|---|---|---|
-| `path` | string | Relative file path (also used by `IN` / `EXCLUDE` globs) |
-| `extension` | string | File extension without the leading `.` — empty string for extension-less files |
-| `size` | integer | File size in bytes |
-| `depth` | integer | Directory depth relative to the workspace root |
-
-**Examples**
-
-```sql
--- All files
-FIND files
-
--- Only files under src/
-FIND files
-  IN 'src/**'
-
--- Top-level directory tree, 2 levels deep
-FIND files DEPTH 2
-
--- Files with the most symbol definitions
-FIND files
-  ORDER BY count DESC
-  LIMIT 20
-
--- Find all non-C/C++ files (e.g. CMake, Markdown, config)
-FIND files IN 'src/**'
-  WHERE extension NOT LIKE 'cpp'
-  WHERE extension NOT LIKE 'c'
-  WHERE extension NOT LIKE 'h'
-  WHERE extension NOT LIKE 'hpp'
-
--- Filter by path pattern instead
-FIND files
-  WHERE path NOT LIKE '%.cpp'
-  WHERE path NOT LIKE '%.h'
-
--- Find unusually large files
-FIND files
-  WHERE size > 100000
-  ORDER BY size DESC
-  LIMIT 10
-
--- Only markdown files, sorted by path
-FIND files
-  WHERE extension = 'md'
-  ORDER BY path ASC
-```
-
----
-
-## Content Commands — SHOW
-
-`SHOW` commands read source content and return structured output. Every `SHOW` response includes `start_line` and `end_line` so the agent can chain directly into a `CHANGE LINES` command without re-reading the file.
-
----
-
-### `SHOW body OF`
-
-Return the full source text of a named symbol's body.
-
-```sql
-SHOW body OF 'symbol_name' [clauses]
-```
-
-| Clause | Effect |
-|---|---|
-| `DEPTH N` | Collapse nested blocks at depth > N (shows `{ ... }` placeholders) |
-
-**Default:** `DEPTH 0` — returns only the signature with the entire body replaced by `{ ... }`. Use `DEPTH 1` or higher to reveal progressively more nested structure.
-
-**Examples**
-
-```sql
-SHOW body OF 'PiscoCode::process'         -- signature only (DEPTH 0)
-SHOW body OF 'PiscoCode::init' DEPTH 1   -- top-level body visible
-SHOW body OF 'PiscoCode::init' DEPTH 99  -- full source
-```
-
----
-
-### `SHOW signature OF`
-
-Return only the declaration (return type, name, parameters) without the body.
-
-```sql
 SHOW signature OF 'symbol_name' [clauses]
-```
 
-**Example**
-
-```sql
-SHOW signature OF 'PiscoCode::process'
-```
-
----
-
-### `SHOW outline OF`
-
-Return the structural outline of a file: top-level symbols with their line numbers, without bodies.
-
-```sql
 SHOW outline OF 'file_path' [clauses]
-```
 
-**Example**
-
-```sql
-SHOW outline OF 'include/PiscoCode.h'
-```
-
----
-
-### `SHOW members OF`
-
-Return all member declarations (fields and methods) of a class or struct.
-
-```sql
 SHOW members OF 'type_name' [clauses]
-```
 
-**Example**
-
-```sql
-SHOW members OF 'PiscoCode'
-```
-
----
-
-### `SHOW context OF`
-
-Return the surrounding lines of a symbol's definition — useful for understanding the declaration environment without reading the full file.
-
-```sql
 SHOW context OF 'symbol_name' [clauses]
-```
 
-**Example**
-
-```sql
-SHOW context OF 'PISCO_BUFFER_SIZE'
-```
-
----
-
-### `SHOW callees OF`
-
-Return all symbols directly called or referenced from inside the named function's body. This is the same handler as `FIND callees OF` — both syntaxes work.
-
-```sql
 SHOW callees OF 'symbol_name' [clauses]
-```
 
-> **Template function limitation** — C++ template functions (e.g. `template<typename T> void foo()`) are not resolved by the call-graph walker and will return an empty result. Use `FIND usages OF 'symbol_name'` instead to locate all reference sites:
->
-> ```sql
-> -- Workaround for template functions
-> FIND usages OF 'MyTemplate::process'
-> ```
-
-**Examples**
-
-```sql
-SHOW callees OF 'PiscoCode::process'
-
-SHOW callees OF 'PiscoCode::process'
-  IN 'src/**'
-  ORDER BY name ASC
-```
-
----
-
-### `SHOW LINES`
-
-Return a specific line range from a file verbatim.
-
-```sql
 SHOW LINES n-m OF 'file_path' [clauses]
 ```
 
-**Examples**
+| Command | Returns |
+|---|---|
+| `SHOW body OF` | Source text of a symbol. **Default `DEPTH 0`**: signature only, body replaced by `{ ... }`. `DEPTH 1`+: progressively reveals nested structure. `DEPTH 99`: full source. |
+| `SHOW signature OF` | Declaration line only (return type, name, parameters). |
+| `SHOW outline OF` | Structural outline of a file: all top-level symbols with kind, name, line. Supports `WHERE kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
+| `SHOW members OF` | Member declarations of a class/struct/enum: fields, methods, enumerators. Supports `WHERE kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
+| `SHOW context OF` | Surrounding lines of a symbol definition. `DEPTH N` controls how many context lines (default 5). |
+| `SHOW callees OF` | All symbols called from inside the named function body. |
+| `SHOW LINES n-m OF` | Verbatim line range from a file. |
 
-```sql
-SHOW LINES 87-103 OF 'src/PiscoCode.cpp'
-SHOW LINES 1-30 OF 'include/PiscoCode.h'
-```
+Every `SHOW` response includes `start_line` and `end_line` — chain directly into `CHANGE LINES` without re-reading.
 
----
-
-## Mutation Commands — CHANGE
-
-`CHANGE` commands modify source files. They are most effective inside a `BEGIN TRANSACTION` block, which provides automatic rollback on failure.
-
-```sql
-CHANGE (FILE | FILES) file_list change_target [clauses]
-```
-
-`FILE` and `FILES` are interchangeable. `file_list` is one or more single-quoted glob patterns separated by commas.
+> **Template limitation** — `SHOW callees OF` does not resolve C++ template functions. Use `FIND usages OF 'symbol'` instead.
 
 ---
 
-### `MATCHING … WITH …`
-
-Replace all occurrences of a literal string with another string across the specified files.
+### CHANGE Commands
 
 ```sql
-CHANGE FILES 'glob', 'glob' MATCHING 'old_text' WITH 'new_text'
+CHANGE (FILE | FILES) file_list
+    MATCHING 'old_text' WITH 'new_text'
+
+CHANGE (FILE | FILES) file_list
+    LINES n-m WITH 'new_content'
+
+CHANGE (FILE | FILES) file_list
+    LINES n-m WITH NOTHING
+
+CHANGE FILE 'file_path'
+    WITH 'new_full_content'
+
+CHANGE FILE 'file_path'
+    WITH NOTHING
 ```
 
-**Examples**
+`file_list`: one or more single-quoted glob patterns, comma-separated.
+`FILE` and `FILES` are interchangeable.
 
-```sql
--- Rename a symbol across all C++ translation units
-CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
-  MATCHING 'PiscoCode::process' WITH 'PiscoCode::run'
-
--- Update a macro value in a single header
-CHANGE FILE 'include/config.h'
-  MATCHING 'PISCO_VERSION "1.3.0"' WITH 'PISCO_VERSION "1.4.0"'
-```
+| Variant | Effect |
+|---|---|
+| `MATCHING … WITH …` | Replace all literal occurrences across matched files |
+| `LINES n-m WITH '…'` | Replace a specific line range with new content |
+| `LINES n-m WITH NOTHING` | Delete a specific line range |
+| `WITH '…'` | Replace entire file content (creates file if absent) |
+| `WITH NOTHING` | Clear file content (file remains on disk, empty) |
 
 ---
 
-### `LINES n-m WITH …`
-
-Replace a specific line range with new content. Typically chained after a `SHOW body` or `SHOW LINES` response that provided the exact line numbers.
-
-```sql
-CHANGE FILE 'file_path' LINES n-m WITH 'new_content'
-```
-
-**Examples**
-
-```sql
--- Rewrite a function body (line range from SHOW body)
-CHANGE FILE 'src/PiscoCode.cpp'
-  LINES 87-103
-  WITH 'void PiscoCode::run(Buffer& buffer) {
-    for (auto& sample : buffer) {
-        sample = this->pipeline.apply(sample);
-    }
-}'
-
--- Fix a header guard
-CHANGE FILE 'include/PiscoCode.h'
-  LINES 1-3
-  WITH '#pragma once'
-```
-
----
-
-### `WITH 'content'`
-
-Replace the entire content of the specified file with a new string. If the file does not exist, it is created.
-
-```sql
-CHANGE FILE 'file_path' WITH 'new_full_content'
-```
-
-**Example**
-
-```sql
-CHANGE FILE 'src/generated/version.h'
-  WITH '#pragma once
-#define PISCO_VERSION "1.4.0"
-#define PISCO_BUILD_DATE "2026-03-17"
-'
-```
-
----
-
-### `LINES n-m WITH NOTHING`
-
-Delete a specific line range from a file.
-
-```sql
-CHANGE FILE 'file_path' LINES n-m WITH NOTHING
-```
-
-**Example**
-
-```sql
--- Remove a deprecated function body (line range from SHOW body)
-CHANGE FILE 'src/PiscoCode.cpp'
-  LINES 200-214
-  WITH NOTHING
-```
-
----
-
-### `WITH NOTHING`
-
-Clear the entire content of a file (the file remains on disk but is emptied).
-
-```sql
-CHANGE FILE 'file_path' WITH NOTHING
-```
-
-**Example**
-
-```sql
--- Clear a generated file entirely
-CHANGE FILE 'src/generated/stale_output.cpp' WITH NOTHING
-```
-
----
-
-## Transaction Commands
-
-Transactions use a **checkpoint-based** model.  Each command is a standalone
-top-level statement that executes independently and returns its own result.
-This gives AI agents full per-step visibility and the freedom to decide how
-to react to failures (e.g. whether to ROLLBACK after a VERIFY failure).
-
----
-
-### `BEGIN TRANSACTION`
-
-Create a named git checkpoint.  Any dirty working-tree state is
-auto-committed so the checkpoint always represents a complete snapshot.
+### Transaction Commands
 
 ```sql
 BEGIN TRANSACTION 'name'
-```
 
-| Part | Description |
-|---|---|
-| `'name'` | Checkpoint label — used by `ROLLBACK TRANSACTION 'name'` to revert to this point |
-
-Checkpoints are stored as a stack on the session.  Multiple
-`BEGIN TRANSACTION` calls push new checkpoints; `ROLLBACK` pops back.
-
----
-
-### `COMMIT MESSAGE`
-
-Stage all changes in the worktree and create a git commit.
-
-```sql
 COMMIT MESSAGE 'message'
-```
 
-| Part | Description |
-|---|---|
-| `'message'` | Git commit message |
-
----
-
-### `VERIFY build`
-
-Run a named build/test step from `.forgeql.yaml`.
-
-```sql
 VERIFY build 'step'
+
+ROLLBACK [TRANSACTION 'name']
 ```
 
-| Part | Description |
+| Command | Effect |
 |---|---|
-| `'step'` | Name of a `verify_steps` entry in the project's `.forgeql.yaml` |
+| `BEGIN TRANSACTION` | Create a named git checkpoint. Dirty state is auto-committed first. Checkpoints stack — multiple `BEGIN` calls push; `ROLLBACK` pops. |
+| `COMMIT MESSAGE` | Stage all changes and create a git commit. |
+| `VERIFY build` | Run a named step from `.forgeql.yaml` `verify_steps`. Returns `success` + `output`. Does **not** auto-rollback on failure. |
+| `ROLLBACK` | Revert to the most recent checkpoint, or to a named one (discards later checkpoints). |
 
-The command runs the step's shell command in the worktree directory and
-returns a `VerifyBuildResult` with `step`, `success`, and `output` fields.
-VERIFY does **not** auto-rollback on failure — the caller decides.
-
-Note: `VERIFY` requires the `build` keyword and accepts a single target
-name.  The target must be defined in the project's `.forgeql.yaml` under
-`verify_steps`.  Place the file in the repository root (ForgeQL walks up
-from the working directory to find it).
-
-**`.forgeql.yaml` example**
+**`.forgeql.yaml`** must be in the repo root:
 
 ```yaml
-# Path to the source tree root, relative to this file.
 workspace_root: .
-
-# Named build/test steps referenced by VERIFY build '<name>'.
 verify_steps:
   - name: test
     command: "cmake --build build && ctest --test-dir build"
     timeout_secs: 120
-  - name: release
-    command: "./scripts/Build.sh release"
-    timeout_secs: 300
-```
-
----
-
-### `ROLLBACK`
-
-Revert the worktree to a previously created checkpoint via `git reset --hard`.
-
-```sql
-ROLLBACK [TRANSACTION 'name']
-```
-
-If `'name'` is given, reverts to that specific checkpoint (and removes all
-checkpoints created after it).  Without a name, reverts to the most recent
-checkpoint on the stack.
-
----
-
-### Typical workflow
-
-Each statement is sent individually; the AI agent sees every result and
-decides whether to proceed, verify, commit, or rollback.
-
-```sql
--- 1. Create a checkpoint before making changes
-BEGIN TRANSACTION 'rename-process'
-
--- 2. Apply mutations (each returns its own result)
-CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
-  MATCHING 'PiscoCode::process' WITH 'PiscoCode::run'
-
--- 3. Verify the build still passes
-VERIFY build 'test'
-
--- 4a. If VERIFY passed → commit
-COMMIT MESSAGE 'rename PiscoCode::process to PiscoCode::run'
-
--- 4b. If VERIFY failed → rollback to the checkpoint
-ROLLBACK TRANSACTION 'rename-process'
-```
-
-**Multi-step refactor**
-
-```sql
-BEGIN TRANSACTION 'bump-version'
-
-CHANGE FILE 'include/config.h'
-  MATCHING 'PISCO_VERSION "1.3.0"' WITH 'PISCO_VERSION "1.4.0"'
-CHANGE FILE 'src/generated/version.h'
-  MATCHING '1.3.0' WITH '1.4.0'
-
-VERIFY build 'test'
-COMMIT MESSAGE 'bump version to 1.4.0'
-```
-
-**Checkpoint stack (selective rollback)**
-
-Multiple `BEGIN TRANSACTION` calls push checkpoints. `ROLLBACK` can target
-any earlier checkpoint by name, discarding all checkpoints created after it.
-
-```sql
--- Phase 1: rename the symbol
-BEGIN TRANSACTION 'phase-1-rename'
-CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
-  MATCHING 'OldName' WITH 'NewName'
-VERIFY build 'test'
-COMMIT MESSAGE 'rename OldName to NewName'
-
--- Phase 2: add a new parameter
-BEGIN TRANSACTION 'phase-2-add-param'
-CHANGE FILE 'include/NewName.h'
-  LINES 12-12
-  WITH 'void NewName::run(Buffer& buf, int flags);'
-VERIFY build 'test'
-
--- Phase 2 failed — roll back to phase-1 checkpoint only;
--- the rename commit from phase 1 is preserved.
-ROLLBACK TRANSACTION 'phase-2-add-param'
 ```
 
 ---
 
 ## Universal Clauses
 
-Every command accepts the following clauses. Multiple clauses can be freely combined. The engine always applies them in this fixed pipeline order regardless of how they appear in the query:
+Every command accepts these clauses. Inapplicable clauses are silently ignored.
+Multiple `WHERE` clauses combine with implicit AND.
+
+Engine applies clauses in this fixed pipeline order, regardless of written order:
 
 ```
 IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIMIT
 ```
 
 ```sql
-[WHERE field operator value]
+[WHERE field operator value] …
 [HAVING field operator value]
 [IN 'glob']
 [EXCLUDE 'glob']
@@ -775,502 +225,406 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 [DEPTH N]
 ```
 
----
-
-### `WHERE`
-
-Filter rows before returning results. Multiple `WHERE` clauses are combined with implicit AND.
-
-```sql
-WHERE name LIKE 'get%'
-WHERE node_kind = 'function_definition'
-WHERE line >= 100
-WHERE usages = 0
-WHERE type LIKE 'void%'
-```
-
----
-
-### `HAVING`
-
-Filter rows after `GROUP BY` aggregation. Operates on computed fields like `count`.
-
-```sql
-FIND usages OF 'PiscoCode::process'
-  GROUP BY file
-  HAVING count >= 3
-```
-
----
-
-### `IN`
-
-Restrict the result set to rows whose file path matches the glob.
-
-```sql
-FIND symbols WHERE node_kind = 'preproc_include'
-  IN 'src/**'
-```
-
----
-
-### `EXCLUDE`
-
-Remove rows whose file path matches the glob.
-
-```sql
-FIND symbols WHERE usages = 0
-  IN 'src/**'
-  EXCLUDE 'src/tests/**'
-```
-
----
-
-### `ORDER BY`
-
-Sort the result set. Default direction is `ASC`.
-
-```sql
-ORDER BY name ASC
-ORDER BY usages DESC
-ORDER BY line
-```
-
----
-
-### `GROUP BY`
-
-Aggregate results by a grouping field. Each output row represents one group and gains a `count` field.
-
-Supported grouping fields: `file`, `kind`, `node_kind`.
-
-```sql
-FIND usages OF 'PiscoCode::process'
-  GROUP BY file
-  ORDER BY count DESC
-```
-
----
-
-### `LIMIT` / `OFFSET`
-
-Paginate large result sets.
-
-```sql
-FIND symbols WHERE node_kind = 'function_definition'
-  ORDER BY name ASC
-  LIMIT 20
-  OFFSET 40
-```
-
----
-
-### `DEPTH`
-
-For `SHOW body` and `FIND files`, collapse or restrict tree depth. `DEPTH 0` shows only the signature with the body replaced by `{ ... }`.
-
-```sql
-SHOW body OF 'PiscoCode::process' DEPTH 1
-FIND files IN 'src/**' DEPTH 2
-```
+| Clause | Purpose |
+|---|---|
+| `WHERE` | Filter rows. Repeatable (implicit AND). Works on all field types including dynamic and enrichment fields. |
+| `HAVING` | Filter after `GROUP BY` aggregation. Operates on `count`. |
+| `IN` | Restrict to files matching glob pattern. |
+| `EXCLUDE` | Remove files matching glob pattern. |
+| `ORDER BY` | Sort results. Default `ASC`. Any filterable field. |
+| `GROUP BY` | Aggregate by field. Adds `count` to each group. |
+| `LIMIT` | Maximum rows returned. Implicit cap of 20 when omitted on `FIND`. |
+| `OFFSET` | Skip N rows (pagination). |
+| `DEPTH` | For `SHOW body`: collapse depth. For `FIND files`: directory tree depth. |
 
 ---
 
 ## Operators and Values
 
-### Comparison Operators
-
 | Operator | Meaning |
 |---|---|
 | `=` | Exact equality |
 | `!=` | Not equal |
-| `LIKE` | SQL-style wildcard: `%` = any sequence, `_` = any single character |
+| `LIKE` | SQL wildcard: `%` = any sequence, `_` = any single char (case-insensitive) |
 | `NOT LIKE` | Negated LIKE |
-| `>` | Greater than (numeric fields) |
-| `>=` | Greater than or equal |
-| `<` | Less than |
-| `<=` | Less than or equal |
+| `>` `>=` `<` `<=` | Numeric comparison |
 
-### Value Types
-
-| Syntax | Type | Example |
-|---|---|---|
-| `'text'` | String | `WHERE name LIKE 'get%'` |
-| `42` | Integer | `WHERE usages >= 5` |
-| `-10` | Signed integer | `WHERE line >= -1` |
-| `true` / `false` | Boolean | *(reserved for future use)* |
+| Value syntax | Type |
+|---|---|
+| `'text'` | String |
+| `42` | Integer |
+| `-10` | Signed integer |
+| `true` / `false` | Boolean (reserved) |
 
 ---
 
 ## Filterable Fields
 
-### Symbol results (`FIND symbols`, `FIND usages OF`, `FIND callees OF`)
+### Symbol Fields
+
+Applies to: `FIND symbols`, `FIND usages OF`, `FIND callees OF`
 
 | Field | Type | Description |
 |---|---|---|
 | `name` | string | Symbol name |
-| `node_kind` | string | Raw tree-sitter node kind (e.g. `function_definition`) |
-| `path` | string | Relative file path — also used by `IN` / `EXCLUDE` globs |
-| `line` | integer | 1-based start line of the node |
-| `usages` | integer | Number of identifier references to this symbol in the index |
+| `node_kind` | string | Tree-sitter node kind (`function_definition`, `declaration`, etc.) |
+| `path` | string | Relative file path (also used by `IN`/`EXCLUDE` globs) |
+| `line` | integer | 1-based start line |
+| `usages` | integer | Reference count across the index |
 
-### File results (`FIND files`)
+### Outline Fields
+
+Applies to: `SHOW outline OF`
 
 | Field | Type | Description |
 |---|---|---|
-| `path` | string | Relative file path — also used by `IN` / `EXCLUDE` globs |
-| `extension` | string | File extension without the leading `.` (empty string for extension-less files) |
-| `size` | integer | File size in bytes |
-| `depth` | integer | Directory depth relative to the workspace root |
+| `name` | string | Symbol name |
+| `kind` / `node_kind` | string | Tree-sitter node kind |
+| `path` / `file` | string | Relative file path |
+| `line` | integer | 1-based start line |
 
-In addition every row carries **dynamic fields** auto-extracted from the tree-sitter grammar. You can filter on any of them without recompiling ForgeQL:
+### Member Fields
+
+Applies to: `SHOW members OF`
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` / `node_kind` / `type` | string | Member kind (`field`, `method`, `enumerator`) |
+| `text` / `declaration` / `name` | string | Declaration text |
+| `line` | integer | 1-based line number |
+
+### File Fields
+
+Applies to: `FIND files`
+
+| Field | Type | Description |
+|---|---|---|
+| `path` / `file` | string | Relative file path |
+| `extension` / `ext` | string | Extension without `.` (empty for extension-less files) |
+| `size` | integer | File size in bytes |
+| `depth` | integer | Directory depth from workspace root |
+
+### Dynamic Fields
+
+Auto-extracted from tree-sitter grammar. Queryable with `WHERE` without recompiling.
 
 | Field | Availability | Description |
 |---|---|---|
 | `type` | C/C++ | Return type text |
-| `value` | C/C++ | Initial value (`preproc_def`, `init_declarator`) — always stored as text; numeric comparisons (`>=`, `<=`, `>`, `<`) require the stored text to be a plain integer literal |
-| `declarator` | C/C++ | Full declarator including pointer/reference qualifiers |
+| `value` | C/C++ | Initial value (`preproc_def`, `init_declarator`) |
+| `declarator` | C/C++ | Full declarator with pointer/reference qualifiers |
 | `parameters` | C/C++ | Parameter list text |
-| `body` | C/C++ | Body text — large; prefer `SHOW body` |
-| `scope` | C/C++ `declaration` | `"file"` (parent is translation unit) or `"local"` (inside a function body) |
-| `storage` | C/C++ `declaration` | Storage class specifier if present: `"static"`, `"extern"`. Absent for default linkage. |
+| `scope` | `declaration` | `"file"` or `"local"` |
+| `storage` | `declaration` | `"static"`, `"extern"`, or absent |
+
+If a field does not exist on a row, `WHERE` evaluates to false (SQL `NULL` semantics).
+
+**Numeric coercion** — dynamic fields are stored as strings. `WHERE value >= 1000` parses the stored text as an integer; if parsing fails, the predicate silently evaluates to false.
 
 ### Enrichment Fields
 
-Enrichment fields are computed by the enrichment pipeline at index time. They provide rich metadata about naming conventions, control flow complexity, operators, code metrics, casts, and redundancy patterns. All enrichment fields are queryable with `WHERE` just like dynamic fields.
+Computed at index time. Queryable with `WHERE` like any other field.
 
 #### NamingEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `naming` | all named symbols | Naming convention: `camelCase`, `PascalCase`, `snake_case`, `UPPER_SNAKE`, `flatcase`, or `other` |
-| `name_length` | all named symbols | Character count of the symbol name |
-
-```sql
-FIND symbols WHERE naming = 'UPPER_SNAKE'
-FIND symbols WHERE name_length >= 20
-```
+| `naming` | all named symbols | `camelCase`, `PascalCase`, `snake_case`, `UPPER_SNAKE`, `flatcase`, `other` |
+| `name_length` | all named symbols | Character count of symbol name |
 
 #### CommentEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `comment_style` | `comment` | One of `doc_line` (`///`), `doc_block` (`/** */`), `block` (`/* */`), or `line` (`//`) |
-| `has_doc` | `function_definition` | `"true"` if the immediately preceding sibling is a doc comment (`///` or `/** */`) |
-
-```sql
--- Find all doc comments
-FIND symbols WHERE comment_style = 'doc_line'
--- Functions with documentation
-FIND symbols WHERE has_doc = 'true'
-```
+| `comment_style` | `comment` | `doc_line` (`///`), `doc_block` (`/** */`), `block` (`/* */`), `line` (`//`) |
+| `has_doc` | `function_definition` | `"true"` if preceded by a doc comment |
 
 #### NumberEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `num_format` | `number_literal` | `decimal`, `hex`, `binary`, `octal`, `float`, or `scientific` |
-| `has_separator` | `number_literal` | `"true"` if the literal contains digit separators (`'`) |
-| `num_sign` | `number_literal` | `"positive"` or `"negative"` |
+| `num_format` | `number_literal` | `decimal`, `hex`, `binary`, `octal`, `float`, `scientific` |
+| `is_magic` | `number_literal` | `"true"` for unexplained constants (not 0, 1, -1, 2, powers of 2, bitmasks) |
+| `num_suffix` | `number_literal` | Type suffix: `u`, `l`, `ll`, `ul`, `ull`, `f`, `ld` |
+| `has_separator` | `number_literal` | `"true"` if contains digit separators |
 | `num_value` | `number_literal` | Raw text of the literal |
-| `num_suffix` | `number_literal` | Type suffix if present: `u`, `l`, `ll`, `ul`, `ull`, `f`, `ld` |
-| `is_magic` | `number_literal` | `"true"` for unexplained numeric constants (not 0, 1, -1, 2, powers of 2, or common bitmasks) |
-
-```sql
--- Find magic numbers
-FIND symbols WHERE is_magic = 'true'
--- Find hex literals
-FIND symbols WHERE num_format = 'hex'
-```
 
 #### ControlFlowEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `condition_tests` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Number of Boolean sub-expressions in the condition (counts comparisons and logical operators) |
-| `paren_depth` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Maximum nesting depth of parentheses in the condition |
-| `condition_text` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Raw text of the condition expression |
-| `has_default` | `switch_statement` | `"true"` if the switch has a `default:` case |
-| `has_assignment_in_condition` | `if_statement`, `while_statement`, `for_statement` | `"true"` if the condition contains an assignment operator (`=` but not `==`) |
-| `mixed_logic` | `if_statement`, `while_statement`, `for_statement` | `"true"` if the condition mixes `&&` and `\|\|` without grouping parentheses |
-| `branch_count` | `function_definition` | Total number of control-flow branch points inside the function (aggregated via post-pass) |
-
-```sql
--- Complex conditions (many sub-tests)
-FIND symbols WHERE condition_tests >= 4
--- Switch statements missing default
-FIND symbols WHERE node_kind = 'switch_statement' WHERE has_default = 'false'
--- Suspicious assignments in conditions
-FIND symbols WHERE has_assignment_in_condition = 'true'
-```
+| `condition_tests` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Number of boolean sub-expressions |
+| `paren_depth` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Max parentheses nesting |
+| `condition_text` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Raw condition expression |
+| `has_default` | `switch_statement` | `"true"` if switch has `default:` |
+| `has_assignment_in_condition` | `if_statement`, `while_statement`, `for_statement` | `"true"` if condition contains `=` (not `==`) |
+| `mixed_logic` | `if_statement`, `while_statement`, `for_statement` | `"true"` if mixes `&&` and `\|\|` without grouping |
+| `branch_count` | `function_definition` | Total control-flow branch points |
 
 #### OperatorEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `increment_style` | `update_expression` | `"prefix"` (`++i`) or `"postfix"` (`i++`) |
+| `increment_style` | `update_expression` | `"prefix"` or `"postfix"` |
 | `increment_op` | `update_expression` | `"++"` or `"--"` |
-| `compound_op` | `compound_assignment` | The operator: `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` |
-| `operand` | `compound_assignment` | Left-hand side text of the compound assignment |
+| `compound_op` | `compound_assignment` | `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` |
+| `operand` | `compound_assignment` | Left-hand side text |
 | `shift_direction` | `shift_expression` | `"left"` or `"right"` |
-| `shift_amount` | `shift_expression` | Right-hand side operand text |
-| `shift_operand` | `shift_expression` | Left-hand side operand text |
-
-```sql
--- All postfix increments (potential performance concern in iterators)
-FIND symbols WHERE increment_style = 'postfix'
--- Compound assignments on a specific variable
-FIND symbols WHERE compound_op = '+=' WHERE operand LIKE 'total%'
-```
+| `shift_amount` | `shift_expression` | Right-hand operand text |
 
 #### MetricsEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `lines` | `function_definition`, `struct_specifier`, `class_specifier`, `enum_specifier` | Span of the node in lines |
-| `param_count` | `function_definition` | Number of parameters |
-| `return_count` | `function_definition` | Number of `return` statements in the body |
-| `goto_count` | `function_definition` | Number of `goto` statements in the body |
-| `string_count` | `function_definition` | Number of string literals in the body |
-| `member_count` | `struct_specifier`, `class_specifier`, `enum_specifier` | Number of members / enumerators |
-| `is_const` | `function_definition`, `declaration` | `"true"` if the declaration or return type includes `const` |
-| `is_volatile` | `function_definition`, `declaration` | `"true"` if the declaration or return type includes `volatile` |
-| `is_static` | `function_definition` | `"true"` if the function is declared `static` |
-| `is_inline` | `function_definition` | `"true"` if the function is declared `inline` |
-| `visibility` | `class_specifier` members | `"public"`, `"private"`, or `"protected"` (currently only on class-level indexed nodes) |
-
-```sql
--- Long functions (potential refactoring candidates)
-FIND symbols WHERE node_kind = 'function_definition' WHERE lines >= 50
--- Functions with goto
-FIND symbols WHERE goto_count >= 1
--- Structs with many members
-FIND symbols WHERE node_kind = 'struct_specifier' WHERE member_count >= 10
-```
+| `lines` | `function_definition`, `struct_specifier`, `class_specifier`, `enum_specifier` | Line span |
+| `param_count` | `function_definition` | Parameter count |
+| `return_count` | `function_definition` | `return` statement count |
+| `goto_count` | `function_definition` | `goto` statement count |
+| `string_count` | `function_definition` | String literal count |
+| `member_count` | `struct_specifier`, `class_specifier`, `enum_specifier` | Member/enumerator count |
+| `is_const` | `function_definition`, `declaration` | `"true"` if `const` present |
+| `is_volatile` | `function_definition`, `declaration` | `"true"` if `volatile` present |
+| `is_static` | `function_definition` | `"true"` if `static` |
+| `is_inline` | `function_definition` | `"true"` if `inline` |
+| `visibility` | class members | `"public"`, `"private"`, `"protected"` |
 
 #### CastEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `cast_style` | `cast_expression` | `"c_style"` for C-style casts `(int)x` |
-| `cast_target_type` | `cast_expression` | Target type text of the cast |
-
-> **Limitation:** Named C++ casts (`static_cast`, `reinterpret_cast`, `const_cast`, `dynamic_cast`) are not indexed as separate node kinds in tree-sitter-cpp 0.23. Only C-style casts are detected.
-
-```sql
--- Find all C-style casts (potential modernization targets)
-FIND symbols WHERE cast_style = 'c_style'
-```
+| `cast_style` | `cast_expression` | `"c_style"` (named C++ casts not indexed in tree-sitter-cpp 0.23) |
+| `cast_target_type` | `cast_expression` | Target type text |
 
 #### RedundancyEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `has_repeated_condition_calls` | `function_definition` | `"true"` if the same function call appears in 2+ different conditions within this function |
-| `repeated_condition_calls` | `function_definition` | Comma-separated list of function names that appear in multiple conditions |
-| `null_check_count` | `function_definition` | Number of null-check patterns (`== NULL`, `!= NULL`, `== nullptr`, `!= nullptr`, `== 0`, `!= 0`) in the function body |
-| `duplicate_condition` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | `"true"` if the exact same condition skeleton appears in another control-flow statement within the same function (set via post-pass) |
-
-```sql
--- Functions with repeated condition calls (extract-variable candidates)
-FIND symbols WHERE has_repeated_condition_calls = 'true'
--- Conditions that are duplicated within their function
-FIND symbols WHERE duplicate_condition = 'true'
--- Functions with many null checks
-FIND symbols WHERE null_check_count >= 5
-```
-
-If a field does not exist on a row, a `WHERE` predicate on that field evaluates to false and the row is excluded — identical to SQL `NULL` semantics.
-
-**Numeric operator coercion** — dynamic fields are stored as strings. When you write `WHERE value >= 1000`, ForgeQL attempts to parse the stored text as an integer. If parsing fails (e.g. the value is `"some_constant"` or `"0x1F"`), the predicate silently evaluates to false for that row. Use `LIKE` patterns for non-decimal values.
+| `has_repeated_condition_calls` | `function_definition` | `"true"` if same call in 2+ conditions |
+| `repeated_condition_calls` | `function_definition` | Comma-separated function names |
+| `null_check_count` | `function_definition` | Count of null-check patterns |
+| `duplicate_condition` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | `"true"` if same condition skeleton exists elsewhere in function |
 
 ---
 
-## Use Cases: Pisco Code v1.3.0
+## Advanced Patterns
 
-The examples below assume:
+These patterns show ForgeQL capabilities that are non-obvious or combine multiple features.
 
-```sql
-CREATE SOURCE 'pisco' FROM 'https://github.com/pisco-de-luz/Pisco-Code.git'
-USE pisco.v1.3.0
-```
+### Progressive function exploration
 
----
-
-### Explore the codebase structure
+`SHOW body` defaults to `DEPTH 0` (signature only). Incrementally reveal structure without reading full source:
 
 ```sql
--- Top-level directory tree
-FIND files DEPTH 2
-
--- Structural outline of the main header
-SHOW outline OF 'include/PiscoCode.h'
-
--- All classes defined in the library
-FIND symbols
-  WHERE node_kind = 'class_specifier'
-  ORDER BY name ASC
-```
-
----
-
-### Find and inspect functions
-
-```sql
--- All getter/setter methods
-FIND symbols
-  WHERE node_kind = 'function_definition'
-  WHERE name LIKE 'get%'
-  ORDER BY name ASC
-
--- Functions with more than 5 callers (high-impact symbols)
-FIND symbols
-  WHERE node_kind = 'function_definition'
-  WHERE usages >= 5
-  ORDER BY usages DESC
-
--- Full body of a function
+-- Step 1: signature only — understand the interface
 SHOW body OF 'PiscoCode::process'
 
--- Just the signature without the body
-SHOW signature OF 'PiscoCode::process'
+-- Step 2: top-level branches visible — see the control flow
+SHOW body OF 'PiscoCode::process' DEPTH 1
 
--- Everything PiscoCode::process calls
-SHOW callees OF 'PiscoCode::process'
+-- Step 3: full source when needed
+SHOW body OF 'PiscoCode::process' DEPTH 99
 ```
 
----
-
-### Audit and dead code detection
+### Dead code detection pipeline
 
 ```sql
--- Macros that are never referenced
+-- Unreferenced functions (skip test files)
+FIND symbols
+  WHERE node_kind = 'function_definition'
+  WHERE usages = 0
+  EXCLUDE 'tests/**'
+  ORDER BY path ASC
+
+-- Unreferenced macros in headers
 FIND symbols
   WHERE node_kind = 'preproc_def'
   WHERE usages = 0
   IN 'include/**'
 
--- Functions never called anywhere
-FIND symbols
-  WHERE node_kind = 'function_definition'
-  WHERE usages = 0
-  EXCLUDE 'src/tests/**'
-  ORDER BY path ASC
-
--- Usage heat-map for a given symbol
-FIND usages OF 'PiscoCode::process'
-  GROUP BY file
-  ORDER BY count DESC
-
--- Files that define more than 20 symbols (candidates for splitting)
+-- Symbol distribution (spot bloated files)
 FIND symbols
   GROUP BY file
   HAVING count >= 20
   ORDER BY count DESC
 ```
 
----
-
-### Safe refactoring
+### Code quality audit
 
 ```sql
--- Rename a symbol with build verification
+-- Functions longer than 50 lines (refactoring candidates)
+FIND symbols
+  WHERE node_kind = 'function_definition'
+  WHERE lines >= 50
+  ORDER BY lines DESC
+
+-- Complex conditions (4+ sub-tests)
+FIND symbols WHERE condition_tests >= 4
+
+-- Switch without default
+FIND symbols
+  WHERE node_kind = 'switch_statement'
+  WHERE has_default = 'false'
+
+-- Mixed && / || without grouping parentheses
+FIND symbols WHERE mixed_logic = 'true'
+
+-- Assignment in condition (likely bug)
+FIND symbols WHERE has_assignment_in_condition = 'true'
+
+-- Magic numbers
+FIND symbols WHERE is_magic = 'true'
+
+-- C-style casts (modernization targets)
+FIND symbols WHERE cast_style = 'c_style'
+
+-- Functions with goto
+FIND symbols WHERE goto_count >= 1
+
+-- Duplicated conditions within same function
+FIND symbols WHERE duplicate_condition = 'true'
+
+-- Functions with repeated conditional calls (extract-variable opportunity)
+FIND symbols WHERE has_repeated_condition_calls = 'true'
+```
+
+### Filtered outline and member inspection
+
+`SHOW outline` and `SHOW members` support the full clause pipeline including `WHERE`:
+
+```sql
+-- Only enum declarations in a header
+SHOW outline OF 'include/config.h'
+  WHERE kind = 'enum_specifier'
+
+-- Only function definitions in outline
+SHOW outline OF 'src/PiscoCode.cpp'
+  WHERE kind = 'function_definition'
+  ORDER BY line ASC
+
+-- Only field members of a class (skip methods)
+SHOW members OF 'PiscoCode'
+  WHERE kind = 'field_declaration'
+
+-- Paginate a large outline
+SHOW outline OF 'include/PiscoCode.h'
+  LIMIT 10 OFFSET 20
+```
+
+### Usage heat-map and call graph
+
+```sql
+-- Which files reference this symbol the most?
+FIND usages OF 'PiscoCode::process'
+  GROUP BY file
+  ORDER BY count DESC
+
+-- What does this function call?
+SHOW callees OF 'PiscoCode::process'
+
+-- Top 10 most-referenced functions
+FIND symbols
+  WHERE node_kind = 'function_definition'
+  ORDER BY usages DESC
+  LIMIT 10
+```
+
+### Safe multi-step refactoring
+
+Each statement executes independently — the agent sees every result and decides whether to proceed.
+
+```sql
+-- 1. Checkpoint
 BEGIN TRANSACTION 'rename-process'
-  CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
-    MATCHING 'PiscoCode::process' WITH 'PiscoCode::run'
-  VERIFY build 'test'
+
+-- 2. Rename across all translation units
+CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
+  MATCHING 'PiscoCode::process' WITH 'PiscoCode::run'
+
+-- 3. Verify the build
+VERIFY build 'test'
+
+-- 4a. Success → commit
 COMMIT MESSAGE 'rename PiscoCode::process to PiscoCode::run'
 
--- Update a configuration constant and a generated header atomically
-BEGIN TRANSACTION 'bump-version'
-  CHANGE FILE 'include/config.h'
-    MATCHING 'PISCO_VERSION "1.3.0"' WITH 'PISCO_VERSION "1.4.0"'
-  CHANGE FILE 'src/generated/version.h'
-    MATCHING '1.3.0' WITH '1.4.0'
-  VERIFY build 'test'
-COMMIT MESSAGE 'bump version to 1.4.0'
+-- 4b. Failure → rollback
+ROLLBACK TRANSACTION 'rename-process'
+```
 
--- Replace a function body using line range from SHOW body
--- (assumes SHOW body OF 'PiscoCode::process' returned start_line=87, end_line=103)
+### Checkpoint stack for phased changes
+
+```sql
+-- Phase 1
+BEGIN TRANSACTION 'phase-1-rename'
+CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
+  MATCHING 'OldName' WITH 'NewName'
+VERIFY build 'test'
+COMMIT MESSAGE 'rename OldName to NewName'
+
+-- Phase 2
+BEGIN TRANSACTION 'phase-2-add-param'
+CHANGE FILE 'include/NewName.h'
+  LINES 12-12
+  WITH 'void NewName::run(Buffer& buf, int flags);'
+VERIFY build 'test'
+
+-- Phase 2 failed — roll back only phase 2; phase 1 commit preserved
+ROLLBACK TRANSACTION 'phase-2-add-param'
+```
+
+### SHOW body → CHANGE LINES workflow
+
+`SHOW body` returns `start_line` / `end_line`, enabling line-precise edits:
+
+```sql
+-- Read the function (DEPTH 99 for full source)
+SHOW body OF 'PiscoCode::process' DEPTH 99
+-- Response includes start_line=87, end_line=103
+
+-- Rewrite it
 BEGIN TRANSACTION 'rewrite-process'
-  CHANGE FILE 'src/PiscoCode.cpp'
-    LINES 87-103
-    WITH 'void PiscoCode::run(Buffer& buffer) {
+CHANGE FILE 'src/PiscoCode.cpp'
+  LINES 87-103
+  WITH 'void PiscoCode::run(Buffer& buffer) {
     for (auto& sample : buffer) {
         sample = this->pipeline.apply(sample);
     }
 }'
-  VERIFY build 'test'
-COMMIT MESSAGE 'rewrite PiscoCode::run with pipeline approach'
-
--- Remove a deprecated helper function
--- (line range from SHOW body OF 'legacyHelper')
-BEGIN TRANSACTION 'remove-legacyHelper'
-  CHANGE FILE 'src/PiscoCode.cpp'
-    LINES 200-214
-    WITH NOTHING
-  VERIFY build 'test'
-COMMIT MESSAGE 'remove deprecated legacyHelper'
+VERIFY build 'test'
+COMMIT MESSAGE 'rewrite PiscoCode::run'
 ```
 
----
-
-### Pagination for large codebases
+### File system exploration
 
 ```sql
--- Browse all function definitions 20 at a time
-FIND symbols
-  WHERE node_kind = 'function_definition'
-  ORDER BY path ASC
-  LIMIT 20
-  OFFSET 0   -- page 1
+-- Large files (potential split candidates)
+FIND files
+  WHERE size > 100000
+  ORDER BY size DESC
+  LIMIT 10
 
-FIND symbols
-  WHERE node_kind = 'function_definition'
-  ORDER BY path ASC
-  LIMIT 20
-  OFFSET 20  -- page 2
+-- Non-source files in src/
+FIND files IN 'src/**'
+  WHERE extension NOT LIKE 'cpp'
+  WHERE extension NOT LIKE 'h'
+
+-- Directory tree 2 levels deep
+FIND files DEPTH 2
 ```
 
----
+### Compact CSV output (MCP mode)
 
-### Dynamic field filtering
+In MCP mode the default output is compact CSV — token-efficient grouped format.
+Pass `format=JSON` for full structured JSON.
 
-Dynamic fields are extracted automatically from tree-sitter grammar nodes and are queryable without any code changes to ForgeQL.
+All compact output follows a uniform 2-column structure:
 
-```sql
--- All void-returning functions
-FIND symbols
-  WHERE node_kind = 'function_definition'
-  WHERE type LIKE 'void%'
-
--- Macros whose value is a plain integer above 1000
--- (non-decimal or symbolic values are silently skipped)
-FIND symbols
-  WHERE node_kind = 'preproc_def'
-  WHERE value >= 1000
-
--- System includes
--- Note: Angle brackets (<...>) are not preserved in the index.
--- Match by name pattern instead (e.g., 'std%' for standard library)
-FIND symbols
-  WHERE node_kind = 'preproc_include'
-  WHERE name LIKE 'std%'
+```csv
+"op",total_count
+"group_key","[field1,field2,...]"
+"group_value_a","[v1,v2],[v3,v4]"
+"group_value_b","[v5,v6]"
+"tokens_approx",N
 ```
-
-### Prefer CSV output for AI agents
-
-When querying inside an AI agent context (MCP mode), the default output format is **compact CSV** — a token-efficient representation that groups repeated fields and drops derivable data. JSON is available via `format=JSON` for programmatic parsing; plain text is the default for interactive CLI use.
-
-#### Compact format overview
-
-All compact output follows a uniform 2-column CSV structure:
-
-| Row | Content |
-|-----|---------|
-| 1   | Command header: `"op","meta1","meta2"` |
-| 2   | Schema hint: `"group_key","[field1,field2]"` |
-| 3+  | Grouped data: `"kind_a","[v1,v2],[v3,v4]"` |
 
 **FIND symbols** — grouped by `node_kind`:
 ```csv
@@ -1318,7 +672,7 @@ All compact output follows a uniform 2-column CSV structure:
 "show_signature","setPeakLevel","src/signal.cpp",125,"void setPeakLevel(int level)"
 ```
 
-**SHOW callees / callers** — grouped by file:
+**SHOW callees** — grouped by file:
 ```csv
 "show_callees","setPWMDuty"
 "file","[name,line]"
@@ -1334,26 +688,4 @@ All compact output follows a uniform 2-column CSV structure:
 ```
 
 Mutations, transactions, and source ops keep their JSON format (already small).
-
-#### CLI `--format` flag
-
-```bash
-forgeql --format compact run "FIND symbols WHERE name LIKE 'set%'"
-forgeql --format json    run "SHOW body OF 'convert'"
-forgeql --format text    run "FIND usages OF 'init'"   # default
-```
-
----
-
-## Known Limitations
-
-| Area | Description | Workaround |
-|---|---|---|
-| Template functions | `SHOW callees OF` / `FIND callees OF` returns empty for C++ template functions | Use `FIND usages OF 'name'` to find all reference sites |
-| Scope filtering | `FIND globals` returns file-scope declarations only. C++ has no `extern`-vs-`static` distinction in the AST; use `WHERE storage != 'static'` to exclude internal linkage. | Filter with `scope` and `storage` dynamic fields |
-| Numeric coercion | `value >= N` silently skips rows where `value` is non-decimal (hex, symbolic constants) | Use `WHERE value LIKE 'pattern'` for non-integer values |
-| Named C++ casts | `static_cast`, `reinterpret_cast`, `const_cast`, `dynamic_cast` are not indexed as separate node kinds in tree-sitter-cpp 0.23. The CastEnricher only detects C-style casts. | Search by name pattern: `WHERE name LIKE '%_cast%'` or use `FIND usages OF 'static_cast'` |
-| Member visibility | `field_declaration` nodes inside classes are not indexed by `extract_name()`, so individual field visibility (`public`/`private`/`protected`) is not available. | Use `member_count` on `class_specifier` to count total members |
-| Scope on functions | The `scope` and `storage` enrichment fields apply only to `declaration` nodes, not `function_definition`. A `static` function will have `is_static = 'true'` (MetricsEnricher) but not `scope = 'file'`. | Use `WHERE is_static = 'true'` to find static functions |
-| FQL `--` literal | The FQL parser does not accept `'--'` as a string predicate value. | Filter by `increment_style` and check `increment_op` programmatically |
 
