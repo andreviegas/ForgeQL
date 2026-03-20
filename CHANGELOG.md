@@ -9,6 +9,26 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.24.0] - 2026-03-20
+
+### Added
+
+- **metric_hint in compact output** — FIND symbols queries that filter or sort
+  by an enrichment metric (e.g. `WHERE member_count > 10`,
+  `ORDER BY lines DESC`) now display that metric as the last column in compact
+  CSV instead of the default `usages`.  The schema row reflects the active
+  metric: `[name,path,line,member_count]`.
+
+### Fixed
+
+- **member_count over-counting nested members** — `member_count` walked the
+  entire AST subtree recursively, which double-counted members of nested
+  structs/classes.  Now counts only direct children of the
+  `field_declaration_list` (fields, methods, declarations) plus those inside
+  `access_specifier` sections.
+
+---
+
 ## [0.23.1] - 2026-03-20
 
 ### Fixed

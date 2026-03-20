@@ -88,8 +88,13 @@ impl QueryLogger {
             );
         }
 
-        let first_line = fql.lines().next().unwrap_or(fql).trim();
-        let preview: String = first_line
+        let flat: String = fql
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let preview: String = flat
             .chars()
             .take(LOG_PREVIEW_MAX_CHARS)
             .collect::<String>()

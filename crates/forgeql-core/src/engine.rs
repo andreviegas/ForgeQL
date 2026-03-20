@@ -30,7 +30,7 @@
 /// wraps it in `Arc<Mutex<ForgeQLEngine>>` and calls `execute()` under the
 /// lock.  Git and tree-sitter operations are CPU-bound, so holding the lock
 /// for the duration of an `execute()` call is correct.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
@@ -542,6 +542,7 @@ impl ForgeQLEngine {
             op: "show_sources".to_string(),
             results,
             total,
+            metric_hint: None,
         }))
     }
 
@@ -581,7 +582,11 @@ impl ForgeQLEngine {
         let mut results: Vec<SymbolMatch> = defs
             .into_iter()
             .map(|def| {
-                let usages = index.usages.get(&def.name).map_or(0, Vec::len);
+                // For qualified names (e.g. `Serial_Protocol::setup`), fall
+                // back to the trailing identifier for the usages lookup
+                // because usage sites are recorded as bare identifiers.
+                let usages_key = def.name.rsplit("::").next().unwrap_or(&def.name);
+                let usages = index.usages.get(usages_key).map_or(0, Vec::len);
                 SymbolMatch {
                     name: def.name.clone(),
                     node_kind: Some(def.node_kind.clone()),
@@ -593,6 +598,17 @@ impl ForgeQLEngine {
                 }
             })
             .collect();
+
+        // Deduplicate by (name, path, node_kind, line) — enricher rows and
+        // multi-pass indexing can produce identical entries that confuse
+        // downstream consumers.
+        {
+            let mut seen = HashSet::new();
+            results.retain(|r| {
+                let key = (r.name.clone(), r.path.clone(), r.node_kind.clone(), r.line);
+                seen.insert(key)
+            });
+        }
 
         // Validate ORDER BY field before applying clauses so that typos
         // produce a clear error instead of silently returning default order.
@@ -606,10 +622,16 @@ impl ForgeQLEngine {
             results.truncate(DEFAULT_QUERY_LIMIT);
         }
 
+        // When the query uses a numeric WHERE on an enrichment field
+        // (e.g. `member_count > 10`), tell the compact renderer to show
+        // that field's value instead of the default `usages`.
+        let metric_hint = detect_metric_hint(clauses);
+
         Ok(ForgeQLResult::Query(QueryResult {
             op: "find_symbols".to_string(),
             results,
             total,
+            metric_hint,
         }))
     }
 
@@ -648,6 +670,7 @@ impl ForgeQLEngine {
             op: "find_usages".to_string(),
             results,
             total,
+            metric_hint: None,
         }))
     }
 
@@ -1212,6 +1235,35 @@ const fn mutation_op_name(op: &ForgeQLIR) -> &'static str {
         ForgeQLIR::ChangeContent { .. } => "change_content",
         _ => "unknown_mutation",
     }
+}
+
+/// Detect the first numeric WHERE predicate on a non-core enrichment field.
+///
+/// Returns the field name (e.g. `"member_count"`, `"param_count"`) so the
+/// compact renderer can show that value instead of `usages`.  Falls back
+/// to `ORDER BY` field when no numeric WHERE is present.
+fn detect_metric_hint(clauses: &Clauses) -> Option<String> {
+    use crate::ir::PredicateValue;
+
+    const CORE_FIELDS: &[&str] = &["name", "node_kind", "path", "line", "usages"];
+
+    // Priority 1: numeric WHERE on enrichment field.
+    for pred in &clauses.where_predicates {
+        if matches!(pred.value, PredicateValue::Number(_))
+            && !CORE_FIELDS.contains(&pred.field.as_str())
+        {
+            return Some(pred.field.clone());
+        }
+    }
+
+    // Priority 2: ORDER BY an enrichment field.
+    if let Some(ref order) = clauses.order_by
+        && !CORE_FIELDS.contains(&order.field.as_str())
+    {
+        return Some(order.field.clone());
+    }
+
+    None
 }
 
 /// Validate the `ORDER BY` field against a result set, returning an error if

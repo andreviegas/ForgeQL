@@ -629,9 +629,19 @@ All compact output follows a uniform 2-column structure:
 **FIND symbols** — grouped by `node_kind`:
 ```csv
 "find_symbols",8
-"kind","[name,path,usages]"
-"function_definition","[encenderMotor,src/motor_control.cpp,7],[apagarMotor,src/motor_control.cpp,5]"
-"class_specifier","[MotorControl,include/motor_control.hpp,2]"
+"kind","[name,path,line,usages]"
+"function_definition","[encenderMotor,src/motor_control.cpp,12,7],[apagarMotor,src/motor_control.cpp,28,5]"
+"class_specifier","[MotorControl,include/motor_control.hpp,5,2]"
+```
+
+When a numeric `WHERE` or `ORDER BY` targets an enrichment field, the last
+column shows that field's value instead of `usages`:
+```csv
+-- FIND symbols WHERE member_count > 10
+"find_symbols",3
+"kind","[name,path,line,member_count]"
+"class_specifier","[Serial_Protocol,src/Serial_Protocol.h,24,17],[Button,src/buttons.h,31,12]"
+"struct_specifier","[MpptState,src/SolarCharger.h,57,11]"
 ```
 
 **FIND usages** — grouped by file:

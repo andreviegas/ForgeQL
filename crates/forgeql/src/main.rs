@@ -564,6 +564,7 @@ mod tests {
             op: "find_symbols".to_string(),
             results: vec![],
             total: 0,
+            metric_hint: None,
         });
         assert_eq!(r.source_lines_count(), 0);
     }

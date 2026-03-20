@@ -62,6 +62,11 @@ pub struct QueryResult {
     pub results: Vec<SymbolMatch>,
     /// Total number of results (before LIMIT truncation, if applicable).
     pub total: usize,
+    /// When the query has a numeric WHERE on an enrichment field (e.g.
+    /// `member_count > 10`), the compact renderer shows that field's value
+    /// as the last column instead of the default `usages`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric_hint: Option<String>,
 }
 
 /// A single row in a query result set.
@@ -828,6 +833,7 @@ mod tests {
                 count: None,
             }],
             total: 1,
+            metric_hint: None,
         });
 
         let json_string = result.to_json();
@@ -859,6 +865,7 @@ mod tests {
                 count: None,
             }],
             total: 1,
+            metric_hint: None,
         });
         let csv = result.to_csv();
         let v: serde_json::Value = serde_json::from_str(&csv).unwrap();
@@ -889,6 +896,7 @@ mod tests {
                 count: None,
             }],
             total: 1,
+            metric_hint: None,
         });
         let csv = result.to_csv();
         let v: serde_json::Value = serde_json::from_str(&csv).unwrap();
@@ -918,6 +926,7 @@ mod tests {
                 count: Some(4),
             }],
             total: 1,
+            metric_hint: None,
         });
         let csv = result.to_csv();
         let v: serde_json::Value = serde_json::from_str(&csv).unwrap();
@@ -1119,6 +1128,7 @@ mod tests {
             op: "find_symbols".to_string(),
             results: vec![],
             total: 0,
+            metric_hint: None,
         };
         let output = format!("{result}");
         assert!(output.contains("No results"));
@@ -1138,6 +1148,7 @@ mod tests {
                 count: None,
             }],
             total: 1,
+            metric_hint: None,
         };
         let output = format!("{result}");
         assert!(output.contains("setPeakLevel"));
@@ -1160,6 +1171,7 @@ mod tests {
                 count: None,
             }],
             total: 100,
+            metric_hint: None,
         };
         let output = format!("{result}");
         assert!(output.contains("1 of 100 shown"));

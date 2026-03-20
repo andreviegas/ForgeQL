@@ -396,6 +396,13 @@ fn collect_nodes(
 ///
 /// Returns `None` for nodes that should not produce index rows.
 fn extract_name(node: tree_sitter::Node<'_>, source: &[u8], language_name: &str) -> Option<String> {
+    // Structural nodes that are part of a declarator tree should never
+    // produce their own index rows — they are handled via their parent
+    // (e.g. function_definition).
+    if node.kind() == "qualified_identifier" {
+        return None;
+    }
+
     // Universal: most grammars expose a "name" field on definition nodes.
     if let Some(name_node) = node.child_by_field_name("name") {
         let text = node_text(source, name_node);
@@ -497,11 +504,10 @@ fn contains_function_declarator(node: tree_sitter::Node<'_>) -> bool {
 /// Drill into nested declarators to find the identifier holding the function name.
 fn find_function_name(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
     match node.kind() {
-        "identifier" | "destructor_name" | "operator_name" => Some(node),
-        "qualified_identifier" => node
-            .child_by_field_name("name")
-            .and_then(find_function_name)
-            .or(Some(node)),
+        // Return the full qualified node (e.g. `Serial_Protocol::setup`)
+        // so that the index stores the qualified name, not just the
+        // trailing identifier.
+        "identifier" | "destructor_name" | "operator_name" | "qualified_identifier" => Some(node),
         "function_declarator"
         | "pointer_declarator"
         | "reference_declarator"
@@ -675,6 +681,31 @@ mod tests {
         let row = table.find_def("processSignal").expect("indexed");
         assert_eq!(row.node_kind, "function_definition");
         assert_eq!(row.line, 1);
+    }
+
+    #[test]
+    fn indexes_qualified_function_definition() {
+        let table =
+            index_snippet("class Motor { void setup(); };\nvoid Motor::setup() { return; }");
+        assert!(
+            table.find_def("Motor::setup").is_some(),
+            "qualified method should be indexed under its full name"
+        );
+        assert!(
+            table.find_def("setup").is_none(),
+            "qualified method should NOT be indexed under the bare name"
+        );
+    }
+
+    #[test]
+    fn bare_and_qualified_functions_coexist() {
+        let table = index_snippet(
+            "void setup() {}\nclass Motor { void setup(); };\nvoid Motor::setup() {}",
+        );
+        let bare = table.find_def("setup").expect("bare setup");
+        assert_eq!(bare.node_kind, "function_definition");
+        let qualified = table.find_def("Motor::setup").expect("qualified setup");
+        assert_eq!(qualified.node_kind, "function_definition");
     }
 
     #[test]

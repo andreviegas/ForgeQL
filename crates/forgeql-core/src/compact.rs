@@ -290,14 +290,18 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
     // Header.
     let tot = query.total.to_string();
     row(&mut out, &[&q(&query.op), &tot]);
-    // Schema hint.
-    row(&mut out, &[&q("kind"), &q("[name,path,usages]")]);
+    // Schema hint — use metric name when a numeric WHERE/ORDER BY was used.
+    let metric_label = query.metric_hint.as_deref().unwrap_or("usages");
+    let schema = format!("[name,path,line,{metric_label}]");
+    row(&mut out, &[&q("kind"), &q(&schema)]);
     // Group by node_kind.
     let groups = group_symbols_by_kind(query);
     for (kind, items) in &groups {
         let brackets: Vec<String> = items
             .iter()
-            .map(|(name, path, usages)| bracket(&[name, path, &usages.to_string()]))
+            .map(|(name, path, line, val)| {
+                bracket(&[name, path, &line.to_string(), &val.to_string()])
+            })
             .collect();
         let val = q(&brackets.join(","));
         row(&mut out, &[&q(kind), &val]);
@@ -370,20 +374,34 @@ fn group_usages_by_file(query: &QueryResult) -> Vec<(String, Vec<usize>)> {
 }
 
 /// Group symbols by `node_kind`.
+///
+/// The last element of each tuple is the "metric value": when a
+/// `metric_hint` is set on the query, the value comes from the row's
+/// enrichment `fields`; otherwise it falls back to `usages_count`.
 #[allow(clippy::type_complexity)]
-fn group_symbols_by_kind(query: &QueryResult) -> Vec<(String, Vec<(&str, String, usize)>)> {
-    let mut groups: Vec<(String, Vec<(&str, String, usize)>)> = Vec::new();
+fn group_symbols_by_kind(query: &QueryResult) -> Vec<(String, Vec<(&str, String, usize, usize)>)> {
+    let hint = query.metric_hint.as_deref();
+    let mut groups: Vec<(String, Vec<(&str, String, usize, usize)>)> = Vec::new();
     for r in &query.results {
         let kind = r.node_kind.as_deref().unwrap_or("");
         let path = r
             .path
             .as_ref()
             .map_or(String::new(), |p| p.to_string_lossy().into_owned());
-        let usages = r.usages_count.or(r.count).unwrap_or(0);
+        let line = r.line.unwrap_or(0);
+        let metric = hint.map_or_else(
+            || r.usages_count.or(r.count).unwrap_or(0),
+            |field| {
+                r.fields
+                    .get(field)
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0)
+            },
+        );
         if let Some(g) = groups.iter_mut().find(|(k, _)| k == kind) {
-            g.1.push((&r.name, path, usages));
+            g.1.push((&r.name, path, line, metric));
         } else {
-            groups.push((kind.to_string(), vec![(&r.name, path, usages)]));
+            groups.push((kind.to_string(), vec![(&r.name, path, line, metric)]));
         }
     }
     groups
@@ -677,6 +695,7 @@ mod tests {
         let result = ForgeQLResult::Query(QueryResult {
             op: "find_symbols".into(),
             total: 3,
+            metric_hint: None,
             results: vec![
                 SymbolMatch {
                     name: "encenderMotor".into(),
@@ -710,14 +729,14 @@ mod tests {
         let csv = to_compact(&result);
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines[0], r#""find_symbols",3"#);
-        assert_eq!(lines[1], r#""kind","[name,path,usages]""#);
+        assert_eq!(lines[1], r#""kind","[name,path,line,usages]""#);
         assert_eq!(
             lines[2],
-            r#""function_definition","[encenderMotor,src/motor_control.cpp,7],[apagarMotor,src/motor_control.cpp,5]""#
+            r#""function_definition","[encenderMotor,src/motor_control.cpp,0,7],[apagarMotor,src/motor_control.cpp,0,5]""#
         );
         assert_eq!(
             lines[3],
-            r#""class_specifier","[MotorControl,include/motor_control.hpp,2]""#
+            r#""class_specifier","[MotorControl,include/motor_control.hpp,0,2]""#
         );
     }
 
@@ -728,6 +747,7 @@ mod tests {
         let result = ForgeQLResult::Query(QueryResult {
             op: "find_usages".into(),
             total: 3,
+            metric_hint: None,
             results: vec![
                 SymbolMatch {
                     name: "encenderMotor".into(),
@@ -773,6 +793,7 @@ mod tests {
         let result = ForgeQLResult::Query(QueryResult {
             op: "count_usages".into(),
             total: 2,
+            metric_hint: None,
             results: vec![
                 SymbolMatch {
                     name: "src/signal.cpp".into(),
@@ -803,6 +824,52 @@ mod tests {
     }
 
     // -- Non-query/show falls back to JSON -----------------------------
+
+    // -- metric_hint overrides last column -----------------------------
+
+    #[test]
+    fn find_symbols_with_metric_hint_shows_field_value() {
+        let result = ForgeQLResult::Query(QueryResult {
+            op: "find_symbols".into(),
+            total: 2,
+            metric_hint: Some("member_count".into()),
+            results: vec![
+                SymbolMatch {
+                    name: "Serial_Protocol".into(),
+                    node_kind: Some("class_specifier".into()),
+                    path: Some(PathBuf::from("src/Serial_Protocol.h")),
+                    line: Some(24),
+                    usages_count: Some(8),
+                    fields: HashMap::from([("member_count".into(), "17".into())]),
+                    count: None,
+                },
+                SymbolMatch {
+                    name: "MpptState".into(),
+                    node_kind: Some("struct_specifier".into()),
+                    path: Some(PathBuf::from("src/SolarCharger.h")),
+                    line: Some(57),
+                    usages_count: Some(4),
+                    fields: HashMap::from([("member_count".into(), "12".into())]),
+                    count: None,
+                },
+            ],
+        });
+        let csv = to_compact(&result);
+        let lines: Vec<&str> = csv.lines().collect();
+        // Schema hint must show the metric name, not "usages".
+        assert_eq!(lines[1], r#""kind","[name,path,line,member_count]""#);
+        // Values must come from fields["member_count"], not usages_count.
+        assert!(
+            lines[2].contains(",17]"),
+            "expected member_count=17 in output, got: {}",
+            lines[2]
+        );
+        assert!(
+            lines[3].contains(",12]"),
+            "expected member_count=12 in output, got: {}",
+            lines[3]
+        );
+    }
 
     #[test]
     fn mutation_falls_back_to_json() {

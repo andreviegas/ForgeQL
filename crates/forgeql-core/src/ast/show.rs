@@ -798,7 +798,19 @@ pub fn show_callees(index: &SymbolTable, workspace: &Workspace, symbol: &str) ->
     let path_str = workspace.relative(&def.path).display().to_string();
     let results: Vec<Value> = callees
         .iter()
-        .map(|name| serde_json::json!({ "name": name }))
+        .map(|name| {
+            index.find_def(name).map_or_else(
+                || serde_json::json!({ "name": name }),
+                |callee_def| {
+                    let callee_path = workspace.relative(&callee_def.path).display().to_string();
+                    serde_json::json!({
+                        "name": name,
+                        "path": callee_path,
+                        "line": callee_def.line,
+                    })
+                },
+            )
+        })
         .collect();
 
     Ok(serde_json::json!({

@@ -60,17 +60,22 @@ impl NodeEnricher for MetricsEnricher {
             kind,
             "struct_specifier" | "class_specifier" | "enum_specifier"
         ) {
-            let target = if kind == "enum_specifier" {
-                "enumerator"
+            let count = if kind == "enum_specifier" {
+                count_descendants_by_kind(ctx.node, "enumerator")
             } else {
-                "field_declaration"
+                // Count only direct members of this type's body, not members
+                // of nested structs/classes.  The body is a
+                // `field_declaration_list` whose children include the actual
+                // members (possibly wrapped in `access_specifier` sections).
+                count_direct_members(ctx.node)
             };
-            let count = count_descendants_by_kind(ctx.node, target);
             drop(fields.insert("member_count".to_string(), count.to_string()));
         }
 
-        // Qualifier flags for declarations
-        if kind == "declaration" {
+        // Qualifier flags for declarations and function definitions.
+        // For declarations: `const int x;`, `static int y;`, `volatile int z;`
+        // For functions: `int getSpeed() const`, `static void init()`
+        if kind == "declaration" || kind == "function_definition" {
             check_qualifier_with_source(ctx.node, ctx.source, "const", "is_const", fields);
             check_qualifier_with_source(ctx.node, ctx.source, "volatile", "is_volatile", fields);
             check_specifier_with_source(ctx.node, ctx.source, "static", "is_static", fields);
@@ -124,6 +129,39 @@ fn count_descendants_by_kind(node: tree_sitter::Node<'_>, target_kind: &str) -> 
             }
         }
     }
+}
+
+const MEMBER_KINDS: &[&str] = &["field_declaration", "function_definition", "declaration"];
+
+/// Count direct members of a struct/class body (one level deep).
+///
+/// Walks the `field_declaration_list` child and counts `field_declaration`,
+/// `function_definition`, and `declaration` nodes.  Members inside
+/// `access_specifier` sections are included, but members of nested
+/// structs/classes are not.
+fn count_direct_members(node: tree_sitter::Node<'_>) -> usize {
+    let Some(body) = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "field_declaration_list")
+    else {
+        return 0;
+    };
+
+    let mut count = 0;
+    for child in body.children(&mut body.walk()) {
+        let ck = child.kind();
+        if MEMBER_KINDS.contains(&ck) {
+            count += 1;
+        } else if ck == "access_specifier" {
+            // public: / private: / protected: sections wrap members.
+            for inner in child.children(&mut child.walk()) {
+                if MEMBER_KINDS.contains(&inner.kind()) {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
 }
 
 /// Check if a specific type qualifier (const, volatile) appears in children.

@@ -29,7 +29,7 @@ pub struct ForgeQLParser;
 /// if an unhandled grammar rule is encountered during dispatch.
 pub fn parse_with_source(input: &str) -> Result<Vec<(String, ForgeQLIR)>, ForgeError> {
     let pairs = ForgeQLParser::parse(Rule::program, input)
-        .map_err(|e| ForgeError::DslParse(e.to_string()))?;
+        .map_err(|e| ForgeError::DslParse(enrich_parse_error(input, e.to_string())))?;
 
     let mut ops = Vec::new();
 
@@ -511,6 +511,32 @@ fn parse_transaction(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR,
 /// Strip the surrounding single-quotes from a `string_literal` token.
 fn unquote(s: &str) -> String {
     s.trim_matches('\'').to_string()
+}
+
+// -----------------------------------------------------------------------
+// Error enrichment
+// -----------------------------------------------------------------------
+
+/// Detect common SQL-isms that don't exist in `ForgeQL` and append a helpful
+/// hint to the pest parse error.
+fn enrich_parse_error(input: &str, mut msg: String) -> String {
+    let upper = input.to_uppercase();
+    if upper.contains(" AND ") {
+        msg.push_str(
+            "\n\nHint: ForgeQL does not support the AND keyword. \
+             Use multiple WHERE clauses instead.\n\
+             Example: WHERE node_kind = 'function_definition' WHERE is_static = 'true'",
+        );
+    }
+    if upper.contains(" OR ") {
+        msg.push_str(
+            "\n\nHint: ForgeQL does not support the OR keyword. \
+             Run separate queries for each condition, or use LIKE wildcards \
+             when matching alternative string patterns.\n\
+             Example: WHERE name LIKE '%read%' (matches any name containing \"read\")",
+        );
+    }
+    msg
 }
 
 // -----------------------------------------------------------------------
