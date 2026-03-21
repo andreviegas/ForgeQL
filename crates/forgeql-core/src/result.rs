@@ -124,6 +124,14 @@ pub struct ShowResult {
     /// Last 1-based line of the shown entity's full span (inclusive).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_line: Option<usize>,
+    /// Total number of source lines before truncation (set only when the
+    /// implicit line cap fires).  Absent when all lines are returned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_lines: Option<usize>,
+    /// Guidance message when the output was truncated by the implicit line
+    /// cap, telling the agent how to see the remaining lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 /// The payload of a SHOW result — either structured lines or a list of members.
@@ -597,6 +605,9 @@ impl fmt::Display for ShowResult {
                 writeln!(formatter, "({total} files)")?;
             }
         }
+        if let Some(ref hint) = self.hint {
+            writeln!(formatter, "{hint}")?;
+        }
         Ok(())
     }
 }
@@ -965,6 +976,8 @@ mod tests {
             file: Some(PathBuf::from("src/adc.cpp")),
             start_line: Some(42),
             end_line: Some(44),
+            total_lines: None,
+            hint: None,
             content: ShowContent::Lines {
                 lines: vec![
                     SourceLine {

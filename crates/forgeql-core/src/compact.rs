@@ -103,6 +103,19 @@ fn compact_lines(s: &ShowResult, lines: &[SourceLine]) -> String {
         let text = q(&line.text);
         row(&mut out, &[&lnum, &text]);
     }
+    // Truncation hint (when implicit line cap fired).
+    if let Some(ref hint) = s.hint {
+        if let Some(total) = s.total_lines {
+            row(
+                &mut out,
+                &[
+                    &q("truncated"),
+                    &q(&format!("{} of {total} lines", lines.len())),
+                ],
+            );
+        }
+        row(&mut out, &[&q("hint"), &q(hint)]);
+    }
     chomp(&mut out);
     out
 }
@@ -436,6 +449,8 @@ mod tests {
             file: Some(PathBuf::from("include/types.hpp")),
             start_line: None,
             end_line: None,
+            total_lines: None,
+            hint: None,
             content: ShowContent::Outline {
                 entries: vec![
                     OutlineEntry {
@@ -476,6 +491,8 @@ mod tests {
             file: Some(PathBuf::from("src/adc.cpp")),
             start_line: None,
             end_line: None,
+            total_lines: None,
+            hint: None,
             content: ShowContent::Outline {
                 entries: vec![
                     OutlineEntry {
@@ -514,6 +531,8 @@ mod tests {
             file: Some(PathBuf::from("include/motor_control.hpp")),
             start_line: Some(20),
             end_line: Some(55),
+            total_lines: None,
+            hint: None,
             content: ShowContent::Members {
                 members: vec![
                     MemberEntry {
@@ -559,6 +578,8 @@ mod tests {
             file: Some(PathBuf::from("src/adc.cpp")),
             start_line: Some(42),
             end_line: Some(44),
+            total_lines: None,
+            hint: None,
             content: ShowContent::Lines {
                 lines: vec![
                     SourceLine {
@@ -601,6 +622,8 @@ mod tests {
             file: Some(PathBuf::from("src/signal.cpp")),
             start_line: Some(125),
             end_line: Some(125),
+            total_lines: None,
+            hint: None,
             content: ShowContent::Signature {
                 signature: "void setPeakLevel(int level)".into(),
                 line: 125,
@@ -624,6 +647,8 @@ mod tests {
             file: None,
             start_line: None,
             end_line: None,
+            total_lines: None,
+            hint: None,
             content: ShowContent::CallGraph {
                 direction: CallDirection::Callees,
                 entries: vec![
@@ -660,6 +685,8 @@ mod tests {
             file: None,
             start_line: None,
             end_line: None,
+            total_lines: None,
+            hint: None,
             content: ShowContent::FileList {
                 files: vec![
                     FileEntry {

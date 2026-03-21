@@ -14,7 +14,10 @@ use serde::Deserialize;
 use tracing::{debug, error};
 
 use forgeql_core::compact;
-use forgeql_core::engine::ForgeQLEngine;
+use forgeql_core::engine::{
+    DEFAULT_BODY_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_QUERY_LIMIT, DEFAULT_SHOW_LINE_LIMIT,
+    ForgeQLEngine,
+};
 use forgeql_core::error::ForgeError;
 use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::parser;
@@ -429,17 +432,58 @@ impl ForgeQlMcp {
 #[tool_handler]
 impl ServerHandler for ForgeQlMcp {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
-            ServerCapabilities::builder().enable_tools().build(),
-        )
-        .with_instructions(
-            "ForgeQL — AST-aware code transformation server. \
-             Use `run_fql` to execute any ForgeQL statement, or use \
-             the individual tools for structured access. \
-             EFFICIENCY RULES: (1) format defaults to CSV — use JSON only when parsing fields. \
-             (2) FIND queries default to 20 rows; always add LIMIT before broadening. \
-             (3) Every response includes tokens_approx — if it is large, narrow the query. \
-             (4) SHOW body defaults to DEPTH 0 (signature only); increment depth to reveal structure progressively.",
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            format!(
+                "ForgeQL — AST-aware code transformation server.\n\
+             All source code is accessed EXCLUSIVELY through ForgeQL queries.\n\
+             \n\
+             CRITICAL RULES:\n\
+             - NEVER use SHOW LINES to explore code. \
+               Use SHOW body OF 'symbol' DEPTH N instead.\n\
+             - NEVER scan files sequentially or by line ranges. \
+               Use FIND symbols WHERE to locate code by name, kind, or enrichment field.\n\
+             - NEVER fall back to local filesystem tools (grep, find, cat, read_file). \
+               ForgeQL manages all code access; the local workspace may be empty.\n\
+             - Always start with USE source.branch before any query.\n\
+             \n\
+             QUERY STRATEGY (all commands accept WHERE, GROUP BY, ORDER BY, \
+             LIMIT, OFFSET — combine them freely):\n\
+             - Need a symbol? → FIND symbols WHERE name LIKE 'pattern' \
+               [WHERE node_kind = '...'] [IN 'path/**'] [ORDER BY usages DESC] [LIMIT N]\n\
+             - Need source code? → SHOW body OF 'name' DEPTH {DEFAULT_BODY_DEPTH} (signature) \
+               → DEPTH 1 (control flow) → DEPTH 99 (full source)\n\
+             - Need blast radius? → FIND usages OF 'name' \
+               [GROUP BY file] [ORDER BY count DESC] [LIMIT N]\n\
+             - Need file list? → FIND files [IN 'path/**'] \
+               [WHERE extension = '...'] [WHERE size > N] [ORDER BY size DESC] [LIMIT N]\n\
+             - Need structure? → SHOW outline OF 'file' \
+               [WHERE kind = '...'] [ORDER BY line ASC] | SHOW members OF 'type'\n\
+             - Need context? → SHOW context OF 'name' \
+               (default {DEFAULT_CONTEXT_LINES} lines; use DEPTH N to adjust)\n\
+             - Need call graph? → SHOW callees OF 'name' \
+               | FIND usages OF 'name' GROUP BY file ORDER BY count DESC\n\
+             \n\
+             EFFICIENCY:\n\
+             - Format defaults to CSV (≈60% fewer tokens). Pass format=JSON only when \
+               parsing fields programmatically.\n\
+             - FIND queries without LIMIT default to {DEFAULT_QUERY_LIMIT} rows. \
+               Add LIMIT N to override. When total > results.len(), more rows exist.\n\
+             - SHOW commands that return more than {DEFAULT_SHOW_LINE_LIMIT} source lines \
+               WITHOUT an explicit LIMIT clause are BLOCKED — zero lines are returned, \
+               only a guidance message. Use FIND symbols WHERE to locate the exact symbol \
+               — it returns file path and line numbers — then SHOW LINES n-m OF 'file' \
+               to read only those lines. Add LIMIT N only if you consciously need more \
+               than {DEFAULT_SHOW_LINE_LIMIT} lines.\n\
+             - Every response includes tokens_approx — if large, narrow the query \
+               with WHERE, IN, EXCLUDE, or lower LIMIT.\n\
+             - SHOW body defaults to DEPTH {DEFAULT_BODY_DEPTH} (signature only). \
+               Increment depth progressively — never jump straight to DEPTH 99 for \
+               large functions.\n\
+             - Multiple WHERE clauses combine as AND — stack them to narrow results.\n\
+             - Use GROUP BY (file | kind | node_kind) + HAVING count >= N to aggregate. \
+               Never GROUP BY without HAVING on large codebases.\n\
+             - Use OFFSET N for pagination when LIMIT truncates results.",
+            ),
         )
     }
 }

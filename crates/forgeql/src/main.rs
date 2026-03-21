@@ -537,6 +537,8 @@ mod tests {
             op: "show_lines".to_string(),
             symbol: None,
             file: Some(PathBuf::from("src/foo.cpp")),
+            total_lines: None,
+            hint: None,
             content: ShowContent::Lines {
                 lines: (1..=n)
                     .map(|i| SourceLine {
@@ -575,6 +577,8 @@ mod tests {
             op: "show_members".to_string(),
             symbol: Some("MyClass".to_string()),
             file: None,
+            total_lines: None,
+            hint: None,
             content: ShowContent::Members {
                 members: vec![MemberEntry {
                     kind: "field".to_string(),

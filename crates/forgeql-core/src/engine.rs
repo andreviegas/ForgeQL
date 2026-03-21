@@ -76,7 +76,26 @@ const SESSION_TTL_SECS: u64 = 2 * 60 * 60; // 2 hours
 /// such as `FIND symbols` on a large codebase.  The agent can always
 /// override with an explicit `LIMIT N` clause.  When the cap fires,
 /// `total > results.len()` signals that more rows are available.
-const DEFAULT_QUERY_LIMIT: usize = 20;
+pub const DEFAULT_QUERY_LIMIT: usize = 20;
+
+/// Default collapse depth for `SHOW body OF`.
+///
+/// `0` = signature only (return type, name, parameters); the body is
+/// replaced with `{ ... }`.  Higher values reveal nested structure
+/// progressively.
+pub const DEFAULT_BODY_DEPTH: usize = 0;
+
+/// Default number of context lines shown by `SHOW context OF`.
+pub const DEFAULT_CONTEXT_LINES: usize = 5;
+
+/// Implicit line cap for `SHOW` commands that return source lines
+/// (`show_body`, `show_lines`, `show_context`) when no `LIMIT` clause
+/// is specified.
+///
+/// Prevents large functions or line ranges from flooding the agent's
+/// context window.  The agent can override with an explicit `LIMIT N`.
+/// When the cap fires, a `hint` field explains how to paginate.
+pub const DEFAULT_SHOW_LINE_LIMIT: usize = 40;
 
 /// The central `ForgeQL` dispatcher — owns all state and executes all operations.
 ///
@@ -690,7 +709,7 @@ impl ForgeQLEngine {
         let json = match op {
             ForgeQLIR::ShowContext { symbol, clauses } => {
                 let file = clauses.in_glob.as_deref();
-                let context_lines = clauses.depth.unwrap_or(5);
+                let context_lines = clauses.depth.unwrap_or(DEFAULT_CONTEXT_LINES);
                 show::show_context(index, &workspace, symbol, file, context_lines)
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
@@ -702,10 +721,13 @@ impl ForgeQLEngine {
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
             ForgeQLIR::ShowMembers { symbol, .. } => show::show_members(index, &workspace, symbol)
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
-            ForgeQLIR::ShowBody { symbol, clauses } => {
-                show::show_body(index, &workspace, symbol, Some(clauses.depth.unwrap_or(0)))
-                    .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
-            }
+            ForgeQLIR::ShowBody { symbol, clauses } => show::show_body(
+                index,
+                &workspace,
+                symbol,
+                Some(clauses.depth.unwrap_or(DEFAULT_BODY_DEPTH)),
+            )
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
             ForgeQLIR::ShowCallees { symbol, .. } => show::show_callees(index, &workspace, symbol)
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
             ForgeQLIR::ShowLines {
@@ -747,7 +769,7 @@ impl ForgeQLEngine {
                 // handled above so they become no-ops here; GROUP BY, HAVING,
                 // WHERE, ORDER BY, LIMIT, OFFSET all run normally.
                 crate::filter::apply_clauses(&mut entries, clauses);
-                let max_depth = clauses.depth.unwrap_or(0);
+                let max_depth = clauses.depth.unwrap_or(DEFAULT_BODY_DEPTH);
                 // When GROUP BY was requested the pipeline has already
                 // aggregated entries and stored per-group counts; skip the
                 // depth-grouping step so those results are not disturbed.
@@ -809,6 +831,52 @@ impl ForgeQLEngine {
                 crate::filter::apply_clauses(members, clauses);
             }
             _ => {}
+        }
+
+        // ----------------------------------------------------------
+        // Implicit line cap for SHOW commands that return source lines.
+        // When no explicit LIMIT was given, truncate to DEFAULT_SHOW_LINE_LIMIT
+        // and attach a hint explaining how to paginate.
+        // When LIMIT was given, honour OFFSET + LIMIT as pagination.
+        // ----------------------------------------------------------
+        if let ShowContent::Lines { lines, .. } = &mut show_result.content {
+            let clauses = match op {
+                ForgeQLIR::ShowBody { clauses, .. }
+                | ForgeQLIR::ShowLines { clauses, .. }
+                | ForgeQLIR::ShowContext { clauses, .. } => Some(clauses),
+                _ => None,
+            };
+            if let Some(clauses) = clauses {
+                let total = lines.len();
+                let has_explicit_limit = clauses.limit.is_some();
+
+                if has_explicit_limit {
+                    // Agent explicitly requested LIMIT — honour it.
+                    let offset = clauses.offset.unwrap_or(0);
+                    if offset > 0 && offset < total {
+                        *lines = lines.split_off(offset);
+                    } else if offset >= total {
+                        lines.clear();
+                    }
+                    let limit = clauses.limit.unwrap_or(total);
+                    if lines.len() > limit {
+                        lines.truncate(limit);
+                    }
+                } else if total > DEFAULT_SHOW_LINE_LIMIT {
+                    // No explicit LIMIT and output exceeds the cap.
+                    // Block the output entirely — return zero lines + guidance.
+                    lines.clear();
+                    show_result.total_lines = Some(total);
+                    show_result.hint = Some(format!(
+                        "Blocked: this SHOW command would return {total} lines \
+                         (limit is {DEFAULT_SHOW_LINE_LIMIT} without an explicit LIMIT clause). \
+                         Use FIND symbols WHERE to locate the exact symbol you need — \
+                         it returns file path and line numbers. \
+                         Then use SHOW LINES n-m OF 'file' to read only those lines. \
+                         If you really need all {total} lines, re-run with LIMIT {total}.",
+                    ));
+                }
+            }
         }
 
         Ok(ForgeQLResult::Show(show_result))
@@ -1371,6 +1439,8 @@ fn convert_show_json(op: &ForgeQLIR, json: &serde_json::Value) -> Result<ShowRes
         content,
         start_line,
         end_line,
+        total_lines: None,
+        hint: None,
     })
 }
 
