@@ -595,55 +595,16 @@ impl ForgeQLEngine {
     fn find_symbols(&self, session_id: Option<&str>, clauses: &Clauses) -> Result<ForgeQLResult> {
         let index = self.require_index(session_id)?;
 
-        // Scan all symbols; apply_clauses handles name filtering via WHERE predicates.
-        let defs = query::find_symbols_like(index, "%");
+        let (mut results, remaining) = find_symbols_prefilter(index, clauses);
 
-        let mut results: Vec<SymbolMatch> = defs
-            .into_iter()
-            .map(|def| {
-                // For qualified names (e.g. `Serial_Protocol::setup`), fall
-                // back to the trailing identifier for the usages lookup
-                // because usage sites are recorded as bare identifiers.
-                let usages_key = def.name.rsplit("::").next().unwrap_or(&def.name);
-                let usages = index.usages.get(usages_key).map_or(0, Vec::len);
-                SymbolMatch {
-                    name: def.name.clone(),
-                    node_kind: Some(def.node_kind.clone()),
-                    path: Some(def.path.clone()),
-                    line: Some(def.line),
-                    usages_count: Some(usages),
-                    fields: def.fields.clone(),
-                    count: None,
-                }
-            })
-            .collect();
+        validate_order_by_field(&remaining, &results)?;
+        crate::filter::apply_clauses(&mut results, &remaining);
 
-        // Deduplicate by (name, path, node_kind, line) — enricher rows and
-        // multi-pass indexing can produce identical entries that confuse
-        // downstream consumers.
-        {
-            let mut seen = HashSet::new();
-            results.retain(|r| {
-                let key = (r.name.clone(), r.path.clone(), r.node_kind.clone(), r.line);
-                seen.insert(key)
-            });
-        }
-
-        // Validate ORDER BY field before applying clauses so that typos
-        // produce a clear error instead of silently returning default order.
-        validate_order_by_field(clauses, &results)?;
-
-        crate::filter::apply_clauses(&mut results, clauses);
-        // Capture total BEFORE the implicit cap so the agent can see when
-        // more rows are available (total > results.len() in the response).
         let total = results.len();
         if clauses.limit.is_none() {
             results.truncate(DEFAULT_QUERY_LIMIT);
         }
 
-        // When the query uses a numeric WHERE on an enrichment field
-        // (e.g. `member_count > 10`), tell the compact renderer to show
-        // that field's value instead of the default `usages`.
         let metric_hint = detect_metric_hint(clauses);
 
         Ok(ForgeQLResult::Query(QueryResult {
@@ -1332,6 +1293,121 @@ fn detect_metric_hint(clauses: &Clauses) -> Option<String> {
     }
 
     None
+}
+
+/// Pre-filter symbol rows using secondary indexes and WHERE predicates
+/// before materializing `SymbolMatch`.  Returns `(results, remaining_clauses)`
+/// where `remaining_clauses` contains only the parts not yet applied.
+fn find_symbols_prefilter(index: &SymbolTable, clauses: &Clauses) -> (Vec<SymbolMatch>, Clauses) {
+    use crate::filter::{eval_predicate, like_match};
+    use crate::ir::{CompareOp, PredicateValue};
+
+    // Extract a `node_kind = 'value'` predicate for kind_index shortcut.
+    let kind_exact: Option<&str> = clauses.where_predicates.iter().find_map(|p| {
+        if (p.field == "node_kind" || p.field == "kind")
+            && p.op == CompareOp::Eq
+            && let PredicateValue::String(ref s) = p.value
+        {
+            Some(s.as_str())
+        } else {
+            None
+        }
+    });
+
+    // Extract a `name LIKE 'pattern'` predicate for name filtering.
+    let name_like: Option<&str> = clauses.where_predicates.iter().find_map(|p| {
+        if p.field == "name"
+            && p.op == CompareOp::Like
+            && let PredicateValue::String(ref s) = p.value
+        {
+            Some(s.as_str())
+        } else {
+            None
+        }
+    });
+
+    let is_usages_pred = |p: &crate::ir::Predicate| p.field == "usages";
+
+    // Row source: kind_index for O(1) lookup, or full scan.
+    let candidates: Box<dyn Iterator<Item = &crate::ast::index::IndexRow>> =
+        if let Some(kind) = kind_exact {
+            Box::new(index.rows_by_kind(kind))
+        } else {
+            Box::new(index.rows.iter())
+        };
+
+    // Collect non-usages predicates not already handled by index lookups.
+    let non_usages_preds: Vec<_> = clauses
+        .where_predicates
+        .iter()
+        .filter(|p| !is_usages_pred(p))
+        .filter(|p| {
+            kind_exact.is_none()
+                || !((p.field == "node_kind" || p.field == "kind") && p.op == CompareOp::Eq)
+        })
+        .filter(|p| name_like.is_none() || !(p.field == "name" && p.op == CompareOp::Like))
+        .collect();
+
+    // Filter on raw IndexRow — no heap allocation per rejected row.
+    let filtered = candidates.filter(|row| {
+        if let Some(pat) = name_like
+            && !like_match(&row.name, pat)
+        {
+            return false;
+        }
+        if let Some(ref glob) = clauses.in_glob
+            && !crate::ast::query::glob_matches(&row.path, glob)
+        {
+            return false;
+        }
+        if let Some(ref glob) = clauses.exclude_glob
+            && crate::ast::query::glob_matches(&row.path, glob)
+        {
+            return false;
+        }
+        non_usages_preds.iter().all(|p| eval_predicate(*row, p))
+    });
+
+    // Materialize SymbolMatch only for survivors, dedup inline.
+    let mut seen = HashSet::new();
+    let mut results: Vec<SymbolMatch> = Vec::new();
+    for def in filtered {
+        let key = (&def.name, &def.path, &def.node_kind, def.line);
+        if !seen.insert(key.to_owned()) {
+            continue;
+        }
+        let usages_key = def.name.rsplit("::").next().unwrap_or(&def.name);
+        let usages = index.usages.get(usages_key).map_or(0, Vec::len);
+        results.push(SymbolMatch {
+            name: def.name.clone(),
+            node_kind: Some(def.node_kind.clone()),
+            path: Some(def.path.clone()),
+            line: Some(def.line),
+            usages_count: Some(usages),
+            fields: def.fields.clone(),
+            count: None,
+        });
+    }
+
+    // Only usages-based WHERE, GROUP/HAVING, ORDER, OFFSET, LIMIT remain.
+    let remaining = Clauses {
+        where_predicates: clauses
+            .where_predicates
+            .iter()
+            .filter(|p| is_usages_pred(p))
+            .cloned()
+            .collect(),
+        having_predicates: clauses.having_predicates.clone(),
+        order_by: clauses.order_by.clone(),
+        group_by: clauses.group_by.clone(),
+        limit: clauses.limit,
+        offset: clauses.offset,
+        in_glob: None,
+        exclude_glob: None,
+        depth: None,
+    };
+
+    (results, remaining)
 }
 
 /// Validate the `ORDER BY` field against a result set, returning an error if

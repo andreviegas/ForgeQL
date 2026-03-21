@@ -81,7 +81,7 @@ fn path_glob_matches(path: &Path, pattern: &str) -> bool {
 // -----------------------------------------------------------------------
 
 /// Evaluate a single predicate against a `ClauseTarget` item.
-fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicate) -> bool {
+pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicate) -> bool {
     match predicate.op {
         // ---- String / LIKE operators ----
         CompareOp::Like => {

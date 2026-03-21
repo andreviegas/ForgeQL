@@ -49,6 +49,13 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   analysis on large codebases straightforward.  `CREATE SOURCE` commands are
   now logged with the correct source name (previously went to `unknown.csv`).
 
+- **FIND symbols pre-filtering** — `FIND symbols` now applies WHERE
+  predicates directly on `IndexRow` before materializing `SymbolMatch`,
+  using the `kind_index` for O(1) row selection when `node_kind = 'value'`
+  is present.  On large codebases this avoids cloning millions of rows that
+  would be discarded by filters, reducing query time from seconds to
+  milliseconds.
+
 ---
 
 ## [0.25.0] - 2026-03-21
