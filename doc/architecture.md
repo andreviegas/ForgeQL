@@ -167,6 +167,37 @@ The MCP layer exposes tools to the agent via the MCP JSON-RPC protocol over stdi
 
 `CREATE SOURCE` and `REFRESH SOURCE` are intentionally blocked through MCP — they must be run via the interpreter.
 
+### Agent Guardrails
+
+The MCP layer includes two mechanisms that prevent AI agents from misusing ForgeQL:
+
+**`with_instructions()`** — The server's `get_info()` response includes a structured instruction text that is injected into the agent's system prompt during the MCP `initialize` handshake. This text contains:
+- Critical rules (never use local filesystem, always start with `USE`)
+- Query strategy decision tree (FIND → SHOW LINES workflow)
+- Efficiency rules (default limits, progressive depth)
+
+These instructions reach the agent regardless of which editor or platform it runs on — they are part of the MCP protocol itself.
+
+**SHOW line blocking** — SHOW commands that return source lines (`body`, `lines`, `context`) are subject to a default line limit (`DEFAULT_SHOW_LINE_LIMIT = 40`). When output exceeds this limit and the agent did not include an explicit `LIMIT` clause:
+- Zero lines are returned
+- A guidance message tells the agent to use `FIND symbols WHERE` to locate the exact symbol, then `SHOW LINES n-m OF 'file'` for targeted reading
+- If the agent genuinely needs more lines, it can re-run with an explicit `LIMIT N`
+
+This creates a teaching moment on first contact — after hitting the block once, agents learn the precision workflow.
+
+### Agent Distribution
+
+ForgeQL ships pre-built agent configuration files in `doc/agents/`:
+
+| File | Platform | Effect |
+|---|---|---|
+| `forgeql.agent.md` | VS Code Copilot | Locks agent to `forgeql/*` tools via `tools:` frontmatter |
+| `AGENTS.md` | VS Code / Claude Code | Workspace-level behavioral instructions |
+| `CLAUDE.md` | Claude Code | Native format adapter |
+| `.cursorrules` | Cursor | Native format adapter |
+
+The VS Code Custom Agent is the strongest enforcement — `tools: [forgeql/*]` means the agent literally cannot call grep, find, or cat. Other platforms rely on behavioral instructions combined with the MCP server's built-in guardrails.
+
 ---
 
 ## Data Flow: a FIND query
@@ -221,14 +252,17 @@ ForgeQL/
 │   ├── forgeql/                  # Binary entry point, MCP server, CLI flags
 │   │   └── src/
 │   │       ├── main.rs
-│   │       └── mcp.rs
+│   │       ├── mcp.rs            # MCP tools + with_instructions() + guardrails
+│   │       └── path_utils.rs
 │   └── forgeql-core/             # All core logic (no binary)
 │       └── src/
 │           ├── ast/
 │           │   ├── index.rs      # IndexRow, SymbolTable, collect_nodes
 │           │   ├── query.rs      # find_symbols, find_usages
 │           │   ├── show.rs       # show_body, show_signature, show_outline, …
-│           │   └── cache.rs      # Index serialization/deserialization (bincode)
+│           │   ├── cache.rs      # Index serialization/deserialization (bincode)
+│           │   └── enrich/       # Enrichment modules (naming, comments, numbers,
+│           │                     #   control_flow, operators, metrics, casts, redundancy)
 │           ├── parser/
 │           │   ├── forgeql.pest  # PEG grammar
 │           │   └── mod.rs        # Parser functions → IR
@@ -247,16 +281,27 @@ ForgeQL/
 │           ├── workspace/
 │           │   ├── mod.rs        # Workspace root discovery, file enumeration
 │           │   └── file_io.rs    # Atomic write, .forgeql-ignore support
-│           ├── engine.rs         # Command dispatch + session management
+│           ├── engine.rs         # Command dispatch + session management + SHOW guardrails
+│           ├── compact.rs        # Compact CSV output renderer (MCP mode)
 │           ├── filter.rs         # apply_clauses(), ClauseTarget trait
 │           ├── ir.rs             # ForgeQLIR, Clauses, Predicate, ChangeTarget
 │           ├── result.rs         # ForgeQLResult, SymbolMatch, ShowResult
 │           ├── config.rs         # .forgeql.yaml deserialization
 │           ├── context.rs        # RequestContext + Permission
 │           └── error.rs          # ForgeError (thiserror)
-└── doc/
-    ├── syntax.md                 # Command and clause reference
-    └── architecture.md           # This file
+│           └── query_logger.rs   # FQL statement logging (--log-queries)
+├── doc/
+│   ├── syntax.md                 # Command and clause reference
+│   ├── architecture.md           # This file
+│   ├── FORGEQL_AGENT_GUIDE.md    # Quick reference for AI agents
+│   └── agents/                   # Distributable agent configs
+│       ├── forgeql.agent.md      # VS Code Copilot Custom Agent (tools locked)
+│       ├── AGENTS.md             # Platform-agnostic workspace instructions
+│       ├── README.md             # Installation guide
+│       ├── references/           # On-demand reference docs for agents
+│       ├── claude-code/          # Claude Code adapter
+│       └── cursor/               # Cursor adapter
+└── tests/                        # Integration tests + fixtures
 ```
 
 ---

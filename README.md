@@ -16,6 +16,50 @@ It works in two modes:
 
 ---
 
+## Real-World Example: Finding Bugs in 60 Seconds
+
+ForgeQL indexes code quality metrics at parse time — magic numbers, complex conditions, missing defaults, dead code, naming violations, and more. Here's what a single session looks like on a real embedded C++ project (14,797 symbols indexed):
+
+```sql
+USE pisco-code-andre.main
+
+-- 1. Where are the likely bugs hiding?
+FIND symbols WHERE has_assignment_in_condition = 'true'
+-- Result: 3 locations where = appears inside if() instead of ==
+
+-- 2. Which conditions are too complex to reason about?
+FIND symbols WHERE condition_tests >= 4 ORDER BY condition_tests DESC
+-- Result: 5 functions with 4+ boolean sub-expressions in a single condition
+
+-- 3. Any switch statements missing a default handler?
+FIND symbols WHERE node_kind = 'switch_statement' WHERE has_default = 'false'
+-- Result: 2 switches that silently fall through on unexpected values
+
+-- 4. Mixed && / || without grouping — operator precedence bugs?
+FIND symbols WHERE mixed_logic = 'true'
+-- Result: 4 conditions mixing AND/OR without parentheses
+
+-- 5. Dead code — functions nobody calls?
+FIND symbols WHERE node_kind = 'function_definition' WHERE usages = 0
+  EXCLUDE 'tests/**' EXCLUDE 'vendor/**' IN 'src/**' ORDER BY path ASC
+-- Result: 11 functions that can be safely removed
+
+-- 6. Risk heat-map — which functions have the most dependents?
+FIND symbols WHERE node_kind = 'function_definition'
+  ORDER BY usages DESC LIMIT 5
+-- Result: top 5 hotspots — a bug here breaks everything
+
+-- 7. Zoom into one of those hotspots — read just the signature
+FIND symbols WHERE name = 'PiscoCode::process'
+-- Result: path=src/PiscoCode.cpp, line=87
+SHOW LINES 87-103 OF 'src/PiscoCode.cpp'
+-- Exactly 17 lines, exactly the function, zero waste
+```
+
+**Total cost: 7 queries, ~800 tokens of output.** A grep-based approach would need to read every file, parse the results manually, and still miss the semantic issues (mixed logic, assignment-in-condition, missing defaults). ForgeQL finds them because it operates on syntax trees, not text.
+
+---
+
 ## Two Core Goals
 
 ### 1. Small Command Surface
@@ -286,8 +330,30 @@ Early results suggest it can. If you find the idea useful, I'd love help from ex
 
 ## Further Reading
 
-- [doc/syntax.md](doc/syntax.md) — complete command and clause reference with more examples.
-- [doc/architecture.md](doc/architecture.md) — internal design: index model, clause pipeline, MCP layer.
+- [doc/syntax.md](doc/syntax.md) — complete command and clause reference.
+- [doc/architecture.md](doc/architecture.md) — internal design: index model, clause pipeline, MCP layer, agent guardrails.
+- [doc/FORGEQL_AGENT_GUIDE.md](doc/FORGEQL_AGENT_GUIDE.md) — quick reference for AI agents (setup, commands, best practices).
+- [doc/agents/](doc/agents/README.md) — AI agent integration: Custom Agent files for VS Code Copilot, Claude Code, and Cursor.
+
+---
+
+## AI Agent Integration
+
+ForgeQL ships with distributable agent configuration files that teach AI agents how to use it correctly — preventing drift to local filesystem tools (grep/find/cat) and enforcing precision query patterns.
+
+**Three layers of defense against agent drift:**
+
+1. **Tool restriction** — the VS Code Custom Agent locks the agent to `forgeql/*` tools only. It literally cannot call grep, find, or cat.
+2. **Behavioral instructions** — every platform adapter includes the two-step workflow: `FIND symbols WHERE` → `SHOW LINES n-m` — no brute-force reading.
+3. **MCP server guardrails** — SHOW commands returning more than 40 lines without an explicit `LIMIT` clause are **blocked**. The agent gets zero lines and a guidance message redirecting it to precision queries. This teaches the right pattern on first contact, even without any agent files installed.
+
+| Platform | File | Tool Lock |
+|---|---|---|
+| **VS Code Copilot** | `forgeql.agent.md` | Yes (`tools: [forgeql/*]`) |
+| **Claude Code** | `CLAUDE.md` | No (behavioral + MCP guardrails) |
+| **Cursor** | `.cursorrules` | No (behavioral + MCP guardrails) |
+
+See [doc/agents/README.md](doc/agents/README.md) for installation instructions.
 
 ---
 
