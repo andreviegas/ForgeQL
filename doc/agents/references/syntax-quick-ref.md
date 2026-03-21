@@ -123,3 +123,14 @@ DEPTH N
 ## Common node_kind Values (C/C++)
 
 `function_definition`, `declaration`, `struct_specifier`, `class_specifier`, `enum_specifier`, `preproc_def`, `preproc_include`, `field_declaration`, `parameter_declaration`, `comment`
+
+---
+
+## Known Limitations
+
+| Issue | Workaround |
+|---|---|
+| Template functions show empty callees | Use `FIND usages OF 'name'` instead |
+| Numeric comparisons skip hex/symbolic values | Use `WHERE value LIKE 'pattern'` instead |
+| Escape sequences treated literally | Write actual newlines in string content |
+| Angle brackets not preserved in includes | Use `WHERE name LIKE 'std%'` patterns |

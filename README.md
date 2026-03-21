@@ -21,7 +21,7 @@ It works in two modes:
 ForgeQL indexes code quality metrics at parse time — magic numbers, complex conditions, missing defaults, dead code, naming violations, and more. Here's what a single session looks like on a real embedded C++ project (14,797 symbols indexed):
 
 ```sql
-USE pisco-code-andre.main
+USE pisco-code.main
 
 -- 1. Where are the likely bugs hiding?
 FIND symbols WHERE has_assignment_in_condition = 'true'
@@ -332,7 +332,6 @@ Early results suggest it can. If you find the idea useful, I'd love help from ex
 
 - [doc/syntax.md](doc/syntax.md) — complete command and clause reference.
 - [doc/architecture.md](doc/architecture.md) — internal design: index model, clause pipeline, MCP layer, agent guardrails.
-- [doc/FORGEQL_AGENT_GUIDE.md](doc/FORGEQL_AGENT_GUIDE.md) — quick reference for AI agents (setup, commands, best practices).
 - [doc/agents/](doc/agents/README.md) — AI agent integration: Custom Agent files for VS Code Copilot, Claude Code, and Cursor.
 
 ---

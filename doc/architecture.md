@@ -293,7 +293,6 @@ ForgeQL/
 ├── doc/
 │   ├── syntax.md                 # Command and clause reference
 │   ├── architecture.md           # This file
-│   ├── FORGEQL_AGENT_GUIDE.md    # Quick reference for AI agents
 │   └── agents/                   # Distributable agent configs
 │       ├── forgeql.agent.md      # VS Code Copilot Custom Agent (tools locked)
 │       ├── AGENTS.md             # Platform-agnostic workspace instructions
