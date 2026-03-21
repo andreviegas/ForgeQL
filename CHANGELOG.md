@@ -15,6 +15,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Zephyr RTOS.  Converted to iterative traversal using `TreeCursor`
   navigation (`goto_first_child` / `goto_next_sibling` / `goto_parent`).
 
+- **Condition skeleton letter overflow** — `skeleton_walk` had only 26 slots
+  (a-z) for unique leaf terms; after exhaustion every new term collapsed to
+  `z`, producing unreadable noise.  Extended to 52 slots (a-z, A-Z) with `$`
+  for any remaining overflow, plus truncation at 120 chars with `…` suffix.
+
+- **Condition skeleton dropped operators** — the catch-all branch in
+  `skeleton_walk` only visited named AST children, silently skipping unnamed
+  operator tokens (`|`, `&`, `=`, `?`, `:`, etc.).  Conditions like
+  `a | b & c` rendered as `abc` with no operators.  Now visits all children
+  so bitwise, ternary, and assignment operators are preserved.
+
 ### Changed
 
 - **Parallel file indexing** — `SymbolTable::build()` now uses `rayon` to

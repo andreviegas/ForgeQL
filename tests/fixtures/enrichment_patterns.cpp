@@ -106,6 +106,49 @@ void controlFlowPatterns(int a, int b, int c, int d) {
     } while (a < 100);
 }
 
+/* Skeleton regression tests — operators must appear between leaf letters,
+   overflow beyond 26 unique terms must use uppercase labels, and very
+   long skeletons must be truncated.                                     */
+
+void skeletonOperatorsPreserved(int a, int b, int c, int d, int e) {
+    // Condition: a > b && c < d || e != a
+    // Expected skeleton:  a>b&&c<d||e!=a  (no adjacent letters)
+    if (a > b && c < d || e != a) {
+        (void)a;
+    }
+}
+
+void skeletonBitwiseOperators(int flags, int mask1, int mask2) {
+    // Bitwise operators in switch condition: flags & mask1 | mask2
+    // Expected skeleton:  a&b|c   (operators must appear between letters)
+    switch (flags & mask1 | mask2) {
+        case 0: break;
+        default: break;
+    }
+}
+
+void skeletonConditionalExpr(int a, int b, int c) {
+    // Ternary expression in condition:  (a > b) ? c : a
+    // The ? and : are operator tokens that should not be silently dropped.
+    if ((a > b) ? c : a) {
+        (void)a;
+    }
+}
+
+void skeletonManyUniqueTerms(int v01,int v02,int v03,int v04,int v05,
+                             int v06,int v07,int v08,int v09,int v10,
+                             int v11,int v12,int v13,int v14,int v15,
+                             int v16,int v17,int v18,int v19,int v20,
+                             int v21,int v22,int v23,int v24,int v25,
+                             int v26,int v27,int v28) {
+    // 28 unique identifiers — exceeds a-z, must use A/B for overflow
+    if (v01==v02 && v03==v04 && v05==v06 && v07==v08 && v09==v10 &&
+        v11==v12 && v13==v14 && v15==v16 && v17==v18 && v19==v20 &&
+        v21==v22 && v23==v24 && v25==v26 && v27==v28) {
+        (void)v01;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* OperatorEnricher patterns                                            */
 /* ------------------------------------------------------------------ */

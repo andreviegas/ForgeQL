@@ -211,26 +211,56 @@ fn max_paren_depth(text: &str) -> usize {
     max
 }
 
+/// Allocate the next label for a leaf term in a condition skeleton.
+///
+/// `a`–`z` (26 unique terms), then `A`–`Z` (52 total).  If all 52
+/// slots are exhausted the label `$` is returned for every overflow term.
+fn next_label(next_letter: &mut u8) -> String {
+    if *next_letter <= b'z' {
+        let l = *next_letter as char;
+        *next_letter += 1;
+        return l.to_string();
+    }
+    // Second tier: A-Z (next_letter tracks 123..148 → A..Z)
+    let upper_base = b'z' + 1; // 123
+    if *next_letter < upper_base + 26 {
+        let l = (b'A' + (*next_letter - upper_base)) as char;
+        *next_letter += 1;
+        return l.to_string();
+    }
+    "$".to_string()
+}
+
+/// Maximum skeleton length (in chars).  Conditions longer than this are
+/// truncated with a `…` suffix to keep output readable.
+const MAX_SKELETON_LEN: usize = 120;
+
 /// Build a structural skeleton of a condition subtree.
 ///
 /// Replaces each leaf expression (identifier, member access, call, literal)
-/// with a sequential letter (a, b, c, ...), keeping operators and parens.
-/// Repeated sub-expressions get the same letter.
+/// with a sequential letter (a, b, c, ..., z), keeping operators and parens.
+/// Repeated sub-expressions get the same letter.  When more than 26 unique
+/// terms exist, overflow terms are mapped to `$`.
 fn skeleton_condition(node: tree_sitter::Node<'_>, source: &[u8]) -> String {
-    let mut mapping: HashMap<String, char> = HashMap::new();
+    let mut mapping: HashMap<String, String> = HashMap::new();
     let mut next_letter = b'a';
     let mut result = String::new();
 
     skeleton_walk(node, source, &mut mapping, &mut next_letter, &mut result);
 
-    result
+    if result.len() > MAX_SKELETON_LEN {
+        let truncated: String = result.chars().take(MAX_SKELETON_LEN).collect();
+        format!("{truncated}…")
+    } else {
+        result
+    }
 }
 
 #[allow(clippy::too_many_lines)]
 fn skeleton_walk(
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    mapping: &mut HashMap<String, char>,
+    mapping: &mut HashMap<String, String>,
     next_letter: &mut u8,
     result: &mut String,
 ) {
@@ -251,56 +281,44 @@ fn skeleton_walk(
             | "nullptr"
     ) {
         let text = node_text(source, node);
-        let letter = *mapping.entry(text).or_insert_with(|| {
-            let l = *next_letter as char;
-            if *next_letter < b'z' {
-                *next_letter += 1;
-            }
-            l
-        });
-        result.push(letter);
+        let label = mapping
+            .entry(text)
+            .or_insert_with(|| next_label(next_letter))
+            .clone();
+        result.push_str(&label);
         return;
     }
 
     // Call expressions: map the whole call as one letter
     if kind == "call_expression" {
         let text = node_text(source, node);
-        let letter = *mapping.entry(text).or_insert_with(|| {
-            let l = *next_letter as char;
-            if *next_letter < b'z' {
-                *next_letter += 1;
-            }
-            l
-        });
-        result.push(letter);
+        let label = mapping
+            .entry(text)
+            .or_insert_with(|| next_label(next_letter))
+            .clone();
+        result.push_str(&label);
         return;
     }
 
     // Field expressions (member access): map as one unit
     if kind == "field_expression" {
         let text = node_text(source, node);
-        let letter = *mapping.entry(text).or_insert_with(|| {
-            let l = *next_letter as char;
-            if *next_letter < b'z' {
-                *next_letter += 1;
-            }
-            l
-        });
-        result.push(letter);
+        let label = mapping
+            .entry(text)
+            .or_insert_with(|| next_label(next_letter))
+            .clone();
+        result.push_str(&label);
         return;
     }
 
     // Subscript expressions: map as one unit
     if kind == "subscript_expression" {
         let text = node_text(source, node);
-        let letter = *mapping.entry(text).or_insert_with(|| {
-            let l = *next_letter as char;
-            if *next_letter < b'z' {
-                *next_letter += 1;
-            }
-            l
-        });
-        result.push(letter);
+        let label = mapping
+            .entry(text)
+            .or_insert_with(|| next_label(next_letter))
+            .clone();
+        result.push_str(&label);
         return;
     }
 
@@ -348,9 +366,11 @@ fn skeleton_walk(
         return;
     }
 
-    // Catch-all: just recurse into named children
-    for i in 0..node.named_child_count() {
-        if let Some(child) = node.named_child(i) {
+    // Catch-all: recurse into ALL children (named + unnamed) so that
+    // operator tokens between operands are preserved.  The unnamed-node
+    // handler above only emits known operators and silently drops the rest.
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
             skeleton_walk(child, source, mapping, next_letter, result);
         }
     }

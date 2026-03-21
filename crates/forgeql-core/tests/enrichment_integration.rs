@@ -807,6 +807,118 @@ fn control_flow_condition_text_has_skeleton() {
     }
 }
 
+// -----------------------------------------------------------------------
+// §4b — Skeleton regression tests (operator preservation, overflow, truncation)
+// -----------------------------------------------------------------------
+
+#[test]
+fn skeleton_no_adjacent_letters() {
+    // Regression: operators between leaf terms must never be dropped.
+    // Condition `a > b && c < d || e != a` → skeleton with > && < || != operators.
+    let (mut e, sid, _d) = engine_enrichment_only();
+
+    // The skeleton for `a > b && c < d || e != a` contains all six operators.
+    // Query for if_statements with mixed_logic that also contain !=.
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' \
+         WHERE condition_text LIKE '%>%&&%<%||%!=%'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected skeleton with > && < || != operators"
+    );
+    let skeleton = field(&qr.results[0], "condition_text");
+    // Must NOT contain two adjacent letter-like chars without operator between them
+    let has_adjacent = skeleton
+        .as_bytes()
+        .windows(2)
+        .any(|w| (w[0] as char).is_ascii_alphabetic() && (w[1] as char).is_ascii_alphabetic());
+    assert!(
+        !has_adjacent,
+        "skeleton must not have adjacent letters without operator: {skeleton}"
+    );
+}
+
+#[test]
+fn skeleton_bitwise_operators_preserved() {
+    // Regression: bitwise & and | must appear in skeleton.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'switch_statement' \
+         WHERE condition_text LIKE '%&%'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected switch skeleton with & operator"
+    );
+    let skeleton = field(&qr.results[0], "condition_text");
+    assert!(
+        skeleton.contains('&') && skeleton.contains('|'),
+        "bitwise skeleton should have & and |: {skeleton}"
+    );
+}
+
+#[test]
+fn skeleton_overflow_uses_uppercase() {
+    // With 28 unique terms, letters 27-28 must use uppercase A/B.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // The skeletonManyUniqueTerms function has an if_statement with 14 ==
+    // comparisons chained by &&.  The skeleton has 28 unique leaf terms.
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE condition_tests > 20",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected if_statement with >20 condition tests (28-term condition)"
+    );
+    let skeleton = field(&qr.results[0], "condition_text");
+    // Must contain uppercase letters (overflow beyond a-z)
+    let has_upper = skeleton.chars().any(|c| c.is_ascii_uppercase());
+    assert!(
+        has_upper,
+        "skeleton with 28 unique terms must use uppercase overflow labels: {skeleton}"
+    );
+    // Must NOT contain '$' (only 28 terms, not 53+)
+    assert!(
+        !skeleton.contains('$'),
+        "28 terms should fit in a-z + A-B, no $ needed: {skeleton}"
+    );
+}
+
+#[test]
+fn skeleton_all_letters_have_operators() {
+    // Global regression: for EVERY condition skeleton with >1 test,
+    // there must be no adjacent leaf-letters without an operator.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE condition_tests > 1");
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty());
+
+    for m in &qr.results {
+        let skeleton = field(m, "condition_text");
+        // Check for two adjacent lowercase/uppercase letters
+        let has_adjacent = skeleton.as_bytes().windows(2).any(|w| {
+            let a = w[0] as char;
+            let b = w[1] as char;
+            a.is_ascii_alphabetic() && b.is_ascii_alphabetic() && a != '$' && b != '$'
+        });
+        assert!(
+            !has_adjacent,
+            "adjacent letters without operator in skeleton: {skeleton} (node_kind: {:?})",
+            m.node_kind
+        );
+    }
+}
+
 #[test]
 fn control_flow_branch_count_on_function() {
     let (mut e, sid, _d) = engine_enrichment_only();
