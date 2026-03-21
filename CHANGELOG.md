@@ -5,7 +5,7 @@ All notable changes to ForgeQL will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.26.0] - 2026-03-21
 
 ### Fixed
 
@@ -87,6 +87,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `pointer_expression` (`*ptr`) as a distinct leaf instead of dropping the
   dereference operator.  This means `ptr != NULL && *ptr != 0` correctly
   produces `a!=b&&c!=d` (two distinct terms) instead of `a!=b&&a!=b`.
+
+- **Skeleton arithmetic operators preserved** — added `+`, `-`, `*`, `/`,
+  `%`, `<<`, `>>` to the operator set kept in condition skeletons.  Without
+  this, `x - 1` and `x + 1` both collapsed to `ab`, causing false
+  `dup_logic` positives on expressions like `(match-1) == ticks || (match+1) == ticks`.
+
+- **Skeleton opaque catch-all for unknown AST nodes** — `skeleton_walk` now
+  maps any unrecognised named node as a single opaque leaf instead of
+  recursing into its children.  This prevents the C++ `operator` keyword
+  from being silently dropped in member-access expressions like
+  `bt_hf->operator`, which was causing a `dup_logic` false positive on
+  `bt_hf && bt_hf->operator`.  Transparent wrapper nodes (`condition_clause`,
+  `cast_expression`, `comma_expression`) are still recursed through.
 
 ---
 

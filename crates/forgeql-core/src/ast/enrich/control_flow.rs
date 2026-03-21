@@ -353,7 +353,7 @@ fn skeleton_walk(
         let text = node_text(source, node);
         match text.as_str() {
             "(" | ")" | "!" | "&&" | "||" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "&" | "|"
-            | "^" | "~" => {
+            | "^" | "~" | "+" | "-" | "*" | "/" | "%" | "<<" | ">>" => {
                 result.push_str(&text);
             }
             _ => {}
@@ -392,14 +392,32 @@ fn skeleton_walk(
         return;
     }
 
-    // Catch-all: recurse into ALL children (named + unnamed) so that
-    // operator tokens between operands are preserved.  The unnamed-node
-    // handler above only emits known operators and silently drops the rest.
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
-            skeleton_walk(child, source, mapping, next_letter, result);
+    // Wrapper / transparent nodes that should be recursed through
+    if matches!(
+        kind,
+        "condition_clause" | "cast_expression" | "comma_expression"
+    ) {
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                skeleton_walk(child, source, mapping, next_letter, result);
+            }
         }
+        return;
     }
+
+    // Catch-all for named nodes: map the whole text as one opaque leaf.
+    // This prevents unknown expression types (e.g. C++ `operator` keyword
+    // in member access) from being recursed into and losing structure.
+    if node.is_named() {
+        let text = node_text(source, node);
+        let label = mapping
+            .entry(text)
+            .or_insert_with(|| next_label(next_letter))
+            .clone();
+        result.push_str(&label);
+    }
+
+    // Unnamed nodes not caught by the operator handler above: drop silently.
 }
 
 // -----------------------------------------------------------------------
