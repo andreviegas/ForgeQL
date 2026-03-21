@@ -7,6 +7,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Stack overflow on large codebases** — `collect_nodes` (the AST indexer
+  invoked by `USE source.branch`) used recursive depth-first traversal,
+  causing a stack overflow on deeply nested files in large projects like
+  Zephyr RTOS.  Converted to iterative traversal using `TreeCursor`
+  navigation (`goto_first_child` / `goto_next_sibling` / `goto_parent`).
+
+### Changed
+
+- **Parallel file indexing** — `SymbolTable::build()` now uses `rayon` to
+  parse and enrich files across all CPU cores.  Each thread creates its own
+  `Parser` and enricher set, producing a per-file `SymbolTable` that is
+  merged sequentially.  On a project with 2M+ symbols (e.g. Zephyr RTOS),
+  indexing time scales inversely with core count.
+
 ---
 
 ## [0.25.0] - 2026-03-21

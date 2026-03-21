@@ -26,6 +26,9 @@ tree-sitter-cpp = { workspace = true }
 pest        = { workspace = true }
 pest_derive = { workspace = true }
 
+# parallelism
+rayon       = { workspace = true }
+
 # file ops
 tempfile    = { workspace = true }
 ignore      = { workspace = true }

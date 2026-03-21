@@ -10,6 +10,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
@@ -89,39 +90,64 @@ pub struct SymbolTable {
 impl SymbolTable {
     /// Build a `SymbolTable` by parsing all C/C++ files in the workspace.
     ///
-    /// This is intentionally synchronous — parsing is CPU-bound.
+    /// Files are parsed and enriched **in parallel** using rayon.  Each thread
+    /// creates its own `Parser` and enricher set, producing a per-file table.
+    /// Results are merged sequentially, then post-pass enrichment runs.
     ///
     /// # Errors
     /// Returns `Err` if the tree-sitter language cannot be set.
     pub fn build(workspace: &Workspace) -> Result<Self> {
-        let mut table = Self::default();
-        let mut parser = tree_sitter::Parser::new();
-        let enrichers = default_enrichers();
-
-        parser
-            .set_language(&tree_sitter_cpp::LANGUAGE.into())
-            .map_err(|e| ForgeError::TreeSitterLanguage(e.to_string()))?;
-
         let cpp_extensions = ["cpp", "c", "cc", "cxx", "h", "hpp", "hxx", "ino"];
 
-        for path in workspace.files() {
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if !cpp_extensions.contains(&ext) {
-                continue;
-            }
+        // 1 — collect file paths up front so rayon can split the work.
+        let paths: Vec<PathBuf> = workspace
+            .files()
+            .filter(|p| {
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|ext| cpp_extensions.contains(&ext))
+            })
+            .collect();
 
-            match index_file(&mut parser, &path, &mut table, &enrichers) {
-                Ok(count) => {
-                    debug!(
-                        path = %workspace.relative(&path).display(),
-                        rows = count,
-                        "indexed"
-                    );
+        debug!(files = paths.len(), "indexing files in parallel");
+
+        // 2 — parse + enrich each file in parallel.
+        //     Each thread owns its own Parser and enricher set.
+        let per_file: Vec<Self> = paths
+            .par_iter()
+            .filter_map(|path| {
+                let mut parser = tree_sitter::Parser::new();
+                if parser
+                    .set_language(&tree_sitter_cpp::LANGUAGE.into())
+                    .is_err()
+                {
+                    warn!(path = %path.display(), "failed to set tree-sitter language");
+                    return None;
                 }
-                Err(err) => {
-                    warn!(path = %path.display(), error = %err, "skipping file");
+                let enrichers = default_enrichers();
+                let mut file_table = Self::default();
+
+                match index_file(&mut parser, path, &mut file_table, &enrichers) {
+                    Ok(count) => {
+                        debug!(
+                            path = %workspace.relative(path).display(),
+                            rows = count,
+                            "indexed"
+                        );
+                    }
+                    Err(err) => {
+                        warn!(path = %path.display(), error = %err, "skipping file");
+                        return None;
+                    }
                 }
-            }
+                Some(file_table)
+            })
+            .collect();
+
+        // 3 — merge per-file tables into one.
+        let mut table = Self::default();
+        for file_table in per_file {
+            table.merge(file_table);
         }
 
         debug!(
@@ -132,12 +158,39 @@ impl SymbolTable {
             "index built"
         );
 
-        // Run post_pass for each enricher (aggregation, cross-row metrics).
+        // 4 — run post_pass for each enricher (aggregation, cross-row metrics).
+        let enrichers = default_enrichers();
         for enricher in &enrichers {
             enricher.post_pass(&mut table);
         }
 
         Ok(table)
+    }
+
+    /// Merge another `SymbolTable` into this one.
+    ///
+    /// Row indices in `name_index` and `kind_index` are offset by the
+    /// current row count so they remain correct after the merge.
+    fn merge(&mut self, other: Self) {
+        let offset = self.rows.len();
+
+        // Merge rows and fix secondary indexes.
+        for (i, row) in other.rows.into_iter().enumerate() {
+            self.name_index
+                .entry(row.name.clone())
+                .or_default()
+                .push(offset + i);
+            self.kind_index
+                .entry(row.node_kind.clone())
+                .or_default()
+                .push(offset + i);
+            self.rows.push(row);
+        }
+
+        // Merge usage sites.
+        for (name, sites) in other.usages {
+            self.usages.entry(name).or_default().extend(sites);
+        }
     }
 
     /// Append a row and update the secondary indexes.
@@ -305,6 +358,9 @@ pub fn index_file(
 /// only the primary (#if) branch is indexed.  Without this, tree-sitter's
 /// full-source parse would create duplicate rows and usage sites for every
 /// symbol that appears in both a `#if` branch and its `#else` counterpart.
+///
+/// Uses iterative depth-first traversal via `TreeCursor` navigation to
+/// avoid stack overflow on large codebases (e.g. Zephyr RTOS).
 fn collect_nodes(
     source: &[u8],
     path: &Path,
@@ -314,77 +370,82 @@ fn collect_nodes(
     table: &mut SymbolTable,
     enrichers: &[Box<dyn NodeEnricher>],
 ) {
-    let node = cursor.node();
+    loop {
+        let node = cursor.node();
 
-    // Skip alternate conditional-compilation branches to avoid duplicate rows.
-    if matches!(node.kind(), "preproc_else" | "preproc_elif") {
-        return;
-    }
+        // Skip alternate conditional-compilation branches entirely.
+        let skip = matches!(node.kind(), "preproc_else" | "preproc_elif");
 
-    // Build the enrichment context once for this node.
-    let ctx = EnrichContext {
-        node,
-        source,
-        path,
-        language_name,
-    };
-
-    // Every named node becomes a row.
-    if let Some(name) = extract_name(node, source, language_name) {
-        let mut fields = extract_fields(node, source, language);
-
-        // Run all enrichers on this row.
-        for enricher in enrichers {
-            enricher.enrich_row(&ctx, &name, &mut fields);
-        }
-
-        let row = IndexRow {
-            name,
-            node_kind: node.kind().to_string(),
-            path: path.to_path_buf(),
-            byte_range: node.byte_range(),
-            line: node.start_position().row + 1,
-            fields,
-        };
-        table.push_row(row);
-    }
-
-    // Run extra_rows() for every node (even if extract_name returned None).
-    for enricher in enrichers {
-        for row in enricher.extra_rows(&ctx) {
-            table.push_row(row);
-        }
-    }
-
-    // All identifier tokens become usage sites.
-    if matches!(
-        node.kind(),
-        "identifier" | "field_identifier" | "type_identifier"
-    ) {
-        let name = node_text(source, node);
-        if name.len() > 1 {
-            let line = node.start_position().row + 1;
-            table.add_usage(name, path, node.byte_range(), line);
-        }
-    }
-
-    // Recurse into children.
-    if cursor.goto_first_child() {
-        loop {
-            collect_nodes(
+        if !skip {
+            // Build the enrichment context once for this node.
+            let ctx = EnrichContext {
+                node,
                 source,
                 path,
-                cursor,
-                language,
                 language_name,
-                table,
-                enrichers,
-            );
-            if !cursor.goto_next_sibling() {
+            };
+
+            // Every named node becomes a row.
+            if let Some(name) = extract_name(node, source, language_name) {
+                let mut fields = extract_fields(node, source, language);
+
+                // Run all enrichers on this row.
+                for enricher in enrichers {
+                    enricher.enrich_row(&ctx, &name, &mut fields);
+                }
+
+                let row = IndexRow {
+                    name,
+                    node_kind: node.kind().to_string(),
+                    path: path.to_path_buf(),
+                    byte_range: node.byte_range(),
+                    line: node.start_position().row + 1,
+                    fields,
+                };
+                table.push_row(row);
+            }
+
+            // Run extra_rows() for every node (even if extract_name returned None).
+            for enricher in enrichers {
+                for row in enricher.extra_rows(&ctx) {
+                    table.push_row(row);
+                }
+            }
+
+            // All identifier tokens become usage sites.
+            if matches!(
+                node.kind(),
+                "identifier" | "field_identifier" | "type_identifier"
+            ) {
+                let name = node_text(source, node);
+                if name.len() > 1 {
+                    let line = node.start_position().row + 1;
+                    table.add_usage(name, path, node.byte_range(), line);
+                }
+            }
+
+            // Descend into children.
+            if cursor.goto_first_child() {
+                continue;
+            }
+        }
+        // When `skip` is true we never call goto_first_child(), so the
+        // entire subtree is skipped — matches the old early-return behaviour.
+
+        // Move to next sibling, or walk up until we find one.
+        if cursor.goto_next_sibling() {
+            continue;
+        }
+        let mut found_sibling = false;
+        while cursor.goto_parent() {
+            if cursor.goto_next_sibling() {
+                found_sibling = true;
                 break;
             }
         }
-        let _ = cursor.goto_parent();
+        if !found_sibling {
+            break;
+        }
     }
 }
 
