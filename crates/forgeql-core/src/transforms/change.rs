@@ -106,7 +106,7 @@ fn resolve_file_globs(raw: &[String], workspace: &Workspace) -> Result<(Vec<Stri
             any_glob = true;
             let matched: Vec<String> = workspace
                 .files()
-                .filter(|p| crate::ast::query::glob_matches(p, entry))
+                .filter(|p| crate::ast::query::relative_glob_matches(p, entry, workspace.root()))
                 .map(|p| workspace.relative(&p).display().to_string())
                 .collect();
             if matched.is_empty() {

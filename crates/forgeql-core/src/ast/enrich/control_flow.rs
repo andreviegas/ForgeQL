@@ -7,6 +7,7 @@
 /// - `has_default`: (switch only) `"true"` if a default case exists
 /// - `has_assignment_in_condition`: `"true"` if `=` (not `==`) in condition
 /// - `mixed_logic`: `"true"` if both `&&` and `||` appear
+/// - `dup_logic`: `"true"` if duplicate sub-expression in `&&`/`||` chain
 ///
 /// Post-pass aggregates on `function_definition` rows:
 /// - `max_condition_tests`, `max_paren_depth`, `branch_count`
@@ -63,6 +64,9 @@ impl NodeEnricher for ControlFlowEnricher {
 
             let mixed = skeleton.contains("&&") && skeleton.contains("||");
             drop(fields.insert("mixed_logic".to_string(), mixed.to_string()));
+
+            let dup = detect_dup_logic(&skeleton);
+            drop(fields.insert("dup_logic".to_string(), dup.to_string()));
         }
 
         // Switch: check for default case
@@ -332,6 +336,18 @@ fn skeleton_walk(
         return;
     }
 
+    // Pointer dereference / address-of: map as one unit so that
+    // `*ptr` and `ptr` get distinct letters.
+    if kind == "pointer_expression" {
+        let text = node_text(source, node);
+        let label = mapping
+            .entry(text)
+            .or_insert_with(|| next_label(next_letter))
+            .clone();
+        result.push_str(&label);
+        return;
+    }
+
     // Operators and punctuation: keep as-is
     if !node.is_named() {
         let text = node_text(source, node);
@@ -384,6 +400,100 @@ fn skeleton_walk(
             skeleton_walk(child, source, mapping, next_letter, result);
         }
     }
+}
+
+// -----------------------------------------------------------------------
+// Duplicate logic detection
+// -----------------------------------------------------------------------
+
+/// Detect duplicate sub-expressions in `&&` / `||` chains within a skeleton.
+///
+/// Splits the skeleton on top-level `&&` or `||` operators (respecting
+/// parentheses) and returns `true` if any two operands are identical.
+/// Handles nested chains by recursing into parenthesised sub-expressions.
+fn detect_dup_logic(skeleton: &str) -> bool {
+    // Strip outermost parens that wrap the entire skeleton (common for
+    // condition nodes: the tree-sitter condition is always parenthesised).
+    let s = strip_outer_parens(skeleton);
+    if s.is_empty() {
+        return false;
+    }
+
+    // Try splitting on `||` first (lower precedence), then `&&`.
+    for op in &["||", "&&"] {
+        let parts = split_top_level(s, op);
+        if parts.len() >= 2 {
+            // Check for exact duplicate operands.
+            let mut seen = std::collections::HashSet::new();
+            for part in &parts {
+                let trimmed = strip_outer_parens(part);
+                if !seen.insert(trimmed) {
+                    return true;
+                }
+            }
+            // Recurse into each operand for nested chains.
+            for part in &parts {
+                if detect_dup_logic(part) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+    false
+}
+
+/// Strip matching outermost parentheses from a skeleton fragment.
+fn strip_outer_parens(s: &str) -> &str {
+    let s = s.trim();
+    if !s.starts_with('(') || !s.ends_with(')') {
+        return s;
+    }
+    // Verify the opening `(` matches the closing `)` (not two separate groups).
+    let inner = &s[1..s.len() - 1];
+    let mut depth = 0i32;
+    for ch in inner.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth < 0 {
+                    return s; // parens don't match → don't strip
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth == 0 { inner } else { s }
+}
+
+/// Split a skeleton string on a top-level operator (`&&` or `||`),
+/// respecting parenthesis nesting.
+fn split_top_level<'a>(s: &'a str, op: &str) -> Vec<&'a str> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    let bytes = s.as_bytes();
+    let op_bytes = op.as_bytes();
+    let op_len = op_bytes.len();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ if depth == 0 && i + op_len <= bytes.len() && &bytes[i..i + op_len] == op_bytes => {
+                parts.push(&s[start..i]);
+                start = i + op_len;
+                i = start;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    parts.push(&s[start..]);
+    // Only return splits if we actually found the operator.
+    if parts.len() == 1 { vec![] } else { parts }
 }
 
 /// Check if an assignment operator (`=` but not `==`, `!=`, `<=`, `>=`)

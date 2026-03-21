@@ -9,6 +9,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`IN` / `EXCLUDE` glob matched too broadly** — `IN 'kernel/**'` also
+  matched files under `tests/kernel/` because glob patterns floated across
+  all path segments.  Now patterns without a leading `**` are anchored at
+  the start of the relative path (worktree root is stripped before matching).
+  Use `**/kernel/**` for the old floating behaviour.
+
 - **Stack overflow on large codebases** — `collect_nodes` (the AST indexer
   invoked by `USE source.branch`) used recursive depth-first traversal,
   causing a stack overflow on deeply nested files in large projects like
@@ -55,6 +61,32 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is present.  On large codebases this avoids cloning millions of rows that
   would be discarded by filters, reducing query time from seconds to
   milliseconds.
+
+- **Early LIMIT short-circuit** — when a `FIND symbols` query has `LIMIT`
+  but no `ORDER BY` or `GROUP BY`, materialization stops as soon as enough
+  rows are collected, avoiding a full scan of millions of candidates.
+
+- **Comment name compaction** — multi-line comment names (e.g. copyright
+  blocks) are now displayed as `len:N` in both the compact CSV and pipe
+  `Display` formats, preventing huge comment text from flooding output.
+  Single-line names longer than 120 chars are truncated with `…`.
+
+- **Enrichment-to-kind inference** — `FIND symbols` queries that filter on
+  enrichment fields (e.g. `WHERE cast_style = 'c_style'`) now automatically
+  infer the target `node_kind`(s) and use the `kind_index` for fast lookup,
+  even without an explicit `node_kind =` predicate.  This turns queries that
+  previously scanned all rows into sub-second lookups.
+
+- **`dup_logic` enrichment field** — control-flow rows (`if_statement`,
+  `while_statement`, `for_statement`, `do_statement`) now include a
+  `dup_logic` field set to `"true"` when the condition contains duplicate
+  sub-expressions in `&&` / `||` chains (e.g. `a & FLAG || a & FLAG`).
+  Catches copy-paste bugs where an operand was duplicated instead of changed.
+
+- **Skeleton `pointer_expression` fix** — `skeleton_walk` now treats
+  `pointer_expression` (`*ptr`) as a distinct leaf instead of dropping the
+  dereference operator.  This means `ptr != NULL && *ptr != 0` correctly
+  produces `a!=b&&c!=d` (two distinct terms) instead of `a!=b&&a!=b`.
 
 ---
 

@@ -17,7 +17,7 @@
 /// fall back to `to_json()`.
 use crate::result::{
     CallDirection, FileEntry, ForgeQLResult, MemberEntry, OutlineEntry, QueryResult, ShowContent,
-    ShowResult, SourceLine,
+    ShowResult, SourceLine, compact_name,
 };
 
 // -----------------------------------------------------------------------
@@ -392,9 +392,11 @@ fn group_usages_by_file(query: &QueryResult) -> Vec<(String, Vec<usize>)> {
 /// `metric_hint` is set on the query, the value comes from the row's
 /// enrichment `fields`; otherwise it falls back to `usages_count`.
 #[allow(clippy::type_complexity)]
-fn group_symbols_by_kind(query: &QueryResult) -> Vec<(String, Vec<(&str, String, usize, usize)>)> {
+fn group_symbols_by_kind(
+    query: &QueryResult,
+) -> Vec<(String, Vec<(String, String, usize, usize)>)> {
     let hint = query.metric_hint.as_deref();
-    let mut groups: Vec<(String, Vec<(&str, String, usize, usize)>)> = Vec::new();
+    let mut groups: Vec<(String, Vec<(String, String, usize, usize)>)> = Vec::new();
     for r in &query.results {
         let kind = r.node_kind.as_deref().unwrap_or("");
         let path = r
@@ -412,9 +414,12 @@ fn group_symbols_by_kind(query: &QueryResult) -> Vec<(String, Vec<(&str, String,
             },
         );
         if let Some(g) = groups.iter_mut().find(|(k, _)| k == kind) {
-            g.1.push((&r.name, path, line, metric));
+            g.1.push((compact_name(&r.name).into_owned(), path, line, metric));
         } else {
-            groups.push((kind.to_string(), vec![(&r.name, path, line, metric)]));
+            groups.push((
+                kind.to_string(),
+                vec![(compact_name(&r.name).into_owned(), path, line, metric)],
+            ));
         }
     }
     groups

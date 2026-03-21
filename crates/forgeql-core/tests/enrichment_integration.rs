@@ -11,8 +11,8 @@
 //!   §2  — CommentEnricher    (comment_style, has_doc)
 //!   §3  — NumberEnricher     (num_format, has_separator, num_sign, num_value, num_suffix, is_magic)
 //!   §4  — ControlFlowEnricher (condition_tests, paren_depth, condition_text, has_default,
-//!                              has_assignment_in_condition, mixed_logic, branch_count,
-//!                              max_condition_tests, max_paren_depth)
+//!                              has_assignment_in_condition, mixed_logic, dup_logic,
+//!                              branch_count, max_condition_tests, max_paren_depth)
 //!   §5  — OperatorEnricher   (increment_style, increment_op, compound_op, operand,
 //!                              shift_direction, shift_amount, shift_operand)
 //!   §6  — MetricsEnricher    (lines, param_count, return_count, goto_count, string_count,
@@ -1982,4 +1982,79 @@ fn motor_control_has_doc_on_functions() {
         ns.contains(&"encenderSistema"),
         "encenderSistema should have has_doc=true: {ns:?}"
     );
+}
+
+// =======================================================================
+// §4b — ControlFlowEnricher: dup_logic
+// =======================================================================
+
+#[test]
+fn dup_logic_detected_bitwise() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // a & FLAG1 || a & FLAG1 → dup_logic=true
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE dup_logic = 'true'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        qr.total >= 4,
+        "expected at least 4 if_statements with dup_logic=true, got {}",
+        qr.total
+    );
+}
+
+#[test]
+fn dup_logic_false_for_non_duplicates() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // "a > 0 && b < 10" is NOT a dup, "a > 0 || b > 0" is NOT a dup,
+    // "ptr != nullptr && *ptr != 0" is NOT a dup (pointer_expression leaf).
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE dup_logic = 'true'",
+    );
+    let qr = as_query(&r);
+    let ns: Vec<&str> = names(&qr.results);
+    // None of the dup_logic=true names should be for the "clean" conditions.
+    // The clean conditions in dupLogicPatterns have skeletons:
+    //   a>b&&c<d  /  a>b||c>b  /  a!=b&&c!=d
+    // Make sure those specific skeletons are NOT in the results.
+    for m in &qr.results {
+        let ct = field(m, "condition_text");
+        assert_ne!(
+            ct, "a>b&&c<d",
+            "'a>b&&c<d' should NOT have dup_logic=true: {ns:?}"
+        );
+        assert_ne!(
+            ct, "a>b||c>b",
+            "'a>b||c>b' should NOT have dup_logic=true: {ns:?}"
+        );
+        assert_ne!(
+            ct, "a!=b&&c!=d",
+            "'a!=b&&c!=d' should NOT have dup_logic=true: {ns:?}"
+        );
+    }
+}
+
+#[test]
+fn dup_logic_pointer_expression_not_false_positive() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // The fixture has: if (ptr != nullptr && *ptr != 0)
+    // With the pointer_expression fix, *ptr gets a different letter than ptr,
+    // so this should NOT be flagged as dup_logic.
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE condition_text LIKE '%a!=b&&c!=d%'",
+    );
+    let qr = as_query(&r);
+    for m in &qr.results {
+        let dl = field(m, "dup_logic");
+        assert_eq!(
+            dl, "false",
+            "ptr != nullptr && *ptr != 0 should have dup_logic=false, got {dl}"
+        );
+    }
 }

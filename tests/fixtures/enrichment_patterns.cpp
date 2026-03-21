@@ -275,6 +275,40 @@ void redundancyPatterns(int* ptr1, int* ptr2) {
     }
 }
 
+/* Duplicate logic — repeated sub-expressions within one condition */
+#define FLAG1 0x01
+#define FLAG2 0x02
+void dupLogicPatterns(int a, int b, int x, int *ptr) {
+    // dup_logic=true: bitwise dup (the Bluetooth AOD_1US bug pattern)
+    if (a & FLAG1 || a & FLAG1) {
+        (void)a;
+    }
+    // dup_logic=true: comparison dup
+    if (x > 0 && x > 0) {
+        (void)x;
+    }
+    // dup_logic=true: dup in 3-way chain
+    if (a == 1 || b == 2 || a == 1) {
+        (void)a;
+    }
+    // dup_logic=true: null check dup
+    if (ptr != nullptr && ptr != nullptr) {
+        (void)ptr;
+    }
+    // dup_logic=false: different operands (control case)
+    if (a > 0 && b < 10) {
+        (void)a;
+    }
+    // dup_logic=false: same operator shape but different operands
+    if (a > 0 || b > 0) {
+        (void)b;
+    }
+    // dup_logic=false: ptr vs *ptr are distinct in skeleton
+    if (ptr != nullptr && *ptr != 0) {
+        (void)ptr;
+    }
+}
+
 /* Duplicate conditions — same skeleton in two ifs */
 void duplicateConditions(int a, int b) {
     if (a > 0 && b < 10) {

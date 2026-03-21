@@ -359,6 +359,7 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | `has_default` | `switch_statement` | `"true"` if switch has `default:` |
 | `has_assignment_in_condition` | `if_statement`, `while_statement`, `for_statement` | `"true"` if condition contains `=` (not `==`) |
 | `mixed_logic` | `if_statement`, `while_statement`, `for_statement` | `"true"` if mixes `&&` and `\|\|` without grouping |
+| `dup_logic` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | `"true"` if condition contains duplicate sub-expressions in `&&`/`\|\|` chains |
 | `branch_count` | `function_definition` | Total control-flow branch points |
 
 #### OperatorEnricher
@@ -482,6 +483,9 @@ FIND symbols WHERE goto_count >= 1
 
 -- Duplicated conditions within same function
 FIND symbols WHERE duplicate_condition = 'true'
+
+-- Duplicate logic within a single condition (copy-paste bugs)
+FIND symbols WHERE dup_logic = 'true'
 
 -- Functions with repeated conditional calls (extract-variable opportunity)
 FIND symbols WHERE has_repeated_condition_calls = 'true'

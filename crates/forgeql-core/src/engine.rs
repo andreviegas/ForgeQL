@@ -593,9 +593,14 @@ impl ForgeQLEngine {
 
     /// `FIND symbols WHERE name LIKE 'pattern' ...`
     fn find_symbols(&self, session_id: Option<&str>, clauses: &Clauses) -> Result<ForgeQLResult> {
-        let index = self.require_index(session_id)?;
+        let sid = require_session_id(session_id)?;
+        let session = self.require_session(sid)?;
+        let index = session
+            .index()
+            .ok_or_else(|| anyhow::anyhow!("session index not ready — retry USE"))?;
+        let root = &session.worktree_path;
 
-        let (mut results, remaining) = find_symbols_prefilter(index, clauses);
+        let (mut results, remaining) = find_symbols_prefilter(index, clauses, root);
 
         validate_order_by_field(&remaining, &results)?;
         crate::filter::apply_clauses(&mut results, &remaining);
@@ -622,11 +627,29 @@ impl ForgeQLEngine {
         of: &str,
         clauses: &Clauses,
     ) -> Result<ForgeQLResult> {
-        let index = self.require_index(session_id)?;
+        let sid = require_session_id(session_id)?;
+        let session = self.require_session(sid)?;
+        let index = session
+            .index()
+            .ok_or_else(|| anyhow::anyhow!("session index not ready — retry USE"))?;
+        let root = &session.worktree_path;
 
         let sites = query::find_usages(index, of);
         let mut results: Vec<SymbolMatch> = sites
             .iter()
+            .filter(|site| {
+                if let Some(ref glob) = clauses.in_glob
+                    && !crate::ast::query::relative_glob_matches(&site.path, glob, root)
+                {
+                    return false;
+                }
+                if let Some(ref glob) = clauses.exclude_glob
+                    && crate::ast::query::relative_glob_matches(&site.path, glob, root)
+                {
+                    return false;
+                }
+                true
+            })
             .map(|site| SymbolMatch {
                 name: of.to_string(),
                 node_kind: None,
@@ -638,9 +661,16 @@ impl ForgeQLEngine {
             })
             .collect();
 
-        validate_order_by_field(clauses, &results)?;
+        // Strip IN/EXCLUDE from clauses — already applied above.
+        let remaining = Clauses {
+            in_glob: None,
+            exclude_glob: None,
+            ..clauses.clone()
+        };
 
-        crate::filter::apply_clauses(&mut results, clauses);
+        validate_order_by_field(&remaining, &results)?;
+
+        crate::filter::apply_clauses(&mut results, &remaining);
         let total = results.len();
         if clauses.limit.is_none() {
             results.truncate(DEFAULT_QUERY_LIMIT);
@@ -1151,17 +1181,6 @@ impl ForgeQLEngine {
     // Internal helpers
     // ===================================================================
 
-    /// Resolve `session_id` to a reference to the session's `SymbolTable`.
-    ///
-    /// # Errors
-    /// Returns `Err` if the session is not found or the index is not ready.
-    fn require_index(&self, session_id: Option<&str>) -> Result<&SymbolTable> {
-        let session = self.require_session(require_session_id(session_id)?)?;
-        session
-            .index()
-            .ok_or_else(|| anyhow::anyhow!("session index not ready — retry USE"))
-    }
-
     /// Resolve `session_id` to a `Workspace` + `SymbolTable` pair.
     ///
     /// # Errors
@@ -1298,7 +1317,12 @@ fn detect_metric_hint(clauses: &Clauses) -> Option<String> {
 /// Pre-filter symbol rows using secondary indexes and WHERE predicates
 /// before materializing `SymbolMatch`.  Returns `(results, remaining_clauses)`
 /// where `remaining_clauses` contains only the parts not yet applied.
-fn find_symbols_prefilter(index: &SymbolTable, clauses: &Clauses) -> (Vec<SymbolMatch>, Clauses) {
+#[allow(clippy::too_many_lines)]
+fn find_symbols_prefilter(
+    index: &SymbolTable,
+    clauses: &Clauses,
+    root: &std::path::Path,
+) -> (Vec<SymbolMatch>, Clauses) {
     use crate::filter::{eval_predicate, like_match};
     use crate::ir::{CompareOp, PredicateValue};
 
@@ -1328,10 +1352,27 @@ fn find_symbols_prefilter(index: &SymbolTable, clauses: &Clauses) -> (Vec<Symbol
 
     let is_usages_pred = |p: &crate::ir::Predicate| p.field == "usages";
 
+    // When no explicit `node_kind =` predicate, infer kind(s) from
+    // enrichment fields used in WHERE.  This lets us use the kind_index
+    // instead of a full 2M-row scan.
+    let inferred_kinds: Option<Vec<&str>> = if kind_exact.is_none() {
+        infer_kinds_from_fields(&clauses.where_predicates)
+    } else {
+        None
+    };
+
     // Row source: kind_index for O(1) lookup, or full scan.
     let candidates: Box<dyn Iterator<Item = &crate::ast::index::IndexRow>> =
         if let Some(kind) = kind_exact {
             Box::new(index.rows_by_kind(kind))
+        } else if let Some(ref kinds) = inferred_kinds {
+            Box::new(
+                kinds
+                    .iter()
+                    .flat_map(|k| index.rows_by_kind(k))
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+            )
         } else {
             Box::new(index.rows.iter())
         };
@@ -1356,12 +1397,12 @@ fn find_symbols_prefilter(index: &SymbolTable, clauses: &Clauses) -> (Vec<Symbol
             return false;
         }
         if let Some(ref glob) = clauses.in_glob
-            && !crate::ast::query::glob_matches(&row.path, glob)
+            && !crate::ast::query::relative_glob_matches(&row.path, glob, root)
         {
             return false;
         }
         if let Some(ref glob) = clauses.exclude_glob
-            && crate::ast::query::glob_matches(&row.path, glob)
+            && crate::ast::query::relative_glob_matches(&row.path, glob, root)
         {
             return false;
         }
@@ -1369,9 +1410,25 @@ fn find_symbols_prefilter(index: &SymbolTable, clauses: &Clauses) -> (Vec<Symbol
     });
 
     // Materialize SymbolMatch only for survivors, dedup inline.
+    // When no ORDER BY / GROUP BY / usages-WHERE remains we can stop as soon
+    // as we hit the LIMIT — no point scanning the remaining millions of rows.
+    let has_usages_pred = clauses.where_predicates.iter().any(is_usages_pred);
+    let can_early_exit = !has_usages_pred
+        && clauses.order_by.is_none()
+        && clauses.group_by.is_none()
+        && clauses.offset.is_none();
+    let early_limit = if can_early_exit {
+        clauses.limit.unwrap_or(usize::MAX)
+    } else {
+        usize::MAX
+    };
+
     let mut seen = HashSet::new();
     let mut results: Vec<SymbolMatch> = Vec::new();
     for def in filtered {
+        if results.len() >= early_limit {
+            break;
+        }
         let key = (&def.name, &def.path, &def.node_kind, def.line);
         if !seen.insert(key.to_owned()) {
             continue;
@@ -1463,6 +1520,107 @@ fn validate_order_by_field(
         order.field,
         STATIC_FIELDS.join(", ")
     )
+}
+
+// -----------------------------------------------------------------------
+// Enrichment field → node_kind inference
+// -----------------------------------------------------------------------
+
+/// Map an enrichment field name to the `node_kind`(s) that carry it.
+///
+/// Returns `None` for universal fields (`naming`, `name_length`) or
+/// built-in fields (`name`, `node_kind`, `path`, `line`, `usages`).
+fn field_to_kinds(field: &str) -> Option<&'static [&'static str]> {
+    match field {
+        // metrics.rs — function_definition only
+        "param_count"
+        | "return_count"
+        | "goto_count"
+        | "string_count"
+        | "is_inline"
+        | "branch_count"
+        | "max_condition_tests"
+        | "max_paren_depth" => Some(&["function_definition"]),
+        // redundancy.rs — function_definition only
+        "has_repeated_condition_calls" | "repeated_condition_calls" | "null_check_count" => {
+            Some(&["function_definition"])
+        }
+        // comments.rs
+        "comment_style" => Some(&["comment"]),
+        // numbers.rs
+        "num_format" | "is_magic" | "num_suffix" | "has_separator" | "num_value" | "num_sign" => {
+            Some(&["number_literal"])
+        }
+        // operators.rs
+        "increment_style" | "increment_op" => Some(&["update_expression"]),
+        "compound_op" | "operand" => Some(&["compound_assignment"]),
+        "shift_direction" | "shift_operand" | "shift_amount" => Some(&["shift_expression"]),
+        // casts.rs
+        "cast_style" | "cast_target_type" => Some(&[
+            "cast_expression",
+            "static_cast_expression",
+            "reinterpret_cast_expression",
+            "const_cast_expression",
+            "dynamic_cast_expression",
+        ]),
+        // control_flow.rs
+        "condition_tests"
+        | "paren_depth"
+        | "condition_text"
+        | "has_assignment_in_condition"
+        | "mixed_logic"
+        | "dup_logic"
+        | "duplicate_condition" => Some(&[
+            "if_statement",
+            "while_statement",
+            "for_statement",
+            "switch_statement",
+            "do_statement",
+        ]),
+        "has_default" => Some(&["switch_statement"]),
+        // metrics.rs — multiple definition kinds
+        "lines" | "member_count" | "has_doc" => Some(&[
+            "function_definition",
+            "struct_specifier",
+            "class_specifier",
+            "enum_specifier",
+        ]),
+        // metrics.rs — qualifier flags
+        "is_const" | "is_volatile" | "is_static" => Some(&["declaration", "function_definition"]),
+        // metrics.rs — visibility
+        "visibility" => Some(&["field_declaration"]),
+        // scope.rs — declaration only
+        "scope" | "storage" => Some(&["declaration"]),
+        // Universal / built-in → no shortcut
+        _ => None,
+    }
+}
+
+/// Inspect WHERE predicates for enrichment fields and, when all resolvable
+/// fields agree on the same set of kinds, return that set.
+///
+/// Returns `None` when no enrichment fields are found, or when the
+/// intersection of inferred kinds is empty (contradictory predicates).
+fn infer_kinds_from_fields(predicates: &[crate::ir::Predicate]) -> Option<Vec<&'static str>> {
+    let mut result: Option<Vec<&'static str>> = None;
+    for pred in predicates {
+        let Some(kinds) = field_to_kinds(&pred.field) else {
+            continue;
+        };
+        result = Some(match result {
+            None => kinds.to_vec(),
+            Some(current) => {
+                let intersected: Vec<&str> =
+                    current.into_iter().filter(|k| kinds.contains(k)).collect();
+                if intersected.is_empty() {
+                    // Contradictory (e.g. cast_style + comment_style) — bail.
+                    return None;
+                }
+                intersected
+            }
+        });
+    }
+    result
 }
 
 /// Convert `TransformPlan` suggestions into typed `SuggestionEntry` values.

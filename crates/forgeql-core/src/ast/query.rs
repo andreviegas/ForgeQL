@@ -65,8 +65,8 @@ pub fn find_files(
 ) -> Vec<serde_json::Value> {
     workspace
         .files()
-        .filter(|p| glob_matches(p, glob))
-        .filter(|p| exclude.is_none_or(|ex| !glob_matches(p, ex)))
+        .filter(|p| relative_glob_matches(p, glob, workspace.root()))
+        .filter(|p| exclude.is_none_or(|ex| !relative_glob_matches(p, ex, workspace.root())))
         .map(|p| {
             let size = p.metadata().map(|m| m.len()).unwrap_or(0);
             let ext = p
@@ -171,7 +171,25 @@ pub fn glob_matches(path: &std::path::Path, pattern: &str) -> bool {
     let path_str = path.to_string_lossy();
     let path_segs: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
     let pattern_segs: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
-    (0..=path_segs.len()).any(|start| match_segs(&path_segs[start..], &pattern_segs))
+    // Only float (try every start position) when the pattern begins with `**`.
+    // Otherwise anchor at the start — `kernel/**` must NOT match `tests/kernel/…`.
+    if pattern_segs.first() == Some(&"**") {
+        (0..=path_segs.len()).any(|start| match_segs(&path_segs[start..], &pattern_segs))
+    } else {
+        match_segs(&path_segs, &pattern_segs)
+    }
+}
+
+/// Like [`glob_matches`] but strips `root` from `path` first, so that an
+/// absolute worktree path can be matched against a relative pattern.
+#[must_use]
+pub fn relative_glob_matches(
+    path: &std::path::Path,
+    pattern: &str,
+    root: &std::path::Path,
+) -> bool {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    glob_matches(relative, pattern)
 }
 
 fn match_segs(path: &[&str], pat: &[&str]) -> bool {
@@ -428,11 +446,14 @@ mod tests {
     fn glob_double_star_matches_nested_paths() {
         use std::path::Path;
         assert!(glob_matches(Path::new("tests/unit/foo.cpp"), "tests/**"));
+        // Leading `**` floats — matches `tests/` at any depth.
         assert!(glob_matches(
             Path::new("/data/worktrees/pisco/tests/foo.cpp"),
-            "tests/**"
+            "**/tests/**"
         ));
         assert!(!glob_matches(Path::new("src/foo.cpp"), "tests/**"));
+        // Anchored pattern must NOT match a deeper path.
+        assert!(!glob_matches(Path::new("extra/tests/foo.cpp"), "tests/**"));
     }
 
     #[test]

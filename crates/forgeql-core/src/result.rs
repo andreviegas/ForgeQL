@@ -388,6 +388,23 @@ pub struct FileEditSummary {
 }
 
 // -----------------------------------------------------------------------
+// Display helpers
+// -----------------------------------------------------------------------
+
+/// Compact a symbol name for display.  Multi-line names (e.g. block comments)
+/// are replaced with `len:<bytes>` so they don't flood the output.
+/// Single-line names longer than 120 chars are truncated with `…`.
+pub(crate) fn compact_name(name: &str) -> std::borrow::Cow<'_, str> {
+    if name.contains('\n') {
+        std::borrow::Cow::Owned(format!("len:{}", name.len()))
+    } else if name.len() > 120 {
+        std::borrow::Cow::Owned(format!("{}…", &name[..120]))
+    } else {
+        std::borrow::Cow::Borrowed(name)
+    }
+}
+
+// -----------------------------------------------------------------------
 // Path relativization — strip worktree prefix from all paths
 // -----------------------------------------------------------------------
 
@@ -513,7 +530,7 @@ impl fmt::Display for QueryResult {
             return writeln!(formatter, "No results.");
         }
         for row in &self.results {
-            write!(formatter, "{}", row.name)?;
+            write!(formatter, "{}", compact_name(&row.name))?;
             if let Some(ref kind) = row.node_kind {
                 write!(formatter, " | {kind}")?;
             }
@@ -802,7 +819,7 @@ impl ForgeQLResult {
                 .or_else(|| row.line.map(|l| l.to_string()))
                 .unwrap_or_default();
             serde_json::json!([
-                row.name,
+                compact_name(&row.name),
                 row.node_kind.as_deref().unwrap_or(""),
                 row.path
                     .as_ref()
