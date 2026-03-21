@@ -9,6 +9,51 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.25.0] - 2026-03-21
+
+### Added
+
+- **SHOW output guardrail** — SHOW commands that return source lines (body,
+  lines, context) are now capped at 40 lines when no explicit `LIMIT` is
+  provided.  Exceeding the cap returns **zero lines** plus a guidance hint
+  directing the agent to use `FIND symbols WHERE` → `SHOW LINES n-m` instead
+  of brute-force pagination.  When the agent consciously adds `LIMIT N`, the
+  value is honored.
+
+- **AI agent integration package** (`doc/agents/`) — distributable Custom
+  Agent definitions that lock AI tools to ForgeQL MCP and prevent drift to
+  local grep/find/cat:
+  - `forgeql.agent.md` — VS Code Copilot Custom Agent with `tools: [forgeql/*]`
+  - `AGENTS.md` — platform-agnostic workspace instructions
+  - `claude-code/CLAUDE.md` — Claude Code adapter
+  - `cursor/.cursorrules` — Cursor adapter
+  - `references/query-strategy.md` — decision tree and anti-patterns
+  - `references/recipes.md` — 8 workflow templates
+  - `references/syntax-quick-ref.md` — condensed command/field reference with
+    verified Known Limitations table
+  - `README.md` — installation guide for all platforms
+
+- **Expanded MCP `with_instructions()`** — the instruction text injected into
+  the agent system prompt during the MCP `initialize` handshake now includes
+  three structured sections (Critical Rules, Query Strategy, Efficiency) with
+  inlined default constants (`DEFAULT_QUERY_LIMIT=20`,
+  `DEFAULT_BODY_DEPTH=0`, `DEFAULT_CONTEXT_LINES=5`,
+  `DEFAULT_SHOW_LINE_LIMIT=40`).
+
+### Changed
+
+- **`ShowResult` extended** — `total_lines: Option<usize>` and
+  `hint: Option<String>` fields added.  Compact CSV renderer appends
+  `truncated` and `hint` rows when present.
+
+### Removed
+
+- **`doc/FORGEQL_AGENT_GUIDE.md`** — superseded by the `doc/agents/` package.
+  All unique content (Known Limitations table) migrated to
+  `doc/agents/references/syntax-quick-ref.md`.
+
+---
+
 ## [0.24.0] - 2026-03-20
 
 ### Added
