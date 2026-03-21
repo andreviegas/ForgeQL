@@ -125,9 +125,11 @@ impl Session {
         let table = SymbolTable::build(&workspace)?;
 
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        let cached = CachedIndex::from_table(&table, &commit_hash);
+        let cached = CachedIndex::from_table(table, &commit_hash);
         let cache_path = self.worktree_path.join(".forgeql-index");
         cached.save(&cache_path)?;
+
+        let table = cached.into_table();
 
         debug!(
             session = %self.id,

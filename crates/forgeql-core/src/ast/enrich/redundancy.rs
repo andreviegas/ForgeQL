@@ -68,53 +68,68 @@ impl NodeEnricher for RedundancyEnricher {
     }
 
     fn post_pass(&self, table: &mut SymbolTable) {
-        // Identify function rows and their byte ranges.
-        let func_ranges: Vec<(std::ops::Range<usize>, std::path::PathBuf)> = table
-            .rows
-            .iter()
-            .filter(|r| r.node_kind == "function_definition")
-            .map(|r| (r.byte_range.clone(), r.path.clone()))
-            .collect();
-
-        // For each function, group control-flow rows by condition_text skeleton.
-        // If a skeleton appears more than once in a function, mark those rows.
-        let mut duplicate_indices: Vec<usize> = Vec::new();
-
-        for (func_range, func_path) in &func_ranges {
-            // Collect (row_index, condition_text) for control-flow rows inside this function.
-            let cf_rows: Vec<(usize, String)> = table
-                .rows
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| {
-                    CONTROL_FLOW_KINDS.contains(&r.node_kind.as_str())
-                        && r.path == *func_path
-                        && r.byte_range.start >= func_range.start
-                        && r.byte_range.end <= func_range.end
-                })
-                .filter_map(|(i, r)| {
-                    r.fields
-                        .get("condition_text")
-                        .filter(|t| !t.is_empty())
-                        .map(|t| (i, t.clone()))
-                })
-                .collect();
-
-            // Count occurrences of each skeleton.
-            let mut skeleton_counts: HashMap<&str, Vec<usize>> = HashMap::new();
-            for (idx, text) in &cf_rows {
-                skeleton_counts.entry(text.as_str()).or_default().push(*idx);
-            }
-
-            // Mark rows whose skeleton appears more than once.
-            for indices in skeleton_counts.values() {
-                if indices.len() > 1 {
-                    duplicate_indices.extend(indices);
+        // Phase 1 (immutable): build file → sorted-functions lookup, map
+        // each CF row to its containing function via binary search, then
+        // detect duplicate skeletons within a function.  O(N log F).
+        let duplicate_indices = {
+            let mut funcs_by_file: HashMap<&std::path::Path, Vec<std::ops::Range<usize>>> =
+                HashMap::new();
+            for row in &table.rows {
+                if row.node_kind == "function_definition" {
+                    funcs_by_file
+                        .entry(row.path.as_path())
+                        .or_default()
+                        .push(row.byte_range.clone());
                 }
             }
-        }
+            for funcs in funcs_by_file.values_mut() {
+                funcs.sort_by_key(|range| range.start);
+            }
 
-        // Apply the duplicate_condition flag.
+            // Group CF rows by containing function index.
+            // Key = (file ptr as usize, func_range_start) to identify a function.
+            let mut func_cf_rows: HashMap<(&std::path::Path, usize), Vec<(usize, &str)>> =
+                HashMap::new();
+
+            for (i, row) in table.rows.iter().enumerate() {
+                if !CONTROL_FLOW_KINDS.contains(&row.node_kind.as_str()) {
+                    continue;
+                }
+                let ct = match row.fields.get("condition_text") {
+                    Some(t) if !t.is_empty() => t.as_str(),
+                    _ => continue,
+                };
+                if let Some(funcs) = funcs_by_file.get(row.path.as_path()) {
+                    let pos = funcs.partition_point(|range| range.start <= row.byte_range.start);
+                    if pos > 0 {
+                        let func_range = &funcs[pos - 1];
+                        if row.byte_range.end <= func_range.end {
+                            func_cf_rows
+                                .entry((row.path.as_path(), func_range.start))
+                                .or_default()
+                                .push((i, ct));
+                        }
+                    }
+                }
+            }
+
+            // Find duplicates within each function.
+            let mut dups: Vec<usize> = Vec::new();
+            for cf_rows in func_cf_rows.values() {
+                let mut skeleton_counts: HashMap<&str, Vec<usize>> = HashMap::new();
+                for &(idx, text) in cf_rows {
+                    skeleton_counts.entry(text).or_default().push(idx);
+                }
+                for indices in skeleton_counts.values() {
+                    if indices.len() > 1 {
+                        dups.extend(indices);
+                    }
+                }
+            }
+            dups
+        };
+
+        // Phase 2 (mutable): apply the duplicate_condition flag.
         for idx in duplicate_indices {
             drop(
                 table.rows[idx]

@@ -111,9 +111,9 @@ impl SymbolTable {
 
         debug!(files = paths.len(), "indexing files in parallel");
 
-        // 2 — parse + enrich each file in parallel.
-        //     Each thread owns its own Parser and enricher set.
-        let per_file: Vec<Self> = paths
+        // 2 — parse + enrich each file in parallel, merging via tree
+        //     reduction so merges also happen across multiple cores.
+        let mut table: Self = paths
             .par_iter()
             .filter_map(|path| {
                 let mut parser = tree_sitter::Parser::new();
@@ -142,13 +142,10 @@ impl SymbolTable {
                 }
                 Some(file_table)
             })
-            .collect();
-
-        // 3 — merge per-file tables into one.
-        let mut table = Self::default();
-        for file_table in per_file {
-            table.merge(file_table);
-        }
+            .reduce(Self::default, |mut acc, file_table| {
+                acc.merge(file_table);
+                acc
+            });
 
         debug!(
             rows = table.rows.len(),

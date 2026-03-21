@@ -26,13 +26,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `a | b & c` rendered as `abc` with no operators.  Now visits all children
   so bitwise, ternary, and assignment operators are preserved.
 
+- **Quadratic post-pass enrichment** — `ControlFlowEnricher::post_pass()`
+  and `RedundancyEnricher::post_pass()` scanned all rows for every function
+  definition (O(N×F)), making indexing collapse to a single core for minutes
+  on large codebases.  Replaced with a file-grouped binary-search approach
+  (O(N log F)) that runs in milliseconds.
+
 ### Changed
 
 - **Parallel file indexing** — `SymbolTable::build()` now uses `rayon` to
   parse and enrich files across all CPU cores.  Each thread creates its own
   `Parser` and enricher set, producing a per-file `SymbolTable` that is
-  merged sequentially.  On a project with 2M+ symbols (e.g. Zephyr RTOS),
-  indexing time scales inversely with core count.
+  merged via tree-reduction so merges also run in parallel.
+
+- **Zero-copy cache persistence** — `CachedIndex::from_table()` now takes
+  ownership of the `SymbolTable` instead of cloning all rows and usages,
+  eliminating a full copy of the index (millions of rows) before
+  serialization.
 
 - **Query log `elapsed_ms` column** — every CSV log row now includes the
   wall-clock milliseconds the command took to execute, making performance

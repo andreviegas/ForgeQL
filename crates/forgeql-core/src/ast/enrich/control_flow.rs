@@ -88,48 +88,58 @@ impl NodeEnricher for ControlFlowEnricher {
     }
 
     fn post_pass(&self, table: &mut SymbolTable) {
-        // Collect aggregated metrics per function
-        let mut func_metrics: HashMap<usize, (i64, i64, i64)> = HashMap::new();
-
-        // First, identify all function rows and their byte ranges
-        let func_ranges: Vec<(usize, std::ops::Range<usize>, std::path::PathBuf)> = table
-            .rows
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.node_kind == "function_definition")
-            .map(|(i, r)| (i, r.byte_range.clone(), r.path.clone()))
-            .collect();
-
-        // Then, scan control-flow rows and assign to containing functions
-        for row in &table.rows {
-            if !CONTROL_FLOW_KINDS.contains(&row.node_kind.as_str()) {
-                continue;
-            }
-            for (func_idx, func_range, func_path) in &func_ranges {
-                if row.path == *func_path
-                    && row.byte_range.start >= func_range.start
-                    && row.byte_range.end <= func_range.end
-                {
-                    let entry = func_metrics.entry(*func_idx).or_insert((0, 0, 0));
-                    let tests: i64 = row
-                        .fields
-                        .get("condition_tests")
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0);
-                    let depth: i64 = row
-                        .fields
-                        .get("paren_depth")
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0);
-                    entry.0 = entry.0.max(tests);
-                    entry.1 = entry.1.max(depth);
-                    entry.2 += 1;
-                    break;
+        // Phase 1 (immutable): build file → sorted-functions lookup, then
+        // scan CF rows and map each to its containing function via binary
+        // search.  This is O(N log F) instead of the previous O(N × F).
+        let func_metrics = {
+            let mut funcs_by_file: HashMap<&std::path::Path, Vec<(usize, std::ops::Range<usize>)>> =
+                HashMap::new();
+            for (i, row) in table.rows.iter().enumerate() {
+                if row.node_kind == "function_definition" {
+                    funcs_by_file
+                        .entry(row.path.as_path())
+                        .or_default()
+                        .push((i, row.byte_range.clone()));
                 }
             }
-        }
+            for funcs in funcs_by_file.values_mut() {
+                funcs.sort_by_key(|(_, range)| range.start);
+            }
 
-        // Apply aggregated metrics to function rows
+            let mut metrics: HashMap<usize, (i64, i64, i64)> = HashMap::new();
+            for row in &table.rows {
+                if !CONTROL_FLOW_KINDS.contains(&row.node_kind.as_str()) {
+                    continue;
+                }
+                if let Some(funcs) = funcs_by_file.get(row.path.as_path()) {
+                    // Binary search: find the last function whose start ≤ row start.
+                    let pos =
+                        funcs.partition_point(|(_, range)| range.start <= row.byte_range.start);
+                    if pos > 0 {
+                        let (func_idx, ref func_range) = funcs[pos - 1];
+                        if row.byte_range.end <= func_range.end {
+                            let entry = metrics.entry(func_idx).or_insert((0, 0, 0));
+                            let tests: i64 = row
+                                .fields
+                                .get("condition_tests")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0);
+                            let depth: i64 = row
+                                .fields
+                                .get("paren_depth")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0);
+                            entry.0 = entry.0.max(tests);
+                            entry.1 = entry.1.max(depth);
+                            entry.2 += 1;
+                        }
+                    }
+                }
+            }
+            metrics
+        };
+
+        // Phase 2 (mutable): apply aggregated metrics to function rows.
         for (func_idx, (max_tests, max_depth, branch_count)) in func_metrics {
             let row = &mut table.rows[func_idx];
             drop(

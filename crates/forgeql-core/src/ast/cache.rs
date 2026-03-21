@@ -46,17 +46,17 @@ pub struct CachedIndex {
 }
 
 impl CachedIndex {
-    /// Create a `CachedIndex` from a built `SymbolTable`.
+    /// Create a `CachedIndex` by taking ownership of a `SymbolTable`.
     ///
-    /// `commit_hash` should be the current HEAD commit hash. Pass an empty
-    /// string in Phase A (before git integration).
+    /// This avoids cloning millions of rows.  Use `into_table()` after
+    /// `save()` to recover the table.
     #[must_use]
-    pub fn from_table(table: &SymbolTable, commit_hash: impl Into<String>) -> Self {
+    pub fn from_table(table: SymbolTable, commit_hash: impl Into<String>) -> Self {
         Self {
             version: CURRENT_VERSION,
             commit_hash: commit_hash.into(),
-            rows: table.rows.clone(),
-            usages: table.usages.clone(),
+            rows: table.rows,
+            usages: table.usages,
             file_hashes: HashMap::new(),
         }
     }
@@ -152,7 +152,7 @@ mod tests {
         let path = dir.path().join(".forgeql-index");
 
         let original = sample_table();
-        let cached = CachedIndex::from_table(&original, "abc123");
+        let cached = CachedIndex::from_table(original, "abc123");
 
         cached.save(&path).expect("save");
         let loaded = CachedIndex::load(&path).expect("load");
@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn into_table_roundtrip() {
         let original = sample_table();
-        let cached = CachedIndex::from_table(&original, "");
+        let cached = CachedIndex::from_table(original, "");
         let recovered = cached.into_table();
 
         assert!(recovered.find_def("foo").is_some());
