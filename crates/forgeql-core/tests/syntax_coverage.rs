@@ -2129,7 +2129,7 @@ fn query_logger_creates_csv_with_header() {
         resumed: false,
         message: Some("ok".to_string()),
     });
-    logger.log("FIND symbols", &result, "some output text");
+    logger.log("FIND symbols", &result, "some output text", 0);
 
     let log_path = logger.log_path();
     assert!(log_path.exists(), "log CSV should be created");
@@ -2157,9 +2157,9 @@ fn query_logger_appends_multiple_rows() {
         message: Some("ok".to_string()),
     });
 
-    logger.log("FIND symbols", &result, "output1");
-    logger.log("FIND files", &result, "output2");
-    logger.log("SHOW body OF 'func'", &result, "output3");
+    logger.log("FIND symbols", &result, "output1", 0);
+    logger.log("FIND files", &result, "output2", 0);
+    logger.log("SHOW body OF 'func'", &result, "output3", 0);
 
     let content = fs::read_to_string(logger.log_path()).unwrap();
     let lines: Vec<&str> = content.lines().collect();
@@ -2195,14 +2195,17 @@ fn query_logger_records_source_lines_for_show() {
     // Execute a SHOW LINES command that returns actual source lines.
     let result = exec(&mut e, &sid, "SHOW LINES 1-5 OF 'motor_control.h'");
     let output = format!("{result}");
-    logger.log("SHOW LINES 1-5 OF 'motor_control.h'", &result, &output);
+    logger.log("SHOW LINES 1-5 OF 'motor_control.h'", &result, &output, 42);
 
     let content = fs::read_to_string(logger.log_path()).unwrap();
     let data_line = content.lines().nth(1).expect("data row");
-    // CSV: "timestamp",source_lines,tokens_sent,tokens_received,"preview"
+    // CSV: "timestamp",elapsed_ms,source_lines,tokens_sent,tokens_received,"preview"
     let fields: Vec<&str> = data_line.split(',').collect();
+    // elapsed_ms should be "42".
+    let elapsed: u64 = fields[1].parse().expect("parse elapsed_ms");
+    assert_eq!(elapsed, 42, "elapsed_ms should be logged");
     // source_lines should be "5" (we asked for 5 lines).
-    let source_lines: usize = fields[1].parse().expect("parse source_lines");
+    let source_lines: usize = fields[2].parse().expect("parse source_lines");
     assert_eq!(source_lines, 5, "SHOW LINES 1-5 should log 5 source_lines");
 }
 
@@ -2216,12 +2219,13 @@ fn query_logger_records_zero_source_lines_for_query() {
     // FIND queries return no source lines.
     let result = exec(&mut e, &sid, "FIND symbols LIMIT 5");
     let output = format!("{result}");
-    logger.log("FIND symbols LIMIT 5", &result, &output);
+    logger.log("FIND symbols LIMIT 5", &result, &output, 0);
 
     let content = fs::read_to_string(logger.log_path()).unwrap();
     let data_line = content.lines().nth(1).expect("data row");
+    // CSV: "timestamp",elapsed_ms,source_lines,...
     let fields: Vec<&str> = data_line.split(',').collect();
-    let source_lines: usize = fields[1].parse().expect("parse source_lines");
+    let source_lines: usize = fields[2].parse().expect("parse source_lines");
     assert_eq!(source_lines, 0, "FIND query should log 0 source_lines");
 }
 

@@ -424,8 +424,10 @@ fn execute_and_print(
     let mut log = logger;
 
     for (source_text, op) in &ops {
+        let t0 = std::time::Instant::now();
         match engine.execute(session.session_id.as_deref(), op) {
             Ok(result) => {
+                let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
                 // Capture session info from USE results.
                 if let ForgeQLResult::SourceOp(ref sop) = result {
                     if let Some(ref sid) = sop.session_id {
@@ -447,6 +449,12 @@ fn execute_and_print(
                             l.set_source(source);
                         }
                     }
+                    // Update logger source name for CREATE SOURCE too.
+                    if let ForgeQLIR::CreateSource { name, .. } = op
+                        && let Some(ref mut l) = log
+                    {
+                        l.set_source(name);
+                    }
                 }
                 // Clear session on DISCONNECT.
                 if matches!(op, ForgeQLIR::Disconnect) {
@@ -458,7 +466,7 @@ fn execute_and_print(
                     CliFormat::Json => result.to_json_pretty(),
                 };
                 if let Some(ref mut l) = log {
-                    l.log(source_text, &result, &output);
+                    l.log(source_text, &result, &output, elapsed_ms);
                 }
                 println!("{output}");
             }

@@ -34,6 +34,11 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   merged sequentially.  On a project with 2M+ symbols (e.g. Zephyr RTOS),
   indexing time scales inversely with core count.
 
+- **Query log `elapsed_ms` column** — every CSV log row now includes the
+  wall-clock milliseconds the command took to execute, making performance
+  analysis on large codebases straightforward.  `CREATE SOURCE` commands are
+  now logged with the correct source name (previously went to `unknown.csv`).
+
 ---
 
 ## [0.25.0] - 2026-03-21

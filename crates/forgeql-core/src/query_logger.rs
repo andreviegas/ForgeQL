@@ -8,7 +8,7 @@
 //! restarts without duplication.
 //!
 //! CSV columns:
-//! `timestamp`, `source_lines`, `tokens_sent`, `tokens_received`, `command_preview`
+//! `timestamp`, `elapsed_ms`, `source_lines`, `tokens_sent`, `tokens_received`, `command_preview`
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -66,7 +66,8 @@ impl QueryLogger {
     /// `fql`           — the raw statement text.
     /// `result`        — the typed result, used to count disclosed source lines.
     /// `result_output` — the serialized output string, used to estimate token usage.
-    pub fn log(&self, fql: &str, result: &ForgeQLResult, result_output: &str) {
+    /// `elapsed_ms`    — wall-clock milliseconds to execute the command.
+    pub fn log(&self, fql: &str, result: &ForgeQLResult, result_output: &str, elapsed_ms: u64) {
         let log_dir = self.data_dir.join("log");
         if std::fs::create_dir_all(&log_dir).is_err() {
             return;
@@ -84,7 +85,7 @@ impl QueryLogger {
         if needs_header {
             let _ = writeln!(
                 file,
-                "timestamp,source_lines,tokens_sent,tokens_received,command_preview"
+                "timestamp,elapsed_ms,source_lines,tokens_sent,tokens_received,command_preview"
             );
         }
 
@@ -106,8 +107,9 @@ impl QueryLogger {
 
         let _ = writeln!(
             file,
-            r#""{}",{},{},{},"{}""#,
+            r#""{}",{},{},{},{},"{}""#,
             iso_timestamp(),
+            elapsed_ms,
             source_lines,
             tokens_sent,
             tokens_received,

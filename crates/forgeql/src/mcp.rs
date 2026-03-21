@@ -50,11 +50,11 @@ impl ForgeQlMcp {
     }
 
     /// Append a log row for a completed FQL statement (no-op when logger is disabled).
-    fn log_query(&self, fql: &str, result: &ForgeQLResult, output: &str) {
+    fn log_query(&self, fql: &str, result: &ForgeQLResult, output: &str, elapsed_ms: u64) {
         if let Ok(mut guard) = self.logger.lock()
             && let Some(ref mut l) = *guard
         {
-            l.log(fql, result, output);
+            l.log(fql, result, output, elapsed_ms);
         }
     }
 
@@ -296,7 +296,9 @@ impl ForgeQlMcp {
         let format = params.format.unwrap_or_default();
         let mut outputs: Vec<String> = Vec::with_capacity(ops.len());
         for (source_text, op) in &ops {
+            let t0 = std::time::Instant::now();
             let result = exec_engine(&self.engine, params.session_id.as_deref(), op)?;
+            let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
             if let ForgeQLIR::UseSource { source, .. } = op {
                 self.set_log_source(source);
             }
@@ -305,7 +307,7 @@ impl ForgeQlMcp {
                 OutputFormat::Json => result.to_json(),
             };
             let output = append_meta(&output);
-            self.log_query(source_text, &result, &output);
+            self.log_query(source_text, &result, &output, elapsed_ms);
             outputs.push(output);
         }
         // Single statement → return its result directly (no wrapping).
@@ -338,10 +340,12 @@ impl ForgeQlMcp {
             branch: params.branch,
             as_branch: params.as_branch,
         };
+        let t0 = std::time::Instant::now();
         let result = exec_engine(&self.engine, None, &op)?;
+        let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.set_log_source(&params.source);
         let output = result.to_json();
-        self.log_query(&fql, &result, &output);
+        self.log_query(&fql, &result, &output, elapsed_ms);
         Ok(json_result(&output))
     }
 
