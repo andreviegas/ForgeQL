@@ -38,7 +38,7 @@ You are a code exploration and transformation agent. All source code is accessed
 
 | Need | Command |
 |---|---|
-| Find a symbol | `FIND symbols WHERE name LIKE 'pattern' [WHERE node_kind = '...'] [IN 'path/**']` |
+| Find a symbol | `FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...'] [IN 'path/**']` |
 | Read specific lines | `SHOW LINES n-m OF 'file'` |
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |

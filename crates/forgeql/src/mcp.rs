@@ -502,7 +502,15 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use forgeql_core::ast::lang::LanguageRegistry;
+    use forgeql_lang_cpp::CppLanguage;
     use tempfile::tempdir;
+
+    fn make_registry() -> Arc<LanguageRegistry> {
+        Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]))
+    }
 
     fn fixtures_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -525,7 +533,7 @@ mod tests {
         .expect("copy .cpp");
 
         let data_dir = dir.path().join("data");
-        let mut engine = ForgeQLEngine::new(data_dir).expect("engine");
+        let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
         let session_id = engine
             .register_local_session(dir.path())
             .expect("register session");
@@ -544,7 +552,7 @@ mod tests {
     #[test]
     fn get_info_returns_tools_capability() {
         let tmp = tempdir().unwrap();
-        let engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+        let engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
         let mcp = ForgeQlMcp::new(engine, None);
         let info = mcp.get_info();
         assert!(info.capabilities.tools.is_some());
@@ -553,7 +561,7 @@ mod tests {
     #[test]
     fn get_info_has_instructions() {
         let tmp = tempdir().unwrap();
-        let engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+        let engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
         let mcp = ForgeQlMcp::new(engine, None);
         let info = mcp.get_info();
         let instructions = info.instructions.expect("should have instructions");

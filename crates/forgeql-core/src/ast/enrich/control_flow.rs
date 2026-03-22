@@ -5,6 +5,8 @@
 /// - `paren_depth`: maximum nesting depth of parentheses
 /// - `condition_text`: structural skeleton with sequential letter substitution
 /// - `has_catch_all`: (switch only) `"true"` if a default/catch-all case exists
+/// - `catch_all_kind`: (switch only, when `has_catch_all` is true) e.g. `"default"`
+/// - `for_style`: (for loops only) `"traditional"` or `"range"`
 /// - `has_assignment_in_condition`: `"true"` if `=` (not `==`) in condition
 /// - `mixed_logic`: `"true"` if both `&&` and `||` appear
 /// - `dup_logic`: `"true"` if duplicate sub-expression in `&&`/`||` chain
@@ -76,6 +78,16 @@ impl NodeEnricher for ControlFlowEnricher {
         if config.switch_raw_kinds.contains(&kind) {
             let has_catch_all = has_default_case(ctx.node);
             drop(fields.insert("has_catch_all".to_string(), has_catch_all.to_string()));
+            if has_catch_all {
+                drop(fields.insert("catch_all_kind".to_string(), "default".to_string()));
+            }
+        }
+
+        // For loops: detect style (traditional vs range-based)
+        if kind == "for_statement" {
+            drop(fields.insert("for_style".to_string(), "traditional".to_string()));
+        } else if kind == "for_range_loop" {
+            drop(fields.insert("for_style".to_string(), "range".to_string()));
         }
 
         // Name = the skeleton (or raw condition text if no condition)

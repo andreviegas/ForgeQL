@@ -10,7 +10,7 @@ Decision tree and anti-patterns for ForgeQL queries.
 What do you need?
 │
 ├─ A symbol's location?
-│  → FIND symbols WHERE name LIKE 'pattern' [WHERE node_kind = '...']
+│  → FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...']
 │  → Result gives you: name, path, line, usages
 │
 ├─ Source code at a known location?
@@ -54,7 +54,7 @@ What do you need?
 |---|---|---|
 | `SHOW body OF 'func' DEPTH 99` without LIMIT | `FIND symbols WHERE name = 'func'` → `SHOW LINES n-m OF 'file'` | Large bodies get blocked; FIND gives exact location |
 | `SHOW LINES 1-500 OF 'file'` | `SHOW outline OF 'file'` → `SHOW LINES n-m` for specific symbols | Scanning whole files wastes tokens |
-| `FIND symbols` (unfiltered) | `FIND symbols WHERE node_kind = '...' WHERE name LIKE '...'` | Unfiltered queries hit the 20-row default cap on large codebases |
+| `FIND symbols` (unfiltered) | `FIND symbols WHERE fql_kind = '...' WHERE name LIKE '...'` | Unfiltered queries hit the 20-row default cap on large codebases |
 | Paginating with OFFSET to read all results | Add more WHERE filters to narrow results | Pagination reads everything; filters find what you need |
 | Using grep/find/cat/read_file | Use ForgeQL FIND and SHOW commands | Local workspace may be empty; ForgeQL has the indexed code |
 | `GROUP BY` without `HAVING` | `GROUP BY file HAVING count >= N` | Ungrouped results on large codebases produce too many rows |
@@ -67,7 +67,7 @@ Stack multiple `WHERE` clauses (implicit AND):
 
 ```sql
 FIND symbols
-  WHERE node_kind = 'function_definition'
+  WHERE fql_kind = 'function'
   WHERE name LIKE '%init%'
   WHERE usages >= 5
   IN 'src/**'
@@ -94,7 +94,7 @@ SHOW LINES 142-160 OF 'src/module.cpp'
 If you don't know the exact name, use `LIKE`:
 
 ```sql
-FIND symbols WHERE name LIKE '%target%' WHERE node_kind = 'function_definition'
+FIND symbols WHERE name LIKE '%target%' WHERE fql_kind = 'function'
 ```
 
 If you need to understand structure before reading:

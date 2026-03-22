@@ -15,7 +15,10 @@ use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use crate::{
-    ast::index::{IndexRow, SymbolTable},
+    ast::{
+        index::{IndexRow, SymbolTable},
+        lang::LanguageRegistry,
+    },
     workspace::Workspace,
 };
 
@@ -32,17 +35,26 @@ pub(crate) fn byte_to_line(source: &[u8], byte_offset: usize) -> usize {
         .count()
 }
 
-/// Parse a C/C++ source file with tree-sitter.
+/// Parse a source file with the appropriate tree-sitter grammar.
+///
+/// The language is determined by file extension via the `LanguageRegistry`.
 ///
 /// Returns `(source_bytes, tree)`.
 ///
 /// # Errors
-/// Returns an error if the file cannot be read or the parser fails.
-pub(crate) fn parse_cpp_file(path: &Path) -> Result<(Vec<u8>, tree_sitter::Tree)> {
+/// Returns an error if no language is registered for the extension, the file
+/// cannot be read, or the parser fails.
+pub(crate) fn parse_file(
+    path: &Path,
+    lang_registry: &LanguageRegistry,
+) -> Result<(Vec<u8>, tree_sitter::Tree)> {
+    let lang = lang_registry
+        .language_for_path(path)
+        .ok_or_else(|| anyhow!("no language registered for {}", path.display()))?;
     let source = crate::workspace::file_io::read_bytes(path)?;
     let mut parser = tree_sitter::Parser::new();
     parser
-        .set_language(&tree_sitter_cpp::LANGUAGE.into())
+        .set_language(&lang.tree_sitter_language())
         .map_err(|e| anyhow!("tree-sitter language error: {e}"))?;
     let tree = parser
         .parse(&source, None)
@@ -456,9 +468,14 @@ pub fn show_context(
 ///
 /// # Errors
 /// Returns an error if the symbol is not indexed or the file cannot be read.
-pub fn show_signature(index: &SymbolTable, workspace: &Workspace, symbol: &str) -> Result<Value> {
+pub fn show_signature(
+    index: &SymbolTable,
+    workspace: &Workspace,
+    symbol: &str,
+    lang_registry: &LanguageRegistry,
+) -> Result<Value> {
     let def = find_def(index, symbol, None)?;
-    let (source, tree) = parse_cpp_file(&def.path)?;
+    let (source, tree) = parse_file(&def.path, lang_registry)?;
     let root = tree.root_node();
 
     let start_line = byte_to_line(&source, def.byte_range.start) + 1;
@@ -564,14 +581,19 @@ pub fn show_outline(index: &SymbolTable, workspace: &Workspace, file: &str) -> R
 /// # Errors
 /// Returns an error if the symbol is not in the index, the file cannot be
 /// read, or the AST node for the type is not found.
-pub fn show_members(index: &SymbolTable, workspace: &Workspace, symbol: &str) -> Result<Value> {
+pub fn show_members(
+    index: &SymbolTable,
+    workspace: &Workspace,
+    symbol: &str,
+    lang_registry: &LanguageRegistry,
+) -> Result<Value> {
     // Resolve path from the index.
     let path = index
         .find_def(symbol)
         .map(|r| r.path.clone())
         .ok_or_else(|| anyhow!("symbol '{symbol}' not found in index"))?;
 
-    let (source, tree) = parse_cpp_file(&path)?;
+    let (source, tree) = parse_file(&path, lang_registry)?;
     let root = tree.root_node();
 
     let type_node = find_type_node_by_name(root, &source, symbol)
@@ -688,9 +710,10 @@ pub fn show_body(
     workspace: &Workspace,
     symbol: &str,
     depth: Option<usize>,
+    lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
     let def = find_body_def(index, symbol)?;
-    let (source, tree) = parse_cpp_file(&def.path)?;
+    let (source, tree) = parse_file(&def.path, lang_registry)?;
     let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start)
         .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 
@@ -800,9 +823,14 @@ pub fn show_callers(index: &SymbolTable, workspace: &Workspace, symbol: &str) ->
 /// # Errors
 /// Returns an error if the symbol is not indexed, the file cannot be parsed,
 /// or the AST node for the function is not found.
-pub fn show_callees(index: &SymbolTable, workspace: &Workspace, symbol: &str) -> Result<Value> {
+pub fn show_callees(
+    index: &SymbolTable,
+    workspace: &Workspace,
+    symbol: &str,
+    lang_registry: &LanguageRegistry,
+) -> Result<Value> {
     let def = find_body_def(index, symbol)?;
-    let (source, tree) = parse_cpp_file(&def.path)?;
+    let (source, tree) = parse_file(&def.path, lang_registry)?;
     let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start)
         .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 

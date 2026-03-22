@@ -7,7 +7,7 @@ authors.workspace    = true
 license.workspace    = true
 
 [features]
-test-helpers = []
+test-helpers = ["tree-sitter-cpp"]
 
 [lints]
 workspace = true
@@ -20,7 +20,7 @@ serde_yml   = { workspace = true }
 
 # AST parsing
 tree-sitter     = { workspace = true }
-tree-sitter-cpp = { workspace = true }
+tree-sitter-cpp = { workspace = true, optional = true }
 
 # DSL parsing
 pest        = { workspace = true }

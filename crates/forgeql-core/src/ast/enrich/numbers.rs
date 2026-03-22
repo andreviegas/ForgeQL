@@ -6,6 +6,7 @@
 /// - `num_sign`: `"positive"` / `"negative"` / `"zero"`
 /// - `num_value`: parsed decimal string (separators stripped)
 /// - `num_suffix`: `"u"` / `"l"` / `"ul"` / `"ull"` / `"f"` / `"ll"` / `"z"` / `""`
+/// - `suffix_meaning`: semantic meaning of suffix (e.g. `"unsigned"`, `"float"`, `"long_long"`)
 /// - `is_magic`: `"false"` for {0, 1, -1}; `"true"` otherwise
 use std::collections::HashMap;
 
@@ -46,6 +47,13 @@ impl NodeEnricher for NumberEnricher {
         // Detect suffix
         let suffix = detect_suffix_with_table(&lower, config.number_suffixes);
         drop(fields.insert("num_suffix".to_string(), suffix.to_string()));
+
+        // Map suffix to its semantic meaning using the config table.
+        if !suffix.is_empty()
+            && let Some(&(_, meaning)) = config.number_suffixes.iter().find(|&&(s, _)| s == suffix)
+        {
+            drop(fields.insert("suffix_meaning".to_string(), meaning.to_string()));
+        }
 
         // Strip suffix for format analysis
         let without_suffix = strip_suffix_with_table(&lower, config.number_suffixes);

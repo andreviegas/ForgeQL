@@ -2,9 +2,9 @@
 /// and shift expressions.
 ///
 /// Creates new [`IndexRow`]s for:
-/// - `update_expression`: `increment_style`, `increment_op`
-/// - `assignment_expression` (compound): `compound_op`, `operand`
-/// - `shift_expression` / binary with `<<`/`>>`: `shift_direction`, `shift_amount`
+/// - `update_expression`: `increment_style`, `increment_op`, `operator_category`
+/// - `assignment_expression` (compound): `compound_op`, `operand`, `operator_category`
+/// - `shift_expression` / binary with `<<`/`>>`: `shift_direction`, `shift_amount`, `operator_category`
 use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
@@ -45,6 +45,7 @@ impl OperatorEnricher {
 
         let op = if text.contains("++") { "++" } else { "--" };
         drop(fields.insert("increment_op".to_string(), op.to_string()));
+        drop(fields.insert("operator_category".to_string(), "increment".to_string()));
 
         // Extract the operand name
         let name = if is_prefix {
@@ -85,7 +86,15 @@ impl OperatorEnricher {
         }
 
         let mut fields = HashMap::new();
-        drop(fields.insert("compound_op".to_string(), op));
+        drop(fields.insert("compound_op".to_string(), op.clone()));
+
+        let category = match op.as_str() {
+            "+=" | "-=" | "*=" | "/=" | "%=" => "arithmetic",
+            "&=" | "|=" | "^=" => "bitwise",
+            "<<=" | ">>=" => "shift",
+            _ => "unknown",
+        };
+        drop(fields.insert("operator_category".to_string(), category.to_string()));
 
         let name = ctx
             .node
@@ -126,6 +135,7 @@ impl OperatorEnricher {
         let mut fields = HashMap::new();
         let direction = if op == "<<" { "left" } else { "right" };
         drop(fields.insert("shift_direction".to_string(), direction.to_string()));
+        drop(fields.insert("operator_category".to_string(), "bitwise".to_string()));
 
         if let Some(left) = ctx.node.child_by_field_name("left") {
             drop(fields.insert("shift_operand".to_string(), node_text(ctx.source, left)));

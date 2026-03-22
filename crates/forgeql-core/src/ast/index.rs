@@ -15,8 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::ast::enrich::{EnrichContext, NodeEnricher, default_enrichers};
-use crate::ast::lang::CppLanguageInline;
-use crate::ast::lang::LanguageSupport;
+use crate::ast::lang::{LanguageRegistry, LanguageSupport};
 use crate::error::ForgeError;
 use crate::workspace::Workspace;
 
@@ -99,7 +98,7 @@ pub struct SymbolTable {
 }
 
 impl SymbolTable {
-    /// Build a `SymbolTable` by parsing all C/C++ files in the workspace.
+    /// Build a `SymbolTable` by parsing all supported files in the workspace.
     ///
     /// Files are parsed and enriched **in parallel** using rayon.  Each thread
     /// creates its own `Parser` and enricher set, producing a per-file table.
@@ -107,17 +106,11 @@ impl SymbolTable {
     ///
     /// # Errors
     /// Returns `Err` if the tree-sitter language cannot be set.
-    pub fn build(workspace: &Workspace) -> Result<Self> {
-        let cpp_extensions = ["cpp", "c", "cc", "cxx", "h", "hpp", "hxx", "ino"];
-
-        // 1 — collect file paths up front so rayon can split the work.
+    pub fn build(workspace: &Workspace, lang_registry: &LanguageRegistry) -> Result<Self> {
+        // 1 — collect file paths that have a registered language.
         let paths: Vec<PathBuf> = workspace
             .files()
-            .filter(|p| {
-                p.extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|ext| cpp_extensions.contains(&ext))
-            })
+            .filter(|p| lang_registry.language_for_path(p).is_some())
             .collect();
 
         debug!(files = paths.len(), "indexing files in parallel");
@@ -127,18 +120,22 @@ impl SymbolTable {
         let mut table: Self = paths
             .par_iter()
             .filter_map(|path| {
+                let lang = lang_registry.language_for_path(path)?;
                 let mut parser = tree_sitter::Parser::new();
-                if parser
-                    .set_language(&tree_sitter_cpp::LANGUAGE.into())
-                    .is_err()
-                {
+                if parser.set_language(&lang.tree_sitter_language()).is_err() {
                     warn!(path = %path.display(), "failed to set tree-sitter language");
                     return None;
                 }
                 let enrichers = default_enrichers();
                 let mut file_table = Self::default();
 
-                match index_file(&mut parser, path, &mut file_table, &enrichers) {
+                match index_file(
+                    &mut parser,
+                    path,
+                    &mut file_table,
+                    &enrichers,
+                    lang.as_ref(),
+                ) {
                     Ok(count) => {
                         debug!(
                             path = %workspace.relative(path).display(),
@@ -310,23 +307,31 @@ impl SymbolTable {
     /// # Errors
     /// Returns `Err` if the tree-sitter language cannot be set or any file
     /// fails to parse.
-    pub fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
+    pub fn reindex_files(
+        &mut self,
+        paths: &[PathBuf],
+        lang_registry: &LanguageRegistry,
+    ) -> Result<()> {
         let mut parser = tree_sitter::Parser::new();
         let enrichers = default_enrichers();
-        parser
-            .set_language(&tree_sitter_cpp::LANGUAGE.into())
-            .map_err(|e| ForgeError::TreeSitterLanguage(e.to_string()))?;
 
         for path in paths {
             self.purge_file(path);
             if path.exists() {
-                match index_file(&mut parser, path, self, &enrichers) {
-                    Ok(count) => {
-                        debug!(path = %path.display(), rows = count, "reindexed");
+                if let Some(lang) = lang_registry.language_for_path(path) {
+                    parser
+                        .set_language(&lang.tree_sitter_language())
+                        .map_err(|e| ForgeError::TreeSitterLanguage(e.to_string()))?;
+                    match index_file(&mut parser, path, self, &enrichers, lang.as_ref()) {
+                        Ok(count) => {
+                            debug!(path = %path.display(), rows = count, "reindexed");
+                        }
+                        Err(err) => {
+                            warn!(path = %path.display(), error = %err, "reindex failed");
+                        }
                     }
-                    Err(err) => {
-                        warn!(path = %path.display(), error = %err, "reindex failed");
-                    }
+                } else {
+                    debug!(path = %path.display(), "purged (unsupported language)");
                 }
             } else {
                 debug!(path = %path.display(), "purged (file deleted)");
@@ -355,6 +360,7 @@ pub fn index_file(
     path: &Path,
     table: &mut SymbolTable,
     enrichers: &[Box<dyn NodeEnricher>],
+    language: &dyn LanguageSupport,
 ) -> Result<usize> {
     let source = crate::workspace::file_io::read_bytes(path)?;
     let tree = parser
@@ -363,7 +369,7 @@ pub fn index_file(
             path: path.to_path_buf(),
         })?;
 
-    let language: tree_sitter::Language = tree_sitter_cpp::LANGUAGE.into();
+    let ts_lang = language.tree_sitter_language();
     let before = table.rows.len();
 
     let mut cursor = tree.root_node().walk();
@@ -371,8 +377,8 @@ pub fn index_file(
         &source,
         path,
         &mut cursor,
-        &language,
-        "cpp",
+        &ts_lang,
+        language,
         table,
         enrichers,
     );
@@ -400,16 +406,19 @@ fn collect_nodes(
     source: &[u8],
     path: &Path,
     cursor: &mut tree_sitter::TreeCursor<'_>,
-    language: &tree_sitter::Language,
-    language_name: &str,
+    ts_language: &tree_sitter::Language,
+    language: &dyn LanguageSupport,
     table: &mut SymbolTable,
     enrichers: &[Box<dyn NodeEnricher>],
 ) {
+    let config = language.config();
+    let lang_name = language.name();
+
     loop {
         let node = cursor.node();
 
         // Skip alternate conditional-compilation branches entirely.
-        let skip = matches!(node.kind(), "preproc_else" | "preproc_elif");
+        let skip = config.skip_node_kinds.contains(&node.kind());
 
         if !skip {
             // Build the enrichment context once for this node.
@@ -417,28 +426,27 @@ fn collect_nodes(
                 node,
                 source,
                 path,
-                language_name,
-                language_config: CppLanguageInline.config(),
-                language_support: &CppLanguageInline,
+                language_name: lang_name,
+                language_config: config,
+                language_support: language,
             };
 
             // Every named node becomes a row.
-            if let Some(name) = extract_name(node, source, language_name) {
-                let mut fields = extract_fields(node, source, language);
+            if let Some(name) = language.extract_name(node, source) {
+                let mut fields = extract_fields(node, source, ts_language);
 
                 // Run all enrichers on this row.
                 for enricher in enrichers {
                     enricher.enrich_row(&ctx, &name, &mut fields);
                 }
 
+                let fql_kind_val = language.map_kind(node.kind()).unwrap_or("");
+
                 let row = IndexRow {
                     name,
                     node_kind: node.kind().to_string(),
-                    fql_kind: CppLanguageInline
-                        .map_kind(node.kind())
-                        .unwrap_or("")
-                        .to_string(),
-                    language: language_name.to_string(),
+                    fql_kind: fql_kind_val.to_string(),
+                    language: lang_name.to_string(),
                     path: path.to_path_buf(),
                     byte_range: node.byte_range(),
                     line: node.start_position().row + 1,
@@ -455,10 +463,7 @@ fn collect_nodes(
             }
 
             // All identifier tokens become usage sites.
-            if matches!(
-                node.kind(),
-                "identifier" | "field_identifier" | "type_identifier"
-            ) {
+            if config.usage_node_kinds.contains(&node.kind()) {
                 let name = node_text(source, node);
                 if name.len() > 1 {
                     let line = node.start_position().row + 1;
@@ -491,83 +496,6 @@ fn collect_nodes(
     }
 }
 
-// -----------------------------------------------------------------------
-// Language-specific name extraction — the only grammar-specific code
-// -----------------------------------------------------------------------
-
-/// Extract the human-readable name from an AST node.
-///
-/// Returns `None` for nodes that should not produce index rows.
-fn extract_name(node: tree_sitter::Node<'_>, source: &[u8], language_name: &str) -> Option<String> {
-    // Structural nodes that are part of a declarator tree should never
-    // produce their own index rows — they are handled via their parent
-    // (e.g. function_definition).
-    if node.kind() == "qualified_identifier" {
-        return None;
-    }
-
-    // Universal: most grammars expose a "name" field on definition nodes.
-    if let Some(name_node) = node.child_by_field_name("name") {
-        let text = node_text(source, name_node);
-        if !text.is_empty() {
-            return Some(text);
-        }
-    }
-
-    // Language-specific fallbacks.
-    match (language_name, node.kind()) {
-        // C++ function definitions: name lives inside the declarator tree.
-        ("cpp", "function_definition") => node
-            .child_by_field_name("declarator")
-            .and_then(find_function_name)
-            .map(|n| node_text(source, n))
-            .filter(|s| !s.is_empty()),
-
-        // `#include` directives: extract the path, strip surrounding delimiters.
-        ("cpp", "preproc_include") => node
-            .child_by_field_name("path")
-            .map(|n| {
-                node_text(source, n)
-                    .trim_matches(|c: char| c == '"' || c == '<' || c == '>')
-                    .to_string()
-            })
-            .filter(|s| !s.is_empty()),
-
-        // C++ variable declarations: name lives inside the declarator tree
-        // (e.g. `int x = 5;` → declaration → declarator → identifier "x").
-        // Skip function forward declarations (e.g. `void foo(int);`) whose
-        // declarator tree contains a `function_declarator` node.
-        ("cpp", "declaration") => {
-            let decl = node.child_by_field_name("declarator")?;
-            if contains_function_declarator(decl) {
-                return None;
-            }
-            find_function_name(decl)
-                .map(|n| node_text(source, n))
-                .filter(|s| !s.is_empty())
-        }
-
-        // C++ class/struct member declarations (both data members and
-        // method prototypes).  tree-sitter uses `field_declaration` for
-        // everything inside a `field_declaration_list`.
-        ("cpp", "field_declaration") => node
-            .child_by_field_name("declarator")
-            .and_then(find_function_name)
-            .map(|n| node_text(source, n))
-            .filter(|s| !s.is_empty()),
-
-        // Comments: the node text IS the name — enabling text search via
-        //   FIND symbols WHERE node_kind = 'comment' WHERE name LIKE '%keyword%'
-        // Both `// line comments` and `/* block comments */` use this node kind.
-        ("cpp", "comment") => {
-            let text = node_text(source, node);
-            if text.is_empty() { None } else { Some(text) }
-        }
-
-        _ => None,
-    }
-}
-
 /// Extract all grammar fields from a tree-sitter node into a string map.
 fn extract_fields(
     node: tree_sitter::Node<'_>,
@@ -593,55 +521,6 @@ fn extract_fields(
 }
 
 // -----------------------------------------------------------------------
-// LANG(cpp) — function name extraction helper
-// -----------------------------------------------------------------------
-
-/// Return `true` if the declarator subtree contains a `function_declarator`,
-/// indicating this `declaration` is a function forward declaration rather
-/// than a variable declaration.
-fn contains_function_declarator(node: tree_sitter::Node<'_>) -> bool {
-    if node.kind() == "function_declarator" {
-        return true;
-    }
-    for i in 0..node.named_child_count() {
-        if let Some(child) = node.named_child(i)
-            && contains_function_declarator(child)
-        {
-            return true;
-        }
-    }
-    false
-}
-
-/// Drill into nested declarators to find the identifier holding the function name.
-fn find_function_name(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
-    match node.kind() {
-        // Return the full qualified node (e.g. `Serial_Protocol::setup`)
-        // so that the index stores the qualified name, not just the
-        // trailing identifier.
-        "identifier"
-        | "field_identifier"
-        | "destructor_name"
-        | "operator_name"
-        | "qualified_identifier" => Some(node),
-        "function_declarator"
-        | "pointer_declarator"
-        | "reference_declarator"
-        | "abstract_function_declarator" => node
-            .child_by_field_name("declarator")
-            .and_then(find_function_name),
-        _ => {
-            for i in 0..node.named_child_count() {
-                if let Some(found) = node.named_child(i).and_then(find_function_name) {
-                    return Some(found);
-                }
-            }
-            None
-        }
-    }
-}
-
-// -----------------------------------------------------------------------
 // Shared utilities
 // -----------------------------------------------------------------------
 
@@ -661,6 +540,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use crate::ast::lang::CppLanguageInline;
 
     fn two_row_table() -> SymbolTable {
         let mut table = SymbolTable::default();
@@ -775,11 +655,19 @@ mod tests {
         parser
             .set_language(&tree_sitter_cpp::LANGUAGE.into())
             .unwrap();
-        index_file(&mut parser, &file, &mut table, &default_enrichers()).unwrap();
+        index_file(
+            &mut parser,
+            &file,
+            &mut table,
+            &default_enrichers(),
+            &CppLanguageInline,
+        )
+        .unwrap();
         assert!(table.find_def("alpha").is_some());
 
         std::fs::write(&file, "void beta() {}").unwrap();
-        table.reindex_files(&[file]).unwrap();
+        let registry = LanguageRegistry::new(vec![std::sync::Arc::new(CppLanguageInline)]);
+        table.reindex_files(&[file], &registry).unwrap();
 
         assert!(
             table.find_def("alpha").is_none(),
@@ -797,7 +685,14 @@ mod tests {
         parser
             .set_language(&tree_sitter_cpp::LANGUAGE.into())
             .unwrap();
-        index_file(&mut parser, &file, &mut table, &default_enrichers()).unwrap();
+        index_file(
+            &mut parser,
+            &file,
+            &mut table,
+            &default_enrichers(),
+            &CppLanguageInline,
+        )
+        .unwrap();
         table
     }
 

@@ -3,6 +3,7 @@
 /// Creates a new [`IndexRow`] for each cast expression with:
 /// - `cast_style`: from `LanguageConfig::cast_kinds`
 /// - `cast_target_type`: the target type text
+/// - `cast_safety`: `"safe"` / `"moderate"` / `"unsafe"` from config
 use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
@@ -21,7 +22,7 @@ impl NodeEnricher for CastEnricher {
         let config = ctx.language_config;
 
         // Look up the cast style from config
-        let Some(&(_raw_kind, cast_style, _safety)) =
+        let Some(&(_raw_kind, cast_style, safety)) =
             config.cast_kinds.iter().find(|(rk, _, _)| *rk == kind)
         else {
             return vec![];
@@ -40,6 +41,7 @@ impl NodeEnricher for CastEnricher {
 
         let mut fields = HashMap::new();
         drop(fields.insert("cast_style".to_string(), cast_style.to_string()));
+        drop(fields.insert("cast_safety".to_string(), safety.to_string()));
         if !target_type.is_empty() {
             drop(fields.insert("cast_target_type".to_string(), target_type.clone()));
         }

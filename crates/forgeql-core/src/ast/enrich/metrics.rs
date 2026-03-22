@@ -4,11 +4,11 @@
 /// - `lines`: body line count for functions/structs/classes/enums
 /// - `param_count`: number of parameters for functions
 /// - `member_count`: number of fields/enumerators for structs/classes/enums
-/// - `is_const`, `is_volatile`, `is_static`, `is_inline`: qualifier flags
+/// - `is_const`, `is_volatile`, `is_static`, `is_inline`, etc.: qualifier flags (config-driven)
 /// - `visibility`: `"public"` / `"private"` / `"protected"` for class members
 ///
 /// `post_pass()` aggregates on function rows:
-/// - `return_count`, `goto_count`, `string_count`
+/// - `return_count`, `goto_count`, `string_count`, `throw_count`
 use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
@@ -52,6 +52,9 @@ impl NodeEnricher for MetricsEnricher {
 
             let string_count = count_descendants_by_kind(ctx.node, "string_literal");
             drop(fields.insert("string_count".to_string(), string_count.to_string()));
+
+            let throw_count = count_descendants_by_kind(ctx.node, "throw_statement");
+            drop(fields.insert("throw_count".to_string(), throw_count.to_string()));
         }
 
         // Member count for type definitions (struct/class/enum)

@@ -29,12 +29,18 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
 use forgeql_core::result::{ForgeQLResult, ShowContent};
 use tempfile::tempdir;
+
+fn make_registry() -> Arc<LanguageRegistry> {
+    Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
+}
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -63,7 +69,7 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
     .expect("copy .cpp");
 
     let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir).expect("engine");
+    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
     let session_id = engine
         .register_local_session(dir.path())
         .expect("register session");
@@ -110,7 +116,7 @@ fn engine_with_git_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
         .unwrap();
 
     let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir).expect("engine");
+    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
     let session_id = engine
         .register_local_session(dir.path())
         .expect("register session");
@@ -1782,7 +1788,7 @@ fn error_malformed_fql() {
 #[test]
 fn error_find_without_session() {
     let tmp = tempdir().unwrap();
-    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
     let ops = parser::parse("FIND symbols").unwrap();
     let op = ops.first().unwrap();
     assert!(engine.execute(None, op).is_err());
@@ -1840,7 +1846,7 @@ fn error_change_nonexistent_file() {
 #[test]
 fn error_disconnect_without_session() {
     let tmp = tempdir().unwrap();
-    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
     let ops = parser::parse("DISCONNECT").unwrap();
     let op = ops.first().unwrap();
     assert!(engine.execute(Some("no-such-session"), op).is_err());

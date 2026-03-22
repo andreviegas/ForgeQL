@@ -8,7 +8,9 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
 use forgeql_core::{
     ast::index::SymbolTable, context::RequestContext, ir::ChangeTarget,
     transforms::change::ChangeFiles, workspace::Workspace,
@@ -42,7 +44,8 @@ fn setup_workspace() -> (tempfile::TempDir, Workspace, SymbolTable) {
     .expect("copy .cpp");
 
     let ws = Workspace::new(dir.path()).expect("new workspace");
-    let idx = SymbolTable::build(&ws).expect("build index");
+    let registry = LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]);
+    let idx = SymbolTable::build(&ws, &registry).expect("build index");
     (dir, ws, idx)
 }
 

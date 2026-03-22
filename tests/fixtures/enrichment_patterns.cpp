@@ -220,6 +220,7 @@ class SimpleClass {
 public:
     int publicField;
     void publicMethod(void) {}
+    void declaredMethod(int arg);
 private:
     int privateField;
 protected:
@@ -319,3 +320,34 @@ void duplicateConditions(int a, int b) {
         (void)b;
     }
 }
+
+/* ------------------------------------------------------------------ */
+/* Phase 8 — Additional enrichment patterns                             */
+/* ------------------------------------------------------------------ */
+
+/* for_style: range-based for loop */
+void rangeForLoop(int arr[], int len) {
+    for (int x : arr) {
+        (void)x;
+    }
+    (void)len;
+}
+
+/* throw_count: function with throw statements */
+void throwingFunction(int x) {
+    if (x < 0) throw "negative";
+    if (x > 100) throw "too_large";
+}
+
+/* override / final: class hierarchy */
+class Base {
+public:
+    virtual void overriddenMethod() {}
+    virtual void finalMethod() {}
+};
+
+class Derived : public Base {
+public:
+    void overriddenMethod() override {}
+    void finalMethod() final {}
+};

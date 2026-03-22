@@ -32,12 +32,13 @@
 /// for the duration of an `execute()` call is correct.
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use tracing::{info, warn};
 
 use crate::{
-    ast::{index::SymbolTable, query, show},
+    ast::{index::SymbolTable, lang::LanguageRegistry, query, show},
     config::ForgeConfig,
     context::RequestContext,
     git::{
@@ -110,6 +111,8 @@ pub struct ForgeQLEngine {
     data_dir: PathBuf,
     /// Lifetime command counter (informational, for `/health` equivalents).
     commands_served: u64,
+    /// Language support registry for tree-sitter parsing and enrichment.
+    lang_registry: Arc<LanguageRegistry>,
 }
 
 // -----------------------------------------------------------------------
@@ -128,7 +131,7 @@ impl ForgeQLEngine {
     ///
     /// # Errors
     /// Returns `Err` if the worktree directory cannot be created.
-    pub fn new(data_dir: PathBuf) -> Result<Self> {
+    pub fn new(data_dir: PathBuf, lang_registry: Arc<LanguageRegistry>) -> Result<Self> {
         std::fs::create_dir_all(data_dir.join("worktrees"))?;
         info!(dir = %data_dir.display(), "engine: data directory ready");
 
@@ -140,6 +143,7 @@ impl ForgeQLEngine {
             sessions: HashMap::new(),
             data_dir,
             commands_served: 0,
+            lang_registry,
         };
         Ok(engine)
     }
@@ -456,7 +460,14 @@ impl ForgeQLEngine {
             &repo_path, &wt_name, branch, &wt_path, as_branch,
         )?);
 
-        let mut session = Session::new(&session_id, "anonymous", wt_path, source_name, branch);
+        let mut session = Session::new(
+            &session_id,
+            "anonymous",
+            wt_path,
+            source_name,
+            branch,
+            Arc::clone(&self.lang_registry),
+        );
         session.custom_branch = as_branch.map(String::from);
         session.worktree_name = wt_name;
 
@@ -709,22 +720,27 @@ impl ForgeQLEngine {
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
             ForgeQLIR::ShowSignature { symbol, .. } => {
-                show::show_signature(index, &workspace, symbol)
+                show::show_signature(index, &workspace, symbol, &self.lang_registry)
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
             ForgeQLIR::ShowOutline { file, .. } => show::show_outline(index, &workspace, file)
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
-            ForgeQLIR::ShowMembers { symbol, .. } => show::show_members(index, &workspace, symbol)
-                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+            ForgeQLIR::ShowMembers { symbol, .. } => {
+                show::show_members(index, &workspace, symbol, &self.lang_registry)
+                    .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+            }
             ForgeQLIR::ShowBody { symbol, clauses } => show::show_body(
                 index,
                 &workspace,
                 symbol,
                 Some(clauses.depth.unwrap_or(DEFAULT_BODY_DEPTH)),
+                &self.lang_registry,
             )
             .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
-            ForgeQLIR::ShowCallees { symbol, .. } => show::show_callees(index, &workspace, symbol)
-                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+            ForgeQLIR::ShowCallees { symbol, .. } => {
+                show::show_callees(index, &workspace, symbol, &self.lang_registry)
+                    .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+            }
             ForgeQLIR::ShowLines {
                 file,
                 start_line,
@@ -1250,6 +1266,7 @@ impl ForgeQLEngine {
             workspace_root.to_path_buf(),
             "local", // synthetic source name
             "main",  // synthetic branch name
+            Arc::clone(&self.lang_registry),
         );
         session.build_index()?;
 
@@ -1906,7 +1923,12 @@ fn extract_source_lines(json: &serde_json::Value) -> Vec<SourceLine> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::lang::CppLanguageInline;
     use crate::ir::Clauses;
+
+    fn make_registry() -> Arc<LanguageRegistry> {
+        Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
+    }
 
     #[test]
     fn generate_session_id_starts_with_s() {
@@ -1955,7 +1977,7 @@ mod tests {
     fn engine_new_creates_worktrees_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let data_dir = tmp.path().to_path_buf();
-        let engine = ForgeQLEngine::new(data_dir.clone()).unwrap();
+        let engine = ForgeQLEngine::new(data_dir.clone(), make_registry()).unwrap();
         assert!(data_dir.join("worktrees").exists());
         assert_eq!(engine.session_count(), 0);
         assert_eq!(engine.source_count(), 0);
@@ -1965,7 +1987,7 @@ mod tests {
     #[test]
     fn engine_show_sources_empty() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+        let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
         let result = engine.execute(None, &ForgeQLIR::ShowSources).unwrap();
         match result {
             ForgeQLResult::Query(qr) => {
@@ -1979,7 +2001,7 @@ mod tests {
     #[test]
     fn engine_show_branches_requires_source() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+        let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
         let result = engine.execute(None, &ForgeQLIR::ShowBranches { source: None });
         assert!(result.is_err());
     }
@@ -1987,7 +2009,7 @@ mod tests {
     #[test]
     fn engine_disconnect_without_session_fails() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+        let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
         let result = engine.execute(None, &ForgeQLIR::Disconnect);
         assert!(result.is_err());
     }
@@ -1995,7 +2017,7 @@ mod tests {
     #[test]
     fn engine_disconnect_unknown_session_fails() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+        let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
         let result = engine.execute(Some("s_unknown"), &ForgeQLIR::Disconnect);
         assert!(result.is_err());
     }
@@ -2003,7 +2025,7 @@ mod tests {
     #[test]
     fn engine_find_symbols_without_session_fails() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+        let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
         let op = ForgeQLIR::FindSymbols {
             clauses: Clauses::default(),
         };
@@ -2126,7 +2148,7 @@ mod tests {
         .unwrap();
 
         let data_dir = tmp.path().join("data");
-        let mut engine = ForgeQLEngine::new(data_dir).unwrap();
+        let mut engine = ForgeQLEngine::new(data_dir, make_registry()).unwrap();
         let session_id = engine.register_local_session(tmp.path()).unwrap();
 
         // FIND globals → FIND symbols WHERE node_kind = 'declaration'

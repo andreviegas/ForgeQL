@@ -1,0 +1,15 @@
+[package]
+name        = "forgeql-lang-cpp"
+description = "C/C++ language support for ForgeQL"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[lints]
+workspace = true
+
+[dependencies]
+forgeql-core    = { workspace = true }
+tree-sitter     = { workspace = true }
+tree-sitter-cpp = { workspace = true }

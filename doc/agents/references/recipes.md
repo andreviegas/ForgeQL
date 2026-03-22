@@ -11,7 +11,7 @@ Find unreferenced functions and macros — candidates for removal.
 ```sql
 -- Unreferenced functions (skip test files)
 FIND symbols
-  WHERE node_kind = 'function_definition'
+  WHERE fql_kind = 'function'
   WHERE usages = 0
   EXCLUDE 'tests/**'
   ORDER BY path ASC
@@ -19,7 +19,7 @@ FIND symbols
 
 -- Unreferenced macros in headers
 FIND symbols
-  WHERE node_kind = 'preproc_def'
+  WHERE fql_kind = 'macro'
   WHERE usages = 0
   IN 'include/**'
   ORDER BY path ASC
@@ -73,7 +73,7 @@ FIND symbols WHERE condition_tests >= 4
 
 -- Switch without default
 FIND symbols
-  WHERE node_kind = 'switch_statement'
+  WHERE fql_kind = 'switch'
   WHERE has_catch_all = 'false'
 
 -- Functions with goto
@@ -98,7 +98,7 @@ Check naming conventions, documentation, and function sizing.
 ```sql
 -- Functions not following snake_case
 FIND symbols
-  WHERE node_kind = 'function_definition'
+  WHERE fql_kind = 'function'
   WHERE naming != 'snake_case'
   WHERE naming != 'PascalCase'
   EXCLUDE 'vendor/**'
@@ -106,7 +106,7 @@ FIND symbols
 
 -- Undocumented public functions (no preceding doc comment)
 FIND symbols
-  WHERE node_kind = 'function_definition'
+  WHERE fql_kind = 'function'
   WHERE has_doc = 'false'
   IN 'src/**'
   ORDER BY path ASC
@@ -114,7 +114,7 @@ FIND symbols
 
 -- Large functions (> 50 lines, refactoring candidates)
 FIND symbols
-  WHERE node_kind = 'function_definition'
+  WHERE fql_kind = 'function'
   WHERE lines >= 50
   ORDER BY lines DESC
   LIMIT 20
@@ -135,7 +135,7 @@ Find the most-referenced symbols — high coupling = high risk.
 ```sql
 -- Top 10 most-referenced functions
 FIND symbols
-  WHERE node_kind = 'function_definition'
+  WHERE fql_kind = 'function'
   ORDER BY usages DESC
   LIMIT 10
 

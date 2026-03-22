@@ -151,6 +151,15 @@ pub struct LanguageConfig {
 
     /// Identifier node kinds that produce usage sites.
     pub usage_node_kinds: &'static [&'static str],
+
+    // -- declarator structure --
+    /// Grammar field name for the declarator child of a definition/declaration
+    /// node (e.g. `"declarator"` in C++).
+    pub declarator_field_name: &'static str,
+
+    /// Raw kind for a function-type declarator nested inside a declarator tree
+    /// (e.g. `"function_declarator"` in C++).
+    pub function_declarator_kind: &'static str,
 }
 
 // -----------------------------------------------------------------------
@@ -197,6 +206,15 @@ pub struct LanguageRegistry {
     by_extension: HashMap<&'static str, Arc<dyn LanguageSupport>>,
 }
 
+impl std::fmt::Debug for LanguageRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let exts: Vec<&&str> = self.by_extension.keys().collect();
+        f.debug_struct("LanguageRegistry")
+            .field("extensions", &exts)
+            .finish()
+    }
+}
+
 impl LanguageRegistry {
     /// Create a new registry from a list of language implementations.
     #[must_use]
@@ -235,17 +253,22 @@ impl LanguageRegistry {
 }
 
 // -----------------------------------------------------------------------
-// CppLanguageInline — temporary in-crate C++ implementation
+// CppLanguageInline — test-only in-crate C++ implementation
 //
-// This will be extracted to `forgeql-lang-cpp` in Phase 7.
-// For now it lives here so that forgeql-core can continue to
-// build and test with only its existing tree-sitter-cpp dependency.
+// The production C++ support lives in `forgeql-lang-cpp`.  This inline
+// duplicate stays here behind `#[cfg(any(test, feature = "test-helpers"))]`
+// so that forgeql-core's own unit and integration tests can build a
+// LanguageRegistry without depending on the external crate.
 // -----------------------------------------------------------------------
 
-/// Inline C++ language support (temporary — will move to `forgeql-lang-cpp`).
+/// Test-only inline C++ language support.
+///
+/// For production use, depend on `forgeql-lang-cpp::CppLanguage` instead.
+#[cfg(any(test, feature = "test-helpers"))]
 pub struct CppLanguageInline;
 
-/// Static configuration for C/C++.
+/// Static configuration for C/C++ (test-only).
+#[cfg(any(test, feature = "test-helpers"))]
 pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
     root_node_kind: "translation_unit",
     scope_separator: "::",
@@ -309,8 +332,14 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
         ("mutable", "is_mutable"),
         ("constexpr", "is_constexpr"),
         ("explicit", "is_explicit"),
+        ("override", "is_override"),
+        ("final", "is_final"),
     ],
-    modifier_node_kinds: &["type_qualifier", "storage_class_specifier"],
+    modifier_node_kinds: &[
+        "type_qualifier",
+        "storage_class_specifier",
+        "virtual_specifier",
+    ],
     visibility_keywords: &[
         ("public", "public"),
         ("private", "private"),
@@ -335,8 +364,11 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
     decorator_raw_kind: None,
     skip_node_kinds: &["preproc_else", "preproc_elif"],
     usage_node_kinds: &["identifier", "field_identifier", "type_identifier"],
+    declarator_field_name: "declarator",
+    function_declarator_kind: "function_declarator",
 };
 
+#[cfg(any(test, feature = "test-helpers"))]
 impl LanguageSupport for CppLanguageInline {
     fn name(&self) -> &'static str {
         "cpp"
@@ -397,6 +429,12 @@ impl LanguageSupport for CppLanguageInline {
                 .map(|n| cpp_node_text(source, n))
                 .filter(|s| !s.is_empty()),
 
+            "parameter_declaration" => node
+                .child_by_field_name("declarator")
+                .and_then(cpp_find_function_name)
+                .map(|n| cpp_node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
             "comment" => {
                 let text = cpp_node_text(source, node);
                 if text.is_empty() { None } else { Some(text) }
@@ -413,12 +451,12 @@ impl LanguageSupport for CppLanguageInline {
             "class_specifier" => Some(FQL_CLASS),
             "struct_specifier" => Some(FQL_STRUCT),
             "enum_specifier" => Some(FQL_ENUM),
-            "declaration" => Some(FQL_VARIABLE),
+            "declaration" | "parameter_declaration" => Some(FQL_VARIABLE),
             "field_declaration" => Some(FQL_FIELD),
             "comment" => Some(FQL_COMMENT),
             "preproc_include" => Some(FQL_IMPORT),
-            "preproc_def" => Some(FQL_MACRO),
-            "type_definition" => Some(FQL_TYPE_ALIAS),
+            "preproc_def" | "preproc_function_def" => Some(FQL_MACRO),
+            "type_definition" | "alias_declaration" => Some(FQL_TYPE_ALIAS),
             "namespace_definition" => Some(FQL_NAMESPACE),
 
             // Expression/literal kinds (from enricher extra_rows)
@@ -447,15 +485,17 @@ impl LanguageSupport for CppLanguageInline {
 }
 
 // -----------------------------------------------------------------------
-// C++ helper functions (will move to forgeql-lang-cpp in Phase 7)
+// C++ helper functions (test-only — production impl in forgeql-lang-cpp)
 // -----------------------------------------------------------------------
 
+#[cfg(any(test, feature = "test-helpers"))]
 fn cpp_node_text(source: &[u8], node: tree_sitter::Node<'_>) -> String {
     std::str::from_utf8(&source[node.byte_range()])
         .unwrap_or("")
         .to_string()
 }
 
+#[cfg(any(test, feature = "test-helpers"))]
 fn cpp_find_function_name(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
     match node.kind() {
         "identifier"
@@ -480,6 +520,7 @@ fn cpp_find_function_name(node: tree_sitter::Node<'_>) -> Option<tree_sitter::No
     }
 }
 
+#[cfg(any(test, feature = "test-helpers"))]
 fn cpp_contains_function_declarator(node: tree_sitter::Node<'_>) -> bool {
     if node.kind() == "function_declarator" {
         return true;

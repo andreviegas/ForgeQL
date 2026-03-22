@@ -34,7 +34,7 @@ USE source_name.branch
 
 | Need | Command |
 |---|---|
-| Find a symbol | `FIND symbols WHERE name LIKE 'pattern' [WHERE node_kind = '...']` |
+| Find a symbol | `FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...']` |
 | Read specific lines | `SHOW LINES n-m OF 'file'` |
 | Function signature | `SHOW body OF 'name' DEPTH 0` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |

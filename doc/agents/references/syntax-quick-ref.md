@@ -85,6 +85,8 @@ DEPTH N
 |---|---|---|
 | `name` | string | Symbol name |
 | `node_kind` | string | Tree-sitter kind |
+| `fql_kind` | string | Universal kind (function, class, struct, …) |
+| `language` | string | Language name (e.g. cpp) |
 | `path` | string | Relative file path |
 | `line` | integer | Start line (1-based) |
 | `usages` | integer | Reference count |
@@ -98,7 +100,7 @@ DEPTH N
 | `depth` | integer | Directory depth |
 
 ### Dynamic Fields (auto-extracted, C/C++)
-`type`, `value`, `parameters`, `declarator`, `scope`, `storage`
+`type`, `value`, `parameters`, `declarator`
 
 ### Enrichment Fields
 
@@ -106,15 +108,19 @@ DEPTH N
 
 **Comments:** `comment_style` (doc_line/doc_block/block/line), `has_doc`
 
-**Numbers:** `num_format` (decimal/hex/binary/octal/float), `is_magic`, `num_value`, `num_suffix`
+**Numbers:** `num_format` (`dec`/`hex`/`bin`/`oct`/`float`/`scientific`), `is_magic`, `num_value`, `num_suffix`, `suffix_meaning`
 
-**Control Flow:** `condition_tests`, `paren_depth`, `has_catch_all`, `has_assignment_in_condition`, `mixed_logic`, `branch_count`
+**Control Flow:** `condition_tests`, `paren_depth`, `has_catch_all`, `catch_all_kind`, `has_assignment_in_condition`, `mixed_logic`, `branch_count`, `for_style`
 
-**Metrics:** `lines`, `param_count`, `return_count`, `goto_count`, `string_count`, `member_count`, `is_const`, `is_volatile`, `is_static`, `is_inline`, `visibility`
+**Metrics:** `lines`, `param_count`, `return_count`, `goto_count`, `string_count`, `member_count`, `throw_count`, `is_const`, `is_volatile`, `is_static`, `is_inline`, `is_override`, `is_final`, `visibility`
 
-**Operators:** `increment_style`, `compound_op`, `shift_direction`, `shift_amount`
+**Operators:** `increment_style`, `compound_op`, `operator_category`, `shift_direction`, `shift_amount`
 
-**Casts:** `cast_style`, `cast_target_type`
+**Casts:** `cast_style`, `cast_target_type`, `cast_safety`
+
+**Scope:** `scope`, `storage`, `binding_kind`, `is_exported`
+
+**Members:** `body_symbol`, `member_kind`, `owner_kind`
 
 **Redundancy:** `has_repeated_condition_calls`, `repeated_condition_calls`, `null_check_count`, `duplicate_condition`
 

@@ -104,6 +104,8 @@ The index is the in-memory representation of a source worktree. Building it mean
 pub struct IndexRow {
     pub name: String,                         // symbol name
     pub node_kind: String,                    // raw tree-sitter node kind
+    pub fql_kind: String,                     // universal FQL kind (function, class, …)
+    pub language: String,                     // language name (cpp, typescript, …)
     pub path: PathBuf,                        // relative file path
     pub byte_range: Range<usize>,
     pub line: usize,                          // 1-based start line
@@ -254,42 +256,47 @@ ForgeQL/
 │   │       ├── main.rs
 │   │       ├── mcp.rs            # MCP tools + with_instructions() + guardrails
 │   │       └── path_utils.rs
-│   └── forgeql-core/             # All core logic (no binary)
+│   ├── forgeql-core/             # All core logic (no binary, no language grammars)
+│   │   └── src/
+│   │       ├── ast/
+│   │       │   ├── lang.rs       # LanguageSupport trait, LanguageConfig, LanguageRegistry
+│   │       │   ├── index.rs      # IndexRow, SymbolTable, collect_nodes
+│   │       │   ├── query.rs      # find_symbols, find_usages
+│   │       │   ├── show.rs       # show_body, show_signature, show_outline, …
+│   │       │   ├── cache.rs      # Index serialization/deserialization (bincode)
+│   │       │   └── enrich/       # Enrichment modules (naming, comments, numbers,
+│   │       │                     #   control_flow, operators, metrics, casts,
+│   │       │                     #   redundancy, scope, member)
+│   │       ├── parser/
+│   │       │   ├── forgeql.pest  # PEG grammar
+│   │       │   └── mod.rs        # Parser functions → IR
+│   │       ├── git/
+│   │       │   ├── mod.rs        # Branch, stage, commit via git2
+│   │       │   ├── source.rs     # Source + SourceRegistry (bare repo management)
+│   │       │   └── worktree.rs   # Worktree lifecycle: create, list, remove
+│   │       ├── session/
+│   │       │   └── mod.rs        # Session management (user → worktree → index)
+│   │       ├── transforms/
+│   │       │   ├── mod.rs        # TransformPlan, ByteRangeEdit, FileEdit
+│   │       │   ├── change.rs     # File mutation: matching, lines, with, delete
+│   │       │   └── diff.rs       # Pure-Rust LCS unified diff generator
+│   │       ├── verify/
+│   │       │   └── mod.rs        # Run build/test verification steps
+│   │       ├── workspace/
+│   │       │   ├── mod.rs        # Workspace root discovery, file enumeration
+│   │       │   └── file_io.rs    # Atomic write, .forgeql-ignore support
+│   │       ├── engine.rs         # Command dispatch + session management + SHOW guardrails
+│   │       ├── compact.rs        # Compact CSV output renderer (MCP mode)
+│   │       ├── filter.rs         # apply_clauses(), ClauseTarget trait
+│   │       ├── ir.rs             # ForgeQLIR, Clauses, Predicate, ChangeTarget
+│   │       ├── result.rs         # ForgeQLResult, SymbolMatch, ShowResult
+│   │       ├── config.rs         # .forgeql.yaml deserialization
+│   │       ├── context.rs        # RequestContext + Permission
+│   │       ├── error.rs          # ForgeError (thiserror)
+│   │       └── query_logger.rs   # FQL statement logging (--log-queries)
+│   └── forgeql-lang-cpp/         # C++ language support crate
 │       └── src/
-│           ├── ast/
-│           │   ├── index.rs      # IndexRow, SymbolTable, collect_nodes
-│           │   ├── query.rs      # find_symbols, find_usages
-│           │   ├── show.rs       # show_body, show_signature, show_outline, …
-│           │   ├── cache.rs      # Index serialization/deserialization (bincode)
-│           │   └── enrich/       # Enrichment modules (naming, comments, numbers,
-│           │                     #   control_flow, operators, metrics, casts, redundancy)
-│           ├── parser/
-│           │   ├── forgeql.pest  # PEG grammar
-│           │   └── mod.rs        # Parser functions → IR
-│           ├── git/
-│           │   ├── mod.rs        # Branch, stage, commit via git2
-│           │   ├── source.rs     # Source + SourceRegistry (bare repo management)
-│           │   └── worktree.rs   # Worktree lifecycle: create, list, remove
-│           ├── session/
-│           │   └── mod.rs        # Session management (user → worktree → index)
-│           ├── transforms/
-│           │   ├── mod.rs        # TransformPlan, ByteRangeEdit, FileEdit
-│           │   ├── change.rs     # File mutation: matching, lines, with, delete
-│           │   └── diff.rs       # Pure-Rust LCS unified diff generator
-│           ├── verify/
-│           │   └── mod.rs        # Run build/test verification steps
-│           ├── workspace/
-│           │   ├── mod.rs        # Workspace root discovery, file enumeration
-│           │   └── file_io.rs    # Atomic write, .forgeql-ignore support
-│           ├── engine.rs         # Command dispatch + session management + SHOW guardrails
-│           ├── compact.rs        # Compact CSV output renderer (MCP mode)
-│           ├── filter.rs         # apply_clauses(), ClauseTarget trait
-│           ├── ir.rs             # ForgeQLIR, Clauses, Predicate, ChangeTarget
-│           ├── result.rs         # ForgeQLResult, SymbolMatch, ShowResult
-│           ├── config.rs         # .forgeql.yaml deserialization
-│           ├── context.rs        # RequestContext + Permission
-│           └── error.rs          # ForgeError (thiserror)
-│           └── query_logger.rs   # FQL statement logging (--log-queries)
+│           └── lib.rs            # CppLanguage, CPP_CONFIG, map_kind(), cpp_registry()
 ├── doc/
 │   ├── syntax.md                 # Command and clause reference
 │   ├── architecture.md           # This file
@@ -305,11 +312,63 @@ ForgeQL/
 
 ---
 
+## Language-Agnostic Architecture
+
+ForgeQL's core (`forgeql-core`) contains zero language-specific code. All language knowledge lives in external crates — one per language.
+
+### Key Abstractions (defined in `ast/lang.rs`)
+
+**`LanguageConfig`** — a static struct containing all language-specific data: node kind sets, modifier maps, cast kinds, number suffixes, comment prefixes, visibility keywords, etc. Each language crate defines a `static CPP_CONFIG: LanguageConfig` (or equivalent).
+
+**`LanguageSupport`** — a trait that every language crate implements:
+
+```rust
+pub trait LanguageSupport: Send + Sync {
+    fn name(&self) -> &'static str;                      // e.g. "cpp"
+    fn extensions(&self) -> &'static [&'static str];     // e.g. &[".cpp", ".h", ".cc", ...]
+    fn config(&self) -> &'static LanguageConfig;         // static config data
+    fn tree_sitter_language(&self) -> Language;           // tree-sitter grammar
+    fn extract_name(&self, node: Node, source: &[u8]) -> Option<String>;
+    fn map_kind(&self, raw_kind: &str) -> Option<&'static str>;  // "function_definition" → "function"
+}
+```
+
+**`LanguageRegistry`** — holds all registered `LanguageSupport` implementations. The engine uses it to route files to the correct language by extension.
+
+### Dual Kind System
+
+Every `IndexRow` carries two kind fields:
+- `node_kind` — the raw tree-sitter node kind (e.g. `function_definition`, `class_specifier`). Unchanged from previous versions. Language-specific.
+- `fql_kind` — a universal kind (e.g. `function`, `class`, `struct`). Language-agnostic, defined by `map_kind()`.
+
+Users can query either: `WHERE node_kind = 'function_definition'` (precise) or `WHERE fql_kind = 'function'` (portable across languages).
+
+### Crate Dependencies
+
+```
+forgeql (binary)
+├── forgeql-core        zero language grammars
+└── forgeql-lang-cpp    tree-sitter-cpp + CppLanguage
+```
+
+`forgeql-core` depends on `tree-sitter` (the library) but NOT on any grammar crate. Grammar dependencies live exclusively in language crates.
+
+---
+
 ## Adding a New Language
 
-Language support requires changes in two places only:
+Adding a new language requires a single new crate with no changes to `forgeql-core`:
 
-1. **`parser_for_path()`** in `ast/index.rs` — map a file extension to a tree-sitter `Language`.
-2. **`extract_name()`** in `ast/index.rs` — add a small match arm (~5 lines) for node kinds whose symbol name is not stored in a grammar field named `"name"`.
+1. **Create `crates/forgeql-lang-<name>/`** with `Cargo.toml` depending on `forgeql-core` + `tree-sitter-<name>`.
 
-Everything else — indexing, the clause pipeline, MCP tools, query functions — works without modification.
+2. **Implement `LanguageSupport`** — define the static `LanguageConfig`, `extract_name()` for the grammar's naming conventions, and `map_kind()` for the FQL kind taxonomy.
+
+3. **Register in the binary** — add the language to the `LanguageRegistry` in `main.rs`:
+   ```rust
+   let registry = Arc::new(LanguageRegistry::new(vec![
+       Arc::new(CppLanguage),
+       Arc::new(TypeScriptLanguage),  // new
+   ]));
+   ```
+
+Everything else — indexing, enrichment, the clause pipeline, MCP tools, query functions — works without modification.

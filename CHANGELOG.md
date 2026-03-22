@@ -5,14 +5,62 @@ All notable changes to ForgeQL will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.27.0] - 2026-03-22
+## [0.28.0] - 2026-03-22
+
+### Added
+
+- **Language-agnostic architecture** — `forgeql-core` no longer contains any
+  language-specific code. All language knowledge is provided via the
+  `LanguageSupport` trait, `LanguageConfig` struct, and `LanguageRegistry`.
+  Adding a new language requires only a new crate — zero changes to core.
+
+- **`forgeql-lang-cpp` crate** — C++ language support extracted into its own
+  crate (`crates/forgeql-lang-cpp/`). Contains `CppLanguage`, `CPP_CONFIG`,
+  `map_kind()`, and `cpp_registry()`.
+
+- **`fql_kind` field** — universal kind on every `IndexRow`: `function`, `class`,
+  `struct`, `enum`, `variable`, `field`, `comment`, `import`, `macro`,
+  `type_alias`, `namespace`, `number`, `cast`, `operator`. Query with
+  `WHERE fql_kind = 'function'` for language-agnostic filtering.
+
+- **`language` field** — every `IndexRow` carries the language name (e.g. `cpp`).
+  Query with `WHERE language = 'cpp'`.
+
+- **New enrichment fields**:
+  - `suffix_meaning` — semantic meaning of number suffixes (e.g. `unsigned`)
+  - `catch_all_kind` — kind of catch-all branch in switch (e.g. `default`)
+  - `for_style` — `traditional` or `range` for loops
+  - `operator_category` — `increment`, `arithmetic`, `bitwise`, or `shift`
+  - `throw_count` — count of throw statements in functions
+  - `cast_safety` — `safe`, `moderate`, or `unsafe` for cast expressions
+  - `binding_kind` — `function` or `variable` for declarations
+  - `is_exported` — `true` for file-scope non-static declarations
+  - `member_kind` — `method` or `field` for class/struct members
+  - `owner_kind` — raw kind of enclosing type for members
+  - `is_override`, `is_final` — modifier flags for virtual method specifiers
+
+- **`MemberEnricher`** — enrichment pass that populates `body_symbol`,
+  `member_kind`, and `owner_kind` on `field_declaration` nodes.
+
+- **`body_symbol` enrichment field** — queryable via
+  `FIND symbols WHERE body_symbol = 'Class::method'`.
+
+### Changed
+
+- **`has_default` renamed to `has_catch_all`** — the switch enrichment field
+  uses language-agnostic terminology. Queries using `has_default` must be
+  updated to `has_catch_all`.
+
+- **All enrichers are now config-driven** — enrichers read from
+  `LanguageConfig` instead of hardcoding C++ node kinds. This is an internal
+  change with no effect on query results for C++ code.
 
 ### Fixed
 
 - **`SHOW body` failed for bare member names** — `SHOW body OF 'loadSignalCode'`
   returned "function definition not found" when the symbol was a class member
   declaration (`field_declaration`) rather than the out-of-line
-  `function_definition`.  The new `MemberEnricher` now stamps a `body_symbol`
+  `function_definition`.  The `MemberEnricher` now stamps a `body_symbol`
   field on member method declarations during indexing (e.g.
   `body_symbol = "SignalSequencer::loadSignalCode"`), and `show_body` /
   `show_callees` follow the redirect — completely language-agnostic.
@@ -23,16 +71,6 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `extract_name()` and `"field_identifier"` to `find_function_name()` so that
   member function prototypes and data members are now visible in the symbol
   index.
-
-### Added
-
-- **`MemberEnricher`** — new enrichment pass
-  (`crates/forgeql-core/src/ast/enrich/member.rs`) that populates `body_symbol`
-  on `field_declaration` nodes containing a `function_declarator`, linking the
-  member declaration to its qualified definition.
-
-- **`body_symbol` enrichment field** — queryable via
-  `FIND symbols WHERE body_symbol = 'Class::method'`.
 
 ## [0.26.0] - 2026-03-21
 

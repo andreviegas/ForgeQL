@@ -1,13 +1,17 @@
 /// Member declaration enrichment.
 ///
-/// For `field_declaration` nodes that contain a `function_declarator`
-/// (i.e. method prototypes inside a class/struct body), adds:
+/// For `field_declaration` nodes, adds:
 ///
-/// - `body_symbol`: the qualified name (`ClassName::method`) under which
-///   the corresponding function definition is typically indexed.
+/// - `body_symbol`: (method declarations only) the qualified name
+///   (`ClassName::method`) under which the corresponding function definition
+///   is typically indexed.
+/// - `member_kind`: `"method"` if the field contains a `function_declarator`,
+///   otherwise `"field"`.
+/// - `owner_kind`: the raw tree-sitter kind of the enclosing type node
+///   (e.g. `"class_specifier"`, `"struct_specifier"`).
 ///
-/// This allows consumers like `show_body` to resolve a bare member name
-/// (e.g. `loadSignalCode`) to its out-of-line definition
+/// `body_symbol` allows consumers like `show_body` to resolve a bare member
+/// name (e.g. `loadSignalCode`) to its out-of-line definition
 /// (`SignalSequencer::loadSignalCode`) without any language-specific logic
 /// at query time.
 use std::collections::HashMap;
@@ -34,12 +38,22 @@ impl NodeEnricher for MemberEnricher {
             return;
         }
 
-        // Only method declarations — must contain a function_declarator.
-        let has_func_decl = ctx
+        let is_method = ctx
             .node
-            .child_by_field_name("declarator")
-            .is_some_and(|d| has_descendant_kind(d, "function_declarator"));
-        if !has_func_decl {
+            .child_by_field_name(config.declarator_field_name)
+            .is_some_and(|d| has_descendant_kind(d, config.function_declarator_kind));
+
+        // member_kind: method vs field
+        let member_kind = if is_method { "method" } else { "field" };
+        drop(fields.insert("member_kind".to_string(), member_kind.to_string()));
+
+        // owner_kind: raw kind of enclosing type node
+        if let Some(owner) = enclosing_type_node(ctx.node, config.type_raw_kinds) {
+            drop(fields.insert("owner_kind".to_string(), owner.kind().to_string()));
+        }
+
+        // body_symbol: only for method declarations
+        if !is_method {
             return;
         }
 
@@ -66,6 +80,21 @@ fn has_descendant_kind(node: tree_sitter::Node<'_>, target: &str) -> bool {
         }
     }
     false
+}
+
+/// Walk up the parent chain to find an enclosing type node.
+fn enclosing_type_node<'a>(
+    node: tree_sitter::Node<'a>,
+    type_raw_kinds: &[&str],
+) -> Option<tree_sitter::Node<'a>> {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if type_raw_kinds.contains(&parent.kind()) {
+            return Some(parent);
+        }
+        current = parent.parent();
+    }
+    None
 }
 
 /// Walk up the parent chain to find an enclosing type node and return its name.

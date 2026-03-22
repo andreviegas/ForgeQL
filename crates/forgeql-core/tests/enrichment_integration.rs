@@ -9,18 +9,22 @@
 //! Organisation:
 //!   §1  — NamingEnricher     (naming, name_length)
 //!   §2  — CommentEnricher    (comment_style, has_doc)
-//!   §3  — NumberEnricher     (num_format, has_separator, num_sign, num_value, num_suffix, is_magic)
+//!   §3  — NumberEnricher     (num_format, has_separator, num_sign, num_value, num_suffix,
+//!                              suffix_meaning, is_magic)
 //!   §4  — ControlFlowEnricher (condition_tests, paren_depth, condition_text, has_catch_all,
-//!                              has_assignment_in_condition, mixed_logic, dup_logic,
-//!                              branch_count, max_condition_tests, max_paren_depth)
+//!                              catch_all_kind, for_style, has_assignment_in_condition,
+//!                              mixed_logic, dup_logic, branch_count, max_condition_tests,
+//!                              max_paren_depth)
 //!   §5  — OperatorEnricher   (increment_style, increment_op, compound_op, operand,
-//!                              shift_direction, shift_amount, shift_operand)
+//!                              shift_direction, shift_amount, shift_operand, operator_category)
 //!   §6  — MetricsEnricher    (lines, param_count, return_count, goto_count, string_count,
-//!                              member_count, is_const, is_volatile, is_static, is_inline, visibility)
-//!   §7  — CastEnricher       (cast_style, cast_target_type)
+//!                              throw_count, member_count, is_const, is_volatile, is_static,
+//!                              is_inline, is_override, is_final, visibility)
+//!   §7  — CastEnricher       (cast_style, cast_target_type, cast_safety)
 //!   §8  — RedundancyEnricher (repeated_condition_calls, has_repeated_condition_calls,
 //!                              null_check_count, duplicate_condition)
-//!   §9  — ScopeEnricher      (scope, storage)
+//!   §9  — ScopeEnricher      (scope, storage, binding_kind, is_exported)
+//!   §9b — MemberEnricher     (body_symbol, member_kind, owner_kind)
 //!   §10 — field_num() fallback (numeric comparison on dynamic fields)
 #![allow(
     clippy::unwrap_used,
@@ -34,7 +38,9 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::result::{ForgeQLResult, SymbolMatch};
@@ -65,7 +71,8 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
     }
 
     let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir).expect("engine");
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let mut engine = ForgeQLEngine::new(data_dir, registry).expect("engine");
     let session_id = engine
         .register_local_session(dir.path())
         .expect("register session");
@@ -85,7 +92,8 @@ fn engine_enrichment_only() -> (ForgeQLEngine, String, tempfile::TempDir) {
     .expect("copy enrichment_patterns.cpp");
 
     let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir).expect("engine");
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let mut engine = ForgeQLEngine::new(data_dir, registry).expect("engine");
     let session_id = engine
         .register_local_session(dir.path())
         .expect("register session");
@@ -1441,8 +1449,7 @@ fn cast_c_style() {
 
 // NOTE: Named C++ casts (reinterpret_cast, const_cast, static_cast, dynamic_cast)
 // are NOT indexed as separate node kinds in tree-sitter-cpp 0.23.
-// They appear as `template_function` or similar, so the CastEnricher
-// cannot detect them. These tests are omitted as known limitations.
+// cast_safety tests are therefore limited to c_style casts.
 
 #[test]
 fn cast_c_style_has_target_type() {
@@ -2057,4 +2064,365 @@ fn dup_logic_pointer_expression_not_false_positive() {
             "ptr != nullptr && *ptr != 0 should have dup_logic=false, got {dl}"
         );
     }
+}
+
+// =======================================================================
+// §13 — Phase 8 new enrichment fields
+// =======================================================================
+
+// --- NumberEnricher: suffix_meaning ---
+
+#[test]
+fn number_suffix_meaning_unsigned() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'u'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one 'u' suffix literal"
+    );
+    for m in &qr.results {
+        assert_eq!(
+            field(m, "suffix_meaning"),
+            "unsigned",
+            "suffix 'u' should have suffix_meaning 'unsigned' on '{}'",
+            m.name,
+        );
+    }
+}
+
+#[test]
+fn number_suffix_meaning_unsigned_long() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'ul'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one 'ul' suffix literal"
+    );
+    for m in &qr.results {
+        assert_eq!(field(m, "suffix_meaning"), "unsigned_long");
+    }
+}
+
+#[test]
+fn number_suffix_meaning_long_long() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'll'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one 'll' suffix literal"
+    );
+    for m in &qr.results {
+        assert_eq!(field(m, "suffix_meaning"), "long_long");
+    }
+}
+
+// --- ControlFlowEnricher: catch_all_kind ---
+
+#[test]
+fn control_flow_catch_all_kind_default() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'switch_statement' WHERE has_catch_all = 'true'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected switch with catch_all");
+    for m in &qr.results {
+        assert_eq!(
+            field(m, "catch_all_kind"),
+            "default",
+            "switch with catch-all should have catch_all_kind='default' on '{}'",
+            m.name,
+        );
+    }
+}
+
+#[test]
+fn control_flow_catch_all_kind_absent_when_no_default() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'switch_statement' WHERE has_catch_all = 'false'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected switch without catch_all");
+    for m in &qr.results {
+        assert!(
+            field_opt(m, "catch_all_kind").is_none(),
+            "switch without catch-all should not have catch_all_kind on '{}'",
+            m.name,
+        );
+    }
+}
+
+// --- ControlFlowEnricher: for_style ---
+
+#[test]
+fn control_flow_for_style_traditional() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'for_statement'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one for_statement"
+    );
+    for m in &qr.results {
+        assert_eq!(
+            field(m, "for_style"),
+            "traditional",
+            "for_statement should have for_style='traditional' on '{}'",
+            m.name,
+        );
+    }
+}
+
+#[test]
+fn control_flow_for_style_range() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'for_range_loop'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one for_range_loop"
+    );
+    for m in &qr.results {
+        assert_eq!(
+            field(m, "for_style"),
+            "range",
+            "for_range_loop should have for_style='range' on '{}'",
+            m.name,
+        );
+    }
+}
+
+// --- OperatorEnricher: operator_category ---
+
+#[test]
+fn operator_category_increment() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'update_expression'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected update expressions");
+    for m in &qr.results {
+        assert_eq!(field(m, "operator_category"), "increment");
+    }
+}
+
+#[test]
+fn operator_category_compound_arithmetic() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '+='",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected += compound assignments");
+    for m in &qr.results {
+        assert_eq!(field(m, "operator_category"), "arithmetic");
+    }
+}
+
+#[test]
+fn operator_category_compound_bitwise() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '&='",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected &= compound assignments");
+    for m in &qr.results {
+        assert_eq!(field(m, "operator_category"), "bitwise");
+    }
+}
+
+#[test]
+fn operator_category_shift() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'shift_expression'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected shift expressions");
+    for m in &qr.results {
+        assert_eq!(field(m, "operator_category"), "bitwise");
+    }
+}
+
+// --- MetricsEnricher: throw_count ---
+
+#[test]
+fn metrics_throw_count() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'throwingFunction'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "throwingFunction");
+    assert_eq!(
+        field(m, "throw_count"),
+        "2",
+        "throwingFunction should have throw_count=2"
+    );
+}
+
+// --- CastEnricher: cast_safety ---
+
+#[test]
+fn cast_safety_c_style_unsafe() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'cast_expression'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected c-style cast");
+    for m in &qr.results {
+        assert_eq!(field(m, "cast_safety"), "unsafe");
+    }
+}
+
+// Named C++ casts (reinterpret_cast, const_cast, etc.) are NOT indexed
+// as separate node kinds in tree-sitter-cpp 0.23, so cast_safety tests
+// for those are omitted (see §7 note above).
+
+// --- ScopeEnricher: binding_kind, is_exported ---
+
+#[test]
+fn scope_binding_kind_variable() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // static const int decNum = 42 → declaration with scope=file, binding_kind=variable
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'decNum'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "decNum");
+    assert_eq!(field(m, "binding_kind"), "variable");
+}
+
+#[test]
+fn scope_is_exported_static_not_exported() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // static declarations should NOT be exported
+    let r = exec(&mut e, &sid, "FIND symbols WHERE storage = 'static'");
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected static declarations");
+    for m in &qr.results {
+        assert!(
+            field_opt(m, "is_exported").is_none(),
+            "static declaration '{}' should not be is_exported",
+            m.name,
+        );
+    }
+}
+
+// --- MemberEnricher: member_kind, owner_kind ---
+
+#[test]
+fn member_kind_method() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // declaredMethod is a field_declaration with function_declarator (method prototype)
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'declaredMethod'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "declaredMethod");
+    assert_eq!(field(m, "member_kind"), "method");
+}
+
+#[test]
+fn member_kind_field() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'publicField'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "publicField");
+    assert_eq!(field(m, "member_kind"), "field");
+}
+
+#[test]
+fn member_owner_kind_class() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'publicField'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "publicField");
+    assert_eq!(field(m, "owner_kind"), "class_specifier");
+}
+
+#[test]
+fn member_owner_kind_struct() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'fieldA'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "fieldA");
+    assert_eq!(field(m, "member_kind"), "field");
+    assert_eq!(field(m, "owner_kind"), "struct_specifier");
+}
+
+// =======================================================================
+// §11 — parameter_declaration indexing and fql_kind
+// =======================================================================
+
+#[test]
+fn parameter_declaration_has_fql_kind_variable() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // manyParams(int a, int b, int c, int d, int e) — 5 parameters
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'parameter_declaration' WHERE name = 'a'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "parameter 'a' should be indexed");
+    let m = find_by_name(&qr.results, "a");
+    assert_eq!(
+        m.fql_kind.as_deref(),
+        Some("variable"),
+        "parameter_declaration should have fql_kind = 'variable', got {:?}",
+        m.fql_kind,
+    );
+}
+
+#[test]
+fn parameter_fql_kind_variable_filter() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE fql_kind = 'variable' WHERE name = 'a'",
+    );
+    let qr = as_query(&r);
+    // Parameter 'a' should appear when filtering by fql_kind = 'variable'
+    let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
+    assert!(
+        names.contains(&"a"),
+        "parameter 'a' should match fql_kind = 'variable', got: {names:?}",
+    );
 }

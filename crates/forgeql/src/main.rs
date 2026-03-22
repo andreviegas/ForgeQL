@@ -19,15 +19,18 @@ mod path_utils;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use forgeql_core::ast::lang::LanguageRegistry;
 use forgeql_core::compact;
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
 use forgeql_core::result::{ForgeQLResult, SourceOpResult};
+use forgeql_lang_cpp::CppLanguage;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use serde::{Deserialize, Serialize};
@@ -149,7 +152,9 @@ async fn main() -> Result<()> {
 
     let data_dir = path_utils::resolve_data_dir(&cli.data_dir);
 
-    let engine = ForgeQLEngine::new(data_dir.clone())
+    let lang_registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
+
+    let engine = ForgeQLEngine::new(data_dir.clone(), lang_registry)
         .with_context(|| format!("initialising engine with data_dir '{}'", data_dir.display()))?;
 
     let logger = cli.log_queries.then(|| QueryLogger::new(data_dir.clone()));

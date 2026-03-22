@@ -11,12 +11,14 @@
 ///      otherwise fall back to a full rebuild.
 ///      (True incremental re-index is deferred to Phase D.)
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Result;
 use tracing::{debug, info};
 
 use crate::ast::cache::CachedIndex;
 use crate::ast::index::SymbolTable;
+use crate::ast::lang::LanguageRegistry;
 use crate::config::VerifyStep;
 use crate::workspace::Workspace;
 
@@ -71,6 +73,8 @@ pub struct Session {
     /// Working directory captured alongside `frozen_verify_steps` — the
     /// directory that contained `.forgeql.yaml` when the session was opened.
     pub frozen_workdir: Option<PathBuf>,
+    /// Language support registry for tree-sitter parsing and enrichment.
+    lang_registry: Arc<LanguageRegistry>,
 }
 
 impl Session {
@@ -85,6 +89,7 @@ impl Session {
         worktree_path: PathBuf,
         source_name: impl Into<String>,
         branch: impl Into<String>,
+        lang_registry: Arc<LanguageRegistry>,
     ) -> Self {
         let id_str: String = id.into();
         let worktree_name = id_str.clone();
@@ -102,6 +107,7 @@ impl Session {
             checkpoints: Vec::new(),
             frozen_verify_steps: None,
             frozen_workdir: None,
+            lang_registry,
         }
     }
 
@@ -122,7 +128,7 @@ impl Session {
             "building symbol index"
         );
         let workspace = Workspace::new(&self.worktree_path)?;
-        let table = SymbolTable::build(&workspace)?;
+        let table = SymbolTable::build(&workspace, &self.lang_registry)?;
 
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
         let cached = CachedIndex::from_table(table, &commit_hash);
@@ -219,7 +225,7 @@ impl Session {
             .index
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("cannot reindex: session {} has no index", self.id))?;
-        table.reindex_files(paths)
+        table.reindex_files(paths, &self.lang_registry)
     }
 
     /// Update the last-active timestamp to now.
@@ -263,7 +269,12 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::lang::CppLanguageInline;
     use tempfile::tempdir;
+
+    fn make_registry() -> Arc<LanguageRegistry> {
+        Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
+    }
 
     /// Create a minimal git repository with one C++ file and one commit.
     /// Returns the path to the working directory (a normal, non-bare repo).
@@ -298,7 +309,14 @@ mod tests {
 
     #[test]
     fn session_new_has_no_index() {
-        let s = Session::new("s1", "alice", PathBuf::from("/tmp"), "motor", "main");
+        let s = Session::new(
+            "s1",
+            "alice",
+            PathBuf::from("/tmp"),
+            "motor",
+            "main",
+            make_registry(),
+        );
         assert!(s.index().is_none());
     }
 
@@ -306,7 +324,7 @@ mod tests {
     fn build_index_populates_symbols() {
         let tmp = tempdir().unwrap();
         let repo_path = make_repo_with_cpp(tmp.path());
-        let mut session = Session::new("s2", "alice", repo_path, "motor", "main");
+        let mut session = Session::new("s2", "alice", repo_path, "motor", "main", make_registry());
 
         session.build_index().unwrap();
 
@@ -328,13 +346,20 @@ mod tests {
         let repo_path = make_repo_with_cpp(tmp.path());
 
         // Build first — writes cache.
-        let mut s1 = Session::new("s3", "alice", repo_path.clone(), "motor", "main");
+        let mut s1 = Session::new(
+            "s3",
+            "alice",
+            repo_path.clone(),
+            "motor",
+            "main",
+            make_registry(),
+        );
         s1.build_index().unwrap();
         let defs_count = s1.index().unwrap().rows.len();
         drop(s1); // drop to release any locks
 
         // Resume — should load from cache (cache hit).
-        let mut s2 = Session::new("s4", "alice", repo_path, "motor", "main");
+        let mut s2 = Session::new("s4", "alice", repo_path, "motor", "main", make_registry());
         s2.resume_index().unwrap();
         assert_eq!(
             s2.index().unwrap().rows.len(),
@@ -349,7 +374,7 @@ mod tests {
         let repo_path = make_repo_with_cpp(tmp.path());
 
         // No cache written — resume should fall back to full build.
-        let mut session = Session::new("s5", "alice", repo_path, "motor", "main");
+        let mut session = Session::new("s5", "alice", repo_path, "motor", "main", make_registry());
         session.resume_index().unwrap();
         assert!(session.index().is_some());
     }
@@ -358,7 +383,7 @@ mod tests {
     fn commit_hash_returns_a_string() {
         let tmp = tempdir().unwrap();
         let repo_path = make_repo_with_cpp(tmp.path());
-        let session = Session::new("s6", "alice", repo_path, "motor", "main");
+        let session = Session::new("s6", "alice", repo_path, "motor", "main", make_registry());
         let hash = session.commit_hash().unwrap();
         assert_eq!(hash.len(), 40, "OID must be a 40-character hex string");
     }

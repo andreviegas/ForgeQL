@@ -17,12 +17,18 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::ir::{Clauses, ForgeQLIR};
 use forgeql_core::parser;
 use forgeql_core::result::{ForgeQLResult, ShowContent};
 use tempfile::tempdir;
+
+fn make_registry() -> Arc<LanguageRegistry> {
+    Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
+}
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -56,7 +62,7 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
 
     // Create an engine with a data_dir inside the temp dir.
     let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir).expect("engine");
+    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
 
     // Register a local session.  The engine doesn't have a direct method
     // for this — we use the internal test helper.
@@ -81,7 +87,7 @@ fn execute_fql(engine: &mut ForgeQLEngine, session_id: &str, fql: &str) -> Forge
 #[test]
 fn engine_starts_with_zero_state() {
     let tmp = tempdir().unwrap();
-    let engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+    let engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
     assert_eq!(engine.session_count(), 0);
     assert_eq!(engine.source_count(), 0);
     assert_eq!(engine.commands_served(), 0);
@@ -90,7 +96,7 @@ fn engine_starts_with_zero_state() {
 #[test]
 fn show_sources_on_empty_engine() {
     let tmp = tempdir().unwrap();
-    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
     let result = engine.execute(None, &ForgeQLIR::ShowSources).unwrap();
     match result {
         ForgeQLResult::Query(qr) => {
@@ -345,7 +351,7 @@ fn change_rename_applies_and_mutates_file() {
 #[test]
 fn find_symbols_without_session_fails() {
     let tmp = tempdir().unwrap();
-    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
     let op = ForgeQLIR::FindSymbols {
         clauses: Clauses::default(),
     };
@@ -355,7 +361,7 @@ fn find_symbols_without_session_fails() {
 #[test]
 fn disconnect_unknown_session_fails() {
     let tmp = tempdir().unwrap();
-    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf()).unwrap();
+    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
     assert!(
         engine
             .execute(Some("s_ghost"), &ForgeQLIR::Disconnect)
@@ -1201,7 +1207,7 @@ int Widget::width() const {
     .expect("write cpp");
 
     let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir).expect("engine");
+    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
     let sid = engine
         .register_local_session(dir.path())
         .expect("register session");

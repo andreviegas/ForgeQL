@@ -69,7 +69,7 @@ After installing, verify the agent works correctly:
 2. Ask it to run `SHOW SOURCES` — it should use ForgeQL MCP tools, not terminal commands
 3. Ask it to "find all functions with more than 50 lines" — it should use:
    ```sql
-   FIND symbols WHERE node_kind = 'function_definition' WHERE lines >= 50 ORDER BY lines DESC
+   FIND symbols WHERE fql_kind = 'function' WHERE lines >= 50 ORDER BY lines DESC
    ```
    Not grep or find commands.
 

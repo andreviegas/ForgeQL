@@ -268,6 +268,8 @@ Applies to: `FIND symbols`, `FIND usages OF`, `FIND callees OF`
 |---|---|---|
 | `name` | string | Symbol name |
 | `node_kind` | string | Tree-sitter node kind (`function_definition`, `declaration`, etc.) |
+| `fql_kind` | string | Universal kind: `function`, `class`, `struct`, `enum`, `variable`, `field`, etc. |
+| `language` | string | Language name: `cpp`, etc. |
 | `path` | string | Relative file path (also used by `IN`/`EXCLUDE` globs) |
 | `line` | integer | 1-based start line |
 | `usages` | integer | Reference count across the index |
@@ -314,8 +316,6 @@ Auto-extracted from tree-sitter grammar. Queryable with `WHERE` without recompil
 | `value` | C/C++ | Initial value (`preproc_def`, `init_declarator`) |
 | `declarator` | C/C++ | Full declarator with pointer/reference qualifiers |
 | `parameters` | C/C++ | Parameter list text |
-| `scope` | `declaration` | `"file"` or `"local"` |
-| `storage` | `declaration` | `"static"`, `"extern"`, or absent |
 
 If a field does not exist on a row, `WHERE` evaluates to false (SQL `NULL` semantics).
 
@@ -343,9 +343,10 @@ Computed at index time. Queryable with `WHERE` like any other field.
 
 | Field | Applies to | Description |
 |---|---|---|
-| `num_format` | `number_literal` | `decimal`, `hex`, `binary`, `octal`, `float`, `scientific` |
+| `num_format` | `number_literal` | `dec`, `hex`, `bin`, `oct`, `float`, `scientific` |
 | `is_magic` | `number_literal` | `"true"` for unexplained constants (not 0, 1, -1, 2, powers of 2, bitmasks) |
 | `num_suffix` | `number_literal` | Type suffix: `u`, `l`, `ll`, `ul`, `ull`, `f`, `ld` |
+| `suffix_meaning` | `number_literal` | Semantic meaning of suffix: `unsigned`, `long`, `float`, etc. |
 | `has_separator` | `number_literal` | `"true"` if contains digit separators |
 | `num_value` | `number_literal` | Raw text of the literal |
 
@@ -357,6 +358,8 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | `paren_depth` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Max parentheses nesting |
 | `condition_text` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Raw condition expression |
 | `has_catch_all` | `switch_statement` | `"true"` if switch has a catch-all case |
+| `catch_all_kind` | `switch_statement` | Kind of catch-all (e.g. `"default"`) when present |
+| `for_style` | `for_statement`, `for_range_loop` | `"traditional"` or `"range"` |
 | `has_assignment_in_condition` | `if_statement`, `while_statement`, `for_statement` | `"true"` if condition contains `=` (not `==`) |
 | `mixed_logic` | `if_statement`, `while_statement`, `for_statement` | `"true"` if mixes `&&` and `\|\|` without grouping |
 | `dup_logic` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | `"true"` if condition contains duplicate sub-expressions in `&&`/`\|\|` chains |
@@ -372,6 +375,7 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | `operand` | `compound_assignment` | Left-hand side text |
 | `shift_direction` | `shift_expression` | `"left"` or `"right"` |
 | `shift_amount` | `shift_expression` | Right-hand operand text |
+| `operator_category` | `update_expression`, `compound_assignment`, `shift_expression` | `"increment"`, `"arithmetic"`, `"bitwise"`, `"shift"` |
 
 #### MetricsEnricher
 
@@ -382,11 +386,14 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | `return_count` | `function_definition` | `return` statement count |
 | `goto_count` | `function_definition` | `goto` statement count |
 | `string_count` | `function_definition` | String literal count |
+| `throw_count` | `function_definition` | `throw` statement count |
 | `member_count` | `struct_specifier`, `class_specifier`, `enum_specifier` | Member/enumerator count |
 | `is_const` | `function_definition`, `declaration` | `"true"` if `const` present |
 | `is_volatile` | `function_definition`, `declaration` | `"true"` if `volatile` present |
 | `is_static` | `function_definition` | `"true"` if `static` |
 | `is_inline` | `function_definition` | `"true"` if `inline` |
+| `is_override` | `function_definition` | `"true"` if `override` |
+| `is_final` | `function_definition` | `"true"` if `final` |
 | `visibility` | class members | `"public"`, `"private"`, `"protected"` |
 
 #### CastEnricher
@@ -395,6 +402,7 @@ Computed at index time. Queryable with `WHERE` like any other field.
 |---|---|---|
 | `cast_style` | `cast_expression` | `"c_style"` (named C++ casts not indexed in tree-sitter-cpp 0.23) |
 | `cast_target_type` | `cast_expression` | Target type text |
+| `cast_safety` | `cast_expression` | `"safe"`, `"moderate"`, or `"unsafe"` |
 
 #### RedundancyEnricher
 
@@ -404,6 +412,23 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | `repeated_condition_calls` | `function_definition` | Comma-separated function names |
 | `null_check_count` | `function_definition` | Count of null-check patterns |
 | `duplicate_condition` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | `"true"` if same condition skeleton exists elsewhere in function |
+
+#### ScopeEnricher
+
+| Field | Applies to | Description |
+|---|---|---|
+| `scope` | `declaration` | `"file"` (top-level) or `"local"` (inside function/block) |
+| `storage` | `declaration` | `"static"`, `"extern"`, or absent |
+| `binding_kind` | `declaration` | `"function"` or `"variable"` |
+| `is_exported` | `declaration` | `"true"` for file-scope declarations without `static` storage |
+
+#### MemberEnricher
+
+| Field | Applies to | Description |
+|---|---|---|
+| `body_symbol` | `field_declaration` (methods) | Qualified name linking to out-of-line definition (e.g. `Class::method`) |
+| `member_kind` | `field_declaration` | `"method"` or `"field"` |
+| `owner_kind` | `field_declaration` | Raw kind of enclosing type (e.g. `class_specifier`, `struct_specifier`) |
 
 ---
 
@@ -431,14 +456,14 @@ SHOW body OF 'PiscoCode::process' DEPTH 99
 ```sql
 -- Unreferenced functions (skip test files)
 FIND symbols
-  WHERE node_kind = 'function_definition'
+  WHERE fql_kind = 'function'
   WHERE usages = 0
   EXCLUDE 'tests/**'
   ORDER BY path ASC
 
 -- Unreferenced macros in headers
 FIND symbols
-  WHERE node_kind = 'preproc_def'
+  WHERE fql_kind = 'macro'
   WHERE usages = 0
   IN 'include/**'
 
@@ -454,7 +479,7 @@ FIND symbols
 ```sql
 -- Functions longer than 50 lines (refactoring candidates)
 FIND symbols
-  WHERE node_kind = 'function_definition'
+  WHERE fql_kind = 'function'
   WHERE lines >= 50
   ORDER BY lines DESC
 
@@ -463,7 +488,7 @@ FIND symbols WHERE condition_tests >= 4
 
 -- Switch without default
 FIND symbols
-  WHERE node_kind = 'switch_statement'
+  WHERE fql_kind = 'switch'
   WHERE has_catch_all = 'false'
 
 -- Mixed && / || without grouping parentheses
@@ -527,7 +552,7 @@ SHOW callees OF 'PiscoCode::process'
 
 -- Top 10 most-referenced functions
 FIND symbols
-  WHERE node_kind = 'function_definition'
+  WHERE fql_kind = 'function'
   ORDER BY usages DESC
   LIMIT 10
 ```
