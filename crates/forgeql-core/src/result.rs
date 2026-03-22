@@ -81,6 +81,12 @@ pub struct SymbolMatch {
     /// AST node kind: `"function_definition"`, `"declaration"`, `"identifier"`, etc.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_kind: Option<String>,
+    /// Universal FQL kind (e.g. `"function"`, `"class"`, `"number"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fql_kind: Option<String>,
+    /// Language identifier (e.g. `"cpp"`, `"typescript"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     /// Source file path (relative to workspace root).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
@@ -851,6 +857,8 @@ mod tests {
             results: vec![SymbolMatch {
                 name: "setPeakLevel".to_string(),
                 node_kind: Some("Function".to_string()),
+                fql_kind: None,
+                language: None,
                 path: Some(PathBuf::from("src/signal_controller.cpp")),
                 line: None,
                 usages_count: Some(3),
@@ -886,6 +894,8 @@ mod tests {
             results: vec![SymbolMatch {
                 name: "setPeakLevel".to_string(),
                 node_kind: Some("Function".to_string()),
+                fql_kind: None,
+                language: None,
                 path: Some(PathBuf::from("src/signal.cpp")),
                 line: None,
                 usages_count: Some(7),
@@ -917,6 +927,8 @@ mod tests {
             results: vec![SymbolMatch {
                 name: "processData".to_string(),
                 node_kind: Some("identifier".to_string()),
+                fql_kind: None,
+                language: None,
                 path: Some(PathBuf::from("src/main.cpp")),
                 line: Some(42),
                 usages_count: None,
@@ -947,6 +959,8 @@ mod tests {
             results: vec![SymbolMatch {
                 name: "src/signal.cpp".to_string(),
                 node_kind: None,
+                fql_kind: None,
+                language: None,
                 path: None,
                 line: None,
                 usages_count: None,
@@ -1171,6 +1185,8 @@ mod tests {
             results: vec![SymbolMatch {
                 name: "setPeakLevel".to_string(),
                 node_kind: Some("Function".to_string()),
+                fql_kind: None,
+                language: None,
                 path: Some(PathBuf::from("src/signal.cpp")),
                 line: None,
                 usages_count: Some(3),
@@ -1194,6 +1210,8 @@ mod tests {
             results: vec![SymbolMatch {
                 name: "foo".to_string(),
                 node_kind: None,
+                fql_kind: None,
+                language: None,
                 path: None,
                 line: None,
                 usages_count: None,

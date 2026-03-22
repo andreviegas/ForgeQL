@@ -283,6 +283,8 @@ mod tests {
             table.push_row(IndexRow {
                 name: name.to_string(),
                 node_kind: "function_definition".to_string(),
+                fql_kind: String::new(),
+                language: String::new(),
                 path: PathBuf::from("src/main.cpp"),
                 byte_range: start..start + 10,
                 line: i + 1,
@@ -364,6 +366,8 @@ mod tests {
         table.push_row(IndexRow {
             name: "myFunc".into(),
             node_kind: "function_definition".into(),
+            fql_kind: String::new(),
+            language: String::new(),
             path: PathBuf::from("a.cpp"),
             byte_range: 0..6,
             line: 1,
@@ -372,6 +376,8 @@ mod tests {
         table.push_row(IndexRow {
             name: "myVar".into(),
             node_kind: "declaration".into(),
+            fql_kind: String::new(),
+            language: String::new(),
             path: PathBuf::from("a.cpp"),
             byte_range: 10..15,
             line: 2,
@@ -397,6 +403,8 @@ mod tests {
         table.push_row(IndexRow {
             name: "shouldTurnLedOn".into(),
             node_kind: "function_definition".into(),
+            fql_kind: String::new(),
+            language: String::new(),
             path: PathBuf::from("src/led_controller.cpp"),
             byte_range: 100..115,
             line: 5,
@@ -430,6 +438,8 @@ mod tests {
         table.push_row(IndexRow {
             name: "processPacket".into(),
             node_kind: "function_definition".into(),
+            fql_kind: String::new(),
+            language: String::new(),
             path: PathBuf::from("src/net.cpp"),
             byte_range: 0..13,
             line: 1,

@@ -245,6 +245,8 @@ impl ClauseTarget for crate::result::SymbolMatch {
         match field {
             "name" => Some(&self.name),
             "kind" | "node_kind" => self.node_kind.as_deref(),
+            "fql_kind" => self.fql_kind.as_deref(),
+            "language" | "lang" => self.language.as_deref(),
             "path" | "file" => self.path.as_deref().and_then(|p| p.to_str()),
             other => self.fields.get(other).map(String::as_str),
         }
@@ -275,6 +277,20 @@ impl ClauseTarget for IndexRow {
         match field {
             "name" => Some(self.name.as_str()),
             "node_kind" | "kind" => Some(self.node_kind.as_str()),
+            "fql_kind" => {
+                if self.fql_kind.is_empty() {
+                    None
+                } else {
+                    Some(self.fql_kind.as_str())
+                }
+            }
+            "language" | "lang" => {
+                if self.language.is_empty() {
+                    None
+                } else {
+                    Some(self.language.as_str())
+                }
+            }
             "path" | "file" => self.path.to_str(),
             other => self.fields.get(other).map(String::as_str),
         }
@@ -379,6 +395,8 @@ mod tests {
         SymbolMatch {
             name: name.to_string(),
             node_kind: Some(kind.to_string()),
+            fql_kind: None,
+            language: None,
             path: Some(PathBuf::from(format!("src/{name}.cpp"))),
             line: None,
             usages_count: Some(usages),
@@ -531,6 +549,8 @@ mod tests {
                 name: "a".into(),
                 path: Some(PathBuf::from("src/main.cpp")),
                 node_kind: None,
+                fql_kind: None,
+                language: None,
                 line: None,
                 usages_count: None,
                 fields: HashMap::new(),
@@ -540,6 +560,8 @@ mod tests {
                 name: "b".into(),
                 path: Some(PathBuf::from("tests/test.cpp")),
                 node_kind: None,
+                fql_kind: None,
+                language: None,
                 line: None,
                 usages_count: None,
                 fields: HashMap::new(),
@@ -562,6 +584,8 @@ mod tests {
                 name: "a".into(),
                 path: Some(PathBuf::from("src/main.cpp")),
                 node_kind: None,
+                fql_kind: None,
+                language: None,
                 line: None,
                 usages_count: None,
                 fields: HashMap::new(),
@@ -571,6 +595,8 @@ mod tests {
                 name: "b".into(),
                 path: Some(PathBuf::from("include/header.hpp")),
                 node_kind: None,
+                fql_kind: None,
+                language: None,
                 line: None,
                 usages_count: None,
                 fields: HashMap::new(),

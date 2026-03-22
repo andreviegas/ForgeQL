@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::index::{IndexRow, SymbolTable, node_text};
+use crate::ast::lang::{CppLanguageInline, LanguageSupport};
 
 /// Enricher for control-flow statement complexity analysis.
 pub struct ControlFlowEnricher;
@@ -84,6 +85,8 @@ impl NodeEnricher for ControlFlowEnricher {
         vec![IndexRow {
             name,
             node_kind: kind.to_string(),
+            fql_kind: CppLanguageInline.map_kind(kind).unwrap_or("").to_string(),
+            language: "cpp".to_string(),
             path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,

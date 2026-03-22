@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::index::{IndexRow, SymbolTable};
+use super::lang::{LanguageConfig, LanguageSupport};
 
 pub mod casts;
 pub mod comments;
@@ -38,6 +39,10 @@ pub struct EnrichContext<'a> {
     pub path: &'a Path,
     /// Language identifier (e.g. `"cpp"`).
     pub language_name: &'a str,
+    /// Language-specific configuration (node kinds, separators, etc.).
+    pub language_config: &'a LanguageConfig,
+    /// Full language support trait object (for `extract_name`, `map_kind`, etc.).
+    pub language_support: &'a dyn LanguageSupport,
 }
 
 // -----------------------------------------------------------------------

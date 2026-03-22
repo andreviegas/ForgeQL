@@ -123,6 +123,8 @@ mod tests {
         t.push_row(IndexRow {
             name: "foo".to_string(),
             node_kind: "function_definition".to_string(),
+            fql_kind: String::new(),
+            language: String::new(),
             path: PathBuf::from("src/foo.cpp"),
             byte_range: 10..20,
             line: 1,

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::index::{IndexRow, node_text};
+use crate::ast::lang::{CppLanguageInline, LanguageSupport};
 
 /// Enricher for operator analysis (increment, compound assignment, shift).
 pub struct OperatorEnricher;
@@ -55,6 +56,11 @@ impl OperatorEnricher {
         vec![IndexRow {
             name,
             node_kind: "update_expression".to_string(),
+            fql_kind: CppLanguageInline
+                .map_kind("update_expression")
+                .unwrap_or("")
+                .to_string(),
+            language: "cpp".to_string(),
             path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
@@ -92,6 +98,11 @@ impl OperatorEnricher {
         vec![IndexRow {
             name,
             node_kind: "compound_assignment".to_string(),
+            fql_kind: CppLanguageInline
+                .map_kind("compound_assignment")
+                .unwrap_or("")
+                .to_string(),
+            language: "cpp".to_string(),
             path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
@@ -131,6 +142,11 @@ impl OperatorEnricher {
         vec![IndexRow {
             name,
             node_kind: "shift_expression".to_string(),
+            fql_kind: CppLanguageInline
+                .map_kind("shift_expression")
+                .unwrap_or("")
+                .to_string(),
+            language: "cpp".to_string(),
             path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,

@@ -732,6 +732,8 @@ mod tests {
                 SymbolMatch {
                     name: "encenderMotor".into(),
                     node_kind: Some("function_definition".into()),
+                    fql_kind: None,
+                    language: None,
                     path: Some(PathBuf::from("src/motor_control.cpp")),
                     line: None,
                     usages_count: Some(7),
@@ -741,6 +743,8 @@ mod tests {
                 SymbolMatch {
                     name: "apagarMotor".into(),
                     node_kind: Some("function_definition".into()),
+                    fql_kind: None,
+                    language: None,
                     path: Some(PathBuf::from("src/motor_control.cpp")),
                     line: None,
                     usages_count: Some(5),
@@ -750,6 +754,8 @@ mod tests {
                 SymbolMatch {
                     name: "MotorControl".into(),
                     node_kind: Some("class_specifier".into()),
+                    fql_kind: None,
+                    language: None,
                     path: Some(PathBuf::from("include/motor_control.hpp")),
                     line: None,
                     usages_count: Some(2),
@@ -784,6 +790,8 @@ mod tests {
                 SymbolMatch {
                     name: "encenderMotor".into(),
                     node_kind: Some("identifier".into()),
+                    fql_kind: None,
+                    language: None,
                     path: Some(PathBuf::from("src/motor_control.cpp")),
                     line: Some(45),
                     usages_count: None,
@@ -793,6 +801,8 @@ mod tests {
                 SymbolMatch {
                     name: "encenderMotor".into(),
                     node_kind: Some("identifier".into()),
+                    fql_kind: None,
+                    language: None,
                     path: Some(PathBuf::from("src/motor_control.cpp")),
                     line: Some(89),
                     usages_count: None,
@@ -802,6 +812,8 @@ mod tests {
                 SymbolMatch {
                     name: "encenderMotor".into(),
                     node_kind: Some("identifier".into()),
+                    fql_kind: None,
+                    language: None,
                     path: Some(PathBuf::from("include/motor_control.hpp")),
                     line: Some(34),
                     usages_count: None,
@@ -830,6 +842,8 @@ mod tests {
                 SymbolMatch {
                     name: "src/signal.cpp".into(),
                     node_kind: None,
+                    fql_kind: None,
+                    language: None,
                     path: None,
                     line: None,
                     usages_count: None,
@@ -839,6 +853,8 @@ mod tests {
                 SymbolMatch {
                     name: "src/main.cpp".into(),
                     node_kind: None,
+                    fql_kind: None,
+                    language: None,
                     path: None,
                     line: None,
                     usages_count: None,
@@ -869,6 +885,8 @@ mod tests {
                 SymbolMatch {
                     name: "Serial_Protocol".into(),
                     node_kind: Some("class_specifier".into()),
+                    fql_kind: None,
+                    language: None,
                     path: Some(PathBuf::from("src/Serial_Protocol.h")),
                     line: Some(24),
                     usages_count: Some(8),
@@ -878,6 +896,8 @@ mod tests {
                 SymbolMatch {
                     name: "MpptState".into(),
                     node_kind: Some("struct_specifier".into()),
+                    fql_kind: None,
+                    language: None,
                     path: Some(PathBuf::from("src/SolarCharger.h")),
                     line: Some(57),
                     usages_count: Some(4),

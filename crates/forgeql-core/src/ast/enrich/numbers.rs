@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::index::{IndexRow, node_text};
+use crate::ast::lang::{CppLanguageInline, LanguageSupport};
 
 /// Enricher that indexes `number_literal` nodes with numeric metadata.
 pub struct NumberEnricher;
@@ -69,6 +70,11 @@ impl NodeEnricher for NumberEnricher {
         vec![IndexRow {
             name: raw,
             node_kind: "number_literal".to_string(),
+            fql_kind: CppLanguageInline
+                .map_kind("number_literal")
+                .unwrap_or("")
+                .to_string(),
+            language: "cpp".to_string(),
             path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,

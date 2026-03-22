@@ -541,6 +541,8 @@ impl ForgeQLEngine {
                 self.registry.get(name).map(|source| SymbolMatch {
                     name: source.name().to_string(),
                     node_kind: Some("source".to_string()),
+                    fql_kind: None,
+                    language: None,
                     path: Some(source.path().to_path_buf()),
                     line: None,
                     usages_count: None,
@@ -653,6 +655,8 @@ impl ForgeQLEngine {
             .map(|site| SymbolMatch {
                 name: of.to_string(),
                 node_kind: None,
+                fql_kind: None,
+                language: None,
                 path: Some(site.path.clone()),
                 line: Some(site.line),
                 usages_count: None,
@@ -1438,6 +1442,16 @@ fn find_symbols_prefilter(
         results.push(SymbolMatch {
             name: def.name.clone(),
             node_kind: Some(def.node_kind.clone()),
+            fql_kind: if def.fql_kind.is_empty() {
+                None
+            } else {
+                Some(def.fql_kind.clone())
+            },
+            language: if def.language.is_empty() {
+                None
+            } else {
+                Some(def.language.clone())
+            },
             path: Some(def.path.clone()),
             line: Some(def.line),
             usages_count: Some(usages),
@@ -2010,6 +2024,8 @@ mod tests {
         crate::result::SymbolMatch {
             name: name.to_string(),
             node_kind: Some("function_definition".to_string()),
+            fql_kind: Some("function".to_string()),
+            language: Some("cpp".to_string()),
             path: Some(std::path::PathBuf::from("src/a.cpp")),
             line: Some(10),
             usages_count: Some(3),

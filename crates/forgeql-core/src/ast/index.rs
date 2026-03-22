@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::ast::enrich::{EnrichContext, NodeEnricher, default_enrichers};
+use crate::ast::lang::CppLanguageInline;
+use crate::ast::lang::LanguageSupport;
 use crate::error::ForgeError;
 use crate::workspace::Workspace;
 
@@ -34,6 +36,13 @@ pub struct IndexRow {
     /// Raw tree-sitter node kind (e.g. `"function_definition"`,
     /// `"struct_specifier"`, `"preproc_def"`).
     pub node_kind: String,
+    /// Universal FQL kind (e.g. `"function"`, `"class"`, `"number"`).
+    /// Empty string when no mapping exists for this `node_kind`.
+    #[serde(default)]
+    pub fql_kind: String,
+    /// Language identifier (e.g. `"cpp"`, `"typescript"`).
+    #[serde(default)]
+    pub language: String,
     /// Source file path (absolute path used internally).
     pub path: PathBuf,
     /// Byte range of the full AST node in the source file.
@@ -85,6 +94,8 @@ pub struct SymbolTable {
     name_index: HashMap<String, Vec<usize>>,
     /// Node kind → row indices for fast kind filtering.
     kind_index: HashMap<String, Vec<usize>>,
+    /// FQL kind → row indices for fast universal-kind filtering.
+    fql_kind_index: HashMap<String, Vec<usize>>,
 }
 
 impl SymbolTable {
@@ -181,6 +192,12 @@ impl SymbolTable {
                 .entry(row.node_kind.clone())
                 .or_default()
                 .push(offset + i);
+            if !row.fql_kind.is_empty() {
+                self.fql_kind_index
+                    .entry(row.fql_kind.clone())
+                    .or_default()
+                    .push(offset + i);
+            }
             self.rows.push(row);
         }
 
@@ -201,6 +218,12 @@ impl SymbolTable {
             .entry(row.node_kind.clone())
             .or_default()
             .push(index);
+        if !row.fql_kind.is_empty() {
+            self.fql_kind_index
+                .entry(row.fql_kind.clone())
+                .or_default()
+                .push(index);
+        }
         self.rows.push(row);
     }
 
@@ -239,6 +262,14 @@ impl SymbolTable {
             .flat_map(|v| v.iter().map(|&i| &self.rows[i]))
     }
 
+    /// Return an iterator over all rows matching a universal FQL kind.
+    pub fn rows_by_fql_kind(&self, fql_kind: &str) -> impl Iterator<Item = &IndexRow> {
+        self.fql_kind_index
+            .get(fql_kind)
+            .into_iter()
+            .flat_map(|v| v.iter().map(|&i| &self.rows[i]))
+    }
+
     // -------------------------------------------------------------------
     // Incremental update
     // -------------------------------------------------------------------
@@ -250,6 +281,7 @@ impl SymbolTable {
         // Rebuild secondary indexes from scratch.
         self.name_index.clear();
         self.kind_index.clear();
+        self.fql_kind_index.clear();
         for (index, row) in self.rows.iter().enumerate() {
             self.name_index
                 .entry(row.name.clone())
@@ -259,6 +291,12 @@ impl SymbolTable {
                 .entry(row.node_kind.clone())
                 .or_default()
                 .push(index);
+            if !row.fql_kind.is_empty() {
+                self.fql_kind_index
+                    .entry(row.fql_kind.clone())
+                    .or_default()
+                    .push(index);
+            }
         }
 
         for sites in self.usages.values_mut() {
@@ -380,6 +418,8 @@ fn collect_nodes(
                 source,
                 path,
                 language_name,
+                language_config: CppLanguageInline.config(),
+                language_support: &CppLanguageInline,
             };
 
             // Every named node becomes a row.
@@ -394,6 +434,11 @@ fn collect_nodes(
                 let row = IndexRow {
                     name,
                     node_kind: node.kind().to_string(),
+                    fql_kind: CppLanguageInline
+                        .map_kind(node.kind())
+                        .unwrap_or("")
+                        .to_string(),
+                    language: language_name.to_string(),
                     path: path.to_path_buf(),
                     byte_range: node.byte_range(),
                     line: node.start_position().row + 1,
@@ -622,6 +667,8 @@ mod tests {
         table.push_row(IndexRow {
             name: "foo".to_string(),
             node_kind: "function_definition".to_string(),
+            fql_kind: String::new(),
+            language: String::new(),
             path: PathBuf::from("a.cpp"),
             byte_range: 0..30,
             line: 1,
@@ -630,6 +677,8 @@ mod tests {
         table.push_row(IndexRow {
             name: "bar".to_string(),
             node_kind: "function_definition".to_string(),
+            fql_kind: String::new(),
+            language: String::new(),
             path: PathBuf::from("b.cpp"),
             byte_range: 0..30,
             line: 1,
@@ -646,6 +695,8 @@ mod tests {
         table.push_row(IndexRow {
             name: "alpha".to_string(),
             node_kind: "function_definition".to_string(),
+            fql_kind: String::new(),
+            language: String::new(),
             path: PathBuf::from("src/alpha.cpp"),
             byte_range: 0..10,
             line: 1,
@@ -662,6 +713,8 @@ mod tests {
         table.push_row(IndexRow {
             name: "foo".to_string(),
             node_kind: "declaration".to_string(),
+            fql_kind: String::new(),
+            language: String::new(),
             path: PathBuf::from("inc/foo.h"),
             byte_range: 0..10,
             line: 1,
@@ -670,6 +723,8 @@ mod tests {
         table.push_row(IndexRow {
             name: "foo".to_string(),
             node_kind: "function_definition".to_string(),
+            fql_kind: String::new(),
+            language: String::new(),
             path: PathBuf::from("src/foo.cpp"),
             byte_range: 0..50,
             line: 1,
