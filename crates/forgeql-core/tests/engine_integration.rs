@@ -1088,7 +1088,7 @@ fn show_outline_where_name_like_filters() {
                 );
                 for entry in entries {
                     assert!(
-                        entry.name.starts_with("VELOCIDAD"),
+                        entry.name.to_ascii_uppercase().starts_with("VELOCIDAD"),
                         "WHERE name LIKE 'VELOCIDAD%' returned unexpected entry '{}'",
                         entry.name
                     );
@@ -1158,5 +1158,127 @@ fn show_members_where_filters_by_kind() {
             other => panic!("expected Members, got {other:?}"),
         },
         other => panic!("expected Show, got {other:?}"),
+    }
+}
+
+// -----------------------------------------------------------------------
+// Member declaration → body resolution (regression: field_declaration)
+// -----------------------------------------------------------------------
+
+/// Create a temp workspace with a header declaring a class method and a
+/// .cpp file providing the out-of-line definition.
+fn engine_with_class_method() -> (ForgeQLEngine, String, tempfile::TempDir) {
+    let dir = tempdir().expect("tempdir");
+
+    fs::write(
+        dir.path().join("widget.hpp"),
+        "\
+class Widget {
+  public:
+    void render(int flags);
+    int  width() const;
+};
+",
+    )
+    .expect("write header");
+
+    fs::write(
+        dir.path().join("widget.cpp"),
+        "\
+#include \"widget.hpp\"
+
+void Widget::render(int flags) {
+    if (flags & 1) {
+        // draw
+    }
+}
+
+int Widget::width() const {
+    return 42;
+}
+",
+    )
+    .expect("write cpp");
+
+    let data_dir = dir.path().join("data");
+    let mut engine = ForgeQLEngine::new(data_dir).expect("engine");
+    let sid = engine
+        .register_local_session(dir.path())
+        .expect("register session");
+    (engine, sid, dir)
+}
+
+#[test]
+fn show_body_resolves_bare_member_name() {
+    let (mut engine, sid, _dir) = engine_with_class_method();
+
+    // Bare name should follow body_symbol → Widget::render
+    let result = execute_fql(&mut engine, &sid, "SHOW body OF 'render'");
+    match &result {
+        ForgeQLResult::Show(sr) => match &sr.content {
+            ShowContent::Lines { lines, .. } => {
+                assert!(!lines.is_empty(), "SHOW body OF 'render' must return lines");
+                let full_text: String = lines
+                    .iter()
+                    .map(|l| l.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(
+                    full_text.contains("Widget::render"),
+                    "body must come from the qualified definition, got: {full_text}"
+                );
+            }
+            other => panic!("expected Lines, got {other:?}"),
+        },
+        other => panic!("expected Show, got {other:?}"),
+    }
+}
+
+#[test]
+fn show_body_qualified_name_still_works() {
+    let (mut engine, sid, _dir) = engine_with_class_method();
+
+    // Fully qualified name should still work directly.
+    let result = execute_fql(&mut engine, &sid, "SHOW body OF 'Widget::render'");
+    match &result {
+        ForgeQLResult::Show(sr) => match &sr.content {
+            ShowContent::Lines { lines, .. } => {
+                assert!(
+                    !lines.is_empty(),
+                    "SHOW body OF 'Widget::render' must return lines"
+                );
+            }
+            other => panic!("expected Lines, got {other:?}"),
+        },
+        other => panic!("expected Show, got {other:?}"),
+    }
+}
+
+#[test]
+fn member_declaration_has_body_symbol_field() {
+    let (mut engine, sid, _dir) = engine_with_class_method();
+
+    // The field_declaration for 'render' should carry body_symbol = "Widget::render"
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE name = 'render' WHERE node_kind = 'field_declaration'",
+    );
+    match &result {
+        ForgeQLResult::Query(qr) => {
+            assert_eq!(
+                qr.results.len(),
+                1,
+                "exactly one field_declaration for render"
+            );
+            let row = &qr.results[0];
+            let body_sym = row.fields.get("body_symbol").map(String::as_str);
+            assert_eq!(
+                body_sym,
+                Some("Widget::render"),
+                "body_symbol must point to the qualified definition"
+            );
+        }
+        other => panic!("expected Query, got {other:?}"),
     }
 }

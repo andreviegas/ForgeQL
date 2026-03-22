@@ -16,6 +16,7 @@ use super::index::{IndexRow, SymbolTable};
 pub mod casts;
 pub mod comments;
 pub mod control_flow;
+pub mod member;
 pub mod metrics;
 pub mod naming;
 pub mod numbers;
@@ -96,5 +97,6 @@ pub fn default_enrichers() -> Vec<Box<dyn NodeEnricher>> {
         Box::new(metrics::MetricsEnricher),
         Box::new(casts::CastEnricher),
         Box::new(redundancy::RedundancyEnricher),
+        Box::new(member::MemberEnricher),
     ]
 }

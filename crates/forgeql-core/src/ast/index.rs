@@ -502,6 +502,15 @@ fn extract_name(node: tree_sitter::Node<'_>, source: &[u8], language_name: &str)
                 .filter(|s| !s.is_empty())
         }
 
+        // C++ class/struct member declarations (both data members and
+        // method prototypes).  tree-sitter uses `field_declaration` for
+        // everything inside a `field_declaration_list`.
+        ("cpp", "field_declaration") => node
+            .child_by_field_name("declarator")
+            .and_then(find_function_name)
+            .map(|n| node_text(source, n))
+            .filter(|s| !s.is_empty()),
+
         // Comments: the node text IS the name — enabling text search via
         //   FIND symbols WHERE node_kind = 'comment' WHERE name LIKE '%keyword%'
         // Both `// line comments` and `/* block comments */` use this node kind.
@@ -565,7 +574,11 @@ fn find_function_name(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'
         // Return the full qualified node (e.g. `Serial_Protocol::setup`)
         // so that the index stores the qualified name, not just the
         // trailing identifier.
-        "identifier" | "destructor_name" | "operator_name" | "qualified_identifier" => Some(node),
+        "identifier"
+        | "field_identifier"
+        | "destructor_name"
+        | "operator_name"
+        | "qualified_identifier" => Some(node),
         "function_declarator"
         | "pointer_declarator"
         | "reference_declarator"
@@ -749,10 +762,12 @@ mod tests {
             table.find_def("Motor::setup").is_some(),
             "qualified method should be indexed under its full name"
         );
-        assert!(
-            table.find_def("setup").is_none(),
-            "qualified method should NOT be indexed under the bare name"
-        );
+        // The member declaration inside the class body is also indexed
+        // under the bare name as a field_declaration.
+        let decl = table
+            .find_def("setup")
+            .expect("member declaration should be indexed");
+        assert_eq!(decl.node_kind, "field_declaration");
     }
 
     #[test]
@@ -760,10 +775,42 @@ mod tests {
         let table = index_snippet(
             "void setup() {}\nclass Motor { void setup(); };\nvoid Motor::setup() {}",
         );
-        let bare = table.find_def("setup").expect("bare setup");
-        assert_eq!(bare.node_kind, "function_definition");
+        // find_def returns the last row for a name — the field_declaration
+        // from the class body comes after the bare function_definition.
+        let last = table.find_def("setup").expect("setup");
+        assert_eq!(last.node_kind, "field_declaration");
+        // The bare function_definition is still in the table.
+        let has_bare_def = table
+            .rows
+            .iter()
+            .any(|r| r.name == "setup" && r.node_kind == "function_definition");
+        assert!(has_bare_def, "bare function_definition should exist");
         let qualified = table.find_def("Motor::setup").expect("qualified setup");
         assert_eq!(qualified.node_kind, "function_definition");
+    }
+
+    #[test]
+    fn indexes_member_function_declaration() {
+        let table = index_snippet(
+            "class SignalSequencer {\n  void loadSignalCode(int code);\n  int getValue() const;\n};",
+        );
+        let load = table
+            .find_def("loadSignalCode")
+            .expect("member declaration indexed");
+        assert_eq!(load.node_kind, "field_declaration");
+        let get = table
+            .find_def("getValue")
+            .expect("member declaration indexed");
+        assert_eq!(get.node_kind, "field_declaration");
+    }
+
+    #[test]
+    fn indexes_member_data_field() {
+        let table = index_snippet("struct Point { int x; double y; };");
+        let x = table.find_def("x").expect("data member indexed");
+        assert_eq!(x.node_kind, "field_declaration");
+        let y = table.find_def("y").expect("data member indexed");
+        assert_eq!(y.node_kind, "field_declaration");
     }
 
     #[test]
@@ -799,5 +846,29 @@ mod tests {
         let table = index_snippet("void foo() { foo(); }");
         let sites = table.find_usages("foo");
         assert!(!sites.is_empty(), "foo should have usage sites");
+    }
+
+    #[test]
+    fn member_method_declaration_carries_body_symbol() {
+        let table = index_snippet(
+            "class Motor { void setup(int speed); };\nvoid Motor::setup(int speed) {}",
+        );
+        let decl = table.find_def("setup").expect("member declaration indexed");
+        assert_eq!(decl.node_kind, "field_declaration");
+        assert_eq!(
+            decl.fields.get("body_symbol").map(String::as_str),
+            Some("Motor::setup"),
+            "body_symbol must point to the qualified name"
+        );
+    }
+
+    #[test]
+    fn data_member_has_no_body_symbol() {
+        let table = index_snippet("struct Point { int x; double y; };");
+        let x = table.find_def("x").expect("data member indexed");
+        assert!(
+            !x.fields.contains_key("body_symbol"),
+            "data members should not have body_symbol"
+        );
     }
 }

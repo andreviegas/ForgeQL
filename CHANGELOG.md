@@ -5,6 +5,35 @@ All notable changes to ForgeQL will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-03-22
+
+### Fixed
+
+- **`SHOW body` failed for bare member names** — `SHOW body OF 'loadSignalCode'`
+  returned "function definition not found" when the symbol was a class member
+  declaration (`field_declaration`) rather than the out-of-line
+  `function_definition`.  The new `MemberEnricher` now stamps a `body_symbol`
+  field on member method declarations during indexing (e.g.
+  `body_symbol = "SignalSequencer::loadSignalCode"`), and `show_body` /
+  `show_callees` follow the redirect — completely language-agnostic.
+
+- **Class/struct member declarations were not indexed** — tree-sitter C++ uses
+  `field_declaration` for members inside class bodies, but the indexer only
+  handled `declaration` nodes.  Added a `("cpp", "field_declaration")` arm to
+  `extract_name()` and `"field_identifier"` to `find_function_name()` so that
+  member function prototypes and data members are now visible in the symbol
+  index.
+
+### Added
+
+- **`MemberEnricher`** — new enrichment pass
+  (`crates/forgeql-core/src/ast/enrich/member.rs`) that populates `body_symbol`
+  on `field_declaration` nodes containing a `function_declarator`, linking the
+  member declaration to its qualified definition.
+
+- **`body_symbol` enrichment field** — queryable via
+  `FIND symbols WHERE body_symbol = 'Class::method'`.
+
 ## [0.26.0] - 2026-03-21
 
 ### Fixed

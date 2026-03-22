@@ -349,6 +349,22 @@ fn find_def<'a>(
     Ok(def)
 }
 
+/// Resolve a symbol to a definition that has a function body.
+///
+/// If the primary row carries a `body_symbol` field (set during indexing by
+/// the `MemberEnricher`), follow the redirect.  Otherwise return the
+/// primary row as-is.  Completely language-agnostic — every language just
+/// needs to populate `body_symbol` during its enrichment pass.
+fn find_body_def<'a>(index: &'a SymbolTable, symbol: &str) -> Result<&'a IndexRow> {
+    let def = find_def(index, symbol, None)?;
+    if let Some(target) = def.fields.get("body_symbol")
+        && let Some(redirected) = index.find_def(target)
+    {
+        return Ok(redirected);
+    }
+    Ok(def)
+}
+
 /// Extract the text of the source line containing `byte_offset`.
 fn extract_line_at(source: &[u8], byte_offset: usize) -> String {
     let text = String::from_utf8_lossy(source);
@@ -673,7 +689,7 @@ pub fn show_body(
     symbol: &str,
     depth: Option<usize>,
 ) -> Result<Value> {
-    let def = find_def(index, symbol, None)?;
+    let def = find_body_def(index, symbol)?;
     let (source, tree) = parse_cpp_file(&def.path)?;
     let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start)
         .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
@@ -785,7 +801,7 @@ pub fn show_callers(index: &SymbolTable, workspace: &Workspace, symbol: &str) ->
 /// Returns an error if the symbol is not indexed, the file cannot be parsed,
 /// or the AST node for the function is not found.
 pub fn show_callees(index: &SymbolTable, workspace: &Workspace, symbol: &str) -> Result<Value> {
-    let def = find_def(index, symbol, None)?;
+    let def = find_body_def(index, symbol)?;
     let (source, tree) = parse_cpp_file(&def.path)?;
     let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start)
         .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
