@@ -14,16 +14,18 @@ use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::index::{SymbolTable, node_text};
+use crate::ast::lang;
 
 /// Enricher that detects redundancy patterns (repeated calls, duplicate conditions).
 pub struct RedundancyEnricher;
 
-const CONTROL_FLOW_KINDS: &[&str] = &[
-    "if_statement",
-    "while_statement",
-    "for_statement",
-    "switch_statement",
-    "do_statement",
+/// FQL kinds for control-flow rows (used in `post_pass`).
+const CF_FQL_KINDS: &[&str] = &[
+    lang::FQL_IF,
+    lang::FQL_WHILE,
+    lang::FQL_FOR,
+    lang::FQL_SWITCH,
+    lang::FQL_DO,
 ];
 
 impl NodeEnricher for RedundancyEnricher {
@@ -37,7 +39,8 @@ impl NodeEnricher for RedundancyEnricher {
         _name: &str,
         fields: &mut HashMap<String, String>,
     ) {
-        if ctx.node.kind() != "function_definition" {
+        let config = ctx.language_config;
+        if !config.function_raw_kinds.contains(&ctx.node.kind()) {
             return;
         }
 
@@ -45,7 +48,14 @@ impl NodeEnricher for RedundancyEnricher {
         let mut condition_calls: HashMap<String, usize> = HashMap::new();
         let mut null_checks: usize = 0;
 
-        collect_condition_info(ctx.node, ctx.source, &mut condition_calls, &mut null_checks);
+        collect_condition_info(
+            ctx.node,
+            ctx.source,
+            config.control_flow_raw_kinds,
+            config.null_literals,
+            &mut condition_calls,
+            &mut null_checks,
+        );
 
         // Repeated condition calls: functions called more than once across conditions.
         let mut repeated: Vec<&str> = condition_calls
@@ -75,7 +85,7 @@ impl NodeEnricher for RedundancyEnricher {
             let mut funcs_by_file: HashMap<&std::path::Path, Vec<std::ops::Range<usize>>> =
                 HashMap::new();
             for row in &table.rows {
-                if row.node_kind == "function_definition" {
+                if row.fql_kind == lang::FQL_FUNCTION {
                     funcs_by_file
                         .entry(row.path.as_path())
                         .or_default()
@@ -92,7 +102,7 @@ impl NodeEnricher for RedundancyEnricher {
                 HashMap::new();
 
             for (i, row) in table.rows.iter().enumerate() {
-                if !CONTROL_FLOW_KINDS.contains(&row.node_kind.as_str()) {
+                if !CF_FQL_KINDS.contains(&row.fql_kind.as_str()) {
                     continue;
                 }
                 let ct = match row.fields.get("condition_text") {
@@ -145,6 +155,8 @@ impl NodeEnricher for RedundancyEnricher {
 fn collect_condition_info(
     func_node: tree_sitter::Node<'_>,
     source: &[u8],
+    cf_raw_kinds: &[&str],
+    null_literals: &[&str],
     condition_calls: &mut HashMap<String, usize>,
     null_checks: &mut usize,
 ) {
@@ -157,11 +169,11 @@ fn collect_condition_info(
             let kind = node.kind();
 
             // When we hit a control-flow node, inspect its condition subtree.
-            if CONTROL_FLOW_KINDS.contains(&kind)
+            if cf_raw_kinds.contains(&kind)
                 && let Some(cond) = node.child_by_field_name("condition")
             {
                 collect_calls_in_subtree(cond, source, condition_calls);
-                *null_checks += count_null_checks(cond, source);
+                *null_checks += count_null_checks(cond, source, null_literals);
             }
         }
 
@@ -230,7 +242,7 @@ fn collect_calls_in_subtree(
 ///
 /// Matches: `== nullptr`, `!= nullptr`, `== NULL`, `!= NULL`, `== 0` when the
 /// other operand is a pointer (heuristic: identifier or `field_expression`).
-fn count_null_checks(node: tree_sitter::Node<'_>, source: &[u8]) -> usize {
+fn count_null_checks(node: tree_sitter::Node<'_>, source: &[u8], null_literals: &[&str]) -> usize {
     let mut count = 0;
     let mut cursor = node.walk();
     let mut visit = true;
@@ -251,7 +263,9 @@ fn count_null_checks(node: tree_sitter::Node<'_>, source: &[u8]) -> usize {
                         .child_by_field_name("right")
                         .map(|n| node_text(source, n))
                         .unwrap_or_default();
-                    if is_null_value(&left) || is_null_value(&right) {
+                    if null_literals.contains(&left.as_str())
+                        || null_literals.contains(&right.as_str())
+                    {
                         count += 1;
                     }
                 }
@@ -276,9 +290,4 @@ fn count_null_checks(node: tree_sitter::Node<'_>, source: &[u8]) -> usize {
             }
         }
     }
-}
-
-/// Check if a value text represents a null pointer constant.
-fn is_null_value(text: &str) -> bool {
-    matches!(text, "nullptr" | "NULL" | "0")
 }

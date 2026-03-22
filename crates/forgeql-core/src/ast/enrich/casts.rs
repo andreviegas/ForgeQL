@@ -1,14 +1,12 @@
 /// Cast style enrichment — indexes cast expressions.
 ///
 /// Creates a new [`IndexRow`] for each cast expression with:
-/// - `cast_style`: `"c_style"` / `"static_cast"` / `"reinterpret_cast"` /
-///   `"const_cast"` / `"dynamic_cast"`
+/// - `cast_style`: from `LanguageConfig::cast_kinds`
 /// - `cast_target_type`: the target type text
 use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::index::{IndexRow, node_text};
-use crate::ast::lang::{CppLanguageInline, LanguageSupport};
 
 /// Enricher that indexes cast expressions with style metadata.
 pub struct CastEnricher;
@@ -20,37 +18,24 @@ impl NodeEnricher for CastEnricher {
 
     fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
         let kind = ctx.node.kind();
+        let config = ctx.language_config;
 
-        let (cast_style, target_type) = match kind {
+        // Look up the cast style from config
+        let Some(&(_raw_kind, cast_style, _safety)) =
+            config.cast_kinds.iter().find(|(rk, _, _)| *rk == kind)
+        else {
+            return vec![];
+        };
+
+        let target_type = if cast_style == "c_style" {
             // C-style cast: `(Type)expr`
-            "cast_expression" => {
-                let type_text = ctx
-                    .node
-                    .child_by_field_name("type")
-                    .map(|n| node_text(ctx.source, n))
-                    .unwrap_or_default();
-                ("c_style", type_text)
-            }
-
-            // C++ named casts: `static_cast<Type>(expr)`
-            "static_cast_expression" => {
-                let type_text = extract_template_type(ctx.node, ctx.source);
-                ("static_cast", type_text)
-            }
-            "reinterpret_cast_expression" => {
-                let type_text = extract_template_type(ctx.node, ctx.source);
-                ("reinterpret_cast", type_text)
-            }
-            "const_cast_expression" => {
-                let type_text = extract_template_type(ctx.node, ctx.source);
-                ("const_cast", type_text)
-            }
-            "dynamic_cast_expression" => {
-                let type_text = extract_template_type(ctx.node, ctx.source);
-                ("dynamic_cast", type_text)
-            }
-
-            _ => return vec![],
+            ctx.node
+                .child_by_field_name("type")
+                .map(|n| node_text(ctx.source, n))
+                .unwrap_or_default()
+        } else {
+            // Named casts: `static_cast<Type>(expr)` etc.
+            extract_template_type(ctx.node, ctx.source)
         };
 
         let mut fields = HashMap::new();
@@ -71,8 +56,12 @@ impl NodeEnricher for CastEnricher {
         vec![IndexRow {
             name,
             node_kind: kind.to_string(),
-            fql_kind: CppLanguageInline.map_kind(kind).unwrap_or("").to_string(),
-            language: "cpp".to_string(),
+            fql_kind: ctx
+                .language_support
+                .map_kind(kind)
+                .unwrap_or("")
+                .to_string(),
+            language: ctx.language_name.to_string(),
             path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,

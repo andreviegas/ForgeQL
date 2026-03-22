@@ -26,54 +26,55 @@ impl NodeEnricher for CommentEnricher {
         fields: &mut HashMap<String, String>,
     ) {
         let kind = ctx.node.kind();
+        let config = ctx.language_config;
 
         // Comment rows: detect style
-        if kind == "comment" {
+        if kind == config.comment_raw_kind {
             let text = node_text(ctx.source, ctx.node);
-            let style = detect_comment_style(&text);
+            let style = detect_comment_style(&text, config.doc_comment_prefixes);
             drop(fields.insert("comment_style".to_string(), style.to_string()));
             return;
         }
 
         // Definition rows: check for preceding doc comment
-        if matches!(
-            kind,
-            "function_definition" | "struct_specifier" | "class_specifier" | "enum_specifier"
-        ) {
+        if config.definition_raw_kinds.contains(&kind) {
             let has_doc = ctx.node.prev_named_sibling().is_some_and(|sib| {
-                if sib.kind() != "comment" {
+                if sib.kind() != config.comment_raw_kind {
                     return false;
                 }
                 let text = node_text(ctx.source, sib);
-                text.starts_with("/**") || text.starts_with("///")
+                config
+                    .doc_comment_prefixes
+                    .iter()
+                    .take_while(|(_, style)| style.starts_with("doc"))
+                    .any(|(prefix, _)| text.starts_with(prefix))
             });
             drop(fields.insert("has_doc".to_string(), has_doc.to_string()));
         }
     }
 }
 
-/// Classify a comment's style from its source text.
-fn detect_comment_style(text: &str) -> &'static str {
-    if text.starts_with("/**") {
-        "doc_block"
-    } else if text.starts_with("///") {
-        "doc_line"
-    } else if text.starts_with("/*") {
-        "block"
-    } else {
-        "line"
+/// Classify a comment's style from its source text using the language config.
+fn detect_comment_style(text: &str, prefixes: &[(&str, &'static str)]) -> &'static str {
+    for &(prefix, style) in prefixes {
+        if text.starts_with(prefix) {
+            return style;
+        }
     }
+    "line"
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::lang::CPP_CONFIG;
 
     #[test]
     fn comment_styles() {
-        assert_eq!(detect_comment_style("/** doc */"), "doc_block");
-        assert_eq!(detect_comment_style("/// doc line"), "doc_line");
-        assert_eq!(detect_comment_style("/* block */"), "block");
-        assert_eq!(detect_comment_style("// line"), "line");
+        let p = CPP_CONFIG.doc_comment_prefixes;
+        assert_eq!(detect_comment_style("/** doc */", p), "doc_block");
+        assert_eq!(detect_comment_style("/// doc line", p), "doc_line");
+        assert_eq!(detect_comment_style("/* block */", p), "block");
+        assert_eq!(detect_comment_style("// line", p), "line");
     }
 }

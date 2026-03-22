@@ -124,11 +124,9 @@ pub struct LanguageConfig {
     /// (keyword, visibility) pairs.
     pub visibility_keywords: &'static [(&'static str, &'static str)],
 
-    /// Default visibility for class members.
-    pub default_class_visibility: &'static str,
-
-    /// Default visibility for struct members.
-    pub default_struct_visibility: &'static str,
+    /// (`raw_kind`, `default_visibility`) pairs — default visibility for
+    /// members of each type kind when no explicit access specifier is present.
+    pub visibility_default_by_type: &'static [(&'static str, &'static str)],
 
     // -- casts --
     /// (`raw_kind`, `cast_style`, `cast_safety`) triples for cast detection.
@@ -318,8 +316,10 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
         ("private", "private"),
         ("protected", "protected"),
     ],
-    default_class_visibility: "private",
-    default_struct_visibility: "public",
+    visibility_default_by_type: &[
+        ("class_specifier", "private"),
+        ("struct_specifier", "public"),
+    ],
 
     cast_kinds: &[
         ("cast_expression", "c_style", "unsafe"),

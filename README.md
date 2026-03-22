@@ -32,7 +32,7 @@ FIND symbols WHERE condition_tests >= 4 ORDER BY condition_tests DESC
 -- Result: 5 functions with 4+ boolean sub-expressions in a single condition
 
 -- 3. Any switch statements missing a default handler?
-FIND symbols WHERE node_kind = 'switch_statement' WHERE has_default = 'false'
+FIND symbols WHERE node_kind = 'switch_statement' WHERE has_catch_all = 'false'
 -- Result: 2 switches that silently fall through on unexpected values
 
 -- 4. Mixed && / || without grouping — operator precedence bugs?

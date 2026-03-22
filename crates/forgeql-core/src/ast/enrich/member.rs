@@ -29,7 +29,8 @@ impl NodeEnricher for MemberEnricher {
         name: &str,
         fields: &mut HashMap<String, String>,
     ) {
-        if ctx.node.kind() != "field_declaration" {
+        let config = ctx.language_config;
+        if !config.field_raw_kinds.contains(&ctx.node.kind()) {
             return;
         }
 
@@ -43,8 +44,11 @@ impl NodeEnricher for MemberEnricher {
         }
 
         // Walk up to find the enclosing class/struct.
-        if let Some(class_name) = enclosing_type_name(ctx.node, ctx.source) {
-            drop(fields.insert("body_symbol".to_string(), format!("{class_name}::{name}")));
+        if let Some(class_name) = enclosing_type_name(ctx.node, ctx.source, config.type_raw_kinds) {
+            drop(fields.insert(
+                "body_symbol".to_string(),
+                format!("{class_name}{}{name}", config.scope_separator),
+            ));
         }
     }
 }
@@ -64,12 +68,15 @@ fn has_descendant_kind(node: tree_sitter::Node<'_>, target: &str) -> bool {
     false
 }
 
-/// Walk up the parent chain to find an enclosing `class_specifier` or
-/// `struct_specifier` and return its name.
-fn enclosing_type_name(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+/// Walk up the parent chain to find an enclosing type node and return its name.
+fn enclosing_type_name(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    type_raw_kinds: &[&str],
+) -> Option<String> {
     let mut current = node.parent();
     while let Some(parent) = current {
-        if matches!(parent.kind(), "class_specifier" | "struct_specifier") {
+        if type_raw_kinds.contains(&parent.kind()) {
             return parent
                 .child_by_field_name("name")
                 .map(|n| node_text(source, n))

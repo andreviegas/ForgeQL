@@ -356,7 +356,7 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | `condition_tests` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Number of boolean sub-expressions |
 | `paren_depth` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Max parentheses nesting |
 | `condition_text` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Raw condition expression |
-| `has_default` | `switch_statement` | `"true"` if switch has `default:` |
+| `has_catch_all` | `switch_statement` | `"true"` if switch has a catch-all case |
 | `has_assignment_in_condition` | `if_statement`, `while_statement`, `for_statement` | `"true"` if condition contains `=` (not `==`) |
 | `mixed_logic` | `if_statement`, `while_statement`, `for_statement` | `"true"` if mixes `&&` and `\|\|` without grouping |
 | `dup_logic` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | `"true"` if condition contains duplicate sub-expressions in `&&`/`\|\|` chains |
@@ -464,7 +464,7 @@ FIND symbols WHERE condition_tests >= 4
 -- Switch without default
 FIND symbols
   WHERE node_kind = 'switch_statement'
-  WHERE has_default = 'false'
+  WHERE has_catch_all = 'false'
 
 -- Mixed && / || without grouping parentheses
 FIND symbols WHERE mixed_logic = 'true'

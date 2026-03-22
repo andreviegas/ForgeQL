@@ -1591,7 +1591,7 @@ fn field_to_kinds(field: &str) -> Option<&'static [&'static str]> {
             "switch_statement",
             "do_statement",
         ]),
-        "has_default" => Some(&["switch_statement"]),
+        "has_catch_all" => Some(&["switch_statement"]),
         // metrics.rs — multiple definition kinds
         "lines" | "member_count" | "has_doc" => Some(&[
             "function_definition",

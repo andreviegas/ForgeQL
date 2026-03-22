@@ -108,7 +108,7 @@ DEPTH N
 
 **Numbers:** `num_format` (decimal/hex/binary/octal/float), `is_magic`, `num_value`, `num_suffix`
 
-**Control Flow:** `condition_tests`, `paren_depth`, `has_default`, `has_assignment_in_condition`, `mixed_logic`, `branch_count`
+**Control Flow:** `condition_tests`, `paren_depth`, `has_catch_all`, `has_assignment_in_condition`, `mixed_logic`, `branch_count`
 
 **Metrics:** `lines`, `param_count`, `return_count`, `goto_count`, `string_count`, `member_count`, `is_const`, `is_volatile`, `is_static`, `is_inline`, `visibility`
 

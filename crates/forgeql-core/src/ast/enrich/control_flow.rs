@@ -4,7 +4,7 @@
 /// - `condition_tests`: count of comparison/logical operators in condition
 /// - `paren_depth`: maximum nesting depth of parentheses
 /// - `condition_text`: structural skeleton with sequential letter substitution
-/// - `has_default`: (switch only) `"true"` if a default case exists
+/// - `has_catch_all`: (switch only) `"true"` if a default/catch-all case exists
 /// - `has_assignment_in_condition`: `"true"` if `=` (not `==`) in condition
 /// - `mixed_logic`: `"true"` if both `&&` and `||` appear
 /// - `dup_logic`: `"true"` if duplicate sub-expression in `&&`/`||` chain
@@ -15,17 +15,18 @@ use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::index::{IndexRow, SymbolTable, node_text};
-use crate::ast::lang::{CppLanguageInline, LanguageSupport};
+use crate::ast::lang;
 
 /// Enricher for control-flow statement complexity analysis.
 pub struct ControlFlowEnricher;
 
-const CONTROL_FLOW_KINDS: &[&str] = &[
-    "if_statement",
-    "while_statement",
-    "for_statement",
-    "switch_statement",
-    "do_statement",
+/// FQL kinds that represent control-flow statements.
+const CF_FQL_KINDS: &[&str] = &[
+    lang::FQL_IF,
+    lang::FQL_WHILE,
+    lang::FQL_FOR,
+    lang::FQL_SWITCH,
+    lang::FQL_DO,
 ];
 
 impl NodeEnricher for ControlFlowEnricher {
@@ -35,7 +36,8 @@ impl NodeEnricher for ControlFlowEnricher {
 
     fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
         let kind = ctx.node.kind();
-        if !CONTROL_FLOW_KINDS.contains(&kind) {
+        let config = ctx.language_config;
+        if !config.control_flow_raw_kinds.contains(&kind) {
             return vec![];
         }
 
@@ -71,9 +73,9 @@ impl NodeEnricher for ControlFlowEnricher {
         }
 
         // Switch: check for default case
-        if kind == "switch_statement" {
-            let has_default = has_default_case(ctx.node);
-            drop(fields.insert("has_default".to_string(), has_default.to_string()));
+        if config.switch_raw_kinds.contains(&kind) {
+            let has_catch_all = has_default_case(ctx.node);
+            drop(fields.insert("has_catch_all".to_string(), has_catch_all.to_string()));
         }
 
         // Name = the skeleton (or raw condition text if no condition)
@@ -85,8 +87,12 @@ impl NodeEnricher for ControlFlowEnricher {
         vec![IndexRow {
             name,
             node_kind: kind.to_string(),
-            fql_kind: CppLanguageInline.map_kind(kind).unwrap_or("").to_string(),
-            language: "cpp".to_string(),
+            fql_kind: ctx
+                .language_support
+                .map_kind(kind)
+                .unwrap_or("")
+                .to_string(),
+            language: ctx.language_name.to_string(),
             path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
@@ -102,7 +108,7 @@ impl NodeEnricher for ControlFlowEnricher {
             let mut funcs_by_file: HashMap<&std::path::Path, Vec<(usize, std::ops::Range<usize>)>> =
                 HashMap::new();
             for (i, row) in table.rows.iter().enumerate() {
-                if row.node_kind == "function_definition" {
+                if row.fql_kind == lang::FQL_FUNCTION {
                     funcs_by_file
                         .entry(row.path.as_path())
                         .or_default()
@@ -115,7 +121,7 @@ impl NodeEnricher for ControlFlowEnricher {
 
             let mut metrics: HashMap<usize, (i64, i64, i64)> = HashMap::new();
             for row in &table.rows {
-                if !CONTROL_FLOW_KINDS.contains(&row.node_kind.as_str()) {
+                if !CF_FQL_KINDS.contains(&row.fql_kind.as_str()) {
                     continue;
                 }
                 if let Some(funcs) = funcs_by_file.get(row.path.as_path()) {

@@ -74,7 +74,7 @@ FIND symbols WHERE condition_tests >= 4
 -- Switch without default
 FIND symbols
   WHERE node_kind = 'switch_statement'
-  WHERE has_default = 'false'
+  WHERE has_catch_all = 'false'
 
 -- Functions with goto
 FIND symbols WHERE goto_count >= 1

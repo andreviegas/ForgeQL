@@ -10,7 +10,7 @@
 //!   §1  — NamingEnricher     (naming, name_length)
 //!   §2  — CommentEnricher    (comment_style, has_doc)
 //!   §3  — NumberEnricher     (num_format, has_separator, num_sign, num_value, num_suffix, is_magic)
-//!   §4  — ControlFlowEnricher (condition_tests, paren_depth, condition_text, has_default,
+//!   §4  — ControlFlowEnricher (condition_tests, paren_depth, condition_text, has_catch_all,
 //!                              has_assignment_in_condition, mixed_logic, dup_logic,
 //!                              branch_count, max_condition_tests, max_paren_depth)
 //!   §5  — OperatorEnricher   (increment_style, increment_op, compound_op, operand,
@@ -705,12 +705,12 @@ fn control_flow_has_assignment_in_condition() {
 }
 
 #[test]
-fn control_flow_switch_has_default() {
+fn control_flow_switch_has_catch_all() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'switch_statement' WHERE has_default = 'true'",
+        "FIND symbols WHERE node_kind = 'switch_statement' WHERE has_catch_all = 'true'",
     );
     let qr = as_query(&r);
     assert!(
@@ -725,7 +725,7 @@ fn control_flow_switch_no_default() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'switch_statement' WHERE has_default = 'false'",
+        "FIND symbols WHERE node_kind = 'switch_statement' WHERE has_catch_all = 'false'",
     );
     let qr = as_query(&r);
     assert!(

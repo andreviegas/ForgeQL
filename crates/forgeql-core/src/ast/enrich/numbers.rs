@@ -11,7 +11,6 @@ use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::index::{IndexRow, node_text};
-use crate::ast::lang::{CppLanguageInline, LanguageSupport};
 
 /// Enricher that indexes `number_literal` nodes with numeric metadata.
 pub struct NumberEnricher;
@@ -22,7 +21,8 @@ impl NodeEnricher for NumberEnricher {
     }
 
     fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
-        if ctx.node.kind() != "number_literal" {
+        let config = ctx.language_config;
+        if !config.number_literal_raw_kinds.contains(&ctx.node.kind()) {
             return vec![];
         }
 
@@ -33,19 +33,22 @@ impl NodeEnricher for NumberEnricher {
 
         let mut fields = HashMap::new();
 
-        let has_separator = raw.contains('\'');
+        let has_separator = config.digit_separator.is_some_and(|sep| raw.contains(sep));
         drop(fields.insert("has_separator".to_string(), has_separator.to_string()));
 
         // Strip digit separators for analysis
-        let clean: String = raw.chars().filter(|&c| c != '\'').collect();
+        let clean: String = raw
+            .chars()
+            .filter(|&c| Some(c) != config.digit_separator)
+            .collect();
         let lower = clean.to_ascii_lowercase();
 
         // Detect suffix
-        let suffix = detect_suffix(&lower);
+        let suffix = detect_suffix_with_table(&lower, config.number_suffixes);
         drop(fields.insert("num_suffix".to_string(), suffix.to_string()));
 
         // Strip suffix for format analysis
-        let without_suffix = strip_suffix(&lower);
+        let without_suffix = strip_suffix_with_table(&lower, config.number_suffixes);
 
         // Detect format
         let format = detect_format(without_suffix);
@@ -69,18 +72,50 @@ impl NodeEnricher for NumberEnricher {
 
         vec![IndexRow {
             name: raw,
-            node_kind: "number_literal".to_string(),
-            fql_kind: CppLanguageInline
-                .map_kind("number_literal")
+            node_kind: ctx.node.kind().to_string(),
+            fql_kind: ctx
+                .language_support
+                .map_kind(ctx.node.kind())
                 .unwrap_or("")
                 .to_string(),
-            language: "cpp".to_string(),
+            language: ctx.language_name.to_string(),
             path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
             fields,
         }]
     }
+}
+
+/// Detect the type suffix of a number literal using the config suffix table.
+///
+/// The config table is checked in order (longest suffixes first).
+fn detect_suffix_with_table(lower: &str, suffixes: &[(&'static str, &str)]) -> &'static str {
+    for &(suffix, _) in suffixes {
+        if lower.ends_with(suffix) {
+            // For hex literals, single-char suffixes a-f are digits, not suffixes
+            if suffix.len() == 1 && lower.starts_with("0x") && "abcdef".contains(suffix) {
+                continue;
+            }
+            return suffix;
+        }
+    }
+    ""
+}
+
+/// Strip the type suffix from the end of a lowercased number string,
+/// using the config suffix table.
+fn strip_suffix_with_table<'a>(lower: &'a str, suffixes: &[(&str, &str)]) -> &'a str {
+    for &(suf, _) in suffixes {
+        if let Some(stripped) = lower.strip_suffix(suf) {
+            // For hex literals, single-char 'f' etc. are digits not suffixes
+            if suf.len() == 1 && lower.starts_with("0x") && "abcdef".contains(suf) {
+                continue;
+            }
+            return stripped;
+        }
+    }
+    lower
 }
 
 /// Detect the base format of a number literal.
@@ -103,54 +138,6 @@ fn detect_format(s: &str) -> &'static str {
     }
 }
 
-/// Detect the type suffix of a number literal (lowercased input).
-fn detect_suffix(lower: &str) -> &'static str {
-    // Check from longest to shortest to avoid partial matches
-    let s = lower.trim_end_matches(|c: char| {
-        c.is_ascii_alphanumeric() || c == '.' || c == '+' || c == '-' || c == '\''
-    });
-    let suffix_region = &lower[lower.len().saturating_sub(4)..];
-
-    if suffix_region.ends_with("ull") || suffix_region.ends_with("llu") {
-        "ull"
-    } else if suffix_region.ends_with("ll") {
-        "ll"
-    } else if suffix_region.ends_with("ul") || suffix_region.ends_with("lu") {
-        "ul"
-    } else if suffix_region.ends_with('z') {
-        "z"
-    } else if suffix_region.ends_with('f') && !is_hex_char_context(lower) {
-        "f"
-    } else if suffix_region.ends_with('l') {
-        "l"
-    } else if suffix_region.ends_with('u') {
-        "u"
-    } else {
-        let _ = s; // silence unused warning
-        ""
-    }
-}
-
-/// Check if trailing 'f' might be a hex digit rather than a suffix.
-fn is_hex_char_context(lower: &str) -> bool {
-    lower.starts_with("0x")
-}
-
-/// Strip the type suffix from the end of a lowercased number string.
-fn strip_suffix(lower: &str) -> &str {
-    let suffixes = ["ull", "llu", "ll", "ul", "lu", "f", "l", "u", "z"];
-    for suf in &suffixes {
-        if let Some(stripped) = lower.strip_suffix(suf) {
-            // For hex literals, 'f' is a digit not a suffix
-            if *suf == "f" && lower.starts_with("0x") {
-                continue;
-            }
-            return stripped;
-        }
-    }
-    lower
-}
-
 /// Parse a number literal string into an i64 value.
 fn parse_value(s: &str, format: &str) -> i64 {
     match format {
@@ -169,6 +156,7 @@ fn parse_value(s: &str, format: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::lang::CPP_CONFIG;
 
     #[test]
     fn format_detection() {
@@ -183,14 +171,15 @@ mod tests {
 
     #[test]
     fn suffix_detection() {
-        assert_eq!(detect_suffix("255u"), "u");
-        assert_eq!(detect_suffix("100ul"), "ul");
-        assert_eq!(detect_suffix("100ull"), "ull");
-        assert_eq!(detect_suffix("3.14f"), "f");
-        assert_eq!(detect_suffix("100ll"), "ll");
-        assert_eq!(detect_suffix("42"), "");
+        let s = CPP_CONFIG.number_suffixes;
+        assert_eq!(detect_suffix_with_table("255u", s), "u");
+        assert_eq!(detect_suffix_with_table("100ul", s), "ul");
+        assert_eq!(detect_suffix_with_table("100ull", s), "ull");
+        assert_eq!(detect_suffix_with_table("3.14f", s), "f");
+        assert_eq!(detect_suffix_with_table("100ll", s), "ll");
+        assert_eq!(detect_suffix_with_table("42", s), "");
         // Hex 'f' is a digit not a suffix
-        assert_eq!(detect_suffix("0xff"), "");
+        assert_eq!(detect_suffix_with_table("0xff", s), "");
     }
 
     #[test]

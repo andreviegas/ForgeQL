@@ -47,7 +47,7 @@ Use these in WHERE clauses for code quality analysis:
 - `has_assignment_in_condition = 'true'` — assignment in condition
 - `mixed_logic = 'true'` — mixed && / || without grouping
 - `condition_tests >= 4` — complex conditions
-- `has_default = 'false'` — switch without default
+- `has_catch_all = 'false'` — switch without default
 - `goto_count >= 1` — functions with goto
 - `lines >= 50` — large functions
 - `usages = 0` — dead code candidates

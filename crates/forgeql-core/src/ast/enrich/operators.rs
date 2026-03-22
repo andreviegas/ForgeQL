@@ -9,7 +9,6 @@ use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::index::{IndexRow, node_text};
-use crate::ast::lang::{CppLanguageInline, LanguageSupport};
 
 /// Enricher for operator analysis (increment, compound assignment, shift).
 pub struct OperatorEnricher;
@@ -21,7 +20,9 @@ impl NodeEnricher for OperatorEnricher {
 
     fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
         match ctx.node.kind() {
-            "update_expression" => Self::handle_update(ctx),
+            "update_expression" if ctx.language_config.has_increment_decrement => {
+                Self::handle_update(ctx)
+            }
             "assignment_expression" => Self::handle_compound_assignment(ctx),
             "binary_expression" | "shift_expression" => Self::handle_shift(ctx),
             _ => vec![],
@@ -56,11 +57,12 @@ impl OperatorEnricher {
         vec![IndexRow {
             name,
             node_kind: "update_expression".to_string(),
-            fql_kind: CppLanguageInline
+            fql_kind: ctx
+                .language_support
                 .map_kind("update_expression")
                 .unwrap_or("")
                 .to_string(),
-            language: "cpp".to_string(),
+            language: ctx.language_name.to_string(),
             path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
@@ -98,11 +100,12 @@ impl OperatorEnricher {
         vec![IndexRow {
             name,
             node_kind: "compound_assignment".to_string(),
-            fql_kind: CppLanguageInline
+            fql_kind: ctx
+                .language_support
                 .map_kind("compound_assignment")
                 .unwrap_or("")
                 .to_string(),
-            language: "cpp".to_string(),
+            language: ctx.language_name.to_string(),
             path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
@@ -142,11 +145,12 @@ impl OperatorEnricher {
         vec![IndexRow {
             name,
             node_kind: "shift_expression".to_string(),
-            fql_kind: CppLanguageInline
+            fql_kind: ctx
+                .language_support
                 .map_kind("shift_expression")
                 .unwrap_or("")
                 .to_string(),
-            language: "cpp".to_string(),
+            language: ctx.language_name.to_string(),
             path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,

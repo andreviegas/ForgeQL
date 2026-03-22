@@ -13,6 +13,7 @@ use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::index::{SymbolTable, node_text};
+use crate::ast::lang::LanguageConfig;
 
 /// Enricher for code size and structure metrics.
 pub struct MetricsEnricher;
@@ -29,19 +30,17 @@ impl NodeEnricher for MetricsEnricher {
         fields: &mut HashMap<String, String>,
     ) {
         let kind = ctx.node.kind();
+        let config = ctx.language_config;
 
         // Lines: body span for definitions
-        if matches!(
-            kind,
-            "function_definition" | "struct_specifier" | "class_specifier" | "enum_specifier"
-        ) {
+        if config.definition_raw_kinds.contains(&kind) {
             let lines = ctx.node.end_position().row - ctx.node.start_position().row + 1;
             drop(fields.insert("lines".to_string(), lines.to_string()));
         }
 
         // Parameter count for functions
-        if kind == "function_definition" {
-            let param_count = count_descendants_by_kind(ctx.node, "parameter_declaration");
+        if config.function_raw_kinds.contains(&kind) {
+            let param_count = count_descendants_by_kind(ctx.node, config.parameter_raw_kind);
             drop(fields.insert("param_count".to_string(), param_count.to_string()));
 
             // Aggregate counts that require subtree walk
@@ -55,40 +54,21 @@ impl NodeEnricher for MetricsEnricher {
             drop(fields.insert("string_count".to_string(), string_count.to_string()));
         }
 
-        // Member count for structs/classes/enums
-        if matches!(
-            kind,
-            "struct_specifier" | "class_specifier" | "enum_specifier"
-        ) {
-            let count = if kind == "enum_specifier" {
-                count_descendants_by_kind(ctx.node, "enumerator")
-            } else {
-                // Count only direct members of this type's body, not members
-                // of nested structs/classes.  The body is a
-                // `field_declaration_list` whose children include the actual
-                // members (possibly wrapped in `access_specifier` sections).
-                count_direct_members(ctx.node)
-            };
+        // Member count for type definitions (struct/class/enum)
+        if config.type_raw_kinds.contains(&kind) {
+            let count = count_direct_members(ctx.node, config);
             drop(fields.insert("member_count".to_string(), count.to_string()));
         }
 
-        // Qualifier flags for declarations and function definitions.
-        // For declarations: `const int x;`, `static int y;`, `volatile int z;`
-        // For functions: `int getSpeed() const`, `static void init()`
-        if kind == "declaration" || kind == "function_definition" {
-            check_qualifier_with_source(ctx.node, ctx.source, "const", "is_const", fields);
-            check_qualifier_with_source(ctx.node, ctx.source, "volatile", "is_volatile", fields);
-            check_specifier_with_source(ctx.node, ctx.source, "static", "is_static", fields);
-        }
-
-        // Inline specifier for functions
-        if kind == "function_definition" {
-            check_specifier_with_source(ctx.node, ctx.source, "inline", "is_inline", fields);
+        // Modifier flags from config (const, static, virtual, inline, etc.)
+        if config.declaration_raw_kinds.contains(&kind) || config.function_raw_kinds.contains(&kind)
+        {
+            check_modifiers(ctx.node, ctx.source, config, fields);
         }
 
         // Visibility for field_declaration inside classes
-        if kind == "field_declaration"
-            && let Some(vis) = detect_visibility(ctx.node, ctx.source)
+        if config.field_raw_kinds.contains(&kind)
+            && let Some(vis) = detect_visibility(ctx.node, ctx.source, config)
         {
             drop(fields.insert("visibility".to_string(), vis.to_string()));
         }
@@ -135,104 +115,93 @@ const MEMBER_KINDS: &[&str] = &["field_declaration", "function_definition", "dec
 
 /// Count direct members of a struct/class body (one level deep).
 ///
-/// Walks the `field_declaration_list` child and counts `field_declaration`,
-/// `function_definition`, and `declaration` nodes.  Members inside
-/// `access_specifier` sections are included, but members of nested
-/// structs/classes are not.
-fn count_direct_members(node: tree_sitter::Node<'_>) -> usize {
-    let Some(body) = node
+/// If the node has a `member_body_raw_kind` child, counts member kinds
+/// within it (including inside access-specifier sections).  Otherwise
+/// falls back to counting all named children of the first list child
+/// (for enums whose body kind differs).
+fn count_direct_members(node: tree_sitter::Node<'_>, config: &LanguageConfig) -> usize {
+    // Struct/class path: look for the config-driven body kind
+    if let Some(body) = node
         .children(&mut node.walk())
-        .find(|c| c.kind() == "field_declaration_list")
-    else {
-        return 0;
-    };
+        .find(|c| c.kind() == config.member_body_raw_kind)
+    {
+        let mut count = 0;
+        for child in body.children(&mut body.walk()) {
+            let ck = child.kind();
+            if config.member_raw_kinds.contains(&ck) || MEMBER_KINDS.contains(&ck) {
+                count += 1;
+            } else {
+                // Access-specifier sections may wrap members.
+                for inner in child.children(&mut child.walk()) {
+                    if config.member_raw_kinds.contains(&inner.kind())
+                        || MEMBER_KINDS.contains(&inner.kind())
+                    {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        return count;
+    }
 
-    let mut count = 0;
-    for child in body.children(&mut body.walk()) {
-        let ck = child.kind();
-        if MEMBER_KINDS.contains(&ck) {
-            count += 1;
-        } else if ck == "access_specifier" {
-            // public: / private: / protected: sections wrap members.
-            for inner in child.children(&mut child.walk()) {
-                if MEMBER_KINDS.contains(&inner.kind()) {
-                    count += 1;
+    // Enum path: count named children of the first list-like child
+    for i in 0..node.named_child_count() {
+        if let Some(child) = node.named_child(i)
+            && child.named_child_count() > 0
+            && child.kind().contains("list")
+        {
+            return child.named_child_count();
+        }
+    }
+    0
+}
+
+/// Check modifier flags from config (const, static, inline, virtual, etc.).
+fn check_modifiers(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    config: &LanguageConfig,
+    fields: &mut HashMap<String, String>,
+) {
+    for i in 0..node.named_child_count() {
+        if let Some(child) = node.named_child(i)
+            && config.modifier_node_kinds.contains(&child.kind())
+        {
+            let text = node_text(source, child);
+            for &(keyword, field_name) in config.modifier_map {
+                if text == keyword {
+                    drop(fields.insert(field_name.to_string(), "true".to_string()));
                 }
             }
         }
     }
-    count
 }
 
-/// Check if a specific type qualifier (const, volatile) appears in children.
-fn check_qualifier_with_source(
+/// Detect visibility context of a member within a type body.
+fn detect_visibility(
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    qualifier: &str,
-    field_name: &str,
-    fields: &mut HashMap<String, String>,
-) {
-    for i in 0..node.named_child_count() {
-        if let Some(child) = node.named_child(i)
-            && child.kind() == "type_qualifier"
-        {
-            let text = node_text(source, child);
-            if text == qualifier {
-                drop(fields.insert(field_name.to_string(), "true".to_string()));
-                return;
-            }
-        }
-    }
-}
-
-/// Check if a specific storage class / function specifier appears in children.
-fn check_specifier_with_source(
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-    specifier: &str,
-    field_name: &str,
-    fields: &mut HashMap<String, String>,
-) {
-    for i in 0..node.named_child_count() {
-        if let Some(child) = node.named_child(i)
-            && matches!(
-                child.kind(),
-                "storage_class_specifier" | "function_specifier" | "virtual_function_specifier"
-            )
-        {
-            let text = node_text(source, child);
-            if text == specifier {
-                drop(fields.insert(field_name.to_string(), "true".to_string()));
-                return;
-            }
-        }
-    }
-}
-
-/// Detect visibility context of a `field_declaration` within a class.
-fn detect_visibility(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<&'static str> {
-    // Walk backwards through siblings to find the governing access_specifier
+    config: &LanguageConfig,
+) -> Option<&'static str> {
+    // Walk backwards through siblings to find the governing access specifier
     let mut sibling = node.prev_named_sibling();
     while let Some(sib) = sibling {
-        if sib.kind() == "access_specifier" {
-            let text = node_text(source, sib);
-            if text.contains("public") {
-                return Some("public");
-            } else if text.contains("protected") {
-                return Some("protected");
-            } else if text.contains("private") {
-                return Some("private");
+        let text = node_text(source, sib);
+        for &(keyword, visibility) in config.visibility_keywords {
+            if text.contains(keyword) {
+                return Some(visibility);
             }
         }
         sibling = sib.prev_named_sibling();
     }
 
-    // Default: check parent container type
+    // Default: check parent container type against config defaults
     let parent = node.parent()?;
     let grandparent = parent.parent()?;
-    match grandparent.kind() {
-        "class_specifier" => Some("private"),
-        "struct_specifier" => Some("public"),
-        _ => None,
-    }
+    let gp_kind = grandparent.kind();
+    config
+        .visibility_default_by_type
+        .iter()
+        .find(|(kind, _)| *kind == gp_kind)
+        .map(|(_, vis)| *vis)
 }

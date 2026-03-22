@@ -22,14 +22,18 @@ impl NodeEnricher for ScopeEnricher {
         _name: &str,
         fields: &mut HashMap<String, String>,
     ) {
-        if ctx.language_name != "cpp" || ctx.node.kind() != "declaration" {
+        if !ctx
+            .language_config
+            .declaration_raw_kinds
+            .contains(&ctx.node.kind())
+        {
             return;
         }
 
         let scope = if ctx
             .node
             .parent()
-            .is_some_and(|p| p.kind() == "translation_unit")
+            .is_some_and(|p| p.kind() == ctx.language_config.root_node_kind)
         {
             "file"
         } else {
@@ -40,7 +44,10 @@ impl NodeEnricher for ScopeEnricher {
         // Extract storage class specifier (static, extern, etc.) if present.
         for i in 0..ctx.node.named_child_count() {
             if let Some(child) = ctx.node.named_child(i)
-                && child.kind() == "storage_class_specifier"
+                && ctx
+                    .language_config
+                    .modifier_node_kinds
+                    .contains(&child.kind())
             {
                 let text = node_text(ctx.source, child);
                 if !text.is_empty() {
