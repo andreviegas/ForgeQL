@@ -1,9 +1,9 @@
+#![allow(clippy::must_use_candidate)]
 /// Shared data-flow utilities for enrichers that inspect local variable
 /// declarations, identifier usage, and write/read patterns within function
 /// bodies.
 ///
 /// Used by both `DeclDistanceEnricher` and `EscapeEnricher`.
-#![allow(clippy::must_use_candidate)]
 
 use super::EnrichContext;
 use crate::ast::index::node_text;

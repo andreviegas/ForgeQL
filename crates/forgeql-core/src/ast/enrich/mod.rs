@@ -27,6 +27,7 @@ pub mod numbers;
 pub mod operators;
 pub mod redundancy;
 pub mod scope;
+pub mod shadow;
 
 // -----------------------------------------------------------------------
 // EnrichContext — the read-only view of a node available to enrichers
@@ -108,5 +109,6 @@ pub fn default_enrichers() -> Vec<Box<dyn NodeEnricher>> {
         Box::new(member::MemberEnricher),
         Box::new(decl_distance::DeclDistanceEnricher),
         Box::new(escape::EscapeEnricher),
+        Box::new(shadow::ShadowEnricher),
     ]
 }

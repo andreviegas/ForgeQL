@@ -54,6 +54,13 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `address_of_expression_raw_kind`, `address_of_operator`,
   `array_declarator_raw_kind`, `static_storage_keywords`.
 
+- **`ShadowEnricher`** — detects functions where an inner scope
+  redeclares a variable name that already exists in an outer scope
+  (parameter or enclosing block).  Fields: `has_shadow`, `shadow_count`,
+  `shadow_vars`.  Handles nested blocks, for-loop initializer
+  declarations, and multi-level nesting.  Fully language-agnostic via
+  existing `LanguageConfig` fields.
+
 - **Shared data-flow utilities** (`data_flow_utils.rs`) — extracted common
   local-variable collection, declarator walking, write-context detection,
   and AST helpers from `DeclDistanceEnricher` for reuse by `EscapeEnricher`

@@ -457,3 +457,62 @@ int* escapeTernary(int flag) {
     int x = 10;
     return flag ? &x : nullptr;
 }
+
+/* ------------------------------------------------------------------ */
+/* ShadowEnricher patterns                                              */
+/* ------------------------------------------------------------------ */
+
+/* Inner block redeclares outer variable */
+void shadowBasic(int n) {
+    int x = 1;
+    if (n > 0) {
+        int x = 2;  /* shadows outer x */
+        (void)x;
+    }
+    (void)x;
+}
+
+/* For-loop variable shadows parameter */
+void shadowForLoop(int i) {
+    for (int i = 0; i < 10; i++) {  /* shadows param i */
+        (void)i;
+    }
+}
+
+/* Multiple shadows */
+void shadowMultiple(void) {
+    int a = 1;
+    int b = 2;
+    {
+        int a = 10;  /* shadows a */
+        int b = 20;  /* shadows b */
+        (void)a;
+        (void)b;
+    }
+    (void)a;
+    (void)b;
+}
+
+/* No shadowing at all */
+void shadowNone(int n) {
+    int x = n + 1;
+    if (x > 0) {
+        int y = x + 2;
+        (void)y;
+    }
+    (void)x;
+}
+
+/* Nested shadow: outer -> middle -> inner */
+void shadowNested(void) {
+    int val = 1;
+    {
+        int val = 2;  /* shadows outer val */
+        {
+            int val = 3;  /* shadows middle val */
+            (void)val;
+        }
+        (void)val;
+    }
+    (void)val;
+}
