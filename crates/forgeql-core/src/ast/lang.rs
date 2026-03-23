@@ -222,6 +222,12 @@ pub struct LanguageConfig {
     /// (e.g. `"break_statement"` for C++/Java/TS).
     /// Empty string if the language has no break statement.
     pub break_statement_raw_kind: &'static str,
+
+    // -- recursion detection (recursion enricher) --
+    /// Raw kind for function/method call expressions
+    /// (e.g. `"call_expression"` for C++/Java/TS, `"call"` for Python).
+    /// Empty string if the language has no call expression kind.
+    pub call_expression_raw_kind: &'static str,
 }
 
 // -----------------------------------------------------------------------
@@ -444,6 +450,8 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
 
     case_statement_raw_kind: "case_statement",
     break_statement_raw_kind: "break_statement",
+
+    call_expression_raw_kind: "call_expression",
 };
 
 #[cfg(any(test, feature = "test-helpers"))]

@@ -29,6 +29,7 @@
 //!   §15 — ShadowEnricher      (has_shadow, shadow_count, shadow_vars)
 //!   §16 — UnusedParamEnricher  (has_unused_param, unused_param_count, unused_params)
 //!   §17 — FallthroughEnricher  (has_fallthrough, fallthrough_count)
+//!   §18 — RecursionEnricher    (is_recursive, recursion_count)
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -3125,5 +3126,109 @@ fn fallthrough_where_filter() {
     assert!(
         !names.contains(&"fallthroughNone"),
         "fallthroughNone should not appear",
+    );
+}
+
+// ── §18 — RecursionEnricher ──────────────────────────────────────────
+
+#[test]
+fn recursion_factorial() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'recursiveFactorial' WHERE fql_kind = 'function'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "recursiveFactorial");
+    assert_eq!(
+        m.fields.get("is_recursive").map(String::as_str),
+        Some("true"),
+    );
+    assert_eq!(
+        m.fields.get("recursion_count").map(String::as_str),
+        Some("1"),
+        "factorial has a single self-call site",
+    );
+}
+
+#[test]
+fn recursion_fib() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'recursiveFib' WHERE fql_kind = 'function'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "recursiveFib");
+    assert_eq!(
+        m.fields.get("is_recursive").map(String::as_str),
+        Some("true"),
+    );
+    assert_eq!(
+        m.fields.get("recursion_count").map(String::as_str),
+        Some("2"),
+        "fib has two self-call sites",
+    );
+}
+
+#[test]
+fn recursion_not_recursive() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'notRecursive' WHERE fql_kind = 'function'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "notRecursive");
+    assert!(
+        !m.fields.contains_key("is_recursive"),
+        "non-recursive function should not have is_recursive field",
+    );
+}
+
+#[test]
+fn recursion_calls_other() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'callsOther' WHERE fql_kind = 'function'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "callsOther");
+    assert!(
+        !m.fields.contains_key("is_recursive"),
+        "function that only calls others should not be recursive",
+    );
+}
+
+#[test]
+fn recursion_where_filter() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE fql_kind = 'function' WHERE is_recursive = 'true'",
+    );
+    let qr = as_query(&r);
+    let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
+    assert!(
+        names.contains(&"recursiveFactorial"),
+        "recursiveFactorial should appear, got: {names:?}",
+    );
+    assert!(
+        names.contains(&"recursiveFib"),
+        "recursiveFib should appear, got: {names:?}",
+    );
+    assert!(
+        !names.contains(&"notRecursive"),
+        "notRecursive should not appear",
+    );
+    assert!(
+        !names.contains(&"callsOther"),
+        "callsOther should not appear",
     );
 }

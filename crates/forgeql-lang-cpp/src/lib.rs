@@ -143,6 +143,8 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
 
     case_statement_raw_kind: "case_statement",
     break_statement_raw_kind: "break_statement",
+
+    call_expression_raw_kind: "call_expression",
 };
 
 impl LanguageSupport for CppLanguage {

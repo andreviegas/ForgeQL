@@ -26,6 +26,7 @@ pub mod metrics;
 pub mod naming;
 pub mod numbers;
 pub mod operators;
+pub mod recursion;
 pub mod redundancy;
 pub mod scope;
 pub mod shadow;
@@ -114,5 +115,6 @@ pub fn default_enrichers() -> Vec<Box<dyn NodeEnricher>> {
         Box::new(shadow::ShadowEnricher),
         Box::new(unused_param::UnusedParamEnricher),
         Box::new(fallthrough::FallthroughEnricher),
+        Box::new(recursion::RecursionEnricher),
     ]
 }

@@ -73,6 +73,10 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Two new `LanguageConfig` fields: `case_statement_raw_kind`,
   `break_statement_raw_kind`.
 
+- **`RecursionEnricher`** — detects direct (single-function) self-recursion.
+  Fields: `is_recursive`, `recursion_count`.  One new `LanguageConfig`
+  field: `call_expression_raw_kind`.
+
 - **Shared data-flow utilities** (`data_flow_utils.rs`) — extracted common
   local-variable collection, declarator walking, write-context detection,
   and AST helpers from `DeclDistanceEnricher` for reuse by `EscapeEnricher`

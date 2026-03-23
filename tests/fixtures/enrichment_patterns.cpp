@@ -593,3 +593,29 @@ void fallthroughGrouped(int x) {
 void fallthroughNoSwitch(int x) {
     if (x > 0) x++;
 }
+
+/* ------------------------------------------------------------------ */
+/* RecursionEnricher patterns                                           */
+/* ------------------------------------------------------------------ */
+
+/* Direct recursion: factorial */
+int recursiveFactorial(int n) {
+    if (n <= 1) return 1;
+    return n * recursiveFactorial(n - 1);
+}
+
+/* Multiple self-calls */
+int recursiveFib(int n) {
+    if (n <= 1) return n;
+    return recursiveFib(n - 1) + recursiveFib(n - 2);
+}
+
+/* Not recursive */
+int notRecursive(int n) {
+    return n * 2;
+}
+
+/* Calls another function, not itself */
+int callsOther(int n) {
+    return notRecursive(n) + 1;
+}
