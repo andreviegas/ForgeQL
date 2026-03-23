@@ -77,6 +77,11 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Fields: `is_recursive`, `recursion_count`.  One new `LanguageConfig`
   field: `call_expression_raw_kind`.
 
+- **`TodoEnricher`** — detects TODO, FIXME, HACK, and XXX markers in
+  comments inside function bodies.  Word-boundary-aware matching avoids
+  false positives.  Fields: `has_todo`, `todo_count`, `todo_tags`.
+  Uses existing `comment_raw_kind` from `LanguageConfig`.
+
 - **Shared data-flow utilities** (`data_flow_utils.rs`) — extracted common
   local-variable collection, declarator walking, write-context detection,
   and AST helpers from `DeclDistanceEnricher` for reuse by `EscapeEnricher`

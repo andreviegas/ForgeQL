@@ -30,6 +30,7 @@ pub mod recursion;
 pub mod redundancy;
 pub mod scope;
 pub mod shadow;
+pub mod todo;
 pub mod unused_param;
 
 // -----------------------------------------------------------------------
@@ -116,5 +117,6 @@ pub fn default_enrichers() -> Vec<Box<dyn NodeEnricher>> {
         Box::new(unused_param::UnusedParamEnricher),
         Box::new(fallthrough::FallthroughEnricher),
         Box::new(recursion::RecursionEnricher),
+        Box::new(todo::TodoEnricher),
     ]
 }

@@ -619,3 +619,33 @@ int notRecursive(int n) {
 int callsOther(int n) {
     return notRecursive(n) + 1;
 }
+
+// ── TodoEnricher fixtures ────────────────────────────────────────────
+
+/* Function with a single TODO */
+int todoSingle(int x) {
+    // TODO: refactor this later
+    return x + 1;
+}
+
+/* Function with multiple different markers */
+int todoMultiple(int x) {
+    // TODO: first thing
+    // FIXME: broken path
+    /* HACK: temporary workaround */
+    return x;
+}
+
+/* Function with no markers at all */
+int todoNone(int x) {
+    // just a normal comment
+    return x * 2;
+}
+
+/* Function with repeated same marker */
+int todoRepeated(int x) {
+    // TODO: item A
+    // TODO: item B
+    // XXX: watch out
+    return x;
+}
