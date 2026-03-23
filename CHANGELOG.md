@@ -28,6 +28,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`ClauseTarget` for `CallGraphEntry`** — fields: `name`, `path`/`file`,
   `line`.
 
+- **`DeclDistanceEnricher`** — new enricher adding three fields to function
+  rows:
+  - `decl_distance`: sum of (first-use − declaration) line distances for
+    locals with distance ≥ 2.
+  - `decl_far_count`: count of local variables with distance ≥ 2.
+  - `has_unused_reassign`: `"true"` when a local is reassigned before its
+    previous value was read (dead store detection).
+  Excludes parameters, globals, and member variables.  Fully language-agnostic
+  via `LanguageConfig` fields.
+
+- **`LanguageConfig` expansion** — six new fields for language-agnostic
+  data-flow analysis: `parameter_list_raw_kind`, `identifier_raw_kind`,
+  `assignment_raw_kinds`, `update_raw_kinds`, `init_declarator_raw_kind`,
+  `block_raw_kind`.
+
 ### Changed
 
 - **Agent instruction files expanded to self-contained references** —

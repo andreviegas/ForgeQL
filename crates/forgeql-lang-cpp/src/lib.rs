@@ -127,6 +127,13 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
     usage_node_kinds: &["identifier", "field_identifier", "type_identifier"],
     declarator_field_name: "declarator",
     function_declarator_kind: "function_declarator",
+
+    parameter_list_raw_kind: "parameter_list",
+    identifier_raw_kind: "identifier",
+    assignment_raw_kinds: &["assignment_expression"],
+    update_raw_kinds: &["update_expression"],
+    init_declarator_raw_kind: "init_declarator",
+    block_raw_kind: "compound_statement",
 };
 
 impl LanguageSupport for CppLanguage {

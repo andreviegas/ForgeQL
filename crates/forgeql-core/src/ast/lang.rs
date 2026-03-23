@@ -160,6 +160,33 @@ pub struct LanguageConfig {
     /// Raw kind for a function-type declarator nested inside a declarator tree
     /// (e.g. `"function_declarator"` in C++).
     pub function_declarator_kind: &'static str,
+
+    // -- declaration distance / data-flow (decl_distance enricher) --
+    /// Raw kind for the parameter list container node
+    /// (e.g. `"parameter_list"` for C++, `"formal_parameters"` for TS/Java).
+    pub parameter_list_raw_kind: &'static str,
+
+    /// Raw kind for a simple identifier token
+    /// (e.g. `"identifier"` — universal for most tree-sitter grammars).
+    pub identifier_raw_kind: &'static str,
+
+    /// Raw kinds for assignment expressions
+    /// (e.g. `["assignment_expression"]` for C++/TS/Java, `["assignment"]` for Python).
+    pub assignment_raw_kinds: &'static [&'static str],
+
+    /// Raw kinds for update/increment expressions (`++x`, `x--`).
+    /// Empty slice for languages without increment/decrement operators.
+    pub update_raw_kinds: &'static [&'static str],
+
+    /// Raw kind for an init-declarator wrapper node
+    /// (e.g. `"init_declarator"` for C++).  Empty string if the language
+    /// does not have this intermediate node.
+    pub init_declarator_raw_kind: &'static str,
+
+    /// Raw kind for block/compound statement nodes
+    /// (e.g. `"compound_statement"` for C++, `"statement_block"` for TS,
+    /// `"block"` for Python/Rust).
+    pub block_raw_kind: &'static str,
 }
 
 // -----------------------------------------------------------------------
@@ -366,6 +393,13 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
     usage_node_kinds: &["identifier", "field_identifier", "type_identifier"],
     declarator_field_name: "declarator",
     function_declarator_kind: "function_declarator",
+
+    parameter_list_raw_kind: "parameter_list",
+    identifier_raw_kind: "identifier",
+    assignment_raw_kinds: &["assignment_expression"],
+    update_raw_kinds: &["update_expression"],
+    init_declarator_raw_kind: "init_declarator",
+    block_raw_kind: "compound_statement",
 };
 
 #[cfg(any(test, feature = "test-helpers"))]

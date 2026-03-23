@@ -351,3 +351,63 @@ public:
     void overriddenMethod() override {}
     void finalMethod() final {}
 };
+
+/* ------------------------------------------------------------------ */
+/* DeclDistanceEnricher patterns                                        */
+/* ------------------------------------------------------------------ */
+
+/* No locals → decl_distance=0, decl_far_count=0, has_unused_reassign=false */
+void noLocals(int a) {
+    (void)a;
+}
+
+/* All locals used immediately (distance < 2) → decl_distance=0 */
+void allNearby(int a) {
+    int x = a + 1;
+    (void)x;
+    int y = a + 2;
+    (void)y;
+}
+
+/* One local declared far from first use → distance = 5 */
+void oneFarDecl(void) {
+    int farVar = 0;
+    (void)printf("line1\n");
+    (void)printf("line2\n");
+    (void)printf("line3\n");
+    (void)printf("line4\n");
+    (void)printf("val=%d\n", farVar);
+}
+
+/* Two far locals → decl_distance = sum of both distances */
+void twoFarDecls(void) {
+    int alpha = 0;
+    int beta = 0;
+    (void)printf("spacer1\n");
+    (void)printf("spacer2\n");
+    (void)printf("spacer3\n");
+    (void)printf("a=%d\n", alpha);
+    (void)printf("b=%d\n", beta);
+}
+
+/* Dead store: variable written twice without read between */
+void deadStorePattern(int a) {
+    int x = a;
+    x = a + 1;
+    (void)x;
+}
+
+/* Compound assign is NOT a dead store (reads before writing) */
+void compoundAssignNotDeadStore(int a) {
+    int x = a;
+    x += 1;
+    (void)x;
+}
+
+/* Parameters excluded — only local counted */
+void paramExcluded(int param) {
+    int loc = 0;
+    (void)printf("gap\n");
+    (void)printf("gap\n");
+    (void)printf("p=%d loc=%d\n", param, loc);
+}
