@@ -124,6 +124,20 @@ DEPTH N
 
 **Redundancy:** `has_repeated_condition_calls`, `repeated_condition_calls`, `null_check_count`, `duplicate_condition`
 
+**Declaration Distance:** `decl_distance`, `decl_far_count`, `has_unused_reassign`
+
+**Escape Analysis:** `has_escape`, `escape_count`, `escape_vars`, `escape_tier`, `escape_kinds`
+
+**Shadow Detection:** `has_shadow`, `shadow_count`, `shadow_vars`
+
+**Unused Parameters:** `has_unused_param`, `unused_param_count`, `unused_params`
+
+**Fallthrough:** `has_fallthrough`, `fallthrough_count`
+
+**Recursion:** `is_recursive`, `recursion_count`
+
+**Todo Markers:** `has_todo`, `todo_count`, `todo_tags`
+
 ---
 
 ## Common node_kind Values (C/C++)

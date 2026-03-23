@@ -87,6 +87,24 @@ FIND symbols WHERE cast_style = 'c_style'
 
 -- Repeated conditional calls (extract-variable opportunity)
 FIND symbols WHERE has_repeated_condition_calls = 'true'
+
+-- Local variables escaping their function
+FIND symbols WHERE fql_kind = 'function' WHERE has_escape = 'true' ORDER BY escape_count DESC LIMIT 20
+
+-- Variable shadowing in nested scopes
+FIND symbols WHERE fql_kind = 'function' WHERE has_shadow = 'true' ORDER BY shadow_count DESC LIMIT 20
+
+-- Unused function parameters
+FIND symbols WHERE fql_kind = 'function' WHERE has_unused_param = 'true' ORDER BY unused_param_count DESC LIMIT 20
+
+-- Switch/case fallthrough without break
+FIND symbols WHERE fql_kind = 'function' WHERE has_fallthrough = 'true' ORDER BY fallthrough_count DESC LIMIT 20
+
+-- Directly recursive functions
+FIND symbols WHERE fql_kind = 'function' WHERE is_recursive = 'true' ORDER BY recursion_count DESC LIMIT 20
+
+-- Functions with TODO/FIXME/HACK/XXX markers
+FIND symbols WHERE fql_kind = 'function' WHERE has_todo = 'true' ORDER BY todo_count DESC LIMIT 20
 ```
 
 ---

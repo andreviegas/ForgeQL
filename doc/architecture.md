@@ -268,7 +268,9 @@ ForgeQL/
 │   │       │   ├── cache.rs      # Index serialization/deserialization (bincode)
 │   │       │   └── enrich/       # Enrichment modules (naming, comments, numbers,
 │   │       │                     #   control_flow, operators, metrics, casts,
-│   │       │                     #   redundancy, scope, member, decl_distance)
+│   │       │                     #   redundancy, scope, member, decl_distance,
+│   │       │                     #   escape, shadow, unused_param, fallthrough,
+│   │       │                     #   recursion, todo)
 │   │       ├── parser/
 │   │       │   ├── forgeql.pest  # PEG grammar
 │   │       │   └── mod.rs        # Parser functions → IR

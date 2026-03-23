@@ -305,18 +305,15 @@ SHOW members OF 'ClassName'          -- member kind values: 'field', 'method', '
 
 ### Recursive Function Detection
 
-There is no single enrichment field for recursion. Detect it in two steps:
+Use the `is_recursive` enrichment field for direct recursion:
 
 ```sql
--- Step 1: get the callees of the function you suspect is recursive
-SHOW callees OF 'functionName'
+-- All directly recursive functions
+FIND symbols WHERE fql_kind = 'function' WHERE is_recursive = 'true' ORDER BY recursion_count DESC LIMIT 20
 
--- Step 2: if 'functionName' appears in its own callee list, it is directly recursive
--- For mutual recursion, check whether any callee calls back to 'functionName':
-FIND usages OF 'functionName'
-  GROUP BY file
-  ORDER BY count DESC
--- Then inspect the callee files to see if they call back
+-- For mutual recursion (A→B→A), use callees + usages:
+SHOW callees OF 'functionName'
+FIND usages OF 'functionName' GROUP BY file ORDER BY count DESC
 ```
 
 ## fql_kind Values
@@ -459,3 +456,63 @@ Data-flow enricher measuring distance between local variable declarations and th
 | `decl_distance` | `function` | Sum of (first-use line − declaration line) for locals with distance ≥ 2 |
 | `decl_far_count` | `function` | Count of locals whose first-use is ≥ 2 lines after declaration |
 | `has_unused_reassign` | `function` | `"true"` when a local is reassigned before its previous value was read (dead store) |
+
+### Escape Analysis
+
+Detects local variables that escape their declaring function — via return, address-of, or pointer/array aliasing.
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `has_escape` | `function` | `"true"` if any local escapes |
+| `escape_count` | `function` | Number of distinct escaping locals |
+| `escape_vars` | `function` | Comma-separated names of escaping locals |
+| `escape_tier` | `function` | Severity: `1` (return), `2` (address-of), `3` (pointer/array alias) |
+| `escape_kinds` | `function` | Comma-separated escape mechanisms (e.g. `"return,address_of"`) |
+
+### Shadow Detection
+
+Detects variables in inner scopes that shadow an outer-scope variable or parameter.
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `has_shadow` | `function` | `"true"` if any inner variable shadows an outer one |
+| `shadow_count` | `function` | Number of shadowing declarations |
+| `shadow_vars` | `function` | Comma-separated names of shadowed variables |
+
+### Unused Parameters
+
+Detects function parameters never referenced in the body.
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `has_unused_param` | `function` | `"true"` if any parameter is unused |
+| `unused_param_count` | `function` | Number of unused parameters |
+| `unused_params` | `function` | Comma-separated names of unused parameters |
+
+### Fallthrough Detection
+
+Detects switch/case fallthrough (non-empty cases without break/return). Empty cases (intentional grouping) are not flagged.
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `has_fallthrough` | `function` | `"true"` if any case falls through |
+| `fallthrough_count` | `function` | Number of fallthrough cases |
+
+### Recursion Detection
+
+Detects direct (single-function) self-recursion.
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `is_recursive` | `function` | `"true"` if the function calls itself |
+| `recursion_count` | `function` | Number of self-call sites in the body |
+
+### Todo Markers
+
+Detects TODO, FIXME, HACK, and XXX markers in comments inside function bodies.
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `has_todo` | `function` | `"true"` if any marker comment is found |
+| `todo_count` | `function` | Total marker occurrences |
+| `todo_tags` | `function` | Comma-separated, sorted unique tags (e.g. `"FIXME,TODO"`) |

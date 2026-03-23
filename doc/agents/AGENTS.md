@@ -66,3 +66,9 @@ ForgeQL indexes code quality metrics at parse time. Use them in WHERE clauses:
 - `lines >= 50` — large functions
 - `usages = 0` — dead code candidates
 - `has_doc = 'false'` — undocumented functions
+- `has_escape = 'true'` — local variables escaping their function
+- `has_shadow = 'true'` — variable shadowing in nested scopes
+- `has_unused_param = 'true'` — unused function parameters
+- `has_fallthrough = 'true'` — switch/case fallthrough without break
+- `is_recursive = 'true'` — directly recursive functions
+- `has_todo = 'true'` — TODO/FIXME/HACK/XXX markers in comments

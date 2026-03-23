@@ -257,6 +257,56 @@ Data-flow enricher measuring distance between local variable declarations and th
 | `decl_far_count` | `function` | Count of locals whose first-use is ≥ 2 lines after declaration |
 | `has_unused_reassign` | `function` | `"true"` when a local is reassigned before its previous value was read (dead store) |
 
+### Escape Analysis
+
+Detects local variables that escape their declaring function — via return, address-of, or pointer/array aliasing.
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `has_escape` | `function` | `"true"` if any local escapes |
+| `escape_count` | `function` | Number of distinct escaping locals |
+| `escape_vars` | `function` | Comma-separated names of escaping locals |
+| `escape_tier` | `function` | Severity: `1` (return), `2` (address-of), `3` (pointer/array alias) |
+| `escape_kinds` | `function` | Comma-separated escape mechanisms (e.g. `"return,address_of"`) |
+
+### Shadow Detection
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `has_shadow` | `function` | `"true"` if any inner variable shadows an outer one |
+| `shadow_count` | `function` | Number of shadowing declarations |
+| `shadow_vars` | `function` | Comma-separated shadowed variable names |
+
+### Unused Parameters
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `has_unused_param` | `function` | `"true"` if any parameter is unused |
+| `unused_param_count` | `function` | Number of unused parameters |
+| `unused_params` | `function` | Comma-separated names of unused parameters |
+
+### Fallthrough Detection
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `has_fallthrough` | `function` | `"true"` if any non-empty case falls through |
+| `fallthrough_count` | `function` | Number of fallthrough cases |
+
+### Recursion Detection
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `is_recursive` | `function` | `"true"` if the function calls itself |
+| `recursion_count` | `function` | Number of self-call sites |
+
+### Todo Markers
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `has_todo` | `function` | `"true"` if any TODO/FIXME/HACK/XXX marker found |
+| `todo_count` | `function` | Total marker occurrences |
+| `todo_tags` | `function` | Sorted unique tags (e.g. `"FIXME,TODO"`) |
+
 ## Common Recipes
 
 ### Dead Code Detection
@@ -330,11 +380,23 @@ FIND symbols WHERE fql_kind = 'function' WHERE has_unused_reassign = 'true'
 -- Functions matching a name pattern (regex)
 FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES '_impl$' ORDER BY usages DESC
 
--- TODO/FIXME lines inside a function body
-SHOW body OF 'FunctionName' DEPTH 99 WHERE text MATCHES '(?i)TODO|FIXME'
+-- Functions with TODO/FIXME/HACK/XXX markers
+FIND symbols WHERE fql_kind = 'function' WHERE has_todo = 'true' ORDER BY todo_count DESC LIMIT 20
 
--- Detect direct recursion (function calls itself)
-SHOW callees OF 'FunctionName' WHERE name = 'FunctionName'
+-- Directly recursive functions
+FIND symbols WHERE fql_kind = 'function' WHERE is_recursive = 'true' ORDER BY recursion_count DESC LIMIT 20
+
+-- Local variables escaping their function (return, address-of, aliasing)
+FIND symbols WHERE fql_kind = 'function' WHERE has_escape = 'true' ORDER BY escape_count DESC LIMIT 20
+
+-- Variable shadowing in nested scopes
+FIND symbols WHERE fql_kind = 'function' WHERE has_shadow = 'true' ORDER BY shadow_count DESC LIMIT 20
+
+-- Unused function parameters
+FIND symbols WHERE fql_kind = 'function' WHERE has_unused_param = 'true' ORDER BY unused_param_count DESC LIMIT 20
+
+-- Switch/case fallthrough without break
+FIND symbols WHERE fql_kind = 'function' WHERE has_fallthrough = 'true' ORDER BY fallthrough_count DESC LIMIT 20
 ```
 
 ### High-Coupling Hotspots

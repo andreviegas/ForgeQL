@@ -464,6 +464,66 @@ Data-flow enricher that measures how far local variable declarations are from th
 | `decl_far_count` | `function_definition` | Count of local variables whose first-use is ≥ 2 lines after declaration |
 | `has_unused_reassign` | `function_definition` | `"true"` when a local is reassigned before its previous value was read (dead store) |
 
+#### EscapeEnricher
+
+Detects local variables that escape their declaring function — via `return`, address-of (`&`), or pointer/array aliasing.
+
+| Field | Applies to | Description |
+|---|---|---|
+| `has_escape` | `function_definition` | `"true"` if any local escapes |
+| `escape_count` | `function_definition` | Number of distinct escaping locals |
+| `escape_vars` | `function_definition` | Comma-separated names of escaping locals |
+| `escape_tier` | `function_definition` | Severity: `1` (return), `2` (address-of), `3` (pointer/array alias) |
+| `escape_kinds` | `function_definition` | Comma-separated escape mechanisms (e.g. `"return,address_of"`) |
+
+#### ShadowEnricher
+
+Detects variables declared in inner scopes that shadow an outer-scope variable or parameter of the same name.
+
+| Field | Applies to | Description |
+|---|---|---|
+| `has_shadow` | `function_definition` | `"true"` if any inner variable shadows an outer one |
+| `shadow_count` | `function_definition` | Number of shadowing declarations |
+| `shadow_vars` | `function_definition` | Comma-separated names of shadowed variables |
+
+#### UnusedParamEnricher
+
+Detects function parameters that are never referenced in the function body.
+
+| Field | Applies to | Description |
+|---|---|---|
+| `has_unused_param` | `function_definition` | `"true"` if any parameter is unused |
+| `unused_param_count` | `function_definition` | Number of unused parameters |
+| `unused_params` | `function_definition` | Comma-separated names of unused parameters |
+
+#### FallthroughEnricher
+
+Detects switch/case statements where a non-empty case falls through to the next without `break` or `return`. Empty cases (intentional grouping) are not flagged.
+
+| Field | Applies to | Description |
+|---|---|---|
+| `has_fallthrough` | `function_definition` | `"true"` if any case falls through |
+| `fallthrough_count` | `function_definition` | Number of fallthrough cases |
+
+#### RecursionEnricher
+
+Detects direct (single-function) self-recursion. Does not detect mutual recursion (A→B→A).
+
+| Field | Applies to | Description |
+|---|---|---|
+| `is_recursive` | `function_definition` | `"true"` if the function calls itself |
+| `recursion_count` | `function_definition` | Number of self-call sites in the body |
+
+#### TodoEnricher
+
+Detects TODO, FIXME, HACK, and XXX markers in comments inside function bodies. Word-boundary-aware matching avoids false positives.
+
+| Field | Applies to | Description |
+|---|---|---|
+| `has_todo` | `function_definition` | `"true"` if any marker comment is found |
+| `todo_count` | `function_definition` | Total number of marker occurrences |
+| `todo_tags` | `function_definition` | Comma-separated, sorted unique tags found (e.g. `"FIXME,TODO"`) |
+
 ---
 
 ## Advanced Patterns
