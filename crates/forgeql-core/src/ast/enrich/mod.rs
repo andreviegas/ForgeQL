@@ -20,6 +20,7 @@ pub mod control_flow;
 pub mod data_flow_utils;
 pub mod decl_distance;
 pub mod escape;
+pub mod fallthrough;
 pub mod member;
 pub mod metrics;
 pub mod naming;
@@ -112,5 +113,6 @@ pub fn default_enrichers() -> Vec<Box<dyn NodeEnricher>> {
         Box::new(escape::EscapeEnricher),
         Box::new(shadow::ShadowEnricher),
         Box::new(unused_param::UnusedParamEnricher),
+        Box::new(fallthrough::FallthroughEnricher),
     ]
 }

@@ -140,6 +140,9 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
     address_of_operator: "&",
     array_declarator_raw_kind: "array_declarator",
     static_storage_keywords: &["static"],
+
+    case_statement_raw_kind: "case_statement",
+    break_statement_raw_kind: "break_statement",
 };
 
 impl LanguageSupport for CppLanguage {

@@ -540,3 +540,56 @@ void unusedParamAll(int x, int y, int z) {
 int unusedParamEmpty(void) {
     return 42;
 }
+
+/* ------------------------------------------------------------------ */
+/* FallthroughEnricher patterns                                         */
+/* ------------------------------------------------------------------ */
+
+/* One case falls through (case 1 has no break) */
+void fallthroughOne(int x) {
+    switch (x) {
+        case 1:
+            x++;
+            /* fallthrough — no break */
+        case 2:
+            x--;
+            break;
+        default:
+            break;
+    }
+}
+
+/* No fallthrough — all cases properly terminated */
+void fallthroughNone(int x) {
+    switch (x) {
+        case 1:
+            x++;
+            break;
+        case 2:
+            x--;
+            return;
+        default:
+            break;
+    }
+}
+
+/* Empty case grouping (intentional, not flagged) + a real fallthrough */
+void fallthroughGrouped(int x) {
+    switch (x) {
+        case 1:
+        case 2:
+            /* intentional grouping — empty cases are not flagged */
+            x++;
+            /* but THIS case falls through to case 3 */
+        case 3:
+            x--;
+            break;
+        default:
+            break;
+    }
+}
+
+/* No switch at all */
+void fallthroughNoSwitch(int x) {
+    if (x > 0) x++;
+}

@@ -211,6 +211,17 @@ pub struct LanguageConfig {
     /// Keywords that mark a local as having static storage duration
     /// (e.g. `["static"]` for C/C++). Empty for languages without this concept.
     pub static_storage_keywords: &'static [&'static str],
+
+    // -- fallthrough detection (fallthrough enricher) --
+    /// Raw kind for case/default labels inside a switch/match
+    /// (e.g. `"case_statement"` for C++, `"switch_case"` for TS/Java).
+    /// Empty string if the language has no switch/case construct.
+    pub case_statement_raw_kind: &'static str,
+
+    /// Raw kind for break statements
+    /// (e.g. `"break_statement"` for C++/Java/TS).
+    /// Empty string if the language has no break statement.
+    pub break_statement_raw_kind: &'static str,
 }
 
 // -----------------------------------------------------------------------
@@ -430,6 +441,9 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
     address_of_operator: "&",
     array_declarator_raw_kind: "array_declarator",
     static_storage_keywords: &["static"],
+
+    case_statement_raw_kind: "case_statement",
+    break_statement_raw_kind: "break_statement",
 };
 
 #[cfg(any(test, feature = "test-helpers"))]

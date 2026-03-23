@@ -66,6 +66,13 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `unused_param_count`, `unused_params`.  Fully language-agnostic via
   existing `LanguageConfig` fields.
 
+- **`FallthroughEnricher`** — detects switch/case statements where a
+  non-empty case falls through to the next case without `break` or
+  `return`.  Empty cases (intentional grouping like `case 1: case 2:`)
+  are not flagged.  Fields: `has_fallthrough`, `fallthrough_count`.
+  Two new `LanguageConfig` fields: `case_statement_raw_kind`,
+  `break_statement_raw_kind`.
+
 - **Shared data-flow utilities** (`data_flow_utils.rs`) — extracted common
   local-variable collection, declarator walking, write-context detection,
   and AST helpers from `DeclDistanceEnricher` for reuse by `EscapeEnricher`
