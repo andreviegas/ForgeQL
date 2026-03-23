@@ -150,6 +150,8 @@ raw results
     → LIMIT         (truncate to N rows)
 ```
 
+The `WHERE` predicate supports `=`, `!=`, `LIKE`, `NOT LIKE`, `MATCHES`, `NOT MATCHES` (regex via the `regex` crate), and numeric comparisons. `ClauseTarget` is implemented for `IndexRow`, `SymbolMatch`, `SourceLine`, and `CallGraphEntry`, so the full pipeline applies uniformly to FIND queries, SHOW body/lines/context, and SHOW callees.
+
 Clauses that do not apply to a given result type are silently skipped. There is no per-command clause handling code.
 
 ---
@@ -266,7 +268,7 @@ ForgeQL/
 │   │       │   ├── cache.rs      # Index serialization/deserialization (bincode)
 │   │       │   └── enrich/       # Enrichment modules (naming, comments, numbers,
 │   │       │                     #   control_flow, operators, metrics, casts,
-│   │       │                     #   redundancy, scope, member)
+│   │       │                     #   redundancy, scope, member, decl_distance)
 │   │       ├── parser/
 │   │       │   ├── forgeql.pest  # PEG grammar
 │   │       │   └── mod.rs        # Parser functions → IR
@@ -318,7 +320,7 @@ ForgeQL's core (`forgeql-core`) contains zero language-specific code. All langua
 
 ### Key Abstractions (defined in `ast/lang.rs`)
 
-**`LanguageConfig`** — a static struct containing all language-specific data: node kind sets, modifier maps, cast kinds, number suffixes, comment prefixes, visibility keywords, etc. Each language crate defines a `static CPP_CONFIG: LanguageConfig` (or equivalent).
+**`LanguageConfig`** — a static struct containing all language-specific data: node kind sets, modifier maps, cast kinds, number suffixes, comment prefixes, visibility keywords, and data-flow analysis node kinds (`parameter_list_raw_kind`, `identifier_raw_kind`, `assignment_raw_kinds`, `update_raw_kinds`, `init_declarator_raw_kind`, `block_raw_kind`). Each language crate defines a `static CPP_CONFIG: LanguageConfig` (or equivalent).
 
 **`LanguageSupport`** — a trait that every language crate implements:
 

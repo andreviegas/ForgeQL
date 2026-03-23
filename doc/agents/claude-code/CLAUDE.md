@@ -101,7 +101,20 @@ ROLLBACK [TRANSACTION 'name']
 ### Universal Clauses (applied in this order)
 `IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIMIT`
 
-**Operators:** `=`, `!=`, `LIKE`, `NOT LIKE`, `>`, `>=`, `<`, `<=`
+**Operators:** `=`, `!=`, `LIKE`, `NOT LIKE`, `MATCHES`, `NOT MATCHES` (regex), `>`, `>=`, `<`, `<=`
+
+`MATCHES` / `NOT MATCHES` use Rust `regex` crate syntax. Prefix `(?i)` for case-insensitive matching.
+
+`SHOW body`, `SHOW LINES`, and `SHOW context` accept `WHERE` on source lines:
+- `text` — line content (supports `=`, `LIKE`, `MATCHES`)
+- `line` — 1-based line number
+
+`SHOW callees` accepts `WHERE` on call graph entries:
+- `name` — called symbol name
+- `path` / `file` — file containing the call
+- `line` — line number of the call
+
+Source line filtering runs **before** the 40-line cap.
 
 ## fql_kind Values
 
@@ -234,6 +247,16 @@ Computed at index time. Use in `WHERE` clauses like any other field.
 | `member_kind` | `field` | `"method"` or `"field"` |
 | `owner_kind` | `field` | Enclosing type kind (e.g. `class`, `struct`) |
 
+### Declaration Distance
+
+Data-flow enricher measuring distance between local variable declarations and their first use. Excludes parameters, globals, and member variables.
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `decl_distance` | `function` | Sum of (first-use line − declaration line) for locals with distance ≥ 2 |
+| `decl_far_count` | `function` | Count of locals whose first-use is ≥ 2 lines after declaration |
+| `has_unused_reassign` | `function` | `"true"` when a local is reassigned before its previous value was read (dead store) |
+
 ## Common Recipes
 
 ### Dead Code Detection
@@ -297,6 +320,21 @@ FIND symbols WHERE fql_kind = 'function' WHERE return_count >= 3 ORDER BY return
 
 -- Complex conditions (4+ boolean sub-expressions)
 FIND symbols WHERE condition_tests >= 4 ORDER BY condition_tests DESC LIMIT 20
+
+-- Variables declared far from first use (move declarations closer)
+FIND symbols WHERE fql_kind = 'function' WHERE decl_far_count >= 3 ORDER BY decl_distance DESC LIMIT 20
+
+-- Dead stores (value overwritten before being read)
+FIND symbols WHERE fql_kind = 'function' WHERE has_unused_reassign = 'true'
+
+-- Functions matching a name pattern (regex)
+FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES '_impl$' ORDER BY usages DESC
+
+-- TODO/FIXME lines inside a function body
+SHOW body OF 'FunctionName' DEPTH 99 WHERE text MATCHES '(?i)TODO|FIXME'
+
+-- Detect direct recursion (function calls itself)
+SHOW callees OF 'FunctionName' WHERE name = 'FunctionName'
 ```
 
 ### High-Coupling Hotspots

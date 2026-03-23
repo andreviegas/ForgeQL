@@ -247,6 +247,8 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 | `!=` | Not equal |
 | `LIKE` | SQL wildcard: `%` = any sequence, `_` = any single char (case-insensitive) |
 | `NOT LIKE` | Negated LIKE |
+| `MATCHES` | Regex match (Rust `regex` crate syntax, case-sensitive by default; use `(?i)` for case-insensitive) |
+| `NOT MATCHES` | Negated regex match |
 | `>` `>=` `<` `<=` | Numeric comparison |
 
 | Value syntax | Type |
@@ -305,6 +307,28 @@ Applies to: `FIND files`
 | `extension` / `ext` | string | Extension without `.` (empty for extension-less files) |
 | `size` | integer | File size in bytes |
 | `depth` | integer | Directory depth from workspace root |
+
+### Source Line Fields
+
+Applies to: `SHOW body OF`, `SHOW LINES n-m OF`, `SHOW context OF`
+
+| Field | Type | Description |
+|---|---|---|
+| `text` | string | Line content (supports `LIKE`, `MATCHES`, `=`) |
+| `line` | integer | 1-based line number |
+| `marker` | string | Prefix marker (e.g. `+`, `-` in diff output) |
+
+Filtering runs **before** the implicit `DEFAULT_SHOW_LINE_LIMIT` cap, so the full function body is searched even when not all lines are returned.
+
+### Call Graph Fields
+
+Applies to: `SHOW callees OF`
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Called symbol name |
+| `path` / `file` | string | File containing the call |
+| `line` | integer | 1-based line number of the call |
 
 ### Dynamic Fields
 
@@ -430,6 +454,16 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | `member_kind` | `field_declaration` | `"method"` or `"field"` |
 | `owner_kind` | `field_declaration` | Raw kind of enclosing type (e.g. `class_specifier`, `struct_specifier`) |
 
+#### DeclDistanceEnricher
+
+Data-flow enricher that measures how far local variable declarations are from their first use. Excludes parameters, globals, and member variables.
+
+| Field | Applies to | Description |
+|---|---|---|
+| `decl_distance` | `function_definition` | Sum of (first-use line − declaration line) for locals with distance ≥ 2 |
+| `decl_far_count` | `function_definition` | Count of local variables whose first-use is ≥ 2 lines after declaration |
+| `has_unused_reassign` | `function_definition` | `"true"` when a local is reassigned before its previous value was read (dead store) |
+
 ---
 
 ## Advanced Patterns
@@ -514,6 +548,26 @@ FIND symbols WHERE dup_logic = 'true'
 
 -- Functions with repeated conditional calls (extract-variable opportunity)
 FIND symbols WHERE has_repeated_condition_calls = 'true'
+
+-- Variables declared far from their first use (move declaration closer)
+FIND symbols
+  WHERE fql_kind = 'function'
+  WHERE decl_far_count >= 3
+  ORDER BY decl_distance DESC
+
+-- Dead stores (value written but never read before overwrite)
+FIND symbols
+  WHERE fql_kind = 'function'
+  WHERE has_unused_reassign = 'true'
+
+-- Regex search: functions whose name ends with _impl
+FIND symbols
+  WHERE fql_kind = 'function'
+  WHERE name MATCHES '_impl$'
+
+-- Source lines containing TODO/FIXME (case-insensitive)
+SHOW body OF 'PiscoCode::run' DEPTH 99
+  WHERE text MATCHES '(?i)TODO|FIXME'
 ```
 
 ### Filtered outline and member inspection
