@@ -78,6 +78,9 @@ ignore           = "0.4"
 # vendored-openssl compiles OpenSSL from source — required for cross-compilation
 git2             = { version = "0.19", features = ["vendored-openssl"] }
 
+# --- regex ---
+regex            = "1"
+
 # --- index serialization ---
 bincode          = "1"
 

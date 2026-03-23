@@ -833,7 +833,7 @@ impl ForgeQLEngine {
         let mut show_result = convert_show_json(op, &json)?;
 
         // Apply the full clause pipeline (WHERE, ORDER BY, LIMIT, OFFSET, …)
-        // to outline and member entries — previously only LIMIT/OFFSET ran.
+        // to structured list results: outline, members, and call graph entries.
         match (&mut show_result.content, op) {
             (ShowContent::Outline { entries }, ForgeQLIR::ShowOutline { clauses, .. }) => {
                 crate::filter::apply_clauses(entries, clauses);
@@ -841,7 +841,30 @@ impl ForgeQLEngine {
             (ShowContent::Members { members, .. }, ForgeQLIR::ShowMembers { clauses, .. }) => {
                 crate::filter::apply_clauses(members, clauses);
             }
+            (ShowContent::CallGraph { entries, .. }, ForgeQLIR::ShowCallees { clauses, .. }) => {
+                crate::filter::apply_clauses(entries, clauses);
+            }
             _ => {}
+        }
+
+        // Apply WHERE predicates to source-line results BEFORE the line cap.
+        // This lets queries like `SHOW body OF 'fn' WHERE text MATCHES 'TODO'`
+        // filter over the full function body, not just the first N lines.
+        if let ShowContent::Lines { lines, .. } = &mut show_result.content {
+            let clauses = match op {
+                ForgeQLIR::ShowBody { clauses, .. }
+                | ForgeQLIR::ShowLines { clauses, .. }
+                | ForgeQLIR::ShowContext { clauses, .. } => Some(clauses),
+                _ => None,
+            };
+            if let Some(clauses) = clauses {
+                // Apply only WHERE predicates here; LIMIT/OFFSET are handled
+                // by the line-cap logic below.
+                for predicate in &clauses.where_predicates {
+                    let pred = predicate.clone();
+                    lines.retain(|line| crate::filter::eval_predicate(line, &pred));
+                }
+            }
         }
 
         // ----------------------------------------------------------

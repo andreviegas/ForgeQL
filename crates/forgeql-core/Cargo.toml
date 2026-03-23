@@ -26,6 +26,9 @@ tree-sitter-cpp = { workspace = true, optional = true }
 pest        = { workspace = true }
 pest_derive = { workspace = true }
 
+# regex
+regex       = { workspace = true }
+
 # parallelism
 rayon       = { workspace = true }
 

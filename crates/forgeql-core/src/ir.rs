@@ -32,8 +32,8 @@ pub struct OrderBy {
 
 /// Comparison operator for `WHERE` predicates.
 ///
-/// Supports six relational operators plus SQL-style `LIKE` / `NOT LIKE`
-/// string pattern matching (where `%` matches any sequence of characters).
+/// Supports six relational operators, SQL-style `LIKE` / `NOT LIKE`
+/// pattern matching, and `MATCHES` / `NOT MATCHES` for regex filtering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompareOp {
@@ -41,6 +41,10 @@ pub enum CompareOp {
     NotEq,
     Like,
     NotLike,
+    /// `WHERE field MATCHES 'regex'` — full regex match via the `regex` crate.
+    Matches,
+    /// `WHERE field NOT MATCHES 'regex'` — negated regex match.
+    NotMatches,
     Gt,
     Gte,
     Lt,

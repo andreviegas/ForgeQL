@@ -7,6 +7,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`MATCHES` / `NOT MATCHES` operators** — regex filtering in WHERE
+  predicates via the `regex` crate.  Works on any string field:
+  `WHERE name MATCHES '^(get|set)_'`,
+  `WHERE text MATCHES '(?i)TODO|FIXME'`.
+
+- **Universal WHERE on SHOW commands** — WHERE predicates now work on:
+  - `SHOW body`, `SHOW lines`, `SHOW context` — filter source lines by
+    `text` (content) or `line` (number).  Example:
+    `SHOW body OF 'func' DEPTH 99 WHERE text MATCHES 'return' LIMIT 100`
+  - `SHOW callees` — filter call graph entries by `name`, `path`, `line`.
+    Enables single-query recursion detection:
+    `SHOW callees OF 'fn' WHERE name = 'fn'`
+
+- **`ClauseTarget` for `SourceLine`** — fields: `text` (content),
+  `line` (number), `marker`.
+
+- **`ClauseTarget` for `CallGraphEntry`** — fields: `name`, `path`/`file`,
+  `line`.
+
 ### Changed
 
 - **Agent instruction files expanded to self-contained references** —
@@ -16,6 +37,10 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **README.md (agents)** — clarified deployment: one file per workspace,
   `references/` folder is human documentation only.
+
+- **WHERE on source lines runs before line cap** — the implicit
+  `DEFAULT_SHOW_LINE_LIMIT` truncation now runs after WHERE filtering,
+  so queries search the full function body, not just the first N lines.
 
 ## [0.28.0] - 2026-03-22
 

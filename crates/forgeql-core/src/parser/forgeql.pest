@@ -181,7 +181,7 @@ having_clause = { "HAVING" ~ predicate }
 /// or dynamic fields from the flat index (`type`, `value`, etc.).
 predicate       = { field_name ~ compare_op ~ predicate_value }
 field_name      = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
-compare_op      = { ">=" | "<=" | "!=" | "NOT" ~ "LIKE" | "LIKE" | ">" | "<" | "=" }
+compare_op      = { ">="  | "<=" | "!=" | "NOT" ~ "MATCHES" | "NOT" ~ "LIKE" | "MATCHES" | "LIKE" | ">" | "<" | "=" }
 predicate_value = { string_literal | signed_number | boolean_literal }
 
 in_clause      = { "IN"      ~ string_literal }

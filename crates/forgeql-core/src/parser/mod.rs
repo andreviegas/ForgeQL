@@ -331,6 +331,8 @@ fn parse_compare_op(op_str: &str) -> CompareOp {
         "!=" => CompareOp::NotEq,
         "LIKE" => CompareOp::Like,
         "NOT LIKE" => CompareOp::NotLike,
+        "MATCHES" => CompareOp::Matches,
+        "NOT MATCHES" => CompareOp::NotMatches,
         ">" => CompareOp::Gt,
         ">=" => CompareOp::Gte,
         "<" => CompareOp::Lt,

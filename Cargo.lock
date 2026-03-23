@@ -483,6 +483,7 @@ dependencies = [
  "pest",
  "pest_derive",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "serde_yml",

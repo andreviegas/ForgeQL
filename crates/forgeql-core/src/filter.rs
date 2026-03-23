@@ -8,6 +8,7 @@ use std::path::Path;
 
 use crate::ast::index::IndexRow;
 use crate::ir::{Clauses, CompareOp, GroupBy, PredicateValue, SortDirection};
+use regex::Regex;
 
 // -----------------------------------------------------------------------
 // ClauseTarget trait
@@ -99,6 +100,29 @@ pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicat
             };
             item.field_str(&predicate.field)
                 .is_none_or(|v| !like_match(v, pat))
+        }
+        // ---- Regex MATCHES operators ----
+        CompareOp::Matches => {
+            let pat = match &predicate.value {
+                PredicateValue::String(s) => s.as_str(),
+                _ => return false,
+            };
+            let Ok(re) = Regex::new(pat) else {
+                return false;
+            };
+            item.field_str(&predicate.field)
+                .is_some_and(|v| re.is_match(v))
+        }
+        CompareOp::NotMatches => {
+            let pat = match &predicate.value {
+                PredicateValue::String(s) => s.as_str(),
+                _ => return true,
+            };
+            let Ok(re) = Regex::new(pat) else {
+                return true;
+            };
+            item.field_str(&predicate.field)
+                .is_none_or(|v| !re.is_match(v))
         }
         CompareOp::Eq => match &predicate.value {
             PredicateValue::String(s) => item
@@ -376,6 +400,48 @@ impl ClauseTarget for crate::result::MemberEntry {
 
     fn path(&self) -> Option<&Path> {
         None
+    }
+}
+
+impl ClauseTarget for crate::result::SourceLine {
+    fn field_str(&self, field: &str) -> Option<&str> {
+        match field {
+            "text" | "content" => Some(&self.text),
+            "marker" => self.marker.as_deref(),
+            _ => None,
+        }
+    }
+
+    fn field_num(&self, field: &str) -> Option<i64> {
+        match field {
+            "line" => Some(i64::try_from(self.line).unwrap_or(i64::MAX)),
+            _ => None,
+        }
+    }
+
+    fn path(&self) -> Option<&Path> {
+        None
+    }
+}
+
+impl ClauseTarget for crate::result::CallGraphEntry {
+    fn field_str(&self, field: &str) -> Option<&str> {
+        match field {
+            "name" => Some(&self.name),
+            "path" | "file" => self.path.as_deref().and_then(|p| p.to_str()),
+            _ => None,
+        }
+    }
+
+    fn field_num(&self, field: &str) -> Option<i64> {
+        match field {
+            "line" => self.line.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
+            _ => None,
+        }
+    }
+
+    fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 }
 
@@ -662,5 +728,230 @@ mod tests {
     fn like_match_case_insensitive() {
         assert!(like_match("SetPeakLevel", "set%"));
         assert!(like_match("setPeakLevel", "SET%"));
+    }
+
+    // -------------------------------------------------------------------
+    // MATCHES (regex) predicate tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn matches_basic_regex() {
+        let mut items = vec![
+            make_symbol("setPeakLevel", "Function", 3),
+            make_symbol("getBaseLevel", "Function", 5),
+            make_symbol("init_motor", "Function", 1),
+        ];
+        let clauses = Clauses {
+            where_predicates: vec![Predicate {
+                field: "name".into(),
+                op: CompareOp::Matches,
+                value: PredicateValue::String("^(set|get)".into()),
+            }],
+            ..Default::default()
+        };
+        apply_clauses(&mut items, &clauses);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].name, "setPeakLevel");
+        assert_eq!(items[1].name, "getBaseLevel");
+    }
+
+    #[test]
+    fn not_matches_regex() {
+        let mut items = vec![
+            make_symbol("setPeakLevel", "Function", 3),
+            make_symbol("getBaseLevel", "Function", 5),
+            make_symbol("init_motor", "Function", 1),
+        ];
+        let clauses = Clauses {
+            where_predicates: vec![Predicate {
+                field: "name".into(),
+                op: CompareOp::NotMatches,
+                value: PredicateValue::String("^(set|get)".into()),
+            }],
+            ..Default::default()
+        };
+        apply_clauses(&mut items, &clauses);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "init_motor");
+    }
+
+    #[test]
+    fn matches_invalid_regex_returns_false() {
+        let mut items = vec![make_symbol("foo", "Function", 1)];
+        let clauses = Clauses {
+            where_predicates: vec![Predicate {
+                field: "name".into(),
+                op: CompareOp::Matches,
+                value: PredicateValue::String("[invalid".into()),
+            }],
+            ..Default::default()
+        };
+        apply_clauses(&mut items, &clauses);
+        // Invalid regex matches nothing — item is filtered out.
+        assert_eq!(items.len(), 0);
+    }
+
+    // -------------------------------------------------------------------
+    // SourceLine ClauseTarget tests
+    // -------------------------------------------------------------------
+
+    use crate::result::SourceLine;
+
+    fn make_lines() -> Vec<SourceLine> {
+        vec![
+            SourceLine {
+                line: 10,
+                text: "void setup() {".into(),
+                marker: None,
+            },
+            SourceLine {
+                line: 11,
+                text: "    // TODO: fix this".into(),
+                marker: None,
+            },
+            SourceLine {
+                line: 12,
+                text: "    int x = 42;".into(),
+                marker: None,
+            },
+            SourceLine {
+                line: 13,
+                text: "    // FIXME: needs review".into(),
+                marker: None,
+            },
+            SourceLine {
+                line: 14,
+                text: "}".into(),
+                marker: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn source_line_where_text_matches() {
+        let mut lines = make_lines();
+        let clauses = Clauses {
+            where_predicates: vec![Predicate {
+                field: "text".into(),
+                op: CompareOp::Matches,
+                value: PredicateValue::String("TODO|FIXME".into()),
+            }],
+            ..Default::default()
+        };
+        apply_clauses(&mut lines, &clauses);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].line, 11);
+        assert_eq!(lines[1].line, 13);
+    }
+
+    #[test]
+    fn source_line_where_text_like() {
+        let mut lines = make_lines();
+        let clauses = Clauses {
+            where_predicates: vec![Predicate {
+                field: "text".into(),
+                op: CompareOp::Like,
+                value: PredicateValue::String("%int%".into()),
+            }],
+            ..Default::default()
+        };
+        apply_clauses(&mut lines, &clauses);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].line, 12);
+    }
+
+    #[test]
+    fn source_line_where_line_gte() {
+        let mut lines = make_lines();
+        let clauses = Clauses {
+            where_predicates: vec![Predicate {
+                field: "line".into(),
+                op: CompareOp::Gte,
+                value: PredicateValue::Number(13),
+            }],
+            ..Default::default()
+        };
+        apply_clauses(&mut lines, &clauses);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].line, 13);
+        assert_eq!(lines[1].line, 14);
+    }
+
+    // -------------------------------------------------------------------
+    // CallGraphEntry ClauseTarget tests
+    // -------------------------------------------------------------------
+
+    use crate::result::CallGraphEntry;
+
+    #[test]
+    fn callgraph_where_name_eq_detects_recursion() {
+        let mut entries = vec![
+            CallGraphEntry {
+                name: "helper".into(),
+                path: Some(PathBuf::from("src/util.cpp")),
+                line: Some(10),
+                byte_start: None,
+            },
+            CallGraphEntry {
+                name: "process".into(),
+                path: Some(PathBuf::from("src/main.cpp")),
+                line: Some(42),
+                byte_start: None,
+            },
+            CallGraphEntry {
+                name: "cleanup".into(),
+                path: None,
+                line: None,
+                byte_start: None,
+            },
+        ];
+        // Simulate: SHOW callees OF 'process' WHERE name = 'process'
+        let clauses = Clauses {
+            where_predicates: vec![Predicate {
+                field: "name".into(),
+                op: CompareOp::Eq,
+                value: PredicateValue::String("process".into()),
+            }],
+            ..Default::default()
+        };
+        apply_clauses(&mut entries, &clauses);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "process");
+    }
+
+    #[test]
+    fn callgraph_where_name_matches() {
+        let mut entries = vec![
+            CallGraphEntry {
+                name: "init_motor".into(),
+                path: Some(PathBuf::from("src/motor.cpp")),
+                line: Some(5),
+                byte_start: None,
+            },
+            CallGraphEntry {
+                name: "init_sensor".into(),
+                path: Some(PathBuf::from("src/sensor.cpp")),
+                line: Some(15),
+                byte_start: None,
+            },
+            CallGraphEntry {
+                name: "cleanup".into(),
+                path: None,
+                line: None,
+                byte_start: None,
+            },
+        ];
+        let clauses = Clauses {
+            where_predicates: vec![Predicate {
+                field: "name".into(),
+                op: CompareOp::Matches,
+                value: PredicateValue::String("^init_".into()),
+            }],
+            ..Default::default()
+        };
+        apply_clauses(&mut entries, &clauses);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "init_motor");
+        assert_eq!(entries[1].name, "init_sensor");
     }
 }

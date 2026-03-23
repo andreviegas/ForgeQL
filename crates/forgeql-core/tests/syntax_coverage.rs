@@ -2297,3 +2297,172 @@ fn result_display_show_members() {
     let text = format!("{r}");
     assert!(!text.is_empty());
 }
+
+// =======================================================================
+// Phase 11 — MATCHES operator + universal WHERE on SHOW results
+// =======================================================================
+
+#[test]
+fn parse_matches_operator() {
+    parser::parse("FIND symbols WHERE name MATCHES '^(set|get)_'").expect("parse MATCHES");
+}
+
+#[test]
+fn parse_not_matches_operator() {
+    parser::parse("FIND symbols WHERE name NOT MATCHES '^init'").expect("parse NOT MATCHES");
+}
+
+#[test]
+fn find_symbols_where_name_matches_regex() {
+    let (mut e, sid, _d) = engine_with_session();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name MATCHES '^encender'");
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "should find encender* functions");
+    for sym in &qr.results {
+        assert!(
+            sym.name.starts_with("encender"),
+            "name '{}' should start with 'encender'",
+            sym.name
+        );
+    }
+}
+
+#[test]
+fn find_symbols_where_name_not_matches_regex() {
+    let (mut e, sid, _d) = engine_with_session();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE name NOT MATCHES '^encender'",
+    );
+    let qr = as_query(&r);
+    for sym in &qr.results {
+        assert!(
+            !sym.name.starts_with("encender"),
+            "name '{}' should NOT start with 'encender'",
+            sym.name
+        );
+    }
+}
+
+#[test]
+fn show_callees_where_name_eq() {
+    let (mut e, sid, _d) = engine_with_session();
+    // encenderSistema calls encenderMotor — filter to just that
+    let r = exec(
+        &mut e,
+        &sid,
+        "SHOW callees OF 'encenderSistema' WHERE name = 'encenderMotor'",
+    );
+    let sr = as_show(&r);
+    match &sr.content {
+        ShowContent::CallGraph { entries, .. } => {
+            assert_eq!(
+                entries.len(),
+                1,
+                "should have exactly 1 callee named encenderMotor"
+            );
+            assert_eq!(entries[0].name, "encenderMotor");
+        }
+        other => panic!("expected CallGraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn show_callees_where_name_matches() {
+    let (mut e, sid, _d) = engine_with_session();
+    let r = exec(
+        &mut e,
+        &sid,
+        "SHOW callees OF 'encenderSistema' WHERE name MATCHES '^encender'",
+    );
+    let sr = as_show(&r);
+    match &sr.content {
+        ShowContent::CallGraph { entries, .. } => {
+            assert!(
+                !entries.is_empty(),
+                "should have callees matching ^encender"
+            );
+            for e in entries {
+                assert!(
+                    e.name.starts_with("encender"),
+                    "callee '{}' should start with 'encender'",
+                    e.name
+                );
+            }
+        }
+        other => panic!("expected CallGraph, got {other:?}"),
+    }
+}
+
+#[test]
+fn show_body_where_text_matches() {
+    let (mut e, sid, _d) = engine_with_session();
+    let r = exec(
+        &mut e,
+        &sid,
+        "SHOW body OF 'encenderMotor' DEPTH 99 WHERE text MATCHES 'return' LIMIT 100",
+    );
+    let sr = as_show(&r);
+    match &sr.content {
+        ShowContent::Lines { lines, .. } => {
+            for line in lines {
+                assert!(
+                    line.text.contains("return"),
+                    "line {} should contain 'return': '{}'",
+                    line.line,
+                    line.text
+                );
+            }
+        }
+        other => panic!("expected Lines, got {other:?}"),
+    }
+}
+
+#[test]
+fn show_body_where_text_like() {
+    let (mut e, sid, _d) = engine_with_session();
+    let r = exec(
+        &mut e,
+        &sid,
+        "SHOW body OF 'encenderMotor' DEPTH 99 WHERE text LIKE '%motor%' LIMIT 100",
+    );
+    let sr = as_show(&r);
+    match &sr.content {
+        ShowContent::Lines { lines, .. } => {
+            for line in lines {
+                assert!(
+                    line.text.to_ascii_lowercase().contains("motor"),
+                    "line {} should contain 'motor': '{}'",
+                    line.line,
+                    line.text
+                );
+            }
+        }
+        other => panic!("expected Lines, got {other:?}"),
+    }
+}
+
+#[test]
+fn show_lines_where_text_matches() {
+    let (mut e, sid, _d) = engine_with_session();
+    let r = exec(
+        &mut e,
+        &sid,
+        "SHOW LINES 1-50 OF 'motor_control.h' WHERE text MATCHES '#include' LIMIT 100",
+    );
+    let sr = as_show(&r);
+    match &sr.content {
+        ShowContent::Lines { lines, .. } => {
+            for line in lines {
+                assert!(
+                    line.text.contains("#include"),
+                    "line {} should contain '#include': '{}'",
+                    line.line,
+                    line.text
+                );
+            }
+        }
+        other => panic!("expected Lines, got {other:?}"),
+    }
+}
