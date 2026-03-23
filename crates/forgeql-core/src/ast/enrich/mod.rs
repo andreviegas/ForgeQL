@@ -28,6 +28,7 @@ pub mod operators;
 pub mod redundancy;
 pub mod scope;
 pub mod shadow;
+pub mod unused_param;
 
 // -----------------------------------------------------------------------
 // EnrichContext — the read-only view of a node available to enrichers
@@ -110,5 +111,6 @@ pub fn default_enrichers() -> Vec<Box<dyn NodeEnricher>> {
         Box::new(decl_distance::DeclDistanceEnricher),
         Box::new(escape::EscapeEnricher),
         Box::new(shadow::ShadowEnricher),
+        Box::new(unused_param::UnusedParamEnricher),
     ]
 }

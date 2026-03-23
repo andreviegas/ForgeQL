@@ -61,6 +61,11 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   declarations, and multi-level nesting.  Fully language-agnostic via
   existing `LanguageConfig` fields.
 
+- **`UnusedParamEnricher`** — detects function parameters that are never
+  referenced in the function body.  Fields: `has_unused_param`,
+  `unused_param_count`, `unused_params`.  Fully language-agnostic via
+  existing `LanguageConfig` fields.
+
 - **Shared data-flow utilities** (`data_flow_utils.rs`) — extracted common
   local-variable collection, declarator walking, write-context detection,
   and AST helpers from `DeclDistanceEnricher` for reuse by `EscapeEnricher`

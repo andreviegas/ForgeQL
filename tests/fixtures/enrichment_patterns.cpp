@@ -516,3 +516,27 @@ void shadowNested(void) {
     }
     (void)val;
 }
+
+/* ------------------------------------------------------------------ */
+/* UnusedParamEnricher patterns                                         */
+/* ------------------------------------------------------------------ */
+
+/* One unused parameter */
+int unusedParamOne(int used, int unused_p) {
+    return used + 1;
+}
+
+/* All parameters used */
+int unusedParamNone(int a, int b) {
+    return a + b;
+}
+
+/* All parameters unused */
+void unusedParamAll(int x, int y, int z) {
+    (void)0;
+}
+
+/* No parameters at all */
+int unusedParamEmpty(void) {
+    return 42;
+}
