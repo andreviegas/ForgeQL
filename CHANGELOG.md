@@ -5,6 +5,18 @@ All notable changes to ForgeQL will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Agent instruction files expanded to self-contained references** —
+  `forgeql.agent.md` and `CLAUDE.md` now inline all syntax, `fql_kind`
+  table, enrichment fields, and recipes. No external `references/` files
+  needed per workspace.
+
+- **README.md (agents)** — clarified deployment: one file per workspace,
+  `references/` folder is human documentation only.
+
 ## [0.28.0] - 2026-03-22
 
 ### Added

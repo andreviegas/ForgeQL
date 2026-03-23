@@ -25,17 +25,18 @@ These files **lock the agent to ForgeQL tools only** and provide behavioral rule
 
 ### VS Code (GitHub Copilot)
 
-Copy the agent file and reference docs to your project:
+Copy only the agent file to your project — it is self-contained:
 
 ```bash
-mkdir -p .github/agents/references
+mkdir -p .github/agents
 cp doc/agents/forgeql.agent.md .github/agents/
-cp doc/agents/references/*.md .github/agents/references/
 ```
 
 The agent will appear in Copilot's agent picker as **"ForgeQL code explorer"**.
 
-**Key feature:** `tools: [forgeql/*]` in the frontmatter restricts the agent to ForgeQL MCP tools only — it cannot fall back to grep/find/cat.
+**Key feature:** `tools: [forgeql/*]` in the frontmatter restricts the agent to ForgeQL MCP tools only — it cannot fall back to grep/find/cat. This is intentional; the agent has no need for local filesystem access because all content is inlined in the file.
+
+> **Note:** The `references/` folder in this repo is human-readable documentation. The agent does not load those files at runtime.
 
 ### Claude Code
 
