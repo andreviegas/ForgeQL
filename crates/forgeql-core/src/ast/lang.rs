@@ -187,6 +187,30 @@ pub struct LanguageConfig {
     /// (e.g. `"compound_statement"` for C++, `"statement_block"` for TS,
     /// `"block"` for Python/Rust).
     pub block_raw_kind: &'static str,
+
+    // -- escape detection (escape enricher) --
+    /// Raw kind for return statements
+    /// (e.g. `"return_statement"` for C++/Java/TS, `"return_expression"` for Rust).
+    /// Empty string if the language has no explicit return statement kind.
+    pub return_statement_raw_kind: &'static str,
+
+    /// Raw kind for the expression node that represents taking-address-of
+    /// (e.g. `"pointer_expression"` for C++, `"reference_expression"` for Rust).
+    /// Empty string if the language has no address-of operator.
+    pub address_of_expression_raw_kind: &'static str,
+
+    /// The textual operator for address-of (e.g. `"&"` for C/C++/Rust/Go/Zig).
+    /// Empty string if the language has no address-of operator — the escape
+    /// enricher will short-circuit.
+    pub address_of_operator: &'static str,
+
+    /// Raw kind for array declarators
+    /// (e.g. `"array_declarator"` for C++). Empty string if N/A.
+    pub array_declarator_raw_kind: &'static str,
+
+    /// Keywords that mark a local as having static storage duration
+    /// (e.g. `["static"]` for C/C++). Empty for languages without this concept.
+    pub static_storage_keywords: &'static [&'static str],
 }
 
 // -----------------------------------------------------------------------
@@ -400,6 +424,12 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
     update_raw_kinds: &["update_expression"],
     init_declarator_raw_kind: "init_declarator",
     block_raw_kind: "compound_statement",
+
+    return_statement_raw_kind: "return_statement",
+    address_of_expression_raw_kind: "pointer_expression",
+    address_of_operator: "&",
+    array_declarator_raw_kind: "array_declarator",
+    static_storage_keywords: &["static"],
 };
 
 #[cfg(any(test, feature = "test-helpers"))]

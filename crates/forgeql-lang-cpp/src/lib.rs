@@ -134,6 +134,12 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
     update_raw_kinds: &["update_expression"],
     init_declarator_raw_kind: "init_declarator",
     block_raw_kind: "compound_statement",
+
+    return_statement_raw_kind: "return_statement",
+    address_of_expression_raw_kind: "pointer_expression",
+    address_of_operator: "&",
+    array_declarator_raw_kind: "array_declarator",
+    static_storage_keywords: &["static"],
 };
 
 impl LanguageSupport for CppLanguage {

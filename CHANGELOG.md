@@ -43,6 +43,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `assignment_raw_kinds`, `update_raw_kinds`, `init_declarator_raw_kind`,
   `block_raw_kind`.
 
+- **`EscapeEnricher`** — detects functions that return addresses of
+  stack-local variables (dangling pointer risk).  Three detection tiers:
+  - Tier 1 (`escape_tier=1`): direct `return &local` — 100% certain.
+  - Tier 2 (`escape_tier=2`): array decay `return local_array` — 100% certain.
+  - Tier 3 (`escape_tier=3`): indirect alias `ptr = &local; return ptr`.
+  Fields: `has_escape`, `escape_tier`, `escape_vars`.
+  Excludes `static` locals (safe).  Fully language-agnostic via
+  `LanguageConfig` — five new fields: `return_statement_raw_kind`,
+  `address_of_expression_raw_kind`, `address_of_operator`,
+  `array_declarator_raw_kind`, `static_storage_keywords`.
+
+- **Shared data-flow utilities** (`data_flow_utils.rs`) — extracted common
+  local-variable collection, declarator walking, write-context detection,
+  and AST helpers from `DeclDistanceEnricher` for reuse by `EscapeEnricher`
+  and future enrichers.
+
 ### Changed
 
 - **`use_source` MCP response now includes a prominent session_id reminder** —

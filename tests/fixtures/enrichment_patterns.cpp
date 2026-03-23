@@ -411,3 +411,49 @@ void paramExcluded(int param) {
     (void)printf("gap\n");
     (void)printf("p=%d loc=%d\n", param, loc);
 }
+
+/* ------------------------------------------------------------------ */
+/* EscapeEnricher patterns                                              */
+/* ------------------------------------------------------------------ */
+
+/* Tier 1: direct return &local — 100% dangling pointer */
+int* escapeDirectAddr(void) {
+    int x = 42;
+    return &x;
+}
+
+/* Tier 2: return local array — array decay to dangling pointer */
+int* escapeArrayDecay(void) {
+    int arr[10];
+    arr[0] = 1;
+    return arr;
+}
+
+/* Tier 3: indirect alias — ptr = &local; return ptr */
+int* escapeIndirectAlias(void) {
+    int val = 7;
+    int *p = &val;
+    return p;
+}
+
+/* Safe: static local — address is stable across calls */
+int* escapeStaticSafe(void) {
+    static int s = 99;
+    return &s;
+}
+
+/* Safe: no escape — returns address of parameter (not local stack) */
+int* escapeNoEscapeParam(int *buf) {
+    return buf;
+}
+
+/* Safe: no locals at all */
+int escapeNoLocals(int a) {
+    return a + 1;
+}
+
+/* Tier 1 inside ternary: return cond ? &local : nullptr */
+int* escapeTernary(int flag) {
+    int x = 10;
+    return flag ? &x : nullptr;
+}
