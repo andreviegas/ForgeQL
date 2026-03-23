@@ -45,6 +45,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`use_source` MCP response now includes a prominent session_id reminder** —
+  the tool response prepends a dedicated text block:
+  `⚠️ IMPORTANT: Pass session_id "…" in ALL subsequent tool calls (find_symbols, find_usages, show_body, run_fql, disconnect).`
+  The tool description was also updated to state the session_id `MUST` be
+  passed to every subsequent call.
+
 - **Agent instruction files expanded to self-contained references** —
   `forgeql.agent.md` and `CLAUDE.md` now inline all syntax, `fql_kind`
   table, enrichment fields, and recipes. No external `references/` files

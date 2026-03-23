@@ -323,7 +323,7 @@ impl ForgeQlMcp {
     /// Start or resume a session on a source branch.
     #[tool(
         name = "use_source",
-        description = "Start or resume a session on a source branch (returns session_id)"
+        description = "Start or resume a session on a source branch. Returns a session_id that MUST be passed to every subsequent tool call (find_symbols, find_usages, show_body, run_fql, disconnect)."
     )]
     fn use_source(
         &self,
@@ -346,7 +346,27 @@ impl ForgeQlMcp {
         self.set_log_source(&params.source);
         let output = result.to_json();
         self.log_query(&fql, &result, &output, elapsed_ms);
-        Ok(json_result(&output))
+
+        // Extract session_id and prepend a prominent reminder so agents
+        // do not forget to pass it in every subsequent tool call.
+        let session_hint = if let ForgeQLResult::SourceOp(ref op) = result {
+            op.session_id.as_deref().map(|sid| {
+                format!(
+                    "⚠️ IMPORTANT: Pass session_id \"{sid}\" in ALL subsequent tool calls \
+                     (find_symbols, find_usages, show_body, run_fql, disconnect)."
+                )
+            })
+        } else {
+            None
+        };
+
+        match session_hint {
+            Some(hint) => Ok(CallToolResult::success(vec![
+                Content::text(hint),
+                Content::text(output),
+            ])),
+            None => Ok(json_result(&output)),
+        }
     }
 
     /// Search for symbols matching a name pattern.
