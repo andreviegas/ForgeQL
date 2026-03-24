@@ -33,11 +33,11 @@ impl NodeEnricher for TodoEnricher {
         fields: &mut HashMap<String, String>,
     ) {
         let config = ctx.language_config;
-        if !config.function_raw_kinds.contains(&ctx.node.kind()) {
+        if !config.is_function_kind(ctx.node.kind()) {
             return;
         }
 
-        if config.comment_raw_kind.is_empty() {
+        if !config.has_comment() {
             return;
         }
 
@@ -66,7 +66,7 @@ fn collect_todos(
     count: &mut u32,
     tags: &mut BTreeSet<String>,
 ) {
-    if node.kind() == config.comment_raw_kind {
+    if config.is_comment_kind(node.kind()) {
         let text = node_text(source, node);
         let upper = text.to_ascii_uppercase();
         for marker in MARKERS {

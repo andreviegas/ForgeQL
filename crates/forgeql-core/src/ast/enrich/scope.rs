@@ -24,18 +24,14 @@ impl NodeEnricher for ScopeEnricher {
         _name: &str,
         fields: &mut HashMap<String, String>,
     ) {
-        if !ctx
-            .language_config
-            .declaration_raw_kinds
-            .contains(&ctx.node.kind())
-        {
+        if !ctx.language_config.is_declaration_kind(ctx.node.kind()) {
             return;
         }
 
         let scope = if ctx
             .node
             .parent()
-            .is_some_and(|p| p.kind() == ctx.language_config.root_node_kind)
+            .is_some_and(|p| ctx.language_config.is_root_kind(p.kind()))
         {
             "file"
         } else {
@@ -47,10 +43,7 @@ impl NodeEnricher for ScopeEnricher {
         let mut is_static = false;
         for i in 0..ctx.node.named_child_count() {
             if let Some(child) = ctx.node.named_child(i)
-                && ctx
-                    .language_config
-                    .modifier_node_kinds
-                    .contains(&child.kind())
+                && ctx.language_config.is_modifier_node_kind(child.kind())
             {
                 let text = node_text(ctx.source, child);
                 if !text.is_empty() {
@@ -65,7 +58,7 @@ impl NodeEnricher for ScopeEnricher {
 
         // binding_kind: function vs variable
         let has_func_decl =
-            has_descendant_kind(ctx.node, ctx.language_config.function_declarator_kind);
+            has_descendant_kind(ctx.node, ctx.language_config.function_declarator());
         let binding = if has_func_decl {
             "function"
         } else {

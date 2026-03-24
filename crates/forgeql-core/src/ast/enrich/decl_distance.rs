@@ -38,7 +38,7 @@ impl NodeEnricher for DeclDistanceEnricher {
         fields: &mut HashMap<String, String>,
     ) {
         let config = ctx.language_config;
-        if !config.function_raw_kinds.contains(&ctx.node.kind()) {
+        if !config.is_function_kind(ctx.node.kind()) {
             return;
         }
 
@@ -126,7 +126,7 @@ fn analyse_uses<'a>(
             let kind = node.kind();
 
             // Only interested in identifier nodes that could be local variable refs.
-            if kind == config.identifier_raw_kind && node != func {
+            if config.is_identifier_kind(kind) && node != func {
                 let text = std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
 
                 if let Some(&decl_line) = local_names.get(text) {

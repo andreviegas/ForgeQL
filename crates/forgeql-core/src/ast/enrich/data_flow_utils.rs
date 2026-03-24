@@ -34,7 +34,7 @@ pub fn collect_local_declarations(ctx: &EnrichContext<'_>) -> Vec<LocalDecl> {
 
             // Skip the function node itself.
             if node != func
-                && config.declaration_raw_kinds.contains(&kind)
+                && config.is_declaration_kind(kind)
                 && !is_inside_parameter_list(node, config)
                 && let Some(name) = extract_declarator_name(node, source, config)
             {
@@ -68,11 +68,11 @@ pub fn collect_local_declarations(ctx: &EnrichContext<'_>) -> Vec<LocalDecl> {
 pub fn is_inside_parameter_list(node: tree_sitter::Node<'_>, config: &LanguageConfig) -> bool {
     let mut parent = node.parent();
     while let Some(p) = parent {
-        if p.kind() == config.parameter_list_raw_kind || p.kind() == config.parameter_raw_kind {
+        if config.is_parameter_list_kind(p.kind()) || config.is_parameter_kind(p.kind()) {
             return true;
         }
         // Stop at function boundary — don't walk above.
-        if config.function_raw_kinds.contains(&p.kind()) {
+        if config.is_function_kind(p.kind()) {
             return false;
         }
         parent = p.parent();
@@ -89,10 +89,10 @@ pub fn extract_declarator_name(
     source: &[u8],
     config: &LanguageConfig,
 ) -> Option<String> {
-    let declarator = decl_node.child_by_field_name(config.declarator_field_name)?;
+    let declarator = decl_node.child_by_field_name(config.declarator_field())?;
 
     // Skip function pointer declarations.
-    if contains_kind(declarator, config.function_declarator_kind) {
+    if contains_kind(declarator, config.function_declarator()) {
         return None;
     }
 
@@ -108,7 +108,7 @@ pub fn find_leaf_identifier(
     config: &LanguageConfig,
 ) -> Option<String> {
     // If this node is itself an identifier, return it.
-    if node.kind() == config.identifier_raw_kind {
+    if config.is_identifier_kind(node.kind()) {
         let text = node_text(source, node);
         if !text.is_empty() {
             return Some(text);
@@ -116,14 +116,14 @@ pub fn find_leaf_identifier(
     }
 
     // Try the declarator field first (init_declarator, pointer_declarator, etc.).
-    if let Some(child) = node.child_by_field_name(config.declarator_field_name) {
+    if let Some(child) = node.child_by_field_name(config.declarator_field()) {
         return find_leaf_identifier(child, source, config);
     }
 
     // Fallback: look for an identifier among direct children.
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i)
-            && child.kind() == config.identifier_raw_kind
+            && config.is_identifier_kind(child.kind())
         {
             let text = node_text(source, child);
             if !text.is_empty() {
@@ -182,18 +182,18 @@ pub fn is_in_declaration(node: tree_sitter::Node<'_>, config: &LanguageConfig) -
     let mut parent = node.parent();
     while let Some(p) = parent {
         let kind = p.kind();
-        if config.declaration_raw_kinds.contains(&kind)
-            || kind == config.init_declarator_raw_kind
-            || kind == config.parameter_raw_kind
+        if config.is_declaration_kind(kind)
+            || config.is_init_declarator_kind(kind)
+            || config.is_parameter_kind(kind)
         {
             // Check if the identifier is on the declarator side, not the value side.
-            if let Some(decl_child) = p.child_by_field_name(config.declarator_field_name) {
+            if let Some(decl_child) = p.child_by_field_name(config.declarator_field()) {
                 return node_is_descendant_of(node, decl_child);
             }
             return true;
         }
         // Stop at statement/block boundaries.
-        if kind.ends_with("_statement") || kind == config.block_raw_kind {
+        if kind.ends_with("_statement") || config.is_block_kind(kind) {
             return false;
         }
         parent = p.parent();
@@ -207,14 +207,14 @@ pub fn is_write_context(node: tree_sitter::Node<'_>, config: &LanguageConfig) ->
         let pk = parent.kind();
 
         // Simple assignment: `x = expr`
-        if config.assignment_raw_kinds.contains(&pk)
+        if config.is_assignment_kind(pk)
             && let Some(left) = parent.child_by_field_name("left")
         {
             return left.id() == node.id();
         }
 
         // update_expression: `++x` or `x++`
-        if config.update_raw_kinds.contains(&pk) {
+        if config.is_update_kind(pk) {
             return true;
         }
     }
@@ -227,11 +227,11 @@ pub fn is_compound_assign_or_update(node: tree_sitter::Node<'_>, config: &Langua
     if let Some(parent) = node.parent() {
         let pk = parent.kind();
 
-        if config.update_raw_kinds.contains(&pk) {
+        if config.is_update_kind(pk) {
             return true;
         }
 
-        if config.assignment_raw_kinds.contains(&pk)
+        if config.is_assignment_kind(pk)
             && let Some(left) = parent.child_by_field_name("left")
             && left.id() == node.id()
             && let Some(op) = parent.child_by_field_name("operator")

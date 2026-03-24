@@ -33,13 +33,13 @@ impl NodeEnricher for MetricsEnricher {
         let config = ctx.language_config;
 
         // Lines: body span for definitions
-        if config.definition_raw_kinds.contains(&kind) {
+        if config.is_definition_kind(kind) {
             let lines = ctx.node.end_position().row - ctx.node.start_position().row + 1;
             drop(fields.insert("lines".to_string(), lines.to_string()));
         }
 
         // Parameter count for functions
-        if config.function_raw_kinds.contains(&kind) {
+        if config.is_function_kind(kind) {
             let param_count = count_descendants_by_kind(ctx.node, config.parameter_raw_kind);
             drop(fields.insert("param_count".to_string(), param_count.to_string()));
 
@@ -60,19 +60,18 @@ impl NodeEnricher for MetricsEnricher {
         }
 
         // Member count for type definitions (struct/class/enum)
-        if config.type_raw_kinds.contains(&kind) {
+        if config.is_type_kind(kind) {
             let count = count_direct_members(ctx.node, config);
             drop(fields.insert("member_count".to_string(), count.to_string()));
         }
 
         // Modifier flags from config (const, static, virtual, inline, etc.)
-        if config.declaration_raw_kinds.contains(&kind) || config.function_raw_kinds.contains(&kind)
-        {
+        if config.is_declaration_kind(kind) || config.is_function_kind(kind) {
             check_modifiers(ctx.node, ctx.source, config, fields);
         }
 
         // Visibility for field_declaration inside classes
-        if config.field_raw_kinds.contains(&kind)
+        if config.is_field_kind(kind)
             && let Some(vis) = detect_visibility(ctx.node, ctx.source, config)
         {
             drop(fields.insert("visibility".to_string(), vis.to_string()));
@@ -155,16 +154,16 @@ fn count_descendants_by_kinds(node: tree_sitter::Node<'_>, target_kinds: &[&str]
 /// (for enums whose body kind differs).
 fn count_direct_members(node: tree_sitter::Node<'_>, config: &LanguageConfig) -> usize {
     let is_member = |k: &str| {
-        config.member_raw_kinds.contains(&k)
-            || config.field_raw_kinds.contains(&k)
-            || config.function_raw_kinds.contains(&k)
-            || config.declaration_raw_kinds.contains(&k)
+        config.is_member_kind(k)
+            || config.is_field_kind(k)
+            || config.is_function_kind(k)
+            || config.is_declaration_kind(k)
     };
 
     // Struct/class path: look for the config-driven body kind
     if let Some(body) = node
         .children(&mut node.walk())
-        .find(|c| c.kind() == config.member_body_raw_kind)
+        .find(|c| config.is_member_body_kind(c.kind()))
     {
         let mut count = 0;
         for child in body.children(&mut body.walk()) {
@@ -203,7 +202,7 @@ fn check_modifiers(
 ) {
     for i in 0..node.named_child_count() {
         if let Some(child) = node.named_child(i)
-            && config.modifier_node_kinds.contains(&child.kind())
+            && config.is_modifier_node_kind(child.kind())
         {
             let text = node_text(source, child);
             for &(keyword, field_name) in config.modifier_map {

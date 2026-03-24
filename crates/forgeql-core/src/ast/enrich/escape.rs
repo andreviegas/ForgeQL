@@ -40,12 +40,12 @@ impl NodeEnricher for EscapeEnricher {
         fields: &mut HashMap<String, String>,
     ) {
         let config = ctx.language_config;
-        if !config.function_raw_kinds.contains(&ctx.node.kind()) {
+        if !config.is_function_kind(ctx.node.kind()) {
             return;
         }
 
         // Short-circuit: language has no address-of operator → no escape possible.
-        if config.address_of_operator.is_empty() {
+        if !config.has_address_of() {
             return;
         }
 
@@ -72,7 +72,7 @@ impl NodeEnricher for EscapeEnricher {
         let mut kinds_seen: HashSet<&str> = HashSet::new();
 
         walk_dfs(ctx.node, |node| {
-            if node.kind() != config.return_statement_raw_kind {
+            if !config.is_return_statement_kind(node.kind()) {
                 return;
             }
 
@@ -138,10 +138,10 @@ fn check_expr_escape(
     let source = ctx.source;
 
     // Tier 1: direct address-of  →  return &local
-    if node.kind() == config.address_of_expression_raw_kind {
+    if config.is_address_of_expression_kind(node.kind()) {
         if let Some(op_child) = node.child(0) {
             let op_text = node_text(source, op_child);
-            if op_text == config.address_of_operator {
+            if op_text == config.address_of_op() {
                 if let Some(operand) = node.child(1) {
                     let name = resolve_identifier(operand, source, config);
                     if let Some(name) = name {
@@ -160,7 +160,7 @@ fn check_expr_escape(
     }
 
     // Tier 2: array decay  →  return local_array
-    if node.kind() == config.identifier_raw_kind {
+    if config.is_identifier_kind(node.kind()) {
         let name = node_text(source, node);
         if array_locals.contains(&name)
             && !static_locals.contains(&name)
@@ -176,7 +176,7 @@ fn check_expr_escape(
     }
 
     // Tier 3: indirect alias  →  return ptr  where ptr was assigned &local
-    if node.kind() == config.identifier_raw_kind {
+    if config.is_identifier_kind(node.kind()) {
         let name = node_text(source, node);
         if let Some(target) = alias_map.get(&name) {
             if !is_in_declaration(node, config) {
@@ -226,16 +226,14 @@ fn resolve_identifier(
     source: &[u8],
     config: &LanguageConfig,
 ) -> Option<String> {
-    if node.kind() == config.identifier_raw_kind {
+    if config.is_identifier_kind(node.kind()) {
         let text = node_text(source, node);
         if !text.is_empty() {
             return Some(text);
         }
     }
     // Parenthesised: `return &(local)` — recurse.
-    if !config.parenthesized_expression_raw_kind.is_empty()
-        && node.kind() == config.parenthesized_expression_raw_kind
-    {
+    if config.is_parenthesized_expression_kind(node.kind()) {
         for i in 0..node.named_child_count() {
             if let Some(child) = node.named_child(i) {
                 return resolve_identifier(child, source, config);
@@ -251,12 +249,12 @@ fn extract_address_of_target(
     source: &[u8],
     config: &LanguageConfig,
 ) -> Option<String> {
-    if node.kind() != config.address_of_expression_raw_kind {
+    if !config.is_address_of_expression_kind(node.kind()) {
         return None;
     }
     let op_child = node.child(0)?;
     let op_text = node_text(source, op_child);
-    if op_text != config.address_of_operator {
+    if op_text != config.address_of_op() {
         return None;
     }
     let operand = node.child(1)?;
@@ -267,7 +265,7 @@ fn extract_address_of_target(
 #[allow(clippy::collapsible_if)]
 fn collect_array_locals(ctx: &EnrichContext<'_>, local_names: &HashSet<&str>) -> HashSet<String> {
     let config = ctx.language_config;
-    if config.array_declarator_raw_kind.is_empty() {
+    if !config.has_array_declarator() {
         return HashSet::new();
     }
 
@@ -281,11 +279,11 @@ fn collect_array_locals(ctx: &EnrichContext<'_>, local_names: &HashSet<&str>) ->
             let kind = node.kind();
 
             if node != ctx.node
-                && config.declaration_raw_kinds.contains(&kind)
+                && config.is_declaration_kind(kind)
                 && !is_inside_parameter_list(node, config)
             {
                 // Check if the declarator subtree contains an array_declarator.
-                if let Some(decl) = node.child_by_field_name(config.declarator_field_name) {
+                if let Some(decl) = node.child_by_field_name(config.declarator_field()) {
                     if contains_kind(decl, config.array_declarator_raw_kind) {
                         // Extract the name of this declaration.
                         if let Some(name) = super::data_flow_utils::extract_declarator_name(
@@ -324,7 +322,7 @@ fn collect_array_locals(ctx: &EnrichContext<'_>, local_names: &HashSet<&str>) ->
 #[allow(clippy::collapsible_if)]
 fn collect_static_locals(ctx: &EnrichContext<'_>) -> HashSet<String> {
     let config = ctx.language_config;
-    if config.static_storage_keywords.is_empty() {
+    if !config.has_static_storage() {
         return HashSet::new();
     }
 
@@ -338,7 +336,7 @@ fn collect_static_locals(ctx: &EnrichContext<'_>) -> HashSet<String> {
             let kind = node.kind();
 
             if node != ctx.node
-                && config.declaration_raw_kinds.contains(&kind)
+                && config.is_declaration_kind(kind)
                 && !is_inside_parameter_list(node, config)
             {
                 if has_static_specifier(node, ctx.source, config) {
@@ -380,7 +378,7 @@ fn has_static_specifier(
     for i in 0..decl_node.child_count() {
         if let Some(child) = decl_node.child(i) {
             let text = node_text(source, child);
-            if config.static_storage_keywords.contains(&text.as_str()) {
+            if config.is_static_storage_keyword(&text) {
                 return true;
             }
         }
@@ -404,7 +402,7 @@ fn build_alias_map(
         let kind = node.kind();
 
         // Case 1: assignment_expression  →  `ptr = &local`
-        if config.assignment_raw_kinds.contains(&kind) {
+        if config.is_assignment_kind(kind) {
             let Some(left) = node.child_by_field_name("left") else {
                 return;
             };
@@ -413,7 +411,7 @@ fn build_alias_map(
             };
 
             // Left side must be a simple identifier.
-            if left.kind() != config.identifier_raw_kind {
+            if !config.is_identifier_kind(left.kind()) {
                 return;
             }
             let lhs_name = node_text(source, left);
@@ -439,9 +437,9 @@ fn build_alias_map(
         }
 
         // Case 2: init_declarator  →  `int *p = &local`
-        if !config.init_declarator_raw_kind.is_empty() && kind == config.init_declarator_raw_kind {
+        if config.is_init_declarator_kind(kind) {
             // Extract the declared name from the declarator subtree.
-            let Some(decl_child) = node.child_by_field_name(config.declarator_field_name) else {
+            let Some(decl_child) = node.child_by_field_name(config.declarator_field()) else {
                 return;
             };
             let Some(name) =

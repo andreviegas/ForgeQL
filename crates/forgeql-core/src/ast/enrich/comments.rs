@@ -29,7 +29,7 @@ impl NodeEnricher for CommentEnricher {
         let config = ctx.language_config;
 
         // Comment rows: detect style
-        if kind == config.comment_raw_kind {
+        if config.is_comment_kind(kind) {
             let text = node_text(ctx.source, ctx.node);
             let style = detect_comment_style(&text, config.doc_comment_prefixes);
             drop(fields.insert("comment_style".to_string(), style.to_string()));
@@ -37,9 +37,9 @@ impl NodeEnricher for CommentEnricher {
         }
 
         // Definition rows: check for preceding doc comment
-        if config.definition_raw_kinds.contains(&kind) {
+        if config.is_definition_kind(kind) {
             let has_doc = ctx.node.prev_named_sibling().is_some_and(|sib| {
-                if sib.kind() != config.comment_raw_kind {
+                if !config.is_comment_kind(sib.kind()) {
                     return false;
                 }
                 let text = node_text(ctx.source, sib);

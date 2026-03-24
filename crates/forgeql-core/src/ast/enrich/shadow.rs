@@ -35,7 +35,7 @@ impl NodeEnricher for ShadowEnricher {
         fields: &mut HashMap<String, String>,
     ) {
         let config = ctx.language_config;
-        if !config.function_raw_kinds.contains(&ctx.node.kind()) {
+        if !config.is_function_kind(ctx.node.kind()) {
             return;
         }
 
@@ -82,10 +82,10 @@ fn collect_parameter_names(
 
     for i in 0..param_list.child_count() {
         if let Some(child) = param_list.child(i)
-            && child.kind() == config.parameter_raw_kind
+            && config.is_parameter_kind(child.kind())
         {
             // Try to extract the parameter name from the declarator.
-            if let Some(decl) = child.child_by_field_name(config.declarator_field_name)
+            if let Some(decl) = child.child_by_field_name(config.declarator_field())
                 && let Some(name) = find_leaf_identifier(decl, source, config)
             {
                 let _ = names.insert(name);
@@ -115,7 +115,7 @@ fn walk_scopes(
         let kind = child.kind();
 
         // If this child is a declaration, extract its name.
-        if config.declaration_raw_kinds.contains(&kind) {
+        if config.is_declaration_kind(kind) {
             if let Some(name) = extract_declarator_name(child, source, config) {
                 // Check against all outer scopes.
                 if is_in_outer_scope(&name, scope_stack) {
@@ -184,7 +184,7 @@ fn visit_nested_scopes(
     shadowed: &mut BTreeSet<String>,
 ) {
     // If the node itself is a block, recurse as a new scope.
-    if node.kind() == config.block_raw_kind {
+    if config.is_block_kind(node.kind()) {
         scope_stack.push(current_scope.clone());
         walk_scopes(node, source, config, scope_stack, shadowed);
         drop(scope_stack.pop());
@@ -194,7 +194,7 @@ fn visit_nested_scopes(
     // Declarations inside non-block parents (e.g. for-loop initializer:
     // `for (int i = 0; ...)` — the `declaration` is a child of `for_statement`,
     // not of a compound_statement).  These are in an implicit nested scope.
-    if config.declaration_raw_kinds.contains(&node.kind())
+    if config.is_declaration_kind(node.kind())
         && let Some(name) = extract_declarator_name(node, source, config)
     {
         if is_in_outer_scope(&name, scope_stack) || current_scope.contains(&name) {

@@ -39,7 +39,7 @@ impl NodeEnricher for ControlFlowEnricher {
     fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
         let kind = ctx.node.kind();
         let config = ctx.language_config;
-        if !config.control_flow_raw_kinds.contains(&kind) {
+        if !config.is_control_flow_kind(kind) {
             return vec![];
         }
 
@@ -75,7 +75,7 @@ impl NodeEnricher for ControlFlowEnricher {
         }
 
         // Switch: check for default case
-        if config.switch_raw_kinds.contains(&kind) {
+        if config.is_switch_kind(kind) {
             let has_catch_all = has_default_case(ctx.node);
             drop(fields.insert("has_catch_all".to_string(), has_catch_all.to_string()));
             if has_catch_all {
@@ -84,11 +84,8 @@ impl NodeEnricher for ControlFlowEnricher {
         }
 
         // For loops: detect style (traditional vs range-based)
-        for &(raw_kind, style_name) in config.for_style_map {
-            if kind == raw_kind {
-                drop(fields.insert("for_style".to_string(), style_name.to_string()));
-                break;
-            }
+        if let Some(style_name) = config.for_style(kind) {
+            drop(fields.insert("for_style".to_string(), style_name.to_string()));
         }
 
         // Name = the skeleton (or raw condition text if no condition)
@@ -198,10 +195,7 @@ fn count_condition_tests(
         if visit {
             let current = cursor.node();
             let kind = current.kind();
-            if kind == config.binary_expression_raw_kind
-                || (!config.logical_expression_raw_kind.is_empty()
-                    && kind == config.logical_expression_raw_kind)
-            {
+            if config.is_binary_expression_kind(kind) || config.is_logical_expression_kind(kind) {
                 // Check the operator child
                 if let Some(op_node) = current.child_by_field_name("operator") {
                     let op = node_text(source, op_node);
@@ -323,12 +317,12 @@ fn skeleton_walk(
 
     // Leaf-like nodes get mapped to letters: identifiers, number/string/char
     // literals, boolean literals, null literals.
-    if config.usage_node_kinds.contains(&kind)
-        || config.number_literal_raw_kinds.contains(&kind)
-        || config.string_literal_raw_kinds.contains(&kind)
-        || (!config.char_literal_raw_kind.is_empty() && kind == config.char_literal_raw_kind)
-        || config.boolean_literals.contains(&kind)
-        || config.null_literals.contains(&kind)
+    if config.is_usage_node_kind(kind)
+        || config.is_number_literal_kind(kind)
+        || config.is_string_literal_kind(kind)
+        || config.is_char_literal_kind(kind)
+        || config.is_boolean_literal(kind)
+        || config.is_null_literal(kind)
     {
         let text = node_text(source, node);
         let label = mapping
@@ -340,7 +334,7 @@ fn skeleton_walk(
     }
 
     // Call expressions: map the whole call as one letter
-    if !config.call_expression_raw_kind.is_empty() && kind == config.call_expression_raw_kind {
+    if config.is_call_expression_kind(kind) {
         let text = node_text(source, node);
         let label = mapping
             .entry(text)
@@ -351,7 +345,7 @@ fn skeleton_walk(
     }
 
     // Field expressions (member access): map as one unit
-    if !config.field_expression_raw_kind.is_empty() && kind == config.field_expression_raw_kind {
+    if config.is_field_expression_kind(kind) {
         let text = node_text(source, node);
         let label = mapping
             .entry(text)
@@ -362,9 +356,7 @@ fn skeleton_walk(
     }
 
     // Subscript expressions: map as one unit
-    if !config.subscript_expression_raw_kind.is_empty()
-        && kind == config.subscript_expression_raw_kind
-    {
+    if config.is_subscript_expression_kind(kind) {
         let text = node_text(source, node);
         let label = mapping
             .entry(text)
@@ -400,7 +392,7 @@ fn skeleton_walk(
     }
 
     // Unary not: keep the ! and recurse
-    if !config.unary_expression_raw_kind.is_empty() && kind == config.unary_expression_raw_kind {
+    if config.is_unary_expression_kind(kind) {
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
                 skeleton_walk(child, source, mapping, next_letter, result, config);
@@ -410,10 +402,7 @@ fn skeleton_walk(
     }
 
     // Binary/logical expressions: recurse into children
-    if (!config.binary_expression_raw_kind.is_empty() && kind == config.binary_expression_raw_kind)
-        || (!config.logical_expression_raw_kind.is_empty()
-            && kind == config.logical_expression_raw_kind)
-    {
+    if config.is_binary_expression_kind(kind) || config.is_logical_expression_kind(kind) {
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
                 skeleton_walk(child, source, mapping, next_letter, result, config);
@@ -423,9 +412,7 @@ fn skeleton_walk(
     }
 
     // Parenthesized expression: recurse, keeping parens from unnamed children
-    if !config.parenthesized_expression_raw_kind.is_empty()
-        && kind == config.parenthesized_expression_raw_kind
-    {
+    if config.is_parenthesized_expression_kind(kind) {
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
                 skeleton_walk(child, source, mapping, next_letter, result, config);
@@ -435,10 +422,9 @@ fn skeleton_walk(
     }
 
     // Wrapper / transparent nodes that should be recursed through
-    if (!config.condition_clause_raw_kind.is_empty() && kind == config.condition_clause_raw_kind)
-        || config.cast_kinds.iter().any(|(k, _, _)| *k == kind)
-        || (!config.comma_expression_raw_kind.is_empty()
-            && kind == config.comma_expression_raw_kind)
+    if config.is_condition_clause_kind(kind)
+        || config.cast_info(kind).is_some()
+        || config.is_comma_expression_kind(kind)
     {
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
@@ -576,7 +562,7 @@ fn has_assignment_in_condition(
     loop {
         if visit {
             let current = cursor.node();
-            if config.assignment_raw_kinds.contains(&current.kind())
+            if config.is_assignment_kind(current.kind())
                 && !contains_template_misparse(current, config)
             {
                 return true;

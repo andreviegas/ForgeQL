@@ -22,9 +22,7 @@ impl NodeEnricher for CastEnricher {
         let config = ctx.language_config;
 
         // Look up the cast style from config
-        let Some(&(_raw_kind, cast_style, safety)) =
-            config.cast_kinds.iter().find(|(rk, _, _)| *rk == kind)
-        else {
+        let Some((cast_style, safety)) = config.cast_info(kind) else {
             return vec![];
         };
 
@@ -87,11 +85,7 @@ fn extract_template_type(
     for i in 0..node.named_child_count() {
         if let Some(child) = node.named_child(i) {
             let kind = child.kind();
-            if (!config.type_descriptor_raw_kind.is_empty()
-                && kind == config.type_descriptor_raw_kind)
-                || (!config.template_argument_list_raw_kind.is_empty()
-                    && kind == config.template_argument_list_raw_kind)
-            {
+            if config.is_type_descriptor_kind(kind) || config.is_template_argument_list_kind(kind) {
                 let text = node_text(source, child);
                 // Strip surrounding < > if present
                 return text

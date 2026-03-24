@@ -23,7 +23,7 @@ impl NodeEnricher for NumberEnricher {
 
     fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
         let config = ctx.language_config;
-        if !config.number_literal_raw_kinds.contains(&ctx.node.kind()) {
+        if !config.is_number_literal_kind(ctx.node.kind()) {
             return vec![];
         }
 

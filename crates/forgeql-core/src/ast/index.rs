@@ -418,7 +418,7 @@ fn collect_nodes(
         let node = cursor.node();
 
         // Skip alternate conditional-compilation branches entirely.
-        let skip = config.skip_node_kinds.contains(&node.kind());
+        let skip = config.is_skip_kind(node.kind());
 
         if !skip {
             // Build the enrichment context once for this node.
@@ -463,7 +463,7 @@ fn collect_nodes(
             }
 
             // All identifier tokens become usage sites.
-            if config.usage_node_kinds.contains(&node.kind()) {
+            if config.is_usage_node_kind(node.kind()) {
                 let name = node_text(source, node);
                 if name.len() > 1 {
                     let line = node.start_position().row + 1;

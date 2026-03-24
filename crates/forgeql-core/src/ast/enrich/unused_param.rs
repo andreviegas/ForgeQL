@@ -31,7 +31,7 @@ impl NodeEnricher for UnusedParamEnricher {
         fields: &mut HashMap<String, String>,
     ) {
         let config = ctx.language_config;
-        if !config.function_raw_kinds.contains(&ctx.node.kind()) {
+        if !config.is_function_kind(ctx.node.kind()) {
             return;
         }
 
@@ -83,8 +83,8 @@ fn collect_param_names(
 
     for i in 0..param_list.child_count() {
         if let Some(child) = param_list.child(i)
-            && child.kind() == config.parameter_raw_kind
-            && let Some(decl) = child.child_by_field_name(config.declarator_field_name)
+            && config.is_parameter_kind(child.kind())
+            && let Some(decl) = child.child_by_field_name(config.declarator_field())
             && let Some(name) = find_leaf_identifier(decl, source, config)
         {
             names.push(name);
@@ -103,7 +103,7 @@ fn collect_identifiers(
     let mut cursor = node.walk();
     let mut visit = true;
     loop {
-        if visit && cursor.node().kind() == config.identifier_raw_kind {
+        if visit && config.is_identifier_kind(cursor.node().kind()) {
             let text = node_text(source, cursor.node());
             if !text.is_empty() {
                 let _ = out.insert(text);

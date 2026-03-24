@@ -325,6 +325,464 @@ pub struct LanguageConfig {
 }
 
 // -----------------------------------------------------------------------
+// LanguageConfig — query methods
+//
+// These methods encapsulate field access patterns used by enrichers and
+// other consumers.  During migration, consumers will switch from direct
+// field access (`config.function_raw_kinds.contains(…)`) to these
+// methods (`config.is_function_kind(…)`).  Once migration is complete,
+// the fields will become private and internal storage can change freely.
+// -----------------------------------------------------------------------
+
+impl LanguageConfig {
+    // -- kind membership tests (slice fields) --------------------------
+
+    /// Is this a function/method definition kind?
+    #[must_use]
+    pub fn is_function_kind(&self, kind: &str) -> bool {
+        self.function_raw_kinds.contains(&kind)
+    }
+
+    /// Is this a type definition kind (class, struct, enum, etc.)?
+    #[must_use]
+    pub fn is_type_kind(&self, kind: &str) -> bool {
+        self.type_raw_kinds.contains(&kind)
+    }
+
+    /// Is this any definition kind (for `has_doc` checks)?
+    #[must_use]
+    pub fn is_definition_kind(&self, kind: &str) -> bool {
+        self.definition_raw_kinds.contains(&kind)
+    }
+
+    /// Is this a variable/const declaration kind?
+    #[must_use]
+    pub fn is_declaration_kind(&self, kind: &str) -> bool {
+        self.declaration_raw_kinds.contains(&kind)
+    }
+
+    /// Is this a member/field declaration kind?
+    #[must_use]
+    pub fn is_field_kind(&self, kind: &str) -> bool {
+        self.field_raw_kinds.contains(&kind)
+    }
+
+    /// Is this a member kind inside a type body?
+    #[must_use]
+    pub fn is_member_kind(&self, kind: &str) -> bool {
+        self.member_raw_kinds.contains(&kind)
+    }
+
+    /// Is this a number literal kind?
+    #[must_use]
+    pub fn is_number_literal_kind(&self, kind: &str) -> bool {
+        self.number_literal_raw_kinds.contains(&kind)
+    }
+
+    /// Is this a control-flow statement kind?
+    #[must_use]
+    pub fn is_control_flow_kind(&self, kind: &str) -> bool {
+        self.control_flow_raw_kinds.contains(&kind)
+    }
+
+    /// Is this a switch/match statement kind?
+    #[must_use]
+    pub fn is_switch_kind(&self, kind: &str) -> bool {
+        self.switch_raw_kinds.contains(&kind)
+    }
+
+    /// Does this kind carry modifier/qualifier keywords?
+    #[must_use]
+    pub fn is_modifier_node_kind(&self, kind: &str) -> bool {
+        self.modifier_node_kinds.contains(&kind)
+    }
+
+    /// Is this an assignment expression kind?
+    #[must_use]
+    pub fn is_assignment_kind(&self, kind: &str) -> bool {
+        self.assignment_raw_kinds.contains(&kind)
+    }
+
+    /// Is this an update/increment expression kind?
+    #[must_use]
+    pub fn is_update_kind(&self, kind: &str) -> bool {
+        self.update_raw_kinds.contains(&kind)
+    }
+
+    /// Is this a string/char literal kind?
+    #[must_use]
+    pub fn is_string_literal_kind(&self, kind: &str) -> bool {
+        self.string_literal_raw_kinds.contains(&kind)
+    }
+
+    /// Should this kind be skipped during indexing?
+    #[must_use]
+    pub fn is_skip_kind(&self, kind: &str) -> bool {
+        self.skip_node_kinds.contains(&kind)
+    }
+
+    /// Is this a usage-site identifier kind?
+    #[must_use]
+    pub fn is_usage_node_kind(&self, kind: &str) -> bool {
+        self.usage_node_kinds.contains(&kind)
+    }
+
+    /// Is this a shift expression kind?
+    #[must_use]
+    pub fn is_shift_expression_kind(&self, kind: &str) -> bool {
+        self.shift_expression_raw_kinds.contains(&kind)
+    }
+
+    /// Is this a template/generic misparse indicator kind?
+    #[must_use]
+    pub fn is_template_misparse_kind(&self, kind: &str) -> bool {
+        self.template_misparse_raw_kinds.contains(&kind)
+    }
+
+    /// Is this text a null literal for this language?
+    #[must_use]
+    pub fn is_null_literal(&self, text: &str) -> bool {
+        self.null_literals.contains(&text)
+    }
+
+    /// Is this text a boolean literal for this language?
+    #[must_use]
+    pub fn is_boolean_literal(&self, text: &str) -> bool {
+        self.boolean_literals.contains(&text)
+    }
+
+    /// Is this text a static-storage keyword?
+    #[must_use]
+    pub fn is_static_storage_keyword(&self, text: &str) -> bool {
+        self.static_storage_keywords.contains(&text)
+    }
+
+    // -- single-kind equality tests ------------------------------------
+
+    /// Is this the root node kind for the grammar?
+    #[must_use]
+    pub fn is_root_kind(&self, kind: &str) -> bool {
+        self.root_node_kind == kind
+    }
+
+    /// Is this a parameter declaration kind?
+    #[must_use]
+    pub fn is_parameter_kind(&self, kind: &str) -> bool {
+        self.parameter_raw_kind == kind
+    }
+
+    /// Is this the member-body (type body) kind?
+    #[must_use]
+    pub fn is_member_body_kind(&self, kind: &str) -> bool {
+        self.member_body_raw_kind == kind
+    }
+
+    /// Is this a comment kind?
+    #[must_use]
+    pub fn is_comment_kind(&self, kind: &str) -> bool {
+        self.comment_raw_kind == kind
+    }
+
+    /// Is this a block/compound-statement kind?
+    #[must_use]
+    pub fn is_block_kind(&self, kind: &str) -> bool {
+        self.block_raw_kind == kind
+    }
+
+    /// Is this an identifier kind?
+    #[must_use]
+    pub fn is_identifier_kind(&self, kind: &str) -> bool {
+        self.identifier_raw_kind == kind
+    }
+
+    /// Is this an init-declarator wrapper kind?
+    #[must_use]
+    pub fn is_init_declarator_kind(&self, kind: &str) -> bool {
+        self.init_declarator_raw_kind == kind
+    }
+
+    /// Is this a return-statement kind?
+    #[must_use]
+    pub fn is_return_statement_kind(&self, kind: &str) -> bool {
+        self.return_statement_raw_kind == kind
+    }
+
+    /// Is this an address-of expression kind?
+    #[must_use]
+    pub fn is_address_of_expression_kind(&self, kind: &str) -> bool {
+        self.address_of_expression_raw_kind == kind
+    }
+
+    /// Is this a case/default label kind?
+    #[must_use]
+    pub fn is_case_statement_kind(&self, kind: &str) -> bool {
+        self.case_statement_raw_kind == kind
+    }
+
+    /// Is this a break-statement kind?
+    #[must_use]
+    pub fn is_break_statement_kind(&self, kind: &str) -> bool {
+        self.break_statement_raw_kind == kind
+    }
+
+    /// Is this a call-expression kind?
+    #[must_use]
+    pub fn is_call_expression_kind(&self, kind: &str) -> bool {
+        self.call_expression_raw_kind == kind
+    }
+
+    /// Is this a goto-statement kind?
+    #[must_use]
+    pub fn is_goto_statement_kind(&self, kind: &str) -> bool {
+        self.goto_statement_raw_kind == kind
+    }
+
+    /// Is this a throw-statement kind?
+    #[must_use]
+    pub fn is_throw_statement_kind(&self, kind: &str) -> bool {
+        self.throw_statement_raw_kind == kind
+    }
+
+    /// Is this a template/generic declaration kind?
+    #[must_use]
+    pub fn is_template_declaration_kind(&self, kind: &str) -> bool {
+        self.template_declaration_raw_kind == kind
+    }
+
+    /// Is this an enumerator/variant kind?
+    #[must_use]
+    pub fn is_enumerator_kind(&self, kind: &str) -> bool {
+        self.enumerator_raw_kind == kind
+    }
+
+    /// Is this a binary expression kind?
+    #[must_use]
+    pub fn is_binary_expression_kind(&self, kind: &str) -> bool {
+        self.binary_expression_raw_kind == kind
+    }
+
+    /// Is this a logical expression kind?
+    /// Returns `false` if the language has no separate logical expression node.
+    #[must_use]
+    pub fn is_logical_expression_kind(&self, kind: &str) -> bool {
+        !self.logical_expression_raw_kind.is_empty() && self.logical_expression_raw_kind == kind
+    }
+
+    /// Is this a type-descriptor kind?
+    #[must_use]
+    pub fn is_type_descriptor_kind(&self, kind: &str) -> bool {
+        self.type_descriptor_raw_kind == kind
+    }
+
+    /// Is this a template-argument-list kind?
+    #[must_use]
+    pub fn is_template_argument_list_kind(&self, kind: &str) -> bool {
+        self.template_argument_list_raw_kind == kind
+    }
+
+    /// Is this a field/member-access expression kind?
+    #[must_use]
+    pub fn is_field_expression_kind(&self, kind: &str) -> bool {
+        self.field_expression_raw_kind == kind
+    }
+
+    /// Is this a subscript/index expression kind?
+    #[must_use]
+    pub fn is_subscript_expression_kind(&self, kind: &str) -> bool {
+        self.subscript_expression_raw_kind == kind
+    }
+
+    /// Is this a unary expression kind?
+    #[must_use]
+    pub fn is_unary_expression_kind(&self, kind: &str) -> bool {
+        self.unary_expression_raw_kind == kind
+    }
+
+    /// Is this a parenthesized expression kind?
+    #[must_use]
+    pub fn is_parenthesized_expression_kind(&self, kind: &str) -> bool {
+        self.parenthesized_expression_raw_kind == kind
+    }
+
+    /// Is this a condition-clause wrapper kind?
+    #[must_use]
+    pub fn is_condition_clause_kind(&self, kind: &str) -> bool {
+        self.condition_clause_raw_kind == kind
+    }
+
+    /// Is this a comma-expression kind?
+    #[must_use]
+    pub fn is_comma_expression_kind(&self, kind: &str) -> bool {
+        self.comma_expression_raw_kind == kind
+    }
+
+    /// Is this a char-literal kind?
+    #[must_use]
+    pub fn is_char_literal_kind(&self, kind: &str) -> bool {
+        self.char_literal_raw_kind == kind
+    }
+
+    /// Is this a parameter-list kind?
+    #[must_use]
+    pub fn is_parameter_list_kind(&self, kind: &str) -> bool {
+        self.parameter_list_raw_kind == kind
+    }
+
+    /// Is this an array-declarator kind?
+    #[must_use]
+    pub fn is_array_declarator_kind(&self, kind: &str) -> bool {
+        self.array_declarator_raw_kind == kind
+    }
+
+    // -- feature capability checks -------------------------------------
+
+    /// Does this language have address-of expressions?
+    #[must_use]
+    pub const fn has_address_of(&self) -> bool {
+        !self.address_of_expression_raw_kind.is_empty()
+    }
+
+    /// Does this language have call expressions?
+    #[must_use]
+    pub const fn has_call_expression(&self) -> bool {
+        !self.call_expression_raw_kind.is_empty()
+    }
+
+    /// Does this language have case/switch labels?
+    #[must_use]
+    pub const fn has_case_statement(&self) -> bool {
+        !self.case_statement_raw_kind.is_empty()
+    }
+
+    /// Does this language have comments?
+    #[must_use]
+    pub const fn has_comment(&self) -> bool {
+        !self.comment_raw_kind.is_empty()
+    }
+
+    /// Does this language have static-storage keywords?
+    #[must_use]
+    pub const fn has_static_storage(&self) -> bool {
+        !self.static_storage_keywords.is_empty()
+    }
+
+    /// Does this language have array declarators?
+    #[must_use]
+    pub const fn has_array_declarator(&self) -> bool {
+        !self.array_declarator_raw_kind.is_empty()
+    }
+
+    /// Does this language have a separate logical expression node?
+    #[must_use]
+    pub const fn has_logical_expression(&self) -> bool {
+        !self.logical_expression_raw_kind.is_empty()
+    }
+
+    /// Does this language have template/generic declarations?
+    #[must_use]
+    pub const fn has_template_declaration(&self) -> bool {
+        !self.template_declaration_raw_kind.is_empty()
+    }
+
+    /// Does this language have enumerator/variant members?
+    #[must_use]
+    pub const fn has_enumerator(&self) -> bool {
+        !self.enumerator_raw_kind.is_empty()
+    }
+
+    // -- value accessors -----------------------------------------------
+
+    /// Scope-resolution separator (e.g. `"::"` for C++, `"."` for others).
+    #[must_use]
+    pub const fn scope_sep(&self) -> &str {
+        self.scope_separator
+    }
+
+    /// Grammar field name for the declarator child.
+    #[must_use]
+    pub const fn declarator_field(&self) -> &str {
+        self.declarator_field_name
+    }
+
+    /// Raw kind for function-type declarators.
+    #[must_use]
+    pub const fn function_declarator(&self) -> &str {
+        self.function_declarator_kind
+    }
+
+    /// Textual operator for address-of (e.g. `"&"`).
+    #[must_use]
+    pub const fn address_of_op(&self) -> &str {
+        self.address_of_operator
+    }
+
+    // -- lookup methods ------------------------------------------------
+
+    /// Look up cast info by raw kind.  Returns `(style, safety)`.
+    #[must_use]
+    pub fn cast_info(&self, kind: &str) -> Option<(&str, &str)> {
+        self.cast_kinds
+            .iter()
+            .find(|(rk, _, _)| *rk == kind)
+            .map(|(_, style, safety)| (*style, *safety))
+    }
+
+    /// Look up for-loop style by raw kind.
+    #[must_use]
+    pub fn for_style(&self, kind: &str) -> Option<&str> {
+        self.for_style_map
+            .iter()
+            .find(|(rk, _)| *rk == kind)
+            .map(|(_, style)| *style)
+    }
+
+    /// Look up the enrichment field name for a modifier keyword.
+    #[must_use]
+    pub fn modifier_field_for(&self, keyword: &str) -> Option<&str> {
+        self.modifier_map
+            .iter()
+            .find(|(kw, _)| *kw == keyword)
+            .map(|(_, field)| *field)
+    }
+
+    /// Look up visibility for an access-specifier keyword.
+    #[must_use]
+    pub fn visibility_for_keyword(&self, keyword: &str) -> Option<&str> {
+        self.visibility_keywords
+            .iter()
+            .find(|(kw, _)| *kw == keyword)
+            .map(|(_, vis)| *vis)
+    }
+
+    /// Look up default visibility for a type kind.
+    #[must_use]
+    pub fn default_visibility_for_type(&self, type_kind: &str) -> Option<&str> {
+        self.visibility_default_by_type
+            .iter()
+            .find(|(rk, _)| *rk == type_kind)
+            .map(|(_, vis)| *vis)
+    }
+
+    /// Detect comment style from comment text (first-prefix-wins).
+    #[must_use]
+    pub fn detect_comment_style(&self, text: &str) -> Option<&str> {
+        self.doc_comment_prefixes
+            .iter()
+            .find(|(prefix, _)| text.starts_with(prefix))
+            .map(|(_, style)| *style)
+    }
+
+    /// Look up meaning for a number literal suffix.
+    #[must_use]
+    pub fn number_suffix_meaning(&self, suffix: &str) -> Option<&str> {
+        self.number_suffixes
+            .iter()
+            .find(|(s, _)| *s == suffix)
+            .map(|(_, meaning)| *meaning)
+    }
+}
+
+// -----------------------------------------------------------------------
 // LanguageSupport trait
 // -----------------------------------------------------------------------
 
@@ -850,6 +1308,135 @@ mod tests {
         assert!(!config.type_raw_kinds.is_empty());
         assert!(!config.skip_node_kinds.is_empty());
         assert!(!config.usage_node_kinds.is_empty());
+    }
+
+    #[test]
+    fn query_methods_kind_membership() {
+        let cfg = CppLanguageInline.config();
+        // slice-based membership
+        assert!(cfg.is_function_kind("function_definition"));
+        assert!(!cfg.is_function_kind("class_specifier"));
+        assert!(cfg.is_type_kind("class_specifier"));
+        assert!(cfg.is_type_kind("struct_specifier"));
+        assert!(cfg.is_definition_kind("function_definition"));
+        assert!(cfg.is_declaration_kind("declaration"));
+        assert!(cfg.is_field_kind("field_declaration"));
+        assert!(cfg.is_member_kind("field_declaration"));
+        assert!(cfg.is_number_literal_kind("number_literal"));
+        assert!(cfg.is_control_flow_kind("if_statement"));
+        assert!(cfg.is_switch_kind("switch_statement"));
+        assert!(cfg.is_modifier_node_kind("type_qualifier"));
+        assert!(cfg.is_assignment_kind("assignment_expression"));
+        assert!(cfg.is_update_kind("update_expression"));
+        assert!(cfg.is_string_literal_kind("string_literal"));
+        assert!(cfg.is_skip_kind("preproc_else"));
+        assert!(cfg.is_usage_node_kind("identifier"));
+        assert!(cfg.is_shift_expression_kind("shift_expression"));
+        assert!(cfg.is_template_misparse_kind("template_function"));
+        assert!(cfg.is_null_literal("nullptr"));
+        assert!(cfg.is_boolean_literal("true"));
+        assert!(cfg.is_static_storage_keyword("static"));
+        // negative cases
+        assert!(!cfg.is_skip_kind("function_definition"));
+        assert!(!cfg.is_null_literal("42"));
+    }
+
+    #[test]
+    fn query_methods_single_kind() {
+        let cfg = CppLanguageInline.config();
+        assert!(cfg.is_root_kind("translation_unit"));
+        assert!(cfg.is_parameter_kind("parameter_declaration"));
+        assert!(cfg.is_member_body_kind("field_declaration_list"));
+        assert!(cfg.is_comment_kind("comment"));
+        assert!(cfg.is_block_kind("compound_statement"));
+        assert!(cfg.is_identifier_kind("identifier"));
+        assert!(cfg.is_init_declarator_kind("init_declarator"));
+        assert!(cfg.is_return_statement_kind("return_statement"));
+        assert!(cfg.is_address_of_expression_kind("pointer_expression"));
+        assert!(cfg.is_case_statement_kind("case_statement"));
+        assert!(cfg.is_break_statement_kind("break_statement"));
+        assert!(cfg.is_call_expression_kind("call_expression"));
+        assert!(cfg.is_goto_statement_kind("goto_statement"));
+        assert!(cfg.is_throw_statement_kind("throw_statement"));
+        assert!(cfg.is_template_declaration_kind("template_declaration"));
+        assert!(cfg.is_enumerator_kind("enumerator"));
+        assert!(cfg.is_binary_expression_kind("binary_expression"));
+        assert!(cfg.is_logical_expression_kind("logical_expression"));
+        assert!(cfg.is_parameter_list_kind("parameter_list"));
+        assert!(cfg.is_char_literal_kind("char_literal"));
+        // negative
+        assert!(!cfg.is_root_kind("program"));
+        assert!(!cfg.is_block_kind("block"));
+    }
+
+    #[test]
+    fn query_methods_feature_checks() {
+        let cfg = CppLanguageInline.config();
+        assert!(cfg.has_address_of());
+        assert!(cfg.has_call_expression());
+        assert!(cfg.has_case_statement());
+        assert!(cfg.has_comment());
+        assert!(cfg.has_static_storage());
+        assert!(cfg.has_logical_expression());
+        assert!(cfg.has_template_declaration());
+        assert!(cfg.has_enumerator());
+        assert!(cfg.has_goto);
+        assert!(cfg.has_increment_decrement);
+        assert!(cfg.has_implicit_truthiness);
+    }
+
+    #[test]
+    fn query_methods_accessors() {
+        let cfg = CppLanguageInline.config();
+        assert_eq!(cfg.scope_sep(), "::");
+        assert_eq!(cfg.declarator_field(), "declarator");
+        assert_eq!(cfg.function_declarator(), "function_declarator");
+        assert_eq!(cfg.address_of_op(), "&");
+    }
+
+    #[test]
+    fn query_methods_lookups() {
+        let cfg = CppLanguageInline.config();
+        // cast_info
+        assert_eq!(
+            cfg.cast_info("cast_expression"),
+            Some(("c_style", "unsafe"))
+        );
+        assert_eq!(
+            cfg.cast_info("static_cast_expression"),
+            Some(("static_cast", "safe"))
+        );
+        assert_eq!(cfg.cast_info("unknown"), None);
+        // for_style
+        assert_eq!(cfg.for_style("for_statement"), Some("traditional"));
+        assert_eq!(cfg.for_style("for_range_loop"), Some("range"));
+        assert_eq!(cfg.for_style("while_statement"), None);
+        // modifier_field_for
+        assert_eq!(cfg.modifier_field_for("const"), Some("is_const"));
+        assert_eq!(cfg.modifier_field_for("virtual"), Some("is_virtual"));
+        assert_eq!(cfg.modifier_field_for("unknown"), None);
+        // visibility
+        assert_eq!(cfg.visibility_for_keyword("public"), Some("public"));
+        assert_eq!(cfg.visibility_for_keyword("private"), Some("private"));
+        assert_eq!(cfg.visibility_for_keyword("unknown"), None);
+        // default visibility for type
+        assert_eq!(
+            cfg.default_visibility_for_type("class_specifier"),
+            Some("private")
+        );
+        assert_eq!(
+            cfg.default_visibility_for_type("struct_specifier"),
+            Some("public")
+        );
+        // comment style
+        assert_eq!(cfg.detect_comment_style("/** doc */"), Some("doc_block"));
+        assert_eq!(cfg.detect_comment_style("/// doc"), Some("doc_line"));
+        assert_eq!(cfg.detect_comment_style("/* block */"), Some("block"));
+        assert_eq!(cfg.detect_comment_style("// line"), Some("line"));
+        // number suffix
+        assert_eq!(cfg.number_suffix_meaning("f"), Some("float"));
+        assert_eq!(cfg.number_suffix_meaning("ull"), Some("unsigned_long_long"));
+        assert_eq!(cfg.number_suffix_meaning("xyz"), None);
     }
 
     #[test]

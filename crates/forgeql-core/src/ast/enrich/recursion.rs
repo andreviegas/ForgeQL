@@ -32,12 +32,12 @@ impl NodeEnricher for RecursionEnricher {
         fields: &mut HashMap<String, String>,
     ) {
         let config = ctx.language_config;
-        if !config.function_raw_kinds.contains(&ctx.node.kind()) {
+        if !config.is_function_kind(ctx.node.kind()) {
             return;
         }
 
         // Short-circuit: language has no call expression kind.
-        if config.call_expression_raw_kind.is_empty() {
+        if !config.has_call_expression() {
             return;
         }
 
@@ -63,7 +63,7 @@ fn count_self_calls(
     config: &LanguageConfig,
     count: &mut u32,
 ) {
-    if node.kind() == config.call_expression_raw_kind {
+    if config.is_call_expression_kind(node.kind()) {
         // In tree-sitter, call_expression typically has a `function` field
         // pointing to the callee.  We extract its text and compare.
         if let Some(callee) = node.child_by_field_name("function") {
@@ -94,7 +94,7 @@ fn extract_callee_name(
     config: &LanguageConfig,
 ) -> Option<String> {
     // Direct identifier: `foo()`
-    if callee.kind() == config.identifier_raw_kind {
+    if config.is_identifier_kind(callee.kind()) {
         let text = node_text(source, callee);
         if !text.is_empty() {
             return Some(text);
@@ -105,7 +105,7 @@ fn extract_callee_name(
     // In tree-sitter-cpp this is `qualified_identifier` with a `name` field.
     if let Some(name_node) = callee
         .child_by_field_name("name")
-        .filter(|n| n.kind() == config.identifier_raw_kind)
+        .filter(|n| config.is_identifier_kind(n.kind()))
     {
         let text = node_text(source, name_node);
         if !text.is_empty() {

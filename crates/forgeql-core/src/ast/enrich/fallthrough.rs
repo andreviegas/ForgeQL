@@ -31,12 +31,12 @@ impl NodeEnricher for FallthroughEnricher {
         fields: &mut HashMap<String, String>,
     ) {
         let config = ctx.language_config;
-        if !config.function_raw_kinds.contains(&ctx.node.kind()) {
+        if !config.is_function_kind(ctx.node.kind()) {
             return;
         }
 
         // Short-circuit: language has no case statements.
-        if config.case_statement_raw_kind.is_empty() {
+        if !config.has_case_statement() {
             return;
         }
 
@@ -59,7 +59,7 @@ impl NodeEnricher for FallthroughEnricher {
 
 /// Walk a subtree looking for switch statements, then check their cases.
 fn collect_fallthroughs(node: tree_sitter::Node<'_>, config: &LanguageConfig, count: &mut u32) {
-    if config.switch_raw_kinds.contains(&node.kind()) {
+    if config.is_switch_kind(node.kind()) {
         check_switch_cases(node, config, count);
         // Don't return — there might be nested switches inside cases.
     }
@@ -86,7 +86,7 @@ fn check_switch_cases(
     let mut cases: Vec<tree_sitter::Node<'_>> = Vec::new();
     for i in 0..body.child_count() {
         if let Some(child) = body.child(i)
-            && child.kind() == config.case_statement_raw_kind
+            && config.is_case_statement_kind(child.kind())
         {
             cases.push(child);
         }
@@ -131,7 +131,7 @@ fn is_fallthrough(case_node: tree_sitter::Node<'_>, config: &LanguageConfig) -> 
         // or are compound_statement/expression_statement, etc.
         if kind.ends_with("_statement")
             || kind.ends_with("_expression")
-            || kind == config.block_raw_kind
+            || config.is_block_kind(kind)
         {
             has_statements = true;
             last_statement = Some(child);
@@ -146,11 +146,11 @@ fn is_fallthrough(case_node: tree_sitter::Node<'_>, config: &LanguageConfig) -> 
     // Check if last statement is a terminator.
     if let Some(last) = last_statement {
         let kind = last.kind();
-        if kind == config.break_statement_raw_kind || kind == config.return_statement_raw_kind {
+        if config.is_break_statement_kind(kind) || config.is_return_statement_kind(kind) {
             return false;
         }
         // Also check if the last thing inside a compound_statement is terminated.
-        if kind == config.block_raw_kind {
+        if config.is_block_kind(kind) {
             return !block_ends_with_terminator(last, config);
         }
     }
@@ -164,7 +164,7 @@ fn block_ends_with_terminator(block: tree_sitter::Node<'_>, config: &LanguageCon
     for i in (0..block.child_count()).rev() {
         if let Some(child) = block.child(i) {
             let kind = child.kind();
-            if kind == config.break_statement_raw_kind || kind == config.return_statement_raw_kind {
+            if config.is_break_statement_kind(kind) || config.is_return_statement_kind(kind) {
                 return true;
             }
             // Skip closing braces and whitespace tokens.

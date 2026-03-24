@@ -508,9 +508,8 @@ pub fn show_signature(
     let root = tree.root_node();
 
     let start_line = byte_to_line(&source, def.byte_range.start) + 1;
-    let is_func_or_template = config.function_raw_kinds.contains(&def.node_kind.as_str())
-        || (!config.template_declaration_raw_kind.is_empty()
-            && def.node_kind == config.template_declaration_raw_kind);
+    let is_func_or_template = config.is_function_kind(def.node_kind.as_str())
+        || config.is_template_declaration_kind(def.node_kind.as_str());
     let (signature, end_line) = if is_func_or_template {
         find_function_node_for_symbol(root, def.byte_range.start, config).map_or_else(
             || {
@@ -641,7 +640,7 @@ pub fn show_members(
                 let child = cursor.node();
                 let ln = byte_to_line(&source, child.start_byte()) + 1;
                 let ck = child.kind();
-                if config.field_raw_kinds.contains(&ck) {
+                if config.is_field_kind(ck) {
                     let text = std::str::from_utf8(&source[child.byte_range()])
                         .unwrap_or("")
                         .trim()
@@ -654,7 +653,7 @@ pub fn show_members(
                             "line": ln,
                         }));
                     }
-                } else if config.function_raw_kinds.contains(&ck) {
+                } else if config.is_function_kind(ck) {
                     // Inline method definition — show signature only.
                     let body_start = child
                         .child_by_field_name("body")
@@ -670,7 +669,7 @@ pub fn show_members(
                             "line": ln,
                         }));
                     }
-                } else if config.declaration_raw_kinds.contains(&ck) {
+                } else if config.is_declaration_kind(ck) {
                     // Method declaration (forward declaration / pure virtual).
                     let text = std::str::from_utf8(&source[child.byte_range()])
                         .unwrap_or("")
@@ -684,8 +683,7 @@ pub fn show_members(
                             "line": ln,
                         }));
                     }
-                } else if !config.enumerator_raw_kind.is_empty()
-                    && ck == config.enumerator_raw_kind
+                } else if config.is_enumerator_kind(ck)
                     && let Some(name_node) = child.child_by_field_name("name")
                 {
                     let name = std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("");

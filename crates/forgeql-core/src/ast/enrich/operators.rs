@@ -22,16 +22,13 @@ impl NodeEnricher for OperatorEnricher {
         let kind = ctx.node.kind();
         let config = ctx.language_config;
 
-        if config.update_raw_kinds.contains(&kind) && config.has_increment_decrement {
+        if config.is_update_kind(kind) && config.has_increment_decrement {
             return Self::handle_update(ctx);
         }
-        if config.assignment_raw_kinds.contains(&kind) {
+        if config.is_assignment_kind(kind) {
             return Self::handle_compound_assignment(ctx);
         }
-        if (!config.binary_expression_raw_kind.is_empty()
-            && kind == config.binary_expression_raw_kind)
-            || config.shift_expression_raw_kinds.contains(&kind)
-        {
+        if config.is_binary_expression_kind(kind) || config.is_shift_expression_kind(kind) {
             return Self::handle_shift(ctx);
         }
         vec![]

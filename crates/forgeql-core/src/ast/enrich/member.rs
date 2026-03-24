@@ -34,14 +34,14 @@ impl NodeEnricher for MemberEnricher {
         fields: &mut HashMap<String, String>,
     ) {
         let config = ctx.language_config;
-        if !config.field_raw_kinds.contains(&ctx.node.kind()) {
+        if !config.is_field_kind(ctx.node.kind()) {
             return;
         }
 
         let is_method = ctx
             .node
-            .child_by_field_name(config.declarator_field_name)
-            .is_some_and(|d| has_descendant_kind(d, config.function_declarator_kind));
+            .child_by_field_name(config.declarator_field())
+            .is_some_and(|d| has_descendant_kind(d, config.function_declarator()));
 
         // member_kind: method vs field
         let member_kind = if is_method { "method" } else { "field" };
@@ -61,7 +61,7 @@ impl NodeEnricher for MemberEnricher {
         if let Some(class_name) = enclosing_type_name(ctx.node, ctx.source, config.type_raw_kinds) {
             drop(fields.insert(
                 "body_symbol".to_string(),
-                format!("{class_name}{}{name}", config.scope_separator),
+                format!("{class_name}{}{name}", config.scope_sep()),
             ));
         }
     }

@@ -40,7 +40,7 @@ impl NodeEnricher for RedundancyEnricher {
         fields: &mut HashMap<String, String>,
     ) {
         let config = ctx.language_config;
-        if !config.function_raw_kinds.contains(&ctx.node.kind()) {
+        if !config.is_function_kind(ctx.node.kind()) {
             return;
         }
 
@@ -177,7 +177,7 @@ fn collect_condition_info(
             let kind = node.kind();
 
             // When we hit a control-flow node, inspect its condition subtree.
-            if config.control_flow_raw_kinds.contains(&kind)
+            if config.is_control_flow_kind(kind)
                 && let Some(cond) = node.child_by_field_name("condition")
             {
                 collect_calls_in_subtree(
