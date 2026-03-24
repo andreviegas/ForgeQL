@@ -159,21 +159,32 @@ fn compact_diff_preview(old: &str, new: &str, path: &Path, cfg: &CompactDiffConf
 
     let total_content_lines: usize = hunks.iter().map(|h| h.lines.len()).sum();
 
-    if total_content_lines <= cfg.max_lines_per_file || hunks.len() == 1 {
-        // Everything fits — emit all hunks, truncated to budget.
-        let mut budget = cfg.max_lines_per_file;
+    if total_content_lines <= cfg.max_lines_per_file {
+        // Everything fits — emit all hunks verbatim.
         for hunk in &hunks {
             for line in &hunk.lines {
-                if budget == 0 {
-                    let _ = writeln!(out, "(… truncated …)");
-                    return out;
-                }
                 let _ = writeln!(out, "{}", truncate_line(line, cfg.max_line_width));
-                budget -= 1;
             }
         }
+    } else if hunks.len() == 1 {
+        // Single oversized hunk: line-level head/tail elision.
+        // Show first K/2 lines, elision marker, then last K/2 lines.
+        let lines = &hunks[0].lines;
+        let first_budget = cfg.max_lines_per_file / 2;
+        let last_budget = cfg.max_lines_per_file - first_budget;
+        let elided = lines.len().saturating_sub(first_budget + last_budget);
+
+        for line in lines.iter().take(first_budget) {
+            let _ = writeln!(out, "{}", truncate_line(line, cfg.max_line_width));
+        }
+        let _ = writeln!(out, "(\u{2026} {elided} lines elided \u{2026})");
+        let skip = lines.len().saturating_sub(last_budget);
+        for line in lines.iter().skip(skip) {
+            let _ = writeln!(out, "{}", truncate_line(line, cfg.max_line_width));
+        }
     } else {
-        // Multi-hunk: show first + last, elide middle.
+        // Multiple oversized hunks: hunk-level head/tail elision.
+        // Show first hunk head lines, elision marker, then last hunk tail lines.
         let first = &hunks[0];
         let last = &hunks[hunks.len() - 1];
 
@@ -669,6 +680,55 @@ mod tests {
         assert!(
             preview.contains("\u{2026}"),
             "must have elision marker for middle hunks: {preview}"
+        );
+    }
+
+    #[test]
+    fn compact_preview_single_oversized_hunk_uses_head_tail_elision() {
+        // One hunk with many added lines — should get line-level head/tail
+        // elision, NOT naive truncation with "(… truncated …)".
+        let old = "fn foo() {\n    old_body();\n}\n";
+        // New body has 30 lines — well over the K=14 default.
+        let mut new_body = String::new();
+        for i in 0..30 {
+            use std::fmt::Write as _;
+            let _ = writeln!(new_body, "    line_{i}();");
+        }
+        let new = format!("fn foo() {{\n{new_body}}}\n");
+
+        let cfg = CompactDiffConfig::default(); // K=14
+        let preview = compact_diff_preview(old, &new, Path::new("foo.cpp"), &cfg);
+
+        // Must use the proportional elision marker, not the naive "(… truncated …)".
+        assert!(
+            preview.contains("\u{2026}") && preview.contains("lines elided"),
+            "single oversized hunk must use head/tail elision: {preview}"
+        );
+        assert!(
+            !preview.contains("truncated"),
+            "must not fall back to naive truncation: {preview}"
+        );
+
+        // The preview must not exceed K + 1 (elision line) + header content lines.
+        let content_lines: usize = preview
+            .lines()
+            .filter(|l| l.starts_with('-') || l.starts_with('+') || l.starts_with(' '))
+            .count();
+        assert!(
+            content_lines <= cfg.max_lines_per_file,
+            "content lines {content_lines} must not exceed K={}: {preview}",
+            cfg.max_lines_per_file
+        );
+
+        // Head should be present (first changed lines visible).
+        assert!(
+            preview.contains("-    old_body()"),
+            "head must show removed line"
+        );
+        // Tail should be present (last added line visible).
+        assert!(
+            preview.contains("+    line_29()"),
+            "tail must show last added line"
         );
     }
 

@@ -5,6 +5,19 @@ All notable changes to ForgeQL will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Compact diff: single oversized hunk now uses head/tail elision** —
+  when a mutation produced a single hunk exceeding the K-line budget (e.g.
+  a large block replacement), the preview fell back to a naive line counter
+  that emitted lines until K=0 then appended `(… truncated …)` at the
+  tail, with no proportional head/tail split.  The renderer now handles
+  three distinct cases: everything fits (≤K lines), one oversized hunk
+  (line-level K/2 head + `(… N lines elided …)` + K/2 tail), and multiple
+  oversized hunks (hunk-level first+last with middle elision).
+
 ## [0.29.0] - 2026-03-24
 
 ### Added
