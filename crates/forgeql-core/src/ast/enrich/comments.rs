@@ -47,7 +47,7 @@ impl NodeEnricher for CommentEnricher {
                     .doc_comment_prefix_table()
                     .iter()
                     .take_while(|(_, style)| style.starts_with("doc"))
-                    .any(|(prefix, _)| text.starts_with(prefix))
+                    .any(|(prefix, _)| text.starts_with(prefix.as_str()))
             });
             drop(fields.insert("has_doc".to_string(), has_doc.to_string()));
         }
@@ -55,9 +55,9 @@ impl NodeEnricher for CommentEnricher {
 }
 
 /// Classify a comment's style from its source text using the language config.
-fn detect_comment_style(text: &str, prefixes: &[(&str, &'static str)]) -> &'static str {
-    for &(prefix, style) in prefixes {
-        if text.starts_with(prefix) {
+fn detect_comment_style<'a>(text: &str, prefixes: &'a [(String, String)]) -> &'a str {
+    for (prefix, style) in prefixes {
+        if text.starts_with(prefix.as_str()) {
             return style;
         }
     }
@@ -67,11 +67,11 @@ fn detect_comment_style(text: &str, prefixes: &[(&str, &'static str)]) -> &'stat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::lang::CPP_CONFIG;
+    use crate::ast::lang::cpp_config;
 
     #[test]
     fn comment_styles() {
-        let p = CPP_CONFIG.doc_comment_prefix_table();
+        let p = cpp_config().doc_comment_prefix_table();
         assert_eq!(detect_comment_style("/** doc */", p), "doc_block");
         assert_eq!(detect_comment_style("/// doc line", p), "doc_line");
         assert_eq!(detect_comment_style("/* block */", p), "block");

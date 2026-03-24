@@ -264,7 +264,7 @@ fn collect_calls_in_subtree(
 fn count_null_checks(
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    null_literals: &[&str],
+    null_literals: &[String],
     binary_expression_raw_kind: &str,
 ) -> usize {
     let mut count = 0;
@@ -287,8 +287,8 @@ fn count_null_checks(
                         .child_by_field_name("right")
                         .map(|n| node_text(source, n))
                         .unwrap_or_default();
-                    if null_literals.contains(&left.as_str())
-                        || null_literals.contains(&right.as_str())
+                    if null_literals.iter().any(|s| s == left.as_str())
+                        || null_literals.iter().any(|s| s == right.as_str())
                     {
                         count += 1;
                     }

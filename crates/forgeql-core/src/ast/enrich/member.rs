@@ -85,11 +85,11 @@ fn has_descendant_kind(node: tree_sitter::Node<'_>, target: &str) -> bool {
 /// Walk up the parent chain to find an enclosing type node.
 fn enclosing_type_node<'a>(
     node: tree_sitter::Node<'a>,
-    type_raw_kinds: &[&str],
+    type_raw_kinds: &[String],
 ) -> Option<tree_sitter::Node<'a>> {
     let mut current = node.parent();
     while let Some(parent) = current {
-        if type_raw_kinds.contains(&parent.kind()) {
+        if type_raw_kinds.iter().any(|s| s == parent.kind()) {
             return Some(parent);
         }
         current = parent.parent();
@@ -101,11 +101,11 @@ fn enclosing_type_node<'a>(
 fn enclosing_type_name(
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    type_raw_kinds: &[&str],
+    type_raw_kinds: &[String],
 ) -> Option<String> {
     let mut current = node.parent();
     while let Some(parent) = current {
-        if type_raw_kinds.contains(&parent.kind()) {
+        if type_raw_kinds.iter().any(|s| s == parent.kind()) {
             return parent
                 .child_by_field_name("name")
                 .map(|n| node_text(source, n))

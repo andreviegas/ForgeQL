@@ -1521,7 +1521,7 @@ fn find_symbols_prefilter(
     // When no explicit `node_kind =` predicate, infer kind(s) from
     // enrichment fields used in WHERE.  This lets us use the kind_index
     // instead of a full 2M-row scan.
-    let inferred_kinds: Option<Vec<&str>> = if kind_exact.is_none() {
+    let inferred_kinds: Option<Vec<String>> = if kind_exact.is_none() {
         infer_kinds_from_fields(&clauses.where_predicates, lang_configs)
     } else {
         None
@@ -1709,7 +1709,7 @@ fn validate_order_by_field(
 fn field_to_kinds_for_config(
     config: &crate::ast::lang::LanguageConfig,
     field: &str,
-) -> Option<Vec<&'static str>> {
+) -> Option<Vec<String>> {
     match field {
         // function_definition only — metrics, redundancy, escape, shadow,
         // unused_param, fallthrough, recursion, todo, decl_distance
@@ -1747,14 +1747,14 @@ fn field_to_kinds_for_config(
         | "decl_far_count"
         | "has_unused_reassign" => Some(config.function_kinds().to_vec()),
         // comments.rs
-        "comment_style" => Some(vec![config.comment_kind()]),
+        "comment_style" => Some(vec![config.comment_kind().to_owned()]),
         // numbers.rs
         "num_format" | "is_magic" | "num_suffix" | "has_separator" | "num_value" | "num_sign" => {
             Some(config.number_literal_kinds().to_vec())
         }
         // operators.rs
         "increment_style" | "increment_op" => Some(config.update_kinds().to_vec()),
-        "compound_op" | "operand" => Some(vec![config.compound_assignment_kind()]),
+        "compound_op" | "operand" => Some(vec![config.compound_assignment_kind().to_owned()]),
         "shift_direction" | "shift_operand" | "shift_amount" => {
             Some(config.shift_expression_kinds().to_vec())
         }
@@ -1763,7 +1763,7 @@ fn field_to_kinds_for_config(
             config
                 .cast_kind_triples()
                 .iter()
-                .map(|(raw_kind, _, _)| *raw_kind)
+                .map(|(raw_kind, _, _)| raw_kind.clone())
                 .collect(),
         ),
         // control_flow.rs
@@ -1781,7 +1781,7 @@ fn field_to_kinds_for_config(
         // metrics.rs — qualifier flags
         "is_const" | "is_volatile" | "is_static" => {
             let mut kinds = config.declaration_kinds().to_vec();
-            kinds.extend(config.function_kinds());
+            kinds.extend_from_slice(config.function_kinds());
             Some(kinds)
         }
         // metrics.rs — visibility
@@ -1797,8 +1797,8 @@ fn field_to_kinds_for_config(
 fn field_to_kinds(
     configs: &[&crate::ast::lang::LanguageConfig],
     field: &str,
-) -> Option<Vec<&'static str>> {
-    let mut all_kinds: Vec<&'static str> = Vec::new();
+) -> Option<Vec<String>> {
+    let mut all_kinds: Vec<String> = Vec::new();
     for config in configs {
         if let Some(kinds) = field_to_kinds_for_config(config, field) {
             for k in kinds {
@@ -1823,8 +1823,8 @@ fn field_to_kinds(
 fn infer_kinds_from_fields(
     predicates: &[crate::ir::Predicate],
     configs: &[&crate::ast::lang::LanguageConfig],
-) -> Option<Vec<&'static str>> {
-    let mut result: Option<Vec<&'static str>> = None;
+) -> Option<Vec<String>> {
+    let mut result: Option<Vec<String>> = None;
     for pred in predicates {
         let Some(kinds) = field_to_kinds(configs, &pred.field) else {
             continue;
@@ -1832,7 +1832,7 @@ fn infer_kinds_from_fields(
         result = Some(match result {
             None => kinds,
             Some(current) => {
-                let intersected: Vec<&str> =
+                let intersected: Vec<String> =
                     current.into_iter().filter(|k| kinds.contains(k)).collect();
                 if intersected.is_empty() {
                     // Contradictory (e.g. cast_style + comment_style) — bail.

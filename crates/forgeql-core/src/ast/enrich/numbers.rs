@@ -50,12 +50,12 @@ impl NodeEnricher for NumberEnricher {
 
         // Map suffix to its semantic meaning using the config table.
         if !suffix.is_empty()
-            && let Some(&(_, meaning)) = config
+            && let Some((_, meaning)) = config
                 .number_suffix_table()
                 .iter()
-                .find(|&&(s, _)| s == suffix)
+                .find(|(s, _)| s == suffix)
         {
-            drop(fields.insert("suffix_meaning".to_string(), meaning.to_string()));
+            drop(fields.insert("suffix_meaning".to_string(), meaning.clone()));
         }
 
         // Strip suffix for format analysis
@@ -101,11 +101,11 @@ impl NodeEnricher for NumberEnricher {
 /// Detect the type suffix of a number literal using the config suffix table.
 ///
 /// The config table is checked in order (longest suffixes first).
-fn detect_suffix_with_table(lower: &str, suffixes: &[(&'static str, &str)]) -> &'static str {
-    for &(suffix, _) in suffixes {
-        if lower.ends_with(suffix) {
+fn detect_suffix_with_table<'a>(lower: &str, suffixes: &'a [(String, String)]) -> &'a str {
+    for (suffix, _) in suffixes {
+        if lower.ends_with(suffix.as_str()) {
             // For hex literals, single-char suffixes a-f are digits, not suffixes
-            if suffix.len() == 1 && lower.starts_with("0x") && "abcdef".contains(suffix) {
+            if suffix.len() == 1 && lower.starts_with("0x") && "abcdef".contains(suffix.as_str()) {
                 continue;
             }
             return suffix;
@@ -116,11 +116,11 @@ fn detect_suffix_with_table(lower: &str, suffixes: &[(&'static str, &str)]) -> &
 
 /// Strip the type suffix from the end of a lowercased number string,
 /// using the config suffix table.
-fn strip_suffix_with_table<'a>(lower: &'a str, suffixes: &[(&str, &str)]) -> &'a str {
-    for &(suf, _) in suffixes {
-        if let Some(stripped) = lower.strip_suffix(suf) {
+fn strip_suffix_with_table<'a>(lower: &'a str, suffixes: &[(String, String)]) -> &'a str {
+    for (suf, _) in suffixes {
+        if let Some(stripped) = lower.strip_suffix(suf.as_str()) {
             // For hex literals, single-char 'f' etc. are digits not suffixes
-            if suf.len() == 1 && lower.starts_with("0x") && "abcdef".contains(suf) {
+            if suf.len() == 1 && lower.starts_with("0x") && "abcdef".contains(suf.as_str()) {
                 continue;
             }
             return stripped;
@@ -167,7 +167,7 @@ fn parse_value(s: &str, format: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::lang::CPP_CONFIG;
+    use crate::ast::lang::cpp_config;
 
     #[test]
     fn format_detection() {
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn suffix_detection() {
-        let s = CPP_CONFIG.number_suffix_table();
+        let s = cpp_config().number_suffix_table();
         assert_eq!(detect_suffix_with_table("255u", s), "u");
         assert_eq!(detect_suffix_with_table("100ul", s), "ul");
         assert_eq!(detect_suffix_with_table("100ull", s), "ull");

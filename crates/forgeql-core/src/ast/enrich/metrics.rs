@@ -114,13 +114,14 @@ fn count_descendants_by_kind(node: tree_sitter::Node<'_>, target_kind: &str) -> 
 }
 
 /// Count all descendants matching any of the given kinds within the node's subtree.
-fn count_descendants_by_kinds(node: tree_sitter::Node<'_>, target_kinds: &[&str]) -> usize {
+fn count_descendants_by_kinds(node: tree_sitter::Node<'_>, target_kinds: &[String]) -> usize {
     let mut count = 0;
     let mut cursor = node.walk();
     let mut visit = true;
 
     loop {
-        if visit && target_kinds.contains(&cursor.node().kind()) && cursor.node() != node {
+        if visit && target_kinds.iter().any(|s| s == cursor.node().kind()) && cursor.node() != node
+        {
             count += 1;
         }
 
@@ -211,11 +212,11 @@ fn check_modifiers(
 }
 
 /// Detect visibility context of a member within a type body.
-fn detect_visibility(
+fn detect_visibility<'a>(
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    config: &LanguageConfig,
-) -> Option<&'static str> {
+    config: &'a LanguageConfig,
+) -> Option<&'a str> {
     // Walk backwards through siblings to find the governing access specifier
     let mut sibling = node.prev_named_sibling();
     while let Some(sib) = sibling {

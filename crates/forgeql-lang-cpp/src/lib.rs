@@ -18,7 +18,7 @@
     clippy::doc_markdown,
 )]
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use forgeql_core::ast::lang::{
     FQL_CAST, FQL_CLASS, FQL_COMMENT, FQL_DO, FQL_ENUM, FQL_FIELD, FQL_FOR, FQL_FUNCTION, FQL_IF,
@@ -31,157 +31,164 @@ use forgeql_core::ast::lang::{
 pub struct CppLanguage;
 
 /// Static configuration for C/C++.
-pub static CPP_CONFIG: LanguageConfig = LanguageConfig::from_init(&LanguageConfigInit {
-    root_node_kind: "translation_unit",
-    scope_separator: "::",
+static CPP_CONFIG: OnceLock<LanguageConfig> = OnceLock::new();
 
-    function_raw_kinds: &["function_definition"],
-    type_raw_kinds: &["class_specifier", "struct_specifier", "enum_specifier"],
-    definition_raw_kinds: &[
-        "function_definition",
-        "class_specifier",
-        "struct_specifier",
-        "enum_specifier",
-    ],
-    declaration_raw_kinds: &["declaration"],
-    field_raw_kinds: &["field_declaration"],
-    parameter_raw_kind: "parameter_declaration",
-    member_body_raw_kind: "field_declaration_list",
-    member_raw_kinds: &["field_declaration"],
-    comment_raw_kind: "comment",
+/// Returns the static C/C++ language configuration.
+pub fn cpp_config() -> &'static LanguageConfig {
+    CPP_CONFIG.get_or_init(|| {
+        LanguageConfig::from_init(&LanguageConfigInit {
+            root_node_kind: "translation_unit",
+            scope_separator: "::",
 
-    number_literal_raw_kinds: &["number_literal"],
-    digit_separator: Some('\''),
-    number_suffixes: &[
-        ("ull", "unsigned_long_long"),
-        ("ull", "unsigned_long_long"),
-        ("ul", "unsigned_long"),
-        ("ll", "long_long"),
-        ("uz", "unsigned_size"),
-        ("u", "unsigned"),
-        ("l", "long"),
-        ("z", "size"),
-        ("f", "float"),
-    ],
+            function_raw_kinds: &["function_definition"],
+            type_raw_kinds: &["class_specifier", "struct_specifier", "enum_specifier"],
+            definition_raw_kinds: &[
+                "function_definition",
+                "class_specifier",
+                "struct_specifier",
+                "enum_specifier",
+            ],
+            declaration_raw_kinds: &["declaration"],
+            field_raw_kinds: &["field_declaration"],
+            parameter_raw_kind: "parameter_declaration",
+            member_body_raw_kind: "field_declaration_list",
+            member_raw_kinds: &["field_declaration"],
+            comment_raw_kind: "comment",
 
-    control_flow_raw_kinds: &[
-        "if_statement",
-        "while_statement",
-        "for_statement",
-        "for_range_loop",
-        "switch_statement",
-        "do_statement",
-    ],
-    switch_raw_kinds: &["switch_statement"],
+            number_literal_raw_kinds: &["number_literal"],
+            digit_separator: Some('\''),
+            number_suffixes: &[
+                ("ull", "unsigned_long_long"),
+                ("ull", "unsigned_long_long"),
+                ("ul", "unsigned_long"),
+                ("ll", "long_long"),
+                ("uz", "unsigned_size"),
+                ("u", "unsigned"),
+                ("l", "long"),
+                ("z", "size"),
+                ("f", "float"),
+            ],
 
-    null_literals: &["nullptr", "NULL", "0"],
-    boolean_literals: &["true", "false"],
+            control_flow_raw_kinds: &[
+                "if_statement",
+                "while_statement",
+                "for_statement",
+                "for_range_loop",
+                "switch_statement",
+                "do_statement",
+            ],
+            switch_raw_kinds: &["switch_statement"],
 
-    doc_comment_prefixes: &[
-        ("/**", "doc_block"),
-        ("///", "doc_line"),
-        ("/*", "block"),
-        ("//", "line"),
-    ],
+            null_literals: &["nullptr", "NULL", "0"],
+            boolean_literals: &["true", "false"],
 
-    modifier_map: &[
-        ("const", "is_const"),
-        ("static", "is_static"),
-        ("virtual", "is_virtual"),
-        ("inline", "is_inline"),
-        ("extern", "is_extern"),
-        ("volatile", "is_volatile"),
-        ("mutable", "is_mutable"),
-        ("constexpr", "is_constexpr"),
-        ("explicit", "is_explicit"),
-        ("override", "is_override"),
-        ("final", "is_final"),
-    ],
-    modifier_node_kinds: &[
-        "type_qualifier",
-        "storage_class_specifier",
-        "virtual_specifier",
-    ],
-    visibility_keywords: &[
-        ("public", "public"),
-        ("private", "private"),
-        ("protected", "protected"),
-    ],
-    visibility_default_by_type: &[
-        ("class_specifier", "private"),
-        ("struct_specifier", "public"),
-    ],
+            doc_comment_prefixes: &[
+                ("/**", "doc_block"),
+                ("///", "doc_line"),
+                ("/*", "block"),
+                ("//", "line"),
+            ],
 
-    cast_kinds: &[
-        ("cast_expression", "c_style", "unsafe"),
-        ("static_cast_expression", "static_cast", "safe"),
-        ("reinterpret_cast_expression", "reinterpret_cast", "unsafe"),
-        ("const_cast_expression", "const_cast", "moderate"),
-        ("dynamic_cast_expression", "dynamic_cast", "safe"),
-    ],
+            modifier_map: &[
+                ("const", "is_const"),
+                ("static", "is_static"),
+                ("virtual", "is_virtual"),
+                ("inline", "is_inline"),
+                ("extern", "is_extern"),
+                ("volatile", "is_volatile"),
+                ("mutable", "is_mutable"),
+                ("constexpr", "is_constexpr"),
+                ("explicit", "is_explicit"),
+                ("override", "is_override"),
+                ("final", "is_final"),
+            ],
+            modifier_node_kinds: &[
+                "type_qualifier",
+                "storage_class_specifier",
+                "virtual_specifier",
+            ],
+            visibility_keywords: &[
+                ("public", "public"),
+                ("private", "private"),
+                ("protected", "protected"),
+            ],
+            visibility_default_by_type: &[
+                ("class_specifier", "private"),
+                ("struct_specifier", "public"),
+            ],
 
-    has_goto: true,
-    has_increment_decrement: true,
-    has_implicit_truthiness: true,
-    decorator_raw_kind: None,
-    skip_node_kinds: &["preproc_else", "preproc_elif"],
-    usage_node_kinds: &["identifier", "field_identifier", "type_identifier"],
-    declarator_field_name: "declarator",
-    function_declarator_kind: "function_declarator",
+            cast_kinds: &[
+                ("cast_expression", "c_style", "unsafe"),
+                ("static_cast_expression", "static_cast", "safe"),
+                ("reinterpret_cast_expression", "reinterpret_cast", "unsafe"),
+                ("const_cast_expression", "const_cast", "moderate"),
+                ("dynamic_cast_expression", "dynamic_cast", "safe"),
+            ],
 
-    parameter_list_raw_kind: "parameter_list",
-    identifier_raw_kind: "identifier",
-    assignment_raw_kinds: &["assignment_expression"],
-    update_raw_kinds: &["update_expression"],
-    init_declarator_raw_kind: "init_declarator",
-    block_raw_kind: "compound_statement",
+            has_goto: true,
+            has_increment_decrement: true,
+            has_implicit_truthiness: true,
+            decorator_raw_kind: None,
+            skip_node_kinds: &["preproc_else", "preproc_elif"],
+            usage_node_kinds: &["identifier", "field_identifier", "type_identifier"],
+            declarator_field_name: "declarator",
+            function_declarator_kind: "function_declarator",
 
-    return_statement_raw_kind: "return_statement",
-    address_of_expression_raw_kind: "pointer_expression",
-    address_of_operator: "&",
-    array_declarator_raw_kind: "array_declarator",
-    static_storage_keywords: &["static"],
+            parameter_list_raw_kind: "parameter_list",
+            identifier_raw_kind: "identifier",
+            assignment_raw_kinds: &["assignment_expression"],
+            update_raw_kinds: &["update_expression"],
+            init_declarator_raw_kind: "init_declarator",
+            block_raw_kind: "compound_statement",
 
-    case_statement_raw_kind: "case_statement",
-    break_statement_raw_kind: "break_statement",
+            return_statement_raw_kind: "return_statement",
+            address_of_expression_raw_kind: "pointer_expression",
+            address_of_operator: "&",
+            array_declarator_raw_kind: "array_declarator",
+            static_storage_keywords: &["static"],
 
-    call_expression_raw_kind: "call_expression",
+            case_statement_raw_kind: "case_statement",
+            break_statement_raw_kind: "break_statement",
 
-    goto_statement_raw_kind: "goto_statement",
-    string_literal_raw_kinds: &["string_literal", "char_literal"],
-    throw_statement_raw_kind: "throw_statement",
+            call_expression_raw_kind: "call_expression",
 
-    template_declaration_raw_kind: "template_declaration",
-    enumerator_raw_kind: "enumerator",
+            goto_statement_raw_kind: "goto_statement",
+            string_literal_raw_kinds: &["string_literal", "char_literal"],
+            throw_statement_raw_kind: "throw_statement",
 
-    binary_expression_raw_kind: "binary_expression",
-    logical_expression_raw_kind: "logical_expression",
+            template_declaration_raw_kind: "template_declaration",
+            enumerator_raw_kind: "enumerator",
 
-    type_descriptor_raw_kind: "type_descriptor",
-    template_argument_list_raw_kind: "template_argument_list",
+            binary_expression_raw_kind: "binary_expression",
+            logical_expression_raw_kind: "logical_expression",
 
-    shift_expression_raw_kinds: &["shift_expression"],
-    compound_assignment_raw_kind: "compound_assignment",
+            type_descriptor_raw_kind: "type_descriptor",
+            template_argument_list_raw_kind: "template_argument_list",
 
-    for_style_map: &[
-        ("for_statement", "traditional"),
-        ("for_range_loop", "range"),
-    ],
+            shift_expression_raw_kinds: &["shift_expression"],
+            compound_assignment_raw_kind: "compound_assignment",
 
-    template_misparse_raw_kinds: &[
-        "template_function",
-        "template_type",
-        "template_argument_list",
-    ],
+            for_style_map: &[
+                ("for_statement", "traditional"),
+                ("for_range_loop", "range"),
+            ],
 
-    field_expression_raw_kind: "field_expression",
-    subscript_expression_raw_kind: "subscript_expression",
-    unary_expression_raw_kind: "unary_expression",
-    parenthesized_expression_raw_kind: "parenthesized_expression",
-    condition_clause_raw_kind: "condition_clause",
-    comma_expression_raw_kind: "comma_expression",
-    char_literal_raw_kind: "char_literal",
-});
+            template_misparse_raw_kinds: &[
+                "template_function",
+                "template_type",
+                "template_argument_list",
+            ],
+
+            field_expression_raw_kind: "field_expression",
+            subscript_expression_raw_kind: "subscript_expression",
+            unary_expression_raw_kind: "unary_expression",
+            parenthesized_expression_raw_kind: "parenthesized_expression",
+            condition_clause_raw_kind: "condition_clause",
+            comma_expression_raw_kind: "comma_expression",
+            char_literal_raw_kind: "char_literal",
+        })
+    })
+}
 
 impl LanguageSupport for CppLanguage {
     fn name(&self) -> &'static str {
@@ -288,7 +295,7 @@ impl LanguageSupport for CppLanguage {
     }
 
     fn config(&self) -> &'static LanguageConfig {
-        &CPP_CONFIG
+        cpp_config()
     }
 }
 

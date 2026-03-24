@@ -72,14 +72,14 @@ pub(crate) fn find_enclosing_function_def<'t>(
     fn walk<'t>(
         cursor: &mut tree_sitter::TreeCursor<'t>,
         def_start: usize,
-        func_kinds: &[&str],
+        func_kinds: &[String],
     ) -> Option<tree_sitter::Node<'t>> {
         let node = cursor.node();
         // Prune: skip subtrees that cannot contain def_start.
         if !node.byte_range().contains(&def_start) {
             return None;
         }
-        if func_kinds.contains(&node.kind()) {
+        if func_kinds.iter().any(|s| s == node.kind()) {
             return Some(node);
         }
         // Recurse into children.
@@ -123,7 +123,7 @@ pub(crate) fn find_function_node_for_symbol<'t>(
         node: tree_sitter::Node<'n>,
         def_start: usize,
         template_kind: &str,
-        func_kinds: &[&str],
+        func_kinds: &[String],
     ) -> Option<tree_sitter::Node<'n>> {
         // Prune: skip subtrees that start after or cannot reach def_start.
         if node.start_byte() > def_start {
@@ -136,7 +136,7 @@ pub(crate) fn find_function_node_for_symbol<'t>(
             // Return the first function_definition direct child.
             for i in 0..node.child_count() {
                 if let Some(child) = node.child(i)
-                    && func_kinds.contains(&child.kind())
+                    && func_kinds.iter().any(|s| s == child.kind())
                 {
                     return Some(child);
                 }
@@ -179,10 +179,10 @@ fn find_type_node_by_name<'t>(
         cursor: &mut tree_sitter::TreeCursor<'t>,
         source: &[u8],
         name: &str,
-        type_kinds: &[&str],
+        type_kinds: &[String],
     ) -> Option<tree_sitter::Node<'t>> {
         let node = cursor.node();
-        if type_kinds.contains(&node.kind())
+        if type_kinds.iter().any(|s| s == node.kind())
             && let Some(name_node) = node.child_by_field_name("name")
         {
             let node_name = std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("");

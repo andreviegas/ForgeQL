@@ -164,8 +164,7 @@ impl OperatorEnricher {
             .language_config
             .shift_expression_kinds()
             .first()
-            .copied()
-            .unwrap_or(node_kind);
+            .map_or(node_kind, String::as_str);
 
         vec![IndexRow {
             name,
