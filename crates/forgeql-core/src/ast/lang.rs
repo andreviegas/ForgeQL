@@ -45,9 +45,15 @@ pub const FQL_DO: &str = "do";
 // -----------------------------------------------------------------------
 
 /// All grammar-specific data that enrichers need to operate
-/// language-agnostically.  Each language crate provides a `static`
-/// instance of this struct.
-pub struct LanguageConfig {
+/// language-agnostically.
+///
+/// Each language crate provides a `static` instance of this struct.
+///
+/// Public construction parameters for [`LanguageConfig`].
+///
+/// Language crates construct this with struct-literal syntax and pass it
+/// to [`LanguageConfig::from_init()`] to produce the sealed config.
+pub struct LanguageConfigInit {
     // -- identity --
     /// Root node kind produced by the tree-sitter grammar (e.g.
     /// `"translation_unit"` for C++, `"program"` for TypeScript).
@@ -324,6 +330,283 @@ pub struct LanguageConfig {
     pub char_literal_raw_kind: &'static str,
 }
 
+pub struct LanguageConfig {
+    // -- identity --
+    /// Root node kind produced by the tree-sitter grammar (e.g.
+    /// `"translation_unit"` for C++, `"program"` for TypeScript).
+    root_node_kind: &'static str,
+
+    /// Scope resolution separator (e.g. `"::"` for C++, `"."` for most others).
+    scope_separator: &'static str,
+
+    // -- node kind sets (raw tree-sitter kinds for enricher internal checks) --
+    /// Raw kinds that represent function/method definitions.
+    function_raw_kinds: &'static [&'static str],
+
+    /// Raw kinds that represent type definitions (class, struct, enum, etc.).
+    type_raw_kinds: &'static [&'static str],
+
+    /// Raw kinds that represent any definition (for `has_doc` checks).
+    definition_raw_kinds: &'static [&'static str],
+
+    /// Raw kinds that represent variable/const declarations.
+    declaration_raw_kinds: &'static [&'static str],
+
+    /// Raw kinds that represent member/field declarations.
+    field_raw_kinds: &'static [&'static str],
+
+    /// Raw kind for parameter declarations (e.g. `"parameter_declaration"`).
+    parameter_raw_kind: &'static str,
+
+    /// Raw kind for the body of a type (e.g. `"field_declaration_list"`).
+    member_body_raw_kind: &'static str,
+
+    /// Raw kinds for members inside a type body.
+    member_raw_kinds: &'static [&'static str],
+
+    /// Raw kind for comments.
+    comment_raw_kind: &'static str,
+
+    // -- number literals --
+    /// Raw kinds that represent number literals.
+    number_literal_raw_kinds: &'static [&'static str],
+
+    /// Digit group separator (e.g. `Some('\'')` for C++, `Some('_')` for Rust).
+    digit_separator: Option<char>,
+
+    /// (`suffix_text`, meaning) pairs for number literal suffixes.
+    number_suffixes: &'static [(&'static str, &'static str)],
+
+    // -- control flow --
+    /// Raw kinds that represent control-flow statements indexed by the
+    /// control-flow enricher.
+    control_flow_raw_kinds: &'static [&'static str],
+
+    /// Raw kinds specifically for switch/match statements.
+    switch_raw_kinds: &'static [&'static str],
+
+    // -- literals --
+    /// Null literal values (e.g. `["nullptr", "NULL", "0"]` for C++).
+    null_literals: &'static [&'static str],
+
+    /// Boolean literal values (e.g. `["true", "false"]`).
+    boolean_literals: &'static [&'static str],
+
+    // -- comments --
+    /// (prefix, `style_name`) pairs for detecting comment styles.
+    /// Checked in order — first match wins.
+    doc_comment_prefixes: &'static [(&'static str, &'static str)],
+
+    // -- modifiers --
+    /// (keyword, `field_name`) pairs for modifier detection.
+    modifier_map: &'static [(&'static str, &'static str)],
+
+    /// Raw node kinds that carry modifier/qualifier keywords.
+    modifier_node_kinds: &'static [&'static str],
+
+    /// (keyword, visibility) pairs.
+    visibility_keywords: &'static [(&'static str, &'static str)],
+
+    /// (`raw_kind`, `default_visibility`) pairs — default visibility for
+    /// members of each type kind when no explicit access specifier is present.
+    visibility_default_by_type: &'static [(&'static str, &'static str)],
+
+    // -- casts --
+    /// (`raw_kind`, `cast_style`, `cast_safety`) triples for cast detection.
+    cast_kinds: &'static [(&'static str, &'static str, &'static str)],
+
+    // -- capabilities --
+    /// Whether the language has `goto` statements.
+    has_goto: bool,
+
+    /// Whether the language has `++`/`--` operators.
+    has_increment_decrement: bool,
+
+    /// Whether the language has implicit truthiness (e.g. `if (ptr)` in C++).
+    has_implicit_truthiness: bool,
+
+    /// Raw kind for decorator/attribute nodes, if the language has them.
+    decorator_raw_kind: Option<&'static str>,
+
+    /// Node kinds whose subtrees should be skipped entirely during indexing
+    /// (e.g. `["preproc_else", "preproc_elif"]` in C++).
+    skip_node_kinds: &'static [&'static str],
+
+    /// Identifier node kinds that produce usage sites.
+    usage_node_kinds: &'static [&'static str],
+
+    // -- declarator structure --
+    /// Grammar field name for the declarator child of a definition/declaration
+    /// node (e.g. `"declarator"` in C++).
+    declarator_field_name: &'static str,
+
+    /// Raw kind for a function-type declarator nested inside a declarator tree
+    /// (e.g. `"function_declarator"` in C++).
+    function_declarator_kind: &'static str,
+
+    // -- declaration distance / data-flow (decl_distance enricher) --
+    /// Raw kind for the parameter list container node
+    /// (e.g. `"parameter_list"` for C++, `"formal_parameters"` for TS/Java).
+    parameter_list_raw_kind: &'static str,
+
+    /// Raw kind for a simple identifier token
+    /// (e.g. `"identifier"` — universal for most tree-sitter grammars).
+    identifier_raw_kind: &'static str,
+
+    /// Raw kinds for assignment expressions
+    /// (e.g. `["assignment_expression"]` for C++/TS/Java, `["assignment"]` for Python).
+    assignment_raw_kinds: &'static [&'static str],
+
+    /// Raw kinds for update/increment expressions (`++x`, `x--`).
+    /// Empty slice for languages without increment/decrement operators.
+    update_raw_kinds: &'static [&'static str],
+
+    /// Raw kind for an init-declarator wrapper node
+    /// (e.g. `"init_declarator"` for C++).  Empty string if the language
+    /// does not have this intermediate node.
+    init_declarator_raw_kind: &'static str,
+
+    /// Raw kind for block/compound statement nodes
+    /// (e.g. `"compound_statement"` for C++, `"statement_block"` for TS,
+    /// `"block"` for Python/Rust).
+    block_raw_kind: &'static str,
+
+    // -- escape detection (escape enricher) --
+    /// Raw kind for return statements
+    /// (e.g. `"return_statement"` for C++/Java/TS, `"return_expression"` for Rust).
+    /// Empty string if the language has no explicit return statement kind.
+    return_statement_raw_kind: &'static str,
+
+    /// Raw kind for the expression node that represents taking-address-of
+    /// (e.g. `"pointer_expression"` for C++, `"reference_expression"` for Rust).
+    /// Empty string if the language has no address-of operator.
+    address_of_expression_raw_kind: &'static str,
+
+    /// The textual operator for address-of (e.g. `"&"` for C/C++/Rust/Go/Zig).
+    /// Empty string if the language has no address-of operator — the escape
+    /// enricher will short-circuit.
+    address_of_operator: &'static str,
+
+    /// Raw kind for array declarators
+    /// (e.g. `"array_declarator"` for C++). Empty string if N/A.
+    array_declarator_raw_kind: &'static str,
+
+    /// Keywords that mark a local as having static storage duration
+    /// (e.g. `["static"]` for C/C++). Empty for languages without this concept.
+    static_storage_keywords: &'static [&'static str],
+
+    // -- fallthrough detection (fallthrough enricher) --
+    /// Raw kind for case/default labels inside a switch/match
+    /// (e.g. `"case_statement"` for C++, `"switch_case"` for TS/Java).
+    /// Empty string if the language has no switch/case construct.
+    case_statement_raw_kind: &'static str,
+
+    /// Raw kind for break statements
+    /// (e.g. `"break_statement"` for C++/Java/TS).
+    /// Empty string if the language has no break statement.
+    break_statement_raw_kind: &'static str,
+
+    // -- recursion detection (recursion enricher) --
+    /// Raw kind for function/method call expressions
+    /// (e.g. `"call_expression"` for C++/Java/TS, `"call"` for Python).
+    /// Empty string if the language has no call expression kind.
+    call_expression_raw_kind: &'static str,
+
+    // -- metrics (body-level counting) --
+    /// Raw kind for goto statements (e.g. `"goto_statement"` for C++).
+    /// Empty string if the language has no goto.
+    goto_statement_raw_kind: &'static str,
+
+    /// Raw kinds for string/char literal nodes
+    /// (e.g. `["string_literal", "char_literal"]` for C++,
+    /// `["string_literal", "raw_string_literal"]` for Rust).
+    string_literal_raw_kinds: &'static [&'static str],
+
+    /// Raw kind for throw/raise statements
+    /// (e.g. `"throw_statement"` for C++, `""` for Rust which uses `panic!`).
+    throw_statement_raw_kind: &'static str,
+
+    // -- show/display --
+    /// Raw kind for template/generic declarations wrapping a function or type
+    /// (e.g. `"template_declaration"` for C++, `""` for Rust).
+    template_declaration_raw_kind: &'static str,
+
+    /// Raw kind for enumerator/variant members inside an enum body
+    /// (e.g. `"enumerator"` for C++, `"enum_variant"` for Rust).
+    enumerator_raw_kind: &'static str,
+
+    // -- expression analysis (control-flow, redundancy) --
+    /// Raw kind for binary arithmetic/comparison expressions
+    /// (e.g. `"binary_expression"` — common across most tree-sitter grammars).
+    binary_expression_raw_kind: &'static str,
+
+    /// Raw kind for logical `&&`/`||` expressions when the grammar has a
+    /// separate node kind (e.g. `"logical_expression"` for C++).
+    /// Empty string if logical operators produce `binary_expression` nodes.
+    logical_expression_raw_kind: &'static str,
+
+    // -- cast type extraction --
+    /// Raw kind for type-descriptor nodes inside cast expressions
+    /// (e.g. `"type_descriptor"` for C++).  Empty if not applicable.
+    type_descriptor_raw_kind: &'static str,
+
+    /// Raw kind for template/generic argument lists
+    /// (e.g. `"template_argument_list"` for C++).  Empty if not applicable.
+    template_argument_list_raw_kind: &'static str,
+
+    // -- operators --
+    /// Raw kinds that may contain shift operators (`<<`, `>>`).
+    /// (e.g. `["shift_expression"]` for C++ — may also include
+    /// `binary_expression` for grammars that don't distinguish shifts).
+    shift_expression_raw_kinds: &'static [&'static str],
+
+    /// Synthetic raw kind assigned to compound-assignment rows created by the
+    /// operator enricher (e.g. `"compound_assignment"`).
+    compound_assignment_raw_kind: &'static str,
+
+    // -- for-loop style disambiguation --
+    /// (`raw_kind`, `style_name`) pairs for for-loop style detection.
+    /// (e.g. `[("for_statement", "traditional"), ("for_range_loop", "range")]`
+    /// for C++, `[("for_expression", "range")]` for Rust).
+    for_style_map: &'static [(&'static str, &'static str)],
+
+    // -- template/generic misparse detection --
+    /// Raw kinds whose presence signals a tree-sitter template/generic
+    /// misparse (e.g. `>=` mis-parsed as `>` + `=` in C++).
+    /// (e.g. `["template_function", "template_type", "template_argument_list"]`).
+    /// Empty slice for languages without this issue.
+    template_misparse_raw_kinds: &'static [&'static str],
+
+    // -- skeleton condition normalization (control-flow enricher) --
+    /// Raw kind for field/member access expressions
+    /// (e.g. `"field_expression"` for C++/Rust).
+    field_expression_raw_kind: &'static str,
+
+    /// Raw kind for array/index subscript expressions
+    /// (e.g. `"subscript_expression"` for C++, `"index_expression"` for Rust).
+    subscript_expression_raw_kind: &'static str,
+
+    /// Raw kind for unary expressions (`!x`, `-x`, etc.)
+    /// (e.g. `"unary_expression"` — common across most grammars).
+    unary_expression_raw_kind: &'static str,
+
+    /// Raw kind for parenthesized expressions
+    /// (e.g. `"parenthesized_expression"` — common across most grammars).
+    parenthesized_expression_raw_kind: &'static str,
+
+    /// Raw kind for the condition clause wrapper node
+    /// (e.g. `"condition_clause"` for C++).  Empty if not applicable.
+    condition_clause_raw_kind: &'static str,
+
+    /// Raw kind for comma expressions
+    /// (e.g. `"comma_expression"` for C++).  Empty if not applicable.
+    comma_expression_raw_kind: &'static str,
+
+    /// Raw kind for character literals
+    /// (e.g. `"char_literal"` for C++).  Empty if not applicable.
+    char_literal_raw_kind: &'static str,
+}
+
 // -----------------------------------------------------------------------
 // LanguageConfig — query methods
 //
@@ -335,6 +618,79 @@ pub struct LanguageConfig {
 // -----------------------------------------------------------------------
 
 impl LanguageConfig {
+    /// Create a `LanguageConfig` from public init parameters.
+    #[must_use]
+    pub const fn from_init(init: &LanguageConfigInit) -> Self {
+        Self {
+            root_node_kind: init.root_node_kind,
+            scope_separator: init.scope_separator,
+            function_raw_kinds: init.function_raw_kinds,
+            type_raw_kinds: init.type_raw_kinds,
+            definition_raw_kinds: init.definition_raw_kinds,
+            declaration_raw_kinds: init.declaration_raw_kinds,
+            field_raw_kinds: init.field_raw_kinds,
+            parameter_raw_kind: init.parameter_raw_kind,
+            member_body_raw_kind: init.member_body_raw_kind,
+            member_raw_kinds: init.member_raw_kinds,
+            comment_raw_kind: init.comment_raw_kind,
+            number_literal_raw_kinds: init.number_literal_raw_kinds,
+            digit_separator: init.digit_separator,
+            number_suffixes: init.number_suffixes,
+            control_flow_raw_kinds: init.control_flow_raw_kinds,
+            switch_raw_kinds: init.switch_raw_kinds,
+            null_literals: init.null_literals,
+            boolean_literals: init.boolean_literals,
+            doc_comment_prefixes: init.doc_comment_prefixes,
+            modifier_map: init.modifier_map,
+            modifier_node_kinds: init.modifier_node_kinds,
+            visibility_keywords: init.visibility_keywords,
+            visibility_default_by_type: init.visibility_default_by_type,
+            cast_kinds: init.cast_kinds,
+            has_goto: init.has_goto,
+            has_increment_decrement: init.has_increment_decrement,
+            has_implicit_truthiness: init.has_implicit_truthiness,
+            decorator_raw_kind: init.decorator_raw_kind,
+            skip_node_kinds: init.skip_node_kinds,
+            usage_node_kinds: init.usage_node_kinds,
+            declarator_field_name: init.declarator_field_name,
+            function_declarator_kind: init.function_declarator_kind,
+            parameter_list_raw_kind: init.parameter_list_raw_kind,
+            identifier_raw_kind: init.identifier_raw_kind,
+            assignment_raw_kinds: init.assignment_raw_kinds,
+            update_raw_kinds: init.update_raw_kinds,
+            init_declarator_raw_kind: init.init_declarator_raw_kind,
+            block_raw_kind: init.block_raw_kind,
+            return_statement_raw_kind: init.return_statement_raw_kind,
+            address_of_expression_raw_kind: init.address_of_expression_raw_kind,
+            address_of_operator: init.address_of_operator,
+            array_declarator_raw_kind: init.array_declarator_raw_kind,
+            static_storage_keywords: init.static_storage_keywords,
+            case_statement_raw_kind: init.case_statement_raw_kind,
+            break_statement_raw_kind: init.break_statement_raw_kind,
+            call_expression_raw_kind: init.call_expression_raw_kind,
+            goto_statement_raw_kind: init.goto_statement_raw_kind,
+            string_literal_raw_kinds: init.string_literal_raw_kinds,
+            throw_statement_raw_kind: init.throw_statement_raw_kind,
+            template_declaration_raw_kind: init.template_declaration_raw_kind,
+            enumerator_raw_kind: init.enumerator_raw_kind,
+            binary_expression_raw_kind: init.binary_expression_raw_kind,
+            logical_expression_raw_kind: init.logical_expression_raw_kind,
+            type_descriptor_raw_kind: init.type_descriptor_raw_kind,
+            template_argument_list_raw_kind: init.template_argument_list_raw_kind,
+            shift_expression_raw_kinds: init.shift_expression_raw_kinds,
+            compound_assignment_raw_kind: init.compound_assignment_raw_kind,
+            for_style_map: init.for_style_map,
+            template_misparse_raw_kinds: init.template_misparse_raw_kinds,
+            field_expression_raw_kind: init.field_expression_raw_kind,
+            subscript_expression_raw_kind: init.subscript_expression_raw_kind,
+            unary_expression_raw_kind: init.unary_expression_raw_kind,
+            parenthesized_expression_raw_kind: init.parenthesized_expression_raw_kind,
+            condition_clause_raw_kind: init.condition_clause_raw_kind,
+            comma_expression_raw_kind: init.comma_expression_raw_kind,
+            char_literal_raw_kind: init.char_literal_raw_kind,
+        }
+    }
+
     // -- kind membership tests (slice fields) --------------------------
 
     /// Is this a function/method definition kind?
@@ -690,29 +1046,235 @@ impl LanguageConfig {
         !self.enumerator_raw_kind.is_empty()
     }
 
+    /// Does this language have `goto` statements?
+    #[must_use]
+    pub const fn has_goto_statement(&self) -> bool {
+        self.has_goto
+    }
+
+    /// Does the language coerce non-boolean values to truth in conditions?
+    #[must_use]
+    pub const fn has_implicit_truth(&self) -> bool {
+        self.has_implicit_truthiness
+    }
+
+    /// Raw kind for decorator/attribute nodes (if any).
+    #[must_use]
+    pub const fn decorator_kind(&self) -> Option<&'static str> {
+        self.decorator_raw_kind
+    }
+
     // -- value accessors -----------------------------------------------
+
+    // Slice accessors — return the raw-kind slices for callers that need
+    // to pass them to helpers or build `Vec` collections (e.g. engine.rs
+    // `field_to_kinds_for_config`).
+
+    /// Raw kinds for function/method definitions.
+    #[must_use]
+    pub const fn function_kinds(&self) -> &'static [&'static str] {
+        self.function_raw_kinds
+    }
+
+    /// Raw kinds for type definitions.
+    #[must_use]
+    pub const fn type_kinds(&self) -> &'static [&'static str] {
+        self.type_raw_kinds
+    }
+
+    /// Raw kinds for any definition (function, type, variable, etc.).
+    #[must_use]
+    pub const fn definition_kinds(&self) -> &'static [&'static str] {
+        self.definition_raw_kinds
+    }
+
+    /// Raw kinds for variable/const declarations.
+    #[must_use]
+    pub const fn declaration_kinds(&self) -> &'static [&'static str] {
+        self.declaration_raw_kinds
+    }
+
+    /// Raw kinds for field/member declarations.
+    #[must_use]
+    pub const fn field_kinds(&self) -> &'static [&'static str] {
+        self.field_raw_kinds
+    }
+
+    /// Raw kinds for number literal nodes.
+    #[must_use]
+    pub const fn number_literal_kinds(&self) -> &'static [&'static str] {
+        self.number_literal_raw_kinds
+    }
+
+    /// Raw kinds for update/increment expressions.
+    #[must_use]
+    pub const fn update_kinds(&self) -> &'static [&'static str] {
+        self.update_raw_kinds
+    }
+
+    /// Raw kinds for shift expressions.
+    #[must_use]
+    pub const fn shift_expression_kinds(&self) -> &'static [&'static str] {
+        self.shift_expression_raw_kinds
+    }
+
+    /// Raw kinds for control-flow statements.
+    #[must_use]
+    pub const fn control_flow_kinds(&self) -> &'static [&'static str] {
+        self.control_flow_raw_kinds
+    }
+
+    /// Raw kinds for switch/match statements.
+    #[must_use]
+    pub const fn switch_kinds(&self) -> &'static [&'static str] {
+        self.switch_raw_kinds
+    }
+
+    /// Null literal values.
+    #[must_use]
+    pub const fn null_literal_values(&self) -> &'static [&'static str] {
+        self.null_literals
+    }
+
+    /// Cast kind triples: `(raw_kind, cast_style, cast_safety)`.
+    #[must_use]
+    pub const fn cast_kind_triples(&self) -> &'static [(&'static str, &'static str, &'static str)] {
+        self.cast_kinds
+    }
+
+    // Single-kind string accessors.
+
+    /// Raw kind for comments.
+    #[must_use]
+    pub const fn comment_kind(&self) -> &'static str {
+        self.comment_raw_kind
+    }
+
+    /// Synthetic raw kind for compound-assignment rows.
+    #[must_use]
+    pub const fn compound_assignment_kind(&self) -> &'static str {
+        self.compound_assignment_raw_kind
+    }
+
+    /// Raw kind for call expressions.
+    #[must_use]
+    pub const fn call_expression_kind(&self) -> &'static str {
+        self.call_expression_raw_kind
+    }
+
+    /// Raw kind for template/generic declarations.
+    #[must_use]
+    pub const fn template_declaration_kind(&self) -> &'static str {
+        self.template_declaration_raw_kind
+    }
+
+    /// Raw kind for block/compound-statement nodes.
+    #[must_use]
+    pub const fn block_kind(&self) -> &'static str {
+        self.block_raw_kind
+    }
+
+    /// Raw kind for parameter-list container nodes.
+    #[must_use]
+    pub const fn parameter_list_kind(&self) -> &'static str {
+        self.parameter_list_raw_kind
+    }
+
+    /// Raw kind for parameter declarations.
+    #[must_use]
+    pub const fn parameter_kind(&self) -> &'static str {
+        self.parameter_raw_kind
+    }
+
+    /// Raw kind for binary expressions.
+    #[must_use]
+    pub const fn binary_expression_kind(&self) -> &'static str {
+        self.binary_expression_raw_kind
+    }
+
+    /// Raw kind for array declarators.
+    #[must_use]
+    pub const fn array_declarator_kind(&self) -> &'static str {
+        self.array_declarator_raw_kind
+    }
+
+    /// Raw kind for address-of expressions.
+    #[must_use]
+    pub const fn address_of_expression_kind(&self) -> &'static str {
+        self.address_of_expression_raw_kind
+    }
+
+    /// Raw kind for return statements.
+    #[must_use]
+    pub const fn return_statement_kind(&self) -> &'static str {
+        self.return_statement_raw_kind
+    }
+
+    /// Raw kind for goto statements.
+    #[must_use]
+    pub const fn goto_statement_kind(&self) -> &'static str {
+        self.goto_statement_raw_kind
+    }
+
+    /// Raw kind for throw/raise statements.
+    #[must_use]
+    pub const fn throw_statement_kind(&self) -> &'static str {
+        self.throw_statement_raw_kind
+    }
+
+    /// Raw kinds for string literal nodes.
+    #[must_use]
+    pub const fn string_literal_kinds(&self) -> &'static [&'static str] {
+        self.string_literal_raw_kinds
+    }
+
+    // Capability / misc accessors.
+
+    /// Whether the language has `++`/`--` operators.
+    #[must_use]
+    pub const fn has_increment_decrement_ops(&self) -> bool {
+        self.has_increment_decrement
+    }
+
+    /// Digit group separator character (e.g. `'` for C++, `_` for Rust).
+    #[must_use]
+    pub const fn digit_sep(&self) -> Option<char> {
+        self.digit_separator
+    }
+
+    /// Suffix table: `(suffix, meaning)` pairs.
+    #[must_use]
+    pub const fn number_suffix_table(&self) -> &'static [(&'static str, &'static str)] {
+        self.number_suffixes
+    }
+
+    /// Doc-comment prefix table: `(prefix, style)` pairs.
+    #[must_use]
+    pub const fn doc_comment_prefix_table(&self) -> &'static [(&'static str, &'static str)] {
+        self.doc_comment_prefixes
+    }
 
     /// Scope-resolution separator (e.g. `"::"` for C++, `"."` for others).
     #[must_use]
-    pub const fn scope_sep(&self) -> &str {
+    pub const fn scope_sep(&self) -> &'static str {
         self.scope_separator
     }
 
     /// Grammar field name for the declarator child.
     #[must_use]
-    pub const fn declarator_field(&self) -> &str {
+    pub const fn declarator_field(&self) -> &'static str {
         self.declarator_field_name
     }
 
     /// Raw kind for function-type declarators.
     #[must_use]
-    pub const fn function_declarator(&self) -> &str {
+    pub const fn function_declarator(&self) -> &'static str {
         self.function_declarator_kind
     }
 
     /// Textual operator for address-of (e.g. `"&"`).
     #[must_use]
-    pub const fn address_of_op(&self) -> &str {
+    pub const fn address_of_op(&self) -> &'static str {
         self.address_of_operator
     }
 
@@ -720,7 +1282,7 @@ impl LanguageConfig {
 
     /// Look up cast info by raw kind.  Returns `(style, safety)`.
     #[must_use]
-    pub fn cast_info(&self, kind: &str) -> Option<(&str, &str)> {
+    pub fn cast_info(&self, kind: &str) -> Option<(&'static str, &'static str)> {
         self.cast_kinds
             .iter()
             .find(|(rk, _, _)| *rk == kind)
@@ -729,7 +1291,7 @@ impl LanguageConfig {
 
     /// Look up for-loop style by raw kind.
     #[must_use]
-    pub fn for_style(&self, kind: &str) -> Option<&str> {
+    pub fn for_style(&self, kind: &str) -> Option<&'static str> {
         self.for_style_map
             .iter()
             .find(|(rk, _)| *rk == kind)
@@ -738,25 +1300,35 @@ impl LanguageConfig {
 
     /// Look up the enrichment field name for a modifier keyword.
     #[must_use]
-    pub fn modifier_field_for(&self, keyword: &str) -> Option<&str> {
+    pub fn modifier_field_for(&self, keyword: &str) -> Option<&'static str> {
         self.modifier_map
             .iter()
             .find(|(kw, _)| *kw == keyword)
             .map(|(_, field)| *field)
     }
 
-    /// Look up visibility for an access-specifier keyword.
+    /// Look up visibility for an access-specifier keyword (exact match).
     #[must_use]
-    pub fn visibility_for_keyword(&self, keyword: &str) -> Option<&str> {
+    pub fn visibility_for_keyword(&self, keyword: &str) -> Option<&'static str> {
         self.visibility_keywords
             .iter()
             .find(|(kw, _)| *kw == keyword)
             .map(|(_, vis)| *vis)
     }
 
+    /// Look up visibility from node text that *contains* a keyword.
+    /// Useful when the node text is e.g. `"public:"` and the keyword is `"public"`.
+    #[must_use]
+    pub fn visibility_for_text(&self, text: &str) -> Option<&'static str> {
+        self.visibility_keywords
+            .iter()
+            .find(|(kw, _)| text.contains(kw))
+            .map(|(_, vis)| *vis)
+    }
+
     /// Look up default visibility for a type kind.
     #[must_use]
-    pub fn default_visibility_for_type(&self, type_kind: &str) -> Option<&str> {
+    pub fn default_visibility_for_type(&self, type_kind: &str) -> Option<&'static str> {
         self.visibility_default_by_type
             .iter()
             .find(|(rk, _)| *rk == type_kind)
@@ -765,7 +1337,7 @@ impl LanguageConfig {
 
     /// Detect comment style from comment text (first-prefix-wins).
     #[must_use]
-    pub fn detect_comment_style(&self, text: &str) -> Option<&str> {
+    pub fn detect_comment_style(&self, text: &str) -> Option<&'static str> {
         self.doc_comment_prefixes
             .iter()
             .find(|(prefix, _)| text.starts_with(prefix))
@@ -774,7 +1346,7 @@ impl LanguageConfig {
 
     /// Look up meaning for a number literal suffix.
     #[must_use]
-    pub fn number_suffix_meaning(&self, suffix: &str) -> Option<&str> {
+    pub fn number_suffix_meaning(&self, suffix: &str) -> Option<&'static str> {
         self.number_suffixes
             .iter()
             .find(|(s, _)| *s == suffix)

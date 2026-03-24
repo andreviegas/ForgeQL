@@ -31,7 +31,7 @@ impl NodeEnricher for CommentEnricher {
         // Comment rows: detect style
         if config.is_comment_kind(kind) {
             let text = node_text(ctx.source, ctx.node);
-            let style = detect_comment_style(&text, config.doc_comment_prefixes);
+            let style = detect_comment_style(&text, config.doc_comment_prefix_table());
             drop(fields.insert("comment_style".to_string(), style.to_string()));
             return;
         }
@@ -44,7 +44,7 @@ impl NodeEnricher for CommentEnricher {
                 }
                 let text = node_text(ctx.source, sib);
                 config
-                    .doc_comment_prefixes
+                    .doc_comment_prefix_table()
                     .iter()
                     .take_while(|(_, style)| style.starts_with("doc"))
                     .any(|(prefix, _)| text.starts_with(prefix))
@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn comment_styles() {
-        let p = CPP_CONFIG.doc_comment_prefixes;
+        let p = CPP_CONFIG.doc_comment_prefix_table();
         assert_eq!(detect_comment_style("/** doc */", p), "doc_block");
         assert_eq!(detect_comment_style("/// doc line", p), "doc_line");
         assert_eq!(detect_comment_style("/* block */", p), "block");

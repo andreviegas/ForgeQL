@@ -284,7 +284,7 @@ fn collect_array_locals(ctx: &EnrichContext<'_>, local_names: &HashSet<&str>) ->
             {
                 // Check if the declarator subtree contains an array_declarator.
                 if let Some(decl) = node.child_by_field_name(config.declarator_field()) {
-                    if contains_kind(decl, config.array_declarator_raw_kind) {
+                    if contains_kind(decl, config.array_declarator_kind()) {
                         // Extract the name of this declaration.
                         if let Some(name) = super::data_flow_utils::extract_declarator_name(
                             node, ctx.source, config,

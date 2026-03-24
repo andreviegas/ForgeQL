@@ -101,7 +101,7 @@ pub(crate) fn find_enclosing_function_def<'t>(
     }
 
     let mut cursor = root.walk();
-    walk(&mut cursor, def_start, config.function_raw_kinds)
+    walk(&mut cursor, def_start, config.function_kinds())
 }
 
 /// Locate the `function_definition` node for a symbol, with template fallback.
@@ -163,8 +163,8 @@ pub(crate) fn find_function_node_for_symbol<'t>(
     walk_template(
         root,
         def_start,
-        config.template_declaration_raw_kind,
-        config.function_raw_kinds,
+        config.template_declaration_kind(),
+        config.function_kinds(),
     )
 }
 
@@ -206,7 +206,7 @@ fn find_type_node_by_name<'t>(
     }
 
     let mut cursor = root.walk();
-    walk(&mut cursor, source, name, config.type_raw_kinds)
+    walk(&mut cursor, source, name, config.type_kinds())
 }
 
 /// Recursively collect the byte ranges of block nodes that
@@ -258,7 +258,7 @@ fn emit_body_lines(
         0,
         max_cs_depth,
         &mut collapsed,
-        config.block_raw_kind,
+        config.block_kind(),
     );
     collapsed.sort_by_key(|r| r.start);
 
@@ -873,7 +873,7 @@ pub fn show_callees(
         &source,
         fn_node,
         &mut callees,
-        config.call_expression_raw_kind,
+        config.call_expression_kind(),
     );
     callees.sort();
     callees.dedup();

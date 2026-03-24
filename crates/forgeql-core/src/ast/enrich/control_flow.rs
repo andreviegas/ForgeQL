@@ -368,7 +368,7 @@ fn skeleton_walk(
 
     // Pointer dereference / address-of: map as one unit so that
     // `*ptr` and `ptr` get distinct letters.
-    if config.address_of_expression_raw_kind.contains(kind) {
+    if config.address_of_expression_kind().contains(kind) {
         let text = node_text(source, node);
         let label = mapping
             .entry(text)
@@ -599,11 +599,7 @@ fn contains_template_misparse(
     let mut cursor = node.walk();
     let mut visit = true;
     loop {
-        if visit
-            && config
-                .template_misparse_raw_kinds
-                .contains(&cursor.node().kind())
-        {
+        if visit && config.is_template_misparse_kind(cursor.node().kind()) {
             return true;
         }
         if visit && cursor.goto_first_child() {

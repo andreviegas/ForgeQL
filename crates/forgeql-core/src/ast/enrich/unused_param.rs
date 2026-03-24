@@ -77,7 +77,7 @@ fn collect_param_names(
 ) -> Vec<String> {
     let mut names = Vec::new();
 
-    let Some(param_list) = find_descendant_by_kind(func, config.parameter_list_raw_kind) else {
+    let Some(param_list) = find_descendant_by_kind(func, config.parameter_list_kind()) else {
         return names;
     };
 

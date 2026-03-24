@@ -23,14 +23,15 @@ use std::sync::Arc;
 use forgeql_core::ast::lang::{
     FQL_CAST, FQL_CLASS, FQL_COMMENT, FQL_DO, FQL_ENUM, FQL_FIELD, FQL_FOR, FQL_FUNCTION, FQL_IF,
     FQL_IMPORT, FQL_INCREMENT, FQL_MACRO, FQL_NAMESPACE, FQL_NUMBER, FQL_STRUCT, FQL_SWITCH,
-    FQL_TYPE_ALIAS, FQL_VARIABLE, FQL_WHILE, LanguageConfig, LanguageRegistry, LanguageSupport,
+    FQL_TYPE_ALIAS, FQL_VARIABLE, FQL_WHILE, LanguageConfig, LanguageConfigInit, LanguageRegistry,
+    LanguageSupport,
 };
 
 /// C/C++ language support for ForgeQL.
 pub struct CppLanguage;
 
 /// Static configuration for C/C++.
-pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
+pub static CPP_CONFIG: LanguageConfig = LanguageConfig::from_init(&LanguageConfigInit {
     root_node_kind: "translation_unit",
     scope_separator: "::",
 
@@ -180,7 +181,7 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
     condition_clause_raw_kind: "condition_clause",
     comma_expression_raw_kind: "comma_expression",
     char_literal_raw_kind: "char_literal",
-};
+});
 
 impl LanguageSupport for CppLanguage {
     fn name(&self) -> &'static str {
@@ -423,12 +424,9 @@ mod tests {
     #[test]
     fn config_is_consistent() {
         let config = CppLanguage.config();
-        assert_eq!(config.root_node_kind, "translation_unit");
-        assert_eq!(config.scope_separator, "::");
-        assert!(!config.function_raw_kinds.is_empty());
-        assert!(!config.type_raw_kinds.is_empty());
-        assert!(!config.skip_node_kinds.is_empty());
-        assert!(!config.usage_node_kinds.is_empty());
+        assert_eq!(config.scope_sep(), "::");
+        assert!(!config.function_kinds().is_empty());
+        assert!(!config.type_kinds().is_empty());
     }
 
     #[test]

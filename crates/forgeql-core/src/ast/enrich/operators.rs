@@ -22,7 +22,7 @@ impl NodeEnricher for OperatorEnricher {
         let kind = ctx.node.kind();
         let config = ctx.language_config;
 
-        if config.is_update_kind(kind) && config.has_increment_decrement {
+        if config.is_update_kind(kind) && config.has_increment_decrement_ops() {
             return Self::handle_update(ctx);
         }
         if config.is_assignment_kind(kind) {
@@ -113,10 +113,10 @@ impl OperatorEnricher {
 
         vec![IndexRow {
             name,
-            node_kind: ctx.language_config.compound_assignment_raw_kind.to_string(),
+            node_kind: ctx.language_config.compound_assignment_kind().to_string(),
             fql_kind: ctx
                 .language_support
-                .map_kind(ctx.language_config.compound_assignment_raw_kind)
+                .map_kind(ctx.language_config.compound_assignment_kind())
                 .unwrap_or("")
                 .to_string(),
             language: ctx.language_name.to_string(),
@@ -162,7 +162,7 @@ impl OperatorEnricher {
         let node_kind = ctx.node.kind();
         let output_kind = ctx
             .language_config
-            .shift_expression_raw_kinds
+            .shift_expression_kinds()
             .first()
             .copied()
             .unwrap_or(node_kind);

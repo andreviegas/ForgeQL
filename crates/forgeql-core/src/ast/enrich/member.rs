@@ -48,7 +48,7 @@ impl NodeEnricher for MemberEnricher {
         drop(fields.insert("member_kind".to_string(), member_kind.to_string()));
 
         // owner_kind: raw kind of enclosing type node
-        if let Some(owner) = enclosing_type_node(ctx.node, config.type_raw_kinds) {
+        if let Some(owner) = enclosing_type_node(ctx.node, config.type_kinds()) {
             drop(fields.insert("owner_kind".to_string(), owner.kind().to_string()));
         }
 
@@ -58,7 +58,7 @@ impl NodeEnricher for MemberEnricher {
         }
 
         // Walk up to find the enclosing class/struct.
-        if let Some(class_name) = enclosing_type_name(ctx.node, ctx.source, config.type_raw_kinds) {
+        if let Some(class_name) = enclosing_type_name(ctx.node, ctx.source, config.type_kinds()) {
             drop(fields.insert(
                 "body_symbol".to_string(),
                 format!("{class_name}{}{name}", config.scope_sep()),

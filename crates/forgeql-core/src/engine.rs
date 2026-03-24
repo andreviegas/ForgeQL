@@ -1745,23 +1745,23 @@ fn field_to_kinds_for_config(
         | "todo_tags"
         | "decl_distance"
         | "decl_far_count"
-        | "has_unused_reassign" => Some(config.function_raw_kinds.to_vec()),
+        | "has_unused_reassign" => Some(config.function_kinds().to_vec()),
         // comments.rs
-        "comment_style" => Some(vec![config.comment_raw_kind]),
+        "comment_style" => Some(vec![config.comment_kind()]),
         // numbers.rs
         "num_format" | "is_magic" | "num_suffix" | "has_separator" | "num_value" | "num_sign" => {
-            Some(config.number_literal_raw_kinds.to_vec())
+            Some(config.number_literal_kinds().to_vec())
         }
         // operators.rs
-        "increment_style" | "increment_op" => Some(config.update_raw_kinds.to_vec()),
-        "compound_op" | "operand" => Some(vec![config.compound_assignment_raw_kind]),
+        "increment_style" | "increment_op" => Some(config.update_kinds().to_vec()),
+        "compound_op" | "operand" => Some(vec![config.compound_assignment_kind()]),
         "shift_direction" | "shift_operand" | "shift_amount" => {
-            Some(config.shift_expression_raw_kinds.to_vec())
+            Some(config.shift_expression_kinds().to_vec())
         }
         // casts.rs
         "cast_style" | "cast_target_type" => Some(
             config
-                .cast_kinds
+                .cast_kind_triples()
                 .iter()
                 .map(|(raw_kind, _, _)| *raw_kind)
                 .collect(),
@@ -1774,20 +1774,20 @@ fn field_to_kinds_for_config(
         | "mixed_logic"
         | "dup_logic"
         | "for_style"
-        | "duplicate_condition" => Some(config.control_flow_raw_kinds.to_vec()),
-        "has_catch_all" => Some(config.switch_raw_kinds.to_vec()),
+        | "duplicate_condition" => Some(config.control_flow_kinds().to_vec()),
+        "has_catch_all" => Some(config.switch_kinds().to_vec()),
         // metrics.rs — multiple definition kinds
-        "lines" | "member_count" | "has_doc" => Some(config.definition_raw_kinds.to_vec()),
+        "lines" | "member_count" | "has_doc" => Some(config.definition_kinds().to_vec()),
         // metrics.rs — qualifier flags
         "is_const" | "is_volatile" | "is_static" => {
-            let mut kinds = config.declaration_raw_kinds.to_vec();
-            kinds.extend(config.function_raw_kinds);
+            let mut kinds = config.declaration_kinds().to_vec();
+            kinds.extend(config.function_kinds());
             Some(kinds)
         }
         // metrics.rs — visibility
-        "visibility" => Some(config.field_raw_kinds.to_vec()),
+        "visibility" => Some(config.field_kinds().to_vec()),
         // scope.rs — declaration only
-        "scope" | "storage" => Some(config.declaration_raw_kinds.to_vec()),
+        "scope" | "storage" => Some(config.declaration_kinds().to_vec()),
         // Universal / built-in → no shortcut
         _ => None,
     }

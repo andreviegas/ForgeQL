@@ -184,13 +184,13 @@ fn collect_condition_info(
                     cond,
                     source,
                     condition_calls,
-                    config.call_expression_raw_kind,
+                    config.call_expression_kind(),
                 );
                 *null_checks += count_null_checks(
                     cond,
                     source,
-                    config.null_literals,
-                    config.binary_expression_raw_kind,
+                    config.null_literal_values(),
+                    config.binary_expression_kind(),
                 );
             }
         }

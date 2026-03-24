@@ -34,29 +34,32 @@ impl NodeEnricher for NumberEnricher {
 
         let mut fields = HashMap::new();
 
-        let has_separator = config.digit_separator.is_some_and(|sep| raw.contains(sep));
+        let has_separator = config.digit_sep().is_some_and(|sep| raw.contains(sep));
         drop(fields.insert("has_separator".to_string(), has_separator.to_string()));
 
         // Strip digit separators for analysis
         let clean: String = raw
             .chars()
-            .filter(|&c| Some(c) != config.digit_separator)
+            .filter(|&c| Some(c) != config.digit_sep())
             .collect();
         let lower = clean.to_ascii_lowercase();
 
         // Detect suffix
-        let suffix = detect_suffix_with_table(&lower, config.number_suffixes);
+        let suffix = detect_suffix_with_table(&lower, config.number_suffix_table());
         drop(fields.insert("num_suffix".to_string(), suffix.to_string()));
 
         // Map suffix to its semantic meaning using the config table.
         if !suffix.is_empty()
-            && let Some(&(_, meaning)) = config.number_suffixes.iter().find(|&&(s, _)| s == suffix)
+            && let Some(&(_, meaning)) = config
+                .number_suffix_table()
+                .iter()
+                .find(|&&(s, _)| s == suffix)
         {
             drop(fields.insert("suffix_meaning".to_string(), meaning.to_string()));
         }
 
         // Strip suffix for format analysis
-        let without_suffix = strip_suffix_with_table(&lower, config.number_suffixes);
+        let without_suffix = strip_suffix_with_table(&lower, config.number_suffix_table());
 
         // Detect format
         let format = detect_format(without_suffix);
@@ -179,7 +182,7 @@ mod tests {
 
     #[test]
     fn suffix_detection() {
-        let s = CPP_CONFIG.number_suffixes;
+        let s = CPP_CONFIG.number_suffix_table();
         assert_eq!(detect_suffix_with_table("255u", s), "u");
         assert_eq!(detect_suffix_with_table("100ul", s), "ul");
         assert_eq!(detect_suffix_with_table("100ull", s), "ull");

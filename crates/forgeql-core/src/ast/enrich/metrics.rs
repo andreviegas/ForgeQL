@@ -40,22 +40,20 @@ impl NodeEnricher for MetricsEnricher {
 
         // Parameter count for functions
         if config.is_function_kind(kind) {
-            let param_count = count_descendants_by_kind(ctx.node, config.parameter_raw_kind);
+            let param_count = count_descendants_by_kind(ctx.node, config.parameter_kind());
             drop(fields.insert("param_count".to_string(), param_count.to_string()));
 
             // Aggregate counts that require subtree walk
-            let return_count =
-                count_descendants_by_kind(ctx.node, config.return_statement_raw_kind);
+            let return_count = count_descendants_by_kind(ctx.node, config.return_statement_kind());
             drop(fields.insert("return_count".to_string(), return_count.to_string()));
 
-            let goto_count = count_descendants_by_kind(ctx.node, config.goto_statement_raw_kind);
+            let goto_count = count_descendants_by_kind(ctx.node, config.goto_statement_kind());
             drop(fields.insert("goto_count".to_string(), goto_count.to_string()));
 
-            let string_count =
-                count_descendants_by_kinds(ctx.node, config.string_literal_raw_kinds);
+            let string_count = count_descendants_by_kinds(ctx.node, config.string_literal_kinds());
             drop(fields.insert("string_count".to_string(), string_count.to_string()));
 
-            let throw_count = count_descendants_by_kind(ctx.node, config.throw_statement_raw_kind);
+            let throw_count = count_descendants_by_kind(ctx.node, config.throw_statement_kind());
             drop(fields.insert("throw_count".to_string(), throw_count.to_string()));
         }
 
@@ -205,10 +203,8 @@ fn check_modifiers(
             && config.is_modifier_node_kind(child.kind())
         {
             let text = node_text(source, child);
-            for &(keyword, field_name) in config.modifier_map {
-                if text == keyword {
-                    drop(fields.insert(field_name.to_string(), "true".to_string()));
-                }
+            if let Some(field_name) = config.modifier_field_for(&text) {
+                drop(fields.insert(field_name.to_string(), "true".to_string()));
             }
         }
     }
@@ -224,10 +220,8 @@ fn detect_visibility(
     let mut sibling = node.prev_named_sibling();
     while let Some(sib) = sibling {
         let text = node_text(source, sib);
-        for &(keyword, visibility) in config.visibility_keywords {
-            if text.contains(keyword) {
-                return Some(visibility);
-            }
+        if let Some(vis) = config.visibility_for_text(&text) {
+            return Some(vis);
         }
         sibling = sib.prev_named_sibling();
     }
@@ -236,9 +230,5 @@ fn detect_visibility(
     let parent = node.parent()?;
     let grandparent = parent.parent()?;
     let gp_kind = grandparent.kind();
-    config
-        .visibility_default_by_type
-        .iter()
-        .find(|(kind, _)| *kind == gp_kind)
-        .map(|(_, vis)| *vis)
+    config.default_visibility_for_type(gp_kind)
 }

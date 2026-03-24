@@ -76,7 +76,7 @@ fn collect_parameter_names(
     // The parameter list may be nested inside a function_declarator
     // (e.g. in C++: function_definition → function_declarator → parameter_list),
     // so search recursively instead of looking at direct children only.
-    let Some(param_list) = find_descendant_by_kind(func, config.parameter_list_raw_kind) else {
+    let Some(param_list) = find_descendant_by_kind(func, config.parameter_list_kind()) else {
         return names;
     };
 
