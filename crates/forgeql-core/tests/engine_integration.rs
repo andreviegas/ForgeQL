@@ -345,6 +345,78 @@ fn change_rename_applies_and_mutates_file() {
 }
 
 // -----------------------------------------------------------------------
+// Mutation: CHANGE FILE LINES trailing newline
+// -----------------------------------------------------------------------
+
+#[test]
+fn change_lines_auto_appends_trailing_newline() {
+    let (mut engine, sid, dir) = engine_with_session();
+
+    let cpp_path = dir.path().join("motor_control.cpp");
+    let original = fs::read_to_string(&cpp_path).unwrap();
+    let original_lines: Vec<&str> = original.lines().collect();
+
+    // Replace line 2 with text that has NO trailing newline.
+    let replacement = "// replaced line";
+    let fql = format!("CHANGE FILE 'motor_control.cpp' LINES 2-2 WITH '{replacement}'");
+    let result = execute_fql(&mut engine, &sid, &fql);
+
+    match &result {
+        ForgeQLResult::Mutation(mr) => {
+            assert!(mr.applied);
+            assert!(mr.edit_count > 0);
+        }
+        other => panic!("expected Mutation, got: {other:?}"),
+    }
+
+    // Line 2 should be the replacement, line 3 should still be the original line 3.
+    let modified = fs::read_to_string(&cpp_path).unwrap();
+    let modified_lines: Vec<&str> = modified.lines().collect();
+    assert_eq!(
+        modified_lines[1], replacement,
+        "line 2 should be the replacement"
+    );
+    assert_eq!(
+        modified_lines[2], original_lines[2],
+        "line 3 must NOT merge with replacement — trailing newline was missing"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Mutation: CHANGE response includes diff preview
+// -----------------------------------------------------------------------
+
+#[test]
+fn change_mutation_includes_diff() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "CHANGE FILE 'motor_control.cpp' MATCHING 'encenderMotor' WITH 'startMotor'",
+    );
+    match result {
+        ForgeQLResult::Mutation(mr) => {
+            assert!(mr.applied);
+            let diff = mr.diff.expect("mutation should include a diff preview");
+            assert!(
+                diff.contains("── "),
+                "compact preview should have ── header: {diff}"
+            );
+            assert!(
+                diff.contains("motor_control.cpp"),
+                "compact preview should name the file: {diff}"
+            );
+            assert!(
+                diff.contains("startMotor"),
+                "compact preview should show the new text: {diff}"
+            );
+        }
+        other => panic!("expected Mutation, got: {other:?}"),
+    }
+}
+
+// -----------------------------------------------------------------------
 // Error cases
 // -----------------------------------------------------------------------
 

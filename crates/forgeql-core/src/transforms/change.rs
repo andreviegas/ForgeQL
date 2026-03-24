@@ -228,6 +228,16 @@ fn resolve_lines(
     let (byte_start, byte_end) = lines_to_byte_range(&source, start, end)?;
     debug!(%rel_path, byte_start, byte_end, "LINES resolved");
 
+    // LINES is a line-oriented command: the replaced range includes the
+    // trailing newline (from lines_to_byte_range), so the replacement text
+    // must also end with one.  Without this, the last replacement line
+    // merges with the next existing line.
+    let content = if !content.is_empty() && !content.ends_with('\n') {
+        format!("{content}\n")
+    } else {
+        content.to_string()
+    };
+
     Ok(FileEdit {
         path: abs_path.to_path_buf(),
         edits: vec![ByteRangeEdit::new(byte_start..byte_end, content)],
@@ -447,5 +457,40 @@ mod tests {
         let fe = resolve_matching("miss.cpp", &path, "nonexistent", "x")
             .expect("should succeed with empty edits");
         assert!(fe.edits.is_empty());
+    }
+
+    // ── CHANGE LINES trailing newline ────────────────────────────────────
+
+    #[test]
+    fn resolve_lines_appends_trailing_newline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("lines.c");
+        std::fs::write(&path, "aaa\nbbb\nccc\nddd\n").expect("write");
+
+        // Replace line 2 with text that lacks a trailing newline.
+        let fe = resolve_lines("lines.c", &path, 2, 2, "BBB").unwrap();
+        assert_eq!(fe.edits.len(), 1);
+        assert_eq!(fe.edits[0].replacement, "BBB\n", "should auto-append \\n");
+    }
+
+    #[test]
+    fn resolve_lines_preserves_existing_trailing_newline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("lines2.c");
+        std::fs::write(&path, "aaa\nbbb\nccc\n").expect("write");
+
+        let fe = resolve_lines("lines2.c", &path, 2, 2, "BBB\n").unwrap();
+        assert_eq!(fe.edits[0].replacement, "BBB\n", "should not double \\n");
+    }
+
+    #[test]
+    fn resolve_lines_no_newline_for_empty_content() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("lines3.c");
+        std::fs::write(&path, "aaa\nbbb\nccc\n").expect("write");
+
+        // Deleting lines (empty content) should stay empty.
+        let fe = resolve_lines("lines3.c", &path, 2, 2, "").unwrap();
+        assert_eq!(fe.edits[0].replacement, "", "empty content = line deletion");
     }
 }

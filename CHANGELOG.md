@@ -5,9 +5,19 @@ All notable changes to ForgeQL will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.29.0] - 2026-03-24
 
 ### Added
+
+- **Compact diff preview in CHANGE responses** — successful mutations now
+  return a compact, token-bounded diff preview in the `diff` field of
+  `MutationResult`.  The preview is computed in memory before applying
+  edits, showing exactly what changed.  Parameters are configurable via
+  `CompactDiffConfig` (defaults: K=14 content lines per file, W=40 chars
+  per line, C=2 context-after lines).  Long lines are truncated with `…`;
+  multi-hunk changes show the first and last hunks with elision of middle
+  hunks.  Previously the response only confirmed `applied: true` with a
+  file count, requiring a separate `SHOW LINES` to verify.
 
 - **Disk-persisted session TTL via sentinel file** — each worktree now
   writes a `.forgeql-session` sentinel file containing the Unix epoch
@@ -32,6 +42,13 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   eviction task in the binary crate can reference it.
 
 ### Fixed
+
+- **`CHANGE FILE LINES` trailing-newline bug** — `CHANGE FILE … LINES x-y
+  WITH 'text'` no longer merges the last replacement line with the next
+  existing line.  Since LINES is a line-oriented command and the replaced
+  byte range includes the trailing newline, the replacement text must also
+  end with one.  `resolve_lines()` now auto-appends `\n` when the content
+  is non-empty and does not already end with one.
 
 - **Transaction commits no longer pollute branch history** — `BEGIN
   TRANSACTION` checkpoint commits are now squashed into a single clean

@@ -54,6 +54,7 @@ use crate::{
         VerifyBuildResult,
     },
     session::{Checkpoint, Session, read_last_active},
+    transforms::diff::{CompactDiffConfig, compact_diff_plan},
     transforms::{TransformPlan, plan_from_ir},
     verify,
     workspace::Workspace,
@@ -957,11 +958,11 @@ impl ForgeQLEngine {
     // Mutations
     // ===================================================================
 
-    /// Handle a single mutation: plan → apply → reindex.
+    /// Handle a single mutation: plan → diff → apply → reindex.
     fn exec_mutation(&mut self, session_id: Option<&str>, op: &ForgeQLIR) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
 
-        let plan = {
+        let mut plan = {
             let (workspace, index) = self.require_workspace_and_index(session_id)?;
             plan_from_ir(op, &RequestContext::admin(), &workspace, index)?
         };
@@ -971,6 +972,18 @@ impl ForgeQLEngine {
             plan.file_edits.iter().map(|fe| fe.path.clone()).collect();
         let edit_count = plan.edit_count();
         let suggestions = convert_suggestions(&plan);
+
+        // Merge before generating preview (compact_diff_plan reads files).
+        plan.merge_by_file()?;
+
+        // Generate a compact diff preview *before* applying (apply consumes
+        // the plan). Bounded by CompactDiffConfig defaults — at most K
+        // content lines per file, each ≤ W characters wide.
+        let diff = match compact_diff_plan(&plan, &CompactDiffConfig::default()) {
+            Ok(d) if d.is_empty() => None,
+            Ok(d) => Some(d),
+            Err(_) => None,
+        };
 
         let _ = plan.apply()?;
 
@@ -982,7 +995,7 @@ impl ForgeQLEngine {
             applied: true,
             files_changed,
             edit_count,
-            diff: None,
+            diff,
             suggestions,
         }))
     }
