@@ -717,6 +717,40 @@ fn control_flow_has_assignment_in_condition() {
     );
 }
 
+/// Regression: comparisons like `>=`, `<=`, `!=` must NOT trigger
+/// `has_assignment_in_condition`. Only real `assignment_expression`
+/// nodes should match.
+#[test]
+fn control_flow_no_false_positive_comparisons() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'noAssignCompare' WHERE fql_kind = 'function'",
+    );
+    let qr = as_query(&r);
+    let _func = find_by_name(&qr.results, "noAssignCompare");
+
+    // Now find all if_statements inside that function's file
+    let r2 = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE has_assignment_in_condition = 'true'",
+    );
+    let qr2 = as_query(&r2);
+    // None of the if-statements from noAssignCompare should be flagged
+    for row in &qr2.results {
+        // The condition skeletons from noAssignCompare are ((a)||((b-c)<d)) and (a&&(a))
+        // They should NOT appear. Check by condition_text pattern.
+        let cond = row.fields.get("condition_text").map(String::as_str).unwrap_or("");
+        assert!(
+            cond != "((a)||(a>=b))||((b-a)<c)"
+                && cond != "(a<=b&&(a!=c))",
+            "comparison-only condition should not be flagged as assignment: {cond}",
+        );
+    }
+}
+
 #[test]
 fn control_flow_switch_has_catch_all() {
     let (mut e, sid, _d) = engine_enrichment_only();

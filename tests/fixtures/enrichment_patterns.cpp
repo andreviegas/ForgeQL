@@ -649,3 +649,16 @@ int todoRepeated(int x) {
     // XXX: watch out
     return x;
 }
+
+// ── False-positive regression fixtures ───────────────────────────────
+
+/* Comparisons only — should NOT have has_assignment_in_condition */
+int noAssignCompare(int addr, int size) {
+    if ((addr < 0 || addr >= 100) || ((100 - addr) < size)) {
+        return -1;
+    }
+    if (addr <= 50 && addr != 0) {
+        return 1;
+    }
+    return 0;
+}

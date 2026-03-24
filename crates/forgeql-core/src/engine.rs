@@ -65,7 +65,7 @@ use crate::{
 
 /// How long (in seconds) a session may be idle before `evict_idle_sessions`
 /// removes it.
-const SESSION_TTL_SECS: u64 = 2 * 60 * 60; // 2 hours
+const SESSION_TTL_SECS: u64 = 48 * 60 * 60; // 48 hours (generous for dev)
 
 // -----------------------------------------------------------------------
 // ForgeQLEngine
@@ -219,6 +219,43 @@ impl ForgeQLEngine {
         let worktree_root = session_id
             .and_then(|sid| self.sessions.get(sid))
             .map(|s| s.worktree_path.clone());
+
+        // Guard: for any session-dependent operation, verify the worktree
+        // directory still exists on disk.  FIND/SHOW/mutations all need a
+        // live worktree; source-management commands (CREATE, USE, DISCONNECT,
+        // SHOW SOURCES, SHOW BRANCHES) do not.
+        if let Some(sid) = session_id {
+            let needs_worktree = matches!(
+                op,
+                ForgeQLIR::FindSymbols { .. }
+                    | ForgeQLIR::FindUsages { .. }
+                    | ForgeQLIR::ShowContext { .. }
+                    | ForgeQLIR::ShowSignature { .. }
+                    | ForgeQLIR::ShowOutline { .. }
+                    | ForgeQLIR::ShowMembers { .. }
+                    | ForgeQLIR::ShowBody { .. }
+                    | ForgeQLIR::ShowCallees { .. }
+                    | ForgeQLIR::ShowLines { .. }
+                    | ForgeQLIR::FindFiles { .. }
+                    | ForgeQLIR::ChangeContent { .. }
+                    | ForgeQLIR::BeginTransaction { .. }
+                    | ForgeQLIR::Commit { .. }
+                    | ForgeQLIR::Rollback { .. }
+                    | ForgeQLIR::VerifyBuild { .. }
+            );
+            if needs_worktree {
+                if let Some(session) = self.sessions.get(sid) {
+                    if !session.worktree_path.is_dir() {
+                        anyhow::bail!(
+                            "session '{sid}' is stale — the worktree directory \
+                             '{}' no longer exists on disk.  \
+                             Run USE <source>.<branch> to start a new session.",
+                            session.worktree_path.display()
+                        );
+                    }
+                }
+            }
+        }
 
         let mut result = match op {
             // --- Source / session management ---

@@ -7,6 +7,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Stale session detection** — all session-dependent commands (`FIND`,
+  `SHOW`, mutations) now fail immediately with a clear message when the
+  worktree directory no longer exists on disk, instead of returning
+  confusing "workspace root not found" errors.  Previously `FIND` queries
+  silently operated on stale in-memory data while `SHOW` commands failed
+  with an opaque filesystem error.
+
+- **Session TTL increased to 48 h** — prevents premature eviction during
+  long development sessions (was 2 h).
+
 ### Added
 
 - **`MATCHES` / `NOT MATCHES` operators** — regex filtering in WHERE
