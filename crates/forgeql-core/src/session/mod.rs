@@ -22,6 +22,22 @@ use crate::ast::lang::LanguageRegistry;
 use crate::config::VerifyStep;
 use crate::workspace::Workspace;
 
+/// Sentinel file written inside each worktree directory on every `touch()`.
+///
+/// Contains a single line: the Unix epoch timestamp (seconds) of the last
+/// successful access.  `prune_orphaned_worktrees` reads this to decide
+/// whether an ownerless worktree is still "warm" after a server restart.
+const SESSION_SENTINEL: &str = ".forgeql-session";
+
+/// Read the last-active Unix timestamp from a worktree's sentinel file.
+///
+/// Returns `None` if the file is missing, unreadable, or malformed.
+#[must_use]
+pub fn read_last_active(worktree_path: &Path) -> Option<u64> {
+    let data = std::fs::read_to_string(worktree_path.join(SESSION_SENTINEL)).ok()?;
+    data.trim().parse().ok()
+}
+
 // -----------------------------------------------------------------------
 // Checkpoint
 // -----------------------------------------------------------------------
@@ -257,9 +273,12 @@ impl Session {
     /// Update the last-active timestamp to now.
     ///
     /// Call this on every request that touches the session so that the TTL
-    /// eviction task can accurately measure idle time.
+    /// eviction task can accurately measure idle time.  The timestamp is
+    /// also persisted to `<worktree>/.forgeql-session` so that
+    /// `prune_orphaned_worktrees` can honour the TTL across restarts.
     pub fn touch(&mut self) {
         self.last_active = std::time::Instant::now();
+        self.persist_last_active();
     }
 
     /// Seconds elapsed since the session was last active.
@@ -286,6 +305,18 @@ impl Session {
         let head = repo.head()?;
         let oid = head.peel_to_commit()?.id().to_string();
         Ok(oid)
+    }
+
+    /// Write the current wall-clock time to the sentinel file.
+    ///
+    /// Best-effort — errors are silently ignored because failing to persist
+    /// the timestamp must never block a user request.
+    fn persist_last_active(&self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = std::fs::write(self.worktree_path.join(SESSION_SENTINEL), now.to_string());
     }
 }
 

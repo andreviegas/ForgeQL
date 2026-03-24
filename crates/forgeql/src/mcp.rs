@@ -3,7 +3,7 @@
 /// Implements the Model Context Protocol (MCP) using `rmcp`.  Each `ForgeQL`
 /// operation is exposed as an MCP tool.  The primary tool is `run_fql` which
 /// accepts raw FQL and delegates to `ForgeQLEngine::execute()`.
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -30,20 +30,20 @@ use forgeql_core::result::ForgeQLResult;
 
 /// MCP server handler wrapping a `ForgeQLEngine`.
 ///
-/// The engine is behind a `Mutex` because `ServerHandler` requires `Sync`
-/// while `ForgeQLEngine::execute` takes `&mut self`.  Stdio transport
-/// processes one request at a time, so contention is negligible.
+/// The engine is behind an `Arc<Mutex>` because `ServerHandler` requires
+/// `Sync` while `ForgeQLEngine::execute` takes `&mut self`.  The `Arc`
+/// allows sharing the engine with a background eviction task.
 pub(crate) struct ForgeQlMcp {
-    engine: Mutex<ForgeQLEngine>,
+    engine: Arc<Mutex<ForgeQLEngine>>,
     tool_router: ToolRouter<Self>,
     logger: Mutex<Option<QueryLogger>>,
 }
 
 impl ForgeQlMcp {
     /// Create a new MCP handler wrapping the given engine.
-    pub(crate) fn new(engine: ForgeQLEngine, logger: Option<QueryLogger>) -> Self {
+    pub(crate) fn new(engine: Arc<Mutex<ForgeQLEngine>>, logger: Option<QueryLogger>) -> Self {
         Self {
-            engine: Mutex::new(engine),
+            engine,
             tool_router: Self::tool_router(),
             logger: Mutex::new(logger),
         }
@@ -557,7 +557,7 @@ mod tests {
         let session_id = engine
             .register_local_session(dir.path())
             .expect("register session");
-        let mcp = ForgeQlMcp::new(engine, None);
+        let mcp = ForgeQlMcp::new(Arc::new(Mutex::new(engine)), None);
         (mcp, session_id, dir)
     }
 
@@ -573,7 +573,7 @@ mod tests {
     fn get_info_returns_tools_capability() {
         let tmp = tempdir().unwrap();
         let engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-        let mcp = ForgeQlMcp::new(engine, None);
+        let mcp = ForgeQlMcp::new(Arc::new(Mutex::new(engine)), None);
         let info = mcp.get_info();
         assert!(info.capabilities.tools.is_some());
     }
@@ -582,7 +582,7 @@ mod tests {
     fn get_info_has_instructions() {
         let tmp = tempdir().unwrap();
         let engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-        let mcp = ForgeQlMcp::new(engine, None);
+        let mcp = ForgeQlMcp::new(Arc::new(Mutex::new(engine)), None);
         let info = mcp.get_info();
         let instructions = info.instructions.expect("should have instructions");
         assert!(instructions.contains("ForgeQL"));

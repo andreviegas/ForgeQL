@@ -7,6 +7,30 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Disk-persisted session TTL via sentinel file** — each worktree now
+  writes a `.forgeql-session` sentinel file containing the Unix epoch
+  timestamp of its last activity.  `prune_orphaned_worktrees()` reads this
+  sentinel before deleting a worktree, so server restarts and short-lived
+  CLI invocations no longer lose the 48 h TTL timer.
+
+- **Background session eviction in MCP mode** — a `tokio::spawn` interval
+  task runs `evict_idle_sessions()` every 5 minutes while the MCP server
+  is alive.  Previously the eviction function existed but was never
+  called from a background loop, so idle sessions would accumulate
+  indefinitely in long-running server processes.
+
+### Changed
+
+- **Engine shared via `Arc<Mutex>` in MCP** — `ForgeQlMcp` now wraps the
+  engine in `Arc<Mutex<ForgeQLEngine>>` (was `Mutex<ForgeQLEngine>`),
+  allowing the background eviction task to share access with the MCP
+  handler.
+
+- **`SESSION_TTL_SECS` is now `pub const`** — exposed so the background
+  eviction task in the binary crate can reference it.
+
 ### Fixed
 
 - **Transaction commits no longer pollute branch history** — `BEGIN

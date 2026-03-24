@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     ast::{index::SymbolTable, lang::LanguageRegistry, query, show},
@@ -53,7 +53,7 @@ use crate::{
         ShowContent, ShowResult, SourceLine, SourceOpResult, SuggestionEntry, SymbolMatch,
         VerifyBuildResult,
     },
-    session::{Checkpoint, Session},
+    session::{Checkpoint, Session, read_last_active},
     transforms::{TransformPlan, plan_from_ir},
     verify,
     workspace::Workspace,
@@ -65,7 +65,7 @@ use crate::{
 
 /// How long (in seconds) a session may be idle before `evict_idle_sessions`
 /// removes it.
-const SESSION_TTL_SECS: u64 = 48 * 60 * 60; // 48 hours (generous for dev)
+pub const SESSION_TTL_SECS: u64 = 48 * 60 * 60; // 48 hours (generous for dev)
 
 // -----------------------------------------------------------------------
 // ForgeQLEngine
@@ -1259,6 +1259,22 @@ impl ForgeQLEngine {
                 let session_id = entry.file_name().to_string_lossy().to_string();
                 if live_ids.contains(&session_id.as_str()) {
                     continue;
+                }
+                // Honour the persisted last-active timestamp — skip worktrees
+                // that were accessed within the TTL window, even though they
+                // have no in-memory session (e.g. after a server restart or
+                // short-lived CLI invocation).
+                let wt_path = entry.path();
+                if let Some(last_epoch) = read_last_active(&wt_path) {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    if now.saturating_sub(last_epoch) < SESSION_TTL_SECS {
+                        debug!(%session_id, idle_secs = now.saturating_sub(last_epoch),
+                               "startup: worktree still warm — skipping");
+                        continue;
+                    }
                 }
                 info!(%session_id, "startup: pruning orphaned worktree");
                 if let Ok(repo_entries) = std::fs::read_dir(&self.data_dir) {

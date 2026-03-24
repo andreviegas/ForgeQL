@@ -175,13 +175,29 @@ async fn main() -> Result<()> {
 // -----------------------------------------------------------------------
 
 async fn run_mcp_stdio(engine: ForgeQLEngine, logger: Option<QueryLogger>) -> Result<()> {
+    use forgeql_core::engine::SESSION_TTL_SECS;
     use rmcp::ServiceExt;
+    use std::sync::Mutex;
 
     // MCP is a long-lived service — orphaned worktrees are truly abandoned.
     engine.prune_orphaned_worktrees();
 
+    let engine = Arc::new(Mutex::new(engine));
+
     info!("starting MCP server over stdio");
-    let handler = mcp::ForgeQlMcp::new(engine, logger);
+    let handler = mcp::ForgeQlMcp::new(Arc::clone(&engine), logger);
+
+    // Background task: evict idle sessions every 5 minutes.
+    let eviction_handle = Arc::clone(&engine);
+    let _eviction_task = tokio::spawn(async move {
+        let interval = std::time::Duration::from_secs(SESSION_TTL_SECS.min(300));
+        loop {
+            tokio::time::sleep(interval).await;
+            if let Ok(mut eng) = eviction_handle.lock() {
+                eng.evict_idle_sessions();
+            }
+        }
+    });
 
     let service = handler
         .serve(rmcp::transport::io::stdio())
