@@ -9,12 +9,32 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **Stale session detection** — all session-dependent commands (`FIND`,
-  `SHOW`, mutations) now fail immediately with a clear message when the
-  worktree directory no longer exists on disk, instead of returning
-  confusing "workspace root not found" errors.  Previously `FIND` queries
-  silently operated on stale in-memory data while `SHOW` commands failed
-  with an opaque filesystem error.
+- **Transaction commits no longer pollute branch history** — `BEGIN
+  TRANSACTION` checkpoint commits are now squashed into a single clean
+  commit by `COMMIT MESSAGE`.  Previously every `BEGIN TRANSACTION`
+  created a visible commit on the session branch, and `COMMIT` added yet
+  another on top, leaving the history littered with internal
+  `forgeql: checkpoint '…'` entries.  The new flow:
+  - `BEGIN TRANSACTION` records a `pre_txn_oid` (the HEAD before the
+    checkpoint) and tracks it in a new `Checkpoint` struct.
+  - `COMMIT` soft-resets to `last_clean_oid` (the base before any
+    checkpoints in the current cycle) then creates one squashed commit.
+  - `ROLLBACK` updates `last_clean_oid` to the checkpoint's `pre_txn_oid`
+    so subsequent commits squash from the correct base.
+  Multi-cycle workflows (`BEGIN … COMMIT … BEGIN … COMMIT … ROLLBACK TO
+  first`) are fully supported — rollback across multiple commit boundaries
+  works correctly.
+
+- **`.forgeql-index` excluded from user-facing commits** — a new
+  `stage_and_commit_clean()` git helper stages all files except the binary
+  index cache.  `COMMIT MESSAGE` uses it so the index file never appears
+  in branch history.  Checkpoint commits still include the index (enabling
+  fast cache-hit rollback via `resume_index()`).
+
+- **Rollback uses `resume_index()` before full rebuild** — after
+  `git reset --hard`, the engine now tries the on-disk index cache first.
+  When the checkpoint commit included `.forgeql-index` the cache matches
+  HEAD, giving an O(ms) restore instead of a full tree-sitter reparse.
 
 - **Session TTL increased to 48 h** — prevents premature eviction during
   long development sessions (was 2 h).
@@ -42,6 +62,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   non-function rows early.
 
 ### Added
+
+- **`git::soft_reset()` helper** — equivalent of `git reset --soft <oid>`,
+  used by `COMMIT` to squash checkpoint commits into a single clean commit.
+
+- **`git::stage_and_commit_clean()` helper** — stages all files except
+  `.forgeql-index`, ensuring the binary cache never leaks into user-facing
+  commits.
+
+- **`Checkpoint` struct** — replaces the previous `(String, String)` tuple
+  in the checkpoint stack.  Tracks `name`, `oid`, and `pre_txn_oid` to
+  support squash-on-commit and correct rollback across commit boundaries.
+
+- **`Session::last_clean_oid` field** — records the base OID for the next
+  `COMMIT` squash cycle.  Set on first `BEGIN TRANSACTION`, updated on
+  each `COMMIT` and `ROLLBACK`.
 
 - **`MATCHES` / `NOT MATCHES` operators** — regex filtering in WHERE
   predicates via the `regex` crate.  Works on any string field:

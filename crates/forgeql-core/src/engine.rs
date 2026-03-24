@@ -53,7 +53,7 @@ use crate::{
         ShowContent, ShowResult, SourceLine, SourceOpResult, SuggestionEntry, SymbolMatch,
         VerifyBuildResult,
     },
-    session::Session,
+    session::{Checkpoint, Session},
     transforms::{TransformPlan, plan_from_ir},
     verify,
     workspace::Workspace,
@@ -994,7 +994,9 @@ impl ForgeQLEngine {
     /// `BEGIN TRANSACTION 'name'` — create a named git checkpoint.
     ///
     /// Auto-commits any dirty working-tree state so the checkpoint OID
-    /// always represents a complete snapshot.
+    /// always represents a complete snapshot.  The current HEAD before the
+    /// checkpoint commit is recorded as `pre_txn_oid` so that `COMMIT` can
+    /// squash back to a clean base.
     ///
     /// # Errors
     /// Returns `Err` if the session is missing, git open fails, or the
@@ -1009,6 +1011,10 @@ impl ForgeQLEngine {
 
         let repo = git::open(&worktree_path)?;
 
+        // Record the HEAD *before* the checkpoint commit — this is the
+        // "clean" point that COMMIT will squash back to.
+        let pre_txn_oid = git::head_oid(&repo)?;
+
         // Auto-commit dirty state so the checkpoint OID is a complete snapshot.
         // Ignore errors from stage_and_commit (e.g. nothing to commit).
         let checkpoint_msg = format!("forgeql: checkpoint '{name}'");
@@ -1017,7 +1023,16 @@ impl ForgeQLEngine {
         let oid = git::head_oid(&repo)?;
 
         if let Some(session) = self.sessions.get_mut(sid) {
-            session.checkpoints.push((name.to_string(), oid.clone()));
+            // Set last_clean_oid once per commit cycle — this is the base
+            // for the next COMMIT squash.
+            if session.last_clean_oid.is_none() {
+                session.last_clean_oid = Some(pre_txn_oid.clone());
+            }
+            session.checkpoints.push(Checkpoint {
+                name: name.to_string(),
+                oid: oid.clone(),
+                pre_txn_oid,
+            });
         }
 
         Ok(ForgeQLResult::BeginTransaction(BeginTransactionResult {
@@ -1026,17 +1041,43 @@ impl ForgeQLEngine {
         }))
     }
 
-    /// `COMMIT MESSAGE 'msg'` — stage all changes and create a git commit.
+    /// `COMMIT MESSAGE 'msg'` — squash checkpoint commits and create a clean
+    /// user-facing git commit.
+    ///
+    /// If `BEGIN TRANSACTION` was called since the last `COMMIT`, a
+    /// `git reset --soft` back to `last_clean_oid` squashes all intermediate
+    /// checkpoint commits into one.  The resulting commit never contains
+    /// `.forgeql-index`.
     ///
     /// # Errors
     /// Returns `Err` if the session is missing, git open or commit fails.
-    fn exec_commit(&self, session_id: Option<&str>, message: &str) -> Result<ForgeQLResult> {
+    fn exec_commit(&mut self, session_id: Option<&str>, message: &str) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
         let worktree_path = self.require_session(sid)?.worktree_path.clone();
+        let last_clean = self
+            .sessions
+            .get(sid)
+            .and_then(|s| s.last_clean_oid.clone());
 
         let repo = git::open(&worktree_path)?;
-        git::stage_and_commit(&repo, message)?;
+
+        // If there are checkpoint commits, squash them by soft-resetting
+        // to the last clean base before committing.
+        if let Some(ref clean_oid) = last_clean {
+            let head = git::head_oid(&repo)?;
+            if head != *clean_oid {
+                git::soft_reset(&repo, clean_oid)?;
+            }
+        }
+
+        // Create a clean commit (excludes .forgeql-index).
+        git::stage_and_commit_clean(&repo, message)?;
         let commit_hash = git::head_oid(&repo)?;
+
+        // Update the clean base for the next commit cycle.
+        if let Some(session) = self.sessions.get_mut(sid) {
+            session.last_clean_oid = Some(commit_hash.clone());
+        }
 
         Ok(ForgeQLResult::Commit(CommitResult {
             message: message.to_string(),
@@ -1054,6 +1095,9 @@ impl ForgeQLEngine {
     /// checkpoints created after it).  If `name` is `None`, reverts to the
     /// most recent checkpoint on the stack.
     ///
+    /// After reset, `last_clean_oid` is updated to the checkpoint's
+    /// `pre_txn_oid` so the next `COMMIT` squashes from the correct base.
+    ///
     /// # Errors
     /// Returns `Err` if no matching checkpoint exists, git open fails, or
     /// the reset itself fails.
@@ -1065,39 +1109,50 @@ impl ForgeQLEngine {
         let sid = require_session_id(session_id)?;
 
         // Pop the checkpoint (releases mutable borrow before reindex).
-        let (label, oid, worktree_path) = {
+        let (label, oid, _pre_txn_oid, worktree_path) = {
             let session = self
                 .sessions
                 .get_mut(sid)
                 .ok_or_else(|| anyhow::anyhow!("session '{sid}' not found"))?;
 
-            let (label, oid) = if let Some(target) = name {
+            let checkpoint = if let Some(target) = name {
                 // Find the named checkpoint and pop everything from that point onward.
                 let pos = session
                     .checkpoints
                     .iter()
-                    .rposition(|(l, _)| l == target)
+                    .rposition(|cp| cp.name == target)
                     .ok_or_else(|| {
                         anyhow::anyhow!("no checkpoint named '{target}' in this session")
                     })?;
-                let (l, o) = session.checkpoints.remove(pos);
+                let cp = session.checkpoints.remove(pos);
                 session.checkpoints.truncate(pos);
-                (l, o)
+                cp
             } else {
                 // Pop the most recent checkpoint.
                 session.checkpoints.pop().ok_or_else(|| {
                     anyhow::anyhow!("no checkpoints available \u{2014} run BEGIN TRANSACTION first")
                 })?
             };
-            (label, oid, session.worktree_path.clone())
+
+            // Reset last_clean_oid so the next COMMIT squashes from the
+            // correct base (the state before this checkpoint existed).
+            session.last_clean_oid = Some(checkpoint.pre_txn_oid.clone());
+
+            (
+                checkpoint.name,
+                checkpoint.oid,
+                checkpoint.pre_txn_oid,
+                session.worktree_path.clone(),
+            )
         };
 
         // Git reset --hard to the checkpoint OID.
         let repo = git::open(&worktree_path)?;
         git::reset_hard(&repo, &oid)?;
 
-        // Full reindex — we cannot know exactly which files changed.
+        // Try disk-cache first; fall back to full rebuild if stale/missing.
         if let Some(session) = self.sessions.get_mut(sid)
+            && session.resume_index().is_err()
             && let Err(err) = session.build_index()
         {
             warn!(error = %err, "rollback: index rebuild failed");

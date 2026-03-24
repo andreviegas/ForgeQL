@@ -76,6 +76,23 @@ pub fn reset_hard(repo: &Repository, oid_hex: &str) -> Result<()> {
     Ok(())
 }
 
+/// Soft-reset the repository to the commit identified by `oid_hex`.
+///
+/// This is equivalent to `git reset --soft <oid>`.  It moves HEAD to the
+/// target commit but leaves the index and working tree unchanged.  Used by
+/// `COMMIT` to squash checkpoint commits into a single clean commit.
+///
+/// # Errors
+/// Returns `Err` if the OID cannot be resolved or the reset fails.
+pub fn soft_reset(repo: &Repository, oid_hex: &str) -> Result<()> {
+    let oid = git2::Oid::from_str(oid_hex)?;
+    let commit = repo.find_commit(oid)?;
+    let obj = commit.into_object();
+    repo.reset(&obj, git2::ResetType::Soft, None)?;
+    debug!(oid = oid_hex, "git reset --soft");
+    Ok(())
+}
+
 /// Stage all modified files and commit with the given message.
 ///
 /// # Errors
@@ -94,6 +111,40 @@ pub fn stage_and_commit(repo: &Repository, message: &str) -> Result<()> {
 
     let _oid = repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
     debug!(message, "committed");
+    Ok(())
+}
+
+/// Stage all modified files **except** `.forgeql-index` and commit.
+///
+/// This produces a "clean" user-facing commit that never contains the
+/// binary index cache file.  Any previously tracked `.forgeql-index` entry
+/// is also removed from the index.
+///
+/// # Errors
+/// Returns `Err` if staging, tree writing, or the commit itself fails.
+pub fn stage_and_commit_clean(repo: &Repository, message: &str) -> Result<()> {
+    let mut index = repo.index()?;
+    index.add_all(
+        std::iter::once("*"),
+        git2::IndexAddOption::DEFAULT,
+        Some(&mut |path: &std::path::Path, _: &[u8]| {
+            i32::from(path.file_name() == Some(std::ffi::OsStr::new(".forgeql-index")))
+        }),
+    )?;
+    // Remove .forgeql-index from the index in case it was tracked by a
+    // prior checkpoint commit — we never want it in user-visible commits.
+    let _ = index.remove_path(std::path::Path::new(".forgeql-index"));
+    index.write()?;
+
+    let tree_id = index.write_tree()?;
+    let tree = repo.find_tree(tree_id)?;
+    let sig = repo
+        .signature()
+        .or_else(|_| git2::Signature::now("ForgeQL", "forgeql@localhost"))?;
+    let parent = repo.head()?.peel_to_commit()?;
+
+    let _oid = repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
+    debug!(message, "committed (clean, no .forgeql-index)");
     Ok(())
 }
 

@@ -23,6 +23,24 @@ use crate::config::VerifyStep;
 use crate::workspace::Workspace;
 
 // -----------------------------------------------------------------------
+// Checkpoint
+// -----------------------------------------------------------------------
+
+/// A named savepoint recorded by `BEGIN TRANSACTION`.
+///
+/// `pre_txn_oid` is the HEAD before the checkpoint commit was created —
+/// the "clean" point that `COMMIT` squashes back to.
+#[derive(Debug, Clone)]
+pub struct Checkpoint {
+    /// User-visible label (e.g. `"my-txn"`).
+    pub name: String,
+    /// Git OID of the checkpoint commit itself.
+    pub oid: String,
+    /// HEAD immediately before the checkpoint commit was created.
+    pub pre_txn_oid: String,
+}
+
+// -----------------------------------------------------------------------
 // Session
 // -----------------------------------------------------------------------
 
@@ -62,10 +80,17 @@ pub struct Session {
     last_active: std::time::Instant,
     /// Named checkpoint stack for the checkpoint-based transaction model.
     ///
-    /// Each entry is `(label, git_oid)`.  `BEGIN TRANSACTION 'label'` pushes
-    /// a new entry; `ROLLBACK [TRANSACTION 'label']` pops back to (and
-    /// including) the named checkpoint.
-    pub checkpoints: Vec<(String, String)>,
+    /// `BEGIN TRANSACTION 'label'` pushes a new entry; `ROLLBACK
+    /// [TRANSACTION 'label']` pops back to (and including) the named
+    /// checkpoint.  `COMMIT` squashes all checkpoint commits back to
+    /// `last_clean_oid` so the branch history stays clean.
+    pub checkpoints: Vec<Checkpoint>,
+    /// The HEAD OID of the last "clean" commit — either the initial HEAD
+    /// when the session started, or the OID produced by the most recent
+    /// `COMMIT`.  `COMMIT` soft-resets to this point before creating the
+    /// squashed commit.  `None` until the first `BEGIN TRANSACTION` or
+    /// `COMMIT`.
+    pub last_clean_oid: Option<String>,
     /// Verify steps frozen from `.forgeql.yaml` at session start (`USE` time).
     /// VERIFY build uses these instead of re-reading the file, so a CHANGE
     /// command cannot inject malicious commands by overwriting `.forgeql.yaml`.
@@ -105,6 +130,7 @@ impl Session {
             cached_commit: None,
             last_active: std::time::Instant::now(),
             checkpoints: Vec::new(),
+            last_clean_oid: None,
             frozen_verify_steps: None,
             frozen_workdir: None,
             lang_registry,
