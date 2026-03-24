@@ -243,17 +243,16 @@ impl ForgeQLEngine {
                     | ForgeQLIR::Rollback { .. }
                     | ForgeQLIR::VerifyBuild { .. }
             );
-            if needs_worktree {
-                if let Some(session) = self.sessions.get(sid) {
-                    if !session.worktree_path.is_dir() {
-                        anyhow::bail!(
-                            "session '{sid}' is stale — the worktree directory \
-                             '{}' no longer exists on disk.  \
-                             Run USE <source>.<branch> to start a new session.",
-                            session.worktree_path.display()
-                        );
-                    }
-                }
+            if needs_worktree
+                && let Some(session) = self.sessions.get(sid)
+                && !session.worktree_path.is_dir()
+            {
+                anyhow::bail!(
+                    "session '{sid}' is stale — the worktree directory \
+                     '{}' no longer exists on disk.  \
+                     Run USE <source>.<branch> to start a new session.",
+                    session.worktree_path.display()
+                );
             }
         }
 
@@ -1623,7 +1622,8 @@ fn validate_order_by_field(
 /// built-in fields (`name`, `node_kind`, `path`, `line`, `usages`).
 fn field_to_kinds(field: &str) -> Option<&'static [&'static str]> {
     match field {
-        // metrics.rs — function_definition only
+        // function_definition only — metrics, redundancy, escape, shadow,
+        // unused_param, fallthrough, recursion, todo, decl_distance
         "param_count"
         | "return_count"
         | "goto_count"
@@ -1631,11 +1631,31 @@ fn field_to_kinds(field: &str) -> Option<&'static [&'static str]> {
         | "is_inline"
         | "branch_count"
         | "max_condition_tests"
-        | "max_paren_depth" => Some(&["function_definition"]),
-        // redundancy.rs — function_definition only
-        "has_repeated_condition_calls" | "repeated_condition_calls" | "null_check_count" => {
-            Some(&["function_definition"])
-        }
+        | "max_paren_depth"
+        | "has_repeated_condition_calls"
+        | "repeated_condition_calls"
+        | "null_check_count"
+        | "has_escape"
+        | "escape_tier"
+        | "escape_vars"
+        | "escape_count"
+        | "escape_kinds"
+        | "has_shadow"
+        | "shadow_count"
+        | "shadow_vars"
+        | "has_unused_param"
+        | "unused_param_count"
+        | "unused_params"
+        | "has_fallthrough"
+        | "fallthrough_count"
+        | "is_recursive"
+        | "recursion_count"
+        | "has_todo"
+        | "todo_count"
+        | "todo_tags"
+        | "decl_distance"
+        | "decl_far_count"
+        | "has_unused_reassign" => Some(&["function_definition"]),
         // comments.rs
         "comment_style" => Some(&["comment"]),
         // numbers.rs

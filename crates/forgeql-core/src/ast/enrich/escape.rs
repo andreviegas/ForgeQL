@@ -69,6 +69,7 @@ impl NodeEnricher for EscapeEnricher {
         // Phase 5: Walk all return statements and detect escaping patterns.
         let mut escaping: Vec<String> = Vec::new();
         let mut best_tier: u8 = 0;
+        let mut kinds_seen: HashSet<&str> = HashSet::new();
 
         walk_dfs(ctx.node, |node| {
             if node.kind() != config.return_statement_raw_kind {
@@ -92,6 +93,7 @@ impl NodeEnricher for EscapeEnricher {
                 &alias_map,
                 &mut escaping,
                 &mut best_tier,
+                &mut kinds_seen,
             );
         });
 
@@ -106,6 +108,12 @@ impl NodeEnricher for EscapeEnricher {
         drop(fields.insert("has_escape".to_string(), "true".to_string()));
         drop(fields.insert("escape_tier".to_string(), best_tier.to_string()));
         drop(fields.insert("escape_vars".to_string(), escaping.join(",")));
+        drop(fields.insert("escape_count".to_string(), escaping.len().to_string()));
+
+        // Build sorted, deterministic escape_kinds.
+        let mut kinds: Vec<&str> = kinds_seen.into_iter().collect();
+        kinds.sort_unstable();
+        drop(fields.insert("escape_kinds".to_string(), kinds.join(",")));
     }
 }
 
@@ -114,6 +122,7 @@ impl NodeEnricher for EscapeEnricher {
 // -----------------------------------------------------------------------
 
 /// Recursively check an expression for escaping patterns.
+#[allow(clippy::too_many_arguments, clippy::collapsible_if)]
 fn check_expr_escape(
     node: tree_sitter::Node<'_>,
     ctx: &EnrichContext<'_>,
@@ -123,6 +132,7 @@ fn check_expr_escape(
     alias_map: &HashMap<String, String>,
     escaping: &mut Vec<String>,
     best_tier: &mut u8,
+    kinds_seen: &mut HashSet<&str>,
 ) {
     let config = ctx.language_config;
     let source = ctx.source;
@@ -135,10 +145,9 @@ fn check_expr_escape(
                 if let Some(operand) = node.child(1) {
                     let name = resolve_identifier(operand, source, config);
                     if let Some(name) = name {
-                        if local_names.contains(name.as_str())
-                            && !static_locals.contains(&name)
-                        {
+                        if local_names.contains(name.as_str()) && !static_locals.contains(&name) {
                             escaping.push(name);
+                            let _ = kinds_seen.insert("address_of");
                             if *best_tier == 0 || *best_tier > 1 {
                                 *best_tier = 1;
                             }
@@ -158,6 +167,7 @@ fn check_expr_escape(
             && !is_in_declaration(node, config)
         {
             escaping.push(name);
+            let _ = kinds_seen.insert("array_decay");
             if *best_tier == 0 || *best_tier > 2 {
                 *best_tier = 2;
             }
@@ -171,6 +181,7 @@ fn check_expr_escape(
         if let Some(target) = alias_map.get(&name) {
             if !is_in_declaration(node, config) {
                 escaping.push(target.clone());
+                let _ = kinds_seen.insert("alias");
                 if *best_tier == 0 {
                     *best_tier = 3;
                 }
@@ -191,6 +202,7 @@ fn check_expr_escape(
                 alias_map,
                 escaping,
                 best_tier,
+                kinds_seen,
             );
         }
     }
@@ -250,10 +262,8 @@ fn extract_address_of_target(
 }
 
 /// Collect the names of local variables declared with array declarators.
-fn collect_array_locals(
-    ctx: &EnrichContext<'_>,
-    local_names: &HashSet<&str>,
-) -> HashSet<String> {
+#[allow(clippy::collapsible_if)]
+fn collect_array_locals(ctx: &EnrichContext<'_>, local_names: &HashSet<&str>) -> HashSet<String> {
     let config = ctx.language_config;
     if config.array_declarator_raw_kind.is_empty() {
         return HashSet::new();
@@ -276,9 +286,9 @@ fn collect_array_locals(
                 if let Some(decl) = node.child_by_field_name(config.declarator_field_name) {
                     if contains_kind(decl, config.array_declarator_raw_kind) {
                         // Extract the name of this declaration.
-                        if let Some(name) =
-                            super::data_flow_utils::extract_declarator_name(node, ctx.source, config)
-                        {
+                        if let Some(name) = super::data_flow_utils::extract_declarator_name(
+                            node, ctx.source, config,
+                        ) {
                             if local_names.contains(name.as_str()) {
                                 let _ = arrays.insert(name);
                             }
@@ -309,6 +319,7 @@ fn collect_array_locals(
 }
 
 /// Collect the names of local variables declared with `static` storage class.
+#[allow(clippy::collapsible_if)]
 fn collect_static_locals(ctx: &EnrichContext<'_>) -> HashSet<String> {
     let config = ctx.language_config;
     if config.static_storage_keywords.is_empty() {
@@ -377,6 +388,7 @@ fn has_static_specifier(
 
 /// Build an alias map: identifier → local variable name, for assignments
 /// of the form `ptr = &local_var`.
+#[allow(clippy::collapsible_if)]
 fn build_alias_map(
     ctx: &EnrichContext<'_>,
     local_names: &HashSet<&str>,
@@ -413,9 +425,7 @@ fn build_alias_map(
             }
 
             if let Some(target) = extract_address_of_target(right, source, config) {
-                if local_names.contains(target.as_str())
-                    && !static_locals.contains(&target)
-                {
+                if local_names.contains(target.as_str()) && !static_locals.contains(&target) {
                     drop(aliases.insert(lhs_name, target));
                     return;
                 }
@@ -427,13 +437,9 @@ fn build_alias_map(
         }
 
         // Case 2: init_declarator  →  `int *p = &local`
-        if !config.init_declarator_raw_kind.is_empty()
-            && kind == config.init_declarator_raw_kind
-        {
+        if !config.init_declarator_raw_kind.is_empty() && kind == config.init_declarator_raw_kind {
             // Extract the declared name from the declarator subtree.
-            let Some(decl_child) =
-                node.child_by_field_name(config.declarator_field_name)
-            else {
+            let Some(decl_child) = node.child_by_field_name(config.declarator_field_name) else {
                 return;
             };
             let Some(name) =
@@ -447,9 +453,7 @@ fn build_alias_map(
                 return;
             };
             if let Some(target) = extract_address_of_target(value, source, config) {
-                if local_names.contains(target.as_str())
-                    && !static_locals.contains(&target)
-                {
+                if local_names.contains(target.as_str()) && !static_locals.contains(&target) {
                     drop(aliases.insert(name, target));
                 }
             }

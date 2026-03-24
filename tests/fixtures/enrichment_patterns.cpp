@@ -321,6 +321,15 @@ void duplicateConditions(int a, int b) {
     }
 }
 
+/* Simple repeated guards — should NOT be flagged as duplicate_condition. */
+int simpleGuards(int *ptr, int val) {
+    if (!ptr) return -1;
+    if (val < 0) return -2;
+    if (!ptr) return -3; /* repeated guard after side-effect */
+    if (val < 0) return -4;
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Phase 8 — Additional enrichment patterns                             */
 /* ------------------------------------------------------------------ */
@@ -658,6 +667,30 @@ int noAssignCompare(int addr, int size) {
         return -1;
     }
     if (addr <= 50 && addr != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+/* Exact Zephyr-like pattern: ((cond) || ((a + b) > c)) */
+int noAssignZephyrLike(int offset, int len, int flash_size) {
+    if ((offset < 0) || ((offset + len) > flash_size)) {
+        return -1;
+    }
+    return 0;
+}
+
+/* Minimal >= test */
+int noAssignGte(int a) {
+    if (a >= 100) {
+        return 1;
+    }
+    return 0;
+}
+
+/* Minimal >= in complex expression */
+int noAssignGteComplex(int a, int b) {
+    if ((a < 0) || (a >= b)) {
         return 1;
     }
     return 0;

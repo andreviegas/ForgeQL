@@ -62,10 +62,7 @@ impl NodeEnricher for UnusedParamEnricher {
 
         if !unused.is_empty() {
             drop(fields.insert("has_unused_param".into(), "true".into()));
-            drop(fields.insert(
-                "unused_param_count".into(),
-                unused.len().to_string(),
-            ));
+            drop(fields.insert("unused_param_count".into(), unused.len().to_string()));
             let names: Vec<&str> = unused.into_iter().collect();
             drop(fields.insert("unused_params".into(), names.join(",")));
         }

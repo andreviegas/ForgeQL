@@ -19,6 +19,28 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Session TTL increased to 48 h** — prevents premature eviction during
   long development sessions (was 2 h).
 
+- **`escape_count` / `escape_kinds` fields missing** — `EscapeEnricher` now
+  emits all 5 documented fields.  Previously only `has_escape`,
+  `escape_tier`, and `escape_vars` were emitted; `escape_count` and
+  `escape_kinds` were documented but never implemented, causing
+  `WHERE escape_count >= 1` to return 0 rows.
+
+- **`has_assignment_in_condition` false positive on `>=` operator** —
+  tree-sitter-cpp mis-parses `addr < 0 || addr >= 100` as a template
+  expression followed by an assignment (`= 100`).  The enricher now
+  detects this tree-sitter misparse pattern and skips it.
+
+- **`duplicate_condition` too aggressive on simple guards** — trivial
+  condition skeletons (≤ 4 chars, e.g. `(a)`, `(!a)`, `(a<b)`, `(a==b)`)
+  are no longer flagged.  These simple guards repeat naturally in
+  functions and produced noise rather than actionable findings.
+
+- **Enrichment field → node kind optimisation** — all enricher field names
+  (`escape_*`, `shadow_*`, `unused_param*`, `fallthrough_*`, `recursion_*`,
+  `todo_*`, `decl_distance`, `decl_far_count`, `has_unused_reassign`) are
+  now mapped in `field_to_kinds()`, enabling the query planner to skip
+  non-function rows early.
+
 ### Added
 
 - **`MATCHES` / `NOT MATCHES` operators** — regex filtering in WHERE

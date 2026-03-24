@@ -15,8 +15,8 @@
 use std::collections::HashMap;
 
 use super::data_flow_utils::{
-    collect_local_declarations, is_compound_assign_or_update, is_in_declaration, is_write_context,
-    LocalDecl,
+    LocalDecl, collect_local_declarations, is_compound_assign_or_update, is_in_declaration,
+    is_write_context,
 };
 use super::{EnrichContext, NodeEnricher};
 

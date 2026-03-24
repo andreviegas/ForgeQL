@@ -97,12 +97,10 @@ fn count_marker_occurrences(upper: &str, marker: &str) -> u32 {
     while let Some(pos) = upper[start..].find(marker) {
         let abs = start + pos;
         // Check left boundary: must be start-of-string or non-alphanumeric.
-        let left_ok =
-            abs == 0 || !bytes[abs - 1].is_ascii_alphanumeric();
+        let left_ok = abs == 0 || !bytes[abs - 1].is_ascii_alphanumeric();
         // Check right boundary.
         let right = abs + m_len;
-        let right_ok =
-            right >= bytes.len() || !bytes[right].is_ascii_alphanumeric();
+        let right_ok = right >= bytes.len() || !bytes[right].is_ascii_alphanumeric();
         if left_ok && right_ok {
             hits += 1;
         }

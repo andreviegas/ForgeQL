@@ -124,10 +124,20 @@ impl NodeEnricher for RedundancyEnricher {
             }
 
             // Find duplicates within each function.
+            // Skip trivial skeletons (≤ 4 chars after removing outer parens) —
+            // simple guards like `(a)`, `(!a)`, `(a<b)`, `(a==b)` repeat
+            // naturally and produce noise rather than actionable findings.
             let mut dups: Vec<usize> = Vec::new();
             for cf_rows in func_cf_rows.values() {
                 let mut skeleton_counts: HashMap<&str, Vec<usize>> = HashMap::new();
                 for &(idx, text) in cf_rows {
+                    let stripped = text
+                        .strip_prefix('(')
+                        .and_then(|s| s.strip_suffix(')'))
+                        .unwrap_or(text);
+                    if stripped.len() <= 4 {
+                        continue;
+                    }
                     skeleton_counts.entry(text).or_default().push(idx);
                 }
                 for indices in skeleton_counts.values() {

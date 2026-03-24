@@ -231,7 +231,7 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 | `HAVING` | Filter after `GROUP BY` aggregation. Operates on `count`. |
 | `IN` | Restrict to files matching glob pattern. |
 | `EXCLUDE` | Remove files matching glob pattern. |
-| `ORDER BY` | Sort results. Default `ASC`. Any filterable field. |
+| `ORDER BY` | Sort results. Default `ASC`. Any filterable field including enrichment fields (numeric values like `shadow_count`, `escape_count` sort numerically). |
 | `GROUP BY` | Aggregate by field. Adds `count` to each group. |
 | `LIMIT` | Maximum rows returned. Implicit cap of 20 when omitted on `FIND`. |
 | `OFFSET` | Skip N rows (pagination). |
@@ -486,6 +486,13 @@ Detects variables declared in inner scopes that shadow an outer-scope variable o
 | `shadow_count` | `function_definition` | Number of shadowing declarations |
 | `shadow_vars` | `function_definition` | Comma-separated names of shadowed variables |
 
+> **Known limitation — `#ifdef` blocks:** tree-sitter parses C/C++ without
+> running the preprocessor, so variables declared inside `#ifdef` / `#else`
+> branches both appear in the same AST.  A variable declared in the `#else`
+> arm can appear to shadow one in the `#ifdef` arm even though only one
+> branch is ever compiled.  Use `EXCLUDE` to skip affected files or verify
+> results manually.
+
 #### UnusedParamEnricher
 
 Detects function parameters that are never referenced in the function body.
@@ -629,6 +636,17 @@ FIND symbols
 SHOW body OF 'PiscoCode::run' DEPTH 99
   WHERE text MATCHES '(?i)TODO|FIXME'
 ```
+
+> **Tip — exclude test directories:**  Enrichment queries on large codebases
+> can be noisy if the results include test harnesses, mocks, and generated
+> test code.  Add `EXCLUDE` clauses to focus on production code:
+>
+> ```sql
+> FIND symbols WHERE has_assignment_in_condition = 'true'
+>   EXCLUDE '**/testsuite/**'
+>   EXCLUDE '**/tests/**'
+>   EXCLUDE '**/test/**'
+> ```
 
 ### Filtered outline and member inspection
 

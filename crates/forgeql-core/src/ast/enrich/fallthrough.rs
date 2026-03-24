@@ -58,11 +58,7 @@ impl NodeEnricher for FallthroughEnricher {
 }
 
 /// Walk a subtree looking for switch statements, then check their cases.
-fn collect_fallthroughs(
-    node: tree_sitter::Node<'_>,
-    config: &LanguageConfig,
-    count: &mut u32,
-) {
+fn collect_fallthroughs(node: tree_sitter::Node<'_>, config: &LanguageConfig, count: &mut u32) {
     if config.switch_raw_kinds.contains(&node.kind()) {
         check_switch_cases(node, config, count);
         // Don't return — there might be nested switches inside cases.
@@ -133,7 +129,8 @@ fn is_fallthrough(case_node: tree_sitter::Node<'_>, config: &LanguageConfig) -> 
         // Values are typically number_literal, identifier, etc.
         // Statements have kinds ending in _statement or _expression,
         // or are compound_statement/expression_statement, etc.
-        if kind.ends_with("_statement") || kind.ends_with("_expression")
+        if kind.ends_with("_statement")
+            || kind.ends_with("_expression")
             || kind == config.block_raw_kind
         {
             has_statements = true;
@@ -149,9 +146,7 @@ fn is_fallthrough(case_node: tree_sitter::Node<'_>, config: &LanguageConfig) -> 
     // Check if last statement is a terminator.
     if let Some(last) = last_statement {
         let kind = last.kind();
-        if kind == config.break_statement_raw_kind
-            || kind == config.return_statement_raw_kind
-        {
+        if kind == config.break_statement_raw_kind || kind == config.return_statement_raw_kind {
             return false;
         }
         // Also check if the last thing inside a compound_statement is terminated.
@@ -169,9 +164,7 @@ fn block_ends_with_terminator(block: tree_sitter::Node<'_>, config: &LanguageCon
     for i in (0..block.child_count()).rev() {
         if let Some(child) = block.child(i) {
             let kind = child.kind();
-            if kind == config.break_statement_raw_kind
-                || kind == config.return_statement_raw_kind
-            {
+            if kind == config.break_statement_raw_kind || kind == config.return_statement_raw_kind {
                 return true;
             }
             // Skip closing braces and whitespace tokens.

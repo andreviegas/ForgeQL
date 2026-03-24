@@ -4,7 +4,6 @@
 /// bodies.
 ///
 /// Used by both `DeclDistanceEnricher` and `EscapeEnricher`.
-
 use super::EnrichContext;
 use crate::ast::index::node_text;
 use crate::ast::lang::LanguageConfig;
@@ -224,10 +223,7 @@ pub fn is_write_context(node: tree_sitter::Node<'_>, config: &LanguageConfig) ->
 
 /// Check if an identifier is in a compound-assignment (`+=`, `-=`, etc.)
 /// or update expression (`++`, `--`) — these are reads AND writes.
-pub fn is_compound_assign_or_update(
-    node: tree_sitter::Node<'_>,
-    config: &LanguageConfig,
-) -> bool {
+pub fn is_compound_assign_or_update(node: tree_sitter::Node<'_>, config: &LanguageConfig) -> bool {
     if let Some(parent) = node.parent() {
         let pk = parent.kind();
 

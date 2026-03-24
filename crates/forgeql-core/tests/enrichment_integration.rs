@@ -1,3 +1,9 @@
+#![allow(
+    clippy::map_unwrap_or,
+    clippy::single_char_pattern,
+    clippy::unnecessary_get_then_check,
+    clippy::uninlined_format_args
+)]
 //! Comprehensive integration tests for all enrichment fields.
 //!
 //! These tests exercise the full pipeline: **parser → IR → engine → result**
@@ -742,13 +748,56 @@ fn control_flow_no_false_positive_comparisons() {
     for row in &qr2.results {
         // The condition skeletons from noAssignCompare are ((a)||((b-c)<d)) and (a&&(a))
         // They should NOT appear. Check by condition_text pattern.
-        let cond = row.fields.get("condition_text").map(String::as_str).unwrap_or("");
+        let cond = row
+            .fields
+            .get("condition_text")
+            .map(String::as_str)
+            .unwrap_or("");
         assert!(
-            cond != "((a)||(a>=b))||((b-a)<c)"
-                && cond != "(a<=b&&(a!=c))",
+            cond != "((a)||(a>=b))||((b-a)<c)" && cond != "(a<=b&&(a!=c))",
             "comparison-only condition should not be flagged as assignment: {cond}",
         );
     }
+}
+
+/// Regression: Zephyr-like ((offset < 0) || ((offset + len) > size)) must NOT
+/// trigger has_assignment_in_condition.
+#[test]
+fn control_flow_no_false_positive_zephyr_like() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE fql_kind = 'if' WHERE has_assignment_in_condition = 'true'",
+    );
+    let qr = as_query(&r);
+    let mut fps: Vec<String> = Vec::new();
+    for row in &qr.results {
+        let path = row
+            .path
+            .as_ref()
+            .map(|p| p.to_string_lossy())
+            .unwrap_or_default();
+        if !path.contains("enrichment_patterns") {
+            continue;
+        }
+        let cond = row
+            .fields
+            .get("condition_text")
+            .map(String::as_str)
+            .unwrap_or("");
+        // The known true positive at line 76 has skeleton ((a)>b) from `(x = a + b) > 0`.
+        // Skip it — it IS a real assignment.
+        if cond == "((a)>b)" {
+            continue;
+        }
+        fps.push(format!("line {:?}: '{cond}'", row.line));
+    }
+    assert!(
+        fps.is_empty(),
+        "false positives in enrichment_patterns.cpp: {:?}",
+        fps,
+    );
 }
 
 #[test]
@@ -1649,6 +1698,39 @@ fn redundancy_duplicate_condition_detected() {
         "expected at least 2 duplicate conditions, got {}",
         qr.total
     );
+}
+
+/// Simple guard conditions like `if (!ptr)` or `if (val < 0)` should not be
+/// flagged even when repeated — their skeletons are too short to be useful.
+#[test]
+fn redundancy_duplicate_condition_skips_simple_guards() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE fql_kind = 'if' WHERE duplicate_condition = 'true'",
+    );
+    let qr = as_query(&r);
+    for row in &qr.results {
+        let path = row
+            .path
+            .as_ref()
+            .map(|p| p.to_string_lossy())
+            .unwrap_or_default();
+        if !path.contains("enrichment_patterns") {
+            continue;
+        }
+        let cond = row
+            .fields
+            .get("condition_text")
+            .map(String::as_str)
+            .unwrap_or("");
+        // None of the simple guards from simpleGuards() should appear.
+        assert!(
+            cond != "(!a)" && cond != "(a<b)",
+            "simple guard should not be flagged as duplicate: {cond}",
+        );
+    }
 }
 
 #[test]
@@ -2663,17 +2745,35 @@ fn escape_direct_addr() {
     );
     let qr = as_query(&r);
     let m = find_by_name(&qr.results, "escapeDirectAddr");
-    assert_eq!(
-        m.fields.get("has_escape").map(String::as_str),
-        Some("true"),
-    );
+    assert_eq!(m.fields.get("has_escape").map(String::as_str), Some("true"),);
     assert_eq!(
         m.fields.get("escape_tier").map(String::as_str),
         Some("1"),
         "direct &local should be tier 1",
     );
-    let vars = m.fields.get("escape_vars").map(String::as_str).unwrap_or("");
-    assert!(vars.contains("x"), "escape_vars should contain 'x', got: {vars}");
+    let vars = m
+        .fields
+        .get("escape_vars")
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        vars.contains("x"),
+        "escape_vars should contain 'x', got: {vars}"
+    );
+    assert_eq!(
+        m.fields.get("escape_count").map(String::as_str),
+        Some("1"),
+        "one escaping local → escape_count = 1",
+    );
+    let kinds = m
+        .fields
+        .get("escape_kinds")
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        kinds.contains("address_of"),
+        "direct &local → escape_kinds should contain 'address_of', got: {kinds}"
+    );
 }
 
 #[test]
@@ -2686,10 +2786,7 @@ fn escape_array_decay() {
     );
     let qr = as_query(&r);
     let m = find_by_name(&qr.results, "escapeArrayDecay");
-    assert_eq!(
-        m.fields.get("has_escape").map(String::as_str),
-        Some("true"),
-    );
+    assert_eq!(m.fields.get("has_escape").map(String::as_str), Some("true"),);
     let tier: u8 = m
         .fields
         .get("escape_tier")
@@ -2697,8 +2794,24 @@ fn escape_array_decay() {
         .parse()
         .expect("numeric");
     assert!(tier <= 2, "array decay should be tier ≤ 2, got {tier}");
-    let vars = m.fields.get("escape_vars").map(String::as_str).unwrap_or("");
-    assert!(vars.contains("arr"), "escape_vars should contain 'arr', got: {vars}");
+    let vars = m
+        .fields
+        .get("escape_vars")
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        vars.contains("arr"),
+        "escape_vars should contain 'arr', got: {vars}"
+    );
+    let kinds = m
+        .fields
+        .get("escape_kinds")
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        kinds.contains("array_decay"),
+        "array decay → escape_kinds should contain 'array_decay', got: {kinds}"
+    );
 }
 
 #[test]
@@ -2711,10 +2824,7 @@ fn escape_indirect_alias() {
     );
     let qr = as_query(&r);
     let m = find_by_name(&qr.results, "escapeIndirectAlias");
-    assert_eq!(
-        m.fields.get("has_escape").map(String::as_str),
-        Some("true"),
-    );
+    assert_eq!(m.fields.get("has_escape").map(String::as_str), Some("true"),);
     let tier: u8 = m
         .fields
         .get("escape_tier")
@@ -2722,8 +2832,24 @@ fn escape_indirect_alias() {
         .parse()
         .expect("numeric");
     assert_eq!(tier, 3, "indirect alias should be tier 3");
-    let vars = m.fields.get("escape_vars").map(String::as_str).unwrap_or("");
-    assert!(vars.contains("val"), "escape_vars should contain 'val', got: {vars}");
+    let vars = m
+        .fields
+        .get("escape_vars")
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        vars.contains("val"),
+        "escape_vars should contain 'val', got: {vars}"
+    );
+    let kinds = m
+        .fields
+        .get("escape_kinds")
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        kinds.contains("alias"),
+        "indirect alias → escape_kinds should contain 'alias', got: {kinds}"
+    );
 }
 
 #[test]
@@ -2846,8 +2972,15 @@ fn shadow_basic() {
         Some("1"),
         "shadowBasic should shadow 1 variable",
     );
-    let vars = m.fields.get("shadow_vars").map(String::as_str).unwrap_or("");
-    assert!(vars.contains("x"), "shadow_vars should contain 'x', got: {vars}");
+    let vars = m
+        .fields
+        .get("shadow_vars")
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        vars.contains("x"),
+        "shadow_vars should contain 'x', got: {vars}"
+    );
 }
 
 #[test]
@@ -2865,8 +2998,15 @@ fn shadow_for_loop() {
         Some("true"),
         "shadowForLoop should have has_shadow=true",
     );
-    let vars = m.fields.get("shadow_vars").map(String::as_str).unwrap_or("");
-    assert!(vars.contains("i"), "shadow_vars should contain 'i', got: {vars}");
+    let vars = m
+        .fields
+        .get("shadow_vars")
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        vars.contains("i"),
+        "shadow_vars should contain 'i', got: {vars}"
+    );
 }
 
 #[test]
@@ -2879,10 +3019,7 @@ fn shadow_multiple() {
     );
     let qr = as_query(&r);
     let m = find_by_name(&qr.results, "shadowMultiple");
-    assert_eq!(
-        m.fields.get("has_shadow").map(String::as_str),
-        Some("true"),
-    );
+    assert_eq!(m.fields.get("has_shadow").map(String::as_str), Some("true"),);
     let count: usize = m
         .fields
         .get("shadow_count")
@@ -2890,9 +3027,19 @@ fn shadow_multiple() {
         .parse()
         .expect("numeric");
     assert_eq!(count, 2, "shadowMultiple should shadow 2 variables (a, b)");
-    let vars = m.fields.get("shadow_vars").map(String::as_str).unwrap_or("");
-    assert!(vars.contains("a"), "shadow_vars should contain 'a', got: {vars}");
-    assert!(vars.contains("b"), "shadow_vars should contain 'b', got: {vars}");
+    let vars = m
+        .fields
+        .get("shadow_vars")
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        vars.contains("a"),
+        "shadow_vars should contain 'a', got: {vars}"
+    );
+    assert!(
+        vars.contains("b"),
+        "shadow_vars should contain 'b', got: {vars}"
+    );
 }
 
 #[test]
@@ -2922,12 +3069,16 @@ fn shadow_nested() {
     );
     let qr = as_query(&r);
     let m = find_by_name(&qr.results, "shadowNested");
-    assert_eq!(
-        m.fields.get("has_shadow").map(String::as_str),
-        Some("true"),
+    assert_eq!(m.fields.get("has_shadow").map(String::as_str), Some("true"),);
+    let vars = m
+        .fields
+        .get("shadow_vars")
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        vars.contains("val"),
+        "shadow_vars should contain 'val', got: {vars}"
     );
-    let vars = m.fields.get("shadow_vars").map(String::as_str).unwrap_or("");
-    assert!(vars.contains("val"), "shadow_vars should contain 'val', got: {vars}");
 }
 
 #[test]
@@ -2975,8 +3126,15 @@ fn unused_param_one() {
         m.fields.get("unused_param_count").map(String::as_str),
         Some("1"),
     );
-    let params = m.fields.get("unused_params").map(String::as_str).unwrap_or("");
-    assert!(params.contains("unused_p"), "unused_params should contain 'unused_p', got: {params}");
+    let params = m
+        .fields
+        .get("unused_params")
+        .map(String::as_str)
+        .unwrap_or("");
+    assert!(
+        params.contains("unused_p"),
+        "unused_params should contain 'unused_p', got: {params}"
+    );
     // Exactly one unused param, so the whole field should be just "unused_p"
     assert_eq!(params, "unused_p", "only unused_p should be listed");
 }
@@ -3019,7 +3177,11 @@ fn unused_param_all() {
         .parse()
         .expect("numeric");
     assert_eq!(count, 3, "all 3 parameters should be unused");
-    let params = m.fields.get("unused_params").map(String::as_str).unwrap_or("");
+    let params = m
+        .fields
+        .get("unused_params")
+        .map(String::as_str)
+        .unwrap_or("");
     assert!(params.contains("x"), "should contain 'x', got: {params}");
     assert!(params.contains("y"), "should contain 'y', got: {params}");
     assert!(params.contains("z"), "should contain 'z', got: {params}");
@@ -3280,18 +3442,9 @@ fn todo_single() {
     );
     let qr = as_query(&r);
     let m = find_by_name(&qr.results, "todoSingle");
-    assert_eq!(
-        m.fields.get("has_todo").map(String::as_str),
-        Some("true"),
-    );
-    assert_eq!(
-        m.fields.get("todo_count").map(String::as_str),
-        Some("1"),
-    );
-    assert_eq!(
-        m.fields.get("todo_tags").map(String::as_str),
-        Some("TODO"),
-    );
+    assert_eq!(m.fields.get("has_todo").map(String::as_str), Some("true"),);
+    assert_eq!(m.fields.get("todo_count").map(String::as_str), Some("1"),);
+    assert_eq!(m.fields.get("todo_tags").map(String::as_str), Some("TODO"),);
 }
 
 #[test]
@@ -3304,10 +3457,7 @@ fn todo_multiple_markers() {
     );
     let qr = as_query(&r);
     let m = find_by_name(&qr.results, "todoMultiple");
-    assert_eq!(
-        m.fields.get("has_todo").map(String::as_str),
-        Some("true"),
-    );
+    assert_eq!(m.fields.get("has_todo").map(String::as_str), Some("true"),);
     assert_eq!(
         m.fields.get("todo_count").map(String::as_str),
         Some("3"),
@@ -3346,10 +3496,7 @@ fn todo_repeated_same_marker() {
     );
     let qr = as_query(&r);
     let m = find_by_name(&qr.results, "todoRepeated");
-    assert_eq!(
-        m.fields.get("has_todo").map(String::as_str),
-        Some("true"),
-    );
+    assert_eq!(m.fields.get("has_todo").map(String::as_str), Some("true"),);
     assert_eq!(
         m.fields.get("todo_count").map(String::as_str),
         Some("3"),
@@ -3379,8 +3526,5 @@ fn todo_where_filter() {
         names.contains(&"todoMultiple"),
         "todoMultiple should appear, got: {names:?}",
     );
-    assert!(
-        !names.contains(&"todoNone"),
-        "todoNone should not appear",
-    );
+    assert!(!names.contains(&"todoNone"), "todoNone should not appear",);
 }

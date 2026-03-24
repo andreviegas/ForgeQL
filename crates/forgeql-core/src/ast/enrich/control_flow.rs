@@ -537,6 +537,12 @@ fn split_top_level<'a>(s: &'a str, op: &str) -> Vec<&'a str> {
 
 /// Check if an assignment operator (`=` but not `==`, `!=`, `<=`, `>=`)
 /// appears inside a condition subtree.
+///
+/// **Caveat:** tree-sitter-cpp sometimes mis-parses `>=` inside complex
+/// conditions as a template closing `>` followed by assignment `=`, producing
+/// a spurious `assignment_expression` whose left-hand side contains a
+/// `template_function` / `template_argument_list`.  We skip those to avoid
+/// false positives.
 fn has_assignment_in_condition(node: tree_sitter::Node<'_>, _source: &[u8]) -> bool {
     let mut cursor = node.walk();
     let mut visit = true;
@@ -544,7 +550,7 @@ fn has_assignment_in_condition(node: tree_sitter::Node<'_>, _source: &[u8]) -> b
     loop {
         if visit {
             let current = cursor.node();
-            if current.kind() == "assignment_expression" {
+            if current.kind() == "assignment_expression" && !contains_template_misparse(current) {
                 return true;
             }
         }
@@ -559,6 +565,44 @@ fn has_assignment_in_condition(node: tree_sitter::Node<'_>, _source: &[u8]) -> b
         }
         loop {
             if !cursor.goto_parent() {
+                return false;
+            }
+            if cursor.goto_next_sibling() {
+                visit = true;
+                break;
+            }
+        }
+    }
+}
+
+/// Check if `node` contains a `template_function`, `template_type`, or
+/// `template_argument_list` as a descendant — a sign that tree-sitter-cpp
+/// mis-parsed `>=` as template-close `>` followed by assignment `=`.
+fn contains_template_misparse(node: tree_sitter::Node<'_>) -> bool {
+    let mut cursor = node.walk();
+    let mut visit = true;
+    loop {
+        if visit
+            && matches!(
+                cursor.node().kind(),
+                "template_function" | "template_type" | "template_argument_list"
+            )
+        {
+            return true;
+        }
+        if visit && cursor.goto_first_child() {
+            visit = true;
+            continue;
+        }
+        if cursor.goto_next_sibling() {
+            visit = true;
+            continue;
+        }
+        loop {
+            if !cursor.goto_parent() {
+                return false;
+            }
+            if cursor.node().id() == node.id() {
                 return false;
             }
             if cursor.goto_next_sibling() {
