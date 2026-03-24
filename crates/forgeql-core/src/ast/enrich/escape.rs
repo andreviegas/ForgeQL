@@ -233,7 +233,9 @@ fn resolve_identifier(
         }
     }
     // Parenthesised: `return &(local)` — recurse.
-    if node.kind() == "parenthesized_expression" {
+    if !config.parenthesized_expression_raw_kind.is_empty()
+        && node.kind() == config.parenthesized_expression_raw_kind
+    {
         for i in 0..node.named_child_count() {
             if let Some(child) = node.named_child(i) {
                 return resolve_identifier(child, source, config);

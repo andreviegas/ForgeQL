@@ -228,6 +228,100 @@ pub struct LanguageConfig {
     /// (e.g. `"call_expression"` for C++/Java/TS, `"call"` for Python).
     /// Empty string if the language has no call expression kind.
     pub call_expression_raw_kind: &'static str,
+
+    // -- metrics (body-level counting) --
+    /// Raw kind for goto statements (e.g. `"goto_statement"` for C++).
+    /// Empty string if the language has no goto.
+    pub goto_statement_raw_kind: &'static str,
+
+    /// Raw kinds for string/char literal nodes
+    /// (e.g. `["string_literal", "char_literal"]` for C++,
+    /// `["string_literal", "raw_string_literal"]` for Rust).
+    pub string_literal_raw_kinds: &'static [&'static str],
+
+    /// Raw kind for throw/raise statements
+    /// (e.g. `"throw_statement"` for C++, `""` for Rust which uses `panic!`).
+    pub throw_statement_raw_kind: &'static str,
+
+    // -- show/display --
+    /// Raw kind for template/generic declarations wrapping a function or type
+    /// (e.g. `"template_declaration"` for C++, `""` for Rust).
+    pub template_declaration_raw_kind: &'static str,
+
+    /// Raw kind for enumerator/variant members inside an enum body
+    /// (e.g. `"enumerator"` for C++, `"enum_variant"` for Rust).
+    pub enumerator_raw_kind: &'static str,
+
+    // -- expression analysis (control-flow, redundancy) --
+    /// Raw kind for binary arithmetic/comparison expressions
+    /// (e.g. `"binary_expression"` — common across most tree-sitter grammars).
+    pub binary_expression_raw_kind: &'static str,
+
+    /// Raw kind for logical `&&`/`||` expressions when the grammar has a
+    /// separate node kind (e.g. `"logical_expression"` for C++).
+    /// Empty string if logical operators produce `binary_expression` nodes.
+    pub logical_expression_raw_kind: &'static str,
+
+    // -- cast type extraction --
+    /// Raw kind for type-descriptor nodes inside cast expressions
+    /// (e.g. `"type_descriptor"` for C++).  Empty if not applicable.
+    pub type_descriptor_raw_kind: &'static str,
+
+    /// Raw kind for template/generic argument lists
+    /// (e.g. `"template_argument_list"` for C++).  Empty if not applicable.
+    pub template_argument_list_raw_kind: &'static str,
+
+    // -- operators --
+    /// Raw kinds that may contain shift operators (`<<`, `>>`).
+    /// (e.g. `["shift_expression"]` for C++ — may also include
+    /// `binary_expression` for grammars that don't distinguish shifts).
+    pub shift_expression_raw_kinds: &'static [&'static str],
+
+    /// Synthetic raw kind assigned to compound-assignment rows created by the
+    /// operator enricher (e.g. `"compound_assignment"`).
+    pub compound_assignment_raw_kind: &'static str,
+
+    // -- for-loop style disambiguation --
+    /// (`raw_kind`, `style_name`) pairs for for-loop style detection.
+    /// (e.g. `[("for_statement", "traditional"), ("for_range_loop", "range")]`
+    /// for C++, `[("for_expression", "range")]` for Rust).
+    pub for_style_map: &'static [(&'static str, &'static str)],
+
+    // -- template/generic misparse detection --
+    /// Raw kinds whose presence signals a tree-sitter template/generic
+    /// misparse (e.g. `>=` mis-parsed as `>` + `=` in C++).
+    /// (e.g. `["template_function", "template_type", "template_argument_list"]`).
+    /// Empty slice for languages without this issue.
+    pub template_misparse_raw_kinds: &'static [&'static str],
+
+    // -- skeleton condition normalization (control-flow enricher) --
+    /// Raw kind for field/member access expressions
+    /// (e.g. `"field_expression"` for C++/Rust).
+    pub field_expression_raw_kind: &'static str,
+
+    /// Raw kind for array/index subscript expressions
+    /// (e.g. `"subscript_expression"` for C++, `"index_expression"` for Rust).
+    pub subscript_expression_raw_kind: &'static str,
+
+    /// Raw kind for unary expressions (`!x`, `-x`, etc.)
+    /// (e.g. `"unary_expression"` — common across most grammars).
+    pub unary_expression_raw_kind: &'static str,
+
+    /// Raw kind for parenthesized expressions
+    /// (e.g. `"parenthesized_expression"` — common across most grammars).
+    pub parenthesized_expression_raw_kind: &'static str,
+
+    /// Raw kind for the condition clause wrapper node
+    /// (e.g. `"condition_clause"` for C++).  Empty if not applicable.
+    pub condition_clause_raw_kind: &'static str,
+
+    /// Raw kind for comma expressions
+    /// (e.g. `"comma_expression"` for C++).  Empty if not applicable.
+    pub comma_expression_raw_kind: &'static str,
+
+    /// Raw kind for character literals
+    /// (e.g. `"char_literal"` for C++).  Empty if not applicable.
+    pub char_literal_raw_kind: &'static str,
 }
 
 // -----------------------------------------------------------------------
@@ -317,6 +411,12 @@ impl LanguageRegistry {
             let _ = seen.entry(lang.name()).or_insert_with(|| Arc::clone(lang));
         }
         seen.into_values().collect()
+    }
+
+    /// Return all language configs from registered languages.
+    #[must_use]
+    pub fn configs(&self) -> Vec<&'static LanguageConfig> {
+        self.languages().iter().map(|l| l.config()).collect()
     }
 }
 
@@ -452,6 +552,41 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
     break_statement_raw_kind: "break_statement",
 
     call_expression_raw_kind: "call_expression",
+
+    goto_statement_raw_kind: "goto_statement",
+    string_literal_raw_kinds: &["string_literal", "char_literal"],
+    throw_statement_raw_kind: "throw_statement",
+
+    template_declaration_raw_kind: "template_declaration",
+    enumerator_raw_kind: "enumerator",
+
+    binary_expression_raw_kind: "binary_expression",
+    logical_expression_raw_kind: "logical_expression",
+
+    type_descriptor_raw_kind: "type_descriptor",
+    template_argument_list_raw_kind: "template_argument_list",
+
+    shift_expression_raw_kinds: &["shift_expression"],
+    compound_assignment_raw_kind: "compound_assignment",
+
+    for_style_map: &[
+        ("for_statement", "traditional"),
+        ("for_range_loop", "range"),
+    ],
+
+    template_misparse_raw_kinds: &[
+        "template_function",
+        "template_type",
+        "template_argument_list",
+    ],
+
+    field_expression_raw_kind: "field_expression",
+    subscript_expression_raw_kind: "subscript_expression",
+    unary_expression_raw_kind: "unary_expression",
+    parenthesized_expression_raw_kind: "parenthesized_expression",
+    condition_clause_raw_kind: "condition_clause",
+    comma_expression_raw_kind: "comma_expression",
+    char_literal_raw_kind: "char_literal",
 };
 
 #[cfg(any(test, feature = "test-helpers"))]

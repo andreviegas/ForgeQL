@@ -52,16 +52,16 @@ impl NodeEnricher for ControlFlowEnricher {
             .unwrap_or_default();
 
         if let Some(cond) = condition_node {
-            let tests = count_condition_tests(cond, ctx.source);
+            let tests = count_condition_tests(cond, ctx.source, config);
             drop(fields.insert("condition_tests".to_string(), tests.to_string()));
 
             let depth = max_paren_depth(&condition_text_raw);
             drop(fields.insert("paren_depth".to_string(), depth.to_string()));
 
-            let skeleton = skeleton_condition(cond, ctx.source);
+            let skeleton = skeleton_condition(cond, ctx.source, config);
             drop(fields.insert("condition_text".to_string(), skeleton.clone()));
 
-            let has_assign = has_assignment_in_condition(cond, ctx.source);
+            let has_assign = has_assignment_in_condition(cond, ctx.source, config);
             drop(fields.insert(
                 "has_assignment_in_condition".to_string(),
                 has_assign.to_string(),
@@ -84,10 +84,11 @@ impl NodeEnricher for ControlFlowEnricher {
         }
 
         // For loops: detect style (traditional vs range-based)
-        if kind == "for_statement" {
-            drop(fields.insert("for_style".to_string(), "traditional".to_string()));
-        } else if kind == "for_range_loop" {
-            drop(fields.insert("for_style".to_string(), "range".to_string()));
+        for &(raw_kind, style_name) in config.for_style_map {
+            if kind == raw_kind {
+                drop(fields.insert("for_style".to_string(), style_name.to_string()));
+                break;
+            }
         }
 
         // Name = the skeleton (or raw condition text if no condition)
@@ -184,7 +185,11 @@ impl NodeEnricher for ControlFlowEnricher {
 }
 
 /// Count comparison and logical operators in a condition subtree.
-fn count_condition_tests(node: tree_sitter::Node<'_>, source: &[u8]) -> usize {
+fn count_condition_tests(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    config: &crate::ast::lang::LanguageConfig,
+) -> usize {
     let mut count = 0;
     let mut cursor = node.walk();
     let mut visit = true;
@@ -193,7 +198,10 @@ fn count_condition_tests(node: tree_sitter::Node<'_>, source: &[u8]) -> usize {
         if visit {
             let current = cursor.node();
             let kind = current.kind();
-            if kind == "binary_expression" || kind == "logical_expression" {
+            if kind == config.binary_expression_raw_kind
+                || (!config.logical_expression_raw_kind.is_empty()
+                    && kind == config.logical_expression_raw_kind)
+            {
                 // Check the operator child
                 if let Some(op_node) = current.child_by_field_name("operator") {
                     let op = node_text(source, op_node);
@@ -276,12 +284,23 @@ const MAX_SKELETON_LEN: usize = 120;
 /// with a sequential letter (a, b, c, ..., z), keeping operators and parens.
 /// Repeated sub-expressions get the same letter.  When more than 26 unique
 /// terms exist, overflow terms are mapped to `$`.
-fn skeleton_condition(node: tree_sitter::Node<'_>, source: &[u8]) -> String {
+fn skeleton_condition(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    config: &crate::ast::lang::LanguageConfig,
+) -> String {
     let mut mapping: HashMap<String, String> = HashMap::new();
     let mut next_letter = b'a';
     let mut result = String::new();
 
-    skeleton_walk(node, source, &mut mapping, &mut next_letter, &mut result);
+    skeleton_walk(
+        node,
+        source,
+        &mut mapping,
+        &mut next_letter,
+        &mut result,
+        config,
+    );
 
     if result.len() > MAX_SKELETON_LEN {
         let truncated: String = result.chars().take(MAX_SKELETON_LEN).collect();
@@ -298,23 +317,19 @@ fn skeleton_walk(
     mapping: &mut HashMap<String, String>,
     next_letter: &mut u8,
     result: &mut String,
+    config: &crate::ast::lang::LanguageConfig,
 ) {
     let kind = node.kind();
 
-    // Leaf-like nodes get mapped to letters
-    if matches!(
-        kind,
-        "identifier"
-            | "field_identifier"
-            | "type_identifier"
-            | "number_literal"
-            | "string_literal"
-            | "char_literal"
-            | "true"
-            | "false"
-            | "null"
-            | "nullptr"
-    ) {
+    // Leaf-like nodes get mapped to letters: identifiers, number/string/char
+    // literals, boolean literals, null literals.
+    if config.usage_node_kinds.contains(&kind)
+        || config.number_literal_raw_kinds.contains(&kind)
+        || config.string_literal_raw_kinds.contains(&kind)
+        || (!config.char_literal_raw_kind.is_empty() && kind == config.char_literal_raw_kind)
+        || config.boolean_literals.contains(&kind)
+        || config.null_literals.contains(&kind)
+    {
         let text = node_text(source, node);
         let label = mapping
             .entry(text)
@@ -325,7 +340,7 @@ fn skeleton_walk(
     }
 
     // Call expressions: map the whole call as one letter
-    if kind == "call_expression" {
+    if !config.call_expression_raw_kind.is_empty() && kind == config.call_expression_raw_kind {
         let text = node_text(source, node);
         let label = mapping
             .entry(text)
@@ -336,7 +351,7 @@ fn skeleton_walk(
     }
 
     // Field expressions (member access): map as one unit
-    if kind == "field_expression" {
+    if !config.field_expression_raw_kind.is_empty() && kind == config.field_expression_raw_kind {
         let text = node_text(source, node);
         let label = mapping
             .entry(text)
@@ -347,7 +362,9 @@ fn skeleton_walk(
     }
 
     // Subscript expressions: map as one unit
-    if kind == "subscript_expression" {
+    if !config.subscript_expression_raw_kind.is_empty()
+        && kind == config.subscript_expression_raw_kind
+    {
         let text = node_text(source, node);
         let label = mapping
             .entry(text)
@@ -359,7 +376,7 @@ fn skeleton_walk(
 
     // Pointer dereference / address-of: map as one unit so that
     // `*ptr` and `ptr` get distinct letters.
-    if kind == "pointer_expression" {
+    if config.address_of_expression_raw_kind.contains(kind) {
         let text = node_text(source, node);
         let label = mapping
             .entry(text)
@@ -383,44 +400,49 @@ fn skeleton_walk(
     }
 
     // Unary not: keep the ! and recurse
-    if kind == "unary_expression" {
-        // Recurse into children to preserve operator
+    if !config.unary_expression_raw_kind.is_empty() && kind == config.unary_expression_raw_kind {
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
-                skeleton_walk(child, source, mapping, next_letter, result);
+                skeleton_walk(child, source, mapping, next_letter, result, config);
             }
         }
         return;
     }
 
     // Binary/logical expressions: recurse into children
-    if matches!(kind, "binary_expression" | "logical_expression") {
+    if (!config.binary_expression_raw_kind.is_empty() && kind == config.binary_expression_raw_kind)
+        || (!config.logical_expression_raw_kind.is_empty()
+            && kind == config.logical_expression_raw_kind)
+    {
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
-                skeleton_walk(child, source, mapping, next_letter, result);
+                skeleton_walk(child, source, mapping, next_letter, result, config);
             }
         }
         return;
     }
 
     // Parenthesized expression: recurse, keeping parens from unnamed children
-    if kind == "parenthesized_expression" {
+    if !config.parenthesized_expression_raw_kind.is_empty()
+        && kind == config.parenthesized_expression_raw_kind
+    {
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
-                skeleton_walk(child, source, mapping, next_letter, result);
+                skeleton_walk(child, source, mapping, next_letter, result, config);
             }
         }
         return;
     }
 
     // Wrapper / transparent nodes that should be recursed through
-    if matches!(
-        kind,
-        "condition_clause" | "cast_expression" | "comma_expression"
-    ) {
+    if (!config.condition_clause_raw_kind.is_empty() && kind == config.condition_clause_raw_kind)
+        || config.cast_kinds.iter().any(|(k, _, _)| *k == kind)
+        || (!config.comma_expression_raw_kind.is_empty()
+            && kind == config.comma_expression_raw_kind)
+    {
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i) {
-                skeleton_walk(child, source, mapping, next_letter, result);
+                skeleton_walk(child, source, mapping, next_letter, result, config);
             }
         }
         return;
@@ -543,14 +565,20 @@ fn split_top_level<'a>(s: &'a str, op: &str) -> Vec<&'a str> {
 /// a spurious `assignment_expression` whose left-hand side contains a
 /// `template_function` / `template_argument_list`.  We skip those to avoid
 /// false positives.
-fn has_assignment_in_condition(node: tree_sitter::Node<'_>, _source: &[u8]) -> bool {
+fn has_assignment_in_condition(
+    node: tree_sitter::Node<'_>,
+    _source: &[u8],
+    config: &crate::ast::lang::LanguageConfig,
+) -> bool {
     let mut cursor = node.walk();
     let mut visit = true;
 
     loop {
         if visit {
             let current = cursor.node();
-            if current.kind() == "assignment_expression" && !contains_template_misparse(current) {
+            if config.assignment_raw_kinds.contains(&current.kind())
+                && !contains_template_misparse(current, config)
+            {
                 return true;
             }
         }
@@ -578,15 +606,17 @@ fn has_assignment_in_condition(node: tree_sitter::Node<'_>, _source: &[u8]) -> b
 /// Check if `node` contains a `template_function`, `template_type`, or
 /// `template_argument_list` as a descendant — a sign that tree-sitter-cpp
 /// mis-parsed `>=` as template-close `>` followed by assignment `=`.
-fn contains_template_misparse(node: tree_sitter::Node<'_>) -> bool {
+fn contains_template_misparse(
+    node: tree_sitter::Node<'_>,
+    config: &crate::ast::lang::LanguageConfig,
+) -> bool {
     let mut cursor = node.walk();
     let mut visit = true;
     loop {
         if visit
-            && matches!(
-                cursor.node().kind(),
-                "template_function" | "template_type" | "template_argument_list"
-            )
+            && config
+                .template_misparse_raw_kinds
+                .contains(&cursor.node().kind())
         {
             return true;
         }

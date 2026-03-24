@@ -44,16 +44,18 @@ impl NodeEnricher for MetricsEnricher {
             drop(fields.insert("param_count".to_string(), param_count.to_string()));
 
             // Aggregate counts that require subtree walk
-            let return_count = count_descendants_by_kind(ctx.node, "return_statement");
+            let return_count =
+                count_descendants_by_kind(ctx.node, config.return_statement_raw_kind);
             drop(fields.insert("return_count".to_string(), return_count.to_string()));
 
-            let goto_count = count_descendants_by_kind(ctx.node, "goto_statement");
+            let goto_count = count_descendants_by_kind(ctx.node, config.goto_statement_raw_kind);
             drop(fields.insert("goto_count".to_string(), goto_count.to_string()));
 
-            let string_count = count_descendants_by_kind(ctx.node, "string_literal");
+            let string_count =
+                count_descendants_by_kinds(ctx.node, config.string_literal_raw_kinds);
             drop(fields.insert("string_count".to_string(), string_count.to_string()));
 
-            let throw_count = count_descendants_by_kind(ctx.node, "throw_statement");
+            let throw_count = count_descendants_by_kind(ctx.node, config.throw_statement_raw_kind);
             drop(fields.insert("throw_count".to_string(), throw_count.to_string()));
         }
 
@@ -114,7 +116,36 @@ fn count_descendants_by_kind(node: tree_sitter::Node<'_>, target_kind: &str) -> 
     }
 }
 
-const MEMBER_KINDS: &[&str] = &["field_declaration", "function_definition", "declaration"];
+/// Count all descendants matching any of the given kinds within the node's subtree.
+fn count_descendants_by_kinds(node: tree_sitter::Node<'_>, target_kinds: &[&str]) -> usize {
+    let mut count = 0;
+    let mut cursor = node.walk();
+    let mut visit = true;
+
+    loop {
+        if visit && target_kinds.contains(&cursor.node().kind()) && cursor.node() != node {
+            count += 1;
+        }
+
+        if visit && cursor.goto_first_child() {
+            visit = true;
+            continue;
+        }
+        if cursor.goto_next_sibling() {
+            visit = true;
+            continue;
+        }
+        loop {
+            if !cursor.goto_parent() {
+                return count;
+            }
+            if cursor.goto_next_sibling() {
+                visit = true;
+                break;
+            }
+        }
+    }
+}
 
 /// Count direct members of a struct/class body (one level deep).
 ///
@@ -123,6 +154,13 @@ const MEMBER_KINDS: &[&str] = &["field_declaration", "function_definition", "dec
 /// falls back to counting all named children of the first list child
 /// (for enums whose body kind differs).
 fn count_direct_members(node: tree_sitter::Node<'_>, config: &LanguageConfig) -> usize {
+    let is_member = |k: &str| {
+        config.member_raw_kinds.contains(&k)
+            || config.field_raw_kinds.contains(&k)
+            || config.function_raw_kinds.contains(&k)
+            || config.declaration_raw_kinds.contains(&k)
+    };
+
     // Struct/class path: look for the config-driven body kind
     if let Some(body) = node
         .children(&mut node.walk())
@@ -130,15 +168,12 @@ fn count_direct_members(node: tree_sitter::Node<'_>, config: &LanguageConfig) ->
     {
         let mut count = 0;
         for child in body.children(&mut body.walk()) {
-            let ck = child.kind();
-            if config.member_raw_kinds.contains(&ck) || MEMBER_KINDS.contains(&ck) {
+            if is_member(child.kind()) {
                 count += 1;
             } else {
                 // Access-specifier sections may wrap members.
                 for inner in child.children(&mut child.walk()) {
-                    if config.member_raw_kinds.contains(&inner.kind())
-                        || MEMBER_KINDS.contains(&inner.kind())
-                    {
+                    if is_member(inner.kind()) {
                         count += 1;
                     }
                 }

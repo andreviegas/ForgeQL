@@ -145,6 +145,41 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
     break_statement_raw_kind: "break_statement",
 
     call_expression_raw_kind: "call_expression",
+
+    goto_statement_raw_kind: "goto_statement",
+    string_literal_raw_kinds: &["string_literal", "char_literal"],
+    throw_statement_raw_kind: "throw_statement",
+
+    template_declaration_raw_kind: "template_declaration",
+    enumerator_raw_kind: "enumerator",
+
+    binary_expression_raw_kind: "binary_expression",
+    logical_expression_raw_kind: "logical_expression",
+
+    type_descriptor_raw_kind: "type_descriptor",
+    template_argument_list_raw_kind: "template_argument_list",
+
+    shift_expression_raw_kinds: &["shift_expression"],
+    compound_assignment_raw_kind: "compound_assignment",
+
+    for_style_map: &[
+        ("for_statement", "traditional"),
+        ("for_range_loop", "range"),
+    ],
+
+    template_misparse_raw_kinds: &[
+        "template_function",
+        "template_type",
+        "template_argument_list",
+    ],
+
+    field_expression_raw_kind: "field_expression",
+    subscript_expression_raw_kind: "subscript_expression",
+    unary_expression_raw_kind: "unary_expression",
+    parenthesized_expression_raw_kind: "parenthesized_expression",
+    condition_clause_raw_kind: "condition_clause",
+    comma_expression_raw_kind: "comma_expression",
+    char_literal_raw_kind: "char_literal",
 };
 
 impl LanguageSupport for CppLanguage {

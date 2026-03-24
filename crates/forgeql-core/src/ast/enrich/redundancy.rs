@@ -51,8 +51,7 @@ impl NodeEnricher for RedundancyEnricher {
         collect_condition_info(
             ctx.node,
             ctx.source,
-            config.control_flow_raw_kinds,
-            config.null_literals,
+            config,
             &mut condition_calls,
             &mut null_checks,
         );
@@ -165,8 +164,7 @@ impl NodeEnricher for RedundancyEnricher {
 fn collect_condition_info(
     func_node: tree_sitter::Node<'_>,
     source: &[u8],
-    cf_raw_kinds: &[&str],
-    null_literals: &[&str],
+    config: &crate::ast::lang::LanguageConfig,
     condition_calls: &mut HashMap<String, usize>,
     null_checks: &mut usize,
 ) {
@@ -179,11 +177,21 @@ fn collect_condition_info(
             let kind = node.kind();
 
             // When we hit a control-flow node, inspect its condition subtree.
-            if cf_raw_kinds.contains(&kind)
+            if config.control_flow_raw_kinds.contains(&kind)
                 && let Some(cond) = node.child_by_field_name("condition")
             {
-                collect_calls_in_subtree(cond, source, condition_calls);
-                *null_checks += count_null_checks(cond, source, null_literals);
+                collect_calls_in_subtree(
+                    cond,
+                    source,
+                    condition_calls,
+                    config.call_expression_raw_kind,
+                );
+                *null_checks += count_null_checks(
+                    cond,
+                    source,
+                    config.null_literals,
+                    config.binary_expression_raw_kind,
+                );
             }
         }
 
@@ -213,13 +221,14 @@ fn collect_calls_in_subtree(
     node: tree_sitter::Node<'_>,
     source: &[u8],
     calls: &mut HashMap<String, usize>,
+    call_expression_raw_kind: &str,
 ) {
     let mut cursor = node.walk();
     let mut visit = true;
 
     loop {
         if visit
-            && cursor.node().kind() == "call_expression"
+            && cursor.node().kind() == call_expression_raw_kind
             && let Some(func_node) = cursor.node().child_by_field_name("function")
         {
             let name = node_text(source, func_node);
@@ -252,7 +261,12 @@ fn collect_calls_in_subtree(
 ///
 /// Matches: `== nullptr`, `!= nullptr`, `== NULL`, `!= NULL`, `== 0` when the
 /// other operand is a pointer (heuristic: identifier or `field_expression`).
-fn count_null_checks(node: tree_sitter::Node<'_>, source: &[u8], null_literals: &[&str]) -> usize {
+fn count_null_checks(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    null_literals: &[&str],
+    binary_expression_raw_kind: &str,
+) -> usize {
     let mut count = 0;
     let mut cursor = node.walk();
     let mut visit = true;
@@ -260,7 +274,7 @@ fn count_null_checks(node: tree_sitter::Node<'_>, source: &[u8], null_literals: 
     loop {
         if visit {
             let current = cursor.node();
-            if current.kind() == "binary_expression"
+            if current.kind() == binary_expression_raw_kind
                 && let Some(op) = current.child_by_field_name("operator")
             {
                 let op_text = node_text(source, op);

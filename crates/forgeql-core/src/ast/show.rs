@@ -17,7 +17,7 @@ use serde_json::Value;
 use crate::{
     ast::{
         index::{IndexRow, SymbolTable},
-        lang::LanguageRegistry,
+        lang::{LanguageConfig, LanguageRegistry},
     },
     workspace::Workspace,
 };
@@ -64,26 +64,28 @@ pub(crate) fn parse_file(
 
 /// Walk the tree recursively to find the nearest `function_definition` node
 /// whose byte range contains `def_start`.
-pub(crate) fn find_enclosing_function_def(
-    root: tree_sitter::Node<'_>,
+pub(crate) fn find_enclosing_function_def<'t>(
+    root: tree_sitter::Node<'t>,
     def_start: usize,
-) -> Option<tree_sitter::Node<'_>> {
+    config: &LanguageConfig,
+) -> Option<tree_sitter::Node<'t>> {
     fn walk<'t>(
         cursor: &mut tree_sitter::TreeCursor<'t>,
         def_start: usize,
+        func_kinds: &[&str],
     ) -> Option<tree_sitter::Node<'t>> {
         let node = cursor.node();
         // Prune: skip subtrees that cannot contain def_start.
         if !node.byte_range().contains(&def_start) {
             return None;
         }
-        if node.kind() == "function_definition" {
+        if func_kinds.contains(&node.kind()) {
             return Some(node);
         }
         // Recurse into children.
         if cursor.goto_first_child() {
             loop {
-                if let Some(found) = walk(cursor, def_start) {
+                if let Some(found) = walk(cursor, def_start, func_kinds) {
                     // Reset cursor to the parent before returning so the
                     // caller's cursor is not left in an indeterminate state.
                     while cursor.goto_parent() {}
@@ -99,7 +101,7 @@ pub(crate) fn find_enclosing_function_def(
     }
 
     let mut cursor = root.walk();
-    walk(&mut cursor, def_start)
+    walk(&mut cursor, def_start, config.function_raw_kinds)
 }
 
 /// Locate the `function_definition` node for a symbol, with template fallback.
@@ -111,24 +113,30 @@ pub(crate) fn find_enclosing_function_def(
 /// byte offset than `def_start`.  This function handles that case by looking
 /// for a `template_declaration` whose start byte equals `def_start` and
 /// returning its inner `function_definition` child.
-pub(crate) fn find_function_node_for_symbol(
-    root: tree_sitter::Node<'_>,
+pub(crate) fn find_function_node_for_symbol<'t>(
+    root: tree_sitter::Node<'t>,
     def_start: usize,
-) -> Option<tree_sitter::Node<'_>> {
+    config: &LanguageConfig,
+) -> Option<tree_sitter::Node<'t>> {
     // Inner helper: walk looking for template_declaration at def_start.
-    fn walk_template(
-        node: tree_sitter::Node<'_>,
+    fn walk_template<'n>(
+        node: tree_sitter::Node<'n>,
         def_start: usize,
-    ) -> Option<tree_sitter::Node<'_>> {
+        template_kind: &str,
+        func_kinds: &[&str],
+    ) -> Option<tree_sitter::Node<'n>> {
         // Prune: skip subtrees that start after or cannot reach def_start.
         if node.start_byte() > def_start {
             return None;
         }
-        if node.kind() == "template_declaration" && node.start_byte() == def_start {
+        if !template_kind.is_empty()
+            && node.kind() == template_kind
+            && node.start_byte() == def_start
+        {
             // Return the first function_definition direct child.
             for i in 0..node.child_count() {
                 if let Some(child) = node.child(i)
-                    && child.kind() == "function_definition"
+                    && func_kinds.contains(&child.kind())
                 {
                     return Some(child);
                 }
@@ -138,7 +146,7 @@ pub(crate) fn find_function_node_for_symbol(
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i)
                 && (child.byte_range().contains(&def_start) || child.start_byte() == def_start)
-                && let Some(found) = walk_template(child, def_start)
+                && let Some(found) = walk_template(child, def_start, template_kind, func_kinds)
             {
                 return Some(found);
             }
@@ -147,31 +155,35 @@ pub(crate) fn find_function_node_for_symbol(
     }
 
     // First try: standard enclosing-function search.
-    if let Some(node) = find_enclosing_function_def(root, def_start) {
+    if let Some(node) = find_enclosing_function_def(root, def_start, config) {
         return Some(node);
     }
 
     // Second try: template_declaration at def_start → inner function_definition.
-    walk_template(root, def_start)
+    walk_template(
+        root,
+        def_start,
+        config.template_declaration_raw_kind,
+        config.function_raw_kinds,
+    )
 }
 
-/// Find a `struct_specifier`, `class_specifier`, or `enum_specifier` node
-/// whose `name` field text equals `name`.
+/// Find a type node (struct/class/enum) whose `name` field text equals `name`.
 fn find_type_node_by_name<'t>(
     root: tree_sitter::Node<'t>,
     source: &[u8],
     name: &str,
+    config: &'_ LanguageConfig,
 ) -> Option<tree_sitter::Node<'t>> {
     fn walk<'t>(
         cursor: &mut tree_sitter::TreeCursor<'t>,
         source: &[u8],
         name: &str,
+        type_kinds: &[&str],
     ) -> Option<tree_sitter::Node<'t>> {
         let node = cursor.node();
-        if matches!(
-            node.kind(),
-            "struct_specifier" | "class_specifier" | "enum_specifier"
-        ) && let Some(name_node) = node.child_by_field_name("name")
+        if type_kinds.contains(&node.kind())
+            && let Some(name_node) = node.child_by_field_name("name")
         {
             let node_name = std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("");
             if node_name == name {
@@ -180,7 +192,7 @@ fn find_type_node_by_name<'t>(
         }
         if cursor.goto_first_child() {
             loop {
-                if let Some(found) = walk(cursor, source, name) {
+                if let Some(found) = walk(cursor, source, name, type_kinds) {
                     while cursor.goto_parent() {}
                     return Some(found);
                 }
@@ -194,10 +206,10 @@ fn find_type_node_by_name<'t>(
     }
 
     let mut cursor = root.walk();
-    walk(&mut cursor, source, name)
+    walk(&mut cursor, source, name, config.type_raw_kinds)
 }
 
-/// Recursively collect the byte ranges of `compound_statement` nodes that
+/// Recursively collect the byte ranges of block nodes that
 /// should be collapsed (their nesting depth exceeds `max_depth`).
 /// Does NOT recurse into already-collapsed nodes.
 fn collect_collapsed(
@@ -205,19 +217,20 @@ fn collect_collapsed(
     cs_depth: usize,
     max_depth: usize,
     out: &mut Vec<std::ops::Range<usize>>,
+    block_kind: &str,
 ) {
-    let new_depth = if node.kind() == "compound_statement" {
+    let new_depth = if node.kind() == block_kind {
         cs_depth + 1
     } else {
         cs_depth
     };
-    if node.kind() == "compound_statement" && new_depth > max_depth {
+    if node.kind() == block_kind && new_depth > max_depth {
         out.push(node.byte_range());
         return; // do not recurse — inner blocks are also collapsed
     }
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
-            collect_collapsed(child, new_depth, max_depth, out);
+            collect_collapsed(child, new_depth, max_depth, out, block_kind);
         }
     }
 }
@@ -236,10 +249,17 @@ fn emit_body_lines(
     source: &[u8],
     fn_node: tree_sitter::Node<'_>,
     max_cs_depth: usize,
+    config: &LanguageConfig,
 ) -> Vec<(usize, String)> {
     // 1 — collect collapsed ranges, sorted by start byte.
     let mut collapsed: Vec<std::ops::Range<usize>> = Vec::new();
-    collect_collapsed(fn_node, 0, max_cs_depth, &mut collapsed);
+    collect_collapsed(
+        fn_node,
+        0,
+        max_cs_depth,
+        &mut collapsed,
+        config.block_raw_kind,
+    );
     collapsed.sort_by_key(|r| r.start);
 
     let fn_start = fn_node.start_byte();
@@ -312,8 +332,13 @@ fn emit_body_lines(
 ///
 /// Uses `child_count()` / `child(i)` instead of a `TreeCursor` to avoid
 /// any cursor-state issues when starting from a non-root node.
-fn collect_callees_walk(source: &[u8], node: tree_sitter::Node<'_>, out: &mut Vec<String>) {
-    if node.kind() == "call_expression"
+fn collect_callees_walk(
+    source: &[u8],
+    node: tree_sitter::Node<'_>,
+    out: &mut Vec<String>,
+    call_kind: &str,
+) {
+    if node.kind() == call_kind
         && let Some(fn_node) = node.child_by_field_name("function")
     {
         let raw = std::str::from_utf8(&source[fn_node.byte_range()]).unwrap_or("");
@@ -333,7 +358,7 @@ fn collect_callees_walk(source: &[u8], node: tree_sitter::Node<'_>, out: &mut Ve
     // Visit every child (named and unnamed) to catch all nested call sites.
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
-            collect_callees_walk(source, child, out);
+            collect_callees_walk(source, child, out, call_kind);
         }
     }
 }
@@ -475,15 +500,19 @@ pub fn show_signature(
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
     let def = find_def(index, symbol, None)?;
+    let lang = lang_registry
+        .language_for_path(&def.path)
+        .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
+    let config = lang.config();
     let (source, tree) = parse_file(&def.path, lang_registry)?;
     let root = tree.root_node();
 
     let start_line = byte_to_line(&source, def.byte_range.start) + 1;
-    let (signature, end_line) = if matches!(
-        def.node_kind.as_str(),
-        "function_definition" | "template_declaration"
-    ) {
-        find_function_node_for_symbol(root, def.byte_range.start).map_or_else(
+    let is_func_or_template = config.function_raw_kinds.contains(&def.node_kind.as_str())
+        || (!config.template_declaration_raw_kind.is_empty()
+            && def.node_kind == config.template_declaration_raw_kind);
+    let (signature, end_line) = if is_func_or_template {
+        find_function_node_for_symbol(root, def.byte_range.start, config).map_or_else(
             || {
                 let sig = extract_line_at(&source, def.byte_range.start);
                 (sig, start_line)
@@ -593,10 +622,14 @@ pub fn show_members(
         .map(|r| r.path.clone())
         .ok_or_else(|| anyhow!("symbol '{symbol}' not found in index"))?;
 
+    let lang = lang_registry
+        .language_for_path(&path)
+        .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
+    let config = lang.config();
     let (source, tree) = parse_file(&path, lang_registry)?;
     let root = tree.root_node();
 
-    let type_node = find_type_node_by_name(root, &source, symbol)
+    let type_node = find_type_node_by_name(root, &source, symbol, config)
         .ok_or_else(|| anyhow!("AST node for '{symbol}' not found in file"))?;
 
     let mut members: Vec<Value> = Vec::new();
@@ -607,67 +640,62 @@ pub fn show_members(
             loop {
                 let child = cursor.node();
                 let ln = byte_to_line(&source, child.start_byte()) + 1;
-                match child.kind() {
-                    "field_declaration" => {
-                        let text = std::str::from_utf8(&source[child.byte_range()])
-                            .unwrap_or("")
-                            .trim()
-                            .trim_end_matches(';')
-                            .to_string();
-                        if !text.is_empty() {
-                            members.push(serde_json::json!({
-                                "kind": "field",
-                                "text": text,
-                                "line": ln,
-                            }));
-                        }
+                let ck = child.kind();
+                if config.field_raw_kinds.contains(&ck) {
+                    let text = std::str::from_utf8(&source[child.byte_range()])
+                        .unwrap_or("")
+                        .trim()
+                        .trim_end_matches(';')
+                        .to_string();
+                    if !text.is_empty() {
+                        members.push(serde_json::json!({
+                            "kind": "field",
+                            "text": text,
+                            "line": ln,
+                        }));
                     }
-                    "function_definition" => {
-                        // Inline method definition — show signature only.
-                        let body_start = child
-                            .child_by_field_name("body")
-                            .map_or_else(|| child.end_byte(), |b| b.start_byte());
-                        let sig = std::str::from_utf8(&source[child.start_byte()..body_start])
-                            .unwrap_or("")
-                            .trim_end()
-                            .to_string();
-                        if !sig.is_empty() {
-                            members.push(serde_json::json!({
-                                "kind": "method",
-                                "text": sig,
-                                "line": ln,
-                            }));
-                        }
+                } else if config.function_raw_kinds.contains(&ck) {
+                    // Inline method definition — show signature only.
+                    let body_start = child
+                        .child_by_field_name("body")
+                        .map_or_else(|| child.end_byte(), |b| b.start_byte());
+                    let sig = std::str::from_utf8(&source[child.start_byte()..body_start])
+                        .unwrap_or("")
+                        .trim_end()
+                        .to_string();
+                    if !sig.is_empty() {
+                        members.push(serde_json::json!({
+                            "kind": "method",
+                            "text": sig,
+                            "line": ln,
+                        }));
                     }
-                    "declaration" => {
-                        // Method declaration (forward declaration / pure virtual).
-                        let text = std::str::from_utf8(&source[child.byte_range()])
-                            .unwrap_or("")
-                            .trim()
-                            .trim_end_matches(';')
-                            .to_string();
-                        if !text.is_empty() {
-                            members.push(serde_json::json!({
-                                "kind": "method",
-                                "text": text,
-                                "line": ln,
-                            }));
-                        }
+                } else if config.declaration_raw_kinds.contains(&ck) {
+                    // Method declaration (forward declaration / pure virtual).
+                    let text = std::str::from_utf8(&source[child.byte_range()])
+                        .unwrap_or("")
+                        .trim()
+                        .trim_end_matches(';')
+                        .to_string();
+                    if !text.is_empty() {
+                        members.push(serde_json::json!({
+                            "kind": "method",
+                            "text": text,
+                            "line": ln,
+                        }));
                     }
-                    "enumerator" => {
-                        if let Some(name_node) = child.child_by_field_name("name") {
-                            let name =
-                                std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("");
-                            if !name.is_empty() {
-                                members.push(serde_json::json!({
-                                    "kind": "enumerator",
-                                    "text": name,
-                                    "line": ln,
-                                }));
-                            }
-                        }
+                } else if !config.enumerator_raw_kind.is_empty()
+                    && ck == config.enumerator_raw_kind
+                    && let Some(name_node) = child.child_by_field_name("name")
+                {
+                    let name = std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("");
+                    if !name.is_empty() {
+                        members.push(serde_json::json!({
+                            "kind": "enumerator",
+                            "text": name,
+                            "line": ln,
+                        }));
                     }
-                    _ => {}
                 }
                 if !cursor.goto_next_sibling() {
                     break;
@@ -713,8 +741,12 @@ pub fn show_body(
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
     let def = find_body_def(index, symbol)?;
+    let lang = lang_registry
+        .language_for_path(&def.path)
+        .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
+    let config = lang.config();
     let (source, tree) = parse_file(&def.path, lang_registry)?;
-    let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start)
+    let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start, config)
         .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 
     let fn_start = fn_node.start_byte();
@@ -752,7 +784,7 @@ pub fn show_body(
                 })
                 .collect()
         }
-        Some(n) => emit_body_lines(&source, fn_node, n)
+        Some(n) => emit_body_lines(&source, fn_node, n, config)
             .into_iter()
             .map(|(ln, text)| serde_json::json!({ "line": ln, "text": text }))
             .collect(),
@@ -830,12 +862,21 @@ pub fn show_callees(
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
     let def = find_body_def(index, symbol)?;
+    let lang = lang_registry
+        .language_for_path(&def.path)
+        .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
+    let config = lang.config();
     let (source, tree) = parse_file(&def.path, lang_registry)?;
-    let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start)
+    let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start, config)
         .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 
     let mut callees: Vec<String> = Vec::new();
-    collect_callees_walk(&source, fn_node, &mut callees);
+    collect_callees_walk(
+        &source,
+        fn_node,
+        &mut callees,
+        config.call_expression_raw_kind,
+    );
     callees.sort();
     callees.dedup();
 
@@ -1048,7 +1089,7 @@ mod tests {
         let tree = parser.parse(source, None).expect("parse");
 
         let mut callees: Vec<String> = Vec::new();
-        collect_callees_walk(source, tree.root_node(), &mut callees);
+        collect_callees_walk(source, tree.root_node(), &mut callees, "call_expression");
         callees.sort();
         callees.dedup();
 
@@ -1073,7 +1114,7 @@ mod tests {
         let tree = parser.parse(source, None).expect("parse");
 
         let mut callees: Vec<String> = Vec::new();
-        collect_callees_walk(source, tree.root_node(), &mut callees);
+        collect_callees_walk(source, tree.root_node(), &mut callees, "call_expression");
         callees.sort();
         callees.dedup();
 
@@ -1097,7 +1138,7 @@ mod tests {
         let tree = parser.parse(source, None).expect("parse");
 
         let mut callees: Vec<String> = Vec::new();
-        collect_callees_walk(source, tree.root_node(), &mut callees);
+        collect_callees_walk(source, tree.root_node(), &mut callees, "call_expression");
         assert!(callees.is_empty(), "expected no callees, got {callees:?}");
     }
 }

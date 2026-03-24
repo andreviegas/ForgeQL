@@ -649,7 +649,8 @@ impl ForgeQLEngine {
             .ok_or_else(|| anyhow::anyhow!("session index not ready — retry USE"))?;
         let root = &session.worktree_path;
 
-        let (mut results, remaining) = find_symbols_prefilter(index, clauses, root);
+        let configs = self.lang_registry.configs();
+        let (mut results, remaining) = find_symbols_prefilter(index, clauses, root, &configs);
 
         validate_order_by_field(&remaining, &results)?;
         crate::filter::apply_clauses(&mut results, &remaining);
@@ -1402,6 +1403,7 @@ fn find_symbols_prefilter(
     index: &SymbolTable,
     clauses: &Clauses,
     root: &std::path::Path,
+    lang_configs: &[&crate::ast::lang::LanguageConfig],
 ) -> (Vec<SymbolMatch>, Clauses) {
     use crate::filter::{eval_predicate, like_match};
     use crate::ir::{CompareOp, PredicateValue};
@@ -1436,7 +1438,7 @@ fn find_symbols_prefilter(
     // enrichment fields used in WHERE.  This lets us use the kind_index
     // instead of a full 2M-row scan.
     let inferred_kinds: Option<Vec<&str>> = if kind_exact.is_none() {
-        infer_kinds_from_fields(&clauses.where_predicates)
+        infer_kinds_from_fields(&clauses.where_predicates, lang_configs)
     } else {
         None
     };
@@ -1620,7 +1622,10 @@ fn validate_order_by_field(
 ///
 /// Returns `None` for universal fields (`naming`, `name_length`) or
 /// built-in fields (`name`, `node_kind`, `path`, `line`, `usages`).
-fn field_to_kinds(field: &str) -> Option<&'static [&'static str]> {
+fn field_to_kinds_for_config(
+    config: &crate::ast::lang::LanguageConfig,
+    field: &str,
+) -> Option<Vec<&'static str>> {
     match field {
         // function_definition only — metrics, redundancy, escape, shadow,
         // unused_param, fallthrough, recursion, todo, decl_distance
@@ -1628,6 +1633,7 @@ fn field_to_kinds(field: &str) -> Option<&'static [&'static str]> {
         | "return_count"
         | "goto_count"
         | "string_count"
+        | "throw_count"
         | "is_inline"
         | "branch_count"
         | "max_condition_tests"
@@ -1655,25 +1661,27 @@ fn field_to_kinds(field: &str) -> Option<&'static [&'static str]> {
         | "todo_tags"
         | "decl_distance"
         | "decl_far_count"
-        | "has_unused_reassign" => Some(&["function_definition"]),
+        | "has_unused_reassign" => Some(config.function_raw_kinds.to_vec()),
         // comments.rs
-        "comment_style" => Some(&["comment"]),
+        "comment_style" => Some(vec![config.comment_raw_kind]),
         // numbers.rs
         "num_format" | "is_magic" | "num_suffix" | "has_separator" | "num_value" | "num_sign" => {
-            Some(&["number_literal"])
+            Some(config.number_literal_raw_kinds.to_vec())
         }
         // operators.rs
-        "increment_style" | "increment_op" => Some(&["update_expression"]),
-        "compound_op" | "operand" => Some(&["compound_assignment"]),
-        "shift_direction" | "shift_operand" | "shift_amount" => Some(&["shift_expression"]),
+        "increment_style" | "increment_op" => Some(config.update_raw_kinds.to_vec()),
+        "compound_op" | "operand" => Some(vec![config.compound_assignment_raw_kind]),
+        "shift_direction" | "shift_operand" | "shift_amount" => {
+            Some(config.shift_expression_raw_kinds.to_vec())
+        }
         // casts.rs
-        "cast_style" | "cast_target_type" => Some(&[
-            "cast_expression",
-            "static_cast_expression",
-            "reinterpret_cast_expression",
-            "const_cast_expression",
-            "dynamic_cast_expression",
-        ]),
+        "cast_style" | "cast_target_type" => Some(
+            config
+                .cast_kinds
+                .iter()
+                .map(|(raw_kind, _, _)| *raw_kind)
+                .collect(),
+        ),
         // control_flow.rs
         "condition_tests"
         | "paren_depth"
@@ -1681,29 +1689,45 @@ fn field_to_kinds(field: &str) -> Option<&'static [&'static str]> {
         | "has_assignment_in_condition"
         | "mixed_logic"
         | "dup_logic"
-        | "duplicate_condition" => Some(&[
-            "if_statement",
-            "while_statement",
-            "for_statement",
-            "switch_statement",
-            "do_statement",
-        ]),
-        "has_catch_all" => Some(&["switch_statement"]),
+        | "for_style"
+        | "duplicate_condition" => Some(config.control_flow_raw_kinds.to_vec()),
+        "has_catch_all" => Some(config.switch_raw_kinds.to_vec()),
         // metrics.rs — multiple definition kinds
-        "lines" | "member_count" | "has_doc" => Some(&[
-            "function_definition",
-            "struct_specifier",
-            "class_specifier",
-            "enum_specifier",
-        ]),
+        "lines" | "member_count" | "has_doc" => Some(config.definition_raw_kinds.to_vec()),
         // metrics.rs — qualifier flags
-        "is_const" | "is_volatile" | "is_static" => Some(&["declaration", "function_definition"]),
+        "is_const" | "is_volatile" | "is_static" => {
+            let mut kinds = config.declaration_raw_kinds.to_vec();
+            kinds.extend(config.function_raw_kinds);
+            Some(kinds)
+        }
         // metrics.rs — visibility
-        "visibility" => Some(&["field_declaration"]),
+        "visibility" => Some(config.field_raw_kinds.to_vec()),
         // scope.rs — declaration only
-        "scope" | "storage" => Some(&["declaration"]),
+        "scope" | "storage" => Some(config.declaration_raw_kinds.to_vec()),
         // Universal / built-in → no shortcut
         _ => None,
+    }
+}
+
+/// Aggregate `field_to_kinds_for_config` across all registered language configs.
+fn field_to_kinds(
+    configs: &[&crate::ast::lang::LanguageConfig],
+    field: &str,
+) -> Option<Vec<&'static str>> {
+    let mut all_kinds: Vec<&'static str> = Vec::new();
+    for config in configs {
+        if let Some(kinds) = field_to_kinds_for_config(config, field) {
+            for k in kinds {
+                if !all_kinds.contains(&k) {
+                    all_kinds.push(k);
+                }
+            }
+        }
+    }
+    if all_kinds.is_empty() {
+        None
+    } else {
+        Some(all_kinds)
     }
 }
 
@@ -1712,14 +1736,17 @@ fn field_to_kinds(field: &str) -> Option<&'static [&'static str]> {
 ///
 /// Returns `None` when no enrichment fields are found, or when the
 /// intersection of inferred kinds is empty (contradictory predicates).
-fn infer_kinds_from_fields(predicates: &[crate::ir::Predicate]) -> Option<Vec<&'static str>> {
+fn infer_kinds_from_fields(
+    predicates: &[crate::ir::Predicate],
+    configs: &[&crate::ast::lang::LanguageConfig],
+) -> Option<Vec<&'static str>> {
     let mut result: Option<Vec<&'static str>> = None;
     for pred in predicates {
-        let Some(kinds) = field_to_kinds(&pred.field) else {
+        let Some(kinds) = field_to_kinds(configs, &pred.field) else {
             continue;
         };
         result = Some(match result {
-            None => kinds.to_vec(),
+            None => kinds,
             Some(current) => {
                 let intersected: Vec<&str> =
                     current.into_iter().filter(|k| kinds.contains(k)).collect();

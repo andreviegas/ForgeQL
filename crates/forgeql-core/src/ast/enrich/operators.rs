@@ -19,14 +19,22 @@ impl NodeEnricher for OperatorEnricher {
     }
 
     fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
-        match ctx.node.kind() {
-            "update_expression" if ctx.language_config.has_increment_decrement => {
-                Self::handle_update(ctx)
-            }
-            "assignment_expression" => Self::handle_compound_assignment(ctx),
-            "binary_expression" | "shift_expression" => Self::handle_shift(ctx),
-            _ => vec![],
+        let kind = ctx.node.kind();
+        let config = ctx.language_config;
+
+        if config.update_raw_kinds.contains(&kind) && config.has_increment_decrement {
+            return Self::handle_update(ctx);
         }
+        if config.assignment_raw_kinds.contains(&kind) {
+            return Self::handle_compound_assignment(ctx);
+        }
+        if (!config.binary_expression_raw_kind.is_empty()
+            && kind == config.binary_expression_raw_kind)
+            || config.shift_expression_raw_kinds.contains(&kind)
+        {
+            return Self::handle_shift(ctx);
+        }
+        vec![]
     }
 }
 
@@ -57,10 +65,10 @@ impl OperatorEnricher {
 
         vec![IndexRow {
             name,
-            node_kind: "update_expression".to_string(),
+            node_kind: ctx.node.kind().to_string(),
             fql_kind: ctx
                 .language_support
-                .map_kind("update_expression")
+                .map_kind(ctx.node.kind())
                 .unwrap_or("")
                 .to_string(),
             language: ctx.language_name.to_string(),
@@ -108,10 +116,10 @@ impl OperatorEnricher {
 
         vec![IndexRow {
             name,
-            node_kind: "compound_assignment".to_string(),
+            node_kind: ctx.language_config.compound_assignment_raw_kind.to_string(),
             fql_kind: ctx
                 .language_support
-                .map_kind("compound_assignment")
+                .map_kind(ctx.language_config.compound_assignment_raw_kind)
                 .unwrap_or("")
                 .to_string(),
             language: ctx.language_name.to_string(),
@@ -152,12 +160,22 @@ impl OperatorEnricher {
             full_text
         };
 
+        // Use the canonical shift kind from config for the output row,
+        // since the trigger node may be a binary_expression in some grammars.
+        let node_kind = ctx.node.kind();
+        let output_kind = ctx
+            .language_config
+            .shift_expression_raw_kinds
+            .first()
+            .copied()
+            .unwrap_or(node_kind);
+
         vec![IndexRow {
             name,
-            node_kind: "shift_expression".to_string(),
+            node_kind: output_kind.to_string(),
             fql_kind: ctx
                 .language_support
-                .map_kind("shift_expression")
+                .map_kind(output_kind)
                 .unwrap_or("")
                 .to_string(),
             language: ctx.language_name.to_string(),

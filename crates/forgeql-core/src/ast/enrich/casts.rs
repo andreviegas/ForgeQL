@@ -36,7 +36,7 @@ impl NodeEnricher for CastEnricher {
                 .unwrap_or_default()
         } else {
             // Named casts: `static_cast<Type>(expr)` etc.
-            extract_template_type(ctx.node, ctx.source)
+            extract_template_type(ctx.node, ctx.source, ctx.language_config)
         };
 
         let mut fields = HashMap::new();
@@ -73,7 +73,11 @@ impl NodeEnricher for CastEnricher {
 }
 
 /// Extract the type from a C++ named cast's template argument.
-fn extract_template_type(node: tree_sitter::Node<'_>, source: &[u8]) -> String {
+fn extract_template_type(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    config: &crate::ast::lang::LanguageConfig,
+) -> String {
     // Try "type" field first (some grammars expose it)
     if let Some(type_node) = node.child_by_field_name("type") {
         return node_text(source, type_node);
@@ -83,7 +87,11 @@ fn extract_template_type(node: tree_sitter::Node<'_>, source: &[u8]) -> String {
     for i in 0..node.named_child_count() {
         if let Some(child) = node.named_child(i) {
             let kind = child.kind();
-            if kind == "type_descriptor" || kind == "template_argument_list" {
+            if (!config.type_descriptor_raw_kind.is_empty()
+                && kind == config.type_descriptor_raw_kind)
+                || (!config.template_argument_list_raw_kind.is_empty()
+                    && kind == config.template_argument_list_raw_kind)
+            {
                 let text = node_text(source, child);
                 // Strip surrounding < > if present
                 return text
