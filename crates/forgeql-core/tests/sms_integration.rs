@@ -21,8 +21,12 @@
     clippy::panic,
     clippy::items_after_statements,
     clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::many_single_char_names,
     clippy::missing_const_for_fn,
     clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
     clippy::single_match,
     clippy::collapsible_if,
     clippy::manual_let_else,
@@ -93,6 +97,8 @@ struct SyntaxSpec {
     operators: Vec<OpSpec>,
     result_types: HashMap<String, ResultTypeSpec>,
     test_values: HashMap<String, Vec<String>>,
+    /// Maps field names → test_values pool names for semantically correct WHERE values.
+    field_pools: HashMap<String, String>,
 }
 
 struct CommandSpec {
@@ -266,6 +272,16 @@ fn load_syntax() -> SyntaxSpec {
         }
     }
 
+    let field_pools: HashMap<String, String> = root
+        .get("field_pools")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+
     SyntaxSpec {
         seed,
         total_budget,
@@ -274,7 +290,26 @@ fn load_syntax() -> SyntaxSpec {
         operators,
         result_types,
         test_values,
+        field_pools,
     }
+}
+
+/// Effective budget: SMS_BUDGET overrides syntax.json; SMS_NIGHTLY multiplies by 5.
+fn effective_budget(spec: &SyntaxSpec) -> usize {
+    if let Ok(val) = std::env::var("SMS_BUDGET") {
+        if let Ok(n) = val.parse::<usize>() {
+            return n;
+        }
+    }
+    if std::env::var("SMS_NIGHTLY").is_ok() {
+        return spec.total_budget * 5;
+    }
+    spec.total_budget
+}
+
+/// CSV output is enabled only in nightly mode or when SMS_CSV=1.
+fn csv_enabled() -> bool {
+    std::env::var("SMS_NIGHTLY").is_ok() || std::env::var("SMS_CSV").is_ok()
 }
 
 fn arr_str(v: &Value) -> Vec<String> {
@@ -326,6 +361,7 @@ fn expand_clause(
     tv: &HashMap<String, Vec<String>>,
     result_types: &HashMap<String, ResultTypeSpec>,
     operators: &[OpSpec],
+    field_pools: &HashMap<String, String>,
 ) -> Option<String> {
     // Check applies_to restriction
     if let Some(ref targets) = spec.applies_to {
@@ -335,16 +371,27 @@ fn expand_clause(
     }
 
     match clause_name {
-        "WHERE" | "HAVING" => {
+        "WHERE" => {
             let rt = cmd.result_type.as_ref().and_then(|k| result_types.get(k));
-            let (field, is_numeric) = pick_field(rng, rt, clause_name == "WHERE");
+            let (field, is_numeric) = pick_field(rng, rt, true);
             let op = pick_operator(rng, operators, is_numeric);
             let value = if is_numeric {
                 pool_value(rng, "numeric_values", tv)
             } else {
-                format!("'{}'", pool_value(rng, "string_values", tv))
+                // Use the field-specific pool when available, fall back to string_values
+                let pool = field_pools
+                    .get(&field)
+                    .map(String::as_str)
+                    .unwrap_or("string_values");
+                format!("'{}'", pool_value(rng, pool, tv))
             };
-            Some(format!("{clause_name} {field} {op} {value}"))
+            Some(format!("WHERE {field} {op} {value}"))
+        }
+        "HAVING" => {
+            // HAVING filters on aggregated count — always use count with a numeric operator
+            let op = pick_operator(rng, operators, true);
+            let val = pool_value(rng, "numeric_values", tv);
+            Some(format!("HAVING count {op} {val}"))
         }
         "IN" | "EXCLUDE" => {
             let glob = pool_value(rng, "globs", tv);
@@ -470,6 +517,7 @@ fn generate_baseline(spec: &SyntaxSpec) -> Vec<GeneratedCommand> {
                     &spec.test_values,
                     &spec.result_types,
                     &spec.operators,
+                    &spec.field_pools,
                 ) {
                     cmds.push(GeneratedCommand {
                         fql: format!("{base} {clause_text}"),
@@ -565,6 +613,7 @@ fn generate_random_fill(spec: &SyntaxSpec, baseline_count: usize) -> Vec<Generat
                     &spec.test_values,
                     &spec.result_types,
                     &spec.operators,
+                    &spec.field_pools,
                 ) {
                     clause_parts.push(text);
                     *used_clauses.entry(clause_key.to_string()).or_default() += 1;
@@ -743,6 +792,34 @@ fn tier3_invariants(
         }
     }
 
+    // Check ORDER BY invariant (results must be sorted)
+    if let Some((field, dir)) = extract_order_by(&cmd.fql) {
+        if !check_order_by_sorted(&result, &field, &dir) {
+            return Some(TierResult {
+                fql: cmd.fql.clone(),
+                command_id: cmd.command_id.clone(),
+                tier: 3,
+                duration_us: elapsed,
+                status: "invariant_fail_order_by",
+                result_count: result_count(&result),
+            });
+        }
+    }
+
+    // Check IN path filtering invariant (all result paths must match glob prefix)
+    if let Some(glob) = extract_in_glob(&cmd.fql) {
+        if !check_in_path_filter(&result, &glob) {
+            return Some(TierResult {
+                fql: cmd.fql.clone(),
+                command_id: cmd.command_id.clone(),
+                tier: 3,
+                duration_us: elapsed,
+                status: "invariant_fail_in_filter",
+                result_count: result_count(&result),
+            });
+        }
+    }
+
     Some(TierResult {
         fql: cmd.fql.clone(),
         command_id: cmd.command_id.clone(),
@@ -795,6 +872,96 @@ fn check_group_by_unique(result: &ForgeQLResult, field: &str) -> bool {
     }
 }
 
+/// Extract ORDER BY field and direction from FQL text.
+fn extract_order_by(fql: &str) -> Option<(String, String)> {
+    let upper = fql.to_uppercase();
+    let idx = upper.find("ORDER BY ")?;
+    let after = &fql[idx + 9..];
+    let mut parts = after.split_whitespace();
+    let field = parts.next()?.to_string();
+    let dir = parts
+        .next()
+        .map(str::to_uppercase)
+        .unwrap_or_else(|| String::from("ASC"));
+    Some((field, dir))
+}
+
+/// Check that ORDER BY produced sorted results.
+fn check_order_by_sorted(result: &ForgeQLResult, field: &str, dir: &str) -> bool {
+    match result {
+        ForgeQLResult::Query(qr) => {
+            if qr.results.len() <= 1 {
+                return true;
+            }
+            let values: Vec<String> = qr
+                .results
+                .iter()
+                .filter_map(|item| match field {
+                    "name" => Some(item.name.clone()),
+                    "kind" | "node_kind" => item.node_kind.clone(),
+                    "fql_kind" => item.fql_kind.clone(),
+                    "language" | "lang" => item.language.clone(),
+                    "path" | "file" => item.path.as_ref().map(|p| p.display().to_string()),
+                    "usages" | "usages_count" => item.usages_count.map(|c| format!("{c:020}")),
+                    "line" => item.line.map(|l| format!("{l:020}")),
+                    other => item.fields.get(other).cloned(),
+                })
+                .collect();
+            if values.len() <= 1 {
+                return true;
+            }
+            let is_asc = dir == "ASC";
+            for window in values.windows(2) {
+                let cmp = window[0].cmp(&window[1]);
+                if is_asc && cmp == std::cmp::Ordering::Greater {
+                    return false;
+                }
+                if !is_asc && cmp == std::cmp::Ordering::Less {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => true,
+    }
+}
+
+/// Extract IN glob pattern from FQL text.
+fn extract_in_glob(fql: &str) -> Option<String> {
+    let upper = fql.to_uppercase();
+    let idx = upper.find(" IN '")?;
+    let after = &fql[idx + 4..];
+    let start = after.find('\'')?;
+    let rest = &after[start + 1..];
+    let end = rest.find('\'')?;
+    Some(rest[..end].to_string())
+}
+
+/// Check that IN path filter was respected: all result paths should match
+/// the glob pattern. Uses a simplified glob check for common patterns.
+fn check_in_path_filter(result: &ForgeQLResult, glob: &str) -> bool {
+    match result {
+        ForgeQLResult::Query(qr) => {
+            // Extract meaningful literal fragments from the glob (split on * and /)
+            let fragments: Vec<&str> = glob.split(['*', '/']).filter(|s| !s.is_empty()).collect();
+            if fragments.is_empty() {
+                return true; // pure wildcard like "**", matches everything
+            }
+            for item in &qr.results {
+                if let Some(ref p) = item.path {
+                    let ps = p.display().to_string();
+                    // Every literal fragment must appear in the path
+                    if !fragments.iter().all(|frag| ps.contains(frag)) {
+                        return false;
+                    }
+                }
+            }
+            true
+        }
+        _ => true,
+    }
+}
+
 fn result_count(result: &ForgeQLResult) -> Option<usize> {
     match result {
         ForgeQLResult::Query(qr) => Some(qr.results.len()),
@@ -814,13 +981,35 @@ fn result_count(result: &ForgeQLResult) -> Option<usize> {
 // CSV output
 // -----------------------------------------------------------------------
 
+/// Convert Unix seconds to a UTC datetime string `YYYY-MM-DD_HH-MM-SS`.
+/// Implemented without external crates using Howard Hinnant's algorithm.
+fn format_datetime_utc(secs: u64) -> String {
+    let z = (secs / 86400) as i64 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    let time = secs % 86400;
+    let h = time / 3600;
+    let min = (time % 3600) / 60;
+    let sec = time % 60;
+    format!("{y:04}-{m:02}-{d:02}_{h:02}-{min:02}-{sec:02}")
+}
+
 fn write_csv(results: &[TierResult]) {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/scripts/logs");
     let _ = fs::create_dir_all(&dir);
-    let timestamp = std::time::SystemTime::now()
+    let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    let timestamp = format_datetime_utc(secs);
     let path = dir.join(format!("sms-perf-{timestamp}.csv"));
 
     let mut f = fs::File::create(&path).expect("create csv");
@@ -850,7 +1039,24 @@ fn write_csv(results: &[TierResult]) {
 
 #[test]
 fn sms_combinatorial() {
-    let spec = load_syntax();
+    let mut spec = load_syntax();
+    let base_budget = spec.total_budget;
+    let budget = effective_budget(&spec);
+    // Scale per-command caps proportionally so the full budget can be reached.
+    if budget > base_budget {
+        let scale = budget / base_budget.max(1);
+        for cmd in &mut spec.commands {
+            cmd.explosion_cap = cmd.explosion_cap.saturating_mul(scale);
+        }
+    }
+    spec.total_budget = budget;
+    let is_nightly = std::env::var("SMS_NIGHTLY").is_ok();
+
+    eprintln!(
+        "[SMS] mode={}, budget={}",
+        if is_nightly { "nightly" } else { "ci" },
+        budget
+    );
 
     // Phase 1: baseline
     let baseline = generate_baseline(&spec);
@@ -911,8 +1117,10 @@ fn sms_combinatorial() {
         }
     }
 
-    // --- Write CSV ---
-    write_csv(&all_results);
+    // --- Write CSV (only in nightly / SMS_CSV mode) ---
+    if csv_enabled() {
+        write_csv(&all_results);
+    }
 
     // --- Coverage report ---
     let unique_commands: std::collections::HashSet<&str> =

@@ -103,3 +103,34 @@ fn caller(n: i32) -> i32 {
     let b = factorial(a);
     return a + b;
 }
+
+fn noop() {
+}
+
+const MAGIC: i32 = 0xCAFE;
+
+fn no_default(code: i32) -> i32 {
+    match code {
+        1 => 10,
+        2 => 20,
+        3 => 30,
+        _ => -1,
+    }
+}
+
+fn deeply_nested(a: i32) -> i32 {
+    if a > 0 {
+        if a > 10 {
+            if a > 100 {
+                if a > 1000 {
+                    return a;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+fn many_params(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32) -> i32 {
+    return a + b + c + d + e + f;
+}

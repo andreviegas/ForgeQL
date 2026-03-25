@@ -103,3 +103,34 @@ int caller(int n) {
     int b = factorial(a);
     return a + b;
 }
+
+void noop() {
+}
+
+const int MAGIC = 0xCAFE;
+
+int no_default(int code) {
+    switch (code) {
+        case 1: return 10;
+        case 2: return 20;
+        case 3: return 30;
+    }
+    return -1;
+}
+
+int deeply_nested(int a) {
+    if (a > 0) {
+        if (a > 10) {
+            if (a > 100) {
+                if (a > 1000) {
+                    return a;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+int many_params(int a, int b, int c, int d, int e, int f) {
+    return a + b + c + d + e + f;
+}

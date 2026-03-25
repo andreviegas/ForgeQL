@@ -28,6 +28,11 @@ same line numbers for every universal construct.
 | 83   | `switcher`  | function  | ControlFlowEnricher(has_catch_all), FallthroughEnricher(C++ only) |
 | 92   | `distant`   | function  | DeclDistanceEnricher(early used far)                     |
 | 101  | `caller`    | function  | callees: bar, factorial                                  |
+| 107  | `noop`      | function  | MetricsEnricher(lines=0, param_count=0), NamingEnricher  |
+| 110  | `MAGIC`     | variable  | NamingEnricher(SCREAMING_CASE), NumberEnricher(hex 0xCAFE) |
+| 112  | `no_default`| function  | ControlFlowEnricher(switch/match, NO catch-all in C++)   |
+| 121  | `deeply_nested`| function | MetricsEnricher(nesting=4), ControlFlowEnricher(4×if)  |
+| 134  | `many_params`| function | MetricsEnricher(param_count=6), NamingEnricher           |
 
 ## Enricher Coverage Matrix
 
@@ -76,6 +81,11 @@ ESCAPING_LINE  = SHADOWED_LINE  + 7  // 77
 SWITCHER_LINE  = ESCAPING_LINE  + 6  // 83
 DISTANT_LINE   = SWITCHER_LINE  + 9  // 92
 CALLER_LINE    = DISTANT_LINE   + 9  // 101
+NOOP_LINE      = CALLER_LINE   + 6  // 107
+MAGIC_LINE     = NOOP_LINE     + 3  // 110
+NO_DEFAULT_LINE = MAGIC_LINE   + 2  // 112
+DEEPLY_LINE    = NO_DEFAULT_LINE + 9 // 121
+MANY_PARAMS_LINE = DEEPLY_LINE + 13 // 134
 ```
 
 ## Cross-language notes
@@ -89,3 +99,8 @@ CALLER_LINE    = DISTANT_LINE   + 9  // 101
 - `transform` uses C-style cast `(int)y` in C++ and `y as i32` in Rust.
 - `helper` uses `for(;;)` in C++ and `for in` in Rust; `sum--` vs `sum -= 1`.
 - OperatorEnricher: `++`/`--` only fire for C++; Rust uses `+= 1` / `-= 1`.
+- `no_default` uses `switch` with NO `default` case in C++; Rust requires
+  exhaustive `match`, so uses `_ => -1` (catch-all). This tests the enricher's
+  detection of missing catch-all as a C++-specific edge case.
+- `MAGIC` uses `const int` in C++ and `const` binding in Rust; both are
+  SCREAMING\_CASE triggering NamingEnricher.
