@@ -463,7 +463,7 @@ impl LanguageConfigJson {
             .as_deref()
             .and_then(|s| s.chars().next());
 
-        LanguageConfig::from_json_parts(LanguageConfigParts {
+        LanguageConfig {
             root_node_kind: self.syntax.root_node,
             scope_separator: self.syntax.scope_separator,
             function_raw_kinds: self.definitions.function_kinds,
@@ -532,84 +532,8 @@ impl LanguageConfigJson {
             comma_expression_raw_kind: self.expressions.comma,
             char_literal_raw_kind: self.literals.char_kind,
             kind_map: self.kind_map,
-        })
+        }
     }
-}
-
-/// Flat owned-data transfer struct used by [`LanguageConfigJson::into_language_config()`]
-/// to pass all fields to [`LanguageConfig::from_json_parts()`] in a single step.
-///
-/// This avoids exposing `LanguageConfig` field internals while allowing
-/// the JSON layer to construct configs without going through `LanguageConfigInit`.
-pub(crate) struct LanguageConfigParts {
-    pub root_node_kind: String,
-    pub scope_separator: String,
-    pub function_raw_kinds: Vec<String>,
-    pub type_raw_kinds: Vec<String>,
-    pub definition_raw_kinds: Vec<String>,
-    pub declaration_raw_kinds: Vec<String>,
-    pub field_raw_kinds: Vec<String>,
-    pub parameter_raw_kind: String,
-    pub member_body_raw_kind: String,
-    pub member_raw_kinds: Vec<String>,
-    pub comment_raw_kind: String,
-    pub number_literal_raw_kinds: Vec<String>,
-    pub digit_separator: Option<char>,
-    pub number_suffixes: Vec<(String, String)>,
-    pub control_flow_raw_kinds: Vec<String>,
-    pub switch_raw_kinds: Vec<String>,
-    pub null_literals: Vec<String>,
-    pub boolean_literals: Vec<String>,
-    pub doc_comment_prefixes: Vec<(String, String)>,
-    pub modifier_map: Vec<(String, String)>,
-    pub modifier_node_kinds: Vec<String>,
-    pub visibility_keywords: Vec<(String, String)>,
-    pub visibility_default_by_type: Vec<(String, String)>,
-    pub cast_kinds: Vec<(String, String, String)>,
-    pub has_goto: bool,
-    pub has_increment_decrement: bool,
-    pub has_implicit_truthiness: bool,
-    pub decorator_raw_kind: Option<String>,
-    pub skip_node_kinds: Vec<String>,
-    pub usage_node_kinds: Vec<String>,
-    pub statement_boundary_kinds: Vec<String>,
-    pub declarator_field_name: String,
-    pub function_declarator_kind: String,
-    pub parameter_list_raw_kind: String,
-    pub identifier_raw_kind: String,
-    pub assignment_raw_kinds: Vec<String>,
-    pub update_raw_kinds: Vec<String>,
-    pub init_declarator_raw_kind: String,
-    pub block_raw_kind: String,
-    pub return_statement_raw_kind: String,
-    pub address_of_expression_raw_kind: String,
-    pub address_of_operator: String,
-    pub array_declarator_raw_kind: String,
-    pub static_storage_keywords: Vec<String>,
-    pub case_statement_raw_kind: String,
-    pub break_statement_raw_kind: String,
-    pub call_expression_raw_kind: String,
-    pub goto_statement_raw_kind: String,
-    pub string_literal_raw_kinds: Vec<String>,
-    pub throw_statement_raw_kind: String,
-    pub template_declaration_raw_kind: String,
-    pub enumerator_raw_kind: String,
-    pub binary_expression_raw_kind: String,
-    pub logical_expression_raw_kind: String,
-    pub type_descriptor_raw_kind: String,
-    pub template_argument_list_raw_kind: String,
-    pub shift_expression_raw_kinds: Vec<String>,
-    pub compound_assignment_raw_kind: String,
-    pub for_style_map: Vec<(String, String)>,
-    pub template_misparse_raw_kinds: Vec<String>,
-    pub field_expression_raw_kind: String,
-    pub subscript_expression_raw_kind: String,
-    pub unary_expression_raw_kind: String,
-    pub parenthesized_expression_raw_kind: String,
-    pub condition_clause_raw_kind: String,
-    pub comma_expression_raw_kind: String,
-    pub char_literal_raw_kind: String,
-    pub kind_map: HashMap<String, String>,
 }
 
 // -----------------------------------------------------------------------
