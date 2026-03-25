@@ -193,7 +193,7 @@ pub fn is_in_declaration(node: tree_sitter::Node<'_>, config: &LanguageConfig) -
             return true;
         }
         // Stop at statement/block boundaries.
-        if kind.ends_with("_statement") || config.is_block_kind(kind) {
+        if config.is_statement_boundary_kind(kind) || config.is_block_kind(kind) {
             return false;
         }
         parent = p.parent();

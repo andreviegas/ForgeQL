@@ -16,7 +16,25 @@
     "init_declarator": "init_declarator",
     "comment": "comment",
     "skip_node_kinds": ["preproc_else", "preproc_elif"],
-    "usage_node_kinds": ["identifier", "field_identifier", "type_identifier"]
+    "usage_node_kinds": ["identifier", "field_identifier", "type_identifier"],
+    "statement_boundary_kinds": [
+      "expression_statement",
+      "if_statement",
+      "while_statement",
+      "for_statement",
+      "for_range_loop",
+      "switch_statement",
+      "do_statement",
+      "return_statement",
+      "break_statement",
+      "continue_statement",
+      "goto_statement",
+      "throw_statement",
+      "case_statement",
+      "labeled_statement",
+      "try_statement",
+      "declaration"
+    ]
   },
 
   "definitions": {

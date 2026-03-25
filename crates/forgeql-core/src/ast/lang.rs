@@ -158,6 +158,16 @@ pub struct LanguageConfigInit {
     /// Identifier node kinds that produce usage sites.
     pub usage_node_kinds: &'static [&'static str],
 
+    /// Node kinds that act as statement / expression boundaries.
+    ///
+    /// Used to stop upward tree traversal in data-flow analysis and to
+    /// identify real statements inside case bodies (fallthrough detection).
+    ///
+    /// For C++ this contains all `*_statement` kinds; for Rust it would
+    /// include `*_expression` kinds like `if_expression`, `return_expression`,
+    /// `for_expression`, etc.
+    pub statement_boundary_kinds: &'static [&'static str],
+
     // -- declarator structure --
     /// Grammar field name for the declarator child of a definition/declaration
     /// node (e.g. `"declarator"` in C++).
@@ -434,6 +444,9 @@ pub struct LanguageConfig {
 
     /// Identifier node kinds that produce usage sites.
     usage_node_kinds: Vec<String>,
+
+    /// Node kinds that act as statement / expression boundaries.
+    statement_boundary_kinds: Vec<String>,
 
     // -- declarator structure --
     /// Grammar field name for the declarator child of a definition/declaration
@@ -734,6 +747,11 @@ impl LanguageConfig {
                 .iter()
                 .map(|s| (*s).to_owned())
                 .collect(),
+            statement_boundary_kinds: init
+                .statement_boundary_kinds
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
             declarator_field_name: init.declarator_field_name.to_owned(),
             function_declarator_kind: init.function_declarator_kind.to_owned(),
             parameter_list_raw_kind: init.parameter_list_raw_kind.to_owned(),
@@ -840,6 +858,7 @@ impl LanguageConfig {
             decorator_raw_kind: p.decorator_raw_kind,
             skip_node_kinds: p.skip_node_kinds,
             usage_node_kinds: p.usage_node_kinds,
+            statement_boundary_kinds: p.statement_boundary_kinds,
             declarator_field_name: p.declarator_field_name,
             function_declarator_kind: p.function_declarator_kind,
             parameter_list_raw_kind: p.parameter_list_raw_kind,
@@ -970,6 +989,15 @@ impl LanguageConfig {
     #[must_use]
     pub fn is_usage_node_kind(&self, kind: &str) -> bool {
         self.usage_node_kinds.iter().any(|s| s == kind)
+    }
+
+    /// Is this a statement / expression boundary kind?
+    ///
+    /// Used to stop upward tree traversal in data-flow analysis and to
+    /// identify real statements inside case bodies.
+    #[must_use]
+    pub fn is_statement_boundary_kind(&self, kind: &str) -> bool {
+        self.statement_boundary_kinds.iter().any(|s| s == kind)
     }
 
     /// Is this a shift expression kind?
@@ -1770,6 +1798,24 @@ pub fn cpp_config() -> &'static LanguageConfig {
             decorator_raw_kind: None,
             skip_node_kinds: &["preproc_else", "preproc_elif"],
             usage_node_kinds: &["identifier", "field_identifier", "type_identifier"],
+            statement_boundary_kinds: &[
+                "expression_statement",
+                "if_statement",
+                "while_statement",
+                "for_statement",
+                "for_range_loop",
+                "switch_statement",
+                "do_statement",
+                "return_statement",
+                "break_statement",
+                "continue_statement",
+                "goto_statement",
+                "throw_statement",
+                "case_statement",
+                "labeled_statement",
+                "try_statement",
+                "declaration",
+            ],
             declarator_field_name: "declarator",
             function_declarator_kind: "function_declarator",
 

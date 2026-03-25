@@ -129,10 +129,7 @@ fn is_fallthrough(case_node: tree_sitter::Node<'_>, config: &LanguageConfig) -> 
         // Values are typically number_literal, identifier, etc.
         // Statements have kinds ending in _statement or _expression,
         // or are compound_statement/expression_statement, etc.
-        if kind.ends_with("_statement")
-            || kind.ends_with("_expression")
-            || config.is_block_kind(kind)
-        {
+        if config.is_statement_boundary_kind(kind) || config.is_block_kind(kind) {
             has_statements = true;
             last_statement = Some(child);
         }

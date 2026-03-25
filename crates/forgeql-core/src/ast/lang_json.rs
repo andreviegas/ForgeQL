@@ -157,6 +157,10 @@ pub struct SyntaxSection {
     /// Identifier node kinds that produce usage sites.
     #[serde(default)]
     pub usage_node_kinds: Vec<String>,
+
+    /// Node kinds that act as statement / expression boundaries.
+    #[serde(default)]
+    pub statement_boundary_kinds: Vec<String>,
 }
 
 /// Definition node kinds.
@@ -490,6 +494,7 @@ impl LanguageConfigJson {
             decorator_raw_kind: self.types.decorator,
             skip_node_kinds: self.syntax.skip_node_kinds,
             usage_node_kinds: self.syntax.usage_node_kinds,
+            statement_boundary_kinds: self.syntax.statement_boundary_kinds,
             declarator_field_name: self.syntax.declarator_field,
             function_declarator_kind: self.syntax.function_declarator,
             parameter_list_raw_kind: self.syntax.parameter_list,
@@ -567,6 +572,7 @@ pub(crate) struct LanguageConfigParts {
     pub decorator_raw_kind: Option<String>,
     pub skip_node_kinds: Vec<String>,
     pub usage_node_kinds: Vec<String>,
+    pub statement_boundary_kinds: Vec<String>,
     pub declarator_field_name: String,
     pub function_declarator_kind: String,
     pub parameter_list_raw_kind: String,
