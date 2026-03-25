@@ -31,6 +31,7 @@ use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
 use forgeql_core::result::{ForgeQLResult, SourceOpResult};
 use forgeql_lang_cpp::CppLanguage;
+use forgeql_lang_rust::RustLanguage;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use serde::{Deserialize, Serialize};
@@ -152,7 +153,10 @@ async fn main() -> Result<()> {
 
     let data_dir = path_utils::resolve_data_dir(&cli.data_dir);
 
-    let lang_registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
+    let lang_registry = Arc::new(LanguageRegistry::new(vec![
+        Arc::new(CppLanguage),
+        Arc::new(RustLanguage),
+    ]));
 
     let engine = ForgeQLEngine::new(data_dir.clone(), lang_registry)
         .with_context(|| format!("initialising engine with data_dir '{}'", data_dir.display()))?;

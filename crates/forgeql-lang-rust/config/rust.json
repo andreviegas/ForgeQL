@@ -1,0 +1,168 @@
+{
+  "language": {
+    "name": "rust",
+    "extensions": ["rs"],
+    "tree_sitter_grammar": "tree-sitter-rust"
+  },
+
+  "syntax": {
+    "root_node": "source_file",
+    "scope_separator": "::",
+    "block": "block",
+    "identifier": "identifier",
+    "parameter_list": "parameters",
+    "declarator_field": "",
+    "function_declarator": "",
+    "init_declarator": "",
+    "comment": "line_comment",
+    "skip_node_kinds": [],
+    "usage_node_kinds": ["identifier", "type_identifier", "field_identifier"],
+    "statement_boundary_kinds": [
+      "expression_statement", "let_declaration",
+      "if_expression", "match_expression",
+      "while_expression", "loop_expression", "for_expression",
+      "return_expression", "break_expression", "continue_expression"
+    ]
+  },
+
+  "definitions": {
+    "function_kinds": ["function_item"],
+    "type_kinds": ["struct_item", "enum_item", "trait_item", "union_item"],
+    "definition_kinds": [
+      "function_item", "struct_item", "enum_item", "trait_item", "union_item",
+      "impl_item", "mod_item"
+    ],
+    "declaration_kinds": ["let_declaration", "const_item", "static_item"],
+    "field_kinds": ["field_declaration"],
+    "parameter_kind": "parameter",
+    "member_body_kind": "field_declaration_list",
+    "member_kinds": ["field_declaration"]
+  },
+
+  "control_flow": {
+    "kinds": [
+      "if_expression", "while_expression",
+      "for_expression", "loop_expression", "match_expression"
+    ],
+    "switch_kinds": ["match_expression"],
+    "for_style_map": [
+      ["for_expression", "range"]
+    ],
+    "condition_clause": ""
+  },
+
+  "statements": {
+    "return": "return_expression",
+    "break": "break_expression",
+    "goto": "",
+    "throw": "",
+    "case": "match_arm",
+    "assignment_kinds": ["assignment_expression"],
+    "update_kinds": []
+  },
+
+  "expressions": {
+    "call": "call_expression",
+    "binary": "binary_expression",
+    "logical": "",
+    "unary": "unary_expression",
+    "field_access": "field_expression",
+    "subscript": "index_expression",
+    "parenthesized": "parenthesized_expression",
+    "comma": "",
+    "address_of": "reference_expression",
+    "address_of_operator": "&",
+    "shift_kinds": ["binary_expression"],
+    "compound_assignment": "compound_assignment_expr"
+  },
+
+  "types": {
+    "type_descriptor": "type_identifier",
+    "template_argument_list": "type_arguments",
+    "template_declaration": "",
+    "array_declarator": "",
+    "enumerator": "enum_variant",
+    "template_misparse_kinds": [],
+    "decorator": "attribute_item"
+  },
+
+  "literals": {
+    "number_kinds": ["integer_literal", "float_literal"],
+    "string_kinds": ["string_literal", "raw_string_literal", "char_literal"],
+    "char_kind": "char_literal",
+    "null_values": [],
+    "boolean_values": ["true", "false"],
+    "digit_separator": "_",
+    "number_suffixes": [
+      ["u8", "unsigned_8"], ["u16", "unsigned_16"], ["u32", "unsigned_32"],
+      ["u64", "unsigned_64"], ["u128", "unsigned_128"], ["usize", "unsigned_size"],
+      ["i8", "signed_8"], ["i16", "signed_16"], ["i32", "signed_32"],
+      ["i64", "signed_64"], ["i128", "signed_128"], ["isize", "signed_size"],
+      ["f32", "float_32"], ["f64", "float_64"]
+    ]
+  },
+
+  "modifiers": {
+    "map": [
+      ["const", "is_const"], ["static", "is_static"],
+      ["mut", "is_mutable"], ["pub", "is_pub"],
+      ["async", "is_async"], ["unsafe", "is_unsafe"]
+    ],
+    "node_kinds": ["visibility_modifier", "mutable_specifier"],
+    "static_storage_keywords": ["static"]
+  },
+
+  "visibility": {
+    "keywords": [
+      ["pub", "public"], ["pub(crate)", "crate"], ["pub(super)", "super"]
+    ],
+    "default_by_type": [
+      ["struct_item", "private"], ["enum_item", "public"]
+    ]
+  },
+
+  "casts": [
+    ["type_cast_expression", "as_cast", "unsafe"]
+  ],
+
+  "comments": {
+    "prefixes": [
+      ["///", "doc_line"], ["//!", "inner_doc"],
+      ["/**", "doc_block"], ["/*!", "inner_doc_block"],
+      ["//", "line"], ["/*", "block"]
+    ]
+  },
+
+  "capabilities": {
+    "has_goto": false,
+    "has_increment_decrement": false,
+    "has_implicit_truthiness": false
+  },
+
+  "kind_map": {
+    "function_item": "function",
+    "struct_item": "struct",
+    "enum_item": "enum",
+    "trait_item": "interface",
+    "union_item": "struct",
+    "impl_item": "class",
+    "mod_item": "namespace",
+    "let_declaration": "variable",
+    "const_item": "variable",
+    "static_item": "variable",
+    "type_item": "type_alias",
+    "use_declaration": "import",
+    "macro_definition": "macro",
+    "field_declaration": "field",
+    "line_comment": "comment",
+    "block_comment": "comment",
+    "integer_literal": "number",
+    "float_literal": "number",
+    "type_cast_expression": "cast",
+    "if_expression": "if",
+    "while_expression": "while",
+    "for_expression": "for",
+    "loop_expression": "while",
+    "match_expression": "switch"
+  }
+}

@@ -1294,6 +1294,98 @@ fn cpp_contains_function_declarator(node: tree_sitter::Node<'_>) -> bool {
 }
 
 // -----------------------------------------------------------------------
+// RustLanguageInline — test-only in-crate Rust implementation
+//
+// The production Rust support lives in `forgeql-lang-rust`.  This inline
+// duplicate stays here behind `#[cfg(any(test, feature = "test-helpers"))]`
+// so that forgeql-core's own unit and integration tests can build a
+// LanguageRegistry without depending on the external crate.
+// -----------------------------------------------------------------------
+
+/// Test-only inline Rust language support.
+///
+/// For production use, depend on `forgeql-lang-rust::RustLanguage` instead.
+#[cfg(any(test, feature = "test-helpers"))]
+static RUST_CONFIG: OnceLock<LanguageConfig> = OnceLock::new();
+
+#[cfg(any(test, feature = "test-helpers"))]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)]
+pub fn rust_config() -> &'static LanguageConfig {
+    RUST_CONFIG.get_or_init(|| {
+        let json_bytes = include_bytes!("../../../forgeql-lang-rust/config/rust.json");
+        let json_config = super::lang_json::LanguageConfigJson::from_json_bytes(json_bytes)
+            .expect("embedded rust.json must be valid");
+        json_config.into_language_config()
+    })
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+pub struct RustLanguageInline;
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl LanguageSupport for RustLanguageInline {
+    fn name(&self) -> &'static str {
+        "rust"
+    }
+
+    fn extensions(&self) -> &'static [&'static str] {
+        &["rs"]
+    }
+
+    fn tree_sitter_language(&self) -> tree_sitter::Language {
+        tree_sitter_rust::LANGUAGE.into()
+    }
+
+    fn extract_name(&self, node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+        if let Some(name_node) = node.child_by_field_name("name") {
+            let text = rust_node_text(source, name_node);
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+
+        match node.kind() {
+            "impl_item" => node
+                .child_by_field_name("type")
+                .map(|n| rust_node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
+            "use_declaration" => node
+                .child_by_field_name("argument")
+                .map(|n| rust_node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
+            "line_comment" | "block_comment" => {
+                let text = rust_node_text(source, node);
+                if text.is_empty() { None } else { Some(text) }
+            }
+
+            "let_declaration" => node
+                .child_by_field_name("pattern")
+                .map(|n| rust_node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
+            _ => None,
+        }
+    }
+
+    fn map_kind(&self, raw_kind: &str) -> Option<&'static str> {
+        rust_config().kind_map_lookup(raw_kind)
+    }
+
+    fn config(&self) -> &'static LanguageConfig {
+        rust_config()
+    }
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+fn rust_node_text(source: &[u8], node: tree_sitter::Node<'_>) -> String {
+    std::str::from_utf8(&source[node.byte_range()])
+        .unwrap_or("")
+        .to_string()
+}
+
+// -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------
 

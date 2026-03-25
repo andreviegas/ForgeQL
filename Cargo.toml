@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/forgeql-core",
     "crates/forgeql-lang-cpp",
+    "crates/forgeql-lang-rust",
     "crates/forgeql",
 ]
 
@@ -62,6 +63,7 @@ serde_yml        = "0.0.12"
 # --- AST parsing ---
 tree-sitter      = "0.25"
 tree-sitter-cpp  = "0.23"
+tree-sitter-rust = "0.24"
 
 # --- DSL parsing ---
 pest             = "2"
@@ -99,7 +101,8 @@ dirs             = "5"
 
 # --- internal crates ---
 forgeql-core     = { path = "crates/forgeql-core" }
-forgeql-lang-cpp = { path = "crates/forgeql-lang-cpp" }
+forgeql-lang-cpp  = { path = "crates/forgeql-lang-cpp" }
+forgeql-lang-rust = { path = "crates/forgeql-lang-rust" }
 
 # --- testing ---
 insta            = "1"
