@@ -2,5 +2,6 @@ pub mod cache;
 pub mod enrich;
 pub mod index;
 pub mod lang;
+pub mod lang_json;
 pub mod query;
 pub mod show;

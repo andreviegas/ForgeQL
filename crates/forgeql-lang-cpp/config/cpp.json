@@ -1,0 +1,198 @@
+{
+  "language": {
+    "name": "cpp",
+    "extensions": ["cpp", "c", "cc", "cxx", "h", "hpp", "hxx", "ino"],
+    "tree_sitter_grammar": "tree-sitter-cpp"
+  },
+
+  "syntax": {
+    "root_node": "translation_unit",
+    "scope_separator": "::",
+    "block": "compound_statement",
+    "identifier": "identifier",
+    "parameter_list": "parameter_list",
+    "declarator_field": "declarator",
+    "function_declarator": "function_declarator",
+    "init_declarator": "init_declarator",
+    "comment": "comment",
+    "skip_node_kinds": ["preproc_else", "preproc_elif"],
+    "usage_node_kinds": ["identifier", "field_identifier", "type_identifier"]
+  },
+
+  "definitions": {
+    "function_kinds": ["function_definition"],
+    "type_kinds": ["class_specifier", "struct_specifier", "enum_specifier"],
+    "definition_kinds": [
+      "function_definition",
+      "class_specifier",
+      "struct_specifier",
+      "enum_specifier"
+    ],
+    "declaration_kinds": ["declaration"],
+    "field_kinds": ["field_declaration"],
+    "parameter_kind": "parameter_declaration",
+    "member_body_kind": "field_declaration_list",
+    "member_kinds": ["field_declaration"]
+  },
+
+  "control_flow": {
+    "kinds": [
+      "if_statement",
+      "while_statement",
+      "for_statement",
+      "for_range_loop",
+      "switch_statement",
+      "do_statement"
+    ],
+    "switch_kinds": ["switch_statement"],
+    "for_style_map": [
+      ["for_statement", "traditional"],
+      ["for_range_loop", "range"]
+    ],
+    "condition_clause": "condition_clause"
+  },
+
+  "statements": {
+    "return": "return_statement",
+    "break": "break_statement",
+    "goto": "goto_statement",
+    "throw": "throw_statement",
+    "case": "case_statement",
+    "assignment_kinds": ["assignment_expression"],
+    "update_kinds": ["update_expression"]
+  },
+
+  "expressions": {
+    "call": "call_expression",
+    "binary": "binary_expression",
+    "logical": "logical_expression",
+    "unary": "unary_expression",
+    "field_access": "field_expression",
+    "subscript": "subscript_expression",
+    "parenthesized": "parenthesized_expression",
+    "comma": "comma_expression",
+    "address_of": "pointer_expression",
+    "address_of_operator": "&",
+    "shift_kinds": ["shift_expression"],
+    "compound_assignment": "compound_assignment"
+  },
+
+  "types": {
+    "type_descriptor": "type_descriptor",
+    "template_argument_list": "template_argument_list",
+    "template_declaration": "template_declaration",
+    "array_declarator": "array_declarator",
+    "enumerator": "enumerator",
+    "template_misparse_kinds": [
+      "template_function",
+      "template_type",
+      "template_argument_list"
+    ]
+  },
+
+  "literals": {
+    "number_kinds": ["number_literal"],
+    "string_kinds": ["string_literal", "char_literal"],
+    "char_kind": "char_literal",
+    "null_values": ["nullptr", "NULL", "0"],
+    "boolean_values": ["true", "false"],
+    "digit_separator": "'",
+    "number_suffixes": [
+      ["ull", "unsigned_long_long"],
+      ["ul", "unsigned_long"],
+      ["ll", "long_long"],
+      ["uz", "unsigned_size"],
+      ["u", "unsigned"],
+      ["l", "long"],
+      ["z", "size"],
+      ["f", "float"]
+    ]
+  },
+
+  "modifiers": {
+    "map": [
+      ["const", "is_const"],
+      ["static", "is_static"],
+      ["virtual", "is_virtual"],
+      ["inline", "is_inline"],
+      ["extern", "is_extern"],
+      ["volatile", "is_volatile"],
+      ["mutable", "is_mutable"],
+      ["constexpr", "is_constexpr"],
+      ["explicit", "is_explicit"],
+      ["override", "is_override"],
+      ["final", "is_final"]
+    ],
+    "node_kinds": [
+      "type_qualifier",
+      "storage_class_specifier",
+      "virtual_specifier"
+    ],
+    "static_storage_keywords": ["static"]
+  },
+
+  "visibility": {
+    "keywords": [
+      ["public", "public"],
+      ["private", "private"],
+      ["protected", "protected"]
+    ],
+    "default_by_type": [
+      ["class_specifier", "private"],
+      ["struct_specifier", "public"]
+    ]
+  },
+
+  "casts": [
+    ["cast_expression", "c_style", "unsafe"],
+    ["static_cast_expression", "static_cast", "safe"],
+    ["reinterpret_cast_expression", "reinterpret_cast", "unsafe"],
+    ["const_cast_expression", "const_cast", "moderate"],
+    ["dynamic_cast_expression", "dynamic_cast", "safe"]
+  ],
+
+  "comments": {
+    "prefixes": [
+      ["/**", "doc_block"],
+      ["///", "doc_line"],
+      ["/*", "block"],
+      ["//", "line"]
+    ]
+  },
+
+  "capabilities": {
+    "has_goto": true,
+    "has_increment_decrement": true,
+    "has_implicit_truthiness": true
+  },
+
+  "kind_map": {
+    "function_definition": "function",
+    "class_specifier": "class",
+    "struct_specifier": "struct",
+    "enum_specifier": "enum",
+    "declaration": "variable",
+    "parameter_declaration": "variable",
+    "field_declaration": "field",
+    "comment": "comment",
+    "preproc_include": "import",
+    "preproc_def": "macro",
+    "preproc_function_def": "macro",
+    "type_definition": "type_alias",
+    "alias_declaration": "type_alias",
+    "namespace_definition": "namespace",
+    "number_literal": "number",
+    "cast_expression": "cast",
+    "static_cast_expression": "cast",
+    "reinterpret_cast_expression": "cast",
+    "const_cast_expression": "cast",
+    "dynamic_cast_expression": "cast",
+    "update_expression": "increment",
+    "if_statement": "if",
+    "while_statement": "while",
+    "for_statement": "for",
+    "for_range_loop": "for",
+    "switch_statement": "switch",
+    "do_statement": "do"
+  }
+}

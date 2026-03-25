@@ -605,6 +605,11 @@ pub struct LanguageConfig {
     /// Raw kind for character literals
     /// (e.g. `"char_literal"` for C++).  Empty if not applicable.
     char_literal_raw_kind: String,
+
+    /// Raw tree-sitter kind → FQL kind mapping used by the data-driven
+    /// `map_kind` implementation. Built from the `kind_map` section of
+    /// the language JSON config. Empty for configs built via `from_init`.
+    kind_map: HashMap<String, String>,
 }
 
 // -----------------------------------------------------------------------
@@ -793,6 +798,85 @@ impl LanguageConfig {
             condition_clause_raw_kind: init.condition_clause_raw_kind.to_owned(),
             comma_expression_raw_kind: init.comma_expression_raw_kind.to_owned(),
             char_literal_raw_kind: init.char_literal_raw_kind.to_owned(),
+            kind_map: HashMap::new(),
+        }
+    }
+
+    /// Create a `LanguageConfig` from deserialized JSON parts.
+    ///
+    /// Used by [`super::lang_json::LanguageConfigJson::into_language_config()`]
+    /// to construct a config without going through `LanguageConfigInit`.
+    #[must_use]
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn from_json_parts(p: super::lang_json::LanguageConfigParts) -> Self {
+        Self {
+            root_node_kind: p.root_node_kind,
+            scope_separator: p.scope_separator,
+            function_raw_kinds: p.function_raw_kinds,
+            type_raw_kinds: p.type_raw_kinds,
+            definition_raw_kinds: p.definition_raw_kinds,
+            declaration_raw_kinds: p.declaration_raw_kinds,
+            field_raw_kinds: p.field_raw_kinds,
+            parameter_raw_kind: p.parameter_raw_kind,
+            member_body_raw_kind: p.member_body_raw_kind,
+            member_raw_kinds: p.member_raw_kinds,
+            comment_raw_kind: p.comment_raw_kind,
+            number_literal_raw_kinds: p.number_literal_raw_kinds,
+            digit_separator: p.digit_separator,
+            number_suffixes: p.number_suffixes,
+            control_flow_raw_kinds: p.control_flow_raw_kinds,
+            switch_raw_kinds: p.switch_raw_kinds,
+            null_literals: p.null_literals,
+            boolean_literals: p.boolean_literals,
+            doc_comment_prefixes: p.doc_comment_prefixes,
+            modifier_map: p.modifier_map,
+            modifier_node_kinds: p.modifier_node_kinds,
+            visibility_keywords: p.visibility_keywords,
+            visibility_default_by_type: p.visibility_default_by_type,
+            cast_kinds: p.cast_kinds,
+            has_goto: p.has_goto,
+            has_increment_decrement: p.has_increment_decrement,
+            has_implicit_truthiness: p.has_implicit_truthiness,
+            decorator_raw_kind: p.decorator_raw_kind,
+            skip_node_kinds: p.skip_node_kinds,
+            usage_node_kinds: p.usage_node_kinds,
+            declarator_field_name: p.declarator_field_name,
+            function_declarator_kind: p.function_declarator_kind,
+            parameter_list_raw_kind: p.parameter_list_raw_kind,
+            identifier_raw_kind: p.identifier_raw_kind,
+            assignment_raw_kinds: p.assignment_raw_kinds,
+            update_raw_kinds: p.update_raw_kinds,
+            init_declarator_raw_kind: p.init_declarator_raw_kind,
+            block_raw_kind: p.block_raw_kind,
+            return_statement_raw_kind: p.return_statement_raw_kind,
+            address_of_expression_raw_kind: p.address_of_expression_raw_kind,
+            address_of_operator: p.address_of_operator,
+            array_declarator_raw_kind: p.array_declarator_raw_kind,
+            static_storage_keywords: p.static_storage_keywords,
+            case_statement_raw_kind: p.case_statement_raw_kind,
+            break_statement_raw_kind: p.break_statement_raw_kind,
+            call_expression_raw_kind: p.call_expression_raw_kind,
+            goto_statement_raw_kind: p.goto_statement_raw_kind,
+            string_literal_raw_kinds: p.string_literal_raw_kinds,
+            throw_statement_raw_kind: p.throw_statement_raw_kind,
+            template_declaration_raw_kind: p.template_declaration_raw_kind,
+            enumerator_raw_kind: p.enumerator_raw_kind,
+            binary_expression_raw_kind: p.binary_expression_raw_kind,
+            logical_expression_raw_kind: p.logical_expression_raw_kind,
+            type_descriptor_raw_kind: p.type_descriptor_raw_kind,
+            template_argument_list_raw_kind: p.template_argument_list_raw_kind,
+            shift_expression_raw_kinds: p.shift_expression_raw_kinds,
+            compound_assignment_raw_kind: p.compound_assignment_raw_kind,
+            for_style_map: p.for_style_map,
+            template_misparse_raw_kinds: p.template_misparse_raw_kinds,
+            field_expression_raw_kind: p.field_expression_raw_kind,
+            subscript_expression_raw_kind: p.subscript_expression_raw_kind,
+            unary_expression_raw_kind: p.unary_expression_raw_kind,
+            parenthesized_expression_raw_kind: p.parenthesized_expression_raw_kind,
+            condition_clause_raw_kind: p.condition_clause_raw_kind,
+            comma_expression_raw_kind: p.comma_expression_raw_kind,
+            char_literal_raw_kind: p.char_literal_raw_kind,
+            kind_map: p.kind_map,
         }
     }
 
@@ -1456,6 +1540,21 @@ impl LanguageConfig {
             .iter()
             .find(|(s, _)| s == suffix)
             .map(|(_, meaning)| meaning.as_str())
+    }
+
+    /// Root node kind for the grammar (e.g. `"translation_unit"`, `"source_file"`).
+    #[must_use]
+    pub fn root_kind(&self) -> &str {
+        &self.root_node_kind
+    }
+
+    /// Look up a universal FQL kind for a raw tree-sitter kind, using the
+    /// data-driven `kind_map` loaded from the language JSON config.
+    ///
+    /// Returns `None` for raw kinds that have no mapping.
+    #[must_use]
+    pub fn kind_map_lookup(&self, raw_kind: &str) -> Option<&str> {
+        self.kind_map.get(raw_kind).map(String::as_str)
     }
 }
 
