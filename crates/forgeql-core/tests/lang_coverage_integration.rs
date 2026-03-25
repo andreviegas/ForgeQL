@@ -29,37 +29,23 @@ struct ExpectedDef {
     line: usize,
 }
 
+macro_rules! def {
+    ($name:expr, $kind:expr, $line:expr) => {
+        ExpectedDef {
+            name: $name,
+            fql_kind: $kind,
+            line: $line,
+        }
+    };
+}
+
 const UNIVERSAL_DEFS: &[ExpectedDef] = &[
-    ExpectedDef {
-        name: "foo",
-        fql_kind: "function",
-        line: FOO_LINE,
-    },
-    ExpectedDef {
-        name: "Motor",
-        fql_kind: "struct",
-        line: MOTOR_LINE,
-    },
-    ExpectedDef {
-        name: "speed",
-        fql_kind: "field",
-        line: SPEED_LINE,
-    },
-    ExpectedDef {
-        name: "State",
-        fql_kind: "enum",
-        line: STATE_LINE,
-    },
-    ExpectedDef {
-        name: "bar",
-        fql_kind: "function",
-        line: BAR_LINE,
-    },
-    ExpectedDef {
-        name: "count",
-        fql_kind: "variable",
-        line: COUNT_LINE,
-    },
+    def!("foo", "function", FOO_LINE),
+    def!("Motor", "struct", MOTOR_LINE),
+    def!("speed", "field", SPEED_LINE),
+    def!("State", "enum", STATE_LINE),
+    def!("bar", "function", BAR_LINE),
+    def!("count", "variable", COUNT_LINE),
 ];
 
 // ---------------------------------------------------------------------------
