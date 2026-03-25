@@ -891,6 +891,12 @@ pub fn show_lines(
     }
     let clamped_end = end_line.min(total);
 
+    if start_line > clamped_end {
+        return Err(anyhow!(
+            "start_line {start_line} is greater than end_line {clamped_end}"
+        ));
+    }
+
     // Compute the byte offset of the first requested line.
     let byte_start: usize = all_lines[..start_line - 1]
         .iter()

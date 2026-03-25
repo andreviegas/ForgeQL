@@ -1,0 +1,551 @@
+{
+  "meta": {
+    "version": "1.0",
+    "description": "ForgeQL grammar state machine — single source of truth for combinatorial test generation (SMS)",
+    "seed": 42,
+    "total_budget": 200,
+    "clause_pipeline_order": ["IN", "EXCLUDE", "WHERE", "GROUP_BY", "HAVING", "ORDER_BY", "OFFSET", "LIMIT"],
+    "notes": [
+      "Parser accepts clauses in any order; engine applies them in pipeline order above.",
+      "can_repeat: 0 = max 1 occurrence, N = max N occurrences per command.",
+      "explosion_cap: per-command ceiling — walker stops generating for this command type after N commands.",
+      "total_budget: global ceiling — walker stops entirely after N commands total (CI-friendly).",
+      "seed: deterministic RNG seed — same seed always produces identical command set.",
+      "result_type links a command to the set of fields available for WHERE/ORDER BY/GROUP BY."
+    ],
+    "generation_strategy": {
+      "description": "Two-phase generation ensures broad coverage within the total_budget.",
+      "phase1_baseline": "Generate one command per (command_id × clause) pair. Every command type, every clause type, and every operator appears at least once. This guarantees breadth.",
+      "phase2_random_fill": "Fill remaining budget with seeded random clause combinations, respecting per-command explosion_cap. Provides depth and edge-case coverage.",
+      "invariant": "phase1 count <= total_budget. If total_budget is too small for full baseline, phase1 round-robins across commands to maximize breadth."
+    }
+  },
+
+  "operators": [
+    { "id": "eq",           "syntax": "=",            "value_types": ["string", "number", "bool"] },
+    { "id": "not_eq",       "syntax": "!=",           "value_types": ["string", "number", "bool"] },
+    { "id": "like",         "syntax": "LIKE",         "value_types": ["string"] },
+    { "id": "not_like",     "syntax": "NOT LIKE",     "value_types": ["string"] },
+    { "id": "matches",      "syntax": "MATCHES",      "value_types": ["string"] },
+    { "id": "not_matches",  "syntax": "NOT MATCHES",  "value_types": ["string"] },
+    { "id": "gt",           "syntax": ">",            "value_types": ["number"] },
+    { "id": "gte",          "syntax": ">=",           "value_types": ["number"] },
+    { "id": "lt",           "syntax": "<",            "value_types": ["number"] },
+    { "id": "lte",          "syntax": "<=",           "value_types": ["number"] }
+  ],
+
+  "result_types": {
+    "symbol_match": {
+      "description": "Rows from FIND symbols, FIND usages, FIND globals",
+      "string_fields": ["name", "kind", "node_kind", "fql_kind", "language", "lang", "path", "file"],
+      "numeric_fields": ["line", "usages", "count"],
+      "accepts_enrichment": true
+    },
+    "file_entry": {
+      "description": "Rows from FIND files",
+      "string_fields": ["path", "file", "extension", "ext"],
+      "numeric_fields": ["size", "depth", "count"],
+      "accepts_enrichment": false
+    },
+    "outline_entry": {
+      "description": "Rows from SHOW outline",
+      "string_fields": ["name", "kind", "node_kind", "path", "file"],
+      "numeric_fields": ["line"],
+      "accepts_enrichment": false
+    },
+    "member_entry": {
+      "description": "Rows from SHOW members",
+      "string_fields": ["kind", "node_kind", "type", "text", "declaration", "name"],
+      "numeric_fields": ["line"],
+      "accepts_enrichment": false
+    },
+    "source_line": {
+      "description": "Rows from SHOW body / SHOW context / SHOW lines",
+      "string_fields": ["text", "content", "marker"],
+      "numeric_fields": ["line"],
+      "accepts_enrichment": false
+    },
+    "call_graph_entry": {
+      "description": "Rows from SHOW callees",
+      "string_fields": ["name", "path", "file"],
+      "numeric_fields": ["line"],
+      "accepts_enrichment": false
+    }
+  },
+
+  "enrichment_fields": {
+    "description": "Dynamic fields added by enrichers to symbol_match rows. Available in WHERE/ORDER BY for FIND symbols.",
+    "string": {
+      "scope":            ["file", "local", "block", "global"],
+      "storage":          ["static", "extern", "register", "thread_local"],
+      "binding_kind":     ["function", "variable"],
+      "naming":           ["snake_case", "PascalCase", "UPPER_SNAKE", "camelCase", "flatcase", "kebab-case", "mixed"],
+      "comment_style":    ["doc_line", "doc_block", "line", "block"],
+      "num_format":       ["dec", "hex", "bin", "oct", "float", "scientific"],
+      "num_suffix":       ["u", "l", "ul", "ull", "f", "ll", "z", ""],
+      "suffix_meaning":   ["unsigned", "float", "long_long", "size_t", "long", "unsigned_long"],
+      "num_sign":         ["positive", "negative", "zero"],
+      "cast_style":       ["c_style", "static_cast", "const_cast", "dynamic_cast", "reinterpret_cast", "as_cast"],
+      "cast_safety":      ["safe", "moderate", "unsafe"],
+      "cast_target_type": [],
+      "visibility":       ["public", "private", "protected"],
+      "member_kind":      ["method", "field"],
+      "owner_kind":       ["class_specifier", "struct_specifier"],
+      "body_symbol":      [],
+      "increment_style":  ["prefix", "postfix"],
+      "increment_op":     ["++", "--"],
+      "compound_op":      ["+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="],
+      "shift_direction":  ["left", "right"],
+      "escape_kinds":     ["address_of", "array_decay", "alias"],
+      "escape_vars":      [],
+      "shadow_vars":      [],
+      "unused_params":    [],
+      "todo_tags":        ["TODO", "FIXME", "HACK", "XXX"],
+      "for_style":        ["traditional", "range"],
+      "condition_text":   [],
+      "repeated_condition_calls": [],
+      "operator_category": ["increment", "arithmetic", "bitwise", "shift"]
+    },
+    "numeric": {
+      "name_length":      [1, 3, 5, 10],
+      "lines":            [1, 3, 5, 11],
+      "param_count":      [0, 1, 2, 3],
+      "return_count":     [0, 1, 2],
+      "member_count":     [0, 1, 2],
+      "string_count":     [0, 1],
+      "goto_count":       [0],
+      "throw_count":      [0],
+      "recursion_count":  [0, 1],
+      "todo_count":       [0, 1, 2],
+      "shadow_count":     [0, 1],
+      "unused_param_count": [0, 1],
+      "escape_tier":      [1, 2, 3],
+      "escape_count":     [0, 1],
+      "decl_distance":    [0, 5, 10],
+      "decl_far_count":   [0, 1],
+      "fallthrough_count": [0, 1],
+      "condition_tests":  [0, 1, 2],
+      "paren_depth":      [0, 1, 2],
+      "null_check_count": [0, 1],
+      "num_value":        [0, 42, 255, 10, 3]
+    },
+    "boolean": {
+      "has_doc":          [true, false],
+      "is_recursive":     [true, false],
+      "has_todo":         [true, false],
+      "has_unused_param": [true, false],
+      "has_shadow":       [true, false],
+      "has_escape":       [true, false],
+      "has_fallthrough":  [true, false],
+      "is_static":        [true, false],
+      "is_const":         [true, false],
+      "is_inline":        [true, false],
+      "is_volatile":      [true, false],
+      "is_exported":      [true, false],
+      "is_magic":         [true, false],
+      "has_catch_all":    [true, false],
+      "has_separator":    [true, false],
+      "has_assignment_in_condition": [true, false],
+      "mixed_logic":      [true, false],
+      "dup_logic":        [true, false],
+      "duplicate_condition": [true, false],
+      "has_repeated_condition_calls": [true, false],
+      "has_unused_reassign": [true, false]
+    }
+  },
+
+  "clauses": {
+    "WHERE": {
+      "syntax": "WHERE {field} {op} {value}",
+      "can_repeat": 2,
+      "semantics": "AND across multiple WHERE predicates",
+      "field_source": "result_type + enrichment_fields",
+      "op_source": "operators"
+    },
+    "HAVING": {
+      "syntax": "HAVING {field} {op} {value}",
+      "can_repeat": 2,
+      "semantics": "AND across multiple HAVING predicates, applied after GROUP BY",
+      "requires": "GROUP_BY",
+      "field_source": "result_type",
+      "op_source": "operators"
+    },
+    "IN": {
+      "syntax": "IN '{glob}'",
+      "can_repeat": 0,
+      "value_pool": "globs"
+    },
+    "EXCLUDE": {
+      "syntax": "EXCLUDE '{glob}'",
+      "can_repeat": 0,
+      "value_pool": "globs"
+    },
+    "ORDER_BY": {
+      "syntax": "ORDER BY {field} [{direction}]",
+      "can_repeat": 0,
+      "field_source": "result_type + enrichment_fields",
+      "directions": ["ASC", "DESC"],
+      "default_direction": "DESC"
+    },
+    "GROUP_BY": {
+      "syntax": "GROUP BY {field}",
+      "can_repeat": 0,
+      "field_source": "result_type.string_fields"
+    },
+    "LIMIT": {
+      "syntax": "LIMIT {n}",
+      "can_repeat": 0,
+      "value_pool": "limit_values"
+    },
+    "OFFSET": {
+      "syntax": "OFFSET {n}",
+      "can_repeat": 0,
+      "value_pool": "offset_values"
+    },
+    "DEPTH": {
+      "syntax": "DEPTH {n}",
+      "can_repeat": 0,
+      "value_pool": "depth_values",
+      "applies_to": ["show_body", "show_context", "find_files"]
+    },
+    "LINES": {
+      "syntax": "LINES {n}",
+      "can_repeat": 0,
+      "value_pool": "lines_values",
+      "applies_to": ["show_context"]
+    }
+  },
+
+  "commands": [
+    {
+      "id": "find_symbols",
+      "syntax": "FIND symbols",
+      "category": "query",
+      "result_type": "symbol_match",
+      "required_args": [],
+      "clauses": ["WHERE", "IN", "EXCLUDE", "ORDER_BY", "GROUP_BY", "HAVING", "LIMIT", "OFFSET"],
+      "explosion_cap": 500
+    },
+    {
+      "id": "find_usages",
+      "syntax": "FIND usages OF '{symbol}'",
+      "category": "query",
+      "result_type": "symbol_match",
+      "required_args": [{ "name": "symbol", "pool": "all_symbols" }],
+      "clauses": ["WHERE", "IN", "EXCLUDE", "ORDER_BY", "GROUP_BY", "HAVING", "LIMIT", "OFFSET"],
+      "explosion_cap": 300
+    },
+    {
+      "id": "find_files",
+      "syntax": "FIND files",
+      "category": "query",
+      "result_type": "file_entry",
+      "required_args": [],
+      "clauses": ["WHERE", "IN", "EXCLUDE", "ORDER_BY", "GROUP_BY", "HAVING", "LIMIT", "OFFSET", "DEPTH"],
+      "explosion_cap": 300
+    },
+    {
+      "id": "find_globals",
+      "syntax": "FIND globals",
+      "category": "query",
+      "result_type": "symbol_match",
+      "required_args": [],
+      "clauses": ["WHERE", "IN", "EXCLUDE", "ORDER_BY", "GROUP_BY", "HAVING", "LIMIT", "OFFSET"],
+      "explosion_cap": 200,
+      "notes": "Convenience alias: implicitly adds WHERE node_kind = 'declaration' WHERE scope = 'file'"
+    },
+    {
+      "id": "show_body",
+      "syntax": "SHOW body OF '{symbol}'",
+      "category": "show",
+      "result_type": "source_line",
+      "required_args": [{ "name": "symbol", "pool": "functions" }],
+      "clauses": ["WHERE", "IN", "EXCLUDE", "ORDER_BY", "LIMIT", "OFFSET", "DEPTH"],
+      "explosion_cap": 200
+    },
+    {
+      "id": "show_context",
+      "syntax": "SHOW context OF '{symbol}'",
+      "category": "show",
+      "result_type": "source_line",
+      "required_args": [{ "name": "symbol", "pool": "all_symbols" }],
+      "clauses": ["WHERE", "IN", "EXCLUDE", "ORDER_BY", "LIMIT", "OFFSET", "DEPTH", "LINES"],
+      "explosion_cap": 200
+    },
+    {
+      "id": "show_signature",
+      "syntax": "SHOW signature OF '{symbol}'",
+      "category": "show",
+      "result_type": "source_line",
+      "required_args": [{ "name": "symbol", "pool": "all_symbols" }],
+      "clauses": ["WHERE", "IN", "EXCLUDE", "LIMIT", "OFFSET"],
+      "explosion_cap": 100
+    },
+    {
+      "id": "show_outline",
+      "syntax": "SHOW outline OF '{file}'",
+      "category": "show",
+      "result_type": "outline_entry",
+      "required_args": [{ "name": "file", "pool": "files" }],
+      "clauses": ["WHERE", "ORDER_BY", "LIMIT", "OFFSET"],
+      "explosion_cap": 200
+    },
+    {
+      "id": "show_members",
+      "syntax": "SHOW members OF '{type}'",
+      "category": "show",
+      "result_type": "member_entry",
+      "required_args": [{ "name": "type", "pool": "types" }],
+      "clauses": ["WHERE", "IN", "EXCLUDE", "ORDER_BY", "LIMIT", "OFFSET"],
+      "explosion_cap": 100
+    },
+    {
+      "id": "show_callees",
+      "syntax": "SHOW callees OF '{symbol}'",
+      "category": "show",
+      "result_type": "call_graph_entry",
+      "required_args": [{ "name": "symbol", "pool": "functions" }],
+      "clauses": ["WHERE", "IN", "EXCLUDE", "ORDER_BY", "LIMIT", "OFFSET"],
+      "explosion_cap": 100
+    },
+    {
+      "id": "show_lines",
+      "syntax": "SHOW LINES {start}-{end} OF '{file}'",
+      "category": "show",
+      "result_type": "source_line",
+      "required_args": [
+        { "name": "file",  "pool": "files" },
+        { "name": "start", "pool": "line_starts" },
+        { "name": "end",   "pool": "line_ends" }
+      ],
+      "clauses": ["WHERE", "LIMIT", "OFFSET"],
+      "explosion_cap": 50
+    },
+    {
+      "id": "change_with_content",
+      "syntax": "CHANGE FILE '{file}' WITH '{content}'",
+      "category": "mutation",
+      "result_type": null,
+      "required_args": [
+        { "name": "file",    "pool": "mutation_files" },
+        { "name": "content", "pool": "mutation_content" }
+      ],
+      "clauses": [],
+      "explosion_cap": 20
+    },
+    {
+      "id": "change_matching",
+      "syntax": "CHANGE FILE '{file}' MATCHING '{pattern}' WITH '{replacement}'",
+      "category": "mutation",
+      "result_type": null,
+      "required_args": [
+        { "name": "file",        "pool": "mutation_files" },
+        { "name": "pattern",     "pool": "mutation_patterns" },
+        { "name": "replacement", "pool": "mutation_replacements" }
+      ],
+      "clauses": [],
+      "explosion_cap": 20
+    },
+    {
+      "id": "change_lines",
+      "syntax": "CHANGE FILE '{file}' LINES {start}-{end} WITH '{content}'",
+      "category": "mutation",
+      "result_type": null,
+      "required_args": [
+        { "name": "file",    "pool": "mutation_files" },
+        { "name": "start",   "pool": "line_starts" },
+        { "name": "end",     "pool": "line_ends" },
+        { "name": "content", "pool": "mutation_content" }
+      ],
+      "clauses": [],
+      "explosion_cap": 20
+    },
+    {
+      "id": "change_delete",
+      "syntax": "CHANGE FILE '{file}' WITH NOTHING",
+      "category": "mutation",
+      "result_type": null,
+      "required_args": [{ "name": "file", "pool": "mutation_files" }],
+      "clauses": [],
+      "explosion_cap": 10
+    },
+    {
+      "id": "begin_transaction",
+      "syntax": "BEGIN TRANSACTION '{name}'",
+      "category": "transaction",
+      "result_type": null,
+      "required_args": [{ "name": "name", "pool": "transaction_names" }],
+      "clauses": [],
+      "explosion_cap": 5
+    },
+    {
+      "id": "commit",
+      "syntax": "COMMIT MESSAGE '{message}'",
+      "category": "transaction",
+      "result_type": null,
+      "required_args": [{ "name": "message", "pool": "commit_messages" }],
+      "clauses": [],
+      "explosion_cap": 5
+    },
+    {
+      "id": "rollback",
+      "syntax": "ROLLBACK",
+      "category": "transaction",
+      "result_type": null,
+      "required_args": [],
+      "optional_args": [{ "name": "name", "syntax": "TRANSACTION '{name}'", "pool": "transaction_names" }],
+      "clauses": [],
+      "explosion_cap": 5
+    },
+    {
+      "id": "verify_build",
+      "syntax": "VERIFY build '{step}'",
+      "category": "transaction",
+      "result_type": null,
+      "required_args": [{ "name": "step", "pool": "verify_steps" }],
+      "clauses": [],
+      "explosion_cap": 5
+    },
+    {
+      "id": "use_source",
+      "syntax": "USE {source}.{branch}",
+      "category": "session",
+      "result_type": null,
+      "required_args": [
+        { "name": "source", "pool": "sources" },
+        { "name": "branch", "pool": "branches" }
+      ],
+      "optional_args": [{ "name": "as_branch", "syntax": "AS '{as_branch}'", "pool": "branches" }],
+      "clauses": [],
+      "explosion_cap": 10
+    },
+    {
+      "id": "create_source",
+      "syntax": "CREATE SOURCE '{name}' FROM '{url}'",
+      "category": "session",
+      "result_type": null,
+      "required_args": [
+        { "name": "name", "pool": "sources" },
+        { "name": "url",  "pool": "source_urls" }
+      ],
+      "clauses": [],
+      "explosion_cap": 5
+    },
+    {
+      "id": "refresh_source",
+      "syntax": "REFRESH SOURCE '{name}'",
+      "category": "session",
+      "result_type": null,
+      "required_args": [{ "name": "name", "pool": "sources" }],
+      "clauses": [],
+      "explosion_cap": 5
+    },
+    {
+      "id": "show_sources",
+      "syntax": "SHOW SOURCES",
+      "category": "session",
+      "result_type": null,
+      "required_args": [],
+      "clauses": [],
+      "explosion_cap": 1
+    },
+    {
+      "id": "show_branches",
+      "syntax": "SHOW BRANCHES",
+      "category": "session",
+      "result_type": null,
+      "required_args": [],
+      "optional_args": [{ "name": "source", "syntax": "OF '{source}'", "pool": "sources" }],
+      "clauses": [],
+      "explosion_cap": 5
+    },
+    {
+      "id": "disconnect",
+      "syntax": "DISCONNECT",
+      "category": "session",
+      "result_type": null,
+      "required_args": [],
+      "clauses": [],
+      "explosion_cap": 1
+    }
+  ],
+
+  "test_values": {
+    "description": "Concrete values drawn from canonical fixtures for realistic command generation.",
+
+    "all_symbols":  ["foo", "bar", "Motor", "speed", "State", "count", "factorial",
+                     "process", "helper", "hex_value", "bin_value", "pi", "transform",
+                     "checker", "shadowed", "escaping", "switcher", "distant", "caller"],
+    "functions":    ["foo", "bar", "factorial", "process", "helper", "transform",
+                     "checker", "shadowed", "escaping", "switcher", "distant", "caller"],
+    "types":        ["Motor", "State"],
+    "files":        ["canonical.cpp", "canonical.rs"],
+
+    "globs":        ["*.cpp", "*.rs", "canonical.*", "**/*.cpp"],
+    "fql_kinds":    ["function", "struct", "enum", "field", "variable"],
+    "languages":    ["cpp", "rust"],
+    "node_kinds":   ["function_definition", "struct_specifier", "enum_specifier",
+                     "declaration", "function_item", "struct_item", "enum_item"],
+
+    "limit_values":  [1, 5, 10, 20, 100],
+    "offset_values": [0, 1, 5, 10],
+    "depth_values":  [0, 1, 2, 3, 99],
+    "lines_values":  [1, 3, 5, 10],
+    "line_starts":   [1, 5, 16, 26, 37, 53, 83],
+    "line_ends":     [3, 7, 21, 29, 47, 59, 90],
+
+    "like_patterns":    ["%foo%", "bar%", "%_value", "%Motor%", "%er"],
+    "regex_patterns":   ["^f", ".*oo.*", "^[A-Z]", "^(foo|bar)$"],
+
+    "numeric_values":   [0, 1, 2, 5, 10, 42, 100, 255],
+    "string_values":    ["foo", "Motor", "function", "struct", "enum", "variable",
+                         "snake_case", "PascalCase", "true", "false", "static"],
+
+    "sources":           ["test-repo"],
+    "branches":          ["main", "develop"],
+    "source_urls":       ["/tmp/test-repo.git"],
+    "transaction_names": ["tx1", "refactor-batch"],
+    "commit_messages":   ["test commit", "SMS generated"],
+    "verify_steps":      ["cargo check", "cargo test"],
+
+    "mutation_files":        ["scratch.cpp"],
+    "mutation_content":      ["// generated\nint x = 1;\n", "void noop() {}\n"],
+    "mutation_patterns":     ["int x", "void noop"],
+    "mutation_replacements": ["int y", "void stub"]
+  },
+
+  "assertion_tiers": {
+    "description": "Three tiers of validation, applied progressively by the SMS harness.",
+    "tier1_parse": {
+      "description": "Command must parse without error. Validates grammar coverage.",
+      "applies_to": "all commands"
+    },
+    "tier2_no_crash": {
+      "description": "Parsed command must execute without panic. May return error result (e.g., symbol not found).",
+      "applies_to": "all commands",
+      "requires_session": true
+    },
+    "tier3_invariants": {
+      "description": "Result must satisfy invariants derived from the parsed IR clauses.",
+      "applies_to": "query and show commands",
+      "requires_session": true,
+      "checks": [
+        { "clause": "LIMIT",    "invariant": "result.count <= limit_value" },
+        { "clause": "OFFSET",   "invariant": "first result index >= offset_value" },
+        { "clause": "IN",       "invariant": "all result paths match IN glob" },
+        { "clause": "EXCLUDE",  "invariant": "no result paths match EXCLUDE glob" },
+        { "clause": "WHERE",    "invariant": "all results satisfy predicate (field op value)" },
+        { "clause": "ORDER_BY", "invariant": "results are sorted by field in declared direction" },
+        { "clause": "GROUP_BY", "invariant": "no duplicate values in GROUP BY field" }
+      ]
+    }
+  },
+
+  "performance": {
+    "description": "Measurement config for the SMS harness.",
+    "measure_each_command": true,
+    "timing_method": "std::time::Instant",
+    "csv_columns": ["fql_command", "command_id", "tier", "duration_us", "result_status", "result_count"],
+    "csv_file_pattern": "sms-perf-{timestamp}.csv"
+  }
+}
