@@ -251,6 +251,19 @@ impl SymbolTable {
             .map(|&idx| &self.rows[idx])
     }
 
+    /// Return all definition rows for a given symbol name.
+    ///
+    /// Unlike [`find_def`] which returns only the last-indexed row,
+    /// this returns every row matching the name — essential for
+    /// multi-language workspaces where the same name may exist in
+    /// different files/languages.
+    #[must_use]
+    pub fn find_all_defs(&self, name: &str) -> Vec<&IndexRow> {
+        self.name_index.get(name).map_or_else(Vec::new, |indices| {
+            indices.iter().map(|&idx| &self.rows[idx]).collect()
+        })
+    }
+
     /// Return an iterator over all rows matching a tree-sitter node kind.
     pub fn rows_by_kind(&self, kind: &str) -> impl Iterator<Item = &IndexRow> {
         self.kind_index

@@ -749,34 +749,49 @@ impl ForgeQLEngine {
     #[allow(clippy::too_many_lines)]
     fn exec_show(&self, session_id: Option<&str>, op: &ForgeQLIR) -> Result<ForgeQLResult> {
         let (workspace, index) = self.require_workspace_and_index(session_id)?;
+        let root = workspace.root();
 
         let json = match op {
             ForgeQLIR::ShowContext { symbol, clauses } => {
-                let file = clauses.in_glob.as_deref();
                 let context_lines = clauses.depth.unwrap_or(DEFAULT_CONTEXT_LINES);
-                show::show_context(index, &workspace, symbol, file, context_lines)
+                resolve_symbol(index, symbol, clauses, root)
+                    .and_then(|def| show::show_context(def, &workspace, symbol, context_lines))
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
-            ForgeQLIR::ShowSignature { symbol, .. } => {
-                show::show_signature(index, &workspace, symbol, &self.lang_registry)
+            ForgeQLIR::ShowSignature { symbol, clauses } => {
+                resolve_symbol(index, symbol, clauses, root)
+                    .and_then(|def| {
+                        show::show_signature(def, &workspace, symbol, &self.lang_registry)
+                    })
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
             ForgeQLIR::ShowOutline { file, .. } => show::show_outline(index, &workspace, file)
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
-            ForgeQLIR::ShowMembers { symbol, .. } => {
-                show::show_members(index, &workspace, symbol, &self.lang_registry)
+            ForgeQLIR::ShowMembers { symbol, clauses } => {
+                resolve_symbol(index, symbol, clauses, root)
+                    .and_then(|def| {
+                        show::show_members(def, &workspace, symbol, &self.lang_registry)
+                    })
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
-            ForgeQLIR::ShowBody { symbol, clauses } => show::show_body(
-                index,
-                &workspace,
-                symbol,
-                Some(clauses.depth.unwrap_or(DEFAULT_BODY_DEPTH)),
-                &self.lang_registry,
-            )
-            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
-            ForgeQLIR::ShowCallees { symbol, .. } => {
-                show::show_callees(index, &workspace, symbol, &self.lang_registry)
+            ForgeQLIR::ShowBody { symbol, clauses } => {
+                resolve_body_symbol(index, symbol, clauses, root)
+                    .and_then(|def| {
+                        show::show_body(
+                            def,
+                            &workspace,
+                            symbol,
+                            Some(clauses.depth.unwrap_or(DEFAULT_BODY_DEPTH)),
+                            &self.lang_registry,
+                        )
+                    })
+                    .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+            }
+            ForgeQLIR::ShowCallees { symbol, clauses } => {
+                resolve_body_symbol(index, symbol, clauses, root)
+                    .and_then(|def| {
+                        show::show_callees(def, index, &workspace, symbol, &self.lang_registry)
+                    })
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
             ForgeQLIR::ShowLines {
@@ -1641,6 +1656,105 @@ fn find_symbols_prefilter(
     };
 
     (results, remaining)
+}
+
+/// Resolve a symbol name to a single [`IndexRow`] using SHOW command clauses.
+///
+/// 1. Finds all definition rows matching `name` in the index.
+/// 2. Filters by `IN`/`EXCLUDE` globs and `WHERE` predicates from `clauses`.
+/// 3. If the surviving candidates span multiple languages, returns an error
+///    asking the user to disambiguate with `WHERE language = '...'` or
+///    `IN '*.ext'`.
+/// 4. Returns the last matching row (preserving v1 last-write-wins semantics
+///    within a single language).
+fn resolve_symbol<'a>(
+    index: &'a SymbolTable,
+    name: &str,
+    clauses: &Clauses,
+    root: &Path,
+) -> Result<&'a crate::ast::index::IndexRow> {
+    use crate::filter::eval_predicate;
+
+    let candidates = index.find_all_defs(name);
+    if candidates.is_empty() {
+        bail!("symbol '{name}' not found in index");
+    }
+
+    // Single candidate — fast path, skip filtering.
+    if candidates.len() == 1 {
+        return Ok(candidates[0]);
+    }
+
+    let filtered: Vec<&crate::ast::index::IndexRow> = candidates
+        .into_iter()
+        .filter(|row| {
+            if let Some(ref glob) = clauses.in_glob
+                && !crate::ast::query::relative_glob_matches(&row.path, glob, root)
+            {
+                return false;
+            }
+            if let Some(ref glob) = clauses.exclude_glob
+                && crate::ast::query::relative_glob_matches(&row.path, glob, root)
+            {
+                return false;
+            }
+            clauses
+                .where_predicates
+                .iter()
+                .all(|p| eval_predicate(*row, p))
+        })
+        .collect();
+
+    if filtered.is_empty() {
+        bail!("symbol '{name}' not found after applying WHERE/IN/EXCLUDE filters");
+    }
+
+    // Check cross-language ambiguity.
+    let mut languages: Vec<&str> = filtered
+        .iter()
+        .filter_map(|r| {
+            if r.language.is_empty() {
+                None
+            } else {
+                Some(r.language.as_str())
+            }
+        })
+        .collect();
+    languages.sort_unstable();
+    languages.dedup();
+
+    if languages.len() > 1 {
+        bail!(
+            "symbol '{name}' exists in multiple languages: [{}]. \
+             Use WHERE language = '...' or IN '*.ext' to disambiguate",
+            languages.join(", ")
+        );
+    }
+
+    // Last match — preserves v1 last-write-wins within a single language.
+    // SAFETY: `filtered` is guaranteed non-empty by the bail above.
+    #[allow(clippy::expect_used)]
+    Ok(filtered.last().expect("filtered is non-empty"))
+}
+
+/// Like [`resolve_symbol`] but follows the `body_symbol` redirect.
+///
+/// If the resolved row carries a `body_symbol` field (set by the
+/// `MemberEnricher` for out-of-line member function definitions), follow
+/// the redirect to find the actual function body.
+fn resolve_body_symbol<'a>(
+    index: &'a SymbolTable,
+    name: &str,
+    clauses: &Clauses,
+    root: &Path,
+) -> Result<&'a crate::ast::index::IndexRow> {
+    let def = resolve_symbol(index, name, clauses, root)?;
+    if let Some(target) = def.fields.get("body_symbol")
+        && let Some(redirected) = index.find_def(target)
+    {
+        return Ok(redirected);
+    }
+    Ok(def)
 }
 
 /// Validate the `ORDER BY` field against a result set, returning an error if

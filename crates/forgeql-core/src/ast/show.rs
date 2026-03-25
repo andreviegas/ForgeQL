@@ -363,45 +363,6 @@ fn collect_callees_walk(
     }
 }
 
-/// Look up a symbol definition, optionally requiring its path to contain
-/// `file_filter` as a substring after stripping surrounding quotes.
-fn find_def<'a>(
-    index: &'a SymbolTable,
-    symbol: &str,
-    file_filter: Option<&str>,
-) -> Result<&'a IndexRow> {
-    let def = index
-        .find_def(symbol)
-        .ok_or_else(|| anyhow!("symbol '{symbol}' not found in index"))?;
-    if let Some(filter) = file_filter {
-        let filter_clean = filter.trim_matches('\'');
-        let path_str = def.path.to_string_lossy();
-        if !path_str.contains(filter_clean) {
-            return Err(anyhow!(
-                "symbol '{symbol}' definition is in '{path_str}', \
-                 which does not match file filter '{filter_clean}'"
-            ));
-        }
-    }
-    Ok(def)
-}
-
-/// Resolve a symbol to a definition that has a function body.
-///
-/// If the primary row carries a `body_symbol` field (set during indexing by
-/// the `MemberEnricher`), follow the redirect.  Otherwise return the
-/// primary row as-is.  Completely language-agnostic — every language just
-/// needs to populate `body_symbol` during its enrichment pass.
-fn find_body_def<'a>(index: &'a SymbolTable, symbol: &str) -> Result<&'a IndexRow> {
-    let def = find_def(index, symbol, None)?;
-    if let Some(target) = def.fields.get("body_symbol")
-        && let Some(redirected) = index.find_def(target)
-    {
-        return Ok(redirected);
-    }
-    Ok(def)
-}
-
 /// Extract the text of the source line containing `byte_offset`.
 fn extract_line_at(source: &[u8], byte_offset: usize) -> String {
     let text = String::from_utf8_lossy(source);
@@ -446,15 +407,13 @@ fn path_matches(root: &Path, path: &Path, pattern: &str) -> bool {
 /// files (rare for C++).
 ///
 /// # Errors
-/// Returns an error if the symbol is not indexed or the file cannot be read.
+/// Returns an error if the file cannot be read.
 pub fn show_context(
-    index: &SymbolTable,
+    def: &IndexRow,
     workspace: &Workspace,
     symbol: &str,
-    file_filter: Option<&str>,
     context_lines: usize,
 ) -> Result<Value> {
-    let def = find_def(index, symbol, file_filter)?;
     let source = crate::workspace::file_io::read_bytes(&def.path)?;
     let center = byte_to_line(&source, def.byte_range.start);
 
@@ -492,14 +451,13 @@ pub fn show_context(
 /// types, it is the first line of the declaration.
 ///
 /// # Errors
-/// Returns an error if the symbol is not indexed or the file cannot be read.
+/// Returns an error if the file cannot be read.
 pub fn show_signature(
-    index: &SymbolTable,
+    def: &IndexRow,
     workspace: &Workspace,
     symbol: &str,
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
-    let def = find_def(index, symbol, None)?;
     let lang = lang_registry
         .language_for_path(&def.path)
         .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
@@ -607,25 +565,19 @@ pub fn show_outline(index: &SymbolTable, workspace: &Workspace, file: &str) -> R
 /// 1-based line numbers.
 ///
 /// # Errors
-/// Returns an error if the symbol is not in the index, the file cannot be
-/// read, or the AST node for the type is not found.
+/// Returns an error if the file cannot be read or the AST node for the
+/// type is not found.
 pub fn show_members(
-    index: &SymbolTable,
+    def: &IndexRow,
     workspace: &Workspace,
     symbol: &str,
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
-    // Resolve path from the index.
-    let path = index
-        .find_def(symbol)
-        .map(|r| r.path.clone())
-        .ok_or_else(|| anyhow!("symbol '{symbol}' not found in index"))?;
-
     let lang = lang_registry
-        .language_for_path(&path)
-        .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
+        .language_for_path(&def.path)
+        .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(&path, lang_registry)?;
+    let (source, tree) = parse_file(&def.path, lang_registry)?;
     let root = tree.root_node();
 
     let type_node = find_type_node_by_name(root, &source, symbol, config)
@@ -705,7 +657,7 @@ pub fn show_members(
     let byte_start = type_node.start_byte();
     let start_line = type_node.start_position().row + 1;
     let end_line = type_node.end_position().row + 1;
-    let path_str = workspace.relative(&path).display().to_string();
+    let path_str = workspace.relative(&def.path).display().to_string();
     Ok(serde_json::json!({
         "op":         "show_members",
         "symbol":     symbol,
@@ -732,13 +684,12 @@ pub fn show_members(
 /// Returns an error if the symbol is not indexed, the file cannot be parsed,
 /// or the AST node for the function is not found.
 pub fn show_body(
-    index: &SymbolTable,
+    def: &IndexRow,
     workspace: &Workspace,
     symbol: &str,
     depth: Option<usize>,
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
-    let def = find_body_def(index, symbol)?;
     let lang = lang_registry
         .language_for_path(&def.path)
         .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
@@ -851,15 +802,15 @@ pub fn show_callers(index: &SymbolTable, workspace: &Workspace, symbol: &str) ->
 /// Results are sorted and deduplicated.
 ///
 /// # Errors
-/// Returns an error if the symbol is not indexed, the file cannot be parsed,
-/// or the AST node for the function is not found.
+/// Returns an error if the file cannot be parsed or the AST node for the
+/// function is not found.
 pub fn show_callees(
+    def: &IndexRow,
     index: &SymbolTable,
     workspace: &Workspace,
     symbol: &str,
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
-    let def = find_body_def(index, symbol)?;
     let lang = lang_registry
         .language_for_path(&def.path)
         .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
