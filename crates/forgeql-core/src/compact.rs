@@ -297,7 +297,7 @@ fn compact_count_usages(query: &QueryResult) -> String {
     out
 }
 
-/// FIND symbols / defines / enums / includes → grouped by `node_kind`.
+/// FIND symbols / defines / enums / includes → grouped by `fql_kind`.
 fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
     let mut out = String::with_capacity(query.results.len() * 50);
     // Header.
