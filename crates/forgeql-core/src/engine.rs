@@ -1507,7 +1507,18 @@ fn find_symbols_prefilter(
     use crate::filter::{eval_predicate, like_match};
     use crate::ir::{CompareOp, PredicateValue};
 
-    // Extract a `node_kind = 'value'` predicate for kind_index shortcut.
+    // Extract a `fql_kind = value` predicate for the fql_kind_index shortcut (preferred).
+    // Extract a `node_kind = value` predicate for the kind_index shortcut (power-user fallback).
+    let fql_kind_exact: Option<&str> = clauses.where_predicates.iter().find_map(|p| {
+        if p.field == "fql_kind"
+            && p.op == CompareOp::Eq
+            && let PredicateValue::String(ref s) = p.value
+        {
+            Some(s.as_str())
+        } else {
+            None
+        }
+    });
     let kind_exact: Option<&str> = clauses.where_predicates.iter().find_map(|p| {
         if p.field == "node_kind"
             && p.op == CompareOp::Eq
@@ -1533,18 +1544,19 @@ fn find_symbols_prefilter(
 
     let is_usages_pred = |p: &crate::ir::Predicate| p.field == "usages";
 
-    // When no explicit `node_kind =` predicate, infer kind(s) from
-    // enrichment fields used in WHERE.  This lets us use the kind_index
-    // instead of a full 2M-row scan.
-    let inferred_kinds: Option<Vec<String>> = if kind_exact.is_none() {
+    // When no explicit kind predicate, infer raw kind(s) from enrichment fields.
+    // This lets us use the kind_index instead of a full scan.
+    let inferred_kinds: Option<Vec<String>> = if fql_kind_exact.is_none() && kind_exact.is_none() {
         infer_kinds_from_fields(&clauses.where_predicates, lang_configs)
     } else {
         None
     };
 
-    // Row source: kind_index for O(1) lookup, or full scan.
+    // Row source: fql_kind_index (universal) > kind_index (power-user) > inferred > full scan.
     let candidates: Box<dyn Iterator<Item = &crate::ast::index::IndexRow>> =
-        if let Some(kind) = kind_exact {
+        if let Some(fql_kind) = fql_kind_exact {
+            Box::new(index.rows_by_fql_kind(fql_kind))
+        } else if let Some(kind) = kind_exact {
             Box::new(index.rows_by_kind(kind))
         } else if let Some(ref kinds) = inferred_kinds {
             Box::new(
@@ -1563,6 +1575,7 @@ fn find_symbols_prefilter(
         .where_predicates
         .iter()
         .filter(|p| !is_usages_pred(p))
+        .filter(|p| fql_kind_exact.is_none() || !(p.field == "fql_kind" && p.op == CompareOp::Eq))
         .filter(|p| kind_exact.is_none() || !(p.field == "node_kind" && p.op == CompareOp::Eq))
         .filter(|p| name_like.is_none() || !(p.field == "name" && p.op == CompareOp::Like))
         .collect();
