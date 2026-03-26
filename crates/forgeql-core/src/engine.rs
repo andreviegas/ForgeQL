@@ -512,13 +512,12 @@ impl ForgeQLEngine {
         // <worktree>/.forgeql-index is reused when HEAD matches.
         session.resume_index()?;
 
-        // Freeze .forgeql.yaml at session start.  Any later CHANGE command
-        // that modifies the config file on disk has no effect on VERIFY —
-        // the engine always uses these snapshots captured here.
-        if let Some(config_path) = ForgeConfig::find(&session.worktree_path)
-            && let Ok(config) = ForgeConfig::load(&config_path)
+        // Freeze verify config at session start — sidecar takes priority over in-repo file.
+        // Any later CHANGE has no effect on VERIFY; steps are captured once here.
+        if let Some((workdir, config)) =
+            load_verify_config(&repo_path, source_name, &session.worktree_path)
         {
-            session.frozen_workdir = config_path.parent().map(std::path::Path::to_path_buf);
+            session.frozen_workdir = Some(workdir);
             session.frozen_verify_steps = Some(config.verify_steps);
         }
 
@@ -1438,6 +1437,34 @@ impl ForgeQLEngine {
 // -----------------------------------------------------------------------
 // Free functions (module-private helpers)
 // -----------------------------------------------------------------------
+
+/// Load verify configuration for `source_name`, preferring an external sidecar
+/// over the in-repo `.forgeql.yaml`.
+///
+/// **Sidecar path:** `<repo_dir>/<source_name>.forgeql.yaml` (no commit needed)\
+/// **Fallback:** walk up from `worktree_path` looking for `.forgeql.yaml`
+///
+/// Returns `(workdir, config)` where `workdir` is the directory from which
+/// VERIFY commands run — always the worktree root when the sidecar is used.
+fn load_verify_config(
+    repo_path: &Path,
+    source_name: &str,
+    worktree_path: &Path,
+) -> Option<(PathBuf, ForgeConfig)> {
+    let sidecar = repo_path
+        .parent()
+        .map(|p| p.join(format!("{source_name}.forgeql.yaml")));
+    if let Some(sc) = sidecar.as_deref().filter(|p| p.exists()) {
+        info!(%source_name, path = %sc.display(), "using sidecar .forgeql.yaml");
+        return ForgeConfig::load(sc)
+            .ok()
+            .map(|c| (worktree_path.to_path_buf(), c));
+    }
+    ForgeConfig::find(worktree_path).and_then(|p| {
+        let workdir = p.parent().map(Path::to_path_buf)?;
+        ForgeConfig::load(&p).ok().map(|c| (workdir, c))
+    })
+}
 
 /// Generate a time-based session ID.
 fn generate_session_id() -> String {
