@@ -187,6 +187,56 @@ pub fn stage_paths_and_commit(
     Ok(oid.to_string())
 }
 
+/// Files managed by `ForgeQL` itself that should not count as user source
+/// changes when deciding whether to keep a session branch on disconnect.
+/// Extend this list as new control files are introduced.
+pub const FORGEQL_CONTROL_FILES: &[&str] = &[".forgeql-index", ".forgeql-session"];
+
+/// Returns the list of changed source files between the session branch
+/// and the base branch, ignoring files in [`FORGEQL_CONTROL_FILES`].
+///
+/// An empty list means no meaningful source changes exist.
+///
+/// Both `base_branch` and `session_branch` must be local branch names in
+/// the bare repo at `repo_path`.
+///
+/// # Errors
+///
+/// Returns `Err` if the repository cannot be opened or either branch
+/// cannot be resolved.
+pub fn source_changes(
+    repo_path: &Path,
+    base_branch: &str,
+    session_branch: &str,
+) -> Result<Vec<String>> {
+    let repo = Repository::open_bare(repo_path)?;
+
+    let base_tree = repo
+        .find_branch(base_branch, BranchType::Local)?
+        .into_reference()
+        .peel_to_tree()?;
+    let session_tree = repo
+        .find_branch(session_branch, BranchType::Local)?
+        .into_reference()
+        .peel_to_tree()?;
+
+    let diff = repo.diff_tree_to_tree(Some(&base_tree), Some(&session_tree), None)?;
+
+    let mut changed = Vec::new();
+    for delta in diff.deltas() {
+        let path = delta
+            .new_file()
+            .path()
+            .and_then(|p| p.to_str())
+            .unwrap_or("")
+            .to_string();
+        if !FORGEQL_CONTROL_FILES.contains(&path.as_str()) {
+            changed.push(path);
+        }
+    }
+    Ok(changed)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;

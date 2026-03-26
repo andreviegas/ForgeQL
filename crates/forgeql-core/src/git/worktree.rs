@@ -214,6 +214,25 @@ pub fn delete_session_branch(repo_path: &Path, session_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Delete a branch by its full name (no prefix added).
+///
+/// # Errors
+///
+/// Returns `Err` if the repository cannot be opened or branch deletion fails.
+pub fn delete_branch(repo_path: &Path, branch_name: &str) -> Result<()> {
+    let repo = open_repo(repo_path)?;
+    match repo.find_branch(branch_name, BranchType::Local) {
+        Ok(mut branch) => {
+            branch.delete()?;
+            debug!(branch = %branch_name, "deleted branch");
+        }
+        Err(_) => {
+            debug!(branch = %branch_name, "branch not found — already deleted");
+        }
+    }
+    Ok(())
+}
+
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------

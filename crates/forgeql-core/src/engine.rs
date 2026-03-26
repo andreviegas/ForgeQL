@@ -557,13 +557,37 @@ impl ForgeQLEngine {
         if let Err(err) = worktree::remove(&repo_path, wt_name) {
             warn!(%wt_name, error = %err, "disconnect: worktree remove failed");
         }
-        // Only auto-delete the forgeql/* branch.  Named branches (from USE … AS)
-        // are intentionally kept for senior developer review.
-        if custom_branch.is_none()
-            && let Err(err) = worktree::delete_session_branch(&repo_path, wt_name)
+        // Determine the session branch name (custom or auto-generated).
+        let auto_branch = format!("forgeql/{wt_name}");
+        let session_branch = custom_branch.as_deref().unwrap_or(&auto_branch);
+
+        // Delete the branch if it contains no real source changes compared
+        // to the base branch (ignoring ForgeQL control files).
+        let disconnect_msg = match git::source_changes(&repo_path, &session.branch, session_branch)
         {
-            warn!(%wt_name, error = %err, "disconnect: branch delete failed");
-        }
+            Ok(changed) if changed.is_empty() => {
+                if let Err(err) = worktree::delete_branch(&repo_path, session_branch) {
+                    warn!(%session_branch, error = %err, "disconnect: branch delete failed");
+                }
+                info!(%session_branch, "deleted branch — no source changes");
+                format!(
+                    "branch {session_branch} deleted (no source changes vs {})",
+                    session.branch
+                )
+            }
+            Ok(changed) => {
+                info!(%session_branch, files = ?changed, "keeping branch — has source changes");
+                format!(
+                    "branch {session_branch} kept — {} changed file(s): {}",
+                    changed.len(),
+                    changed.join(", ")
+                )
+            }
+            Err(err) => {
+                warn!(%session_branch, error = %err, "disconnect: could not diff trees, keeping branch");
+                format!("branch {session_branch} kept — diff error: {err}")
+            }
+        };
 
         info!(%sid, "session disconnected and cleaned up");
         Ok(ForgeQLResult::SourceOp(SourceOpResult {
@@ -573,7 +597,7 @@ impl ForgeQLEngine {
             branches: Vec::new(),
             symbols_indexed: None,
             resumed: false,
-            message: None,
+            message: Some(disconnect_msg),
         }))
     }
 
