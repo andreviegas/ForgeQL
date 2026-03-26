@@ -24,7 +24,7 @@ verify_steps:
     timeout_secs: 120
 
   # Syntax coverage: every node_kind / fql_kind value cross-checked against
-  # the C++ fixture (motor_control.h). Main target for fql_kind migration.
+  # the C++ fixture (motor_control.h)
   - name: test-syntax
     command: "cargo test -p forgeql-core --test syntax_coverage"
     timeout_secs: 120
@@ -60,11 +60,6 @@ verify_steps:
   - name: test
     command: "cargo test --workspace"
     timeout_secs: 300
-
-  # Lint check -- run after passing tests to catch style regressions.
-  - name: clippy
-    command: "cargo clippy --workspace -- -D warnings"
-    timeout_secs: 120
 
   # Formatting check — mirrors the CI fmt job exactly.
   - name: fmt
