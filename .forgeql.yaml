@@ -66,9 +66,18 @@ verify_steps:
     command: "cargo clippy --workspace -- -D warnings"
     timeout_secs: 120
 
-  # Build release binary, install it, then schedule a server restart.
-  # The 5-second delay lets VERIFY return its output before the process exits.
-  # VS Code auto-restarts MCP servers that exit -- reconnect after ~5 seconds.
-  - name: build-and-restart
-    command: "cargo build --release && { (sleep 5 && kill -SIGINT $PPID) & echo 'Binary built. Server restarting in 5 seconds -- reconnect with USE.'; }"
-    timeout_secs: 180    
+  # Formatting check — mirrors the CI fmt job exactly.
+  - name: fmt
+    command: "cargo fmt --all -- --check"
+    timeout_secs: 120
+
+  # Lint check — mirrors the CI clippy job exactly (--all-targets + deny warnings).
+  - name: clippy
+    command: "cargo clippy --workspace --all-targets -- --deny warnings"
+    timeout_secs: 240
+
+  # Full CI gate — run this before every commit, exactly what GitHub Actions runs.
+  # fmt → clippy → test: first failure stops the chain.
+  - name: test-all-before-commit
+    command: "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- --deny warnings && cargo test --workspace"
+    timeout_secs: 600
