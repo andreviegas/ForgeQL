@@ -1,8 +1,12 @@
 //! **SMS — State Machine Syntax** combinatorial test harness.
 //!
 //! Reads `tests/fixtures/syntax.json` and generates FQL commands that cover
-//! every (command × clause × operator) combination.  Two-phase generation:
+//! every (command × clause × operator × enrichment-field) combination.
+//! Three-phase generation:
 //!
+//! - **Phase 0 (field sweep):** every enrichment field × every pool value at
+//!   three clause-count levels (L1: single WHERE; L2: +ORDER BY; L3: +LIMIT).
+//!   Guarantees every field is tested in isolation before being combined.
 //! - **Phase 1 (baseline):** one command per (command\_id, clause) pair so
 //!   every command type and every clause appears at least once.
 //! - **Phase 2 (random fill):** seeded deterministic random combinations
@@ -12,7 +16,9 @@
 //! Three assertion tiers:
 //! - Tier 1: parse without error.
 //! - Tier 2: execute without panic (errors like "symbol not found" are OK).
-//! - Tier 3: invariant checking on successful results (LIMIT, IN, ORDER BY …).
+//! - Tier 3: invariant checking on successful results. Each invariant is an
+//!   independent `inv_*` function `fn(&str, &ForgeQLResult) -> Result<(), &'static str>`
+//!   registered in `INVARIANT_CHECKS`. Add new invariants there.
 //!
 //! Run with: `cargo test -p forgeql-core --test sms_integration -- --nocapture`
 #![allow(
@@ -99,6 +105,8 @@ struct SyntaxSpec {
     test_values: HashMap<String, Vec<String>>,
     /// Maps field names → test_values pool names for semantically correct WHERE values.
     field_pools: HashMap<String, String>,
+    /// All enrichment fields parsed from syntax.json: (field_name, is_numeric).
+    enrichment_fields: Vec<(String, bool)>,
 }
 
 struct CommandSpec {
@@ -282,6 +290,25 @@ fn load_syntax() -> SyntaxSpec {
         })
         .unwrap_or_default();
 
+    // Load all enrichment fields dynamically so pick_field covers all of them.
+    let mut enrichment_fields: Vec<(String, bool)> = Vec::new();
+    let ef = &root["enrichment_fields"];
+    for (field, vals) in ef["string"].as_object().into_iter().flatten() {
+        if vals.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+            enrichment_fields.push((field.clone(), false));
+        }
+    }
+    for (field, vals) in ef["numeric"].as_object().into_iter().flatten() {
+        if vals.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+            enrichment_fields.push((field.clone(), true));
+        }
+    }
+    for (field, vals) in ef["boolean"].as_object().into_iter().flatten() {
+        if vals.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+            enrichment_fields.push((field.clone(), false));
+        }
+    }
+
     SyntaxSpec {
         seed,
         total_budget,
@@ -291,6 +318,7 @@ fn load_syntax() -> SyntaxSpec {
         result_types,
         test_values,
         field_pools,
+        enrichment_fields,
     }
 }
 
@@ -362,6 +390,7 @@ fn expand_clause(
     result_types: &HashMap<String, ResultTypeSpec>,
     operators: &[OpSpec],
     field_pools: &HashMap<String, String>,
+    enrichment_fields: &[(String, bool)],
 ) -> Option<String> {
     // Check applies_to restriction
     if let Some(ref targets) = spec.applies_to {
@@ -373,16 +402,33 @@ fn expand_clause(
     match clause_name {
         "WHERE" => {
             let rt = cmd.result_type.as_ref().and_then(|k| result_types.get(k));
-            let (field, is_numeric) = pick_field(rng, rt, true);
-            let op = pick_operator(rng, operators, is_numeric);
+            let (field, is_numeric) = pick_field(rng, rt, true, enrichment_fields);
+            let field_pool = field_pools
+                .get(&field)
+                .map(String::as_str)
+                .unwrap_or("string_values");
+            let is_bool_field = field_pool == "bool_values";
+            // Boolean fields only support = and !=; patterns/comparisons are nonsensical.
+            let op = if is_bool_field {
+                if rng.chance(50) {
+                    "=".to_string()
+                } else {
+                    "!=".to_string()
+                }
+            } else {
+                pick_operator(rng, operators, is_numeric)
+            };
             let value = if is_numeric {
                 pool_value(rng, "numeric_values", tv)
+            } else if is_bool_field {
+                pool_value(rng, "bool_values", tv) // unquoted: true / false
             } else {
-                // Use the field-specific pool when available, fall back to string_values
-                let pool = field_pools
-                    .get(&field)
-                    .map(String::as_str)
-                    .unwrap_or("string_values");
+                // LIKE/MATCHES require pattern syntax — use dedicated pattern pools
+                let pool = match op.as_str() {
+                    "LIKE" | "NOT LIKE" => "like_patterns",
+                    "MATCHES" | "NOT MATCHES" => "regex_patterns",
+                    _ => field_pool,
+                };
                 format!("'{}'", pool_value(rng, pool, tv))
             };
             Some(format!("WHERE {field} {op} {value}"))
@@ -400,7 +446,7 @@ fn expand_clause(
         }
         "ORDER_BY" => {
             let rt = cmd.result_type.as_ref().and_then(|k| result_types.get(k));
-            let (field, _) = pick_field(rng, rt, false);
+            let (field, _) = pick_field(rng, rt, false, enrichment_fields);
             let dir = spec
                 .directions
                 .as_ref()
@@ -439,6 +485,7 @@ fn pick_field(
     rng: &mut Rng,
     rt: Option<&ResultTypeSpec>,
     include_enrichment: bool,
+    enrichment_fields: &[(String, bool)],
 ) -> (String, bool) {
     let rt = match rt {
         Some(r) => r,
@@ -450,20 +497,14 @@ fn pick_field(
     if total == 0 {
         return ("name".to_string(), false);
     }
-    // For enrichment-capable types, sometimes pick an enrichment field
-    if include_enrichment && rt.accepts_enrichment && rng.chance(30) {
-        let enrich_fields = [
-            ("has_doc", false),
-            ("is_recursive", false),
-            ("has_todo", false),
-            ("lines", true),
-            ("param_count", true),
-            ("naming", false),
-            ("scope", false),
-            ("num_format", false),
-        ];
-        let (f, is_num) = rng.pick(&enrich_fields);
-        return (f.to_string(), *is_num);
+    // For enrichment-capable types, sometimes pick from the full dynamically-loaded enrichment set
+    if include_enrichment
+        && rt.accepts_enrichment
+        && rng.chance(30)
+        && !enrichment_fields.is_empty()
+    {
+        let (f, is_num) = rng.pick(enrichment_fields);
+        return (f.clone(), *is_num);
     }
     let idx = rng.next_usize(total);
     if idx < total_str {
@@ -518,6 +559,7 @@ fn generate_baseline(spec: &SyntaxSpec) -> Vec<GeneratedCommand> {
                     &spec.result_types,
                     &spec.operators,
                     &spec.field_pools,
+                    &spec.enrichment_fields,
                 ) {
                     cmds.push(GeneratedCommand {
                         fql: format!("{base} {clause_text}"),
@@ -543,6 +585,108 @@ fn generate_baseline(spec: &SyntaxSpec) -> Vec<GeneratedCommand> {
                 command_id: cmd.id.clone(),
                 _phase: 1,
             });
+        }
+    }
+
+    cmds
+}
+
+/// Phase 0: deterministic field sweep at three clause-count levels:
+///   L1: `FIND symbols WHERE {field} = {value}`
+///   L2: same + `ORDER BY name ASC`
+///   L3: same + `ORDER BY name ASC LIMIT 10`
+///
+/// Covers two field sets:
+/// - **Structural fields** from the `symbol_match` result type (fql_kind,
+///   language, name, file, …) — these have known pool mappings in field_pools.
+/// - **Enrichment fields** (has_doc, param_count, naming, …) from the
+///   enrichment_fields index.
+///
+/// Guarantees every field is exercised in isolation before phase 1/2 combine
+/// it with other clauses.
+fn generate_field_sweep(spec: &SyntaxSpec) -> Vec<GeneratedCommand> {
+    let mut cmds = Vec::new();
+    let base = "FIND symbols";
+
+    // Helper closure that emits L1/L2/L3 triples for one (field, value) pair.
+    let emit = |cmds: &mut Vec<GeneratedCommand>, field: &str, value_str: String| {
+        let w = format!("WHERE {field} = {value_str}");
+        cmds.push(GeneratedCommand {
+            fql: format!("{base} {w}"),
+            command_id: "find_symbols".to_string(),
+            _phase: 0,
+        });
+        cmds.push(GeneratedCommand {
+            fql: format!("{base} {w} ORDER BY name ASC"),
+            command_id: "find_symbols".to_string(),
+            _phase: 0,
+        });
+        cmds.push(GeneratedCommand {
+            fql: format!("{base} {w} ORDER BY name ASC LIMIT 10"),
+            command_id: "find_symbols".to_string(),
+            _phase: 0,
+        });
+    };
+
+    // --- Structural fields: from the symbol_match result type ---
+    // These are always meaningful (indexed by the engine) so their isolation
+    // tests provide high-signal WHERE coverage (fql_kind, language, name, etc.).
+    let structural_fields: &[(&str, bool)] = &[
+        ("fql_kind", false),
+        ("language", false),
+        ("lang", false),
+        ("name", false),
+        ("file", false),
+        ("path", false),
+        ("kind", false),
+        ("node_kind", false),
+    ];
+    for (field, is_numeric) in structural_fields {
+        let pool_name =
+            spec.field_pools
+                .get(*field)
+                .map(String::as_str)
+                .unwrap_or(if *is_numeric {
+                    "numeric_values"
+                } else {
+                    "string_values"
+                });
+        let Some(values) = spec.test_values.get(pool_name).filter(|v| !v.is_empty()) else {
+            continue;
+        };
+        for val in values {
+            emit(
+                &mut cmds,
+                field,
+                format!("'{val}'"), // structural string fields are always quoted
+            );
+        }
+    }
+
+    // --- Enrichment fields ---
+    for (field, is_numeric) in &spec.enrichment_fields {
+        let pool_name = spec
+            .field_pools
+            .get(field.as_str())
+            .map(String::as_str)
+            .unwrap_or(if *is_numeric {
+                "numeric_values"
+            } else {
+                "string_values"
+            });
+        let values = match spec.test_values.get(pool_name) {
+            Some(v) if !v.is_empty() => v,
+            _ => continue,
+        };
+        let is_bool = pool_name == "bool_values";
+
+        for val in values {
+            let value_str = if *is_numeric || is_bool {
+                val.clone() // unquoted
+            } else {
+                format!("'{val}'")
+            };
+            emit(&mut cmds, field, value_str);
         }
     }
 
@@ -614,6 +758,7 @@ fn generate_random_fill(spec: &SyntaxSpec, baseline_count: usize) -> Vec<Generat
                     &spec.result_types,
                     &spec.operators,
                     &spec.field_pools,
+                    &spec.enrichment_fields,
                 ) {
                     clause_parts.push(text);
                     *used_clauses.entry(clause_key.to_string()).or_default() += 1;
@@ -761,61 +906,17 @@ fn tier3_invariants(
     let start = Instant::now();
     let result = engine.execute(Some(session), op).ok()?;
     let elapsed = start.elapsed().as_micros();
+    let rc = result_count(&result);
 
-    // Check LIMIT invariant
-    if let Some(limit) = extract_limit(&cmd.fql) {
-        if let Some(count) = result_count(&result) {
-            if count > limit {
-                return Some(TierResult {
-                    fql: cmd.fql.clone(),
-                    command_id: cmd.command_id.clone(),
-                    tier: 3,
-                    duration_us: elapsed,
-                    status: "invariant_fail_limit",
-                    result_count: Some(count),
-                });
-            }
-        }
-    }
-
-    // Check GROUP BY invariant (no duplicate values)
-    if let Some(field) = extract_group_by(&cmd.fql) {
-        if !check_group_by_unique(&result, &field) {
+    for check in INVARIANT_CHECKS {
+        if let Err(status) = check(&cmd.fql, &result) {
             return Some(TierResult {
                 fql: cmd.fql.clone(),
                 command_id: cmd.command_id.clone(),
                 tier: 3,
                 duration_us: elapsed,
-                status: "invariant_fail_group_by",
-                result_count: result_count(&result),
-            });
-        }
-    }
-
-    // Check ORDER BY invariant (results must be sorted)
-    if let Some((field, dir)) = extract_order_by(&cmd.fql) {
-        if !check_order_by_sorted(&result, &field, &dir) {
-            return Some(TierResult {
-                fql: cmd.fql.clone(),
-                command_id: cmd.command_id.clone(),
-                tier: 3,
-                duration_us: elapsed,
-                status: "invariant_fail_order_by",
-                result_count: result_count(&result),
-            });
-        }
-    }
-
-    // Check IN path filtering invariant (all result paths must match glob prefix)
-    if let Some(glob) = extract_in_glob(&cmd.fql) {
-        if !check_in_path_filter(&result, &glob) {
-            return Some(TierResult {
-                fql: cmd.fql.clone(),
-                command_id: cmd.command_id.clone(),
-                tier: 3,
-                duration_us: elapsed,
-                status: "invariant_fail_in_filter",
-                result_count: result_count(&result),
+                status,
+                result_count: rc,
             });
         }
     }
@@ -826,7 +927,7 @@ fn tier3_invariants(
         tier: 3,
         duration_us: elapsed,
         status: "ok",
-        result_count: result_count(&result),
+        result_count: rc,
     })
 }
 
@@ -937,20 +1038,96 @@ fn extract_in_glob(fql: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
-/// Check that IN path filter was respected: all result paths should match
-/// the glob pattern. Uses a simplified glob check for common patterns.
+/// Extract EXCLUDE glob pattern from FQL text.
+fn extract_exclude_glob(fql: &str) -> Option<String> {
+    let upper = fql.to_uppercase();
+    let key = "EXCLUDE '";
+    let idx = upper.find(key)?;
+    let after = &fql[idx + key.len()..];
+    let end = after.find('\'')?;
+    Some(after[..end].to_string())
+}
+
+/// Extract all WHERE predicates as `(field, op, raw_value)` tuples.
+/// `raw_value` is already unquoted (quotes stripped from string values).
+fn extract_where_predicates(fql: &str) -> Vec<(String, String, String)> {
+    let mut result = Vec::new();
+    let upper = fql.to_uppercase();
+    let mut search_from = 0usize;
+    while let Some(rel) = upper[search_from..].find("WHERE ") {
+        let field_start = search_from + rel + 6;
+        if field_start >= fql.len() {
+            break;
+        }
+        let seg = &fql[field_start..];
+        let upper_seg = seg.to_uppercase();
+        // field = first whitespace-delimited token
+        let field_end = seg.find(char::is_whitespace).unwrap_or(seg.len());
+        if field_end == 0 {
+            search_from = field_start + 1;
+            continue;
+        }
+        let field = seg[..field_end].to_lowercase();
+        let after_field = seg[field_end..].trim_start();
+        let upper_af = after_field.to_uppercase();
+        // detect op (longest match first)
+        let (op, value_str): (&str, &str) = if upper_af.starts_with("NOT LIKE ") {
+            ("NOT LIKE", &after_field[9..])
+        } else if upper_af.starts_with("NOT MATCHES ") {
+            ("NOT MATCHES", &after_field[12..])
+        } else if upper_af.starts_with("LIKE ") {
+            ("LIKE", &after_field[5..])
+        } else if upper_af.starts_with("MATCHES ") {
+            ("MATCHES", &after_field[8..])
+        } else if let Some(rest) = after_field.strip_prefix("!= ") {
+            ("!=", rest)
+        } else if let Some(rest) = after_field.strip_prefix(">= ") {
+            (">=", rest)
+        } else if let Some(rest) = after_field.strip_prefix("<= ") {
+            ("<=", rest)
+        } else if let Some(rest) = after_field.strip_prefix("= ") {
+            ("=", rest)
+        } else if let Some(rest) = after_field.strip_prefix("> ") {
+            (">", rest)
+        } else if let Some(rest) = after_field.strip_prefix("< ") {
+            ("<", rest)
+        } else {
+            search_from = field_start + 1;
+            continue;
+        };
+        let value_str = value_str.trim_start();
+        let raw_value = value_str.strip_prefix('\'').map_or_else(
+            || {
+                value_str
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            },
+            |inner| {
+                let end = inner.find('\'').unwrap_or(inner.len());
+                inner[..end].to_string()
+            },
+        );
+        result.push((field, op.to_string(), raw_value));
+        search_from = field_start + 1;
+        let _ = upper_seg; // suppress unused warning
+    }
+    result
+}
+
+/// Check that IN path filter was respected: all result paths should contain
+/// every literal fragment of the glob (simplified glob matching).
 fn check_in_path_filter(result: &ForgeQLResult, glob: &str) -> bool {
     match result {
         ForgeQLResult::Query(qr) => {
-            // Extract meaningful literal fragments from the glob (split on * and /)
             let fragments: Vec<&str> = glob.split(['*', '/']).filter(|s| !s.is_empty()).collect();
             if fragments.is_empty() {
-                return true; // pure wildcard like "**", matches everything
+                return true; // pure wildcard like "**"
             }
             for item in &qr.results {
                 if let Some(ref p) = item.path {
                     let ps = p.display().to_string();
-                    // Every literal fragment must appear in the path
                     if !fragments.iter().all(|frag| ps.contains(frag)) {
                         return false;
                     }
@@ -961,6 +1138,153 @@ fn check_in_path_filter(result: &ForgeQLResult, glob: &str) -> bool {
         _ => true,
     }
 }
+
+/// Check that EXCLUDE filter was respected: no result path should match
+/// the excluded glob (simplified fragment matching).
+fn check_exclude_path_filter(result: &ForgeQLResult, glob: &str) -> bool {
+    match result {
+        ForgeQLResult::Query(qr) => {
+            let fragments: Vec<&str> = glob.split(['*', '/']).filter(|s| !s.is_empty()).collect();
+            if fragments.is_empty() {
+                return true; // exclude "**" — vacuous
+            }
+            for item in &qr.results {
+                if let Some(ref p) = item.path {
+                    let ps = p.display().to_string();
+                    if fragments.iter().all(|frag| ps.contains(frag)) {
+                        return false; // path should have been excluded but wasn't
+                    }
+                }
+            }
+            true
+        }
+        _ => true,
+    }
+}
+
+/// Retrieve the value of a named field from a result row.
+/// Checks structural fields first, then the dynamic `fields` map.
+fn field_value_for_row(item: &forgeql_core::result::SymbolMatch, field: &str) -> Option<String> {
+    match field {
+        "name" => Some(item.name.clone()),
+        "kind" | "node_kind" => item.node_kind.clone(),
+        "fql_kind" => item.fql_kind.clone(),
+        "language" | "lang" => item.language.clone(),
+        "path" | "file" => item.path.as_ref().map(|p| p.display().to_string()),
+        "line" => item.line.map(|l| l.to_string()),
+        "usages" | "usages_count" => item.usages_count.map(|c| c.to_string()),
+        other => item.fields.get(other).cloned(),
+    }
+}
+
+// -----------------------------------------------------------------------
+// Tier-3 invariant functions
+//
+// Each function has the signature:
+//   fn inv_*(fql: &str, result: &ForgeQLResult) -> Result<(), &'static str>
+//
+// Return Ok(()) when the invariant holds, Err("invariant_fail_...") when
+// it is violated. Register new checks in INVARIANT_CHECKS below.
+// -----------------------------------------------------------------------
+
+fn inv_limit(fql: &str, result: &ForgeQLResult) -> Result<(), &'static str> {
+    if let Some(limit) = extract_limit(fql) {
+        if let Some(count) = result_count(result) {
+            if count > limit {
+                return Err("invariant_fail_limit");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn inv_group_by(fql: &str, result: &ForgeQLResult) -> Result<(), &'static str> {
+    if let Some(field) = extract_group_by(fql) {
+        if !check_group_by_unique(result, &field) {
+            return Err("invariant_fail_group_by");
+        }
+    }
+    Ok(())
+}
+
+fn inv_order_by(fql: &str, result: &ForgeQLResult) -> Result<(), &'static str> {
+    if let Some((field, dir)) = extract_order_by(fql) {
+        if !check_order_by_sorted(result, &field, &dir) {
+            return Err("invariant_fail_order_by");
+        }
+    }
+    Ok(())
+}
+
+fn inv_in_filter(fql: &str, result: &ForgeQLResult) -> Result<(), &'static str> {
+    if let Some(glob) = extract_in_glob(fql) {
+        if !check_in_path_filter(result, &glob) {
+            return Err("invariant_fail_in_filter");
+        }
+    }
+    Ok(())
+}
+
+fn inv_exclude_filter(fql: &str, result: &ForgeQLResult) -> Result<(), &'static str> {
+    if let Some(glob) = extract_exclude_glob(fql) {
+        if !check_exclude_path_filter(result, &glob) {
+            return Err("invariant_fail_exclude_filter");
+        }
+    }
+    Ok(())
+}
+
+/// Check WHERE `=` predicates against each returned row.
+///
+/// Only `=` (equality) is verified: every result row must have the expected
+/// value for the filtered field. `!=` is intentionally skipped because the
+/// engine does not guarantee that enrichment fields are always populated,
+/// making absence-of-value verification unreliable without full index coverage.
+///
+/// LIKE / MATCHES / numeric comparisons are also skipped (require regex or
+/// numeric evaluation).
+///
+/// Vacuously passes when results are empty (e.g. EXCLUDE filtered everything).
+fn inv_where_predicate(fql: &str, result: &ForgeQLResult) -> Result<(), &'static str> {
+    let predicates = extract_where_predicates(fql);
+    if predicates.is_empty() {
+        return Ok(());
+    }
+    let ForgeQLResult::Query(qr) = result else {
+        return Ok(());
+    };
+    if qr.results.is_empty() {
+        return Ok(());
+    }
+    for (field, op, expected) in &predicates {
+        if op != "=" {
+            continue; // only verify equality — see doc comment above
+        }
+        for item in &qr.results {
+            let actual = field_value_for_row(item, field);
+            let Some(ref actual_val) = actual else {
+                continue; // field absent in this row — skip rather than false-positive
+            };
+            if actual_val != expected {
+                return Err("invariant_fail_where_predicate");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Registry of all tier-3 invariant checks, applied in order by `tier3_invariants`.
+/// To add a new invariant: implement `fn inv_foo(fql: &str, result: &ForgeQLResult)
+/// -> Result<(), &'static str>` and append it here.
+#[allow(clippy::type_complexity)]
+static INVARIANT_CHECKS: &[fn(&str, &ForgeQLResult) -> Result<(), &'static str>] = &[
+    inv_limit,
+    inv_group_by,
+    inv_order_by,
+    inv_in_filter,
+    inv_exclude_filter,
+    inv_where_predicate,
+];
 
 fn result_count(result: &ForgeQLResult) -> Option<usize> {
     match result {
@@ -1058,20 +1382,27 @@ fn sms_combinatorial() {
         budget
     );
 
-    // Phase 1: baseline
+    // Phase 0: deterministic enrichment-field sweep
+    let sweep = generate_field_sweep(&spec);
+    let sweep_count = sweep.len();
+
+    // Phase 1: baseline — one command per (command × clause)
     let baseline = generate_baseline(&spec);
     let baseline_count = baseline.len();
 
-    // Phase 2: random fill
-    let random = generate_random_fill(&spec, baseline_count);
+    // Phase 2: random fill — consumes remaining budget after phase 0 + 1
+    let prior_count = sweep_count + baseline_count;
+    let random = generate_random_fill(&spec, prior_count);
 
-    let all_commands: Vec<GeneratedCommand> = baseline.into_iter().chain(random).collect();
+    let all_commands: Vec<GeneratedCommand> =
+        sweep.into_iter().chain(baseline).chain(random).collect();
 
     eprintln!(
-        "[SMS] Generated {} commands (phase1={}, phase2={})",
+        "[SMS] Generated {} commands (phase0={}, phase1={}, phase2={})",
         all_commands.len(),
+        sweep_count,
         baseline_count,
-        all_commands.len() - baseline_count
+        all_commands.len() - sweep_count - baseline_count
     );
 
     // Skip session/mutation/transaction commands for execution tiers
@@ -1186,4 +1517,466 @@ fn sms_combinatorial() {
             .collect::<Vec<_>>()
             .join("\n")
     );
+
+    // Every enrichment field must have been exercised in phase 0
+    let executed_fqls: std::collections::HashSet<&str> = all_results
+        .iter()
+        .filter(|r| r.tier == 2 && r.status == "ok")
+        .map(|r| r.fql.as_str())
+        .collect();
+    let covered_fields: std::collections::HashSet<String> = all_commands
+        .iter()
+        .filter(|c| c._phase == 0)
+        .filter(|c| executed_fqls.contains(c.fql.as_str()))
+        .filter_map(|c| {
+            extract_where_predicates(&c.fql)
+                .into_iter()
+                .next()
+                .map(|(f, _, _)| f)
+        })
+        .collect();
+    let all_sweep_fields: std::collections::HashSet<String> = spec
+        .enrichment_fields
+        .iter()
+        .filter_map(|(f, _)| {
+            let pool = spec
+                .field_pools
+                .get(f.as_str())
+                .map(String::as_str)
+                .unwrap_or("string_values");
+            if spec
+                .test_values
+                .get(pool)
+                .map(|v| !v.is_empty())
+                .unwrap_or(false)
+            {
+                Some(f.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let uncovered: Vec<&String> = all_sweep_fields
+        .iter()
+        .filter(|f| !covered_fields.contains(*f))
+        .collect();
+    assert!(
+        uncovered.is_empty(),
+        "[SMS] Enrichment fields never reached tier-2 ok in sweep: {uncovered:?}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Unit tests for extract_* and inv_* functions
+// -----------------------------------------------------------------------
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::*;
+    use forgeql_core::result::{ForgeQLResult, QueryResult, SymbolMatch};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    // -----------------------------------------------------------------------
+    // Helpers to build mock ForgeQLResult values without running the engine
+    // -----------------------------------------------------------------------
+
+    fn sym(name: &str) -> SymbolMatch {
+        SymbolMatch {
+            name: name.to_string(),
+            node_kind: None,
+            fql_kind: None,
+            language: None,
+            path: None,
+            line: None,
+            usages_count: None,
+            fields: HashMap::new(),
+            count: None,
+        }
+    }
+
+    fn sym_lang(name: &str, lang: &str) -> SymbolMatch {
+        SymbolMatch {
+            language: Some(lang.to_string()),
+            ..sym(name)
+        }
+    }
+
+    fn sym_field(name: &str, field: &str, value: &str) -> SymbolMatch {
+        let mut fields = HashMap::new();
+        let _ = fields.insert(field.to_string(), value.to_string());
+        SymbolMatch {
+            fields,
+            ..sym(name)
+        }
+    }
+
+    fn sym_path(name: &str, path: &str) -> SymbolMatch {
+        SymbolMatch {
+            path: Some(PathBuf::from(path)),
+            ..sym(name)
+        }
+    }
+
+    fn sym_line(name: &str, line: usize) -> SymbolMatch {
+        SymbolMatch {
+            line: Some(line),
+            ..sym(name)
+        }
+    }
+
+    fn query(items: Vec<SymbolMatch>) -> ForgeQLResult {
+        let total = items.len();
+        ForgeQLResult::Query(QueryResult {
+            op: "find_symbols".to_string(),
+            results: items,
+            total,
+            metric_hint: None,
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_limit
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extract_limit_present() {
+        assert_eq!(extract_limit("FIND symbols LIMIT 10"), Some(10));
+        assert_eq!(
+            extract_limit("FIND symbols WHERE name = 'foo' LIMIT 5"),
+            Some(5)
+        );
+        assert_eq!(extract_limit("FIND symbols LIMIT 100 OFFSET 3"), Some(100));
+    }
+
+    #[test]
+    fn test_extract_limit_absent() {
+        assert_eq!(extract_limit("FIND symbols"), None);
+        assert_eq!(extract_limit("FIND symbols ORDER BY name"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_group_by
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extract_group_by_present() {
+        assert_eq!(
+            extract_group_by("FIND symbols GROUP BY language"),
+            Some("language".to_string())
+        );
+        assert_eq!(
+            extract_group_by("FIND symbols GROUP BY fql_kind HAVING count > 1"),
+            Some("fql_kind".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_group_by_absent() {
+        assert_eq!(extract_group_by("FIND symbols"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_order_by
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extract_order_by_with_direction() {
+        assert_eq!(
+            extract_order_by("FIND symbols ORDER BY name ASC"),
+            Some(("name".to_string(), "ASC".to_string()))
+        );
+        assert_eq!(
+            extract_order_by("FIND symbols ORDER BY line DESC"),
+            Some(("line".to_string(), "DESC".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_extract_order_by_defaults_to_asc() {
+        assert_eq!(
+            extract_order_by("FIND symbols ORDER BY name"),
+            Some(("name".to_string(), "ASC".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_extract_order_by_absent() {
+        assert_eq!(extract_order_by("FIND symbols"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_in_glob / extract_exclude_glob
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extract_in_glob() {
+        assert_eq!(
+            extract_in_glob("FIND symbols IN '*.cpp'"),
+            Some("*.cpp".to_string())
+        );
+        assert_eq!(extract_in_glob("FIND symbols"), None);
+    }
+
+    #[test]
+    fn test_extract_exclude_glob() {
+        assert_eq!(
+            extract_exclude_glob("FIND symbols EXCLUDE '**/*.cpp'"),
+            Some("**/*.cpp".to_string())
+        );
+        assert_eq!(
+            extract_exclude_glob("FIND symbols EXCLUDE 'canonical.*'"),
+            Some("canonical.*".to_string())
+        );
+        assert_eq!(extract_exclude_glob("FIND symbols"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_where_predicates
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extract_where_single_eq_string() {
+        let preds = extract_where_predicates("FIND symbols WHERE language = 'cpp'");
+        assert_eq!(
+            preds,
+            vec![("language".to_string(), "=".to_string(), "cpp".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_extract_where_single_eq_bool() {
+        let preds = extract_where_predicates("FIND symbols WHERE has_shadow = true");
+        assert_eq!(
+            preds,
+            vec![(
+                "has_shadow".to_string(),
+                "=".to_string(),
+                "true".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn test_extract_where_not_eq() {
+        let preds = extract_where_predicates("FIND symbols WHERE has_shadow != false");
+        assert_eq!(
+            preds,
+            vec![(
+                "has_shadow".to_string(),
+                "!=".to_string(),
+                "false".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn test_extract_where_like() {
+        let preds = extract_where_predicates("FIND symbols WHERE name LIKE '%foo%'");
+        assert_eq!(
+            preds,
+            vec![("name".to_string(), "LIKE".to_string(), "%foo%".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_extract_where_multiple() {
+        let preds = extract_where_predicates(
+            "FIND symbols WHERE has_shadow = true WHERE is_recursive = false",
+        );
+        assert_eq!(preds.len(), 2);
+        assert_eq!(
+            preds[0],
+            (
+                "has_shadow".to_string(),
+                "=".to_string(),
+                "true".to_string()
+            )
+        );
+        assert_eq!(
+            preds[1],
+            (
+                "is_recursive".to_string(),
+                "=".to_string(),
+                "false".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn test_extract_where_absent() {
+        assert!(extract_where_predicates("FIND symbols").is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // inv_limit
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_inv_limit_passes_under() {
+        let r = query(vec![sym("a"), sym("b"), sym("c")]);
+        assert!(inv_limit("FIND symbols LIMIT 5", &r).is_ok());
+    }
+
+    #[test]
+    fn test_inv_limit_passes_exact() {
+        let r = query(vec![sym("a"), sym("b")]);
+        assert!(inv_limit("FIND symbols LIMIT 2", &r).is_ok());
+    }
+
+    #[test]
+    fn test_inv_limit_fails_over() {
+        let r = query(vec![sym("a"), sym("b"), sym("c"), sym("d")]);
+        assert_eq!(
+            inv_limit("FIND symbols LIMIT 3", &r),
+            Err("invariant_fail_limit")
+        );
+    }
+
+    #[test]
+    fn test_inv_limit_no_clause() {
+        let r = query(vec![sym("a"); 100]);
+        assert!(inv_limit("FIND symbols", &r).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // inv_group_by
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_inv_group_by_unique_lang() {
+        let r = query(vec![sym_lang("a", "cpp"), sym_lang("b", "rust")]);
+        assert!(inv_group_by("FIND symbols GROUP BY language", &r).is_ok());
+    }
+
+    #[test]
+    fn test_inv_group_by_duplicate_lang() {
+        let r = query(vec![sym_lang("a", "cpp"), sym_lang("b", "cpp")]);
+        assert_eq!(
+            inv_group_by("FIND symbols GROUP BY language", &r),
+            Err("invariant_fail_group_by")
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // inv_order_by
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_inv_order_by_asc_passes() {
+        let r = query(vec![sym_line("a", 1), sym_line("b", 5), sym_line("c", 10)]);
+        assert!(inv_order_by("FIND symbols ORDER BY line ASC", &r).is_ok());
+    }
+
+    #[test]
+    fn test_inv_order_by_asc_fails() {
+        let r = query(vec![sym_line("a", 10), sym_line("b", 5)]);
+        assert_eq!(
+            inv_order_by("FIND symbols ORDER BY line ASC", &r),
+            Err("invariant_fail_order_by")
+        );
+    }
+
+    #[test]
+    fn test_inv_order_by_desc_passes() {
+        let r = query(vec![sym_line("a", 10), sym_line("b", 5), sym_line("c", 1)]);
+        assert!(inv_order_by("FIND symbols ORDER BY line DESC", &r).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // inv_in_filter
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_inv_in_filter_passes() {
+        let r = query(vec![
+            sym_path("foo", "canonical.cpp"),
+            sym_path("bar", "other.cpp"),
+        ]);
+        assert!(inv_in_filter("FIND symbols IN '*.cpp'", &r).is_ok());
+    }
+
+    #[test]
+    fn test_inv_in_filter_fails() {
+        let r = query(vec![
+            sym_path("foo", "canonical.cpp"),
+            sym_path("bar", "canonical.rs"), // .rs should not match *.cpp
+        ]);
+        assert_eq!(
+            inv_in_filter("FIND symbols IN '*.cpp'", &r),
+            Err("invariant_fail_in_filter")
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // inv_exclude_filter
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_inv_exclude_filter_passes() {
+        let r = query(vec![sym_path("foo", "canonical.rs")]);
+        assert!(inv_exclude_filter("FIND symbols EXCLUDE '*.cpp'", &r).is_ok());
+    }
+
+    #[test]
+    fn test_inv_exclude_filter_fails() {
+        let r = query(vec![
+            sym_path("foo", "canonical.rs"),
+            sym_path("bar", "canonical.cpp"), // should have been excluded
+        ]);
+        assert_eq!(
+            inv_exclude_filter("FIND symbols EXCLUDE '*.cpp'", &r),
+            Err("invariant_fail_exclude_filter")
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // inv_where_predicate
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_inv_where_eq_passes() {
+        let r = query(vec![
+            sym_field("a", "has_shadow", "true"),
+            sym_field("b", "has_shadow", "true"),
+        ]);
+        assert!(inv_where_predicate("FIND symbols WHERE has_shadow = true", &r).is_ok());
+    }
+
+    #[test]
+    fn test_inv_where_eq_fails() {
+        let r = query(vec![
+            sym_field("a", "has_shadow", "true"),
+            sym_field("b", "has_shadow", "false"), // violates WHERE has_shadow = true
+        ]);
+        assert_eq!(
+            inv_where_predicate("FIND symbols WHERE has_shadow = true", &r),
+            Err("invariant_fail_where_predicate")
+        );
+    }
+
+    #[test]
+    fn test_inv_where_neq_not_checked() {
+        // != predicates are intentionally not validated (see inv_where_predicate doc).
+        // A row violating != must still pass — we don't catch it here.
+        let r = query(vec![
+            sym_field("a", "has_shadow", "true"), // would violate !=, but not checked
+            sym_field("b", "has_shadow", "false"),
+        ]);
+        assert!(inv_where_predicate("FIND symbols WHERE has_shadow != true", &r).is_ok());
+    }
+
+    #[test]
+    fn test_inv_where_empty_results_passes() {
+        let r = query(vec![]);
+        // Vacuously true — e.g. EXCLUDE filtered everything out
+        assert!(inv_where_predicate("FIND symbols WHERE has_shadow = true", &r).is_ok());
+    }
+
+    #[test]
+    fn test_inv_where_like_skipped() {
+        // LIKE predicates are not checked — should always pass regardless of data
+        let r = query(vec![sym_field("a", "name", "something_else")]);
+        assert!(inv_where_predicate("FIND symbols WHERE name LIKE '%foo%'", &r).is_ok());
+    }
 }

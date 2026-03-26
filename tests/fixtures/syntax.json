@@ -1,7 +1,7 @@
 {
   "meta": {
     "version": "1.0",
-    "description": "ForgeQL grammar state machine \u2014 single source of truth for combinatorial test generation (SMS)",
+    "description": "ForgeQL grammar state machine — single source of truth for combinatorial test generation (SMS)",
     "seed": 42,
     "total_budget": 1000,
     "clause_pipeline_order": [
@@ -17,14 +17,14 @@
     "notes": [
       "Parser accepts clauses in any order; engine applies them in pipeline order above.",
       "can_repeat: 0 = max 1 occurrence, N = max N occurrences per command.",
-      "explosion_cap: per-command ceiling \u2014 walker stops generating for this command type after N commands.",
-      "total_budget: global ceiling \u2014 walker stops entirely after N commands total (CI-friendly).",
-      "seed: deterministic RNG seed \u2014 same seed always produces identical command set.",
+      "explosion_cap: per-command ceiling — walker stops generating for this command type after N commands.",
+      "total_budget: global ceiling — walker stops entirely after N commands total (CI-friendly).",
+      "seed: deterministic RNG seed — same seed always produces identical command set.",
       "result_type links a command to the set of fields available for WHERE/ORDER BY/GROUP BY."
     ],
     "generation_strategy": {
       "description": "Two-phase generation ensures broad coverage within the total_budget.",
-      "phase1_baseline": "Generate one command per (command_id \u00d7 clause) pair. Every command type, every clause type, and every operator appears at least once. This guarantees breadth.",
+      "phase1_baseline": "Generate one command per (command_id × clause) pair. Every command type, every clause type, and every operator appears at least once. This guarantees breadth.",
       "phase2_random_fill": "Fill remaining budget with seeded random clause combinations, respecting per-command explosion_cap. Provides depth and edge-case coverage.",
       "invariant": "phase1 count <= total_budget. If total_budget is too small for full baseline, phase1 round-robins across commands to maximize breadth."
     }
@@ -1273,6 +1273,101 @@
     "extension_values": [
       ".cpp",
       ".rs"
+    ],
+    "storage_values": [
+      "static",
+      "extern",
+      "register",
+      "thread_local"
+    ],
+    "binding_kind_values": [
+      "function",
+      "variable"
+    ],
+    "comment_style_values": [
+      "doc_line",
+      "doc_block",
+      "line",
+      "block"
+    ],
+    "cast_style_values": [
+      "c_style",
+      "static_cast",
+      "const_cast",
+      "dynamic_cast",
+      "reinterpret_cast",
+      "as_cast"
+    ],
+    "cast_safety_values": [
+      "safe",
+      "moderate",
+      "unsafe"
+    ],
+    "visibility_values": [
+      "public",
+      "private",
+      "protected"
+    ],
+    "member_kind_values": [
+      "method",
+      "field"
+    ],
+    "owner_kind_values": [
+      "class_specifier",
+      "struct_specifier"
+    ],
+    "increment_style_values": [
+      "prefix",
+      "postfix"
+    ],
+    "increment_op_values": [
+      "+=",
+      "-="
+    ],
+    "compound_op_values": [
+      "+=",
+      "-=",
+      "*=",
+      "/=",
+      "%="
+    ],
+    "shift_direction_values": [
+      "left",
+      "right"
+    ],
+    "escape_kinds_values": [
+      "address_of",
+      "array_decay",
+      "alias"
+    ],
+    "todo_tags_values": [
+      "TODO",
+      "FIXME",
+      "HACK",
+      "XXX"
+    ],
+    "for_style_values": [
+      "traditional",
+      "range"
+    ],
+    "operator_category_values": [
+      "increment",
+      "arithmetic",
+      "bitwise",
+      "shift"
+    ],
+    "num_sign_values": [
+      "positive",
+      "negative",
+      "zero"
+    ],
+    "num_suffix_values": [
+      "u",
+      "l",
+      "ul",
+      "ull",
+      "f",
+      "ll"
     ]
   },
   "assertion_tiers": {
@@ -1352,6 +1447,42 @@
     "scope": "scope_values",
     "has_doc": "bool_values",
     "is_recursive": "bool_values",
-    "has_todo": "bool_values"
+    "has_todo": "bool_values",
+    "has_unused_param": "bool_values",
+    "has_shadow": "bool_values",
+    "has_escape": "bool_values",
+    "has_fallthrough": "bool_values",
+    "is_static": "bool_values",
+    "is_const": "bool_values",
+    "is_inline": "bool_values",
+    "is_volatile": "bool_values",
+    "is_exported": "bool_values",
+    "is_magic": "bool_values",
+    "has_catch_all": "bool_values",
+    "has_separator": "bool_values",
+    "has_assignment_in_condition": "bool_values",
+    "mixed_logic": "bool_values",
+    "dup_logic": "bool_values",
+    "duplicate_condition": "bool_values",
+    "has_repeated_condition_calls": "bool_values",
+    "has_unused_reassign": "bool_values",
+    "storage": "storage_values",
+    "binding_kind": "binding_kind_values",
+    "comment_style": "comment_style_values",
+    "cast_style": "cast_style_values",
+    "cast_safety": "cast_safety_values",
+    "visibility": "visibility_values",
+    "member_kind": "member_kind_values",
+    "owner_kind": "owner_kind_values",
+    "increment_style": "increment_style_values",
+    "increment_op": "increment_op_values",
+    "compound_op": "compound_op_values",
+    "shift_direction": "shift_direction_values",
+    "escape_kinds": "escape_kinds_values",
+    "todo_tags": "todo_tags_values",
+    "for_style": "for_style_values",
+    "operator_category": "operator_category_values",
+    "num_sign": "num_sign_values",
+    "num_suffix": "num_suffix_values"
   }
 }
