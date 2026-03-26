@@ -1099,24 +1099,24 @@ fn find_declarations_filter_by_scope_and_storage() {
 fn show_outline_where_filters_by_kind() {
     let (mut engine, sid, _dir) = engine_with_session();
 
-    // motor_control.h has preproc_def entries AND other kinds (enums, comments, macros).
-    // WHERE kind = 'preproc_def' must return only preproc_def entries.
+    // motor_control.h has macro entries AND other kinds (enums, comments, etc.).
+    // WHERE kind = 'macro' must return only macro entries.
     let result = execute_fql(
         &mut engine,
         &sid,
-        "SHOW outline OF 'motor_control.h' WHERE kind = 'preproc_def'",
+        "SHOW outline OF 'motor_control.h' WHERE kind = 'macro'",
     );
     match &result {
         ForgeQLResult::Show(sr) => match &sr.content {
             ShowContent::Outline { entries } => {
                 assert!(
                     !entries.is_empty(),
-                    "motor_control.h must have preproc_def entries"
+                    "motor_control.h must have macro entries"
                 );
                 for entry in entries {
                     assert_eq!(
-                        entry.kind, "preproc_def",
-                        "WHERE kind = 'preproc_def' returned '{}' with kind '{}'",
+                        entry.kind, "macro",
+                        "WHERE kind = 'macro' returned '{}' with kind '{}'",
                         entry.name, entry.kind
                     );
                 }
@@ -1185,7 +1185,7 @@ fn show_outline_where_with_limit_applies_both() {
     let result = execute_fql(
         &mut engine,
         &sid,
-        "SHOW outline OF 'motor_control.h' WHERE kind = 'preproc_def' LIMIT 2",
+        "SHOW outline OF 'motor_control.h' WHERE kind = 'macro' LIMIT 2",
     );
     match &result {
         ForgeQLResult::Show(sr) => match &sr.content {
@@ -1197,7 +1197,7 @@ fn show_outline_where_with_limit_applies_both() {
                 );
                 for entry in entries {
                     assert_eq!(
-                        entry.kind, "preproc_def",
+                        entry.kind, "macro",
                         "WHERE filter must still apply with LIMIT"
                     );
                 }

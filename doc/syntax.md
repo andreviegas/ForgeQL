@@ -82,26 +82,13 @@ FIND files [clauses]
 
 | Command | Returns |
 |---|---|
-| `FIND symbols` | All indexed AST nodes. Use `WHERE node_kind = '...'` to narrow. |
+| `FIND symbols` | All indexed AST nodes. Use `WHERE fql_kind = '...'` to narrow. |
 | `FIND globals` | Shorthand for file-scope `declaration` nodes only. |
 | `FIND usages OF` | Every identifier reference to the named symbol. |
 | `FIND callees OF` | Symbols called from inside the named function body. Alias for `SHOW callees OF`. |
 | `FIND files` | Files in the worktree. Supports `WHERE`, `DEPTH`, `ORDER BY size`, etc. |
 
-**Common `node_kind` values (C/C++)**
-
-| `node_kind` | Matches |
-|---|---|
-| `function_definition` | Function definitions with body |
-| `declaration` | Variable declarations (file-scope and local) |
-| `struct_specifier` | `struct` declarations |
-| `class_specifier` | `class` declarations |
-| `enum_specifier` | `enum` declarations |
-| `preproc_def` | `#define` macros |
-| `preproc_include` | `#include` directives |
-| `field_declaration` | Member variable declarations |
-| `parameter_declaration` | Function parameter declarations |
-| `comment` | Single-line and block comments |
+> **Use `fql_kind` for all filtering.** It is language-agnostic and portable across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific and **deprecated**.
 
 ---
 
@@ -219,7 +206,7 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 [IN 'glob']
 [EXCLUDE 'glob']
 [ORDER BY field [ASC | DESC]]
-[GROUP BY (file | kind | node_kind)]
+[GROUP BY (file | kind)]
 [LIMIT N]
 [OFFSET N]
 [DEPTH N]
@@ -269,9 +256,8 @@ Applies to: `FIND symbols`, `FIND usages OF`, `FIND callees OF`
 | Field | Type | Description |
 |---|---|---|
 | `name` | string | Symbol name |
-| `node_kind` | string | Tree-sitter node kind (`function_definition`, `declaration`, etc.) |
 | `fql_kind` | string | Universal kind: `function`, `class`, `struct`, `enum`, `variable`, `field`, etc. |
-| `language` | string | Language name: `cpp`, etc. |
+| `language` | string | Language name: `cpp`, `rust`, etc. |
 | `path` | string | Relative file path (also used by `IN`/`EXCLUDE` globs) |
 | `line` | integer | 1-based start line |
 | `usages` | integer | Reference count across the index |
@@ -283,7 +269,7 @@ Applies to: `SHOW outline OF`
 | Field | Type | Description |
 |---|---|---|
 | `name` | string | Symbol name |
-| `kind` / `node_kind` | string | Tree-sitter node kind |
+| `kind` | string | Universal kind (`fql_kind` value, e.g. `function`, `class`). Falls back to raw tree-sitter name for unmapped nodes. |
 | `path` / `file` | string | Relative file path |
 | `line` | integer | 1-based start line |
 
@@ -293,7 +279,7 @@ Applies to: `SHOW members OF`
 
 | Field | Type | Description |
 |---|---|---|
-| `kind` / `node_kind` / `type` | string | Member kind (`field`, `method`, `enumerator`) |
+| `kind` / `type` | string | Member kind (`field`, `method`, `enumerator`) |
 | `text` / `declaration` / `name` | string | Declaration text |
 | `line` | integer | 1-based line number |
 
@@ -361,98 +347,98 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | Field | Applies to | Description |
 |---|---|---|
 | `comment_style` | `comment` | `doc_line` (`///`), `doc_block` (`/** */`), `block` (`/* */`), `line` (`//`) |
-| `has_doc` | `function_definition` | `"true"` if preceded by a doc comment |
+| `has_doc` | `function` | `"true"` if preceded by a doc comment |
 
 #### NumberEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `num_format` | `number_literal` | `dec`, `hex`, `bin`, `oct`, `float`, `scientific` |
-| `is_magic` | `number_literal` | `"true"` for unexplained constants (not 0, 1, -1, 2, powers of 2, bitmasks) |
-| `num_suffix` | `number_literal` | Type suffix: `u`, `l`, `ll`, `ul`, `ull`, `f`, `ld` |
-| `suffix_meaning` | `number_literal` | Semantic meaning of suffix: `unsigned`, `long`, `float`, etc. |
-| `has_separator` | `number_literal` | `"true"` if contains digit separators |
-| `num_value` | `number_literal` | Raw text of the literal |
+| `num_format` | `number` | `dec`, `hex`, `bin`, `oct`, `float`, `scientific` |
+| `is_magic` | `number` | `"true"` for unexplained constants (not 0, 1, -1, 2, powers of 2, bitmasks) |
+| `num_suffix` | `number` | Type suffix: `u`, `l`, `ll`, `ul`, `ull`, `f`, `ld` |
+| `suffix_meaning` | `number` | Semantic meaning of suffix: `unsigned`, `long`, `float`, etc. |
+| `has_separator` | `number` | `"true"` if contains digit separators |
+| `num_value` | `number` | Raw text of the literal |
 
 #### ControlFlowEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `condition_tests` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Number of boolean sub-expressions |
-| `paren_depth` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Max parentheses nesting |
-| `condition_text` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | Raw condition expression |
-| `has_catch_all` | `switch_statement` | `"true"` if switch has a catch-all case |
-| `catch_all_kind` | `switch_statement` | Kind of catch-all (e.g. `"default"`) when present |
-| `for_style` | `for_statement`, `for_range_loop` | `"traditional"` or `"range"` |
-| `has_assignment_in_condition` | `if_statement`, `while_statement`, `for_statement` | `"true"` if condition contains `=` (not `==`) |
-| `mixed_logic` | `if_statement`, `while_statement`, `for_statement` | `"true"` if mixes `&&` and `\|\|` without grouping |
-| `dup_logic` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | `"true"` if condition contains duplicate sub-expressions in `&&`/`\|\|` chains |
-| `branch_count` | `function_definition` | Total control-flow branch points |
+| `condition_tests` | `if`, `while`, `for`, `do` | Number of boolean sub-expressions |
+| `paren_depth` | `if`, `while`, `for`, `do` | Max parentheses nesting |
+| `condition_text` | `if`, `while`, `for`, `do` | Raw condition expression |
+| `has_catch_all` | `switch` | `"true"` if switch has a catch-all case |
+| `catch_all_kind` | `switch` | Kind of catch-all (e.g. `"default"`) when present |
+| `for_style` | `for` | `"traditional"` or `"range"` |
+| `has_assignment_in_condition` | `if`, `while`, `for` | `"true"` if condition contains `=` (not `==`) |
+| `mixed_logic` | `if`, `while`, `for` | `"true"` if mixes `&&` and `\|\|` without grouping |
+| `dup_logic` | `if`, `while`, `for`, `do` | `"true"` if condition contains duplicate sub-expressions in `&&`/`\|\|` chains |
+| `branch_count` | `function` | Total control-flow branch points |
 
 #### OperatorEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `increment_style` | `update_expression` | `"prefix"` or `"postfix"` |
-| `increment_op` | `update_expression` | `"++"` or `"--"` |
+| `increment_style` | `increment` | `"prefix"` or `"postfix"` |
+| `increment_op` | `increment` | `"++"` or `"--"` |
 | `compound_op` | `compound_assignment` | `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` |
 | `operand` | `compound_assignment` | Left-hand side text |
 | `shift_direction` | `shift_expression` | `"left"` or `"right"` |
 | `shift_amount` | `shift_expression` | Right-hand operand text |
-| `operator_category` | `update_expression`, `compound_assignment`, `shift_expression` | `"increment"`, `"arithmetic"`, `"bitwise"`, `"shift"` |
+| `operator_category` | `increment`, `compound_assignment`, `shift_expression` | `"increment"`, `"arithmetic"`, `"bitwise"`, `"shift"` |
 
 #### MetricsEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `lines` | `function_definition`, `struct_specifier`, `class_specifier`, `enum_specifier` | Line span |
-| `param_count` | `function_definition` | Parameter count |
-| `return_count` | `function_definition` | `return` statement count |
-| `goto_count` | `function_definition` | `goto` statement count |
-| `string_count` | `function_definition` | String literal count |
-| `throw_count` | `function_definition` | `throw` statement count |
-| `member_count` | `struct_specifier`, `class_specifier`, `enum_specifier` | Member/enumerator count |
-| `is_const` | `function_definition`, `declaration` | `"true"` if `const` present |
-| `is_volatile` | `function_definition`, `declaration` | `"true"` if `volatile` present |
-| `is_static` | `function_definition` | `"true"` if `static` |
-| `is_inline` | `function_definition` | `"true"` if `inline` |
-| `is_override` | `function_definition` | `"true"` if `override` |
-| `is_final` | `function_definition` | `"true"` if `final` |
-| `visibility` | class members | `"public"`, `"private"`, `"protected"` |
+| `lines` | `function`, `struct`, `class`, `enum` | Line span |
+| `param_count` | `function` | Parameter count |
+| `return_count` | `function` | `return` statement count |
+| `goto_count` | `function` | `goto` statement count |
+| `string_count` | `function` | String literal count |
+| `throw_count` | `function` | `throw` statement count |
+| `member_count` | `struct`, `class`, `enum` | Member/enumerator count |
+| `is_const` | `function`, `variable` | `"true"` if `const` present |
+| `is_volatile` | `function`, `variable` | `"true"` if `volatile` present |
+| `is_static` | `function` | `"true"` if `static` |
+| `is_inline` | `function` | `"true"` if `inline` |
+| `is_override` | `function` | `"true"` if `override` |
+| `is_final` | `function` | `"true"` if `final` |
+| `visibility` | `field` (class members) | `"public"`, `"private"`, `"protected"` |
 
 #### CastEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `cast_style` | `cast_expression` | `"c_style"` (named C++ casts not indexed in tree-sitter-cpp 0.23) |
-| `cast_target_type` | `cast_expression` | Target type text |
-| `cast_safety` | `cast_expression` | `"safe"`, `"moderate"`, or `"unsafe"` |
+| `cast_style` | `cast` | `"c_style"` (named C++ casts not indexed in tree-sitter-cpp 0.23) |
+| `cast_target_type` | `cast` | Target type text |
+| `cast_safety` | `cast` | `"safe"`, `"moderate"`, or `"unsafe"` |
 
 #### RedundancyEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `has_repeated_condition_calls` | `function_definition` | `"true"` if same call in 2+ conditions |
-| `repeated_condition_calls` | `function_definition` | Comma-separated function names |
-| `null_check_count` | `function_definition` | Count of null-check patterns |
-| `duplicate_condition` | `if_statement`, `while_statement`, `for_statement`, `do_statement` | `"true"` if same condition skeleton exists elsewhere in function |
+| `has_repeated_condition_calls` | `function` | `"true"` if same call in 2+ conditions |
+| `repeated_condition_calls` | `function` | Comma-separated function names |
+| `null_check_count` | `function` | Count of null-check patterns |
+| `duplicate_condition` | `if`, `while`, `for`, `do` | `"true"` if same condition skeleton exists elsewhere in function |
 
 #### ScopeEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `scope` | `declaration` | `"file"` (top-level) or `"local"` (inside function/block) |
-| `storage` | `declaration` | `"static"`, `"extern"`, or absent |
-| `binding_kind` | `declaration` | `"function"` or `"variable"` |
-| `is_exported` | `declaration` | `"true"` for file-scope declarations without `static` storage |
+| `scope` | `variable` | `"file"` (top-level) or `"local"` (inside function/block) |
+| `storage` | `variable` | `"static"`, `"extern"`, or absent |
+| `binding_kind` | `variable` | `"function"` or `"variable"` |
+| `is_exported` | `variable` | `"true"` for file-scope declarations without `static` storage |
 
 #### MemberEnricher
 
 | Field | Applies to | Description |
 |---|---|---|
-| `body_symbol` | `field_declaration` (methods) | Qualified name linking to out-of-line definition (e.g. `Class::method`) |
-| `member_kind` | `field_declaration` | `"method"` or `"field"` |
-| `owner_kind` | `field_declaration` | Raw kind of enclosing type (e.g. `class_specifier`, `struct_specifier`) |
+| `body_symbol` | `field` (methods) | Qualified name linking to out-of-line definition (e.g. `Class::method`) |
+| `member_kind` | `field` | `"method"` or `"field"` |
+| `owner_kind` | `field` | `fql_kind` of enclosing type (e.g. `class`, `struct`) |
 
 #### DeclDistanceEnricher
 
@@ -460,9 +446,9 @@ Data-flow enricher that measures how far local variable declarations are from th
 
 | Field | Applies to | Description |
 |---|---|---|
-| `decl_distance` | `function_definition` | Sum of (first-use line − declaration line) for locals with distance ≥ 2 |
-| `decl_far_count` | `function_definition` | Count of local variables whose first-use is ≥ 2 lines after declaration |
-| `has_unused_reassign` | `function_definition` | `"true"` when a local is reassigned before its previous value was read (dead store) |
+| `decl_distance` | `function` | Sum of (first-use line − declaration line) for locals with distance ≥ 2 |
+| `decl_far_count` | `function` | Count of local variables whose first-use is ≥ 2 lines after declaration |
+| `has_unused_reassign` | `function` | `"true"` when a local is reassigned before its previous value was read (dead store) |
 
 #### EscapeEnricher
 
@@ -470,11 +456,11 @@ Detects local variables that escape their declaring function — via `return`, a
 
 | Field | Applies to | Description |
 |---|---|---|
-| `has_escape` | `function_definition` | `"true"` if any local escapes |
-| `escape_count` | `function_definition` | Number of distinct escaping locals |
-| `escape_vars` | `function_definition` | Comma-separated names of escaping locals |
-| `escape_tier` | `function_definition` | Severity: `1` (return), `2` (address-of), `3` (pointer/array alias) |
-| `escape_kinds` | `function_definition` | Comma-separated escape mechanisms (e.g. `"return,address_of"`) |
+| `has_escape` | `function` | `"true"` if any local escapes |
+| `escape_count` | `function` | Number of distinct escaping locals |
+| `escape_vars` | `function` | Comma-separated names of escaping locals |
+| `escape_tier` | `function` | Severity: `1` (return), `2` (address-of), `3` (pointer/array alias) |
+| `escape_kinds` | `function` | Comma-separated escape mechanisms (e.g. `"return,address_of"`) |
 
 #### ShadowEnricher
 
@@ -482,9 +468,9 @@ Detects variables declared in inner scopes that shadow an outer-scope variable o
 
 | Field | Applies to | Description |
 |---|---|---|
-| `has_shadow` | `function_definition` | `"true"` if any inner variable shadows an outer one |
-| `shadow_count` | `function_definition` | Number of shadowing declarations |
-| `shadow_vars` | `function_definition` | Comma-separated names of shadowed variables |
+| `has_shadow` | `function` | `"true"` if any inner variable shadows an outer one |
+| `shadow_count` | `function` | Number of shadowing declarations |
+| `shadow_vars` | `function` | Comma-separated names of shadowed variables |
 
 > **Known limitation — `#ifdef` blocks:** tree-sitter parses C/C++ without
 > running the preprocessor, so variables declared inside `#ifdef` / `#else`
@@ -499,9 +485,9 @@ Detects function parameters that are never referenced in the function body.
 
 | Field | Applies to | Description |
 |---|---|---|
-| `has_unused_param` | `function_definition` | `"true"` if any parameter is unused |
-| `unused_param_count` | `function_definition` | Number of unused parameters |
-| `unused_params` | `function_definition` | Comma-separated names of unused parameters |
+| `has_unused_param` | `function` | `"true"` if any parameter is unused |
+| `unused_param_count` | `function` | Number of unused parameters |
+| `unused_params` | `function` | Comma-separated names of unused parameters |
 
 #### FallthroughEnricher
 
@@ -509,8 +495,8 @@ Detects switch/case statements where a non-empty case falls through to the next 
 
 | Field | Applies to | Description |
 |---|---|---|
-| `has_fallthrough` | `function_definition` | `"true"` if any case falls through |
-| `fallthrough_count` | `function_definition` | Number of fallthrough cases |
+| `has_fallthrough` | `function` | `"true"` if any case falls through |
+| `fallthrough_count` | `function` | Number of fallthrough cases |
 
 #### RecursionEnricher
 
@@ -518,8 +504,8 @@ Detects direct (single-function) self-recursion. Does not detect mutual recursio
 
 | Field | Applies to | Description |
 |---|---|---|
-| `is_recursive` | `function_definition` | `"true"` if the function calls itself |
-| `recursion_count` | `function_definition` | Number of self-call sites in the body |
+| `is_recursive` | `function` | `"true"` if the function calls itself |
+| `recursion_count` | `function` | Number of self-call sites in the body |
 
 #### TodoEnricher
 
@@ -527,9 +513,9 @@ Detects TODO, FIXME, HACK, and XXX markers in comments inside function bodies. W
 
 | Field | Applies to | Description |
 |---|---|---|
-| `has_todo` | `function_definition` | `"true"` if any marker comment is found |
-| `todo_count` | `function_definition` | Total number of marker occurrences |
-| `todo_tags` | `function_definition` | Comma-separated, sorted unique tags found (e.g. `"FIXME,TODO"`) |
+| `has_todo` | `function` | `"true"` if any marker comment is found |
+| `todo_count` | `function` | Total number of marker occurrences |
+| `todo_tags` | `function` | Comma-separated, sorted unique tags found (e.g. `"FIXME,TODO"`) |
 
 ---
 
@@ -787,12 +773,12 @@ All compact output follows a uniform 2-column structure:
 "tokens_approx",N
 ```
 
-**FIND symbols** — grouped by `node_kind`:
+**FIND symbols** — grouped by `fql_kind`:
 ```csv
 "find_symbols",8
 "kind","[name,path,line,usages]"
-"function_definition","[encenderMotor,src/motor_control.cpp,12,7],[apagarMotor,src/motor_control.cpp,28,5]"
-"class_specifier","[MotorControl,include/motor_control.hpp,5,2]"
+"function","[encenderMotor,src/motor_control.cpp,12,7],[apagarMotor,src/motor_control.cpp,28,5]"
+"class","[MotorControl,include/motor_control.hpp,5,2]"
 ```
 
 When a numeric `WHERE` or `ORDER BY` targets an enrichment field, the last
@@ -801,8 +787,8 @@ column shows that field's value instead of `usages`:
 -- FIND symbols WHERE member_count > 10
 "find_symbols",3
 "kind","[name,path,line,member_count]"
-"class_specifier","[Serial_Protocol,src/Serial_Protocol.h,24,17],[Button,src/buttons.h,31,12]"
-"struct_specifier","[MpptState,src/SolarCharger.h,57,11]"
+"class","[Serial_Protocol,src/Serial_Protocol.h,24,17],[Button,src/buttons.h,31,12]"
+"struct","[MpptState,src/SolarCharger.h,57,11]"
 ```
 
 **FIND usages** — grouped by file:

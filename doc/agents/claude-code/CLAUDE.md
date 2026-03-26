@@ -31,7 +31,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
 | Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` |
-| File structure | `SHOW outline OF 'file' [WHERE kind = 'node_kind']` — uses raw `node_kind`, **not** `fql_kind` |
+| File structure | `SHOW outline OF 'file' [WHERE kind = '...']` |
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
 | File list | `FIND files [IN 'path/**'] [WHERE extension = '...'] ORDER BY size DESC` |
@@ -118,7 +118,7 @@ Source line filtering runs **before** the 40-line cap.
 
 ## fql_kind Values
 
-**Always prefer `fql_kind` over raw `node_kind` in WHERE clauses.** `fql_kind` is language-agnostic. Raw `node_kind` (tree-sitter grammar names) may also work but are language-specific.
+**Always use `fql_kind` in WHERE clauses.** `fql_kind` is language-agnostic and works identically across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific and **deprecated**.
 
 | `fql_kind` | Matches |
 |---|---|
@@ -142,15 +142,11 @@ Source line filtering runs **before** the 40-line cap.
 | `switch` | switch statements |
 | `do` | do-while loops |
 
-> **Note:** `compound_assignment` and `shift_expression` have no `fql_kind` — use raw `node_kind` for those.
->
-> **`SHOW outline` exception:** The `kind` field returned by `SHOW outline` contains raw `node_kind` values (e.g. `'function_definition'`), not `fql_kind`. Use raw names when filtering outline results.
-
 ## Enrichment Fields
 
 Computed at index time. Use in `WHERE` clauses like any other field.
 
-> **`Applies to`** uses `fql_kind` values. Raw tree-sitter `node_kind` names may also match but are language-specific.
+> **`Applies to`** uses `fql_kind` values.
 
 ### Naming
 | Field | Applies to | Values / Notes |
@@ -193,10 +189,10 @@ Computed at index time. Use in `WHERE` clauses like any other field.
 |---|---|---|
 | `increment_style` | `increment` | `"prefix"` or `"postfix"` |
 | `increment_op` | `increment` | `"++"` or `"--"` |
-| `compound_op` | `compound_assignment` *(raw node_kind)* | `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` |
-| `operand` | `compound_assignment` *(raw node_kind)* | Left-hand side text |
-| `shift_direction` | `shift_expression` *(raw node_kind)* | `"left"` or `"right"` |
-| `shift_amount` | `shift_expression` *(raw node_kind)* | Right-hand operand text |
+| `compound_op` | `compound_assignment` | `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` |
+| `operand` | `compound_assignment` | Left-hand side text |
+| `shift_direction` | `shift_expression` | `"left"` or `"right"` |
+| `shift_amount` | `shift_expression` | Right-hand operand text |
 | `operator_category` | `increment`, `compound_assignment`, `shift_expression` | `"increment"`, `"arithmetic"`, `"bitwise"`, `"shift"` |
 
 ### Metrics

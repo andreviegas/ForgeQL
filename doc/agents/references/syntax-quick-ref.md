@@ -61,7 +61,7 @@ Applied in this order: `IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORD
 IN 'glob/**'
 EXCLUDE 'glob/**'
 WHERE field operator value       -- repeatable (AND)
-GROUP BY (file | kind | node_kind)
+GROUP BY (file | kind)
 HAVING field operator value
 ORDER BY field [ASC | DESC]
 OFFSET N
@@ -84,9 +84,8 @@ DEPTH N
 | Field | Type | Description |
 |---|---|---|
 | `name` | string | Symbol name |
-| `node_kind` | string | Tree-sitter kind |
 | `fql_kind` | string | Universal kind (function, class, struct, …) |
-| `language` | string | Language name (e.g. cpp) |
+| `language` | string | Language name (e.g. `cpp`, `rust`) |
 | `path` | string | Relative file path |
 | `line` | integer | Start line (1-based) |
 | `usages` | integer | Reference count |
@@ -137,12 +136,6 @@ DEPTH N
 **Recursion:** `is_recursive`, `recursion_count`
 
 **Todo Markers:** `has_todo`, `todo_count`, `todo_tags`
-
----
-
-## Common node_kind Values (C/C++)
-
-`function_definition`, `declaration`, `struct_specifier`, `class_specifier`, `enum_specifier`, `preproc_def`, `preproc_include`, `field_declaration`, `parameter_declaration`, `comment`
 
 ---
 

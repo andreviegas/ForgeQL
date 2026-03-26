@@ -207,15 +207,15 @@ The VS Code Custom Agent is the strongest enforcement — `tools: [forgeql/*]` m
 ## Data Flow: a FIND query
 
 ```
-Agent sends:  FIND symbols WHERE node_kind = 'function_definition' LIMIT 5
+Agent sends:  FIND symbols WHERE fql_kind = 'function' LIMIT 5
 
 1. Parser          → ForgeQLIR::FindSymbols {
-                         clauses: { where: [node_kind = "function_definition"],
+                         clauses: { where: [fql_kind = "function"],
                                     limit: Some(5) }
                        }
 2. Engine          → table = session.index()
 3. Engine          → raw = table.rows.iter().collect()   // all rows, unfiltered
-4. Clause pipeline → apply WHERE: keep rows where node_kind == "function_definition"
+4. Clause pipeline → apply WHERE: keep rows where fql_kind == "function"
                    → apply LIMIT: take first 5
 5. Engine          → ForgeQLResult::Query { results: [SymbolMatch × 5] }
 6. MCP layer       → serialise to JSON → send to agent
@@ -298,9 +298,14 @@ ForgeQL/
 │   │       ├── context.rs        # RequestContext + Permission
 │   │       ├── error.rs          # ForgeError (thiserror)
 │   │       └── query_logger.rs   # FQL statement logging (--log-queries)
-│   └── forgeql-lang-cpp/         # C++ language support crate
+│   ├── forgeql-lang-cpp/         # C++ language support crate
+│   │   └── src/
+│   │       └── lib.rs            # CppLanguage, CPP_CONFIG, map_kind(), cpp_registry()
+│   └── forgeql-lang-rust/        # Rust language support crate
+│       ├── config/
+│       │   └── rust.json         # kind_map, enricher hints, node kind sets
 │       └── src/
-│           └── lib.rs            # CppLanguage, CPP_CONFIG, map_kind(), cpp_registry()
+│           └── lib.rs            # RustLanguage, RUST_CONFIG, rust_registry()
 ├── doc/
 │   ├── syntax.md                 # Command and clause reference
 │   ├── architecture.md           # This file
@@ -342,17 +347,18 @@ pub trait LanguageSupport: Send + Sync {
 ### Dual Kind System
 
 Every `IndexRow` carries two kind fields:
-- `node_kind` — the raw tree-sitter node kind (e.g. `function_definition`, `class_specifier`). Unchanged from previous versions. Language-specific.
+- `node_kind` — the raw tree-sitter node kind (e.g. `function_definition`, `class_specifier`). Language-specific; internal use only. Deprecated for query use.
 - `fql_kind` — a universal kind (e.g. `function`, `class`, `struct`). Language-agnostic, defined by `map_kind()`.
 
-Users can query either: `WHERE node_kind = 'function_definition'` (precise) or `WHERE fql_kind = 'function'` (portable across languages).
+Always use `WHERE fql_kind = 'function'` rather than `WHERE node_kind = 'function_definition'`. `node_kind` remains in the index for internal purposes but is deprecated for agent queries.
 
 ### Crate Dependencies
 
 ```
 forgeql (binary)
 ├── forgeql-core        zero language grammars
-└── forgeql-lang-cpp    tree-sitter-cpp + CppLanguage
+├── forgeql-lang-cpp    tree-sitter-cpp + CppLanguage
+└── forgeql-lang-rust   tree-sitter-rust + RustLanguage
 ```
 
 `forgeql-core` depends on `tree-sitter` (the library) but NOT on any grammar crate. Grammar dependencies live exclusively in language crates.

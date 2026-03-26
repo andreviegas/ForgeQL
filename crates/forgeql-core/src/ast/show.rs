@@ -537,11 +537,16 @@ pub fn show_outline(index: &SymbolTable, workspace: &Workspace, file: &str) -> R
         }
         let rel = workspace.relative(&row.path).display().to_string();
         let ln = line_for(&mut byte_cache, &row.path, row.byte_range.start);
+        let kind = if row.fql_kind.is_empty() {
+            &row.node_kind
+        } else {
+            &row.fql_kind
+        };
         entries.push((
             row.byte_range.start,
             serde_json::json!({
                 "name": row.name,
-                "kind": row.node_kind,
+                "kind": kind,
                 "path": rel,
                 "line": ln,
             }),

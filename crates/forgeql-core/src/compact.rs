@@ -398,7 +398,11 @@ fn group_symbols_by_kind(
     let hint = query.metric_hint.as_deref();
     let mut groups: Vec<(String, Vec<(String, String, usize, usize)>)> = Vec::new();
     for r in &query.results {
-        let kind = r.node_kind.as_deref().unwrap_or("");
+        let kind = r
+            .fql_kind
+            .as_deref()
+            .or(r.node_kind.as_deref())
+            .unwrap_or("");
         let path = r
             .path
             .as_ref()
@@ -731,8 +735,8 @@ mod tests {
             results: vec![
                 SymbolMatch {
                     name: "encenderMotor".into(),
-                    node_kind: Some("function_definition".into()),
-                    fql_kind: None,
+                    node_kind: None,
+                    fql_kind: Some("function".into()),
                     language: None,
                     path: Some(PathBuf::from("src/motor_control.cpp")),
                     line: None,
@@ -742,8 +746,8 @@ mod tests {
                 },
                 SymbolMatch {
                     name: "apagarMotor".into(),
-                    node_kind: Some("function_definition".into()),
-                    fql_kind: None,
+                    node_kind: None,
+                    fql_kind: Some("function".into()),
                     language: None,
                     path: Some(PathBuf::from("src/motor_control.cpp")),
                     line: None,
@@ -753,8 +757,8 @@ mod tests {
                 },
                 SymbolMatch {
                     name: "MotorControl".into(),
-                    node_kind: Some("class_specifier".into()),
-                    fql_kind: None,
+                    node_kind: None,
+                    fql_kind: Some("class".into()),
                     language: None,
                     path: Some(PathBuf::from("include/motor_control.hpp")),
                     line: None,
@@ -770,11 +774,11 @@ mod tests {
         assert_eq!(lines[1], r#""kind","[name,path,line,usages]""#);
         assert_eq!(
             lines[2],
-            r#""function_definition","[encenderMotor,src/motor_control.cpp,0,7],[apagarMotor,src/motor_control.cpp,0,5]""#
+            r#""function","[encenderMotor,src/motor_control.cpp,0,7],[apagarMotor,src/motor_control.cpp,0,5]""#
         );
         assert_eq!(
             lines[3],
-            r#""class_specifier","[MotorControl,include/motor_control.hpp,0,2]""#
+            r#""class","[MotorControl,include/motor_control.hpp,0,2]""#
         );
     }
 

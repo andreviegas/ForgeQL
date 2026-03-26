@@ -43,7 +43,7 @@ You are a code exploration and transformation agent. All source code is accessed
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
 | Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` |
-| File structure | `SHOW outline OF 'file' [WHERE kind = 'node_kind']` — uses raw `node_kind`, **not** `fql_kind` |
+| File structure | `SHOW outline OF 'file' [WHERE kind = '...']` |
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
 | File list | `FIND files [IN 'path/**'] [WHERE extension = '...'] ORDER BY size DESC` |
@@ -133,7 +133,7 @@ Applied in order: `IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY
 | `IN 'glob/**'` | Limit to matching paths |
 | `EXCLUDE 'glob/**'` | Skip matching paths |
 | `WHERE field op value` | Filter (repeatable, AND) |
-| `GROUP BY file\|kind\|node_kind` | Aggregate |
+| `GROUP BY file\|kind` | Aggregate |
 | `HAVING field op value` | Filter on aggregates |
 | `ORDER BY field [ASC\|DESC]` | Sort |
 | `OFFSET N` / `LIMIT N` | Pagination |
@@ -298,8 +298,7 @@ ROLLBACK
 ```sql
 FIND files IN 'src/**' WHERE extension = 'cpp' ORDER BY size DESC
 FIND files WHERE size > 50000 ORDER BY size DESC LIMIT 10
--- Note: SHOW outline 'kind' field contains raw node_kind values, not fql_kind
-SHOW outline OF 'src/module.cpp' WHERE kind = 'function_definition' ORDER BY line ASC
+SHOW outline OF 'src/module.cpp' WHERE kind = 'function' ORDER BY line ASC
 SHOW members OF 'ClassName'          -- member kind values: 'field', 'method', 'enumerator'
 ```
 
@@ -318,7 +317,7 @@ FIND usages OF 'functionName' GROUP BY file ORDER BY count DESC
 
 ## fql_kind Values
 
-`fql_kind` is the language-agnostic kind field. **Always prefer `fql_kind` over `node_kind` in WHERE clauses.** Raw `node_kind` values (tree-sitter grammar names) may also work but are language-specific and not portable.
+`fql_kind` is the language-agnostic kind field. Raw `node_kind` values (tree-sitter grammar names) are language-specific and **deprecated**.
 
 | `fql_kind` | Matches |
 |---|---|
@@ -342,15 +341,11 @@ FIND usages OF 'functionName' GROUP BY file ORDER BY count DESC
 | `switch` | switch statements |
 | `do` | do-while loops |
 
-> **Note:** `compound_assignment` and `shift_expression` have no `fql_kind` mapping — use the raw `node_kind` for those.
->
-> **`SHOW outline` exception:** The `kind` field returned by `SHOW outline` contains raw `node_kind` values (e.g. `'function_definition'`), not `fql_kind`. Use raw names when filtering outline results.
-
 ## Enrichment Fields
 
 Computed at index time. Use in `WHERE` clauses like any other field.
 
-> **`Applies to`** column uses `fql_kind` values. The raw tree-sitter `node_kind` names may also match but are language-specific.
+> **`Applies to`** column uses `fql_kind` values.
 
 ### Naming
 | Field | Applies to | Values / Notes |
@@ -393,10 +388,10 @@ Computed at index time. Use in `WHERE` clauses like any other field.
 |---|---|---|
 | `increment_style` | `increment` | `"prefix"` or `"postfix"` |
 | `increment_op` | `increment` | `"++"` or `"--"` |
-| `compound_op` | `compound_assignment` *(raw node_kind)* | `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` |
-| `operand` | `compound_assignment` *(raw node_kind)* | Left-hand side text |
-| `shift_direction` | `shift_expression` *(raw node_kind)* | `"left"` or `"right"` |
-| `shift_amount` | `shift_expression` *(raw node_kind)* | Right-hand operand text |
+| `compound_op` | `compound_assignment` | `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `\|=`, `^=`, `<<=`, `>>=` |
+| `operand` | `compound_assignment` | Left-hand side text |
+| `shift_direction` | `shift_expression` | `"left"` or `"right"` |
+| `shift_amount` | `shift_expression` | Right-hand operand text |
 | `operator_category` | `increment`, `compound_assignment`, `shift_expression` | `"increment"`, `"arithmetic"`, `"bitwise"`, `"shift"` |
 
 ### Metrics
