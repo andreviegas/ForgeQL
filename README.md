@@ -32,7 +32,7 @@ FIND symbols WHERE condition_tests >= 4 ORDER BY condition_tests DESC
 -- Result: 5 functions with 4+ boolean sub-expressions in a single condition
 
 -- 3. Any switch statements missing a default handler?
-FIND symbols WHERE node_kind = 'switch_statement' WHERE has_catch_all = 'false'
+FIND symbols WHERE fql_kind = 'switch' WHERE has_catch_all = 'false'
 -- Result: 2 switches that silently fall through on unexpected values
 
 -- 4. Mixed && / || without grouping — operator precedence bugs?
@@ -40,12 +40,12 @@ FIND symbols WHERE mixed_logic = 'true'
 -- Result: 4 conditions mixing AND/OR without parentheses
 
 -- 5. Dead code — functions nobody calls?
-FIND symbols WHERE node_kind = 'function_definition' WHERE usages = 0
+FIND symbols WHERE fql_kind = 'function' WHERE usages = 0
   EXCLUDE 'tests/**' EXCLUDE 'vendor/**' IN 'src/**' ORDER BY path ASC
 -- Result: 11 functions that can be safely removed
 
 -- 6. Risk heat-map — which functions have the most dependents?
-FIND symbols WHERE node_kind = 'function_definition'
+FIND symbols WHERE fql_kind = 'function'
   ORDER BY usages DESC LIMIT 5
 -- Result: top 5 hotspots — a bug here breaks everything
 
@@ -95,7 +95,7 @@ These clauses work identically on every command. Instead of returning thousands 
 
 ```sql
 FIND symbols
-  WHERE node_kind = 'function_definition'
+  WHERE fql_kind = 'function'
   IN 'src/**'
   ORDER BY usages DESC
   LIMIT 10
@@ -174,7 +174,7 @@ You can also pipe any FQL statement directly to the binary. This is useful for s
 ```bash
 echo "SHOW SOURCES" | forgeql --data-dir /tmp/forgeql-lab
 
-echo "FIND symbols WHERE node_kind = 'function_definition' LIMIT 5" \
+echo "FIND symbols WHERE fql_kind = 'function' LIMIT 5" \
   | forgeql --data-dir /tmp/forgeql-lab
 ```
 
@@ -206,7 +206,7 @@ SHOW outline OF 'include/PiscoCode.h'
 
 -- All classes defined in the library
 FIND symbols
-  WHERE node_kind = 'class_specifier'
+  WHERE fql_kind = 'class'
   ORDER BY name ASC
 ```
 
@@ -215,15 +215,19 @@ FIND symbols
 ```sql
 -- All getter/setter methods
 FIND symbols
-  WHERE node_kind = 'function_definition'
+  WHERE fql_kind = 'function'
   WHERE name LIKE 'get%'
   ORDER BY name ASC
 
 -- All #define macros in headers
 FIND symbols
-  WHERE node_kind = 'preproc_def'
+  WHERE fql_kind = 'macro'
   IN 'include/**'
 ```
+
+> **Note for power users:** `fql_kind` maps raw tree-sitter node kinds to universal names.
+> If you need exact tree-sitter precision, the `node_kind` field is also available as a power-user
+> escape hatch: `WHERE node_kind = ...` still works alongside all `fql_kind` queries.
 
 ### Inspect a function
 
@@ -248,7 +252,7 @@ Every `SHOW` response includes `start_line` and `end_line`. Those values feed di
 ```sql
 -- Functions that are never called
 FIND symbols
-  WHERE node_kind = 'function_definition'
+  WHERE fql_kind = 'function'
   WHERE usages = 0
   IN 'src/**'
   EXCLUDE 'src/tests/**'
