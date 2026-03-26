@@ -180,6 +180,7 @@ fn find_symbols_bare() {
     assert!(qr.total > 0);
 }
 
+#[rustfmt::skip]
 #[test]
 fn find_symbols_where_fql_kind_eq_function() {
     let (mut e, sid, _d) = engine_with_session();
@@ -195,6 +196,7 @@ fn find_symbols_where_fql_kind_eq_function() {
     }
 }
 
+#[rustfmt::skip]
 #[test]
 fn find_symbols_where_fql_kind_eq_class() {
     let (mut e, sid, _d) = engine_with_session();
@@ -211,6 +213,7 @@ fn find_symbols_where_fql_kind_eq_class() {
     }
 }
 
+#[rustfmt::skip]
 #[test]
 fn find_symbols_where_fql_kind_eq_struct() {
     let (mut e, sid, _d) = engine_with_session();
@@ -226,6 +229,7 @@ fn find_symbols_where_fql_kind_eq_struct() {
     }
 }
 
+#[rustfmt::skip]
 #[test]
 fn find_symbols_where_fql_kind_eq_enum() {
     let (mut e, sid, _d) = engine_with_session();
@@ -257,6 +261,7 @@ fn find_symbols_where_fql_kind_eq_macro() {
     );
 }
 
+#[rustfmt::skip]
 #[test]
 fn find_symbols_where_fql_kind_eq_import() {
     let (mut e, sid, _d) = engine_with_session();

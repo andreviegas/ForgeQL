@@ -490,6 +490,7 @@ fn display_output_contains_symbol_names() {
 // -----------------------------------------------------------------------
 
 /// FIND symbols WHERE fql_kind = 'function' returns only functions.
+#[rustfmt::skip]
 #[test]
 fn find_symbols_filters_by_fql_kind() {
     let (mut engine, sid, _dir) = engine_with_session();
@@ -716,6 +717,7 @@ fn find_symbols_where_usages_eq_zero() {
 }
 
 /// FIND symbols WHERE fql_kind = 'macro' finds macros/includes.
+#[rustfmt::skip]
 #[test]
 fn find_symbols_fql_kind_macro_and_import() {
     let (mut engine, sid, _dir) = engine_with_session();
@@ -1332,6 +1334,7 @@ fn show_body_qualified_name_still_works() {
     }
 }
 
+#[rustfmt::skip]
 #[test]
 fn member_variable_has_body_symbol_field() {
     let (mut engine, sid, _dir) = engine_with_class_method();
