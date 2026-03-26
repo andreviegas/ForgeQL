@@ -70,5 +70,5 @@ verify_steps:
   # The 5-second delay lets VERIFY return its output before the process exits.
   # VS Code auto-restarts MCP servers that exit -- reconnect after ~5 seconds.
   - name: build-and-restart
-    command: "cargo build --release && { (sleep 5 && pkill -f 'forgeql --mcp') & echo 'Binary built. Server restarting in 5 seconds -- reconnect with USE.'; }"
+    command: "cargo build --release && { (sleep 5 && kill -SIGINT $PPID) & echo 'Binary built. Server restarting in 5 seconds -- reconnect with USE.'; }"
     timeout_secs: 180    
