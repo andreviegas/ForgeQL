@@ -206,7 +206,7 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 [IN 'glob']
 [EXCLUDE 'glob']
 [ORDER BY field [ASC | DESC]]
-[GROUP BY (file | kind)]
+[GROUP BY (file | fql_kind)]
 [LIMIT N]
 [OFFSET N]
 [DEPTH N]
