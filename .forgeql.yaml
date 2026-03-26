@@ -65,3 +65,13 @@ verify_steps:
   - name: clippy
     command: "cargo clippy --workspace -- -D warnings"
     timeout_secs: 120
+
+  # Build release binary, install it, then schedule a server restart.
+  # The 5-second delay lets VERIFY return its output before the process exits.
+  # VS Code auto-restarts MCP servers that exit -- reconnect after ~5 seconds.
+  - name: build-and-restart
+    command: >
+      cargo build --release &&
+      (sleep 5 && pkill -f "forgeql --mcp") &
+      echo "Binary installed. Server restarting in 5 seconds -- reconnect with USE."
+    timeout_secs: 180    
