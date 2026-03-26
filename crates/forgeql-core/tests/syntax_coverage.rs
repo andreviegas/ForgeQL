@@ -181,74 +181,74 @@ fn find_symbols_bare() {
 }
 
 #[test]
-fn find_symbols_where_node_kind_eq_function_definition() {
+fn find_symbols_where_fql_kind_eq_function() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition'",
+        "FIND symbols WHERE fql_kind = 'function'",
     );
     let qr = as_query(&r);
     assert!(!qr.results.is_empty());
     for row in &qr.results {
-        assert_eq!(row.node_kind.as_deref(), Some("function_definition"));
+        assert_eq!(row.fql_kind.as_deref(), Some("function"));
     }
 }
 
 #[test]
-fn find_symbols_where_node_kind_eq_class_specifier() {
+fn find_symbols_where_fql_kind_eq_class() {
     let (mut e, sid, _d) = engine_with_session();
-    // motor_control.h has no class_specifier — expect empty results (not an error).
+    // motor_control.h has no class — expect empty results (not an error).
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'class_specifier'",
+        "FIND symbols WHERE fql_kind = 'class'",
     );
     let qr = as_query(&r);
     // May be empty for this fixture — that's valid.
     for row in &qr.results {
-        assert_eq!(row.node_kind.as_deref(), Some("class_specifier"));
+        assert_eq!(row.fql_kind.as_deref(), Some("class"));
     }
 }
 
 #[test]
-fn find_symbols_where_node_kind_eq_struct_specifier() {
+fn find_symbols_where_fql_kind_eq_struct() {
     let (mut e, sid, _d) = engine_with_session();
-    // motor_control.h has typedef struct — may or may not be indexed as struct_specifier.
+    // motor_control.h has typedef struct — may or may not be indexed as struct.
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'struct_specifier'",
+        "FIND symbols WHERE fql_kind = 'struct'",
     );
     let qr = as_query(&r);
     for row in &qr.results {
-        assert_eq!(row.node_kind.as_deref(), Some("struct_specifier"));
+        assert_eq!(row.fql_kind.as_deref(), Some("struct"));
     }
 }
 
 #[test]
-fn find_symbols_where_node_kind_eq_enum_specifier() {
+fn find_symbols_where_fql_kind_eq_enum() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'enum_specifier'",
+        "FIND symbols WHERE fql_kind = 'enum'",
     );
     let qr = as_query(&r);
     // motor_control.h has ErrorMotor and ErrorSensor enums.
     for row in &qr.results {
-        assert_eq!(row.node_kind.as_deref(), Some("enum_specifier"));
+        assert_eq!(row.fql_kind.as_deref(), Some("enum"));
     }
 }
 
 #[test]
-fn find_symbols_where_node_kind_eq_preproc_def() {
+fn find_symbols_where_fql_kind_eq_macro() {
     let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE node_kind = 'preproc_def'");
+    let r = exec(&mut e, &sid, "FIND symbols WHERE fql_kind = 'macro'");
     let qr = as_query(&r);
     assert!(!qr.results.is_empty(), "fixture has #define macros");
     for row in &qr.results {
-        assert_eq!(row.node_kind.as_deref(), Some("preproc_def"));
+        assert_eq!(row.fql_kind.as_deref(), Some("macro"));
     }
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
     assert!(
@@ -258,45 +258,45 @@ fn find_symbols_where_node_kind_eq_preproc_def() {
 }
 
 #[test]
-fn find_symbols_where_node_kind_eq_preproc_include() {
+fn find_symbols_where_fql_kind_eq_import() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'preproc_include'",
+        "FIND symbols WHERE fql_kind = 'import'",
     );
     let qr = as_query(&r);
     assert!(!qr.results.is_empty(), "fixture has #include directives");
     for row in &qr.results {
-        assert_eq!(row.node_kind.as_deref(), Some("preproc_include"));
+        assert_eq!(row.fql_kind.as_deref(), Some("import"));
     }
 }
 
 #[test]
-fn find_symbols_where_node_kind_eq_declaration() {
+fn find_symbols_where_fql_kind_eq_variable() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'declaration' LIMIT 100",
+        "FIND symbols WHERE fql_kind = 'variable' LIMIT 100",
     );
     let qr = as_query(&r);
     for row in &qr.results {
-        assert_eq!(row.node_kind.as_deref(), Some("declaration"));
+        assert_eq!(row.fql_kind.as_deref(), Some("variable"));
     }
 }
 
 #[test]
-fn find_symbols_where_node_kind_eq_comment() {
+fn find_symbols_where_fql_kind_eq_comment() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'comment' LIMIT 10",
+        "FIND symbols WHERE fql_kind = 'comment' LIMIT 10",
     );
     let qr = as_query(&r);
     for row in &qr.results {
-        assert_eq!(row.node_kind.as_deref(), Some("comment"));
+        assert_eq!(row.fql_kind.as_deref(), Some("comment"));
     }
 }
 
@@ -357,7 +357,7 @@ fn find_symbols_where_name_not_like() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' WHERE name NOT LIKE 'encender%'",
+        "FIND symbols WHERE fql_kind = 'function' WHERE name NOT LIKE 'encender%'",
     );
     let qr = as_query(&r);
     for row in &qr.results {
@@ -386,7 +386,7 @@ fn find_symbols_where_name_neq() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' WHERE name != 'encenderMotor' LIMIT 100",
+        "FIND symbols WHERE fql_kind = 'function' WHERE name != 'encenderMotor' LIMIT 100",
     );
     let qr = as_query(&r);
     for row in &qr.results {
@@ -520,11 +520,11 @@ fn find_symbols_two_where_clauses() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' WHERE usages >= 1 LIMIT 50",
+        "FIND symbols WHERE fql_kind = 'function' WHERE usages >= 1 LIMIT 50",
     );
     let qr = as_query(&r);
     for row in &qr.results {
-        assert_eq!(row.node_kind.as_deref(), Some("function_definition"));
+        assert_eq!(row.fql_kind.as_deref(), Some("function"));
         assert!(row.usages_count.unwrap_or(0) >= 1);
     }
 }
@@ -535,11 +535,11 @@ fn find_symbols_three_where_clauses() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' WHERE usages >= 1 WHERE name LIKE 'encender%'",
+        "FIND symbols WHERE fql_kind = 'function' WHERE usages >= 1 WHERE name LIKE 'encender%'",
     );
     let qr = as_query(&r);
     for row in &qr.results {
-        assert_eq!(row.node_kind.as_deref(), Some("function_definition"));
+        assert_eq!(row.fql_kind.as_deref(), Some("function"));
         assert!(row.usages_count.unwrap_or(0) >= 1);
         assert!(row.name.starts_with("encender"));
     }
@@ -553,7 +553,7 @@ fn find_symbols_order_by_name_asc() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' ORDER BY name ASC LIMIT 100",
+        "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 100",
     );
     let qr = as_query(&r);
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
@@ -573,7 +573,7 @@ fn find_symbols_order_by_name_desc() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' ORDER BY name DESC LIMIT 100",
+        "FIND symbols WHERE fql_kind = 'function' ORDER BY name DESC LIMIT 100",
     );
     let qr = as_query(&r);
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
@@ -593,7 +593,7 @@ fn find_symbols_order_by_usages_desc() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' ORDER BY usages DESC LIMIT 100",
+        "FIND symbols WHERE fql_kind = 'function' ORDER BY usages DESC LIMIT 100",
     );
     let qr = as_query(&r);
     let counts: Vec<usize> = qr
@@ -617,7 +617,7 @@ fn find_symbols_order_by_line_asc() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' ORDER BY line ASC LIMIT 100",
+        "FIND symbols WHERE fql_kind = 'function' ORDER BY line ASC LIMIT 100",
     );
     let qr = as_query(&r);
     let lines: Vec<usize> = qr.results.iter().map(|r| r.line.unwrap_or(0)).collect();
@@ -638,7 +638,7 @@ fn find_symbols_order_by_default_is_asc() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' ORDER BY name LIMIT 100",
+        "FIND symbols WHERE fql_kind = 'function' ORDER BY name LIMIT 100",
     );
     let qr = as_query(&r);
     assert!(!qr.results.is_empty());
@@ -646,7 +646,7 @@ fn find_symbols_order_by_default_is_asc() {
     let r2 = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' ORDER BY name LIMIT 100",
+        "FIND symbols WHERE fql_kind = 'function' ORDER BY name LIMIT 100",
     );
     let names1: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
     let names2: Vec<&str> = as_query(&r2)
@@ -760,12 +760,12 @@ fn find_symbols_in_and_exclude() {
 // --- GROUP BY ---
 
 #[test]
-fn find_symbols_group_by_node_kind() {
+fn find_symbols_group_by_fql_kind() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols GROUP BY node_kind ORDER BY count DESC",
+        "FIND symbols GROUP BY fql_kind ORDER BY count DESC",
     );
     let qr = as_query(&r);
     assert!(!qr.results.is_empty());
@@ -801,13 +801,13 @@ fn find_symbols_full_clause_combination() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' \
+        "FIND symbols WHERE fql_kind = 'function' \
          ORDER BY usages DESC LIMIT 3 OFFSET 1",
     );
     let qr = as_query(&r);
     assert!(qr.results.len() <= 3);
     for row in &qr.results {
-        assert_eq!(row.node_kind.as_deref(), Some("function_definition"));
+        assert_eq!(row.fql_kind.as_deref(), Some("function"));
     }
 }
 
@@ -819,7 +819,7 @@ fn find_symbols_where_type_like_void() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' WHERE type LIKE 'void%' LIMIT 50",
+        "FIND symbols WHERE fql_kind = 'function' WHERE type LIKE 'void%' LIMIT 50",
     );
     let qr = as_query(&r);
     // All returned symbols should have type starting with "void"
@@ -840,7 +840,7 @@ fn find_symbols_where_scope_eq_local() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'declaration' WHERE scope = 'local' LIMIT 50",
+        "FIND symbols WHERE fql_kind = 'variable' WHERE scope = 'local' LIMIT 50",
     );
     let qr = as_query(&r);
     for row in &qr.results {
@@ -859,7 +859,7 @@ fn find_symbols_where_scope_eq_file() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'declaration' WHERE scope = 'file' LIMIT 50",
+        "FIND symbols WHERE fql_kind = 'variable' WHERE scope = 'file' LIMIT 50",
     );
     let qr = as_query(&r);
     for row in &qr.results {
@@ -878,7 +878,7 @@ fn find_symbols_where_storage_eq_static() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'declaration' WHERE storage = 'static' LIMIT 50",
+        "FIND symbols WHERE fql_kind = 'variable' WHERE storage = 'static' LIMIT 50",
     );
     let qr = as_query(&r);
     for row in &qr.results {
@@ -897,7 +897,7 @@ fn find_symbols_where_storage_neq_static() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'declaration' WHERE storage != 'static' LIMIT 50",
+        "FIND symbols WHERE fql_kind = 'variable' WHERE storage != 'static' LIMIT 50",
     );
     let qr = as_query(&r);
     for row in &qr.results {
@@ -1162,7 +1162,7 @@ fn find_globals_bare() {
     let qr = as_query(&r);
     assert!(!qr.results.is_empty());
     for row in &qr.results {
-        assert_eq!(row.node_kind.as_deref(), Some("declaration"));
+        assert_eq!(row.fql_kind.as_deref(), Some("variable"));
         assert_eq!(row.fields.get("scope").map(String::as_str), Some("file"));
     }
 }
@@ -1859,7 +1859,7 @@ fn error_disconnect_without_session() {
 #[test]
 fn parse_find_symbols_all_clauses() {
     parser::parse(
-        "FIND symbols WHERE node_kind = 'function_definition' \
+        "FIND symbols WHERE fql_kind = 'function' \
          WHERE name LIKE 'get%' \
          IN 'src/**' \
          EXCLUDE 'tests/**' \
@@ -2267,7 +2267,7 @@ fn result_to_csv_find_symbols() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' LIMIT 5",
+        "FIND symbols WHERE fql_kind = 'function' LIMIT 5",
     );
     let csv = r.to_csv();
     // CSV output should be valid JSON (our format wraps CSV in JSON envelope).
@@ -2333,7 +2333,7 @@ fn find_symbols_where_name_not_matches_regex() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' WHERE name NOT MATCHES '^encender'",
+        "FIND symbols WHERE fql_kind = 'function' WHERE name NOT MATCHES '^encender'",
     );
     let qr = as_query(&r);
     for sym in &qr.results {
