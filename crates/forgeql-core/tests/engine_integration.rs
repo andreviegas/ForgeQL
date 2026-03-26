@@ -1104,7 +1104,7 @@ fn show_outline_where_filters_by_kind() {
     let result = execute_fql(
         &mut engine,
         &sid,
-        "SHOW outline OF 'motor_control.h' WHERE kind = 'macro'",
+        "SHOW outline OF 'motor_control.h' WHERE fql_kind = 'macro'",
     );
     match &result {
         ForgeQLResult::Show(sr) => match &sr.content {
@@ -1115,9 +1115,9 @@ fn show_outline_where_filters_by_kind() {
                 );
                 for entry in entries {
                     assert_eq!(
-                        entry.kind, "macro",
-                        "WHERE kind = 'macro' returned '{}' with kind '{}'",
-                        entry.name, entry.kind
+                        entry.fql_kind, "macro",
+                        "WHERE fql_kind = 'macro' returned '{}' with kind '{}'",
+                        entry.name, entry.fql_kind
                     );
                 }
             }
@@ -1185,7 +1185,7 @@ fn show_outline_where_with_limit_applies_both() {
     let result = execute_fql(
         &mut engine,
         &sid,
-        "SHOW outline OF 'motor_control.h' WHERE kind = 'macro' LIMIT 2",
+        "SHOW outline OF 'motor_control.h' WHERE fql_kind = 'macro' LIMIT 2",
     );
     match &result {
         ForgeQLResult::Show(sr) => match &sr.content {
@@ -1197,7 +1197,7 @@ fn show_outline_where_with_limit_applies_both() {
                 );
                 for entry in entries {
                     assert_eq!(
-                        entry.kind, "macro",
+                        entry.fql_kind, "macro",
                         "WHERE filter must still apply with LIMIT"
                     );
                 }
@@ -1216,7 +1216,7 @@ fn show_members_where_filters_by_kind() {
     let result = execute_fql(
         &mut engine,
         &sid,
-        "SHOW members OF 'ErrorMotor' WHERE kind = 'enumerator'",
+        "SHOW members OF 'ErrorMotor' WHERE fql_kind = 'enumerator'",
     );
     match &result {
         ForgeQLResult::Show(sr) => match &sr.content {
@@ -1227,9 +1227,9 @@ fn show_members_where_filters_by_kind() {
                 );
                 for m in members {
                     assert_eq!(
-                        m.kind, "enumerator",
-                        "WHERE kind = 'enumerator' returned member with kind '{}'",
-                        m.kind
+                        m.fql_kind, "enumerator",
+                        "WHERE fql_kind = 'enumerator' returned member with kind '{}'",
+                        m.fql_kind
                     );
                 }
             }

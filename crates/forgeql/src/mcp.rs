@@ -473,7 +473,7 @@ impl ServerHandler for ForgeQlMcp {
              QUERY STRATEGY (all commands accept WHERE, GROUP BY, ORDER BY, \
              LIMIT, OFFSET — combine them freely):\n\
              - Need a symbol? → FIND symbols WHERE name LIKE 'pattern' \
-               [WHERE node_kind = '...'] [IN 'path/**'] [ORDER BY usages DESC] [LIMIT N]\n\
+               [WHERE fql_kind = '...'] [IN 'path/**'] [ORDER BY usages DESC] [LIMIT N]\n\
              - Need source code? → SHOW body OF 'name' DEPTH {DEFAULT_BODY_DEPTH} (signature) \
                → DEPTH 1 (control flow) → DEPTH 99 (full source)\n\
              - Need blast radius? → FIND usages OF 'name' \
@@ -481,7 +481,7 @@ impl ServerHandler for ForgeQlMcp {
              - Need file list? → FIND files [IN 'path/**'] \
                [WHERE extension = '...'] [WHERE size > N] [ORDER BY size DESC] [LIMIT N]\n\
              - Need structure? → SHOW outline OF 'file' \
-               [WHERE kind = '...'] [ORDER BY line ASC] | SHOW members OF 'type'\n\
+               [WHERE fql_kind = '...'] [ORDER BY line ASC] | SHOW members OF 'type'\n\
              - Need context? → SHOW context OF 'name' \
                (default {DEFAULT_CONTEXT_LINES} lines; use DEPTH N to adjust)\n\
              - Need call graph? → SHOW callees OF 'name' \
@@ -648,7 +648,7 @@ mod tests {
             "compact output should have op in header: {text}"
         );
         assert!(
-            text.contains("\"kind\""),
+            text.contains("\"fql_kind\""),
             "compact output should have schema row: {text}"
         );
         assert!(

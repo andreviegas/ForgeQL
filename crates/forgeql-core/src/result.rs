@@ -190,7 +190,7 @@ pub struct SourceLine {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutlineEntry {
     pub name: String,
-    pub kind: String,
+    pub fql_kind: String,
     pub path: PathBuf,
     pub line: usize,
 }
@@ -199,7 +199,7 @@ pub struct OutlineEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberEntry {
     /// Member kind: `"field"`, `"method"`, `"enumerator"`.
-    pub kind: String,
+    pub fql_kind: String,
     /// Declaration text (trimmed).
     pub text: String,
     /// 1-based line number.
@@ -596,7 +596,7 @@ impl fmt::Display for ShowResult {
                     writeln!(
                         formatter,
                         "{:>4} | {:12} | {}",
-                        entry.line, entry.kind, entry.name,
+                        entry.line, entry.fql_kind, entry.name,
                     )?;
                 }
             }
@@ -605,7 +605,7 @@ impl fmt::Display for ShowResult {
                     writeln!(
                         formatter,
                         "{:>4} | {:12} | {}",
-                        member.line, member.kind, member.text,
+                        member.line, member.fql_kind, member.text,
                     )?;
                 }
             }
@@ -786,7 +786,7 @@ impl ForgeQLResult {
     /// Serialize query results to a compact CSV-style envelope.
     ///
     /// Produces a minimal JSON object with a `results` array where each entry
-    /// is a flat string array `["name", "kind", "path", "count"]`.
+    /// is a flat string array `["name", "node_kind", "path", "count"]`.
     ///
     /// The `count` column covers two cases:
     /// - `usages_count` — number of references to the symbol (FIND queries)
@@ -812,7 +812,7 @@ impl ForgeQLResult {
             "count"
         };
         let mut all_rows: Vec<serde_json::Value> =
-            vec![serde_json::json!(["name", "kind", "path", count_col])];
+            vec![serde_json::json!(["name", "node_kind", "path", count_col])];
         all_rows.extend(query.results.iter().map(|row| {
             // `usages_count` is populated by FIND queries;
             // `count` is populated by COUNT … GROUP BY;
@@ -910,7 +910,7 @@ mod tests {
         // First element of results is the header row.
         assert_eq!(
             v["results"][0],
-            serde_json::json!(["name", "kind", "path", "count"])
+            serde_json::json!(["name", "node_kind", "path", "count"])
         );
         // Data row has the usages_count in the 4th column.
         assert_eq!(v["results"][1][0], "setPeakLevel");
@@ -942,7 +942,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&csv).unwrap();
         assert_eq!(
             v["results"][0],
-            serde_json::json!(["name", "kind", "path", "line"]),
+            serde_json::json!(["name", "node_kind", "path", "line"]),
             "header must say 'line' for find_usages op"
         );
         assert_eq!(
@@ -975,7 +975,7 @@ mod tests {
         // Header row present.
         assert_eq!(
             v["results"][0],
-            serde_json::json!(["name", "kind", "path", "count"])
+            serde_json::json!(["name", "node_kind", "path", "count"])
         );
         // Data row: count field (not usages_count) must appear in column 4.
         assert_eq!(

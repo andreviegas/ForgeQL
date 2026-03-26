@@ -189,11 +189,11 @@ FIND files DEPTH 1
 SHOW outline OF 'src/module.cpp'
 
 -- Only functions in a file
-SHOW outline OF 'src/module.cpp' WHERE kind = 'function_definition' ORDER BY line ASC
+SHOW outline OF 'src/module.cpp' WHERE fql_kind = 'function' ORDER BY line ASC
 
 -- Class member overview
 SHOW members OF 'ClassName'
-SHOW members OF 'ClassName' WHERE kind = 'field_declaration'
+SHOW members OF 'ClassName' WHERE fql_kind = 'field'
 ```
 
 ---

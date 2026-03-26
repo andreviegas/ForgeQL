@@ -638,7 +638,6 @@ fn generate_field_sweep(spec: &SyntaxSpec) -> Vec<GeneratedCommand> {
         ("name", false),
         ("file", false),
         ("path", false),
-        ("kind", false),
         ("node_kind", false),
     ];
     for (field, is_numeric) in structural_fields {
@@ -955,7 +954,7 @@ fn check_group_by_unique(result: &ForgeQLResult, field: &str) -> bool {
             for item in &qr.results {
                 let value = match field {
                     "name" => Some(item.name.clone()),
-                    "kind" | "node_kind" => item.node_kind.clone(),
+                    "node_kind" => item.node_kind.clone(),
                     "fql_kind" => item.fql_kind.clone(),
                     "language" | "lang" => item.language.clone(),
                     "path" | "file" => item.path.as_ref().map(|p| p.display().to_string()),
@@ -999,7 +998,7 @@ fn check_order_by_sorted(result: &ForgeQLResult, field: &str, dir: &str) -> bool
                 .iter()
                 .filter_map(|item| match field {
                     "name" => Some(item.name.clone()),
-                    "kind" | "node_kind" => item.node_kind.clone(),
+                    "node_kind" => item.node_kind.clone(),
                     "fql_kind" => item.fql_kind.clone(),
                     "language" | "lang" => item.language.clone(),
                     "path" | "file" => item.path.as_ref().map(|p| p.display().to_string()),
@@ -1167,7 +1166,7 @@ fn check_exclude_path_filter(result: &ForgeQLResult, glob: &str) -> bool {
 fn field_value_for_row(item: &forgeql_core::result::SymbolMatch, field: &str) -> Option<String> {
     match field {
         "name" => Some(item.name.clone()),
-        "kind" | "node_kind" => item.node_kind.clone(),
+        "node_kind" => item.node_kind.clone(),
         "fql_kind" => item.fql_kind.clone(),
         "language" | "lang" => item.language.clone(),
         "path" | "file" => item.path.as_ref().map(|p| p.display().to_string()),

@@ -546,7 +546,7 @@ pub fn show_outline(index: &SymbolTable, workspace: &Workspace, file: &str) -> R
             row.byte_range.start,
             serde_json::json!({
                 "name": row.name,
-                "kind": kind,
+                "fql_kind": kind,
                 "path": rel,
                 "line": ln,
             }),
@@ -605,7 +605,7 @@ pub fn show_members(
                         .to_string();
                     if !text.is_empty() {
                         members.push(serde_json::json!({
-                            "kind": "field",
+                            "fql_kind": "field",
                             "text": text,
                             "line": ln,
                         }));
@@ -621,7 +621,7 @@ pub fn show_members(
                         .to_string();
                     if !sig.is_empty() {
                         members.push(serde_json::json!({
-                            "kind": "method",
+                            "fql_kind": "method",
                             "text": sig,
                             "line": ln,
                         }));
@@ -635,7 +635,7 @@ pub fn show_members(
                         .to_string();
                     if !text.is_empty() {
                         members.push(serde_json::json!({
-                            "kind": "method",
+                            "fql_kind": "method",
                             "text": text,
                             "line": ln,
                         }));
@@ -646,7 +646,7 @@ pub fn show_members(
                     let name = std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("");
                     if !name.is_empty() {
                         members.push(serde_json::json!({
-                            "kind": "enumerator",
+                            "fql_kind": "enumerator",
                             "text": name,
                             "line": ln,
                         }));

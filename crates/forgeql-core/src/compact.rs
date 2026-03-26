@@ -148,8 +148,8 @@ fn compact_outline(s: &ShowResult, entries: &[OutlineEntry]) -> String {
         .map_or(String::new(), |e| q(&e.path.to_string_lossy()));
     row(&mut out, &[&op, &file]);
     // Schema hint.
-    row(&mut out, &[&q("kind"), &q("[name,line]")]);
-    // Group by kind.
+    row(&mut out, &[&q("fql_kind"), &q("[name,line]")]);
+    // Group by fql_kind.
     let groups = group_outline(entries);
     for (kind, items) in &groups {
         let brackets: Vec<String> = items
@@ -306,8 +306,8 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
     // Schema hint — use metric name when a numeric WHERE/ORDER BY was used.
     let metric_label = query.metric_hint.as_deref().unwrap_or("usages");
     let schema = format!("[name,path,line,{metric_label}]");
-    row(&mut out, &[&q("kind"), &q(&schema)]);
-    // Group by node_kind.
+    row(&mut out, &[&q("fql_kind"), &q(&schema)]);
+    // Group by fql_kind.
     let groups = group_symbols_by_kind(query);
     for (kind, items) in &groups {
         let brackets: Vec<String> = items
@@ -331,10 +331,10 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
 fn group_outline(entries: &[OutlineEntry]) -> Vec<(String, Vec<(&str, usize)>)> {
     let mut groups: Vec<(String, Vec<(&str, usize)>)> = Vec::new();
     for e in entries {
-        if let Some(g) = groups.iter_mut().find(|(k, _)| k == &e.kind) {
+        if let Some(g) = groups.iter_mut().find(|(k, _)| k == &e.fql_kind) {
             g.1.push((&e.name, e.line));
         } else {
-            groups.push((e.kind.clone(), vec![(&e.name, e.line)]));
+            groups.push((e.fql_kind.clone(), vec![(&e.name, e.line)]));
         }
     }
     groups
@@ -344,10 +344,10 @@ fn group_outline(entries: &[OutlineEntry]) -> Vec<(String, Vec<(&str, usize)>)> 
 fn group_members(members: &[MemberEntry]) -> Vec<(String, Vec<(&str, usize)>)> {
     let mut groups: Vec<(String, Vec<(&str, usize)>)> = Vec::new();
     for m in members {
-        if let Some(g) = groups.iter_mut().find(|(k, _)| k == &m.kind) {
+        if let Some(g) = groups.iter_mut().find(|(k, _)| k == &m.fql_kind) {
             g.1.push((&m.text, m.line));
         } else {
-            groups.push((m.kind.clone(), vec![(&m.text, m.line)]));
+            groups.push((m.fql_kind.clone(), vec![(&m.text, m.line)]));
         }
     }
     groups
@@ -464,19 +464,19 @@ mod tests {
                 entries: vec![
                     OutlineEntry {
                         name: "int16_t".into(),
-                        kind: "type_alias".into(),
+                        fql_kind: "type_alias".into(),
                         path: PathBuf::from("include/types.hpp"),
                         line: 17,
                     },
                     OutlineEntry {
                         name: "int32_t".into(),
-                        kind: "type_alias".into(),
+                        fql_kind: "type_alias".into(),
                         path: PathBuf::from("include/types.hpp"),
                         line: 18,
                     },
                     OutlineEntry {
                         name: "Pid".into(),
-                        kind: "class_specifier".into(),
+                        fql_kind: "class_specifier".into(),
                         path: PathBuf::from("include/types.hpp"),
                         line: 22,
                     },
@@ -486,7 +486,7 @@ mod tests {
         let csv = to_compact(&result);
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines[0], r#""show_outline","include/types.hpp""#);
-        assert_eq!(lines[1], r#""kind","[name,line]""#);
+        assert_eq!(lines[1], r#""fql_kind","[name,line]""#);
         assert_eq!(lines[2], r#""type_alias","[int16_t,17],[int32_t,18]""#);
         assert_eq!(lines[3], r#""class_specifier","[Pid,22]""#);
         assert_eq!(lines.len(), 4);
@@ -506,13 +506,13 @@ mod tests {
                 entries: vec![
                     OutlineEntry {
                         name: "// ADC conversion".into(),
-                        kind: "comment".into(),
+                        fql_kind: "comment".into(),
                         path: PathBuf::from("src/adc.cpp"),
                         line: 1,
                     },
                     OutlineEntry {
                         name: "convertByte2Volts".into(),
-                        kind: "function_definition".into(),
+                        fql_kind: "function_definition".into(),
                         path: PathBuf::from("src/adc.cpp"),
                         line: 5,
                     },
@@ -545,17 +545,17 @@ mod tests {
             content: ShowContent::Members {
                 members: vec![
                     MemberEntry {
-                        kind: "field".into(),
+                        fql_kind: "field".into(),
                         text: "uint16_t rpm_setpoint;".into(),
                         line: 28,
                     },
                     MemberEntry {
-                        kind: "method".into(),
+                        fql_kind: "method".into(),
                         text: "void setRPM(uint16_t);".into(),
                         line: 35,
                     },
                     MemberEntry {
-                        kind: "field".into(),
+                        fql_kind: "field".into(),
                         text: "bool is_locked;".into(),
                         line: 51,
                     },
@@ -771,7 +771,7 @@ mod tests {
         let csv = to_compact(&result);
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines[0], r#""find_symbols",3"#);
-        assert_eq!(lines[1], r#""kind","[name,path,line,usages]""#);
+        assert_eq!(lines[1], r#""fql_kind","[name,path,line,usages]""#);
         assert_eq!(
             lines[2],
             r#""function","[encenderMotor,src/motor_control.cpp,0,7],[apagarMotor,src/motor_control.cpp,0,5]""#
@@ -913,7 +913,7 @@ mod tests {
         let csv = to_compact(&result);
         let lines: Vec<&str> = csv.lines().collect();
         // Schema hint must show the metric name, not "usages".
-        assert_eq!(lines[1], r#""kind","[name,path,line,member_count]""#);
+        assert_eq!(lines[1], r#""fql_kind","[name,path,line,member_count]""#);
         // Values must come from fields["member_count"], not usages_count.
         assert!(
             lines[2].contains(",17]"),

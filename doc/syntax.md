@@ -114,8 +114,8 @@ SHOW LINES n-m OF 'file_path' [clauses]
 |---|---|
 | `SHOW body OF` | Source text of a symbol. **Default `DEPTH 0`**: signature only, body replaced by `{ ... }`. `DEPTH 1`+: progressively reveals nested structure. `DEPTH 99`: full source. |
 | `SHOW signature OF` | Declaration line only (return type, name, parameters). |
-| `SHOW outline OF` | Structural outline of a file: all top-level symbols with kind, name, line. Supports `WHERE kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
-| `SHOW members OF` | Member declarations of a class/struct/enum: fields, methods, enumerators. Supports `WHERE kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
+| `SHOW outline OF` | Structural outline of a file: all top-level symbols with fql_kind, name, line. Supports `WHERE fql_kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
+| `SHOW members OF` | Member declarations of a class/struct/enum: fields, methods, enumerators. Supports `WHERE fql_kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
 | `SHOW context OF` | Surrounding lines of a symbol definition. `DEPTH N` controls how many context lines (default 5). |
 | `SHOW callees OF` | All symbols called from inside the named function body. |
 | `SHOW LINES n-m OF` | Verbatim line range from a file. |
@@ -641,16 +641,16 @@ SHOW body OF 'PiscoCode::run' DEPTH 99
 ```sql
 -- Only enum declarations in a header
 SHOW outline OF 'include/config.h'
-  WHERE kind = 'enum_specifier'
+  WHERE fql_kind = 'enum'
 
 -- Only function definitions in outline
 SHOW outline OF 'src/PiscoCode.cpp'
-  WHERE kind = 'function_definition'
+  WHERE fql_kind = 'function'
   ORDER BY line ASC
 
 -- Only field members of a class (skip methods)
 SHOW members OF 'PiscoCode'
-  WHERE kind = 'field_declaration'
+  WHERE fql_kind = 'field'
 
 -- Paginate a large outline
 SHOW outline OF 'include/PiscoCode.h'
@@ -776,7 +776,7 @@ All compact output follows a uniform 2-column structure:
 **FIND symbols** — grouped by `fql_kind`:
 ```csv
 "find_symbols",8
-"kind","[name,path,line,usages]"
+"fql_kind","[name,path,line,usages]"
 "function","[encenderMotor,src/motor_control.cpp,12,7],[apagarMotor,src/motor_control.cpp,28,5]"
 "class","[MotorControl,include/motor_control.hpp,5,2]"
 ```
@@ -786,7 +786,7 @@ column shows that field's value instead of `usages`:
 ```csv
 -- FIND symbols WHERE member_count > 10
 "find_symbols",3
-"kind","[name,path,line,member_count]"
+"fql_kind","[name,path,line,member_count]"
 "class","[Serial_Protocol,src/Serial_Protocol.h,24,17],[Button,src/buttons.h,31,12]"
 "struct","[MpptState,src/SolarCharger.h,57,11]"
 ```
@@ -802,7 +802,7 @@ column shows that field's value instead of `usages`:
 **SHOW outline** — grouped by kind, comments compressed to `len:N`:
 ```csv
 "show_outline","include/types.hpp"
-"kind","[name,line]"
+"fql_kind","[name,line]"
 "comment","[len:18,1],[len:23,55]"
 "type_alias","[int16_t,17],[int32_t,18]"
 ```

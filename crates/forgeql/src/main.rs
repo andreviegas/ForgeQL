@@ -614,7 +614,7 @@ mod tests {
             hint: None,
             content: ShowContent::Members {
                 members: vec![MemberEntry {
-                    kind: "field".to_string(),
+                    fql_kind: "field".to_string(),
                     text: "int x;".to_string(),
                     line: 1,
                 }],

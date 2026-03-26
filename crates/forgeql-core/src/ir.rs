@@ -80,7 +80,7 @@ pub struct Predicate {
 /// `GROUP BY` clause — group results by a named field before `HAVING`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GroupBy {
-    /// Group by the value of arbitrary named field (e.g. `"file"`, `"kind"`).
+    /// Group by the value of arbitrary named field (e.g. `"file"`, `"fql_kind"`).
     Field(String),
 }
 

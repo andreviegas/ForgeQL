@@ -1509,7 +1509,7 @@ fn find_symbols_prefilter(
 
     // Extract a `node_kind = 'value'` predicate for kind_index shortcut.
     let kind_exact: Option<&str> = clauses.where_predicates.iter().find_map(|p| {
-        if (p.field == "node_kind" || p.field == "kind")
+        if p.field == "node_kind"
             && p.op == CompareOp::Eq
             && let PredicateValue::String(ref s) = p.value
         {
@@ -1563,10 +1563,7 @@ fn find_symbols_prefilter(
         .where_predicates
         .iter()
         .filter(|p| !is_usages_pred(p))
-        .filter(|p| {
-            kind_exact.is_none()
-                || !((p.field == "node_kind" || p.field == "kind") && p.op == CompareOp::Eq)
-        })
+        .filter(|p| kind_exact.is_none() || !(p.field == "node_kind" && p.op == CompareOp::Eq))
         .filter(|p| name_like.is_none() || !(p.field == "name" && p.op == CompareOp::Like))
         .collect();
 
@@ -1774,7 +1771,7 @@ fn validate_order_by_field(
 
     const STATIC_FIELDS: &[&str] = &[
         "name",
-        "kind",
+        "fql_kind",
         "node_kind",
         "path",
         "file",
@@ -2075,7 +2072,7 @@ fn convert_show_content(op: &ForgeQLIR, json: &serde_json::Value) -> Result<Show
                         .filter_map(|entry| {
                             Some(OutlineEntry {
                                 name: entry.get("name")?.as_str()?.to_string(),
-                                kind: entry.get("kind")?.as_str()?.to_string(),
+                                fql_kind: entry.get("fql_kind")?.as_str()?.to_string(),
                                 path: PathBuf::from(entry.get("path")?.as_str()?),
                                 line: entry.get("line")?.as_u64()? as usize,
                             })
@@ -2094,7 +2091,7 @@ fn convert_show_content(op: &ForgeQLIR, json: &serde_json::Value) -> Result<Show
                     arr.iter()
                         .filter_map(|m| {
                             Some(MemberEntry {
-                                kind: m.get("kind")?.as_str()?.to_string(),
+                                fql_kind: m.get("fql_kind")?.as_str()?.to_string(),
                                 text: m.get("text")?.as_str()?.to_string(),
                                 line: m.get("line")?.as_u64()? as usize,
                             })
@@ -2376,7 +2373,7 @@ mod tests {
         let results = vec![make_sym("foo")];
         for field in &[
             "name",
-            "kind",
+            "fql_kind",
             "node_kind",
             "path",
             "file",

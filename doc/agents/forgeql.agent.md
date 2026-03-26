@@ -43,7 +43,7 @@ You are a code exploration and transformation agent. All source code is accessed
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
 | Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` |
-| File structure | `SHOW outline OF 'file' [WHERE kind = '...']` |
+| File structure | `SHOW outline OF 'file' [WHERE fql_kind = '...']` |
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
 | File list | `FIND files [IN 'path/**'] [WHERE extension = '...'] ORDER BY size DESC` |
@@ -298,7 +298,7 @@ ROLLBACK
 ```sql
 FIND files IN 'src/**' WHERE extension = 'cpp' ORDER BY size DESC
 FIND files WHERE size > 50000 ORDER BY size DESC LIMIT 10
-SHOW outline OF 'src/module.cpp' WHERE kind = 'function' ORDER BY line ASC
+SHOW outline OF 'src/module.cpp' WHERE fql_kind = 'function' ORDER BY line ASC
 SHOW members OF 'ClassName'          -- member kind values: 'field', 'method', 'enumerator'
 ```
 

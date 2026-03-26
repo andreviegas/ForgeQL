@@ -31,7 +31,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
 | Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` |
-| File structure | `SHOW outline OF 'file' [WHERE kind = '...']` |
+| File structure | `SHOW outline OF 'file' [WHERE fql_kind = '...']` |
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
 | File list | `FIND files [IN 'path/**'] [WHERE extension = '...'] ORDER BY size DESC` |

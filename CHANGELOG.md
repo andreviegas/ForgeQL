@@ -7,16 +7,57 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-03-24
+
+### Added
+
+- **Rust language support** — new `forgeql-lang-cpp` sibling crate
+  `forgeql-lang-rust` adds first-class Rust indexing via `tree-sitter-rust`.
+  All `fql_kind` values (`function`, `struct`, `enum`, `class` for `impl`,
+  `namespace` for `mod`, `variable`, `import`, `macro`, etc.) are mapped
+  and enrichment fields work across both languages without query changes.
+
+- **SMS (State Model Search) combinatorial test engine** — Phase C adds an
+  automated combinatorial harness that exercises every `WHERE`, `ORDER BY`,
+  `GROUP BY`, `LIMIT`, and `OFFSET` clause combination against real index
+  data, verifying invariants (ordering, limit bounds, filter correctness)
+  for each permutation.  Catches regressions in the clause pipeline that
+  unit tests would miss.
+
+### Changed
+
+- **`SHOW outline` and `FIND symbols` now return `fql_kind` values** —
+  the `kind` field in `SHOW outline` results and the group keys in `FIND
+  symbols` CSV output are now `fql_kind` values (e.g. `function`, `class`,
+  `macro`) rather than raw tree-sitter `node_kind` strings (e.g.
+  `function_definition`, `class_specifier`, `preproc_def`).  A fallback to
+  `node_kind` applies only when `fql_kind` is empty (unmapped nodes such as
+  `compound_assignment`).  Queries using `WHERE kind = 'function'` now work
+  identically across C++ and Rust.
+
+- **`node_kind` deprecated for agent queries** — `node_kind` remains in the
+  index for internal use and backwards compatibility, but all documentation,
+  examples, and agent instructions now exclusively reference `fql_kind`.
+
+- **`kind` alias removed — `fql_kind` is now the sole kind field** — the
+  `kind` alias that previously routed `WHERE kind = '...'` to raw `node_kind`
+  values on `FIND symbols` has been dropped.  `SHOW outline` and `SHOW
+  members` now expose `fql_kind` in both WHERE predicates and JSON result
+  objects (`OutlineEntry.fql_kind`, `MemberEntry.fql_kind`).  Compact CSV
+  schema headers change from `"kind"` to `"fql_kind"`.  Power-users needing
+  raw tree-sitter precision can still use `WHERE node_kind =
+  'function_definition'`.
+
 ### Fixed
 
 - **Compact diff: single oversized hunk now uses head/tail elision** —
-  when a mutation produced a single hunk exceeding the K-line budget (e.g.
-  a large block replacement), the preview fell back to a naive line counter
-  that emitted lines until K=0 then appended `(… truncated …)` at the
-  tail, with no proportional head/tail split.  The renderer now handles
-  three distinct cases: everything fits (≤K lines), one oversized hunk
-  (line-level K/2 head + `(… N lines elided …)` + K/2 tail), and multiple
-  oversized hunks (hunk-level first+last with middle elision).
+  when a mutation produced a single hunk exceeding the K-line budget the
+  renderer now shows a proportional K/2 head + `(… N lines elided …)` +
+  K/2 tail instead of emitting lines until the budget ran out.
+
+- **Cross-language symbol ambiguity in SHOW commands** — `SHOW body`,
+  `SHOW signature`, `SHOW context`, and `SHOW callees` no longer return
+  spurious results when two symbols from different languages share a name.
 
 ## [0.29.0] - 2026-03-24
 

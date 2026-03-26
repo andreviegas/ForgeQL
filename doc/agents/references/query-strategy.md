@@ -28,10 +28,10 @@ What do you need?
 │  → SHOW callees OF 'name'
 │
 ├─ File structure / outline?
-│  → SHOW outline OF 'file' [WHERE kind = '...']
+│  → SHOW outline OF 'file' [WHERE fql_kind = '...']
 │
 ├─ Class/struct members?
-│  → SHOW members OF 'type' [WHERE kind = '...']
+│  → SHOW members OF 'type' [WHERE fql_kind = '...']
 │
 ├─ Context around a definition?
 │  → SHOW context OF 'name'

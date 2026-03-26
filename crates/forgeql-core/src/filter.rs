@@ -268,7 +268,7 @@ impl ClauseTarget for crate::result::SymbolMatch {
     fn field_str(&self, field: &str) -> Option<&str> {
         match field {
             "name" => Some(&self.name),
-            "kind" | "node_kind" => self.node_kind.as_deref(),
+            "node_kind" => self.node_kind.as_deref(),
             "fql_kind" => self.fql_kind.as_deref(),
             "language" | "lang" => self.language.as_deref(),
             "path" | "file" => self.path.as_deref().and_then(|p| p.to_str()),
@@ -300,7 +300,7 @@ impl ClauseTarget for IndexRow {
     fn field_str(&self, field: &str) -> Option<&str> {
         match field {
             "name" => Some(self.name.as_str()),
-            "node_kind" | "kind" => Some(self.node_kind.as_str()),
+            "node_kind" => Some(self.node_kind.as_str()),
             "fql_kind" => {
                 if self.fql_kind.is_empty() {
                     None
@@ -364,7 +364,7 @@ impl ClauseTarget for crate::result::OutlineEntry {
     fn field_str(&self, field: &str) -> Option<&str> {
         match field {
             "name" => Some(&self.name),
-            "kind" | "node_kind" => Some(&self.kind),
+            "fql_kind" => Some(&self.fql_kind),
             "path" | "file" => self.path.to_str(),
             _ => None,
         }
@@ -385,7 +385,7 @@ impl ClauseTarget for crate::result::OutlineEntry {
 impl ClauseTarget for crate::result::MemberEntry {
     fn field_str(&self, field: &str) -> Option<&str> {
         match field {
-            "kind" | "node_kind" | "type" => Some(&self.kind),
+            "fql_kind" | "type" => Some(&self.fql_kind),
             "text" | "declaration" | "name" => Some(&self.text),
             _ => None,
         }
@@ -460,8 +460,8 @@ mod tests {
     fn make_symbol(name: &str, kind: &str, usages: usize) -> SymbolMatch {
         SymbolMatch {
             name: name.to_string(),
-            node_kind: Some(kind.to_string()),
-            fql_kind: None,
+            node_kind: None,
+            fql_kind: Some(kind.to_string()),
             language: None,
             path: Some(PathBuf::from(format!("src/{name}.cpp"))),
             line: None,
@@ -486,7 +486,7 @@ mod tests {
         ];
         let clauses = Clauses {
             where_predicates: vec![Predicate {
-                field: "kind".into(),
+                field: "fql_kind".into(),
                 op: CompareOp::Eq,
                 value: PredicateValue::String("Function".into()),
             }],
@@ -690,7 +690,7 @@ mod tests {
         let clauses = Clauses {
             where_predicates: vec![
                 Predicate {
-                    field: "kind".into(),
+                    field: "fql_kind".into(),
                     op: CompareOp::Eq,
                     value: PredicateValue::String("Function".into()),
                 },
