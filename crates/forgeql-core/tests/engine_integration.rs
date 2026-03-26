@@ -489,27 +489,27 @@ fn display_output_contains_symbol_names() {
 // Phase 7: v2 architecture validation
 // -----------------------------------------------------------------------
 
-/// FIND symbols WHERE node_kind = 'function_definition' returns only functions.
+/// FIND symbols WHERE fql_kind = 'function' returns only functions.
 #[test]
-fn find_symbols_filters_by_node_kind() {
+fn find_symbols_filters_by_fql_kind() {
     let (mut engine, sid, _dir) = engine_with_session();
     let result = execute_fql(
         &mut engine,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition'",
+        "FIND symbols WHERE fql_kind = 'function'",
     );
     match result {
         ForgeQLResult::Query(qr) => {
             assert!(
                 !qr.results.is_empty(),
-                "should find function_definition rows"
+                "should find function rows"
             );
-            // All returned rows must have node_kind = function_definition.
+            // All returned rows must have fql_kind = function.
             for row in &qr.results {
-                let kind = row.node_kind.as_deref().unwrap_or("");
+                let kind = row.fql_kind.as_deref().unwrap_or("");
                 assert_eq!(
-                    kind, "function_definition",
-                    "unexpected node_kind '{kind}' for row '{}'",
+                    kind, "function",
+                    "unexpected fql_kind '{kind}' for row '{}'",
                     row.name
                 );
             }
@@ -518,9 +518,9 @@ fn find_symbols_filters_by_node_kind() {
     }
 }
 
-/// All SymbolMatch results carry a populated `node_kind` field.
+/// All SymbolMatch results carry a populated `fql_kind` field.
 #[test]
-fn find_symbols_result_has_node_kind_populated() {
+fn find_symbols_result_has_fql_kind_populated() {
     let (mut engine, sid, _dir) = engine_with_session();
     let result = execute_fql(&mut engine, &sid, "FIND symbols WHERE name LIKE '%'");
     match result {
@@ -531,8 +531,8 @@ fn find_symbols_result_has_node_kind_populated() {
             );
             for row in &qr.results {
                 assert!(
-                    row.node_kind.is_some(),
-                    "every SymbolMatch must have node_kind set (missing on '{}')",
+                    row.fql_kind.is_some(),
+                    "every SymbolMatch must have fql_kind set (missing on '{}')",
                     row.name
                 );
             }
@@ -715,27 +715,27 @@ fn find_symbols_where_usages_eq_zero() {
     }
 }
 
-/// Dynamic field access: FIND symbols WHERE node_kind LIKE 'preproc%' finds macros/includes.
+/// FIND symbols WHERE fql_kind = 'macro' finds macros/includes.
 #[test]
-fn find_symbols_node_kind_like_preproc() {
+fn find_symbols_fql_kind_macro_and_import() {
     let (mut engine, sid, _dir) = engine_with_session();
     let result = execute_fql(
         &mut engine,
         &sid,
-        "FIND symbols WHERE node_kind LIKE 'preproc%'",
+        "FIND symbols WHERE fql_kind = 'macro'",
     );
     match result {
         ForgeQLResult::Query(qr) => {
             // motor_control.h uses #include and likely #define directives.
             assert!(
                 !qr.results.is_empty(),
-                "fixture must have preproc* nodes (includes/defines)"
+                "fixture must have macro nodes (#define directives)"
             );
             for row in &qr.results {
-                let kind = row.node_kind.as_deref().unwrap_or("");
+                let kind = row.fql_kind.as_deref().unwrap_or("");
                 assert!(
-                    kind.starts_with("preproc"),
-                    "unexpected node_kind '{kind}' for row '{}' — expected preproc*",
+                    kind == "macro",
+                    "unexpected fql_kind '{kind}' for row '{}' — expected macro",
                     row.name
                 );
             }
@@ -782,7 +782,7 @@ fn show_members_limit_is_respected() {
 fn show_outline_limit_is_respected() {
     let (mut engine, sid, _dir) = engine_with_session();
 
-    // motor_control.h has many declarations; full list should exceed 2.
+    // motor_control.h has many variables; full list should exceed 2.
     let full = execute_fql(&mut engine, &sid, "SHOW outline OF 'motor_control.h'");
     let full_count = match &full {
         ForgeQLResult::Show(sr) => match &sr.content {
@@ -829,13 +829,13 @@ fn find_symbols_order_by_line_asc_vs_desc_differ() {
     let asc = execute_fql(
         &mut engine,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' \
+        "FIND symbols WHERE fql_kind = 'function' \
          IN 'motor_control.cpp' ORDER BY line ASC LIMIT 1",
     );
     let desc = execute_fql(
         &mut engine,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' \
+        "FIND symbols WHERE fql_kind = 'function' \
          IN 'motor_control.cpp' ORDER BY line DESC LIMIT 1",
     );
 
@@ -877,7 +877,7 @@ fn find_symbols_no_duplicate_rows() {
     let result = execute_fql(
         &mut engine,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' IN 'motor_control.cpp'",
+        "FIND symbols WHERE fql_kind = 'function' IN 'motor_control.cpp'",
     );
     match result {
         ForgeQLResult::Query(qr) => {
@@ -928,12 +928,12 @@ fn find_usages_csv_count_column_is_non_empty() {
 }
 
 // -----------------------------------------------------------------------
-// Declaration indexing (FIND globals / WHERE node_kind = 'declaration')
+// Declaration indexing (FIND globals / WHERE fql_kind = 'variable')
 // -----------------------------------------------------------------------
 
-/// FIND globals returns file-scope declaration nodes (variable declarations).
+/// FIND globals returns file-scope variable nodes (variable variables).
 #[test]
-fn find_globals_returns_declarations() {
+fn find_globals_returns_variables() {
     let (mut engine, sid, _dir) = engine_with_session();
     let result = execute_fql(&mut engine, &sid, "FIND globals LIMIT 200");
     match result {
@@ -941,10 +941,10 @@ fn find_globals_returns_declarations() {
             assert!(!qr.results.is_empty(), "FIND globals should return results");
             for row in &qr.results {
                 assert_eq!(
-                    row.node_kind.as_deref(),
-                    Some("declaration"),
-                    "FIND globals must only return declaration nodes, got {:?} for '{}'",
-                    row.node_kind,
+                    row.fql_kind.as_deref(),
+                    Some("variable"),
+                    "FIND globals must only return variable nodes, got {:?} for '{}'",
+                    row.fql_kind,
                     row.name,
                 );
                 assert_eq!(
@@ -972,54 +972,54 @@ fn find_globals_returns_declarations() {
     }
 }
 
-/// FIND symbols WHERE node_kind = 'declaration' returns ALL declarations (file + local).
+/// FIND symbols WHERE fql_kind = 'variable' returns ALL variables (file + local).
 #[test]
-fn find_symbols_where_node_kind_declaration() {
+fn find_symbols_where_fql_kind_variable() {
     let (mut engine, sid, _dir) = engine_with_session();
     let result = execute_fql(
         &mut engine,
         &sid,
-        "FIND symbols WHERE node_kind = 'declaration' LIMIT 200",
+        "FIND symbols WHERE fql_kind = 'variable' LIMIT 200",
     );
     match result {
         ForgeQLResult::Query(qr) => {
-            assert!(!qr.results.is_empty(), "should return declaration nodes");
+            assert!(!qr.results.is_empty(), "should return variable nodes");
             let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
-            // File-scope declarations.
+            // File-scope variables.
             for expected in ["motorPrincipal", "motorSecundario", "gCallbackEncendido"] {
                 assert!(
                     names.contains(&expected),
-                    "expected '{expected}' in declarations; got: {names:?}",
+                    "expected '{expected}' in variables; got: {names:?}",
                 );
             }
-            // Local declarations should also appear (unlike FIND globals).
+            // Local variables should also appear (unlike FIND globals).
             let has_local = qr
                 .results
                 .iter()
                 .any(|r| r.fields.get("scope").map(String::as_str) == Some("local"));
             assert!(
                 has_local,
-                "WHERE node_kind='declaration' should include local declarations"
+                "WHERE fql_kind='variable' should include local variables"
             );
         }
         other => panic!("expected Query, got: {other:?}"),
     }
 }
 
-/// FIND symbols GROUP BY node_kind returns one row per node kind with counts.
+/// FIND symbols GROUP BY fql_kind returns one row per fql_kind with counts.
 #[test]
-fn find_symbols_group_by_node_kind() {
+fn find_symbols_group_by_fql_kind() {
     let (mut engine, sid, _dir) = engine_with_session();
     let result = execute_fql(
         &mut engine,
         &sid,
-        "FIND symbols GROUP BY node_kind ORDER BY count DESC LIMIT 50",
+        "FIND symbols GROUP BY fql_kind ORDER BY count DESC LIMIT 50",
     );
     match result {
         ForgeQLResult::Query(qr) => {
             assert!(
                 !qr.results.is_empty(),
-                "GROUP BY node_kind should return groups"
+                "GROUP BY fql_kind should return groups"
             );
             // Every row must have a count > 0.
             for row in &qr.results {
@@ -1027,22 +1027,22 @@ fn find_symbols_group_by_node_kind() {
                     row.count.unwrap_or(0) > 0,
                     "each group must have count > 0, got {:?} for {:?}",
                     row.count,
-                    row.node_kind,
+                    row.fql_kind,
                 );
             }
-            // "declaration" must now appear as a group.
+            // "variable" must now appear as a group.
             let kinds: Vec<&str> = qr
                 .results
                 .iter()
-                .filter_map(|r| r.node_kind.as_deref())
+                .filter_map(|r| r.fql_kind.as_deref())
                 .collect();
             assert!(
-                kinds.contains(&"declaration"),
-                "declaration must appear in GROUP BY node_kind results; got: {kinds:?}",
+                kinds.contains(&"variable"),
+                "variable must appear in GROUP BY fql_kind results; got: {kinds:?}",
             );
             assert!(
-                kinds.contains(&"function_definition"),
-                "function_definition must appear in GROUP BY node_kind results; got: {kinds:?}",
+                kinds.contains(&"function"),
+                "function must appear in GROUP BY fql_kind results; got: {kinds:?}",
             );
         }
         other => panic!("expected Query, got: {other:?}"),
@@ -1051,14 +1051,14 @@ fn find_symbols_group_by_node_kind() {
 
 /// Scope and storage dynamic fields can be filtered via WHERE clauses.
 #[test]
-fn find_declarations_filter_by_scope_and_storage() {
+fn find_variables_filter_by_scope_and_storage() {
     let (mut engine, sid, _dir) = engine_with_session();
 
-    // File-scope declarations only (same as FIND globals).
+    // File-scope variables only (same as FIND globals).
     let result = execute_fql(
         &mut engine,
         &sid,
-        "FIND symbols WHERE node_kind = 'declaration' WHERE scope = 'file' LIMIT 200",
+        "FIND symbols WHERE fql_kind = 'variable' WHERE scope = 'file' LIMIT 200",
     );
     let file_names: Vec<String> = match result {
         ForgeQLResult::Query(qr) => qr.results.iter().map(|r| r.name.clone()).collect(),
@@ -1073,7 +1073,7 @@ fn find_declarations_filter_by_scope_and_storage() {
     let result = execute_fql(
         &mut engine,
         &sid,
-        "FIND symbols WHERE node_kind = 'declaration' WHERE storage = 'static' LIMIT 200",
+        "FIND symbols WHERE fql_kind = 'variable' WHERE storage = 'static' LIMIT 200",
     );
     match result {
         ForgeQLResult::Query(qr) => {
@@ -1081,7 +1081,7 @@ fn find_declarations_filter_by_scope_and_storage() {
                 assert_eq!(
                     row.fields.get("storage").map(String::as_str),
                     Some("static"),
-                    "storage filter should only return static declarations, got {:?} for '{}'",
+                    "storage filter should only return static variables, got {:?} for '{}'",
                     row.fields.get("storage"),
                     row.name,
                 );
@@ -1240,7 +1240,7 @@ fn show_members_where_filters_by_kind() {
 }
 
 // -----------------------------------------------------------------------
-// Member declaration → body resolution (regression: field_declaration)
+// Member variable → body resolution (regression: field)
 // -----------------------------------------------------------------------
 
 /// Create a temp workspace with a header declaring a class method and a
@@ -1333,21 +1333,21 @@ fn show_body_qualified_name_still_works() {
 }
 
 #[test]
-fn member_declaration_has_body_symbol_field() {
+fn member_variable_has_body_symbol_field() {
     let (mut engine, sid, _dir) = engine_with_class_method();
 
-    // The field_declaration for 'render' should carry body_symbol = "Widget::render"
+    // The field for 'render' should carry body_symbol = "Widget::render"
     let result = execute_fql(
         &mut engine,
         &sid,
-        "FIND symbols WHERE name = 'render' WHERE node_kind = 'field_declaration'",
+        "FIND symbols WHERE name = 'render' WHERE fql_kind = 'field'",
     );
     match &result {
         ForgeQLResult::Query(qr) => {
             assert_eq!(
                 qr.results.len(),
                 1,
-                "exactly one field_declaration for render"
+                "exactly one field for render"
             );
             let row = &qr.results[0];
             let body_sym = row.fields.get("body_symbol").map(String::as_str);
