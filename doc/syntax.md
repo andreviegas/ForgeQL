@@ -13,6 +13,7 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
    - [FIND Commands](#find-commands)
    - [SHOW Commands](#show-commands)
    - [CHANGE Commands](#change-commands)
+   - [COPY / MOVE Commands](#copy--move-commands)
    - [Transaction Commands](#transaction-commands)
 3. [Universal Clauses](#universal-clauses)
 4. [Operators and Values](#operators-and-values)
@@ -155,6 +156,30 @@ CHANGE FILE 'file_path'
 | `LINES n-m WITH NOTHING` | Delete a specific line range |
 | `WITH '…'` | Replace entire file content (creates file if absent) |
 | `WITH NOTHING` | Clear file content (file remains on disk, empty) |
+
+---
+
+### COPY / MOVE Commands
+
+Copies or moves lines n..=m (1-based, inclusive) from `src_path` into `dst_path`.
+
+Syntax:
+
+    COPY LINES n-m OF 'src' TO 'dst'
+    COPY LINES n-m OF 'src' TO 'dst' AT LINE k
+
+    MOVE LINES n-m OF 'src' TO 'dst'
+    MOVE LINES n-m OF 'src' TO 'dst' AT LINE k
+
+| Argument | Meaning |
+|---|---|
+| `n-m` | 1-based inclusive source line range |
+| `'src'` | Relative source file path |
+| `'dst'` | Relative destination file path (may equal `'src'`) |
+| `AT LINE k` | Insert before line `k` in `dst`; omitted = append at end |
+
+**COPY** — inserts the lines into `dst` without modifying `src`.
+**MOVE** — inserts the lines into `dst` then deletes them from `src`. Same-file moves are handled atomically.
 
 ---
 

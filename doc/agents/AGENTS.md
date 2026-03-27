@@ -72,3 +72,25 @@ ForgeQL indexes code quality metrics at parse time. Use them in WHERE clauses:
 - `has_fallthrough = 'true'` — switch/case fallthrough without break
 - `is_recursive = 'true'` — directly recursive functions
 - `has_todo = 'true'` — TODO/FIXME/HACK/XXX markers in comments
+
+## Mutations
+
+Use `CHANGE` to modify file content, `COPY LINES` to copy a line range from one file to another, and `MOVE LINES` to move it (cut from source, paste to destination).
+
+| Command | Effect |
+|---|---|
+| `CHANGE FILE 'f' LINES n-m WITH '...'` | Replace lines n-m |
+| `CHANGE FILE 'f' LINES n-m WITH NOTHING` | Delete lines n-m |
+| `CHANGE FILES '*.c' MATCHING 'old' WITH 'new'` | Bulk literal replacement |
+| `CHANGE FILE 'f' WITH '...'` | Replace entire file |
+| `COPY LINES n-m OF 'src' TO 'dst'` | Copy lines, append to dst |
+| `COPY LINES n-m OF 'src' TO 'dst' AT LINE k` | Copy lines, insert before line k in dst |
+| `MOVE LINES n-m OF 'src' TO 'dst'` | Move lines (cut+paste), append to dst |
+| `MOVE LINES n-m OF 'src' TO 'dst' AT LINE k` | Move lines, insert before line k in dst |
+
+Wrap mutations in a transaction for atomic rollback:
+
+    BEGIN TRANSACTION 'name'
+      CHANGE FILE 'src/foo.c' LINES 10-12 WITH 'fixed'
+      VERIFY build 'test'
+    COMMIT MESSAGE 'fix: ...'

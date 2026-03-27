@@ -85,7 +85,8 @@ pub enum ForgeQLIR {
 
     // Mutations
     ChangeContent { files, target, clauses },
-
+    CopyLines { src, start, end, dst, at },
+    MoveLines { src, start, end, dst, at },
     // Composite operations
     Transaction { name, ops, verify, message },
     Rollback { name },
@@ -283,6 +284,7 @@ ForgeQL/
 │   │       ├── transforms/
 │   │       │   ├── mod.rs        # TransformPlan, ByteRangeEdit, FileEdit
 │   │       │   ├── change.rs     # File mutation: matching, lines, with, delete
+│   │       │   ├── copy_move.rs  # COPY LINES / MOVE LINES planning and execution
 │   │       │   └── diff.rs       # Pure-Rust LCS unified diff generator
 │   │       ├── verify/
 │   │       │   └── mod.rs        # Run build/test verification steps

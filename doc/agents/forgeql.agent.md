@@ -110,15 +110,18 @@ SHOW callees OF 'name' [clauses]
 SHOW LINES n-m OF 'file' [clauses]
 ```
 
-### CHANGE & Transactions
+### Mutations & Transactions
 ```sql
 CHANGE FILE 'path' LINES n-m WITH 'text'
 CHANGE FILE 'path' LINES n-m WITH NOTHING
 CHANGE FILES 'glob1','glob2' MATCHING 'old' WITH 'new'
 CHANGE FILE 'path' WITH 'full_content'
 
+COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]
+MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]
+
 BEGIN TRANSACTION 'name'
-  -- CHANGE / VERIFY commands
+  -- CHANGE / COPY / MOVE / VERIFY commands
 COMMIT MESSAGE 'msg'
 VERIFY build 'step'
 ROLLBACK [TRANSACTION 'name']

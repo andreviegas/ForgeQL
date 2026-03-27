@@ -71,7 +71,7 @@ ForgeQL is intentionally minimal. Everything is built from four command families
 | **Session** | `CREATE SOURCE` · `REFRESH SOURCE` · `USE` · `SHOW SOURCES` · `SHOW BRANCHES` · `DISCONNECT` |
 | **Queries** | `FIND symbols` · `FIND usages OF` · `FIND callees OF` · `FIND files` |
 | **Content** | `SHOW body` · `SHOW signature` · `SHOW outline` · `SHOW members` · `SHOW context` · `SHOW LINES` |
-| **Mutations** | `CHANGE FILE` / `CHANGE FILES` (with `MATCHING`, `LINES`, `WITH`, or `WITH NOTHING`) |
+| **Mutations** | `CHANGE FILE` / `CHANGE FILES` (with `MATCHING`, `LINES`, `WITH`, or `WITH NOTHING`) · `COPY LINES n-m OF src TO dst [AT LINE k]` · `MOVE LINES n-m OF src TO dst [AT LINE k]` |
 
 Complex workflows — renaming a symbol, applying a coding standard, migrating a pattern — are **composed by the agent** from these primitives. ForgeQL provides the precision tools; the agent decides the strategy.
 

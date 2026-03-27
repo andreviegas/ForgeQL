@@ -9,6 +9,15 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]`** — copies a 1-based
+  inclusive line range from one file to another (or the same file).  When
+  `AT LINE k` is omitted the lines are appended at the end of the destination
+  file.  The source file is left untouched.
+
+- **`MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]`** — identical to `COPY`
+  but also deletes `src` lines `n..=m` after the insertion.  For same-file
+  moves the insert and delete are applied in reverse byte order so the result
+  is correct regardless of move direction (up or down).
 - **Heredoc `WITH <<TAG...TAG` syntax for CHANGE commands** — all three
   `WITH` forms (`CHANGE FILE LINES n-m WITH`, `CHANGE FILE WITH`, and
   `CHANGE FILE MATCHING ... WITH`) now accept a heredoc block in addition
