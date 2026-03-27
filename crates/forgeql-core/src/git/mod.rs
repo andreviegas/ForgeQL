@@ -93,13 +93,32 @@ pub fn soft_reset(repo: &Repository, oid_hex: &str) -> Result<()> {
     Ok(())
 }
 
-/// Stage all modified files and commit with the given message.
+/// Files that `ForgeQL` generates at runtime and must never appear in any commit
+/// — neither user-visible commits nor internal checkpoint commits.
+const RUNTIME_FILES: &[&str] = &[".forgeql-index", ".forgeql-session"];
+
+fn is_runtime_file(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| RUNTIME_FILES.contains(&name))
+}
+
+/// Stage all modified files (excluding `ForgeQL` runtime files) and commit.
+///
+/// Used for internal checkpoint commits inside a transaction.
 ///
 /// # Errors
 /// Returns `Err` if staging, tree writing, or the commit itself fails.
 pub fn stage_and_commit(repo: &Repository, message: &str) -> Result<()> {
     let mut index = repo.index()?;
-    index.add_all(std::iter::once("*"), git2::IndexAddOption::DEFAULT, None)?;
+    index.add_all(
+        std::iter::once("*"),
+        git2::IndexAddOption::DEFAULT,
+        Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_runtime_file(path))),
+    )?;
+    for f in RUNTIME_FILES {
+        let _ = index.remove_path(std::path::Path::new(f));
+    }
     index.write()?;
 
     let tree_id = index.write_tree()?;
@@ -114,11 +133,10 @@ pub fn stage_and_commit(repo: &Repository, message: &str) -> Result<()> {
     Ok(())
 }
 
-/// Stage all modified files **except** `.forgeql-index` and commit.
+/// Stage all modified files (excluding `ForgeQL` runtime files) and commit.
 ///
-/// This produces a "clean" user-facing commit that never contains the
-/// binary index cache file.  Any previously tracked `.forgeql-index` entry
-/// is also removed from the index.
+/// Produces a clean user-facing commit that never contains runtime-generated
+/// files. Any previously tracked runtime files are also removed from the index.
 ///
 /// # Errors
 /// Returns `Err` if staging, tree writing, or the commit itself fails.
@@ -127,13 +145,11 @@ pub fn stage_and_commit_clean(repo: &Repository, message: &str) -> Result<()> {
     index.add_all(
         std::iter::once("*"),
         git2::IndexAddOption::DEFAULT,
-        Some(&mut |path: &std::path::Path, _: &[u8]| {
-            i32::from(path.file_name() == Some(std::ffi::OsStr::new(".forgeql-index")))
-        }),
+        Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_runtime_file(path))),
     )?;
-    // Remove .forgeql-index from the index in case it was tracked by a
-    // prior checkpoint commit — we never want it in user-visible commits.
-    let _ = index.remove_path(std::path::Path::new(".forgeql-index"));
+    for f in RUNTIME_FILES {
+        let _ = index.remove_path(std::path::Path::new(f));
+    }
     index.write()?;
 
     let tree_id = index.write_tree()?;
@@ -144,7 +160,7 @@ pub fn stage_and_commit_clean(repo: &Repository, message: &str) -> Result<()> {
     let parent = repo.head()?.peel_to_commit()?;
 
     let _oid = repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
-    debug!(message, "committed (clean, no .forgeql-index)");
+    debug!(message, "committed (clean, no runtime files)");
     Ok(())
 }
 
