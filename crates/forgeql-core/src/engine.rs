@@ -54,6 +54,7 @@ use crate::{
         VerifyBuildResult,
     },
     session::{Checkpoint, Session, read_last_active},
+    transforms::copy_move::{plan_copy_lines, plan_copy_lines_at, plan_move_lines},
     transforms::diff::{CompactDiffConfig, compact_diff_plan},
     transforms::{TransformPlan, plan_from_ir},
     verify,
@@ -286,6 +287,8 @@ impl ForgeQLEngine {
 
             // --- Mutations ---
             ForgeQLIR::ChangeContent { .. } => self.exec_mutation(session_id, op),
+            ForgeQLIR::CopyLines { .. } => self.exec_copy_lines(session_id, op),
+            ForgeQLIR::MoveLines { .. } => self.exec_move_lines(session_id, op),
 
             // --- Checkpoint-based transactions ---
             ForgeQLIR::BeginTransaction { name } => self.exec_begin_transaction(session_id, name),
@@ -1040,6 +1043,97 @@ impl ForgeQLEngine {
     }
 
     // ===================================================================
+    // COPY / MOVE lines
+    // ===================================================================
+
+    fn exec_copy_lines(
+        &mut self,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let (workspace, _index) = self.require_workspace_and_index(session_id)?;
+
+        let (src, start, end, dst, at) = match op {
+            ForgeQLIR::CopyLines {
+                src,
+                start,
+                end,
+                dst,
+                at,
+            } => (src.as_str(), *start, *end, dst.as_str(), *at),
+            _ => bail!("exec_copy_lines called with wrong IR variant"),
+        };
+
+        let src_abs = workspace.root().join(src);
+        let dst_abs = workspace.root().join(dst);
+
+        let plan = match at {
+            None => plan_copy_lines(src, &src_abs, start, end, &dst_abs)?,
+            Some(at_line) => plan_copy_lines_at(src, &src_abs, start, end, &dst_abs, at_line)?,
+        };
+
+        self.apply_plan(sid, plan, "copy_lines")
+    }
+
+    fn exec_move_lines(
+        &mut self,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let (workspace, _index) = self.require_workspace_and_index(session_id)?;
+
+        let (src, start, end, dst, at) = match op {
+            ForgeQLIR::MoveLines {
+                src,
+                start,
+                end,
+                dst,
+                at,
+            } => (src.as_str(), *start, *end, dst.as_str(), *at),
+            _ => bail!("exec_move_lines called with wrong IR variant"),
+        };
+
+        let src_abs = workspace.root().join(src);
+        let dst_abs = workspace.root().join(dst);
+
+        let plan = plan_move_lines(src, &src_abs, start, end, &dst_abs, at)?;
+        self.apply_plan(sid, plan, "move_lines")
+    }
+
+    /// Shared plan → diff → apply → reindex helper used by COPY and MOVE.
+    fn apply_plan(
+        &mut self,
+        sid: &str,
+        mut plan: TransformPlan,
+        op_name: &str,
+    ) -> Result<ForgeQLResult> {
+        let files_changed: Vec<PathBuf> =
+            plan.file_edits.iter().map(|fe| fe.path.clone()).collect();
+        let edit_count = plan.edit_count();
+
+        plan.merge_by_file()?;
+
+        let diff = match compact_diff_plan(&plan, &CompactDiffConfig::default()) {
+            Ok(d) if d.is_empty() => None,
+            Ok(d) => Some(d),
+            Err(_) => None,
+        };
+
+        let _ = plan.apply()?;
+
+        self.reindex_session(sid, &files_changed);
+
+        Ok(ForgeQLResult::Mutation(MutationResult {
+            op: op_name.to_string(),
+            applied: true,
+            files_changed,
+            edit_count,
+            diff,
+            suggestions: Vec::new(),
+        }))
+    }
     // Checkpoint-based transactions
     // ===================================================================
 

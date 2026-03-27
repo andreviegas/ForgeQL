@@ -267,7 +267,7 @@ fn resolve_delete(rel_path: &str, abs_path: &Path) -> Result<FileEdit> {
 ///
 /// # Errors
 /// Returns an error if lines are out of range or `end < start`.
-fn lines_to_byte_range(
+pub(crate) fn lines_to_byte_range(
     source: &[u8],
     start_line: usize,
     end_line: usize,

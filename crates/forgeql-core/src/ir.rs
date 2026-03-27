@@ -279,6 +279,38 @@ pub enum ForgeQLIR {
         clauses: Clauses,
     },
 
+    /// `COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]`
+    ///
+    /// Reads lines `start`..=`end` (1-based, inclusive) from `src` and
+    /// inserts them into `dst` before line `at` (1-based).  When `at` is
+    /// `None` the lines are appended at the end of the file.
+    ///
+    /// `src` and `dst` may be the same file (useful for reordering blocks).
+    CopyLines {
+        src: String,
+        start: usize,
+        end: usize,
+        dst: String,
+        /// Destination insertion point (1-based line number).  `None` = append.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        at: Option<usize>,
+    },
+
+    /// `MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]`
+    ///
+    /// Identical to `CopyLines` but also deletes lines `start`..=`end` from
+    /// `src` after the insertion.  For same-file moves the ordering of
+    /// operations is chosen automatically to keep line numbers consistent.
+    MoveLines {
+        src: String,
+        start: usize,
+        end: usize,
+        dst: String,
+        /// Destination insertion point (1-based line number).  `None` = append.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        at: Option<usize>,
+    },
+
     // ------------------------------------------------------------------
     // Checkpoint-based transactions
     // ------------------------------------------------------------------

@@ -1,6 +1,6 @@
 pub mod change;
+pub mod copy_move;
 pub mod diff;
-
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
