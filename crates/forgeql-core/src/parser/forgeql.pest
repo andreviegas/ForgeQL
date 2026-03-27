@@ -19,6 +19,17 @@ COMMENT    = _{ "--" ~ (!"\n" ~ ANY)* ~ "\n"? }
 string_literal = { "'" ~ inner_string ~ "'" }
 inner_string   = @{ (!"'" ~ ANY)* }
 
+/// Content value — a single-quoted literal or a heredoc block.
+/// Used wherever CHANGE accepts replacement text.
+content_value = { heredoc_literal | string_literal }
+
+/// Heredoc: <<TAG\ncontent\nTAG
+/// The tag must be ALL_CAPS (e.g. RUST, CODE, END).  The closing tag must
+/// appear on its own line with no leading or trailing whitespace.  The Rust
+/// parser validates that the opening tag equals the closing tag.
+heredoc_tag     = @{ ASCII_ALPHA_UPPER ~ (ASCII_ALPHA_UPPER | ASCII_DIGIT | "_")* }
+heredoc_body    = @{ (!( "\n" ~ heredoc_tag ~ ("\n" | EOI) ) ~ ANY)* }
+heredoc_literal = ${ "<<" ~ heredoc_tag ~ "\n" ~ heredoc_body ~ "\n" ~ heredoc_tag }
 /// Unquoted identifier — letters, digits, underscores, colons.
 /// Atomic: no implicit WHITESPACE inside the token (pest footgun guard).
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | ":")* }
@@ -132,11 +143,11 @@ change_target = {
   | change_with_content
 }
 
-change_matching     = { "MATCHING" ~ string_literal ~ "WITH" ~ string_literal }
+change_matching     = { "MATCHING" ~ string_literal ~ "WITH" ~ content_value }
 change_lines_delete = { "LINES" ~ number ~ "-" ~ number ~ "NOTHING" }
-change_lines_range  = { "LINES" ~ number ~ "-" ~ number ~ "WITH" ~ string_literal }
+change_lines_range  = { "LINES" ~ number ~ "-" ~ number ~ "WITH" ~ content_value }
 change_delete       = { "WITH" ~ "NOTHING" }
-change_with_content = { "WITH" ~ string_literal }
+change_with_content = { "WITH" ~ content_value }
 
 // -----------------------------------------------------------------------
 // Transactions

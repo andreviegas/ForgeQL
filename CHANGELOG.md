@@ -7,6 +7,26 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Heredoc `WITH <<TAG...TAG` syntax for CHANGE commands** — all three
+  `WITH` forms (`CHANGE FILE LINES n-m WITH`, `CHANGE FILE WITH`, and
+  `CHANGE FILE MATCHING ... WITH`) now accept a heredoc block in addition
+  to the existing single-quoted string literal.  The heredoc tag must be
+  all-uppercase (e.g. `RUST`, `CODE`, `END`); the closing tag must appear
+  on its own line with no leading whitespace and must match the opening tag.
+  The body may contain any characters — single quotes, double quotes,
+  embedded ForgeQL keywords — without escaping.  This eliminates the
+  single-quote quoting problem for code edits involving Rust char literals,
+  lifetimes, and C-style string escapes.
+
+### Changed
+
+- **`SHOW BRANCHES` is now session-scoped** — the `OF <source>` argument
+  has been removed.  `SHOW BRANCHES` now requires an active session and
+  returns the branches for that session source.  Passing `OF <source>` is
+  a grammar error.
+
 ## [0.30.0] - 2026-03-24
 
 ### Added

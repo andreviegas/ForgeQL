@@ -422,9 +422,10 @@ fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, Forg
         Rule::change_matching => {
             let mut m = target_inner.into_inner();
             let pattern = next_str(&mut m, "change_matching: expected pattern")?;
-            let replacement = m.next().map(|p| unquote(p.as_str())).ok_or_else(|| {
-                ForgeError::DslParse("change_matching: expected replacement".into())
-            })?;
+            let replacement = m
+                .next()
+                .ok_or_else(|| ForgeError::DslParse("change_matching: expected replacement".into()))
+                .and_then(unwrap_content)?;
             ChangeTarget::Matching {
                 pattern,
                 replacement,
@@ -467,8 +468,8 @@ fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, Forg
                 .map_err(|e| ForgeError::DslParse(format!("change_lines end: {e}")))?;
             let content = m
                 .next()
-                .map(|p| unquote(p.as_str()))
-                .ok_or_else(|| ForgeError::DslParse("change_lines: expected content".into()))?;
+                .ok_or_else(|| ForgeError::DslParse("change_lines: expected content".into()))
+                .and_then(unwrap_content)?;
             ChangeTarget::Lines {
                 start,
                 end,
@@ -480,8 +481,8 @@ fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, Forg
             let content = target_inner
                 .into_inner()
                 .next()
-                .map(|p| unquote(p.as_str()))
-                .ok_or_else(|| ForgeError::DslParse("change_with: expected content".into()))?;
+                .ok_or_else(|| ForgeError::DslParse("change_with: expected content".into()))
+                .and_then(unwrap_content)?;
             ChangeTarget::WithContent { content }
         }
         r => {
@@ -512,6 +513,54 @@ fn unquote(s: &str) -> String {
     s.trim_matches('\'').to_string()
 }
 
+/// Extract the string content from a `content_value` pair, handling both
+/// single-quoted string literals and heredoc blocks.
+fn unwrap_content(pair: pest::iterators::Pair<Rule>) -> Result<String, ForgeError> {
+    let inner = match pair.as_rule() {
+        Rule::content_value => pair
+            .into_inner()
+            .next()
+            .ok_or_else(|| ForgeError::DslParse("content_value: empty".into()))?,
+        Rule::string_literal | Rule::heredoc_literal => pair,
+        r => {
+            return Err(ForgeError::DslParse(format!(
+                "unwrap_content: unexpected {r:?}"
+            )));
+        }
+    };
+    match inner.as_rule() {
+        Rule::string_literal => Ok(unquote(inner.as_str())),
+        Rule::heredoc_literal => extract_heredoc(inner),
+        r => Err(ForgeError::DslParse(format!(
+            "unwrap_content: unexpected inner {r:?}"
+        ))),
+    }
+}
+
+/// Extract body text from a `heredoc_literal` pair.
+/// Validates that the opening and closing tags match.
+/// The body is returned without the trailing newline that precedes the closing tag.
+fn extract_heredoc(pair: pest::iterators::Pair<Rule>) -> Result<String, ForgeError> {
+    let mut inner = pair.into_inner();
+    let open_tag = inner
+        .next()
+        .ok_or_else(|| ForgeError::DslParse("heredoc: missing open tag".into()))?
+        .as_str();
+    let body = inner
+        .next()
+        .ok_or_else(|| ForgeError::DslParse("heredoc: missing body".into()))?
+        .as_str();
+    let close_tag = inner
+        .next()
+        .ok_or_else(|| ForgeError::DslParse("heredoc: missing close tag".into()))?
+        .as_str();
+    if open_tag != close_tag {
+        return Err(ForgeError::DslParse(format!(
+            "heredoc: opening tag {open_tag} does not match closing tag {close_tag}"
+        )));
+    }
+    Ok(body.to_string())
+}
 // -----------------------------------------------------------------------
 // Error enrichment
 // -----------------------------------------------------------------------
@@ -906,6 +955,103 @@ mod tests {
         }
     }
 
+    // ── Heredoc WITH tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_change_with_heredoc_basic() {
+        let q = char::from(39u8);
+        let input = format!("CHANGE FILE {q}src/lib.rs{q} WITH <<RUST\nfn hello() {{}}\nRUST");
+        let ops = parse(&input).unwrap();
+        match &ops[0] {
+            ForgeQLIR::ChangeContent { files, target, .. } => {
+                assert_eq!(files, &["src/lib.rs"]);
+                assert!(
+                    matches!(target, ChangeTarget::WithContent { content } if content == "fn hello() {}")
+                );
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_change_lines_heredoc() {
+        let q = char::from(39u8);
+        let input = format!("CHANGE FILE {q}src/lib.rs{q} LINES 5-10 WITH <<CODE\nreturn 0;\nCODE");
+        let ops = parse(&input).unwrap();
+        match &ops[0] {
+            ForgeQLIR::ChangeContent { files, target, .. } => {
+                assert_eq!(files, &["src/lib.rs"]);
+                assert!(
+                    matches!(target, ChangeTarget::Lines { start: 5, end: 10, content } if content == "return 0;")
+                );
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_change_matching_heredoc() {
+        let q = char::from(39u8);
+        let input =
+            format!("CHANGE FILE {q}x.cpp{q} MATCHING {q}old_fn{q} WITH <<END\nnew_fn\nEND");
+        let ops = parse(&input).unwrap();
+        match &ops[0] {
+            ForgeQLIR::ChangeContent { files, target, .. } => {
+                assert_eq!(files, &["x.cpp"]);
+                assert!(
+                    matches!(target, ChangeTarget::Matching { pattern, replacement }
+                    if pattern == "old_fn" && replacement == "new_fn")
+                );
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_heredoc_multiline() {
+        let q = char::from(39u8);
+        let input = format!("CHANGE FILE {q}a.rs{q} WITH <<BLOCK\nline one\nline two\nBLOCK");
+        let ops = parse(&input).unwrap();
+        match &ops[0] {
+            ForgeQLIR::ChangeContent { target, .. } => {
+                assert!(
+                    matches!(target, ChangeTarget::WithContent { content } if content == "line one\nline two")
+                );
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_heredoc_body_with_single_quotes() {
+        // The main motivation: single quotes inside heredoc body must not break parsing
+        let q = char::from(39u8);
+        let expected = format!("let c = {q}x{q};");
+        let input = format!("CHANGE FILE {q}a.rs{q} WITH <<RUST\nlet c = {q}x{q};\nRUST");
+        let ops = parse(&input).unwrap();
+        match &ops[0] {
+            ForgeQLIR::ChangeContent { target, .. } => {
+                assert!(
+                    matches!(target, ChangeTarget::WithContent { content } if content == &expected)
+                );
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_heredoc_mismatched_tags_is_error() {
+        let q = char::from(39u8);
+        let input = format!("CHANGE FILE {q}a.rs{q} WITH <<OPEN\ncontent\nCLOSE");
+        assert!(parse(&input).is_err());
+    }
+
+    #[test]
+    fn parse_heredoc_lowercase_tag_is_rejected() {
+        let q = char::from(39u8);
+        let input = format!("CHANGE FILE {q}a.rs{q} WITH <<rust\ncontent\nrust");
+        assert!(parse(&input).is_err());
+    }
     #[test]
     fn parse_change_delete() {
         let ops = parse("CHANGE FILES 'a.cpp', 'b.h' WITH NOTHING").unwrap();

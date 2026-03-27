@@ -1961,8 +1961,40 @@ fn parse_show_branches_bare() {
 }
 
 #[test]
-fn parse_show_branches_of() {
-    parser::parse("SHOW BRANCHES OF 'my-source'").expect("parse SHOW BRANCHES OF");
+fn parse_show_branches_of_is_rejected() {
+    let q = char::from(39u8);
+    let input = format!("SHOW BRANCHES OF {q}my-source{q}");
+    assert!(parser::parse(&input).is_err());
+}
+
+#[test]
+fn parse_change_lines_with_heredoc() {
+    let q = char::from(39u8);
+    let input =
+        format!("CHANGE FILE {q}src/main.rs{q} LINES 1-5 WITH <<RUST\nfn main() {{}}\nRUST");
+    parser::parse(&input).expect("parse CHANGE LINES WITH heredoc");
+}
+
+#[test]
+fn parse_change_with_content_heredoc() {
+    let q = char::from(39u8);
+    let input = format!("CHANGE FILE {q}a.rs{q} WITH <<CODE\nlet x = 1;\nCODE");
+    parser::parse(&input).expect("parse CHANGE WITH heredoc");
+}
+
+#[test]
+fn parse_change_heredoc_body_has_single_quotes() {
+    // Primary use-case: single quotes in the replacement body must not break parsing
+    let q = char::from(39u8);
+    let input = format!("CHANGE FILE {q}a.rs{q} WITH <<RUST\nlet c = {q}x{q};\nRUST");
+    parser::parse(&input).expect("parse heredoc body with single quotes");
+}
+
+#[test]
+fn parse_change_matching_with_heredoc() {
+    let q = char::from(39u8);
+    let input = format!("CHANGE FILE {q}a.cpp{q} MATCHING {q}old{q} WITH <<END\nnew\nEND");
+    parser::parse(&input).expect("parse CHANGE MATCHING WITH heredoc");
 }
 
 #[test]

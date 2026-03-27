@@ -1037,15 +1037,8 @@
       "category": "session",
       "result_type": null,
       "required_args": [],
-      "optional_args": [
-        {
-          "name": "source",
-          "syntax": "OF '{source}'",
-          "pool": "sources"
-        }
-      ],
       "clauses": [],
-      "explosion_cap": 5
+      "explosion_cap": 1
     },
     {
       "id": "disconnect",
