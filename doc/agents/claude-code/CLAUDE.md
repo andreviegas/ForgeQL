@@ -9,6 +9,12 @@ The local workspace may be empty — never fall back to local filesystem tools (
 2. Never use Bash tools (grep, find, cat, less) or Read File for source code. ForgeQL manages all code access.
 3. Never brute-force read code. Use FIND to locate symbols, then SHOW LINES for exact ranges.
 4. SHOW commands without LIMIT are blocked beyond 40 lines. If blocked, use FIND to get file + line numbers, then SHOW LINES n-m.
+5. Stack WHERE clauses aggressively before executing. Multiple WHERE clauses combine as AND — filter first, read later.
+6. Filter inside SHOW LINES — never read then grep. `SHOW LINES 1-400 OF 'file' WHERE text LIKE '%pattern%'` returns only matching lines.
+7. Always ORDER BY in GROUP BY queries. Use `ORDER BY count ASC` to surface lowest-scope candidates first. Add HAVING constraints to filter at aggregate level.
+8. Verify structural assumptions before mutating. Check includes and structure before refactoring, not after.
+9. Numbers have no symbolic usages — use text search. Use `SHOW LINES WHERE text LIKE '%value%'` or `WHERE name = 'value'` for literal search.
+10. Persist key findings in `HINTS.md`. After completing a task, append short bullet points of key codebase facts discovered (file locations, naming conventions, architectural decisions) to `HINTS.md` in the workspace root.
 
 ## Query Workflow
 
@@ -36,6 +42,10 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Call graph | `SHOW callees OF 'name'` |
 | File list | `FIND files [IN 'path/**'] [WHERE extension = '...'] ORDER BY size DESC` |
 | Context around symbol | `SHOW context OF 'name'` |
+| Read + filter lines | `SHOW LINES n-m OF 'file' WHERE text LIKE '%pattern%'` |
+| Repo top-level dirs | `FIND files` (returns depth-1 entries) |
+| Copy lines between files | `COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]` |
+| Move lines between files | `MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]` |
 
 ## Anti-Patterns
 
@@ -44,7 +54,9 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | `SHOW body OF 'func' DEPTH 99` without LIMIT | `FIND symbols WHERE name = 'func'` → `SHOW LINES n-m OF 'file'` |
 | `SHOW LINES 1-500 OF 'file'` | `SHOW outline OF 'file'` → `SHOW LINES n-m` for specific symbols |
 | `FIND symbols` (unfiltered) | `FIND symbols WHERE fql_kind = '...' WHERE name LIKE '...'` |
-| `GROUP BY` without `HAVING` | `GROUP BY file HAVING count >= N` |
+| `GROUP BY` without `HAVING` or `ORDER BY` | `GROUP BY file HAVING count >= N ORDER BY count ASC` |
+| `SHOW LINES n-m OF 'file'` then filter manually | `SHOW LINES n-m OF 'file' WHERE text LIKE '%pattern%'` |
+| `FIND usages OF 'number'` for literal occurrence | `FIND symbols WHERE name = 'value' WHERE is_magic = 'true'` or `SHOW LINES WHERE text LIKE '%value%'` |
 
 ## Efficiency
 
@@ -53,6 +65,8 @@ The local workspace may be empty — never fall back to local filesystem tools (
 - FIND defaults to 20 rows without LIMIT.
 - Format defaults to CSV (~60% fewer tokens). Use `format=JSON` only when parsing fields programmatically.
 - Every response includes `tokens_approx` — if large, narrow with WHERE, IN, EXCLUDE, or lower LIMIT.
+- For magic number exploration: `WHERE num_format = 'dec' WHERE num_value > X WHERE num_value < Y` narrows by semantic domain (timeouts, counts, ASCII ranges) — more surgical than blind GROUP BY.
+- Plan multi-read SHOW operations in advance. If you need context around multiple lines in the same file, check whether one contiguous range covers all before issuing separate queries.
 
 ## Syntax Reference
 
@@ -60,7 +74,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 ```sql
 USE source.branch [AS 'alias']
 SHOW SOURCES
-SHOW BRANCHES [OF 'source']
+SHOW BRANCHES
 DISCONNECT
 ```
 
@@ -91,8 +105,11 @@ CHANGE FILE 'path' LINES n-m WITH NOTHING
 CHANGE FILES 'glob1','glob2' MATCHING 'old' WITH 'new'
 CHANGE FILE 'path' WITH 'full_content'
 
+COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]
+MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]
+
 BEGIN TRANSACTION 'name'
-  -- CHANGE / VERIFY commands
+  -- CHANGE / COPY / MOVE / VERIFY commands
 COMMIT MESSAGE 'msg'
 VERIFY build 'step'
 ROLLBACK [TRANSACTION 'name']
@@ -427,4 +444,69 @@ COMMIT MESSAGE 'fix: handle edge case in buggyFunction'
 
 -- 7. Roll back if verification fails
 ROLLBACK
+```
+
+### Magic Number → Named Constant
+
+Find repeated magic numbers across files and replace with a named constant.
+
+```sql
+-- Step 1: Discover repo top-level structure
+FIND files
+
+-- Step 2: Find repeated magic numbers in a numeric range
+FIND symbols
+  WHERE is_magic = 'true'
+  WHERE num_format = 'dec'
+  WHERE num_value > 16 WHERE num_value < 64
+  IN 'subsys/**'
+  GROUP BY name HAVING count >= 2 HAVING count <= 7
+  ORDER BY count ASC LIMIT 10
+
+-- Step 3: List all occurrences of the candidate value
+FIND symbols WHERE is_magic = 'true' WHERE name = '30U'
+  IN 'subsys/**' LIMIT 20
+
+-- Step 4: Read context for each semantic domain (parallel)
+SHOW LINES 306-333 OF 'subsys/sd/mmc.c' WHERE text LIKE '%30U%' LIMIT 5
+
+-- Step 5: Confirm no existing constant
+FIND symbols WHERE fql_kind = 'macro' WHERE value = '30U'
+  IN 'subsys/sd/**' LIMIT 5
+
+-- Step 6: Find common header
+SHOW LINES 1-20 OF 'subsys/sd/mmc.c' WHERE text LIKE '%include%' LIMIT 8
+
+-- Step 7: Apply atomically
+BEGIN TRANSACTION 'sd-csd-struct-shift'
+  CHANGE FILE 'include/zephyr/sd/sd_spec.h'
+    LINES 777-777 WITH '#define SDMMC_CSD_STRUCT_SHIFT 30U'
+  CHANGE FILE 'subsys/sd/mmc.c' MATCHING '>> 30U' WITH '>> SDMMC_CSD_STRUCT_SHIFT'
+  CHANGE FILE 'subsys/sd/sd_ops.c' MATCHING '>> 30U' WITH '>> SDMMC_CSD_STRUCT_SHIFT'
+  VERIFY build 'test'
+COMMIT MESSAGE 'refactor: name CSD structure field bit shift constant'
+```
+
+### Copy / Move Lines
+
+Relocate a block of lines within or across files (v0.31.0+).
+
+```sql
+-- Copy to another file (append)
+COPY LINES 10-25 OF 'src/module.c' TO 'include/module.h'
+
+-- Copy and insert at a specific line
+COPY LINES 10-25 OF 'src/module.c' TO 'include/module.h' AT LINE 42
+
+-- Move (cut + paste, atomic)
+MOVE LINES 10-25 OF 'src/module.c' TO 'include/module.h' AT LINE 42
+
+-- Same-file reorder
+MOVE LINES 80-95 OF 'src/module.c' TO 'src/module.c' AT LINE 20
+
+-- Wrap in a transaction
+BEGIN TRANSACTION 'extract-helper'
+  MOVE LINES 42-58 OF 'src/module.c' TO 'include/helpers.h' AT LINE 10
+  VERIFY build 'test'
+COMMIT MESSAGE 'refactor: extract helper to shared header'
 ```

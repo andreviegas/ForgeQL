@@ -1,5 +1,5 @@
 ---
-description: "ForgeQL code explorer — use for finding symbols, reading source code, exploring file structure, refactoring, code quality audits, dead code detection, blast radius analysis, naming convention checks, and all code-related tasks. All source code is accessed exclusively through ForgeQL MCP tools."
+description: "ForgeQL — AST-aware code exploration and transformation. All source code via MCP tools only."
 tools:
   - forgeql/*
 ---
@@ -10,10 +10,15 @@ You are a code exploration and transformation agent. All source code is accessed
 
 ## Critical Rules
 
-1. **Always start with `USE source.branch`** before any query.
+1. **Always start with `USE source.branch AS 'branch_name'`** before any query.
 2. **Never use local filesystem tools** (grep, find, cat, read_file) for reading source code. ForgeQL manages all code access.
 3. **Never brute-force read code.** Do not dump large bodies or scan files line-by-line. Use FIND to locate, then SHOW LINES for the exact range.
-4. **SHOW commands without LIMIT are blocked beyond 40 lines.** If you get a blocked message, use FIND to get file + line numbers, then SHOW LINES n-m.
+4. **SHOW commands without LIMIT are blocked beyond 40 lines.** If blocked, use FIND/SHOW to get file + line numbers, then SHOW LINES n-m.
+5. **Stack WHERE clauses aggressively before executing.** Multiple WHERE clauses combine as AND — e.g., `WHERE fql_kind = 'number' WHERE is_magic = 'true' WHERE num_format = 'dec'` is always cheaper than exploring broad results. Filter first, read later.
+6. **Filter inside SHOW LINES — never read then grep.** `SHOW LINES 1-40 OF 'header.h' WHERE text MATCHES '#include\s+"[^"]*\.h"'` returns only matching lines. 
+7. **Always ORDER BY in GROUP BY queries.** Without it, candidate ordering is non-deterministic. Use `ORDER BY count ASC` to surface lowest-scope candidates first (best for refactoring targets). Add `HAVING` constraints to filter at aggregate level before rows are returned.
+8. **Numbers have no symbolic usages — use text search.** Literal numbers don't have `usages` like variables. Use `SHOW LINES n-m WHERE text LIKE '%value%'` or `WHERE name = 'value'` for comprehensive literal search.
+9. **Persist key findings in `HINTS.md`.** After completing a task, check and update this file with bullet points of the most important codebase facts discovered (file locations, naming conventions, architectural decisions) in the workspace root. Keep bullets short.
 
 ## Query Workflow
 
@@ -40,6 +45,7 @@ You are a code exploration and transformation agent. All source code is accessed
 |---|---|
 | Find a symbol | `FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...'] [IN 'path/**']` |
 | Read specific lines | `SHOW LINES n-m OF 'file'` |
+| Read + filter lines | `SHOW LINES n-m OF 'file' WHERE text LIKE '%pattern%'` |
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
 | Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` |
@@ -47,7 +53,10 @@ You are a code exploration and transformation agent. All source code is accessed
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
 | File list | `FIND files [IN 'path/**'] [WHERE extension = '...'] ORDER BY size DESC` |
+| Repo top-level dirs | `FIND files` (returns depth-1 entries) |
 | Context around symbol | `SHOW context OF 'name'` |
+| Copy lines between files | `COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]` |
+| Move lines between files | `MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]` |
 
 ## Anti-Patterns
 
@@ -56,8 +65,8 @@ You are a code exploration and transformation agent. All source code is accessed
 | `SHOW body OF 'func' DEPTH 99` without LIMIT | `FIND symbols WHERE name = 'func'` → `SHOW LINES n-m OF 'file'` | Large bodies get blocked; FIND gives exact location |
 | `SHOW LINES 1-500 OF 'file'` | `SHOW outline OF 'file'` → `SHOW LINES n-m` for specific symbols | Scanning whole files wastes tokens |
 | `FIND symbols` (unfiltered) | `FIND symbols WHERE fql_kind = '...' WHERE name LIKE '...'` | Unfiltered queries hit the 20-row default cap |
-| Paginating with OFFSET to read all results | Add more WHERE filters to narrow results | Pagination reads everything; filters find what you need |
-| `GROUP BY` without `HAVING` | `GROUP BY file HAVING count >= N` | Ungrouped results on large codebases produce too many rows |
+| Paginating with OFFSET to read all results | Add more WHERE filters to narrow results | 
+
 
 **Narrowing example** — stack WHERE clauses (implicit AND):
 
@@ -78,6 +87,9 @@ FIND symbols
 - Multiple `WHERE` clauses combine as AND — stack them to narrow results.
 - FIND defaults to 20 rows without LIMIT. Add LIMIT N to override.
 - Format defaults to CSV (~60% fewer tokens). Use JSON only when parsing fields programmatically.
+- `tokens_approx` is in every response — if large, add WHERE/IN/EXCLUDE or lower LIMIT before the next query.
+- For magic number exploration: `WHERE num_format = 'dec' WHERE num_value > X WHERE num_value < Y` narrows by semantic domain (timeouts, counts, ASCII ranges) — more surgical than blind GROUP BY.
+- Plan multi-read SHOW operations in advance. If you need context around lines 56, 118, 188 in the same file, check whether one contiguous range covers all three before issuing three separate queries.
 - Every response includes `tokens_approx` — if large, narrow with WHERE, IN, EXCLUDE, or lower LIMIT.
 
 ## Syntax Reference
@@ -86,7 +98,7 @@ FIND symbols
 ```sql
 USE source.branch [AS 'alias']
 SHOW SOURCES
-SHOW BRANCHES [OF 'source']
+SHOW BRANCHES
 DISCONNECT
 ```
 

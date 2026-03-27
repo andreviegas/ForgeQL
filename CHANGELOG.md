@@ -7,6 +7,8 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-03-27
+
 ### Added
 
 - **`COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]`** — copies a 1-based
@@ -18,6 +20,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   but also deletes `src` lines `n..=m` after the insertion.  For same-file
   moves the insert and delete are applied in reverse byte order so the result
   is correct regardless of move direction (up or down).
+
 - **Heredoc `WITH <<TAG...TAG` syntax for CHANGE commands** — all three
   `WITH` forms (`CHANGE FILE LINES n-m WITH`, `CHANGE FILE WITH`, and
   `CHANGE FILE MATCHING ... WITH`) now accept a heredoc block in addition
@@ -28,6 +31,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   embedded ForgeQL keywords — without escaping.  This eliminates the
   single-quote quoting problem for code edits involving Rust char literals,
   lifetimes, and C-style string escapes.
+
+- **`fql_kind` fast-path index lookup** — `FIND symbols WHERE fql_kind = '...'`
+  now resolves through a dedicated `fql_kind` index instead of a full symbol
+  scan, matching the performance of the existing `node_kind` power-user path.
+
+- **Sidecar `.forgeql.yaml` config outside the repo** — ForgeQL now discovers
+  and loads a `.forgeql.yaml` configuration file placed next to (but outside)
+  the repository root, enabling per-project settings without touching the
+  tracked tree.
+
+### Fixed
+
+- **`GROUP BY` count column now shows the real aggregate count** — previously
+  the last column in grouped `FIND` results always displayed `0` (it was
+  rendering the per-symbol `usages` field instead of the group count).
+  `HAVING count >= N` filtering was always correct; only the display was wrong.
+
+- **`.forgeql-session` and `.forgeql-index` excluded from all commits** —
+  ForgeQL runtime control files are now filtered out of both internal
+  checkpoint commits and user-visible `COMMIT` output, so they never
+  appear in repository history.
 
 ### Changed
 

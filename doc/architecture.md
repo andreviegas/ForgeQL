@@ -66,7 +66,7 @@ pub enum ForgeQLIR {
     RefreshSource { name },
     UseSource { source, branch, as_branch },
     ShowSources,
-    ShowBranches { source },
+    ShowBranches,
     Disconnect,
 
     // Queries — all carry Clauses
@@ -315,7 +315,6 @@ ForgeQL/
 │       ├── forgeql.agent.md      # VS Code Copilot Custom Agent (tools locked)
 │       ├── AGENTS.md             # Platform-agnostic workspace instructions
 │       ├── README.md             # Installation guide
-│       ├── references/           # On-demand reference docs for agents
 │       ├── claude-code/          # Claude Code adapter
 │       └── cursor/               # Cursor adapter
 └── tests/                        # Integration tests + fixtures

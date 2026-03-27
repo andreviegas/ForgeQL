@@ -10,6 +10,19 @@ Works with VS Code Copilot and Claude Code (both read AGENTS.md from workspace r
 All source code is accessed **exclusively** through ForgeQL MCP tools.
 The local workspace may be empty — never fall back to local filesystem tools (grep, find, cat, read_file).
 
+## HINTS.md — Persistent Session Knowledge
+
+After completing a meaningful task, append a bullet point summary of the most important codebase facts discovered to a `HINTS.md` file in the **workspace root** (next to the `.forgeql-index`). Use one line per fact:
+
+```markdown
+# ForgeQL Hints
+- Naming convention: BT controller internal constants use `BT_CTLR_*` prefix + `_CNT` suffix
+- Channel count constant for BLE data channels: define in `lll_chan.h`, value = 37
+- SD CSD register bit-shift constants belong in `include/zephyr/sd/sd_spec.h`
+```
+
+Do **not** create the file if nothing significant was discovered. Keep bullets short — one line each, factual only.
+
 ## Setup
 
 Always start a session with:

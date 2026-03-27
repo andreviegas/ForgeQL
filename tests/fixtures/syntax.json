@@ -908,6 +908,72 @@
       "explosion_cap": 10
     },
     {
+      "id": "copy_lines",
+      "syntax": "COPY LINES {start}-{end} OF '{src}' TO '{dst}'",
+      "category": "mutation",
+      "result_type": null,
+      "required_args": [
+        {
+          "name": "src",
+          "pool": "mutation_files"
+        },
+        {
+          "name": "dst",
+          "pool": "mutation_files"
+        },
+        {
+          "name": "start",
+          "pool": "line_starts"
+        },
+        {
+          "name": "end",
+          "pool": "line_ends"
+        }
+      ],
+      "optional_args": [
+        {
+          "name": "at",
+          "syntax": "AT LINE {at}",
+          "pool": "line_starts"
+        }
+      ],
+      "clauses": [],
+      "explosion_cap": 10
+    },
+    {
+      "id": "move_lines",
+      "syntax": "MOVE LINES {start}-{end} OF '{src}' TO '{dst}'",
+      "category": "mutation",
+      "result_type": null,
+      "required_args": [
+        {
+          "name": "src",
+          "pool": "mutation_files"
+        },
+        {
+          "name": "dst",
+          "pool": "mutation_files"
+        },
+        {
+          "name": "start",
+          "pool": "line_starts"
+        },
+        {
+          "name": "end",
+          "pool": "line_ends"
+        }
+      ],
+      "optional_args": [
+        {
+          "name": "at",
+          "syntax": "AT LINE {at}",
+          "pool": "line_starts"
+        }
+      ],
+      "clauses": [],
+      "explosion_cap": 10
+    },
+    {
       "id": "begin_transaction",
       "syntax": "BEGIN TRANSACTION '{name}'",
       "category": "transaction",

@@ -55,7 +55,7 @@ USE source_name.branch [AS 'alias']
 
 SHOW SOURCES
 
-SHOW BRANCHES [OF 'source']
+SHOW BRANCHES
 
 DISCONNECT
 ```
