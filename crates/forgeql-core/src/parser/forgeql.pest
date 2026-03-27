@@ -74,7 +74,7 @@ refresh_source_stmt = { "REFRESH" ~ "SOURCE" ~ string_literal }
 use_stmt = { "USE" ~ source_name ~ "." ~ identifier ~ ("AS" ~ string_literal)? }
 
 show_sources_stmt  = { "SHOW" ~ "SOURCES" }
-show_branches_stmt = { "SHOW" ~ "BRANCHES" ~ ("OF" ~ string_literal)? }
+show_branches_stmt = { "SHOW" ~ "BRANCHES" }
 
 /// DISCONNECT — ends the caller's session, deletes its worktree and branch.
 /// No arguments: session_id comes from HTTP params / CLI state.

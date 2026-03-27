@@ -166,11 +166,8 @@ pub enum ForgeQLIR {
     /// `SHOW SOURCES` — list all registered sources.
     ShowSources,
 
-    /// `SHOW BRANCHES [OF 'source']` — list branches of a source.
-    ShowBranches {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        source: Option<String>,
-    },
+    /// `SHOW BRANCHES` — list branches of the current session source.
+    ShowBranches,
 
     /// `DISCONNECT` — end the current session, delete its worktree and
     ///  per-session git branch.  `session_id` is supplied via the HTTP params

@@ -267,7 +267,7 @@ impl ForgeQLEngine {
                 as_branch,
             } => self.use_source(source, branch, as_branch.as_deref()),
             ForgeQLIR::ShowSources => self.show_sources(),
-            ForgeQLIR::ShowBranches { source } => self.show_branches(source.as_deref()),
+            ForgeQLIR::ShowBranches => self.show_branches(session_id),
             ForgeQLIR::Disconnect => self.disconnect(session_id),
 
             // --- Read-only queries ---
@@ -639,19 +639,20 @@ impl ForgeQLEngine {
     }
 
     /// `SHOW BRANCHES [OF 'source']` — list branches of a source.
-    fn show_branches(&self, source: Option<&str>) -> Result<ForgeQLResult> {
-        let name =
-            source.ok_or_else(|| anyhow::anyhow!("SHOW BRANCHES requires OF '<source_name>'"))?;
+    fn show_branches(&self, session_id: Option<&str>) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let session = self.require_session(sid)?;
+        let source_name = session.source_name.clone();
 
         let source_ref = self
             .registry
-            .get(name)
-            .ok_or_else(|| anyhow::anyhow!("source '{name}' not found"))?;
+            .get(&source_name)
+            .ok_or_else(|| anyhow::anyhow!("source {source_name} not found"))?;
         let branches = source_ref.branches().unwrap_or_default();
 
         Ok(ForgeQLResult::SourceOp(SourceOpResult {
             op: "show_branches".to_string(),
-            source_name: Some(name.to_string()),
+            source_name: Some(source_name),
             session_id: None,
             branches,
             symbols_indexed: None,
@@ -2365,10 +2366,10 @@ mod tests {
     }
 
     #[test]
-    fn engine_show_branches_requires_source() {
+    fn engine_show_branches_requires_session() {
         let tmp = tempfile::tempdir().unwrap();
         let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-        let result = engine.execute(None, &ForgeQLIR::ShowBranches { source: None });
+        let result = engine.execute(None, &ForgeQLIR::ShowBranches);
         assert!(result.is_err());
     }
 

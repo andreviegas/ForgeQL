@@ -101,10 +101,7 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
 
         Rule::show_sources_stmt => Ok(ForgeQLIR::ShowSources),
 
-        Rule::show_branches_stmt => {
-            let source = pair.into_inner().next().map(|p| unquote(p.as_str()));
-            Ok(ForgeQLIR::ShowBranches { source })
-        }
+        Rule::show_branches_stmt => Ok(ForgeQLIR::ShowBranches),
 
         Rule::show_context_stmt => {
             let mut inner = pair.into_inner();
@@ -708,21 +705,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_show_branches_with_source() {
-        let ops = parse("SHOW BRANCHES OF 'pisco'").unwrap();
-        match &ops[0] {
-            ForgeQLIR::ShowBranches { source } => assert_eq!(source.as_deref(), Some("pisco")),
-            _ => panic!("wrong variant"),
-        }
+    fn parse_show_branches_with_source_is_rejected() {
+        let q = char::from(39u8);
+        let input = format!("SHOW BRANCHES OF {q}pisco{q}");
+        assert!(parse(&input).is_err());
     }
 
     #[test]
-    fn parse_show_branches_no_source() {
+    fn parse_show_branches() {
         let ops = parse("SHOW BRANCHES").unwrap();
-        match &ops[0] {
-            ForgeQLIR::ShowBranches { source } => assert!(source.is_none()),
-            _ => panic!("wrong variant"),
-        }
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(ops[0], ForgeQLIR::ShowBranches));
     }
 
     #[test]
