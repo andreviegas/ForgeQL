@@ -303,8 +303,15 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
     // Header.
     let tot = query.total.to_string();
     row(&mut out, &[&q(&query.op), &tot]);
-    // Schema hint — use metric name when a numeric WHERE/ORDER BY was used.
-    let metric_label = query.metric_hint.as_deref().unwrap_or("usages");
+    // Schema hint — when GROUP BY is active with no enrichment field, display
+    // "count"; when a numeric WHERE/ORDER BY was used, display that field name;
+    // otherwise fall back to "usages".
+    let is_grouped = query.results.iter().any(|r| r.count.is_some());
+    let metric_label = if is_grouped && query.metric_hint.is_none() {
+        "count"
+    } else {
+        query.metric_hint.as_deref().unwrap_or("usages")
+    };
     let schema = format!("[name,path,line,{metric_label}]");
     row(&mut out, &[&q("fql_kind"), &q(&schema)]);
     // Group by fql_kind.
@@ -409,7 +416,7 @@ fn group_symbols_by_kind(
             .map_or(String::new(), |p| p.to_string_lossy().into_owned());
         let line = r.line.unwrap_or(0);
         let metric = hint.map_or_else(
-            || r.usages_count.or(r.count).unwrap_or(0),
+            || r.count.or(r.usages_count).unwrap_or(0),
             |field| {
                 r.fields
                     .get(field)
