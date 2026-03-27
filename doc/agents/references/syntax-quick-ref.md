@@ -42,6 +42,18 @@ CHANGE FILES 'glob1','glob2' MATCHING 'old' WITH 'new'
 CHANGE FILE 'path' WITH 'full_content'
 ```
 
+### COPY / MOVE (relocate lines)
+
+    COPY LINES n-m OF 'src' TO 'dst'
+    COPY LINES n-m OF 'src' TO 'dst' AT LINE k
+
+    MOVE LINES n-m OF 'src' TO 'dst'
+    MOVE LINES n-m OF 'src' TO 'dst' AT LINE k
+
+Copies or moves lines n..=m (1-based, inclusive) from `src` into `dst`.
+`AT LINE k` inserts before line k; omitted = append at end.
+**COPY** does not modify `src`; **MOVE** deletes the source lines atomically.
+
 ### Transactions
 ```sql
 BEGIN TRANSACTION 'name'

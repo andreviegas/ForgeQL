@@ -40,10 +40,12 @@ What do you need?
 │  → FIND files [IN 'path/**'] [WHERE extension = '...']
 │
 └─ Modify code?
-   → BEGIN TRANSACTION 'name'
-     CHANGE FILE ... LINES n-m WITH '...'
-     VERIFY build 'step'
-   COMMIT MESSAGE '...'
+   ├─ Replace text or line range?
+   │  → BEGIN TRANSACTION; CHANGE FILE...; VERIFY; COMMIT MESSAGE
+   ├─ Copy lines to another location?
+   │  → COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]
+   └─ Move lines to another location?
+      → MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]
 ```
 
 ---

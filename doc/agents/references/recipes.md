@@ -225,6 +225,26 @@ ROLLBACK
 
 ---
 
+## Copy / Move Lines
+
+Relocate a block of lines within or across files.
+
+    COPY LINES n-m OF 'src/from.cpp' TO 'src/to.cpp'
+    COPY LINES n-m OF 'src/from.cpp' TO 'src/to.cpp' AT LINE k
+
+    MOVE LINES n-m OF 'src/from.cpp' TO 'src/to.cpp'
+    MOVE LINES n-m OF 'src/from.cpp' TO 'src/to.cpp' AT LINE k
+
+Example — extract helper function into shared header:
+
+    BEGIN TRANSACTION 'extract-helper'
+      MOVE LINES 42-58 OF 'src/module.cpp' TO 'include/helpers.h'
+      VERIFY build 'test'
+    COMMIT MESSAGE 'refactor: extract helper to shared header'
+
+---
+
+## Version/Config Update
 ## Version/Config Update
 
 Multi-file coordinated change.
