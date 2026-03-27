@@ -303,11 +303,11 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
     // Header.
     let tot = query.total.to_string();
     row(&mut out, &[&q(&query.op), &tot]);
-    // Schema hint — when GROUP BY is active with no enrichment field, display
-    // "count"; when a numeric WHERE/ORDER BY was used, display that field name;
-    // otherwise fall back to "usages".
+    // Schema hint — GROUP BY always displays the aggregated count (per-symbol
+    // fields are meaningless for a group representative).  Without GROUP BY,
+    // use the enrichment field name from metric_hint, else "usages".
     let is_grouped = query.results.iter().any(|r| r.count.is_some());
-    let metric_label = if is_grouped && query.metric_hint.is_none() {
+    let metric_label = if is_grouped {
         "count"
     } else {
         query.metric_hint.as_deref().unwrap_or("usages")
@@ -415,15 +415,20 @@ fn group_symbols_by_kind(
             .as_ref()
             .map_or(String::new(), |p| p.to_string_lossy().into_owned());
         let line = r.line.unwrap_or(0);
-        let metric = hint.map_or_else(
-            || r.count.or(r.usages_count).unwrap_or(0),
-            |field| {
-                r.fields
-                    .get(field)
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .unwrap_or(0)
-            },
-        );
+        // GROUP BY → always show the aggregated count (per-symbol fields
+        // are meaningless for a representative row).
+        // No GROUP BY → enrichment field if metric_hint is set, else usages.
+        let metric = r.count.unwrap_or_else(|| {
+            hint.map_or_else(
+                || r.usages_count.unwrap_or(0),
+                |field| {
+                    r.fields
+                        .get(field)
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(0)
+                },
+            )
+        });
         if let Some(g) = groups.iter_mut().find(|(k, _)| k == kind) {
             g.1.push((compact_name(&r.name).into_owned(), path, line, metric));
         } else {
