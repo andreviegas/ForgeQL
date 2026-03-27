@@ -70,6 +70,8 @@ statement = {
   | show_sources_stmt
   | show_branches_stmt
   | change_stmt
+  | copy_stmt
+  | move_stmt
   | find_stmt
 }
 
@@ -148,6 +150,24 @@ change_lines_delete = { "LINES" ~ number ~ "-" ~ number ~ "NOTHING" }
 change_lines_range  = { "LINES" ~ number ~ "-" ~ number ~ "WITH" ~ content_value }
 change_delete       = { "WITH" ~ "NOTHING" }
 change_with_content = { "WITH" ~ content_value }
+
+/// `COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]`
+/// Copies lines n..=m (1-based, inclusive) from src into dst.
+/// When AT LINE k is omitted the lines are appended at end of file.
+copy_stmt = {
+    "COPY" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ string_literal
+    ~ "TO" ~ string_literal
+    ~ ("AT" ~ "LINE" ~ number)?
+}
+
+/// `MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]`
+/// Like COPY but also deletes lines n..=m from src after insertion.
+/// Same-file moves are handled atomically (ordering preserved).
+move_stmt = {
+    "MOVE" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ string_literal
+    ~ "TO" ~ string_literal
+    ~ ("AT" ~ "LINE" ~ number)?
+}
 
 // -----------------------------------------------------------------------
 // Transactions
