@@ -2057,6 +2057,36 @@ fn parse_change_with_nothing() {
 }
 
 #[test]
+fn parse_copy_lines_append() {
+    parser::parse("COPY LINES 3-7 OF 'src/lib.rs' TO 'dst/lib.rs'")
+        .expect("parse COPY LINES (append)");
+}
+
+#[test]
+fn parse_copy_lines_at() {
+    parser::parse("COPY LINES 3-7 OF 'src/lib.rs' TO 'dst/lib.rs' AT LINE 10")
+        .expect("parse COPY LINES AT LINE");
+}
+
+#[test]
+fn parse_move_lines_append() {
+    parser::parse("MOVE LINES 1-5 OF 'src/lib.rs' TO 'dst/lib.rs'")
+        .expect("parse MOVE LINES (append)");
+}
+
+#[test]
+fn parse_move_lines_at() {
+    parser::parse("MOVE LINES 1-5 OF 'src/lib.rs' TO 'dst/lib.rs' AT LINE 20")
+        .expect("parse MOVE LINES AT LINE");
+}
+
+#[test]
+fn parse_copy_same_file_move() {
+    // COPY within the same file (block reorder use-case)
+    parser::parse("COPY LINES 10-20 OF 'main.rs' TO 'main.rs' AT LINE 5")
+        .expect("parse COPY same-file");
+}
+#[test]
 fn parse_begin_transaction() {
     parser::parse("BEGIN TRANSACTION 'my-txn'").expect("parse BEGIN TRANSACTION");
 }

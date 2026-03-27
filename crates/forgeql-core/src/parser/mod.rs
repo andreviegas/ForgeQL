@@ -173,6 +173,9 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
 
         Rule::change_stmt => parse_change(pair),
 
+        Rule::copy_stmt => parse_copy_or_move(pair, false),
+        Rule::move_stmt => parse_copy_or_move(pair, true),
+
         Rule::find_stmt => parse_find(pair),
 
         // `statement` is a grammar wrapper — unwrap one level.
@@ -502,6 +505,61 @@ fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, Forg
     })
 }
 
+/// Parse `COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]` and
+/// `MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]`.
+///
+/// `is_move` distinguishes the two variants.
+fn parse_copy_or_move(
+    pair: pest::iterators::Pair<'_, Rule>,
+    is_move: bool,
+) -> Result<ForgeQLIR, ForgeError> {
+    let mut inner = pair.into_inner();
+
+    let start: usize = inner
+        .next()
+        .ok_or_else(|| ForgeError::DslParse("copy/move: expected start line".into()))?
+        .as_str()
+        .parse()
+        .map_err(|e| ForgeError::DslParse(format!("copy/move start: {e}")))?;
+
+    let end: usize = inner
+        .next()
+        .ok_or_else(|| ForgeError::DslParse("copy/move: expected end line".into()))?
+        .as_str()
+        .parse()
+        .map_err(|e| ForgeError::DslParse(format!("copy/move end: {e}")))?;
+
+    let src = next_str(&mut inner, "copy/move: expected source path")?;
+    let dst = next_str(&mut inner, "copy/move: expected destination path")?;
+
+    // Optional `AT LINE k`
+    let at: Option<usize> = inner
+        .next()
+        .map(|p| {
+            p.as_str()
+                .parse::<usize>()
+                .map_err(|e| ForgeError::DslParse(format!("copy/move AT LINE: {e}")))
+        })
+        .transpose()?;
+
+    if is_move {
+        Ok(ForgeQLIR::MoveLines {
+            src,
+            start,
+            end,
+            dst,
+            at,
+        })
+    } else {
+        Ok(ForgeQLIR::CopyLines {
+            src,
+            start,
+            end,
+            dst,
+            at,
+        })
+    }
+}
 fn parse_transaction(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
     let mut inner = pair.into_inner();
     let name = next_str(&mut inner, "transaction: expected name")?;
