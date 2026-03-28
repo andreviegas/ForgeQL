@@ -66,9 +66,20 @@ fn count_self_calls(
     if config.is_call_expression_kind(node.kind()) {
         // In tree-sitter, call_expression typically has a `function` field
         // pointing to the callee.  We extract its text and compare.
-        if let Some(callee) = node.child_by_field_name("function") {
-            let callee_name = extract_callee_name(callee, source, config);
-            if callee_name.as_deref() == Some(func_name) {
+        if let Some(callee) = node.child_by_field_name("function")
+            && let Some((callee_text, is_qualified)) = extract_callee_name(callee, source, config)
+        {
+            let is_self_call = if is_qualified {
+                // Qualified call: `Foo::bar()` — must match the full
+                // function name exactly (covers `A::B::C::method`
+                // at any nesting depth).
+                callee_text == func_name
+            } else {
+                // Unqualified call: `bar()` — matches if func_name is
+                // bare `bar` or qualified `Foo::bar` (C++ out-of-line).
+                func_name == callee_text || func_name.ends_with(&format!("::{callee_text}"))
+            };
+            if is_self_call {
                 *count += 1;
             }
         }
@@ -81,35 +92,37 @@ fn count_self_calls(
     }
 }
 
-/// Extract the simple name from a call expression's function/callee node.
+/// Extract the callee name from a call expression's function node.
 ///
-/// Handles:
-/// - Simple identifiers: `foo()`  → `"foo"`
-/// - Qualified names: `ns::foo()` → `"foo"` (last identifier)
+/// Returns `(text, is_qualified)` where:
+/// - Simple identifiers: `foo()`            → `("foo", false)`
+/// - Qualified names:    `A::B::method()`   → `("A::B::method", true)`
 ///
 /// Does NOT match method calls (`obj.method()`) as self-calls.
 fn extract_callee_name(
     callee: tree_sitter::Node<'_>,
     source: &[u8],
     config: &LanguageConfig,
-) -> Option<String> {
+) -> Option<(String, bool)> {
     // Direct identifier: `foo()`
     if config.is_identifier_kind(callee.kind()) {
         let text = node_text(source, callee);
         if !text.is_empty() {
-            return Some(text);
+            return Some((text, false));
         }
     }
 
-    // Qualified identifier: `ns::foo()` — extract the rightmost identifier.
-    // In tree-sitter-cpp this is `qualified_identifier` with a `name` field.
-    if let Some(name_node) = callee
+    // Qualified identifier: `ns::foo()` or `A::B::C::method()`.
+    // Return the full qualified text so the caller can compare against
+    // the (possibly qualified) function name.
+    if callee
         .child_by_field_name("name")
         .filter(|n| config.is_identifier_kind(n.kind()))
+        .is_some()
     {
-        let text = node_text(source, name_node);
-        if !text.is_empty() {
-            return Some(text);
+        let full_text = node_text(source, callee);
+        if !full_text.is_empty() {
+            return Some((full_text, true));
         }
     }
 

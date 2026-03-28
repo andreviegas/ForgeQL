@@ -56,6 +56,12 @@ impl LanguageSupport for RustLanguage {
     }
 
     fn extract_name(&self, node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+        // scoped_identifier nodes (e.g. `Vec::new` in a call) are references,
+        // not definitions — skip them so they don't pollute the name index.
+        if node.kind() == "scoped_identifier" {
+            return None;
+        }
+
         // Most Rust definition nodes have a `name` field.
         if let Some(name_node) = node.child_by_field_name("name") {
             let text = node_text(source, name_node);

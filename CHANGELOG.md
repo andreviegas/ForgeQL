@@ -7,6 +7,38 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.31.1] - 2026-03-28
+
+### Fixed
+
+- **Symbol resolution picks wrong definition for ambiguous names** —
+  `resolve_symbol` now prefers rows with a non-empty `fql_kind` (actual
+  definitions) over reference-only index rows such as `scoped_identifier`
+  nodes.  Previously, `SHOW body OF 'new'` could resolve to an unrelated
+  function that merely *called* `new`, because the last-write-wins
+  tie-breaker did not distinguish definitions from references.  All five
+  symbol-targeted SHOW commands (`body`, `callees`, `context`, `signature`,
+  `members`) are affected.
+
+- **Recursion enrichment false positives on qualified calls** —
+  `extract_callee_name` now returns the full qualified callee text (e.g.
+  `Vec::new`) instead of stripping it to the bare name (`new`).
+  `count_self_calls` compares qualified calls exactly and unqualified calls
+  with an `ends_with` fallback for C++ out-of-line definitions.  This
+  eliminates false `is_recursive = true` on every Rust `new()`, `default()`,
+  `from()`, etc. that calls another type's constructor.
+
+- **Recursion enrichment false negatives on C++ qualified self-calls** —
+  `void Foo::bar() { Foo::bar(); }` is now correctly detected as recursive.
+  Previously the qualified callee `Foo::bar` was stripped to `bar` and
+  compared against the full name `Foo::bar`, always producing a mismatch.
+
+- **Rust `scoped_identifier` nodes polluting the name index** —
+  `RustLanguage::extract_name` now skips `scoped_identifier` nodes (e.g.
+  `Vec::new` in a call expression), matching the existing C++ guard for
+  `qualified_identifier`.  This prevents hundreds of reference-only rows
+  from entering the name index and reduces the ambiguity that triggered the
+  resolution bug above.
 ## [0.31.0] - 2026-03-27
 
 ### Added

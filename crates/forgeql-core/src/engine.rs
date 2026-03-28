@@ -1865,8 +1865,18 @@ fn resolve_symbol<'a>(
         bail!("symbol '{name}' not found after applying WHERE/IN/EXCLUDE filters");
     }
 
+    // Prefer actual definitions (non-empty fql_kind) over reference-only
+    // index rows such as scoped_identifier / qualified_identifier nodes
+    // that happen to share the bare name.
+    let defs: Vec<&crate::ast::index::IndexRow> = filtered
+        .iter()
+        .copied()
+        .filter(|row| !row.fql_kind.is_empty())
+        .collect();
+    let best = if defs.is_empty() { &filtered } else { &defs };
+
     // Check cross-language ambiguity.
-    let mut languages: Vec<&str> = filtered
+    let mut languages: Vec<&str> = best
         .iter()
         .filter_map(|r| {
             if r.language.is_empty() {
@@ -1888,9 +1898,9 @@ fn resolve_symbol<'a>(
     }
 
     // Last match — preserves v1 last-write-wins within a single language.
-    // SAFETY: `filtered` is guaranteed non-empty by the bail above.
+    // SAFETY: `best` is guaranteed non-empty by the bail above.
     #[allow(clippy::expect_used)]
-    Ok(filtered.last().expect("filtered is non-empty"))
+    Ok(best.last().expect("filtered is non-empty"))
 }
 
 /// Like [`resolve_symbol`] but follows the `body_symbol` redirect.
