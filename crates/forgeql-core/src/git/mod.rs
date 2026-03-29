@@ -218,14 +218,18 @@ pub fn squash_commit_on_branch(
     // 3. Explicit parent — not derived from HEAD.
     let parent = repo.find_commit(git2::Oid::from_str(parent_oid)?)?;
 
-    // 4. Update the branch ref directly by name (not through HEAD).
-    let oid = repo.commit(
-        Some(&branch_ref_name),
-        &sig,
-        &sig,
-        message,
-        &tree,
-        &[&parent],
+    // 4. Create the commit *without* updating any ref — this avoids
+    //    libgit2's compare-and-swap check which would fail because the
+    //    branch tip (a checkpoint commit) differs from `parent_oid`
+    //    (the pre-transaction base).
+    let oid = repo.commit(None, &sig, &sig, message, &tree, &[&parent])?;
+
+    // 5. Force-update the branch ref to point to the new squash commit.
+    let _ref = repo.reference(
+        &branch_ref_name,
+        oid,
+        true, // force
+        &format!("ForgeQL squash: {message}"),
     )?;
 
     debug!(%message, oid = %oid, branch = %branch_ref_name, "squash-committed on branch");

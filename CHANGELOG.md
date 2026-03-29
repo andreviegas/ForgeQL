@@ -30,6 +30,14 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   range spanning the entire file, which was then elided to the first and
   last lines.
 
+- **COMMIT fails with "current tip is not the first parent"** —
+  `squash_commit_on_branch()` now creates the commit without a ref update
+  (`repo.commit(None, …)`) and then force-updates the branch ref via
+  `repo.reference()`.  Previously it passed the branch ref name to
+  `repo.commit(Some(ref))`, which triggers libgit2's compare-and-swap
+  check — since the branch tip had advanced past `last_clean_oid` during
+  `BEGIN TRANSACTION`'s checkpoint commit, the CAS always failed.
+
 ## [0.31.1] - 2026-03-28
 
 ### Fixed
