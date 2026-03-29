@@ -1190,10 +1190,11 @@ impl ForgeQLEngine {
     /// `COMMIT MESSAGE 'msg'` — squash checkpoint commits and create a clean
     /// user-facing git commit.
     ///
-    /// If `BEGIN TRANSACTION` was called since the last `COMMIT`, a
-    /// `git reset --soft` back to `last_clean_oid` squashes all intermediate
-    /// checkpoint commits into one.  The resulting commit never contains
-    /// `.forgeql-index`.
+    /// If `BEGIN TRANSACTION` was called since the last `COMMIT`, the
+    /// checkpoint commits are squashed: a new commit is created with
+    /// parent = `last_clean_oid` and the current working-tree state,
+    /// updating the session branch ref directly by name.  This avoids
+    /// `git reset --soft` which can detach HEAD in linked worktrees.
     ///
     /// # Errors
     /// Returns `Err` if the session is missing, git open or commit fails.
@@ -1207,18 +1208,15 @@ impl ForgeQLEngine {
 
         let repo = git::open(&worktree_path)?;
 
-        // If there are checkpoint commits, squash them by soft-resetting
-        // to the last clean base before committing.
-        if let Some(ref clean_oid) = last_clean {
-            let head = git::head_oid(&repo)?;
-            if head != *clean_oid {
-                git::soft_reset(&repo, clean_oid)?;
-            }
-        }
-
-        // Create a clean commit (excludes .forgeql-index).
-        git::stage_and_commit_clean(&repo, message)?;
-        let commit_hash = git::head_oid(&repo)?;
+        let commit_hash = if let Some(ref clean_oid) = last_clean {
+            // Squash checkpoint commits: create a single commit whose parent
+            // is the pre-transaction base, updating the branch ref by name.
+            git::squash_commit_on_branch(&repo, clean_oid, message)?
+        } else {
+            // No transaction context — simple commit on HEAD.
+            git::stage_and_commit_clean(&repo, message)?;
+            git::head_oid(&repo)?
+        };
 
         // Update the clean base for the next commit cycle.
         if let Some(session) = self.sessions.get_mut(sid) {

@@ -164,6 +164,74 @@ pub fn stage_and_commit_clean(repo: &Repository, message: &str) -> Result<()> {
     Ok(())
 }
 
+/// Stage working-tree changes and create a squashed commit whose parent is
+/// `parent_oid`, updating the branch that HEAD points to **by name**.
+///
+/// Unlike [`stage_and_commit_clean`], this function never calls
+/// `git reset --soft` and never relies on HEAD-chasing through `Some("HEAD")`.
+/// Instead it:
+///
+/// 1. Resolves HEAD → branch ref name (e.g. `refs/heads/forgeql/s123`)
+///    *before* any destructive operation.
+/// 2. Stages all working-tree changes (excluding runtime files).
+/// 3. Creates the commit with an explicit parent OID.
+/// 4. Updates the branch ref **directly by name**.
+///
+/// This is safe in linked worktrees where `git reset --soft` can detach
+/// HEAD and leave the branch ref stale.
+///
+/// Returns the hex SHA of the new commit.
+///
+/// # Errors
+/// Returns `Err` if HEAD is detached, staging fails, or the commit fails.
+pub fn squash_commit_on_branch(
+    repo: &Repository,
+    parent_oid: &str,
+    message: &str,
+) -> Result<String> {
+    // 1. Capture the branch ref name HEAD points to.
+    let head_ref = repo.find_reference("HEAD")?;
+    let branch_ref_name = head_ref
+        .symbolic_target()
+        .ok_or_else(|| anyhow::anyhow!("HEAD is detached — cannot determine target branch"))?
+        .to_string();
+
+    // 2. Stage working-tree changes (excluding runtime files).
+    let mut index = repo.index()?;
+    index.add_all(
+        std::iter::once("*"),
+        git2::IndexAddOption::DEFAULT,
+        Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_runtime_file(path))),
+    )?;
+    for f in RUNTIME_FILES {
+        let _ = index.remove_path(std::path::Path::new(f));
+    }
+    index.write()?;
+
+    let tree_id = index.write_tree()?;
+    let tree = repo.find_tree(tree_id)?;
+
+    let sig = repo
+        .signature()
+        .or_else(|_| git2::Signature::now("ForgeQL", "forgeql@localhost"))?;
+
+    // 3. Explicit parent — not derived from HEAD.
+    let parent = repo.find_commit(git2::Oid::from_str(parent_oid)?)?;
+
+    // 4. Update the branch ref directly by name (not through HEAD).
+    let oid = repo.commit(
+        Some(&branch_ref_name),
+        &sig,
+        &sig,
+        message,
+        &tree,
+        &[&parent],
+    )?;
+
+    debug!(%message, oid = %oid, branch = %branch_ref_name, "squash-committed on branch");
+    Ok(oid.to_string())
+}
+
 /// Stage only `touched` files and commit with `message` on the current HEAD branch.
 ///
 /// `worktree_root` is the working directory of the git checkout.  All paths in

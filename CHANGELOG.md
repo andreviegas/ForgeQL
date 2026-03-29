@@ -7,6 +7,29 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.31.2] - 2026-03-29
+
+### Fixed
+
+- **COMMIT does not advance branch ref in linked worktrees** —
+  `exec_commit` now uses a new `squash_commit_on_branch()` helper that
+  resolves `HEAD → refs/heads/<branch>` before committing and updates
+  the branch ref by name with an explicit parent OID.  Previously, the
+  squash path called `soft_reset` followed by `repo.commit(Some("HEAD"))`;
+  in linked worktrees (libgit2 1.8.1) `soft_reset` can detach HEAD,
+  causing the commit to update a detached pointer instead of the branch
+  ref — leaving the commit as a dangling object invisible to `git log`.
+
+- **Compact diff shows file header/tail instead of actual edited region** —
+  `compact_diff_plan` now uses a new `edit_based_change_ranges()` function
+  that converts byte-range edits directly to line-level change ranges via
+  binary search on a line-start-offsets table — O(edits × log(lines)).
+  Previously, the compact diff path relied on an O(m×n) LCS algorithm
+  with a 4 M-cell cap; any file over ~2 000 lines exceeded the cap,
+  causing LCS to return no matches and the diff to collapse into a single
+  range spanning the entire file, which was then elided to the first and
+  last lines.
+
 ## [0.31.1] - 2026-03-28
 
 ### Fixed
