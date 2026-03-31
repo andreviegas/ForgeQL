@@ -9,6 +9,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.31.2] - 2026-03-29
 
+### Added
+
+- **README video links** — two YouTube videos added near the top of README.md:
+  an overview video and a live demo of an AI agent querying the VLC source
+  code (~600 K LOC).
+
 ### Fixed
 
 - **COMMIT does not advance branch ref in linked worktrees** —

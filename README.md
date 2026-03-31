@@ -4,6 +4,18 @@
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
+## Videos
+
+**What is ForgeQL?** — Overview and motivation:
+
+[![What is ForgeQL?](https://img.youtube.com/vi/EF4XZVAQsPQ/0.jpg)](https://youtu.be/EF4XZVAQsPQ)
+
+**Live demo** — An AI agent using ForgeQL to query the VLC video player source code (~600K LOC):
+
+[![ForgeQL demo with VLC source code](https://img.youtube.com/vi/UPc7ojOOoNs/0.jpg)](https://youtu.be/UPc7ojOOoNs)
+
+---
+
 ## What Is ForgeQL?
 
 ForgeQL is a **declarative, code-aware transformation tool**. You describe *what* you want to find or change in a codebase and ForgeQL executes it precisely — leaving the strategy and file selection to the agent or developer driving it.
