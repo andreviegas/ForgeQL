@@ -543,6 +543,9 @@ impl fmt::Display for QueryResult {
             if let Some(ref path) = row.path {
                 write!(formatter, " | {}", path.display())?;
             }
+            if let Some(line) = row.line {
+                write!(formatter, ":{line}")?;
+            }
             if let Some(usages) = row.usages_count {
                 write!(formatter, " | usages: {usages}")?;
             }
@@ -1188,7 +1191,7 @@ mod tests {
                 fql_kind: None,
                 language: None,
                 path: Some(PathBuf::from("src/signal.cpp")),
-                line: None,
+                line: Some(42),
                 usages_count: Some(3),
                 fields: HashMap::new(),
                 count: None,
@@ -1199,7 +1202,7 @@ mod tests {
         let output = format!("{result}");
         assert!(output.contains("setPeakLevel"));
         assert!(output.contains("Function"));
-        assert!(output.contains("src/signal.cpp"));
+        assert!(output.contains("src/signal.cpp:42"));
         assert!(output.contains("usages: 3"));
     }
 
