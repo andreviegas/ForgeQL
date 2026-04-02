@@ -14,9 +14,10 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-forgeql-core      = { workspace = true }
-forgeql-lang-cpp  = { workspace = true }
-forgeql-lang-rust = { workspace = true }
+forgeql-core        = { workspace = true }
+forgeql-lang-cpp    = { workspace = true }
+forgeql-lang-python = { workspace = true }
+forgeql-lang-rust   = { workspace = true }
 
 # async (MCP transport)
 tokio = { workspace = true }

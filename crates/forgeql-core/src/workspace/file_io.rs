@@ -26,6 +26,9 @@ pub fn write_atomic(target: &Path, contents: &[u8]) -> Result<()> {
         .parent()
         .ok_or_else(|| ForgeError::io(target, std::io::Error::other("no parent directory")))?;
 
+    // Ensure parent directories exist for new-file creation.
+    std::fs::create_dir_all(dir).map_err(|e| ForgeError::io(dir, e))?;
+
     // Create tempfile IN THE SAME DIRECTORY (same filesystem = atomic rename).
     let mut tmp = tempfile::Builder::new()
         .tempfile_in(dir)

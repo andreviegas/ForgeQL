@@ -31,6 +31,7 @@ use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
 use forgeql_core::result::{ForgeQLResult, SourceOpResult};
 use forgeql_lang_cpp::CppLanguage;
+use forgeql_lang_python::PythonLanguage;
 use forgeql_lang_rust::RustLanguage;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
@@ -155,6 +156,7 @@ async fn main() -> Result<()> {
 
     let lang_registry = Arc::new(LanguageRegistry::new(vec![
         Arc::new(CppLanguage),
+        Arc::new(PythonLanguage),
         Arc::new(RustLanguage),
     ]));
 

@@ -1,0 +1,146 @@
+{
+  "language": {
+    "name": "python",
+    "extensions": ["py", "pyi"],
+    "tree_sitter_grammar": "tree-sitter-python"
+  },
+
+  "syntax": {
+    "root_node": "module",
+    "scope_separator": ".",
+    "block": "block",
+    "identifier": "identifier",
+    "parameter_list": "parameters",
+    "declarator_field": "",
+    "function_declarator": "",
+    "init_declarator": "",
+    "comment": "comment",
+    "skip_node_kinds": [],
+    "usage_node_kinds": ["identifier"],
+    "statement_boundary_kinds": [
+      "expression_statement", "return_statement",
+      "if_statement", "while_statement", "for_statement",
+      "break_statement", "continue_statement", "pass_statement",
+      "raise_statement", "assert_statement",
+      "import_statement", "import_from_statement"
+    ]
+  },
+
+  "definitions": {
+    "function_kinds": ["function_definition"],
+    "type_kinds": ["class_definition"],
+    "definition_kinds": [
+      "function_definition", "class_definition",
+      "decorated_definition"
+    ],
+    "declaration_kinds": ["assignment", "augmented_assignment"],
+    "field_kinds": [],
+    "parameter_kind": "parameter",
+    "member_body_kind": "block",
+    "member_kinds": ["function_definition", "assignment"]
+  },
+
+  "control_flow": {
+    "kinds": [
+      "if_statement", "while_statement",
+      "for_statement", "match_statement"
+    ],
+    "switch_kinds": ["match_statement"],
+    "for_style_map": [
+      ["for_statement", "range"]
+    ],
+    "condition_clause": ""
+  },
+
+  "statements": {
+    "return": "return_statement",
+    "break": "break_statement",
+    "goto": "",
+    "throw": "raise_statement",
+    "case": "case_clause",
+    "assignment_kinds": ["assignment"],
+    "update_kinds": ["augmented_assignment"]
+  },
+
+  "expressions": {
+    "call": "call",
+    "binary": "binary_operator",
+    "logical": "boolean_operator",
+    "unary": "unary_operator",
+    "field_access": "attribute",
+    "subscript": "subscript",
+    "parenthesized": "parenthesized_expression",
+    "comma": "",
+    "address_of": "",
+    "address_of_operator": "",
+    "shift_kinds": ["binary_operator"],
+    "compound_assignment": "augmented_assignment"
+  },
+
+  "types": {
+    "type_descriptor": "type",
+    "template_argument_list": "",
+    "template_declaration": "",
+    "array_declarator": "",
+    "enumerator": "",
+    "template_misparse_kinds": [],
+    "decorator": "decorator"
+  },
+
+  "literals": {
+    "number_kinds": ["integer", "float"],
+    "string_kinds": ["string", "concatenated_string"],
+    "char_kind": "",
+    "null_values": ["None"],
+    "boolean_values": ["True", "False"],
+    "digit_separator": "_",
+    "number_suffixes": []
+  },
+
+  "modifiers": {
+    "map": [
+      ["async", "is_async"]
+    ],
+    "node_kinds": [],
+    "static_storage_keywords": []
+  },
+
+  "visibility": {
+    "keywords": [],
+    "default_by_type": [
+      ["class_definition", "public"],
+      ["function_definition", "public"]
+    ]
+  },
+
+  "casts": [],
+
+  "comments": {
+    "prefixes": [
+      ["#", "line"]
+    ]
+  },
+
+  "capabilities": {
+    "has_goto": false,
+    "has_increment_decrement": false,
+    "has_implicit_truthiness": true
+  },
+
+  "kind_map": {
+    "function_definition": "function",
+    "class_definition": "class",
+    "decorated_definition": "function",
+    "assignment": "variable",
+    "augmented_assignment": "variable",
+    "import_statement": "import",
+    "import_from_statement": "import",
+    "comment": "comment",
+    "integer": "number",
+    "float": "number",
+    "if_statement": "if",
+    "while_statement": "while",
+    "for_statement": "for",
+    "match_statement": "switch"
+  }
+}

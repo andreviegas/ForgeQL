@@ -1386,6 +1386,120 @@ fn rust_node_text(source: &[u8], node: tree_sitter::Node<'_>) -> String {
 }
 
 // -----------------------------------------------------------------------
+// PythonLanguageInline — test-only in-crate Python implementation
+//
+// The production Python support lives in `forgeql-lang-python`.  This inline
+// duplicate stays here behind `#[cfg(any(test, feature = "test-helpers"))]`
+// so that forgeql-core's own unit and integration tests can build a
+// LanguageRegistry without depending on the external crate.
+// -----------------------------------------------------------------------
+
+/// Test-only inline Python language support.
+///
+/// For production use, depend on `forgeql-lang-python::PythonLanguage` instead.
+#[cfg(any(test, feature = "test-helpers"))]
+static PYTHON_CONFIG: OnceLock<LanguageConfig> = OnceLock::new();
+
+#[cfg(any(test, feature = "test-helpers"))]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)]
+pub fn python_config() -> &'static LanguageConfig {
+    PYTHON_CONFIG.get_or_init(|| {
+        let json_bytes = include_bytes!("../../../forgeql-lang-python/config/python.json");
+        let json_config = super::lang_json::LanguageConfigJson::from_json_bytes(json_bytes)
+            .expect("embedded python.json must be valid");
+        json_config.into_language_config()
+    })
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+pub struct PythonLanguageInline;
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl LanguageSupport for PythonLanguageInline {
+    fn name(&self) -> &'static str {
+        "python"
+    }
+
+    fn extensions(&self) -> &'static [&'static str] {
+        &["py", "pyi"]
+    }
+
+    fn tree_sitter_language(&self) -> tree_sitter::Language {
+        tree_sitter_python::LANGUAGE.into()
+    }
+
+    fn extract_name(&self, node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+        if let Some(name_node) = node.child_by_field_name("name") {
+            let text = python_node_text(source, name_node);
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+
+        match node.kind() {
+            "decorated_definition" => node
+                .child_by_field_name("definition")
+                .and_then(|def| def.child_by_field_name("name"))
+                .map(|n| python_node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
+            "import_statement" => {
+                let mut names = Vec::new();
+                for i in 0..node.named_child_count() {
+                    if let Some(child) = node.named_child(i) {
+                        match child.kind() {
+                            "dotted_name" | "aliased_import" => {
+                                let text = python_node_text(source, child);
+                                if !text.is_empty() {
+                                    names.push(text);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if names.is_empty() {
+                    None
+                } else {
+                    Some(names.join(", "))
+                }
+            }
+
+            "import_from_statement" => node
+                .child_by_field_name("module_name")
+                .map(|n| python_node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
+            "assignment" => node
+                .child_by_field_name("left")
+                .map(|n| python_node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
+            "comment" => {
+                let text = python_node_text(source, node);
+                if text.is_empty() { None } else { Some(text) }
+            }
+
+            _ => None,
+        }
+    }
+
+    fn map_kind(&self, raw_kind: &str) -> Option<&'static str> {
+        python_config().kind_map_lookup(raw_kind)
+    }
+
+    fn config(&self) -> &'static LanguageConfig {
+        python_config()
+    }
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+fn python_node_text(source: &[u8], node: tree_sitter::Node<'_>) -> String {
+    std::str::from_utf8(&source[node.byte_range()])
+        .unwrap_or("")
+        .to_string()
+}
+// -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------
 
