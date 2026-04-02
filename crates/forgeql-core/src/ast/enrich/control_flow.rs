@@ -161,7 +161,7 @@ impl NodeEnricher for ControlFlowEnricher {
                             entry.1 = entry.1.max(depth);
                             entry.2 += 1;
                             // Record enclosing function name for this CF row.
-                            cf_encl.insert(cf_idx, table.rows[func_idx].name.clone());
+                            drop(cf_encl.insert(cf_idx, table.rows[func_idx].name.clone()));
                         }
                     }
                 }
@@ -188,7 +188,11 @@ impl NodeEnricher for ControlFlowEnricher {
 
         // Phase 3 (mutable): write enclosing_fn to CF rows.
         for (cf_idx, fn_name) in cf_encl {
-            drop(table.rows[cf_idx].fields.insert("enclosing_fn".to_string(), fn_name));
+            drop(
+                table.rows[cf_idx]
+                    .fields
+                    .insert("enclosing_fn".to_string(), fn_name),
+            );
         }
     }
 }

@@ -7,6 +7,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Line numbers in text output** — `FIND` results in text/REPL format now
+  include the 1-based source line number appended to the file path
+  (`motor.c:42`) so all three output formats (text, JSON, compact) carry
+  equivalent information.
+
+- **`enclosing_fn` field for control-flow nodes** — every `if`, `switch`,
+  `for`, `while`, and `do` row now carries an `enclosing_fn` enrichment
+  field with the name of the containing function.  This lets agents invoke
+  `SHOW body OF` directly from a CF-enrichment query result (e.g.
+  `FIND symbols WHERE mixed_logic = true`) without a separate lookup.
+
+- **`SymbolRow` — unified per-row display model** — `SymbolRow` is the
+  single source of truth for what each formatter renders.  Adding a new
+  display column now requires only two changes (add field to `SymbolRow`,
+  populate in `from_match`) instead of one edit per formatter.  The compact
+  schema hint is automatically extended to `[name,path,line,enclosing_fn,...]`
+  when at least one result in the response carries `enclosing_fn`.
 ## [0.31.2] - 2026-03-29
 
 ### Added

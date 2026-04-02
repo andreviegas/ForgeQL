@@ -313,7 +313,10 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
         query.metric_hint.as_deref().unwrap_or("usages")
     };
     // Include enclosing_fn in the schema when at least one result carries it.
-    let has_enclosing_fn = query.results.iter().any(|r| r.fields.contains_key("enclosing_fn"));
+    let has_enclosing_fn = query
+        .results
+        .iter()
+        .any(|r| r.fields.contains_key("enclosing_fn"));
     let schema = if has_enclosing_fn {
         format!("[name,path,line,enclosing_fn,{metric_label}]")
     } else {
@@ -335,7 +338,12 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
                         &metric.to_string(),
                     ])
                 } else {
-                    bracket(&[&sr.name, &sr.path, &sr.line.to_string(), &metric.to_string()])
+                    bracket(&[
+                        &sr.name,
+                        &sr.path,
+                        &sr.line.to_string(),
+                        &metric.to_string(),
+                    ])
                 }
             })
             .collect();
@@ -820,7 +828,10 @@ mod tests {
         let csv = to_compact(&result);
         let lines: Vec<&str> = csv.lines().collect();
         // enclosing_fn present → schema extends to 5 columns.
-        assert_eq!(lines[1], r#""fql_kind","[name,path,line,enclosing_fn,usages]""#);
+        assert_eq!(
+            lines[1],
+            r#""""fql_kind"",""[name,path,line,enclosing_fn,usages]""""#
+        );
         // Data row contains function name and line number.
         assert!(lines[2].contains("traverse_trees"));
         assert!(lines[2].contains("899"));
