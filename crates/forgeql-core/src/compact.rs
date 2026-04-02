@@ -830,7 +830,7 @@ mod tests {
         // enclosing_fn present → schema extends to 5 columns.
         assert_eq!(
             lines[1],
-            r#""""fql_kind"",""[name,path,line,enclosing_fn,usages]""""#
+            r#""fql_kind","[name,path,line,enclosing_fn,usages]""#
         );
         // Data row contains function name and line number.
         assert!(lines[2].contains("traverse_trees"));
