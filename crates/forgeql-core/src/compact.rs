@@ -17,7 +17,7 @@
 /// fall back to `to_json()`.
 use crate::result::{
     CallDirection, FileEntry, ForgeQLResult, MemberEntry, OutlineEntry, QueryResult, ShowContent,
-    ShowResult, SourceLine, compact_name,
+    ShowResult, SourceLine, SymbolRow,
 };
 
 // -----------------------------------------------------------------------
@@ -312,15 +312,31 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
     } else {
         query.metric_hint.as_deref().unwrap_or("usages")
     };
-    let schema = format!("[name,path,line,{metric_label}]");
+    // Include enclosing_fn in the schema when at least one result carries it.
+    let has_enclosing_fn = query.results.iter().any(|r| r.fields.contains_key("enclosing_fn"));
+    let schema = if has_enclosing_fn {
+        format!("[name,path,line,enclosing_fn,{metric_label}]")
+    } else {
+        format!("[name,path,line,{metric_label}]")
+    };
     row(&mut out, &[&q("fql_kind"), &q(&schema)]);
     // Group by fql_kind.
     let groups = group_symbols_by_kind(query);
     for (kind, items) in &groups {
         let brackets: Vec<String> = items
             .iter()
-            .map(|(name, path, line, val)| {
-                bracket(&[name, path, &line.to_string(), &val.to_string()])
+            .map(|(sr, metric)| {
+                if has_enclosing_fn {
+                    bracket(&[
+                        &sr.name,
+                        &sr.path,
+                        &sr.line.to_string(),
+                        sr.enclosing_fn.as_deref().unwrap_or(""),
+                        &metric.to_string(),
+                    ])
+                } else {
+                    bracket(&[&sr.name, &sr.path, &sr.line.to_string(), &metric.to_string()])
+                }
             })
             .collect();
         let val = q(&brackets.join(","));
@@ -333,6 +349,41 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
 // -----------------------------------------------------------------------
 // Grouping helpers (preserve insertion order)
 // -----------------------------------------------------------------------
+
+/// Group symbols by `fql_kind` using [`SymbolRow`] for field extraction.
+///
+/// Returns `(kind, Vec<(SymbolRow, metric)>)`.  The metric value is:
+/// - `count`       when a GROUP BY aggregated count is present
+/// - enrichment field value  when `metric_hint` is set
+/// - `usages_count` otherwise
+fn group_symbols_by_kind(query: &QueryResult) -> Vec<(String, Vec<(SymbolRow, usize)>)> {
+    let hint = query.metric_hint.as_deref();
+    let mut groups: Vec<(String, Vec<(SymbolRow, usize)>)> = Vec::new();
+    for r in &query.results {
+        let sr = SymbolRow::from_match(r);
+        // GROUP BY → always show the aggregated count (per-symbol fields
+        // are meaningless for a representative row).
+        // No GROUP BY → enrichment field if metric_hint is set, else usages.
+        let metric = r.count.unwrap_or_else(|| {
+            hint.map_or_else(
+                || r.usages_count.unwrap_or(0),
+                |field| {
+                    r.fields
+                        .get(field)
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(0)
+                },
+            )
+        });
+        if let Some(g) = groups.iter_mut().find(|(k, _)| k == &sr.kind) {
+            g.1.push((sr, metric));
+        } else {
+            let kind = sr.kind.clone();
+            groups.push((kind, vec![(sr, metric)]));
+        }
+    }
+    groups
+}
 
 /// Group outline entries by kind → Vec<(kind, Vec<(name, line)>)>.
 fn group_outline(entries: &[OutlineEntry]) -> Vec<(String, Vec<(&str, usize)>)> {
@@ -375,7 +426,7 @@ fn group_callgraph(entries: &[crate::result::CallGraphEntry]) -> Vec<(String, Ve
     groups
 }
 
-/// Group usages by file path → Vec<(file, Vec<line>)>.
+/// Group usage rows by file → Vec<(file, Vec<line>)>.
 fn group_usages_by_file(query: &QueryResult) -> Vec<(String, Vec<usize>)> {
     let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
     for r in &query.results {
@@ -392,55 +443,6 @@ fn group_usages_by_file(query: &QueryResult) -> Vec<(String, Vec<usize>)> {
     }
     groups
 }
-
-/// Group symbols by `node_kind`.
-///
-/// The last element of each tuple is the "metric value": when a
-/// `metric_hint` is set on the query, the value comes from the row's
-/// enrichment `fields`; otherwise it falls back to `usages_count`.
-#[allow(clippy::type_complexity)]
-fn group_symbols_by_kind(
-    query: &QueryResult,
-) -> Vec<(String, Vec<(String, String, usize, usize)>)> {
-    let hint = query.metric_hint.as_deref();
-    let mut groups: Vec<(String, Vec<(String, String, usize, usize)>)> = Vec::new();
-    for r in &query.results {
-        let kind = r
-            .fql_kind
-            .as_deref()
-            .or(r.node_kind.as_deref())
-            .unwrap_or("");
-        let path = r
-            .path
-            .as_ref()
-            .map_or(String::new(), |p| p.to_string_lossy().into_owned());
-        let line = r.line.unwrap_or(0);
-        // GROUP BY → always show the aggregated count (per-symbol fields
-        // are meaningless for a representative row).
-        // No GROUP BY → enrichment field if metric_hint is set, else usages.
-        let metric = r.count.unwrap_or_else(|| {
-            hint.map_or_else(
-                || r.usages_count.unwrap_or(0),
-                |field| {
-                    r.fields
-                        .get(field)
-                        .and_then(|v| v.parse::<usize>().ok())
-                        .unwrap_or(0)
-                },
-            )
-        });
-        if let Some(g) = groups.iter_mut().find(|(k, _)| k == kind) {
-            g.1.push((compact_name(&r.name).into_owned(), path, line, metric));
-        } else {
-            groups.push((
-                kind.to_string(),
-                vec![(compact_name(&r.name).into_owned(), path, line, metric)],
-            ));
-        }
-    }
-    groups
-}
-
 /// Remove trailing newline if present.
 fn chomp(s: &mut String) {
     if s.ends_with('\n') {
@@ -792,6 +794,36 @@ mod tests {
             lines[3],
             r#""class","[MotorControl,include/motor_control.hpp,0,2]""#
         );
+    }
+
+    #[test]
+    fn find_symbols_cf_rows_include_enclosing_fn() {
+        let mut fields = HashMap::new();
+        fields.insert("mixed_logic".to_string(), "true".to_string());
+        fields.insert("enclosing_fn".to_string(), "traverse_trees".to_string());
+        let result = ForgeQLResult::Query(QueryResult {
+            op: "find_symbols".into(),
+            total: 1,
+            metric_hint: None,
+            results: vec![SymbolMatch {
+                name: "(a&&(b||c))".into(),
+                node_kind: Some("if_statement".into()),
+                fql_kind: Some("if".into()),
+                language: None,
+                path: Some(PathBuf::from("tree-walk.c")),
+                line: Some(899),
+                usages_count: Some(0),
+                fields,
+                count: None,
+            }],
+        });
+        let csv = to_compact(&result);
+        let lines: Vec<&str> = csv.lines().collect();
+        // enclosing_fn present → schema extends to 5 columns.
+        assert_eq!(lines[1], r#""fql_kind","[name,path,line,enclosing_fn,usages]""#);
+        // Data row contains function name and line number.
+        assert!(lines[2].contains("traverse_trees"));
+        assert!(lines[2].contains("899"));
     }
 
     // -- FIND usages ---------------------------------------------------

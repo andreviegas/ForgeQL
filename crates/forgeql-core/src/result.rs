@@ -108,6 +108,57 @@ pub struct SymbolMatch {
 }
 
 // -----------------------------------------------------------------------
+// Per-row display data — consumed by all output formatters
+// -----------------------------------------------------------------------
+
+/// Unified per-row display data extracted from a [`SymbolMatch`].
+///
+/// All output formatters — text (`Display`), compact, and JSON — derive their
+/// row representation from this struct.  Adding a new display column requires
+/// only two changes:
+///
+/// 1. Add the field here.
+/// 2. Populate it in [`SymbolRow::from_match`].
+///
+/// No per-formatter changes needed unless the formatter has format-specific
+/// layout choices (e.g. compact groups by `kind`, text uses `via` prefix).
+pub(crate) struct SymbolRow {
+    /// Compact display name (long names are truncated to 120 chars).
+    pub name: String,
+    /// FQL kind (`"function"`, `"if"`, …) or raw AST node kind as fallback.
+    pub kind: String,
+    /// File path (relative), empty string when absent.
+    pub path: String,
+    /// 1-based line number; 0 when absent.
+    pub line: usize,
+    /// Enclosing function name — populated for control-flow nodes (if/switch/for/while).
+    /// `None` for top-level symbols (functions, structs, etc.).
+    pub enclosing_fn: Option<String>,
+}
+
+impl SymbolRow {
+    pub(crate) fn from_match(row: &SymbolMatch) -> Self {
+        Self {
+            name: compact_name(&row.name).into_owned(),
+            kind: row
+                .fql_kind
+                .as_deref()
+                .or(row.node_kind.as_deref())
+                .unwrap_or("")
+                .to_string(),
+            path: row
+                .path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            line: row.line.unwrap_or(0),
+            enclosing_fn: row.fields.get("enclosing_fn").cloned(),
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Show results
 // Show results
 // -----------------------------------------------------------------------
 
@@ -536,15 +587,16 @@ impl fmt::Display for QueryResult {
             return writeln!(formatter, "No results.");
         }
         for row in &self.results {
-            write!(formatter, "{}", compact_name(&row.name))?;
-            if let Some(ref kind) = row.node_kind {
-                write!(formatter, " | {kind}")?;
+            let sr = SymbolRow::from_match(row);
+            write!(formatter, "{}", sr.name)?;
+            if !sr.kind.is_empty() {
+                write!(formatter, " | {}", sr.kind)?;
             }
-            if let Some(ref path) = row.path {
-                write!(formatter, " | {}", path.display())?;
+            if !sr.path.is_empty() {
+                write!(formatter, " | {}:{}", sr.path, sr.line)?;
             }
-            if let Some(line) = row.line {
-                write!(formatter, ":{line}")?;
+            if let Some(ref fn_name) = sr.enclosing_fn {
+                write!(formatter, " | via {fn_name}")?;
             }
             if let Some(usages) = row.usages_count {
                 write!(formatter, " | usages: {usages}")?;
@@ -1204,6 +1256,31 @@ mod tests {
         assert!(output.contains("Function"));
         assert!(output.contains("src/signal.cpp:42"));
         assert!(output.contains("usages: 3"));
+    }
+
+    #[test]
+    fn display_query_result_shows_enclosing_fn() {
+        let mut fields = HashMap::new();
+        fields.insert("enclosing_fn".to_string(), "traverse_trees".to_string());
+        let result = QueryResult {
+            op: "find_symbols".to_string(),
+            results: vec![SymbolMatch {
+                name: "(a&&(b||c))".to_string(),
+                node_kind: None,
+                fql_kind: Some("if".to_string()),
+                language: None,
+                path: Some(PathBuf::from("tree-walk.c")),
+                line: Some(899),
+                usages_count: Some(0),
+                fields,
+                count: None,
+            }],
+            total: 1,
+            metric_hint: None,
+        };
+        let output = format!("{result}");
+        assert!(output.contains("via traverse_trees"));
+        assert!(output.contains("tree-walk.c:899"));
     }
 
     #[test]

@@ -114,7 +114,10 @@ impl NodeEnricher for ControlFlowEnricher {
         // Phase 1 (immutable): build file → sorted-functions lookup, then
         // scan CF rows and map each to its containing function via binary
         // search.  This is O(N log F) instead of the previous O(N × F).
-        let func_metrics = {
+        // Phase 1 (immutable): build file → sorted-functions lookup, then
+        // scan CF rows and map each to its containing function via binary
+        // search.  This is O(N log F) instead of the previous O(N × F).
+        let (func_metrics, cf_encl) = {
             let mut funcs_by_file: HashMap<&std::path::Path, Vec<(usize, std::ops::Range<usize>)>> =
                 HashMap::new();
             for (i, row) in table.rows.iter().enumerate() {
@@ -130,7 +133,9 @@ impl NodeEnricher for ControlFlowEnricher {
             }
 
             let mut metrics: HashMap<usize, (i64, i64, i64)> = HashMap::new();
-            for row in &table.rows {
+            // Maps CF row index → enclosing function name.
+            let mut cf_encl: HashMap<usize, String> = HashMap::new();
+            for (cf_idx, row) in table.rows.iter().enumerate() {
                 if !CF_FQL_KINDS.contains(&row.fql_kind.as_str()) {
                     continue;
                 }
@@ -155,11 +160,13 @@ impl NodeEnricher for ControlFlowEnricher {
                             entry.0 = entry.0.max(tests);
                             entry.1 = entry.1.max(depth);
                             entry.2 += 1;
+                            // Record enclosing function name for this CF row.
+                            cf_encl.insert(cf_idx, table.rows[func_idx].name.clone());
                         }
                     }
                 }
             }
-            metrics
+            (metrics, cf_encl)
         };
 
         // Phase 2 (mutable): apply aggregated metrics to function rows.
@@ -177,6 +184,11 @@ impl NodeEnricher for ControlFlowEnricher {
                 row.fields
                     .insert("branch_count".to_string(), branch_count.to_string()),
             );
+        }
+
+        // Phase 3 (mutable): write enclosing_fn to CF rows.
+        for (cf_idx, fn_name) in cf_encl {
+            drop(table.rows[cf_idx].fields.insert("enclosing_fn".to_string(), fn_name));
         }
     }
 }
