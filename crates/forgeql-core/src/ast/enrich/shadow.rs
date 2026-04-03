@@ -80,14 +80,26 @@ fn collect_parameter_names(
         return names;
     };
 
+    let has_param_kind = !config.parameter_kind().is_empty();
     for i in 0..param_list.child_count() {
-        if let Some(child) = param_list.child(i)
-            && config.is_parameter_kind(child.kind())
-        {
-            // Try to extract the parameter name from the declarator.
-            if let Some(decl) = child.child_by_field_name(config.declarator_field())
-                && let Some(name) = find_leaf_identifier(decl, source, config)
-            {
+        let Some(child) = param_list.child(i) else {
+            continue;
+        };
+        if has_param_kind {
+            // C++/Rust: match specific parameter node kinds.
+            if config.is_parameter_kind(child.kind()) {
+                if let Some(decl) = child.child_by_field_name(config.declarator_field())
+                    && let Some(name) = find_leaf_identifier(decl, source, config)
+                {
+                    let _ = names.insert(name);
+                } else if let Some(name) = find_leaf_identifier(child, source, config) {
+                    let _ = names.insert(name);
+                }
+            }
+        } else {
+            // Python-style: no dedicated parameter kind. Each named child of
+            // the parameter list is a potential parameter.
+            if let Some(name) = find_leaf_identifier(child, source, config) {
                 let _ = names.insert(name);
             }
         }

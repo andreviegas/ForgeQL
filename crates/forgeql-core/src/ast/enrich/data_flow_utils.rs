@@ -4,6 +4,8 @@
 /// bodies.
 ///
 /// Used by both `DeclDistanceEnricher` and `EscapeEnricher`.
+use std::collections::HashSet;
+
 use super::EnrichContext;
 use crate::ast::index::node_text;
 use crate::ast::lang::LanguageConfig;
@@ -24,6 +26,7 @@ pub fn collect_local_declarations(ctx: &EnrichContext<'_>) -> Vec<LocalDecl> {
     let source = ctx.source;
 
     let mut locals = Vec::new();
+    let mut seen = HashSet::new();
     let mut cursor = func.walk();
     let mut visit = true;
 
@@ -38,8 +41,13 @@ pub fn collect_local_declarations(ctx: &EnrichContext<'_>) -> Vec<LocalDecl> {
                 && !is_inside_parameter_list(node, config)
                 && let Some(name) = extract_declarator_name(node, source, config)
             {
-                let line = node.start_position().row + 1; // 1-based
-                locals.push((name, line));
+                // First-seen-per-name: treat the first assignment as the
+                // declaration point.  Subsequent assignments to the same
+                // name are mutations, not new locals.
+                if seen.insert(name.clone()) {
+                    let line = node.start_position().row + 1; // 1-based
+                    locals.push((name, line));
+                }
             }
         }
 
@@ -89,10 +97,22 @@ pub fn extract_declarator_name(
     source: &[u8],
     config: &LanguageConfig,
 ) -> Option<String> {
-    let declarator = decl_node.child_by_field_name(config.declarator_field())?;
+    // Resolve the name-carrying child of the declaration/assignment node.
+    // C++ uses "declarator"; Rust uses "pattern"; Python uses "left".
+    // When the language-specific field is empty, fall through common fields.
+    let declarator = if !config.declarator_field().is_empty() {
+        decl_node.child_by_field_name(config.declarator_field())
+    } else {
+        decl_node
+            .child_by_field_name("pattern")
+            .or_else(|| decl_node.child_by_field_name("left"))
+            .or_else(|| decl_node.child_by_field_name("name"))
+    }?;
 
     // Skip function pointer declarations.
-    if contains_kind(declarator, config.function_declarator()) {
+    if !config.function_declarator().is_empty()
+        && contains_kind(declarator, config.function_declarator())
+    {
         return None;
     }
 
@@ -186,9 +206,16 @@ pub fn is_in_declaration(node: tree_sitter::Node<'_>, config: &LanguageConfig) -
             || config.is_init_declarator_kind(kind)
             || config.is_parameter_kind(kind)
         {
-            // Check if the identifier is on the declarator side, not the value side.
-            if let Some(decl_child) = p.child_by_field_name(config.declarator_field()) {
-                return node_is_descendant_of(node, decl_child);
+            // Check if the identifier is on the declarator/LHS side, not the value side.
+            let decl_child = if !config.declarator_field().is_empty() {
+                p.child_by_field_name(config.declarator_field())
+            } else {
+                p.child_by_field_name("pattern")
+                    .or_else(|| p.child_by_field_name("left"))
+                    .or_else(|| p.child_by_field_name("name"))
+            };
+            if let Some(dc) = decl_child {
+                return node_is_descendant_of(node, dc);
             }
             return true;
         }
