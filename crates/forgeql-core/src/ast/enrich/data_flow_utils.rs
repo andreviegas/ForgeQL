@@ -100,13 +100,13 @@ pub fn extract_declarator_name(
     // Resolve the name-carrying child of the declaration/assignment node.
     // C++ uses "declarator"; Rust uses "pattern"; Python uses "left".
     // When the language-specific field is empty, fall through common fields.
-    let declarator = if !config.declarator_field().is_empty() {
-        decl_node.child_by_field_name(config.declarator_field())
-    } else {
+    let declarator = if config.declarator_field().is_empty() {
         decl_node
             .child_by_field_name("pattern")
             .or_else(|| decl_node.child_by_field_name("left"))
             .or_else(|| decl_node.child_by_field_name("name"))
+    } else {
+        decl_node.child_by_field_name(config.declarator_field())
     }?;
 
     // Skip function pointer declarations.
@@ -207,12 +207,12 @@ pub fn is_in_declaration(node: tree_sitter::Node<'_>, config: &LanguageConfig) -
             || config.is_parameter_kind(kind)
         {
             // Check if the identifier is on the declarator/LHS side, not the value side.
-            let decl_child = if !config.declarator_field().is_empty() {
-                p.child_by_field_name(config.declarator_field())
-            } else {
+            let decl_child = if config.declarator_field().is_empty() {
                 p.child_by_field_name("pattern")
                     .or_else(|| p.child_by_field_name("left"))
                     .or_else(|| p.child_by_field_name("name"))
+            } else {
+                p.child_by_field_name(config.declarator_field())
             };
             if let Some(dc) = decl_child {
                 return node_is_descendant_of(node, dc);
