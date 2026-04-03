@@ -35,7 +35,7 @@
     ],
     "declaration_kinds": ["assignment", "augmented_assignment"],
     "field_kinds": [],
-    "parameter_kind": "parameter",
+    "parameter_kind": "",
     "member_body_kind": "block",
     "member_kinds": ["function_definition", "assignment"]
   },
@@ -64,7 +64,7 @@
 
   "expressions": {
     "call": "call",
-    "binary": "binary_operator",
+    "binary": "comparison_operator",
     "logical": "boolean_operator",
     "unary": "unary_operator",
     "field_access": "attribute",

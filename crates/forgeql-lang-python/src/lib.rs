@@ -107,6 +107,12 @@ impl LanguageSupport for PythonLanguage {
                 .map(|n| node_text(source, n))
                 .filter(|s| !s.is_empty()),
 
+            // For-loop variable: `for x in ...` → name is "x"
+            "for_statement" => node
+                .child_by_field_name("left")
+                .map(|n| node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
             // Comments: extract raw text
             "comment" => {
                 let text = node_text(source, node);

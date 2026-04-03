@@ -40,9 +40,8 @@ impl NodeEnricher for MetricsEnricher {
 
         // Parameter count for functions
         if config.is_function_kind(kind) {
-            let param_count = count_descendants_by_kind(ctx.node, config.parameter_kind());
+            let param_count = count_params(ctx.node, config);
             drop(fields.insert("param_count".to_string(), param_count.to_string()));
-
             // Aggregate counts that require subtree walk
             let return_count = count_descendants_by_kind(ctx.node, config.return_statement_kind());
             drop(fields.insert("return_count".to_string(), return_count.to_string()));
@@ -145,6 +144,34 @@ fn count_descendants_by_kinds(node: tree_sitter::Node<'_>, target_kinds: &[Strin
     }
 }
 
+/// Count parameters for a function node.
+///
+/// For languages where parameters have a distinct single node kind (e.g. Rust's
+/// `parameter`, C++'s `parameter_declaration`), counts all descendants of that
+/// kind.  For languages where parameters are represented by multiple kinds with
+/// no common wrapper (e.g. Python where `identifier`, `default_parameter`, and
+/// `typed_parameter` all appear directly inside `parameters`), counts instead
+/// the named children of the parameter-list container node.
+fn count_params(node: tree_sitter::Node<'_>, config: &LanguageConfig) -> usize {
+    let param_kind = config.parameter_kind();
+    if !param_kind.is_empty() {
+        return count_descendants_by_kind(node, param_kind);
+    }
+
+    // Fallback: count named children of the parameter-list node directly.
+    let list_kind = config.parameter_list_kind();
+    if list_kind.is_empty() {
+        return 0;
+    }
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i)
+            && child.kind() == list_kind
+        {
+            return child.named_child_count();
+        }
+    }
+    0
+}
 /// Count direct members of a struct/class body (one level deep).
 ///
 /// If the node has a `member_body_raw_kind` child, counts member kinds

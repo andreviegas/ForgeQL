@@ -212,12 +212,16 @@ fn count_condition_tests(
             let current = cursor.node();
             let kind = current.kind();
             if config.is_binary_expression_kind(kind) || config.is_logical_expression_kind(kind) {
-                // Check the operator child
-                if let Some(op_node) = current.child_by_field_name("operator") {
+                // Most grammars use "operator" (singular); tree-sitter-python's
+                // comparison_operator uses "operators" (plural).  Try both.
+                let op_node = current
+                    .child_by_field_name("operator")
+                    .or_else(|| current.child_by_field_name("operators"));
+                if let Some(op_node) = op_node {
                     let op = node_text(source, op_node);
                     if matches!(
                         op.as_str(),
-                        "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||"
+                        "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" | "and" | "or" // Python and other word-operator languages
                     ) {
                         count += 1;
                     }
@@ -399,7 +403,9 @@ fn skeleton_walk(
         let text = node_text(source, node);
         match text.as_str() {
             "(" | ")" | "!" | "&&" | "||" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "&" | "|"
-            | "^" | "~" | "+" | "-" | "*" | "/" | "%" | "<<" | ">>" => {
+            | "^" | "~" | "+" | "-" | "*" | "/" | "%" | "<<" | ">>"
+            // Word operators (Python, SQL, Swift, etc.)
+            | "and" | "or" | "not" => {
                 result.push_str(&text);
             }
             _ => {}

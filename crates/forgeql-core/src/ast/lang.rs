@@ -1475,6 +1475,11 @@ impl LanguageSupport for PythonLanguageInline {
                 .map(|n| python_node_text(source, n))
                 .filter(|s| !s.is_empty()),
 
+            "for_statement" => node
+                .child_by_field_name("left")
+                .map(|n| python_node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
             "comment" => {
                 let text = python_node_text(source, node);
                 if text.is_empty() { None } else { Some(text) }
