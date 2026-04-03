@@ -157,6 +157,37 @@ CHANGE FILE 'file_path'
 | `WITH '…'` | Replace entire file content (creates file if absent) |
 | `WITH NOTHING` | Clear file content (file remains on disk, empty) |
 
+#### Heredoc syntax
+
+Every `WITH 'content'` form also accepts a heredoc block as the replacement text:
+
+```sql
+-- Replace a line range — no escaping needed for Rust lifetimes, char literals, etc.
+CHANGE FILE 'src/lib.rs' LINES 10-15 WITH <<RUST
+fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
+    if x.len() > y.len() { x } else { y }
+}
+RUST
+
+-- Find-and-replace across files
+CHANGE FILES 'src/**/*.rs' MATCHING 'old_api()' WITH <<CODE
+new_api()
+CODE
+
+-- Replace full file content
+CHANGE FILE 'src/config.rs' WITH <<END
+// regenerated
+const VERSION: &str = "2.0";
+END
+```
+
+| Heredoc rule | Detail |
+|---|---|
+| Opening tag | `<<TAG` immediately after `WITH` — tag must be **all-uppercase** (e.g. `RUST`, `CODE`, `END`) |
+| Closing tag | Must appear on its **own line** with **no leading whitespace**, matching the opening tag exactly |
+| Body | May contain any characters — single quotes, double quotes, embedded ForgeQL keywords — without escaping |
+| Purpose | Prefer over `'…'` when the replacement contains single quotes (Rust char literals, lifetimes, C-style string escapes) |
+
 ---
 
 ### COPY / MOVE Commands
@@ -202,7 +233,7 @@ ROLLBACK [TRANSACTION 'name']
 | `VERIFY build` | Run a named step from `.forgeql.yaml` `verify_steps`. Returns `success` + `output`. Does **not** auto-rollback on failure. |
 | `ROLLBACK` | Revert to the most recent checkpoint, or to a named one (discards later checkpoints). |
 
-**`.forgeql.yaml`** must be in the repo root:
+**`.forgeql.yaml`** may be in the repo root **or** in the directory directly above it (sidecar, outside the tracked tree):
 
 ```yaml
 workspace_root: .
@@ -399,6 +430,7 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | `mixed_logic` | `if`, `while`, `for` | `"true"` if mixes `&&` and `\|\|` without grouping |
 | `dup_logic` | `if`, `while`, `for`, `do` | `"true"` if condition contains duplicate sub-expressions in `&&`/`\|\|` chains |
 | `branch_count` | `function` | Total control-flow branch points |
+| `enclosing_fn` | `if`, `switch`, `for`, `while`, `do` | Name of the containing function — enables `SHOW body OF` directly from a CF-enrichment query result |
 
 #### OperatorEnricher
 

@@ -26,6 +26,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   populate in `from_match`) instead of one edit per formatter.  The compact
   schema hint is automatically extended to `[name,path,line,enclosing_fn,...]`
   when at least one result in the response carries `enclosing_fn`.
+
+- **Heredoc syntax documented** — `doc/syntax.md` and
+  `doc/agents/forgeql.agent.md` now include the `WITH <<TAG...TAG` heredoc
+  alternative for all three CHANGE `WITH` forms (`LINES n-m WITH`,
+  `MATCHING ... WITH`, and whole-file `WITH`).  Rules, examples, and a
+  comparison table show how to avoid single-quote escaping for Rust char
+  literals, lifetimes, and C-style string escapes.
+
+- **`enclosing_fn` field added to syntax reference** — the
+  `ControlFlowEnricher` table in `doc/syntax.md` and the Control Flow
+  enrichment section in `doc/agents/forgeql.agent.md` now document the
+  `enclosing_fn` field on `if`, `switch`, `for`, `while`, and `do` nodes.
+
+- **`.forgeql.yaml` sidecar placement documented** — `doc/syntax.md` now
+  states that the config file may be placed in the directory directly above
+  the repo root (outside the tracked tree) as well as in the repo root
+  itself.
+
 ## [0.31.2] - 2026-03-29
 
 ### Added

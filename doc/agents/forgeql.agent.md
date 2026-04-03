@@ -129,6 +129,16 @@ CHANGE FILE 'path' LINES n-m WITH NOTHING
 CHANGE FILES 'glob1','glob2' MATCHING 'old' WITH 'new'
 CHANGE FILE 'path' WITH 'full_content'
 
+-- Heredoc: no escaping needed (use for Rust lifetimes, char literals, C-style strings)
+CHANGE FILE 'path' LINES n-m WITH <<TAG
+replacement text
+TAG
+CHANGE FILE 'path' WITH <<TAG
+full content
+TAG
+
+-- Tag must be ALL-UPPERCASE; closing tag on its own line with no leading whitespace
+
 COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]
 MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]
 
@@ -397,6 +407,7 @@ Computed at index time. Use in `WHERE` clauses like any other field.
 | `mixed_logic` | `if`, `while`, `for` | `"true"` if mixes `&&` and `\|\|` without grouping |
 | `dup_logic` | `if`, `while`, `for`, `do` | `"true"` if duplicate sub-expressions in `&&`/`\|\|` chains |
 | `branch_count` | `function` | Total control-flow branch points |
+| `enclosing_fn` | `if`, `switch`, `for`, `while`, `do` | Name of the containing function |
 
 ### Operators
 | Field | Applies to | Values / Notes |
