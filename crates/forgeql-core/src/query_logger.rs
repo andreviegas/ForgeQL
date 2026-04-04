@@ -25,23 +25,18 @@ const CHARS_PER_TOKEN: usize = 4;
 /// CSV query logger that records every FQL statement execution to disk.
 pub struct QueryLogger {
     data_dir: PathBuf,
-    /// Sanitized source name — used as the CSV filename stem.
-    source: String,
 }
 
 impl QueryLogger {
     /// Create a new logger that writes to `{data_dir}/log/`.
     #[must_use]
-    pub fn new(data_dir: PathBuf) -> Self {
-        Self {
-            data_dir,
-            source: "unknown".to_string(),
-        }
+    pub const fn new(data_dir: PathBuf) -> Self {
+        Self { data_dir }
     }
 
-    /// Update the source name once a `USE source.branch` succeeds.
-    pub fn set_source(&mut self, source: &str) {
-        self.source = source
+    /// Sanitize a source name for use as a filesystem-safe CSV filename stem.
+    fn sanitize_source(source: &str) -> String {
+        source
             .chars()
             .map(|c| {
                 if c.is_alphanumeric() || c == '-' || c == '_' {
@@ -50,15 +45,15 @@ impl QueryLogger {
                     '_'
                 }
             })
-            .collect();
+            .collect()
     }
 
     /// Return the path to the log CSV file.
     #[must_use]
-    pub fn log_path(&self) -> PathBuf {
+    pub fn log_path(&self, source: &str) -> PathBuf {
         self.data_dir
             .join("log")
-            .join(format!("{}.csv", self.source))
+            .join(format!("{}.csv", Self::sanitize_source(source)))
     }
 
     /// Append one CSV row for the completed FQL statement.
@@ -67,12 +62,22 @@ impl QueryLogger {
     /// `result`        — the typed result, used to count disclosed source lines.
     /// `result_output` — the serialized output string, used to estimate token usage.
     /// `elapsed_ms`    — wall-clock milliseconds to execute the command.
-    pub fn log(&self, fql: &str, result: &ForgeQLResult, result_output: &str, elapsed_ms: u64) {
+    /// `source`        — the source name, used to select the per-source CSV file.
+    pub fn log(
+        &self,
+        fql: &str,
+        result: &ForgeQLResult,
+        result_output: &str,
+        elapsed_ms: u64,
+        source: &str,
+    ) {
+        let sanitized = Self::sanitize_source(source);
+
         let log_dir = self.data_dir.join("log");
         if std::fs::create_dir_all(&log_dir).is_err() {
             return;
         }
-        let log_path = log_dir.join(format!("{}.csv", self.source));
+        let log_path = log_dir.join(format!("{sanitized}.csv"));
 
         let needs_header = !log_path.exists();
         let Ok(mut file) = std::fs::OpenOptions::new()

@@ -2190,8 +2190,7 @@ fn parse_multi_statement() {
 fn query_logger_creates_csv_with_header() {
     let tmp = tempdir().unwrap();
     let data_dir = tmp.path().to_path_buf();
-    let mut logger = QueryLogger::new(data_dir);
-    logger.set_source("test-source");
+    let logger = QueryLogger::new(data_dir);
 
     let result = ForgeQLResult::SourceOp(forgeql_core::result::SourceOpResult {
         op: "test".to_string(),
@@ -2202,9 +2201,15 @@ fn query_logger_creates_csv_with_header() {
         resumed: false,
         message: Some("ok".to_string()),
     });
-    logger.log("FIND symbols", &result, "some output text", 0);
+    logger.log(
+        "FIND symbols",
+        &result,
+        "some output text",
+        0,
+        "test-source",
+    );
 
-    let log_path = logger.log_path();
+    let log_path = logger.log_path("test-source");
     assert!(log_path.exists(), "log CSV should be created");
     let content = fs::read_to_string(&log_path).unwrap();
     let lines: Vec<&str> = content.lines().collect();
@@ -2217,8 +2222,7 @@ fn query_logger_creates_csv_with_header() {
 fn query_logger_appends_multiple_rows() {
     let tmp = tempdir().unwrap();
     let data_dir = tmp.path().to_path_buf();
-    let mut logger = QueryLogger::new(data_dir);
-    logger.set_source("multi-test");
+    let logger = QueryLogger::new(data_dir);
 
     let result = ForgeQLResult::SourceOp(forgeql_core::result::SourceOpResult {
         op: "test".to_string(),
@@ -2230,11 +2234,11 @@ fn query_logger_appends_multiple_rows() {
         message: Some("ok".to_string()),
     });
 
-    logger.log("FIND symbols", &result, "output1", 0);
-    logger.log("FIND files", &result, "output2", 0);
-    logger.log("SHOW body OF 'func'", &result, "output3", 0);
+    logger.log("FIND symbols", &result, "output1", 0, "multi-test");
+    logger.log("FIND files", &result, "output2", 0, "multi-test");
+    logger.log("SHOW body OF 'func'", &result, "output3", 0, "multi-test");
 
-    let content = fs::read_to_string(logger.log_path()).unwrap();
+    let content = fs::read_to_string(logger.log_path("multi-test")).unwrap();
     let lines: Vec<&str> = content.lines().collect();
     // Header + 3 data rows.
     assert_eq!(
@@ -2249,10 +2253,9 @@ fn query_logger_appends_multiple_rows() {
 fn query_logger_sanitizes_source_name() {
     let tmp = tempdir().unwrap();
     let data_dir = tmp.path().to_path_buf();
-    let mut logger = QueryLogger::new(data_dir);
-    logger.set_source("my/source@special");
+    let logger = QueryLogger::new(data_dir);
 
-    let path = logger.log_path();
+    let path = logger.log_path("my/source@special");
     let filename = path.file_name().unwrap().to_string_lossy();
     assert!(!filename.contains('/'));
     assert!(!filename.contains('@'));
@@ -2262,15 +2265,20 @@ fn query_logger_sanitizes_source_name() {
 fn query_logger_records_source_lines_for_show() {
     let (mut e, sid, _d) = engine_with_session();
     let tmp = tempdir().unwrap();
-    let mut logger = QueryLogger::new(tmp.path().to_path_buf());
-    logger.set_source("show-test");
+    let logger = QueryLogger::new(tmp.path().to_path_buf());
 
     // Execute a SHOW LINES command that returns actual source lines.
     let result = exec(&mut e, &sid, "SHOW LINES 1-5 OF 'motor_control.h'");
     let output = format!("{result}");
-    logger.log("SHOW LINES 1-5 OF 'motor_control.h'", &result, &output, 42);
+    logger.log(
+        "SHOW LINES 1-5 OF 'motor_control.h'",
+        &result,
+        &output,
+        42,
+        "show-test",
+    );
 
-    let content = fs::read_to_string(logger.log_path()).unwrap();
+    let content = fs::read_to_string(logger.log_path("show-test")).unwrap();
     let data_line = content.lines().nth(1).expect("data row");
     // CSV: "timestamp",elapsed_ms,source_lines,tokens_sent,tokens_received,"preview"
     let fields: Vec<&str> = data_line.split(',').collect();
@@ -2286,15 +2294,14 @@ fn query_logger_records_source_lines_for_show() {
 fn query_logger_records_zero_source_lines_for_query() {
     let (mut e, sid, _d) = engine_with_session();
     let tmp = tempdir().unwrap();
-    let mut logger = QueryLogger::new(tmp.path().to_path_buf());
-    logger.set_source("query-test");
+    let logger = QueryLogger::new(tmp.path().to_path_buf());
 
     // FIND queries return no source lines.
     let result = exec(&mut e, &sid, "FIND symbols LIMIT 5");
     let output = format!("{result}");
-    logger.log("FIND symbols LIMIT 5", &result, &output, 0);
+    logger.log("FIND symbols LIMIT 5", &result, &output, 0, "query-test");
 
-    let content = fs::read_to_string(logger.log_path()).unwrap();
+    let content = fs::read_to_string(logger.log_path("query-test")).unwrap();
     let data_line = content.lines().nth(1).expect("data row");
     // CSV: "timestamp",elapsed_ms,source_lines,...
     let fields: Vec<&str> = data_line.split(',').collect();

@@ -50,21 +50,31 @@ impl ForgeQlMcp {
     }
 
     /// Append a log row for a completed FQL statement (no-op when logger is disabled).
-    fn log_query(&self, fql: &str, result: &ForgeQLResult, output: &str, elapsed_ms: u64) {
+    fn log_query(
+        &self,
+        fql: &str,
+        result: &ForgeQLResult,
+        output: &str,
+        elapsed_ms: u64,
+        source: &str,
+    ) {
         if let Ok(mut guard) = self.logger.lock()
             && let Some(ref mut l) = *guard
         {
-            l.log(fql, result, output, elapsed_ms);
+            l.log(fql, result, output, elapsed_ms, source);
         }
     }
 
-    /// Update the logger's source name (called after a successful USE).
-    fn set_log_source(&self, source: &str) {
-        if let Ok(mut guard) = self.logger.lock()
-            && let Some(ref mut l) = *guard
-        {
-            l.set_source(source);
-        }
+    /// Resolve the source name for a session from the engine.
+    fn resolve_source(&self, session_id: Option<&str>) -> String {
+        session_id
+            .and_then(|sid| {
+                self.engine
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.source_name_for_session(sid).map(str::to_owned))
+            })
+            .unwrap_or_else(|| "unknown".to_string())
     }
 }
 
@@ -294,20 +304,21 @@ impl ForgeQlMcp {
         // Execute each statement individually — one log row per command,
         // exactly as if each were sent in a separate run_fql call.
         let format = params.format.unwrap_or_default();
+        let mut log_source = self.resolve_source(params.session_id.as_deref());
         let mut outputs: Vec<String> = Vec::with_capacity(ops.len());
         for (source_text, op) in &ops {
             let t0 = std::time::Instant::now();
             let result = exec_engine(&self.engine, params.session_id.as_deref(), op)?;
             let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
             if let ForgeQLIR::UseSource { source, .. } = op {
-                self.set_log_source(source);
+                log_source.clone_from(source);
             }
             let output = match format {
                 OutputFormat::Csv => compact::to_compact(&result),
                 OutputFormat::Json => result.to_json(),
             };
             let output = append_meta(&output);
-            self.log_query(source_text, &result, &output, elapsed_ms);
+            self.log_query(source_text, &result, &output, elapsed_ms, &log_source);
             outputs.push(output);
         }
         // Single statement → return its result directly (no wrapping).
@@ -343,9 +354,8 @@ impl ForgeQlMcp {
         let t0 = std::time::Instant::now();
         let result = exec_engine(&self.engine, None, &op)?;
         let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.set_log_source(&params.source);
         let output = result.to_json();
-        self.log_query(&fql, &result, &output, elapsed_ms);
+        self.log_query(&fql, &result, &output, elapsed_ms, &params.source);
 
         // Extract session_id and prepend a prominent reminder so agents
         // do not forget to pass it in every subsequent tool call.

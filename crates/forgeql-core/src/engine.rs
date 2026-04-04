@@ -1503,6 +1503,13 @@ impl ForgeQLEngine {
         })
     }
 
+    /// Return the source name associated with the given session, if it exists.
+    #[must_use]
+    pub fn source_name_for_session(&self, session_id: &str) -> Option<&str> {
+        self.sessions
+            .get(session_id)
+            .map(|s| s.source_name.as_str())
+    }
     /// Incrementally re-index the given files in a session after a mutation.
     ///
     /// Errors are logged but never propagated — re-indexing is best-effort.

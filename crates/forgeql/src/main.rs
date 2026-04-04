@@ -236,11 +236,6 @@ fn run_repl(
     // Try to resume a saved session.
     let mut session = load_session_file();
     try_resume_session(&mut engine, &mut session);
-    // Seed the logger source from an already-saved session (resume path).
-    if let (Some(log), Some(src)) = (&mut logger, &session.source) {
-        log.set_source(src);
-    }
-
     println!(
         "ForgeQL v{} — type 'help' or 'exit'",
         env!("CARGO_PKG_VERSION")
@@ -319,10 +314,6 @@ fn run_pipe(
 
     let mut session = load_session_file();
     try_resume_session(&mut engine, &mut session);
-    if let (Some(log), Some(src)) = (&mut logger, &session.source) {
-        log.set_source(src);
-    }
-
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let line = line.context("reading stdin")?;
@@ -354,10 +345,6 @@ fn run_one_shot(
         session.session_id = Some(sid.to_string());
     }
     try_resume_session(&mut engine, &mut session);
-    if let (Some(log), Some(src)) = (&mut logger, &session.source) {
-        log.set_source(src);
-    }
-
     execute_and_print(&mut engine, fql, &mut session, logger.as_mut(), format);
 
     save_session_file(&session);
@@ -449,6 +436,10 @@ fn execute_and_print(
     // Consume the Option<&mut QueryLogger> as an ownable value so we can use
     // it across the loop without re-borrowing for each iteration.
     let mut log = logger;
+    let mut log_source = session
+        .source
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
 
     for (source_text, op) in &ops {
         let t0 = std::time::Instant::now();
@@ -471,16 +462,11 @@ fn execute_and_print(
                         session.source = Some(source.clone());
                         session.branch = Some(branch.clone());
                         session.as_branch.clone_from(as_branch);
-                        // Update the logger source name now that we know it.
-                        if let Some(ref mut l) = log {
-                            l.set_source(source);
-                        }
+                        log_source.clone_from(source);
                     }
-                    // Update logger source name for CREATE SOURCE too.
-                    if let ForgeQLIR::CreateSource { name, .. } = op
-                        && let Some(ref mut l) = log
-                    {
-                        l.set_source(name);
+                    // Update log source for CREATE SOURCE too.
+                    if let ForgeQLIR::CreateSource { name, .. } = op {
+                        log_source.clone_from(name);
                     }
                 }
                 // Clear session on DISCONNECT.
@@ -493,7 +479,7 @@ fn execute_and_print(
                     CliFormat::Json => result.to_json_pretty(),
                 };
                 if let Some(ref mut l) = log {
-                    l.log(source_text, &result, &output, elapsed_ms);
+                    l.log(source_text, &result, &output, elapsed_ms, &log_source);
                 }
                 println!("{output}");
             }
