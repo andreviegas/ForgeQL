@@ -20,10 +20,10 @@ use crate::ast::index::{IndexRow, SymbolTable, UsageSite};
 
 /// Increment this when `CachedIndex` fields change incompatibly.
 ///
-/// `load()` returns `Err` if the on-disk version does not match.
 /// v9: `parameter_declaration` gains `fql_kind = "variable"` — stale caches lack this.
 /// v10: `alias_declaration` → `type_alias`, `preproc_function_def` → `macro` `fql_kind` mappings.
-pub const CURRENT_VERSION: u32 = 10;
+/// v11: `dead_store_conditional`, `decl_far_conditional`, `branch_depth` enrichment fields added.
+pub const CURRENT_VERSION: u32 = 11;
 
 // -----------------------------------------------------------------------
 // CachedIndex

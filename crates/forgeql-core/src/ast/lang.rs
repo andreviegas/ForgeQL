@@ -49,6 +49,7 @@ pub const FQL_DO: &str = "do";
 ///
 /// Each language crate constructs this via JSON deserialization
 /// ([`super::lang_json::LanguageConfigJson::from_json_bytes`]).
+#[allow(clippy::struct_excessive_bools)]
 pub struct LanguageConfig {
     // -- identity --
     /// Root node kind produced by the tree-sitter grammar (e.g.
@@ -143,6 +144,12 @@ pub struct LanguageConfig {
 
     /// Whether the language has implicit truthiness (e.g. `if (ptr)` in C++).
     pub(crate) has_implicit_truthiness: bool,
+
+    /// Whether function parameters and the function body share the same variable
+    /// scope (Python-style).  When `true`, `ShadowEnricher` treats params as
+    /// part of the function body's own scope rather than an outer scope, avoiding
+    /// false positives on simple parameter reassignments inside `if`/`for` blocks.
+    pub(crate) params_share_body_scope: bool,
 
     /// Raw kind for decorator/attribute nodes, if the language has them.
     pub(crate) decorator_raw_kind: Option<String>,
@@ -770,6 +777,15 @@ impl LanguageConfig {
     #[must_use]
     pub const fn has_goto_statement(&self) -> bool {
         self.has_goto
+    }
+
+    /// Do function parameters share the same variable scope as the function body?
+    ///
+    /// `true` for Python-style languages where params are just the first
+    /// assignments in the function scope, not a separate outer scope.
+    #[must_use]
+    pub const fn params_share_body_scope(&self) -> bool {
+        self.params_share_body_scope
     }
 
     /// Does the language coerce non-boolean values to truth in conditions?

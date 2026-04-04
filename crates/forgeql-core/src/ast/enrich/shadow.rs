@@ -88,10 +88,15 @@ fn walk_scopes_iterative(
     params: BTreeSet<String>,
     shadowed: &mut BTreeSet<String>,
 ) {
-    // Outer scopes (innermost-last).  Starts with the parameter scope.
-    let mut scope_stack: Vec<BTreeSet<String>> = vec![params];
-    // Declarations collected at the current (innermost) scope level.
-    let mut current_scope: BTreeSet<String> = BTreeSet::new();
+    // In Python-style languages the params and function body share one scope:
+    // start with params already in `current_scope` and an empty outer stack.
+    // In C++/Rust-style languages params are an outer scope and the function
+    // body is an inner scope.
+    let (mut scope_stack, mut current_scope) = if config.params_share_body_scope() {
+        (Vec::<BTreeSet<String>>::new(), params)
+    } else {
+        (vec![params], BTreeSet::new())
+    };
 
     // Seed with body's direct children in reverse so they pop in forward order.
     let mut work: Vec<WorkItem<'_>> = Vec::new();
@@ -136,8 +141,13 @@ fn walk_scopes_iterative(
                     if let Some(name) = extract_declarator_name(node, source, config) {
                         // Direct children of a block: shadow only if name is in an outer scope.
                         // Non-direct (for-loop init etc.): also shadow if in current scope.
+                        // For Python-style languages, only outer scopes (scope_stack)
+                        // trigger shadows. The `current_scope` check is suppressed
+                        // because params live there and reassigning a param is not a shadow.
                         let is_shadow = scope_stack.iter().any(|s| s.contains(&name))
-                            || (!in_block_direct && current_scope.contains(&name));
+                            || (!config.params_share_body_scope()
+                                && !in_block_direct
+                                && current_scope.contains(&name));
                         if is_shadow {
                             let _ = shadowed.insert(name.clone());
                         }

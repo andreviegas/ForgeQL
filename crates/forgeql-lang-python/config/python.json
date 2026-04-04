@@ -16,6 +16,7 @@
     "init_declarator": "",
     "comment": "comment",
     "skip_node_kinds": [],
+    "scope_creating_kinds": ["function_definition", "lambda"],
     "usage_node_kinds": ["identifier"],
     "statement_boundary_kinds": [
       "expression_statement", "return_statement",
@@ -49,7 +50,14 @@
     "for_style_map": [
       ["for_statement", "range"]
     ],
-    "condition_clause": ""
+    "condition_clause": "",
+    "branch_kinds": [
+      "if_statement", "elif_clause", "else_clause",
+      "for_statement", "while_statement",
+      "match_statement", "case_clause"
+    ],
+    "loop_kinds": ["for_statement", "while_statement"],
+    "exception_handler_kinds": ["try_statement", "except_clause"]
   },
 
   "statements": {
@@ -124,7 +132,8 @@
   "capabilities": {
     "has_goto": false,
     "has_increment_decrement": false,
-    "has_implicit_truthiness": true
+    "has_implicit_truthiness": true,
+    "params_share_body_scope": true
   },
 
   "kind_map": {

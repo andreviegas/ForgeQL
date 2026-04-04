@@ -427,6 +427,7 @@ pub struct CommentsSection {
 
 /// Language capability flags.
 #[derive(Deserialize, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct CapabilitiesSection {
     /// Has `goto` statements.
     #[serde(default)]
@@ -436,9 +437,13 @@ pub struct CapabilitiesSection {
     #[serde(default)]
     pub has_increment_decrement: bool,
 
-    /// Has implicit truthiness (e.g. `if (ptr)` in C++).
-    #[serde(default)]
     pub has_implicit_truthiness: bool,
+
+    /// Whether function parameters and the function body share the same variable
+    /// scope (Python-style).  Set to `true` for Python and similar languages.
+    /// Default: `false` (C++/Rust style — params are an outer scope).
+    #[serde(default)]
+    pub params_share_body_scope: bool,
 }
 
 // -----------------------------------------------------------------------
@@ -512,6 +517,7 @@ impl LanguageConfigJson {
             has_goto: self.capabilities.has_goto,
             has_increment_decrement: self.capabilities.has_increment_decrement,
             has_implicit_truthiness: self.capabilities.has_implicit_truthiness,
+            params_share_body_scope: self.capabilities.params_share_body_scope,
             decorator_raw_kind: self.types.decorator,
             skip_node_kinds: self.syntax.skip_node_kinds,
             usage_node_kinds: self.syntax.usage_node_kinds,
