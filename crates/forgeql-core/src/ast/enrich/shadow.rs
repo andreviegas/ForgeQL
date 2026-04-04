@@ -131,6 +131,11 @@ fn walk_scopes_iterative(
                     });
                     for i in (0..node.child_count()).rev() {
                         if let Some(child) = node.child(i) {
+                            // Skip preprocessor alternate branches (preproc_else,
+                            // preproc_elif) even inside scope-creating nodes.
+                            if config.is_skip_kind(child.kind()) {
+                                continue;
+                            }
                             work.push(WorkItem::Visit {
                                 node: child,
                                 in_block_direct: true,
@@ -155,8 +160,15 @@ fn walk_scopes_iterative(
                     }
                 } else {
                     // Non-scope, non-declaration: recurse into children (non-direct context).
+                    // Skip preprocessor alternate branches (preproc_else, preproc_elif) so
+                    // that variables declared under #ifdef and #else arms do not appear to
+                    // shadow each other — those branches are mutually exclusive at runtime.
+                    // This matches the skip_node_kinds filter used during indexing.
                     for i in (0..node.child_count()).rev() {
                         if let Some(child) = node.child(i) {
+                            if config.is_skip_kind(child.kind()) {
+                                continue;
+                            }
                             work.push(WorkItem::Visit {
                                 node: child,
                                 in_block_direct: false,

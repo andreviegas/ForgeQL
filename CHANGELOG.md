@@ -87,6 +87,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`ShadowEnricher` false positives from `#ifdef`/`#else` siblings** —
+  `walk_scopes_iterative` now honours `skip_node_kinds` (`preproc_else`,
+  `preproc_elif`) when iterating over a node's children, in both the
+  scope-creating and the generic-recurse paths.  Previously, declarations
+  in the `#ifdef` arm accumulated into `current_scope` and then a matching
+  declaration in the `#else` arm was reported as a shadow — incorrect because
+  the two arms are mutually exclusive at runtime.  Real shadows (a variable
+  inside `#ifdef` that shadows an outer-scope variable) are still detected.
+  Cache bumped to v14.
+
 - **`has_unused_reassign` false positives for uninitialized declarations** —
   `DeclDistanceEnricher` previously seeded every unconditional local
   declaration as "written not read", which caused the very first assignment to

@@ -26,7 +26,11 @@ use crate::ast::index::{IndexRow, SymbolTable, UsageSite};
 /// v12: `decl_far_conditional` corrected from a count to a boolean `"true"`/`"false"`.
 /// v13: `has_unused_reassign` false-positive fix — uninitialized declarations no longer seeded
 ///      as "written not read"; only declarations with explicit initializers are seeded.
-pub const CURRENT_VERSION: u32 = 13;
+/// v14: `ShadowEnricher` false-positive fix — `preproc_else`/`preproc_elif` branches are now
+///      skipped during the shadow walk (honouring `skip_node_kinds`), eliminating false positives
+///      where a variable in one `#ifdef`/`#else` arm appeared to shadow the same variable in the
+///      sibling arm (mutually exclusive at runtime).
+pub const CURRENT_VERSION: u32 = 14;
 
 // -----------------------------------------------------------------------
 // CachedIndex
