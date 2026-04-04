@@ -3,8 +3,8 @@
 /// `enrich_row()` adds to `function_definition` rows:
 /// - `decl_distance`: sum of (`first_use` − `decl`) for locals with distance ≥ 2.
 /// - `decl_far_count`: number of locals with distance ≥ 2.
-/// - `decl_far_conditional`: subset of `decl_far_count` where the declaration
-///   or first use is inside a branch/loop (conditionally
+/// - `decl_far_conditional`: `"true"` if any far-declared variable (`decl_distance ≥ 2`)
+///   has its declaration or first use inside a branch/loop (conditionally
 ///   executed), so the distance measurement is unreliable.
 /// - `has_unused_reassign`: `"true"` if any local is written twice without a
 ///   read in between at branch depth 0 (unconditional dead store).
@@ -78,7 +78,7 @@ impl NodeEnricher for DeclDistanceEnricher {
         drop(fields.insert("decl_far_count".to_string(), far_count.to_string()));
         drop(fields.insert(
             "decl_far_conditional".to_string(),
-            far_conditional_count.to_string(),
+            (far_conditional_count > 0).to_string(),
         ));
         drop(fields.insert(
             "has_unused_reassign".to_string(),

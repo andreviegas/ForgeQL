@@ -23,7 +23,8 @@ use crate::ast::index::{IndexRow, SymbolTable, UsageSite};
 /// v9: `parameter_declaration` gains `fql_kind = "variable"` — stale caches lack this.
 /// v10: `alias_declaration` → `type_alias`, `preproc_function_def` → `macro` `fql_kind` mappings.
 /// v11: `dead_store_conditional`, `decl_far_conditional`, `branch_depth` enrichment fields added.
-pub const CURRENT_VERSION: u32 = 11;
+/// v12: `decl_far_conditional` corrected from a count to a boolean `"true"`/`"false"`.
+pub const CURRENT_VERSION: u32 = 12;
 
 // -----------------------------------------------------------------------
 // CachedIndex
