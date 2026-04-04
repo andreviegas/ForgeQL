@@ -1514,13 +1514,22 @@ impl ForgeQLEngine {
     ///
     /// Errors are logged but never propagated — re-indexing is best-effort.
     fn reindex_session(&mut self, session_id: &str, paths: &[PathBuf]) {
-        if let Some(session) = self.sessions.get_mut(session_id)
-            && let Err(err) = session.reindex_files(paths)
-        {
+        let Some(session) = self.sessions.get_mut(session_id) else {
+            return;
+        };
+        if let Err(err) = session.reindex_files(paths) {
             warn!(
                 session = %session_id,
                 error = %err,
                 "reindex after mutation failed"
+            );
+            return;
+        }
+        if let Err(err) = session.save_index() {
+            warn!(
+                session = %session_id,
+                error = %err,
+                "index save after mutation failed"
             );
         }
     }

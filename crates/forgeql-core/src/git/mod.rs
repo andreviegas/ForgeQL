@@ -93,19 +93,32 @@ pub fn soft_reset(repo: &Repository, oid_hex: &str) -> Result<()> {
     Ok(())
 }
 
-/// Files that `ForgeQL` generates at runtime and must never appear in any commit
-/// — neither user-visible commits nor internal checkpoint commits.
-const RUNTIME_FILES: &[&str] = &[".forgeql-index", ".forgeql-session"];
+/// Files excluded from **user-facing** commits (`COMMIT MESSAGE`, squash).
+/// The index cache is stripped so published history stays clean.
+const CLEAN_COMMIT_EXCLUDED: &[&str] = &[".forgeql-index", ".forgeql-session"];
 
-fn is_runtime_file(path: &std::path::Path) -> bool {
+/// Files excluded from **internal checkpoint** commits (`BEGIN TRANSACTION`).
+/// The index cache is intentionally *included* so that `git reset --hard`
+/// restores it automatically, giving instant rollback without re-indexing.
+const CHECKPOINT_EXCLUDED: &[&str] = &[".forgeql-session"];
+
+fn is_clean_commit_excluded(path: &std::path::Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|name| RUNTIME_FILES.contains(&name))
+        .is_some_and(|name| CLEAN_COMMIT_EXCLUDED.contains(&name))
 }
 
-/// Stage all modified files (excluding `ForgeQL` runtime files) and commit.
+fn is_checkpoint_excluded(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| CHECKPOINT_EXCLUDED.contains(&name))
+}
+
+/// Stage all modified files and commit as an internal checkpoint.
 ///
-/// Used for internal checkpoint commits inside a transaction.
+/// The `.forgeql-index` cache is **included** so that `git reset --hard`
+/// restores it, enabling instant rollback without re-indexing.
+/// Only `.forgeql-session` is excluded.
 ///
 /// # Errors
 /// Returns `Err` if staging, tree writing, or the commit itself fails.
@@ -114,9 +127,9 @@ pub fn stage_and_commit(repo: &Repository, message: &str) -> Result<()> {
     index.add_all(
         std::iter::once("*"),
         git2::IndexAddOption::DEFAULT,
-        Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_runtime_file(path))),
+        Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_checkpoint_excluded(path))),
     )?;
-    for f in RUNTIME_FILES {
+    for f in CHECKPOINT_EXCLUDED {
         let _ = index.remove_path(std::path::Path::new(f));
     }
     index.write()?;
@@ -129,14 +142,14 @@ pub fn stage_and_commit(repo: &Repository, message: &str) -> Result<()> {
     let parent = repo.head()?.peel_to_commit()?;
 
     let _oid = repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
-    debug!(message, "committed");
+    debug!(message, "committed (checkpoint)");
     Ok(())
 }
 
-/// Stage all modified files (excluding `ForgeQL` runtime files) and commit.
+/// Stage all modified files (excluding runtime and index files) and commit.
 ///
-/// Produces a clean user-facing commit that never contains runtime-generated
-/// files. Any previously tracked runtime files are also removed from the index.
+/// Produces a clean user-facing commit that never contains `.forgeql-index`
+/// or `.forgeql-session`. Any previously tracked copies are also removed.
 ///
 /// # Errors
 /// Returns `Err` if staging, tree writing, or the commit itself fails.
@@ -145,9 +158,9 @@ pub fn stage_and_commit_clean(repo: &Repository, message: &str) -> Result<()> {
     index.add_all(
         std::iter::once("*"),
         git2::IndexAddOption::DEFAULT,
-        Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_runtime_file(path))),
+        Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_clean_commit_excluded(path))),
     )?;
-    for f in RUNTIME_FILES {
+    for f in CLEAN_COMMIT_EXCLUDED {
         let _ = index.remove_path(std::path::Path::new(f));
     }
     index.write()?;
@@ -196,14 +209,14 @@ pub fn squash_commit_on_branch(
         .ok_or_else(|| anyhow::anyhow!("HEAD is detached — cannot determine target branch"))?
         .to_string();
 
-    // 2. Stage working-tree changes (excluding runtime files).
+    // 2. Stage working-tree changes (excluding runtime + index files).
     let mut index = repo.index()?;
     index.add_all(
         std::iter::once("*"),
         git2::IndexAddOption::DEFAULT,
-        Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_runtime_file(path))),
+        Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_clean_commit_excluded(path))),
     )?;
-    for f in RUNTIME_FILES {
+    for f in CLEAN_COMMIT_EXCLUDED {
         let _ = index.remove_path(std::path::Path::new(f));
     }
     index.write()?;

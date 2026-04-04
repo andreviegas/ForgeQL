@@ -270,6 +270,33 @@ impl Session {
         table.reindex_files(paths, &self.lang_registry)
     }
 
+    /// Persist the current in-memory index to `.forgeql-index`.
+    ///
+    /// This round-trips through `CachedIndex` (which takes ownership of the
+    /// table and gives it back via `into_table`), so the session keeps its
+    /// live index after the call.
+    ///
+    /// # Errors
+    /// Returns `Err` if no index has been built yet, or if serialisation /
+    /// I/O fails.
+    pub fn save_index(&mut self) -> Result<()> {
+        let table = self
+            .index
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("cannot save: session {} has no index", self.id))?;
+        let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
+        let cached = CachedIndex::from_table(table, &commit_hash);
+        let cache_path = self.worktree_path.join(".forgeql-index");
+        cached.save(&cache_path)?;
+        self.index = Some(cached.into_table());
+        debug!(
+            session = %self.id,
+            commit = %commit_hash,
+            "index saved to disk"
+        );
+        self.cached_commit = Some(commit_hash);
+        Ok(())
+    }
     /// Update the last-active timestamp to now.
     ///
     /// Call this on every request that touches the session so that the TTL
