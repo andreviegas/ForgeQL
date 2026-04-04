@@ -24,7 +24,9 @@ use crate::ast::index::{IndexRow, SymbolTable, UsageSite};
 /// v10: `alias_declaration` → `type_alias`, `preproc_function_def` → `macro` `fql_kind` mappings.
 /// v11: `dead_store_conditional`, `decl_far_conditional`, `branch_depth` enrichment fields added.
 /// v12: `decl_far_conditional` corrected from a count to a boolean `"true"`/`"false"`.
-pub const CURRENT_VERSION: u32 = 12;
+/// v13: `has_unused_reassign` false-positive fix — uninitialized declarations no longer seeded
+///      as "written not read"; only declarations with explicit initializers are seeded.
+pub const CURRENT_VERSION: u32 = 13;
 
 // -----------------------------------------------------------------------
 // CachedIndex

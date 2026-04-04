@@ -20,6 +20,11 @@ pub struct LocalDecl {
     /// enclosing function body.  Zero means the declaration is unconditional
     /// (always executed on every call).
     pub branch_depth: u32,
+    /// True if the declaration carries an initializer value (e.g. `int x = 0`).
+    /// False for bare uninitialized declarations (e.g. `int x;` or `let x;`).
+    /// Only initialized declarations are seeded as "written not read" because
+    /// an uninitialized declaration has no value that can be overwritten as dead.
+    pub has_initializer: bool,
 }
 
 /// Collect all local variable declarations inside a function body.
@@ -54,10 +59,26 @@ pub fn collect_local_declarations(ctx: &EnrichContext<'_>) -> Vec<LocalDecl> {
                 if seen.insert(name.clone()) {
                     let line = node.start_position().row + 1;
                     let branch_depth = count_node_branch_depth(node, func, config);
+                    // An initialized declaration (e.g. `int x = 0`) carries a
+                    // value that can be dead-stored-over.  A bare declaration
+                    // (e.g. `int x;` or `let x;`) does NOT — its "value" is
+                    // indeterminate, so the first write is always valid.
+                    //
+                    // C/C++: declarator field child is `init_declarator` when initialised.
+                    // Rust:  `let_declaration` has an explicit `value` field.
+                    // Python: `assignment` always has `right`; always initialised.
+                    let has_initializer = if config.declarator_field().is_empty() {
+                        node.child_by_field_name("value").is_some()
+                            || node.child_by_field_name("right").is_some()
+                    } else {
+                        node.child_by_field_name(config.declarator_field())
+                            .is_some_and(|d| config.is_init_declarator_kind(d.kind()))
+                    };
                     locals.push(LocalDecl {
                         name,
                         line,
                         branch_depth,
+                        has_initializer,
                     });
                 }
             }

@@ -87,6 +87,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`has_unused_reassign` false positives for uninitialized declarations** —
+  `DeclDistanceEnricher` previously seeded every unconditional local
+  declaration as "written not read", which caused the very first assignment to
+  a bare uninitialized variable (e.g. `int x;` or `let x;`) to be misreported
+  as a dead store.  Only declarations that carry an explicit initializer value
+  (e.g. `int x = 0;`, `int x = fn()`, Rust `let x = ...`) are now seeded.
+  This eliminates the large class of false positives where code follows the
+  common C/C++ pattern of declaring a variable then immediately assigning it
+  from a function call: `uint8_t mod; mod = read_reg(...); use(mod);`.
+  Genuine dead stores — where a variable is initialized *and* then
+  unconditionally overwritten before being read — continue to be detected.
+  Cache bumped to v13.
+
 - **Python `condition_tests` under-counted** — tree-sitter-python's
   `comparison_operator` node uses `"operators"` (plural) for its operator
   field instead of the singular `"operator"` used by most grammars.

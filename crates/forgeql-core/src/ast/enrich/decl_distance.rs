@@ -146,11 +146,17 @@ fn analyse_uses<'a>(ctx: &EnrichContext<'a>, locals: &[LocalDecl]) -> AnalyseRes
     let mut has_dead_store = false;
     let mut has_dead_store_conditional = false;
 
-    // Only seed unconditional declarations as "initially written".
-    // A declaration inside a branch may not execute, so we cannot treat it
-    // as a guaranteed write seeding a dead-store check.
+    // Only seed unconditional declarations that carry an initializer value
+    // as "initially written".  Rules:
+    //   1. branch_depth == 0: the declaration always executes — a conditional
+    //      declaration may not run, so its "write" is not guaranteed.
+    //   2. has_initializer: only a declaration *with* an initial value
+    //      (e.g. `int x = 0;`) can produce a dead store if immediately
+    //      overwritten.  A bare uninitialized declaration (e.g. `int x;` or
+    //      `let x;`) has no value to preserve — the first write after it is
+    //      always valid and must NOT be flagged as a dead store.
     for local in locals {
-        if local.branch_depth == 0 {
+        if local.branch_depth == 0 && local.has_initializer {
             let _ = written_not_read.insert(local.name.as_str(), true);
         }
     }
