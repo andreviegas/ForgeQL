@@ -9,6 +9,7 @@
     "root_node": "translation_unit",
     "scope_separator": "::",
     "block": "compound_statement",
+    "scope_creating_kinds": ["compound_statement"],
     "identifier": "identifier",
     "parameter_list": "parameter_list",
     "declarator_field": "declarator",
@@ -67,7 +68,15 @@
       ["for_statement", "traditional"],
       ["for_range_loop", "range"]
     ],
-    "condition_clause": "condition_clause"
+    "condition_clause": "condition_clause",
+    "branch_kinds": [
+      "if_statement", "else_clause",
+      "for_statement", "for_range_loop",
+      "while_statement", "do_statement",
+      "switch_statement", "case_statement"
+    ],
+    "loop_kinds": ["for_statement", "for_range_loop", "while_statement", "do_statement"],
+    "exception_handler_kinds": ["try_statement", "catch_clause"]
   },
 
   "statements": {

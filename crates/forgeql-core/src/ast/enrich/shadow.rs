@@ -1,26 +1,26 @@
-/// Shadow enrichment — detects functions where an inner scope
-/// redeclares a variable name that already exists in an outer scope.
+/// Shadow enrichment — detects functions where an inner scope redeclares a
+/// variable name that already exists in an outer scope.
 ///
 /// `enrich_row()` adds to `function_definition` rows:
 /// - `has_shadow`:   `"true"` if any shadowed variable was detected.
 /// - `shadow_count`: number of distinct shadowed variable names.
 /// - `shadow_vars`:  comma-separated names of shadowed variables.
 ///
-/// A "shadow" occurs when a declaration in a nested `compound_statement`
-/// (or language-equivalent block) uses the same identifier as a
-/// declaration in an enclosing scope of the same function.  Parameters
-/// are treated as the outermost scope.
+/// A "shadow" occurs when a declaration in a nested scope uses the same
+/// identifier as a declaration in an enclosing scope of the same function.
+/// Parameters are treated as the outermost scope.
 ///
-/// **Language-agnostic:** uses `block_raw_kind`, `declaration_raw_kinds`,
-/// `function_raw_kinds`, `parameter_raw_kind`, and
-/// `parameter_list_raw_kind` from [`LanguageConfig`].
+/// **Language-agnostic via config:** `scope_creating_raw_kinds` controls which
+/// node kinds open a new scope.  C++/Rust: `["compound_statement"]` / `["block"]`
+/// (every `{}` creates a new scope).  Python: only `function_definition`,
+/// `class_definition`, `lambda`, and comprehension nodes create scopes — `if`/
+/// `for` blocks do NOT, which matches Python's function-scoped variable rules.
 use std::collections::{BTreeSet, HashMap};
 
-use super::data_flow_utils::{extract_declarator_name, find_leaf_identifier};
+use super::data_flow_utils::{collect_parameter_names, extract_declarator_name};
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::lang::LanguageConfig;
 
-/// Enricher for variable shadowing detection.
 pub struct ShadowEnricher;
 
 impl NodeEnricher for ShadowEnricher {
@@ -42,19 +42,16 @@ impl NodeEnricher for ShadowEnricher {
         let source = ctx.source;
         let func = ctx.node;
 
-        // Collect parameter names as the outermost scope.
-        let params = collect_parameter_names(func, source, config);
+        let params: BTreeSet<String> = collect_parameter_names(func, source, config)
+            .into_iter()
+            .collect();
 
-        // Walk the function body looking for nested scope shadows.
         let Some(body) = func.child_by_field_name("body") else {
             return;
         };
 
         let mut shadowed: BTreeSet<String> = BTreeSet::new();
-        // Start with parameter names as the initial outer scope.
-        let mut scope_stack: Vec<BTreeSet<String>> = vec![params];
-
-        walk_scopes(body, source, config, &mut scope_stack, &mut shadowed);
+        walk_scopes_iterative(body, source, config, params, &mut shadowed);
 
         if !shadowed.is_empty() {
             drop(fields.insert("has_shadow".into(), "true".into()));
@@ -65,160 +62,99 @@ impl NodeEnricher for ShadowEnricher {
     }
 }
 
-/// Collect all parameter names from a function's parameter list.
-fn collect_parameter_names(
-    func: tree_sitter::Node<'_>,
-    source: &[u8],
-    config: &LanguageConfig,
-) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-
-    // The parameter list may be nested inside a function_declarator
-    // (e.g. in C++: function_definition → function_declarator → parameter_list),
-    // so search recursively instead of looking at direct children only.
-    let Some(param_list) = find_descendant_by_kind(func, config.parameter_list_kind()) else {
-        return names;
-    };
-
-    let has_param_kind = !config.parameter_kind().is_empty();
-    for i in 0..param_list.child_count() {
-        let Some(child) = param_list.child(i) else {
-            continue;
-        };
-        if has_param_kind {
-            // C++/Rust: match specific parameter node kinds.
-            if config.is_parameter_kind(child.kind()) {
-                if let Some(decl) = child.child_by_field_name(config.declarator_field())
-                    && let Some(name) = find_leaf_identifier(decl, source, config)
-                {
-                    let _ = names.insert(name);
-                } else if let Some(name) = find_leaf_identifier(child, source, config) {
-                    let _ = names.insert(name);
-                }
-            }
-        } else {
-            // Python-style: no dedicated parameter kind. Each named child of
-            // the parameter list is a potential parameter.
-            if let Some(name) = find_leaf_identifier(child, source, config) {
-                let _ = names.insert(name);
-            }
-        }
-    }
-    names
+/// Work item for the iterative scope-aware tree walk.
+enum WorkItem<'tree> {
+    /// Visit this node.
+    Visit {
+        node: tree_sitter::Node<'tree>,
+        /// `true` when this node is a direct child of a scope-creating block.
+        /// Direct children check only outer scopes for shadowing; non-direct
+        /// children (e.g. for-loop initializers) also check the current scope.
+        in_block_direct: bool,
+    },
+    /// Restore scope state after finishing a scope-creating block.
+    ExitScope { saved_current: BTreeSet<String> },
 }
 
-/// Recursively walk a scope (block node), collecting declarations and
-/// detecting shadows against outer scopes.
-fn walk_scopes(
-    block: tree_sitter::Node<'_>,
-    source: &[u8],
-    config: &LanguageConfig,
-    scope_stack: &mut Vec<BTreeSet<String>>,
-    shadowed: &mut BTreeSet<String>,
-) {
-    // Declarations in THIS scope.
-    let mut current_scope = BTreeSet::new();
-
-    for i in 0..block.child_count() {
-        let Some(child) = block.child(i) else {
-            continue;
-        };
-
-        let kind = child.kind();
-
-        // If this child is a declaration, extract its name.
-        if config.is_declaration_kind(kind) {
-            if let Some(name) = extract_declarator_name(child, source, config) {
-                // Check against all outer scopes.
-                if is_in_outer_scope(&name, scope_stack) {
-                    let _ = shadowed.insert(name.clone());
-                }
-                let _ = current_scope.insert(name);
-            }
-        } else {
-            // If this child contains a nested scope, recurse.
-            // Many statements (if, for, while, etc.) contain compound_statement
-            // children that form a new scope.
-            visit_nested_scopes(child, source, config, scope_stack, &current_scope, shadowed);
-        }
-    }
-}
-
-/// Check if a name exists in any of the outer scopes in the stack.
-fn is_in_outer_scope(name: &str, scope_stack: &[BTreeSet<String>]) -> bool {
-    scope_stack.iter().any(|scope| scope.contains(name))
-}
-
-/// Find a descendant node of the given kind (BFS, stops at first match).
-fn find_descendant_by_kind<'a>(
-    root: tree_sitter::Node<'a>,
-    kind: &str,
-) -> Option<tree_sitter::Node<'a>> {
-    let mut cursor = root.walk();
-    let mut visit = true;
-    loop {
-        if visit && cursor.node().kind() == kind && cursor.node() != root {
-            return Some(cursor.node());
-        }
-        if visit && cursor.goto_first_child() {
-            visit = true;
-            continue;
-        }
-        if cursor.goto_next_sibling() {
-            visit = true;
-            continue;
-        }
-        loop {
-            if !cursor.goto_parent() {
-                return None;
-            }
-            if cursor.goto_next_sibling() {
-                visit = true;
-                break;
-            }
-        }
-    }
-}
-
-/// Visit all nested scopes inside a node.
+/// Iterative (non-recursive) scope-aware shadow walk.
 ///
-/// Handles:
-/// - `compound_statement` blocks → recurse as a new scope
-/// - Declarations inside non-block contexts (for-loop initializers) →
-///   check for shadowing against outer + current scopes
-/// - Other nodes → recurse into children
-fn visit_nested_scopes(
-    node: tree_sitter::Node<'_>,
+/// Uses an explicit work stack to avoid call-stack depth issues on deeply
+/// nested code.  `scope_stack` holds outer scopes (innermost-last).
+/// `current_scope` accumulates declarations at the current nesting level.
+fn walk_scopes_iterative(
+    body: tree_sitter::Node<'_>,
     source: &[u8],
     config: &LanguageConfig,
-    scope_stack: &mut Vec<BTreeSet<String>>,
-    current_scope: &BTreeSet<String>,
+    params: BTreeSet<String>,
     shadowed: &mut BTreeSet<String>,
 ) {
-    // If the node itself is a block, recurse as a new scope.
-    if config.is_block_kind(node.kind()) {
-        scope_stack.push(current_scope.clone());
-        walk_scopes(node, source, config, scope_stack, shadowed);
-        drop(scope_stack.pop());
-        return;
-    }
+    // Outer scopes (innermost-last).  Starts with the parameter scope.
+    let mut scope_stack: Vec<BTreeSet<String>> = vec![params];
+    // Declarations collected at the current (innermost) scope level.
+    let mut current_scope: BTreeSet<String> = BTreeSet::new();
 
-    // Declarations inside non-block parents (e.g. for-loop initializer:
-    // `for (int i = 0; ...)` — the `declaration` is a child of `for_statement`,
-    // not of a compound_statement).  These are in an implicit nested scope.
-    if config.is_declaration_kind(node.kind())
-        && let Some(name) = extract_declarator_name(node, source, config)
-    {
-        if is_in_outer_scope(&name, scope_stack) || current_scope.contains(&name) {
-            let _ = shadowed.insert(name);
+    // Seed with body's direct children in reverse so they pop in forward order.
+    let mut work: Vec<WorkItem<'_>> = Vec::new();
+    for i in (0..body.child_count()).rev() {
+        if let Some(child) = body.child(i) {
+            work.push(WorkItem::Visit {
+                node: child,
+                in_block_direct: true,
+            });
         }
-        return;
     }
 
-    // Recurse into children.
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
-            visit_nested_scopes(child, source, config, scope_stack, current_scope, shadowed);
+    while let Some(item) = work.pop() {
+        match item {
+            WorkItem::ExitScope { saved_current } => {
+                let _ = scope_stack.pop();
+                current_scope = saved_current;
+            }
+            WorkItem::Visit {
+                node,
+                in_block_direct,
+            } => {
+                let kind = node.kind();
+
+                if config.is_scope_creating_kind(kind) {
+                    // Open a new scope: save current state, push it for inner
+                    // block to check against, start fresh current_scope.
+                    let saved = std::mem::take(&mut current_scope);
+                    scope_stack.push(saved.clone());
+                    work.push(WorkItem::ExitScope {
+                        saved_current: saved,
+                    });
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            work.push(WorkItem::Visit {
+                                node: child,
+                                in_block_direct: true,
+                            });
+                        }
+                    }
+                } else if config.is_declaration_kind(kind) {
+                    if let Some(name) = extract_declarator_name(node, source, config) {
+                        // Direct children of a block: shadow only if name is in an outer scope.
+                        // Non-direct (for-loop init etc.): also shadow if in current scope.
+                        let is_shadow = scope_stack.iter().any(|s| s.contains(&name))
+                            || (!in_block_direct && current_scope.contains(&name));
+                        if is_shadow {
+                            let _ = shadowed.insert(name.clone());
+                        }
+                        let _ = current_scope.insert(name);
+                    }
+                } else {
+                    // Non-scope, non-declaration: recurse into children (non-direct context).
+                    for i in (0..node.child_count()).rev() {
+                        if let Some(child) = node.child(i) {
+                            work.push(WorkItem::Visit {
+                                node: child,
+                                in_block_direct: false,
+                            });
+                        }
+                    }
+                }
+            }
         }
     }
 }

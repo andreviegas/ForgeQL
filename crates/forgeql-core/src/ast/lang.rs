@@ -193,6 +193,29 @@ pub struct LanguageConfig {
     /// `"block"` for Python/Rust).
     pub(crate) block_raw_kind: String,
 
+    // -- scope / branch awareness (shadow + dead-store enrichers) --
+    /// Node kinds that create a new variable scope for shadowing purposes.
+    /// C++/Rust: `["compound_statement"]` / `["block"]` (every `{}` block).
+    /// Python: only function, class, lambda, and comprehension nodes.
+    pub(crate) scope_creating_raw_kinds: Vec<String>,
+
+    /// Node kinds that represent conditional branches.
+    /// Used to compute branch depth for dead-store and decl-distance enrichers.
+    /// Examples: `if_statement`, `else_clause`, `switch_statement`, `case_statement`.
+    pub(crate) branch_raw_kinds: Vec<String>,
+
+    /// Node kinds that represent loop constructs.
+    /// Loops are treated like branches for depth tracking (a write inside a
+    /// loop may be read on the next iteration, so it is not a dead store).
+    pub(crate) loop_raw_kinds: Vec<String>,
+
+    /// Node kinds that represent exception handlers (`try`, `catch`, `except`).
+    pub(crate) exception_handler_raw_kinds: Vec<String>,
+
+    /// Subset of `declaration_raw_kinds` that are block-scoped.
+    /// Empty = all declarations follow block scoping (default for C++, Rust, Python).
+    /// For JS/TS: set to `["lexical_declaration"]`; `var` then stays function-scoped.
+    pub(crate) block_scoped_declaration_raw_kinds: Vec<String>,
     // -- escape detection (escape enricher) --
     /// Raw kind for return statements
     /// (e.g. `"return_statement"` for C++/Java/TS, `"return_expression"` for Rust).
@@ -505,6 +528,43 @@ impl LanguageConfig {
         self.block_raw_kind == kind
     }
 
+    /// Is this a scope-creating kind (opens a new variable scope)?
+    #[must_use]
+    pub fn is_scope_creating_kind(&self, kind: &str) -> bool {
+        self.scope_creating_raw_kinds.iter().any(|s| s == kind)
+    }
+
+    /// Is this a conditional-branch kind?
+    #[must_use]
+    pub fn is_branch_kind(&self, kind: &str) -> bool {
+        self.branch_raw_kinds.iter().any(|s| s == kind)
+    }
+
+    /// Is this a loop-construct kind?
+    #[must_use]
+    pub fn is_loop_kind(&self, kind: &str) -> bool {
+        self.loop_raw_kinds.iter().any(|s| s == kind)
+    }
+
+    /// Is this an exception-handler kind?
+    #[must_use]
+    pub fn is_exception_handler_kind(&self, kind: &str) -> bool {
+        self.exception_handler_raw_kinds.iter().any(|s| s == kind)
+    }
+
+    /// Is this declaration kind block-scoped?
+    /// When `block_scoped_declaration_raw_kinds` is empty every declaration
+    /// kind is treated as block-scoped (correct for C++, Rust, Python).
+    #[must_use]
+    pub fn is_block_scoped_declaration_kind(&self, kind: &str) -> bool {
+        if self.block_scoped_declaration_raw_kinds.is_empty() {
+            self.is_declaration_kind(kind)
+        } else {
+            self.block_scoped_declaration_raw_kinds
+                .iter()
+                .any(|s| s == kind)
+        }
+    }
     /// Is this an identifier kind?
     #[must_use]
     pub fn is_identifier_kind(&self, kind: &str) -> bool {
@@ -834,6 +894,29 @@ impl LanguageConfig {
         &self.block_raw_kind
     }
 
+    /// Raw slice of scope-creating node kinds.
+    #[must_use]
+    pub fn scope_creating_kinds(&self) -> &[String] {
+        &self.scope_creating_raw_kinds
+    }
+
+    /// Raw slice of conditional-branch node kinds.
+    #[must_use]
+    pub fn branch_kinds(&self) -> &[String] {
+        &self.branch_raw_kinds
+    }
+
+    /// Raw slice of loop-construct node kinds.
+    #[must_use]
+    pub fn loop_kinds(&self) -> &[String] {
+        &self.loop_raw_kinds
+    }
+
+    /// Raw slice of exception-handler node kinds.
+    #[must_use]
+    pub fn exception_handler_kinds(&self) -> &[String] {
+        &self.exception_handler_raw_kinds
+    }
     /// Raw kind for parameter-list container nodes.
     #[must_use]
     pub fn parameter_list_kind(&self) -> &str {

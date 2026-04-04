@@ -9,6 +9,47 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Python language support** — new `forgeql-lang-python` crate adds
+  first-class Python indexing via `tree-sitter-python`.  All `fql_kind`
+  values (`function`, `class`, `variable`, `import`, `namespace` for
+  modules, etc.) are mapped with full classification for `.py` and `.pyi`
+  files.  All enrichment fields work across C++, Rust, and Python without
+  query changes.
+
+- **Scope-aware `ShadowEnricher`** — rewritten with an iterative
+  `WorkItem<'tree>` walker that uses the new `is_scope_creating_kind()`
+  config method.  Python false positives from `if`/`for` blocks (which do
+  not create variable scopes in Python) are eliminated.  C++ for-loop
+  initializer declarations (`for (int i = 0; ...)`) now correctly detect
+  shadowing of an outer `i` via an `in_block_direct` flag that controls
+  whether the current scope is re-checked.
+
+- **Branch-depth-aware dead-store detection** — `DeclDistanceEnricher`
+  now tracks branch nesting depth during its DFS walk using a
+  `depth_stack: Vec<bool>` maintained alongside the cursor.  Two new
+  enrichment fields are emitted:
+  - `dead_store_conditional`: `"true"` when a dead-store assignment occurs
+    inside a branch or loop (`branch_depth > 0`).
+  - `decl_far_conditional`: `"true"` when a far-declared variable
+    (`decl_distance ≥ 2`) lives inside a branch or loop.
+  Variables at `branch_depth = 0` continue to set the existing
+  `has_unused_reassign` field unconditionally.
+
+- **Unused-param detection integrated into `DeclDistanceEnricher`** —
+  `has_unused_param`, `unused_param_count`, and `unused_params` are now
+  emitted by the declaration-distance pass, which already performs a
+  complete identifier walk.  The standalone `UnusedParamEnricher` is now
+  a no-op stub; all three fields are populated without any extra AST
+  traversal.
+
+- **New `LanguageConfig` control-flow scoping fields** — five new fields
+  enable language-agnostic scope and branch analysis:
+  `scope_creating_raw_kinds`, `branch_raw_kinds`, `loop_raw_kinds`,
+  `exception_handler_raw_kinds`, `block_scoped_declaration_raw_kinds`.
+  Five corresponding `is_*_kind()` methods added.
+  `is_scope_creating_kind()` falls back to `block_raw_kind` when the new
+  vec is empty, so existing language configs require no changes.
+
 - **Line numbers in text output** — `FIND` results in text/REPL format now
   include the 1-based source line number appended to the file path
   (`motor.c:42`) so all three output formats (text, JSON, compact) carry
@@ -43,6 +84,49 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   states that the config file may be placed in the directory directly above
   the repo root (outside the tracked tree) as well as in the repo root
   itself.
+
+### Fixed
+
+- **Python `condition_tests` under-counted** — tree-sitter-python's
+  `comparison_operator` node uses `"operators"` (plural) for its operator
+  field instead of the singular `"operator"` used by most grammars.
+  `count_condition_tests` now tries both field names.  Python word
+  operators (`and`, `or`) are now recognised as logical operators and
+  counted; the condition skeleton also preserves `and`, `or`, and `not`
+  as operator tokens.
+
+- **Python `param_count` and for-loop variable names wrong** —
+  `MetricsEnricher` now uses language-agnostic parameter counting for
+  Python (where parameters are bare `identifier` children of `parameters`),
+  and for-loop iteration variable names are correctly extracted from
+  Python `for_statement` nodes.
+
+- **Data-flow enrichers non-functional for Python** —
+  `extract_declarator_name`, `collect_local_declarations`,
+  `is_in_declaration`, and `collect_parameter_names` are now fully
+  language-agnostic.  When `declarator_field` is empty (Python uses
+  assignment nodes as declarations), they fall back to standard
+  tree-sitter field names (`pattern`, `left`, `name`).  This enables
+  `decl_distance`, dead-store, escape, and shadow enrichers for Python.
+  `collect_local_declarations` also adds first-seen-per-name deduplication
+  to prevent double-counting reassigned variables.
+
+- **CSV query log routed to wrong file in multi-session MCP mode** — in a
+  long-running MCP server with multiple simultaneous sessions on different
+  sources, all query log entries were written to a single `unknown.csv`
+  file regardless of which source was queried.  A new
+  `source_name_for_session()` engine method resolves the correct source
+  name at log time; the `QueryLogger` is now sessionless (no fixed
+  `source` field) so each call routes to the source-specific CSV file.
+
+- **`ROLLBACK` triggered full reindex on large codebases** — checkpoint
+  commits now include the `.forgeql-index` binary cache, so
+  `git reset --hard` to a checkpoint automatically restores the correct
+  cached index.  `Session::save_index()` is called by `reindex_session()`
+  after every mutation to keep the on-disk cache current.
+  `stage_and_commit_clean()` and `squash_commit_on_branch()` still exclude
+  `.forgeql-index` from user-facing commits.  Eliminates the ~30 s full
+  tree-sitter reparse on `ROLLBACK` for large codebases.
 
 ## [0.31.2] - 2026-03-29
 

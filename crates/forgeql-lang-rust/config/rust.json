@@ -9,6 +9,7 @@
     "root_node": "source_file",
     "scope_separator": "::",
     "block": "block",
+    "scope_creating_kinds": ["block"],
     "identifier": "identifier",
     "parameter_list": "parameters",
     "declarator_field": "",
@@ -48,7 +49,14 @@
     "for_style_map": [
       ["for_expression", "range"]
     ],
-    "condition_clause": ""
+    "condition_clause": "",
+    "branch_kinds": [
+      "if_expression", "else_clause",
+      "for_expression", "while_expression", "loop_expression",
+      "match_arm"
+    ],
+    "loop_kinds": ["for_expression", "while_expression", "loop_expression"],
+    "exception_handler_kinds": []
   },
 
   "statements": {

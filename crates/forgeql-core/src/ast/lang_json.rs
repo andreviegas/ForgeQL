@@ -161,6 +161,10 @@ pub struct SyntaxSection {
     /// Node kinds that act as statement / expression boundaries.
     #[serde(default)]
     pub statement_boundary_kinds: Vec<String>,
+
+    /// Node kinds that create a new variable scope (for shadow detection).
+    #[serde(default)]
+    pub scope_creating_kinds: Vec<String>,
 }
 
 /// Definition node kinds.
@@ -197,6 +201,11 @@ pub struct DefinitionsSection {
     /// Member kinds inside a type body.
     #[serde(default)]
     pub member_kinds: Vec<String>,
+
+    /// Declaration kinds that are block-scoped.
+    /// Empty = all declaration kinds are block-scoped (default for C++, Rust, Python).
+    #[serde(default)]
+    pub block_scoped_declaration_kinds: Vec<String>,
 }
 
 /// Control-flow node kinds.
@@ -217,6 +226,18 @@ pub struct ControlFlowSection {
     /// Condition clause wrapper kind.
     #[serde(default)]
     pub condition_clause: String,
+
+    /// Conditional-branch node kinds (for dead-store branch-depth tracking).
+    #[serde(default)]
+    pub branch_kinds: Vec<String>,
+
+    /// Loop-construct node kinds (for dead-store branch-depth tracking).
+    #[serde(default)]
+    pub loop_kinds: Vec<String>,
+
+    /// Exception-handler node kinds.
+    #[serde(default)]
+    pub exception_handler_kinds: Vec<String>,
 }
 
 /// Statement node kinds.
@@ -503,6 +524,11 @@ impl LanguageConfigJson {
             update_raw_kinds: self.statements.update_kinds,
             init_declarator_raw_kind: self.syntax.init_declarator,
             block_raw_kind: self.syntax.block,
+            scope_creating_raw_kinds: self.syntax.scope_creating_kinds,
+            branch_raw_kinds: self.control_flow.branch_kinds,
+            loop_raw_kinds: self.control_flow.loop_kinds,
+            exception_handler_raw_kinds: self.control_flow.exception_handler_kinds,
+            block_scoped_declaration_raw_kinds: self.definitions.block_scoped_declaration_kinds,
             return_statement_raw_kind: self.statements.return_kind,
             address_of_expression_raw_kind: self.expressions.address_of,
             address_of_operator: self.expressions.address_of_operator,

@@ -3,22 +3,31 @@
 /// declarations, identifier usage, and write/read patterns within function
 /// bodies.
 ///
-/// Used by both `DeclDistanceEnricher` and `EscapeEnricher`.
+/// Used by `DeclDistanceEnricher`, `EscapeEnricher`, and `ShadowEnricher`.
 use std::collections::HashSet;
 
 use super::EnrichContext;
 use crate::ast::index::node_text;
 use crate::ast::lang::LanguageConfig;
 
-/// A local variable: (name, 1-based declaration line).
-pub type LocalDecl = (String, usize);
+/// A local variable declaration annotated with branch depth.
+pub struct LocalDecl {
+    /// Variable name.
+    pub name: String,
+    /// 1-based declaration line.
+    pub line: usize,
+    /// Number of branch/loop ancestor nodes between this declaration and the
+    /// enclosing function body.  Zero means the declaration is unconditional
+    /// (always executed on every call).
+    pub branch_depth: u32,
+}
 
 /// Collect all local variable declarations inside a function body.
 ///
-/// Walks the function's direct body to find `declaration` nodes, extracts
-/// the declarator name, and records its 1-based line.  Skips:
-/// - Parameters (identified by `parameter_raw_kind`)
-/// - Field declarations (member variables)
+/// Walks the function's entire subtree to find `declaration` nodes, extracts
+/// the declarator name, and records its 1-based line and branch depth.
+/// Skips:
+/// - Parameters (inside the parameter list)
 /// - Declarations that contain a function declarator (function pointer decls)
 pub fn collect_local_declarations(ctx: &EnrichContext<'_>) -> Vec<LocalDecl> {
     let config = ctx.language_config;
@@ -35,23 +44,25 @@ pub fn collect_local_declarations(ctx: &EnrichContext<'_>) -> Vec<LocalDecl> {
             let node = cursor.node();
             let kind = node.kind();
 
-            // Skip the function node itself.
             if node != func
                 && config.is_declaration_kind(kind)
                 && !is_inside_parameter_list(node, config)
                 && let Some(name) = extract_declarator_name(node, source, config)
             {
-                // First-seen-per-name: treat the first assignment as the
-                // declaration point.  Subsequent assignments to the same
-                // name are mutations, not new locals.
+                // First-seen-per-name: the first assignment is the declaration.
+                // Later assignments to the same name are mutations, not new locals.
                 if seen.insert(name.clone()) {
-                    let line = node.start_position().row + 1; // 1-based
-                    locals.push((name, line));
+                    let line = node.start_position().row + 1;
+                    let branch_depth = count_node_branch_depth(node, func, config);
+                    locals.push(LocalDecl {
+                        name,
+                        line,
+                        branch_depth,
+                    });
                 }
             }
         }
 
-        // DFS: descend, sibling, or ascend.
         if visit && cursor.goto_first_child() {
             visit = true;
             continue;
@@ -72,6 +83,97 @@ pub fn collect_local_declarations(ctx: &EnrichContext<'_>) -> Vec<LocalDecl> {
     }
 }
 
+/// Count the number of `branch_kind` or `loop_kind` ancestor nodes between
+/// `node` and `ancestor` (exclusive on both ends).  Iterative — no recursion.
+pub fn count_node_branch_depth(
+    node: tree_sitter::Node<'_>,
+    ancestor: tree_sitter::Node<'_>,
+    config: &LanguageConfig,
+) -> u32 {
+    let mut depth = 0u32;
+    let mut parent = node.parent();
+    while let Some(p) = parent {
+        if p.id() == ancestor.id() {
+            break;
+        }
+        if config.is_branch_kind(p.kind()) || config.is_loop_kind(p.kind()) {
+            depth += 1;
+        }
+        parent = p.parent();
+    }
+    depth
+}
+
+/// Collect all parameter names from a function's parameter list.
+///
+/// Shared by `ShadowEnricher` and `DeclDistanceEnricher`
+/// (unused-param detection).
+pub fn collect_parameter_names(
+    func: tree_sitter::Node<'_>,
+    source: &[u8],
+    config: &LanguageConfig,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    let Some(param_list) = find_descendant_by_kind(func, config.parameter_list_kind()) else {
+        return names;
+    };
+
+    let has_param_kind = !config.parameter_kind().is_empty();
+    for i in 0..param_list.child_count() {
+        let Some(child) = param_list.child(i) else {
+            continue;
+        };
+        if has_param_kind {
+            if config.is_parameter_kind(child.kind()) {
+                if let Some(decl) = child.child_by_field_name(config.declarator_field())
+                    && let Some(name) = find_leaf_identifier(decl, source, config)
+                {
+                    names.push(name);
+                } else if let Some(name) = find_leaf_identifier(child, source, config) {
+                    names.push(name);
+                }
+            }
+        } else {
+            // Python-style: no dedicated parameter kind; each named child is a param.
+            if let Some(name) = find_leaf_identifier(child, source, config) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// Iterative BFS search for the first descendant node of the given kind.
+pub fn find_descendant_by_kind<'a>(
+    root: tree_sitter::Node<'a>,
+    kind: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    let mut cursor = root.walk();
+    let mut visit = true;
+    loop {
+        if visit && cursor.node().kind() == kind && cursor.node() != root {
+            return Some(cursor.node());
+        }
+        if visit && cursor.goto_first_child() {
+            visit = true;
+            continue;
+        }
+        if cursor.goto_next_sibling() {
+            visit = true;
+            continue;
+        }
+        loop {
+            if !cursor.goto_parent() {
+                return None;
+            }
+            if cursor.goto_next_sibling() {
+                visit = true;
+                break;
+            }
+        }
+    }
+}
+
 /// Check if a node is inside a parameter list (i.e. it IS a parameter).
 pub fn is_inside_parameter_list(node: tree_sitter::Node<'_>, config: &LanguageConfig) -> bool {
     let mut parent = node.parent();
@@ -79,7 +181,6 @@ pub fn is_inside_parameter_list(node: tree_sitter::Node<'_>, config: &LanguageCo
         if config.is_parameter_list_kind(p.kind()) || config.is_parameter_kind(p.kind()) {
             return true;
         }
-        // Stop at function boundary — don't walk above.
         if config.is_function_kind(p.kind()) {
             return false;
         }
@@ -97,9 +198,7 @@ pub fn extract_declarator_name(
     source: &[u8],
     config: &LanguageConfig,
 ) -> Option<String> {
-    // Resolve the name-carrying child of the declaration/assignment node.
     // C++ uses "declarator"; Rust uses "pattern"; Python uses "left".
-    // When the language-specific field is empty, fall through common fields.
     let declarator = if config.declarator_field().is_empty() {
         decl_node
             .child_by_field_name("pattern")
@@ -109,25 +208,22 @@ pub fn extract_declarator_name(
         decl_node.child_by_field_name(config.declarator_field())
     }?;
 
-    // Skip function pointer declarations.
     if !config.function_declarator().is_empty()
         && contains_kind(declarator, config.function_declarator())
     {
         return None;
     }
 
-    // Drill down through nested declarators (init_declarator, pointer_declarator,
-    // reference_declarator, etc.) to find the leaf identifier.
     find_leaf_identifier(declarator, source, config)
 }
 
-/// Recursively drill through declarator wrappers to find the leaf identifier.
+/// Drill through declarator wrappers to find the leaf identifier.
+/// Note: this is recursive but bounded to declarator chain depth (typically 1-3 levels).
 pub fn find_leaf_identifier(
     node: tree_sitter::Node<'_>,
     source: &[u8],
     config: &LanguageConfig,
 ) -> Option<String> {
-    // If this node is itself an identifier, return it.
     if config.is_identifier_kind(node.kind()) {
         let text = node_text(source, node);
         if !text.is_empty() {
@@ -135,12 +231,10 @@ pub fn find_leaf_identifier(
         }
     }
 
-    // Try the declarator field first (init_declarator, pointer_declarator, etc.).
     if let Some(child) = node.child_by_field_name(config.declarator_field()) {
         return find_leaf_identifier(child, source, config);
     }
 
-    // Fallback: look for an identifier among direct children.
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i)
             && config.is_identifier_kind(child.kind())
@@ -196,8 +290,8 @@ pub fn node_is_descendant_of(
     nr.start >= hr.start && nr.end <= hr.end
 }
 
-/// Check if an identifier node is part of a declaration (i.e. the declarator
-/// itself, not a reference).
+/// Check if an identifier node is part of a declaration (the declarator side,
+/// not the value side).
 pub fn is_in_declaration(node: tree_sitter::Node<'_>, config: &LanguageConfig) -> bool {
     let mut parent = node.parent();
     while let Some(p) = parent {
@@ -206,7 +300,6 @@ pub fn is_in_declaration(node: tree_sitter::Node<'_>, config: &LanguageConfig) -
             || config.is_init_declarator_kind(kind)
             || config.is_parameter_kind(kind)
         {
-            // Check if the identifier is on the declarator/LHS side, not the value side.
             let decl_child = if config.declarator_field().is_empty() {
                 p.child_by_field_name("pattern")
                     .or_else(|| p.child_by_field_name("left"))
@@ -219,7 +312,6 @@ pub fn is_in_declaration(node: tree_sitter::Node<'_>, config: &LanguageConfig) -
             }
             return true;
         }
-        // Stop at statement/block boundaries.
         if config.is_statement_boundary_kind(kind) || config.is_block_kind(kind) {
             return false;
         }
@@ -233,14 +325,12 @@ pub fn is_write_context(node: tree_sitter::Node<'_>, config: &LanguageConfig) ->
     if let Some(parent) = node.parent() {
         let pk = parent.kind();
 
-        // Simple assignment: `x = expr`
         if config.is_assignment_kind(pk)
             && let Some(left) = parent.child_by_field_name("left")
         {
             return left.id() == node.id();
         }
 
-        // update_expression: `++x` or `x++`
         if config.is_update_kind(pk) {
             return true;
         }
@@ -248,8 +338,8 @@ pub fn is_write_context(node: tree_sitter::Node<'_>, config: &LanguageConfig) ->
     false
 }
 
-/// Check if an identifier is in a compound-assignment (`+=`, `-=`, etc.)
-/// or update expression (`++`, `--`) — these are reads AND writes.
+/// Check if an identifier is in a compound-assignment or update expression —
+/// these are simultaneous reads AND writes.
 pub fn is_compound_assign_or_update(node: tree_sitter::Node<'_>, config: &LanguageConfig) -> bool {
     if let Some(parent) = node.parent() {
         let pk = parent.kind();
@@ -263,7 +353,6 @@ pub fn is_compound_assign_or_update(node: tree_sitter::Node<'_>, config: &Langua
             && left.id() == node.id()
             && let Some(op) = parent.child_by_field_name("operator")
         {
-            // Compound if operator is not plain `=` (byte length > 1).
             let op_range = op.byte_range();
             return op_range.end - op_range.start > 1;
         }

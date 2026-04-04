@@ -55,7 +55,7 @@ impl NodeEnricher for EscapeEnricher {
             return;
         }
 
-        let local_names: HashSet<&str> = locals.iter().map(|(n, _)| n.as_str()).collect();
+        let local_names: HashSet<&str> = locals.iter().map(|d| d.name.as_str()).collect();
 
         // Phase 2: Identify which locals are arrays.
         let array_locals = collect_array_locals(ctx, &local_names);
