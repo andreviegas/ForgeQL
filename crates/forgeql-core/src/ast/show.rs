@@ -881,7 +881,7 @@ pub fn show_lines(
     start_line: usize,
     end_line: usize,
 ) -> Result<Value> {
-    let path = workspace.root().join(file);
+    let path = workspace.safe_path(file)?;
     let source = crate::workspace::file_io::read_bytes(&path)?;
     let text = std::str::from_utf8(&source)
         .map_err(|e| anyhow!("file '{file}' is not valid UTF-8: {e}"))?;

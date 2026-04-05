@@ -1065,8 +1065,8 @@ impl ForgeQLEngine {
             _ => bail!("exec_copy_lines called with wrong IR variant"),
         };
 
-        let src_abs = workspace.root().join(src);
-        let dst_abs = workspace.root().join(dst);
+        let src_abs = workspace.safe_path(src)?;
+        let dst_abs = workspace.safe_path(dst)?;
 
         let plan = match at {
             None => plan_copy_lines(src, &src_abs, start, end, &dst_abs)?,
@@ -1095,8 +1095,8 @@ impl ForgeQLEngine {
             _ => bail!("exec_move_lines called with wrong IR variant"),
         };
 
-        let src_abs = workspace.root().join(src);
-        let dst_abs = workspace.root().join(dst);
+        let src_abs = workspace.safe_path(src)?;
+        let dst_abs = workspace.safe_path(dst)?;
 
         let plan = plan_move_lines(src, &src_abs, start, end, &dst_abs, at)?;
         self.apply_plan(sid, plan, "move_lines")

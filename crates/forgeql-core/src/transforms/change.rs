@@ -57,7 +57,7 @@ impl ChangeFiles {
 
         let mut plan = TransformPlan::default();
         for rel_path in &resolved {
-            let abs_path = workspace.root().join(rel_path);
+            let abs_path = workspace.safe_path(rel_path)?;
             let fe = resolve_target(rel_path, &abs_path, &self.target)?;
             // For literal (non-glob) paths, an empty edit means the pattern
             // was not found — that is an error the user should see.
