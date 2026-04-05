@@ -9,6 +9,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`.forgeql-index` leaks into squash commits after BEGIN → ROLLBACK cycles** —
+  `exec_rollback` set `last_clean_oid` to `checkpoint.pre_txn_oid` unconditionally.
+  After a complete BEGIN → ROLLBACK cycle, HEAD pointed at the checkpoint commit
+  (which includes `.forgeql-index`).  The next BEGIN captured that checkpoint OID
+  as `pre_txn_oid`, and subsequent ROLLBACK wrote it into `last_clean_oid`.
+  When COMMIT ran, `squash_commit_on_branch` used this stale checkpoint OID as
+  the squash parent — producing a commit that showed `.forgeql-index` as deleted
+  relative to its parent.  Fixed by clearing `last_clean_oid` to `None` when the
+  checkpoint stack becomes empty after rollback, so the next `BEGIN TRANSACTION`
+  captures a fresh pre-transaction base.
+
 - **`CHANGE FILE LINES n-m WITH NOTHING` parse error** — the grammar rule
   `change_lines_delete` only accepted bare `NOTHING` after the line range,
   causing `LINES n-m WITH NOTHING` to fail with "expected content_value".

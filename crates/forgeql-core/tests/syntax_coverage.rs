@@ -1812,6 +1812,38 @@ fn transaction_with_change_and_verify() {
     assert!(!format!("{show}").contains("MODIFIED"));
 }
 
+// Regression: BEGIN → ROLLBACK → BEGIN → ROLLBACK → BEGIN → COMMIT must squash
+// to the original base, not to a stale checkpoint OID.  Previously,
+// last_clean_oid was not cleared on final rollback, causing the next commit
+// cycle to use a checkpoint OID as the squash parent — which included
+// .forgeql-index in the tree.
+#[test]
+fn rollback_clears_last_clean_oid_when_stack_empty() {
+    let (mut e, sid, _d) = engine_with_git_session();
+
+    // Cycle 1: begin + rollback.
+    exec(&mut e, &sid, "BEGIN TRANSACTION 'cycle1'");
+    exec(&mut e, &sid, "ROLLBACK TRANSACTION 'cycle1'");
+
+    // Cycle 2: begin + rollback.
+    exec(&mut e, &sid, "BEGIN TRANSACTION 'cycle2'");
+    exec(&mut e, &sid, "ROLLBACK TRANSACTION 'cycle2'");
+
+    // Cycle 3: begin + change + commit — squash parent must be the real base.
+    exec(&mut e, &sid, "BEGIN TRANSACTION 'cycle3'");
+    exec(
+        &mut e,
+        &sid,
+        "CHANGE FILE 'motor_control.h' LINES 1-1 WITH '// cycle3'",
+    );
+    let r = exec(&mut e, &sid, "COMMIT MESSAGE 'squash test'");
+    match &r {
+        ForgeQLResult::Commit(c) => {
+            assert!(!c.commit_hash.is_empty(), "commit hash should not be empty");
+        }
+        other => panic!("expected Commit, got {other:?}"),
+    }
+}
 // =======================================================================
 // Phase 8 — Error cases
 // =======================================================================

@@ -1226,9 +1226,16 @@ impl ForgeQLEngine {
                 })?
             };
 
-            // Reset last_clean_oid so the next COMMIT squashes from the
-            // correct base (the state before this checkpoint existed).
-            session.last_clean_oid = Some(checkpoint.pre_txn_oid.clone());
+            // When the last checkpoint is popped, reset last_clean_oid so the
+            // next BEGIN TRANSACTION captures a fresh pre-transaction base.
+            // Without this, a sequence like BEGIN → ROLLBACK → BEGIN → ROLLBACK
+            // → BEGIN → COMMIT would squash to a stale checkpoint OID (which
+            // contains .forgeql-index) instead of the true clean base.
+            if session.checkpoints.is_empty() {
+                session.last_clean_oid = None;
+            } else {
+                session.last_clean_oid = Some(checkpoint.pre_txn_oid.clone());
+            }
 
             (
                 checkpoint.name,
