@@ -1656,6 +1656,38 @@ fn change_lines_delete_nothing_and_rollback() {
     );
 }
 
+// --- CHANGE LINES n-m WITH NOTHING (line deletion, alternate syntax) ---
+
+#[test]
+fn change_lines_delete_with_nothing_and_rollback() {
+    let (mut e, sid, _d) = engine_with_git_session();
+
+    let before = exec(&mut e, &sid, "SHOW LINES 1-5 OF 'motor_control.h'");
+    let before_text = format!("{before}");
+
+    exec(&mut e, &sid, "BEGIN TRANSACTION 'test-lines-with-nothing'");
+
+    let r = exec(
+        &mut e,
+        &sid,
+        "CHANGE FILE 'motor_control.h' LINES 3-3 WITH NOTHING",
+    );
+    let mr = as_mutation(&r);
+    assert!(mr.applied);
+
+    exec(
+        &mut e,
+        &sid,
+        "ROLLBACK TRANSACTION 'test-lines-with-nothing'",
+    );
+
+    let after = exec(&mut e, &sid, "SHOW LINES 1-5 OF 'motor_control.h'");
+    let after_text = format!("{after}");
+    assert_eq!(
+        before_text, after_text,
+        "rollback should restore deleted lines"
+    );
+}
 // --- CHANGE WITH NOTHING (clear file) ---
 
 #[test]

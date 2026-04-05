@@ -1152,6 +1152,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_change_lines_with_nothing() {
+        let ops = parse("CHANGE FILE 'src/test.cpp' LINES 1-3 WITH NOTHING").unwrap();
+        match &ops[0] {
+            ForgeQLIR::ChangeContent { files, target, .. } => {
+                assert_eq!(files, &["src/test.cpp"]);
+                assert!(
+                    matches!(target, ChangeTarget::Lines { start: 1, end: 3, content } if content.is_empty()),
+                    "expected Lines{{1,3,\"\"}} got {target:?}"
+                );
+            }
+            other => panic!("expected ChangeContent, got {other:?}"),
+        }
+    }
+    #[test]
     fn parse_change_in_transaction_sequence() {
         let fql = "BEGIN TRANSACTION 'test-change'\n\
                    CHANGE FILE 'file.cpp' MATCHING 'old' WITH 'new'\n\

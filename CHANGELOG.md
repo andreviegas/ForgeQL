@@ -7,6 +7,14 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`CHANGE FILE LINES n-m WITH NOTHING` parse error** — the grammar rule
+  `change_lines_delete` only accepted bare `NOTHING` after the line range,
+  causing `LINES n-m WITH NOTHING` to fail with "expected content_value".
+  Made the `WITH` keyword optional (`"WITH"?`) so both `LINES 3-5 NOTHING`
+  and `LINES 3-5 WITH NOTHING` are accepted.  Parser and integration tests
+  added for the new syntax.
 ### Removed
 
 - **`DISCONNECT` command eliminated** — sessions are now fully managed by a server-side

@@ -142,7 +142,7 @@ change_target = {
 }
 
 change_matching     = { "MATCHING" ~ string_literal ~ "WITH" ~ content_value }
-change_lines_delete = { "LINES" ~ number ~ "-" ~ number ~ "NOTHING" }
+change_lines_delete = { "LINES" ~ number ~ "-" ~ number ~ "WITH"? ~ "NOTHING" }
 change_lines_range  = { "LINES" ~ number ~ "-" ~ number ~ "WITH" ~ content_value }
 change_delete       = { "WITH" ~ "NOTHING" }
 change_with_content = { "WITH" ~ content_value }
