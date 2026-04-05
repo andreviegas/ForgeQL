@@ -371,11 +371,17 @@ fn try_resume_session(engine: &mut ForgeQLEngine, session: &mut SessionFile) {
         session.session_id = None;
         return;
     };
+    let Some(ref as_branch) = session.as_branch else {
+        // No AS branch — legacy session without AS clause; clear the stale id.
+        info!("session file has no as_branch — clearing stale session");
+        session.session_id = None;
+        return;
+    };
 
     let use_op = ForgeQLIR::UseSource {
         source: source.clone(),
         branch: branch.clone(),
-        as_branch: session.as_branch.clone(),
+        as_branch: as_branch.clone(),
     };
 
     match engine.execute(None, &use_op) {
@@ -461,7 +467,7 @@ fn execute_and_print(
                     {
                         session.source = Some(source.clone());
                         session.branch = Some(branch.clone());
-                        session.as_branch.clone_from(as_branch);
+                        session.as_branch = Some(as_branch.clone());
                         log_source.clone_from(source);
                     }
                     // Update log source for CREATE SOURCE too.

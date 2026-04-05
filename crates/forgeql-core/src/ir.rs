@@ -152,15 +152,15 @@ pub enum ForgeQLIR {
 
     /// `USE source.branch [AS 'custom-branch']` — create (or resume) a session.
     ///
-    /// `as_branch`, when present, is used as the git branch name instead of the
+    /// `as_branch` is the git branch name used for this session instead of the
     /// auto-generated `forgeql/<session_id>`.  Allows the caller to create a
     /// human-readable branch (e.g. `agent/refactor-signal-api`) that can be
     /// fetched and reviewed by the senior developer without decoding session IDs.
+    /// This field is mandatory — every USE command must supply AS 'branch-name'.
     UseSource {
         source: String,
         branch: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        as_branch: Option<String>,
+        as_branch: String,
     },
 
     /// `SHOW SOURCES` — list all registered sources.

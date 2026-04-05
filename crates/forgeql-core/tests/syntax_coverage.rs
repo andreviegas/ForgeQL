@@ -2009,8 +2009,8 @@ fn parse_refresh_source() {
 }
 
 #[test]
-fn parse_use_stmt_basic() {
-    parser::parse("USE my-source.main").expect("parse USE");
+fn parse_use_stmt_basic_without_as_is_error() {
+    parser::parse("USE my-source.main").expect_err("USE without AS should be a parse error");
 }
 
 #[test]

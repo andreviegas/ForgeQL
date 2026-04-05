@@ -82,9 +82,10 @@ statement = {
 create_source_stmt  = { "CREATE" ~ "SOURCE" ~ string_literal ~ "FROM" ~ string_literal }
 refresh_source_stmt = { "REFRESH" ~ "SOURCE" ~ string_literal }
 
-/// `USE pisco-code.main [AS 'agent/refactor-signal-api']`
+/// `USE pisco-code.main AS 'agent/refactor-signal-api'`
 /// Source names allow hyphens; AS target is string_literal to allow '/' in branch names.
-use_stmt = { "USE" ~ source_name ~ "." ~ identifier ~ ("AS" ~ string_literal)? }
+/// Note: AS 'branch-name' is MANDATORY — USE without AS is a parse error.
+use_stmt = { "USE" ~ source_name ~ "." ~ identifier ~ "AS" ~ string_literal }
 
 show_sources_stmt  = { "SHOW" ~ "SOURCES" }
 show_branches_stmt = { "SHOW" ~ "BRANCHES" }

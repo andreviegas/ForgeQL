@@ -116,8 +116,8 @@ pub(crate) struct UseSourceParams {
     pub source: String,
     /// Branch to check out (e.g. "main").
     pub branch: String,
-    /// Optional custom branch alias (e.g. "agent/refactor-signal-api").
-    pub as_branch: Option<String>,
+    /// Custom branch alias (e.g. "agent/refactor-signal-api"). Required — every USE must name a branch.
+    pub as_branch: String,
 }
 
 /// Parameters for `find_symbols` — search symbols by name pattern.
@@ -341,11 +341,10 @@ impl ForgeQlMcp {
         Parameters(params): Parameters<UseSourceParams>,
     ) -> Result<CallToolResult, ErrorData> {
         debug!(source = %params.source, branch = %params.branch, "use_source");
-        let fql = if let Some(ref alias) = params.as_branch {
-            format!("USE {}.{} AS '{alias}'", params.source, params.branch)
-        } else {
-            format!("USE {}.{}", params.source, params.branch)
-        };
+        let fql = format!(
+            "USE {}.{} AS '{}'",
+            params.source, params.branch, params.as_branch
+        );
         let op = ForgeQLIR::UseSource {
             source: params.source.clone(),
             branch: params.branch,

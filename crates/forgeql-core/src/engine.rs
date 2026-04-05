@@ -266,7 +266,7 @@ impl ForgeQLEngine {
                 source,
                 branch,
                 as_branch,
-            } => self.use_source(source, branch, as_branch.as_deref()),
+            } => self.use_source(source, branch, as_branch),
             ForgeQLIR::ShowSources => self.show_sources(),
             ForgeQLIR::ShowBranches => self.show_branches(session_id),
             ForgeQLIR::Disconnect => self.disconnect(session_id),
@@ -407,7 +407,7 @@ impl ForgeQLEngine {
         &mut self,
         source_name: &str,
         branch: &str,
-        as_branch: Option<&str>,
+        as_branch: &str,
     ) -> Result<ForgeQLResult> {
         info!(%source_name, %branch, ?as_branch, "starting session");
 
@@ -421,11 +421,7 @@ impl ForgeQLEngine {
         // `self.sessions` to avoid holding a shared borrow across a mutable one.
         let resume_outcome: Option<(String, Option<usize>)> = {
             if let Some((existing_id, existing_session)) = self.sessions.iter().find(|(_, s)| {
-                s.source_name == source_name
-                    && as_branch.map_or_else(
-                        || s.branch == branch && s.custom_branch.is_none(),
-                        |ab| s.custom_branch.as_deref() == Some(ab),
-                    )
+                s.source_name == source_name && s.custom_branch.as_deref() == Some(as_branch)
             }) {
                 // Compare the bare repo's current branch tip to what we
                 // indexed.  If `branch_head` returns None (repo unavailable
@@ -469,7 +465,7 @@ impl ForgeQLEngine {
                     branches: Vec::new(),
                     symbols_indexed: Some(symbols_indexed),
                     resumed: true,
-                    message: as_branch.map(|ab| format!("as_branch: {ab}")),
+                    message: Some(format!("as_branch: {as_branch}")),
                 }));
             }
             Some((stale_id, None)) => {
@@ -493,11 +489,15 @@ impl ForgeQLEngine {
 
         let session_id = generate_session_id();
         // Worktree folder name: sanitize '/' → '-' for filesystem safety.
-        let wt_name = as_branch.map_or_else(|| session_id.clone(), |s| s.replace('/', "-"));
+        let wt_name = as_branch.replace('/', "-");
         let wt_path = self.data_dir.join("worktrees").join(&wt_name);
 
         drop(worktree::create(
-            &repo_path, &wt_name, branch, &wt_path, as_branch,
+            &repo_path,
+            &wt_name,
+            branch,
+            &wt_path,
+            Some(as_branch),
         )?);
 
         let mut session = Session::new(
@@ -508,7 +508,7 @@ impl ForgeQLEngine {
             branch,
             Arc::clone(&self.lang_registry),
         );
-        session.custom_branch = as_branch.map(String::from);
+        session.custom_branch = Some(as_branch.to_string());
         session.worktree_name = wt_name;
 
         // Use resume_index() so an existing disk cache at
@@ -535,7 +535,7 @@ impl ForgeQLEngine {
             branches: Vec::new(),
             symbols_indexed: Some(symbols_indexed),
             resumed: false,
-            message: as_branch.map(|ab| format!("as_branch: {ab}")),
+            message: Some(format!("as_branch: {as_branch}")),
         }))
     }
 

@@ -7,6 +7,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`USE` requires `AS 'branch-name'` (breaking change)** — `USE source.branch`
+  without an `AS` clause is now a parse error. Every `USE` command must supply a
+  human-readable branch alias, e.g. `USE forgeql-pub.main AS 'my-feature-branch'`.
+  This enforces the convention that every agent session works on a named branch,
+  making diffs reviewable without decoding session IDs.
+  - Grammar (`forgeql.pest`): `AS string_literal` clause made mandatory in `use_stmt`.
+  - IR (`ir.rs`): `UseSource.as_branch` changed from `Option<String>` to `String`.
+  - Engine (`engine.rs`): `use_source` signature updated; session lookup now always
+    matches on `custom_branch`; worktree name derived directly from `as_branch`.
+  - MCP tool (`mcp.rs`): `UseSourceParams.as_branch` changed from `Option<String>`
+    to `String`.
+  - CLI auto-resume (`main.rs`): sessions without a saved `as_branch` are silently
+    cleared rather than resumed with a broken state.
+  - SMS test fixture (`syntax.json`): `as_branch` moved from `optional_args` to
+    `required_args`; base syntax updated to include the `AS` clause.
 ### Fixed
 
 - **`dup_logic` false positive with `*p++` in conditions** — `skeleton_walk`

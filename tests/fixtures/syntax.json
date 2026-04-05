@@ -1033,7 +1033,7 @@
     },
     {
       "id": "use_source",
-      "syntax": "USE {source}.{branch}",
+      "syntax": "USE {source}.{branch} AS '{as_branch}'",
       "category": "session",
       "result_type": null,
       "required_args": [
@@ -1044,15 +1044,13 @@
         {
           "name": "branch",
           "pool": "branches"
-        }
-      ],
-      "optional_args": [
+        },
         {
           "name": "as_branch",
-          "syntax": "AS '{as_branch}'",
           "pool": "branches"
         }
       ],
+      "optional_args": [],
       "clauses": [],
       "explosion_cap": 10
     },

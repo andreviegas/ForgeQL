@@ -90,8 +90,13 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
                 .next()
                 .map(|p| p.as_str().to_string())
                 .ok_or_else(|| ForgeError::DslParse("use: expected branch name".into()))?;
-            // Optional: AS 'custom-branch-name'
-            let as_branch = inner.next().map(|p| unquote(p.as_str()));
+            // Mandatory: AS 'branch-name' — enforced at grammar level, but we also
+            // extract it here and treat a missing value as a hard parse error.
+            let as_branch = inner.next().map(|p| unquote(p.as_str())).ok_or_else(|| {
+                ForgeError::DslParse(
+                    "USE requires AS 'branch-name': e.g.  USE source.branch AS 'my-feature'".into(),
+                )
+            })?;
             Ok(ForgeQLIR::UseSource {
                 source,
                 branch,
@@ -774,9 +779,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_use_source() {
+    fn parse_use_source_without_as_is_error() {
+        // USE without AS 'branch-name' must be a parse error (grammar enforces it)
+        assert!(
+            parse("USE pisco.main").is_err(),
+            "USE without AS should be a parse error"
+        );
+        assert!(
+            parse("USE pisco-code.main").is_err(),
+            "USE without AS (hyphenated source) should be a parse error"
+        );
+    }
+
+    #[test]
+    fn parse_use_source_with_as() {
         // plain identifier
-        let ops = parse("USE pisco.main").unwrap();
+        let ops = parse("USE pisco.main AS 'my-feature'").unwrap();
         match &ops[0] {
             ForgeQLIR::UseSource {
                 source,
@@ -785,12 +803,12 @@ mod tests {
             } => {
                 assert_eq!(source, "pisco");
                 assert_eq!(branch, "main");
-                assert!(as_branch.is_none());
+                assert_eq!(as_branch, "my-feature");
             }
             _ => panic!("wrong variant"),
         }
         // hyphenated source name
-        let ops2 = parse("USE pisco-code.main").unwrap();
+        let ops2 = parse("USE pisco-code.main AS 'refactor'").unwrap();
         match &ops2[0] {
             ForgeQLIR::UseSource {
                 source,
@@ -799,7 +817,7 @@ mod tests {
             } => {
                 assert_eq!(source, "pisco-code");
                 assert_eq!(branch, "main");
-                assert!(as_branch.is_none());
+                assert_eq!(as_branch, "refactor");
             }
             _ => panic!("wrong variant for hyphenated name"),
         }
@@ -1308,20 +1326,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_use_source_without_as_has_no_as_branch() {
-        let ops = parse("USE pisco-code.main").unwrap();
-        match &ops[0] {
-            ForgeQLIR::UseSource {
-                source,
-                branch,
-                as_branch,
-            } => {
-                assert_eq!(source, "pisco-code");
-                assert_eq!(branch, "main");
-                assert!(as_branch.is_none(), "no AS clause → as_branch must be None");
-            }
-            _ => panic!("wrong variant"),
-        }
+    fn parse_use_source_without_as_is_a_parse_error() {
+        // This test replaces parse_use_source_without_as_has_no_as_branch.
+        // AS 'branch-name' is now mandatory — omitting it must be a parse error.
+        assert!(
+            parse("USE pisco-code.main").is_err(),
+            "USE without AS should be a parse error"
+        );
     }
 
     #[test]
@@ -1335,7 +1346,7 @@ mod tests {
             } => {
                 assert_eq!(source, "pisco-code");
                 assert_eq!(branch, "main");
-                assert_eq!(as_branch.as_deref(), Some("agent/refactor-signal-api"));
+                assert_eq!(as_branch, "agent/refactor-signal-api");
             }
             _ => panic!("wrong variant"),
         }
