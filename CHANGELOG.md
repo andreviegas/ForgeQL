@@ -7,6 +7,28 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`dup_logic` false positive with `*p++` in conditions** — `skeleton_walk`
+  assigned the same letter to every occurrence of a side-effectful expression
+  (e.g. `*p++`, `arr[i++]`) because the mapping was keyed solely by source
+  text.  Since each `*p++` advances the pointer and reads a *different* byte,
+  the operands are semantically distinct even though their text is identical.
+  Fixed by adding `subtree_has_update()` to detect `++`/`--` descendants and
+  using a position-unique key (`text + "@" + start_byte`) in the `call_expression`,
+  `subscript_expression`, and `address_of` branches of `skeleton_walk`.
+
+- **`has_repeated_condition_calls` false positive with `isdigit(*p++)`** —
+  `collect_calls_in_subtree` counted each `isdigit(*p++)` occurrence as the
+  same repeated condition call, because only the function name (not its
+  arguments) was used as the key.  When arguments contain a side-effectful
+  `++`/`--` operator the call effectively has a different argument each time.
+  Fixed by adding `has_update_descendant()` and using a per-position unique key
+  for such calls.
+
+  Both fixes are language-agnostic via `config.update_kinds()`.  Languages
+  without `++`/`--` operators (Python, Rust, Swift, …) have an empty
+  `update_raw_kinds` slice and see no behaviour change.
 ### Security
 
 - **CVE: path traversal in `SHOW LINES`, `CHANGE FILE`, `COPY LINES`,
