@@ -292,6 +292,54 @@ fn next_label(next_letter: &mut u8) -> String {
 /// truncated with a `…` suffix to keep output readable.
 const MAX_SKELETON_LEN: usize = 120;
 
+/// Return `true` when any node in `node`'s subtree has a kind that the
+/// language config classifies as an update/increment expression (i.e. `++`/`--`
+/// or the equivalent in other languages).
+///
+/// This is used to give side-effectful expressions a position-unique skeleton
+/// label: `*p++` at byte 100 and `*p++` at byte 120 are structurally
+/// identical but semantically distinct (they read *different* bytes), so
+/// treating them as the same leaf would produce spurious `dup_logic` hits.
+///
+/// For languages that have no increment operators (Python, Rust, Swift …)
+/// `config.update_kinds()` is empty, so this function always returns `false`
+/// and has no runtime cost.
+fn subtree_has_update(
+    node: tree_sitter::Node<'_>,
+    config: &crate::ast::lang::LanguageConfig,
+) -> bool {
+    let update_kinds = config.update_kinds();
+    if update_kinds.is_empty() {
+        return false;
+    }
+    let mut cursor = node.walk();
+    let mut visit = true;
+    loop {
+        if visit && update_kinds.iter().any(|k| k == cursor.node().kind()) {
+            return true;
+        }
+        if visit && cursor.goto_first_child() {
+            continue;
+        }
+        if cursor.goto_next_sibling() {
+            visit = true;
+            continue;
+        }
+        loop {
+            if !cursor.goto_parent() {
+                return false;
+            }
+            if cursor.node() == node {
+                // Back at the root of the subtree we were asked to search.
+                return false;
+            }
+            if cursor.goto_next_sibling() {
+                visit = true;
+                break;
+            }
+        }
+    }
+}
 /// Build a structural skeleton of a condition subtree.
 ///
 /// Replaces each leaf expression (identifier, member access, call, literal)
@@ -353,11 +401,19 @@ fn skeleton_walk(
         return;
     }
 
-    // Call expressions: map the whole call as one letter
+    // Call expressions: map the whole call as one letter.
+    // If any argument contains a side-effectful ++/-- operation, the call
+    // produces a different result at each position (e.g. `isdigit(*p++)`)
+    // — treat every such occurrence as unique to avoid false dup_logic hits.
     if config.is_call_expression_kind(kind) {
         let text = node_text(source, node);
+        let key = if subtree_has_update(node, config) {
+            format!("{text}@{}", node.start_byte())
+        } else {
+            text
+        };
         let label = mapping
-            .entry(text)
+            .entry(key)
             .or_insert_with(|| next_label(next_letter))
             .clone();
         result.push_str(&label);
@@ -375,11 +431,17 @@ fn skeleton_walk(
         return;
     }
 
-    // Subscript expressions: map as one unit
+    // Subscript expressions: map as one unit.
+    // Position-unique key if the index contains a side-effectful ++/--.
     if config.is_subscript_expression_kind(kind) {
         let text = node_text(source, node);
+        let key = if subtree_has_update(node, config) {
+            format!("{text}@{}", node.start_byte())
+        } else {
+            text
+        };
         let label = mapping
-            .entry(text)
+            .entry(key)
             .or_insert_with(|| next_label(next_letter))
             .clone();
         result.push_str(&label);
@@ -388,16 +450,21 @@ fn skeleton_walk(
 
     // Pointer dereference / address-of: map as one unit so that
     // `*ptr` and `ptr` get distinct letters.
+    // Position-unique key when the expression contains ++/--, e.g. `*p++`.
     if config.address_of_expression_kind().contains(kind) {
         let text = node_text(source, node);
+        let key = if subtree_has_update(node, config) {
+            format!("{text}@{}", node.start_byte())
+        } else {
+            text
+        };
         let label = mapping
-            .entry(text)
+            .entry(key)
             .or_insert_with(|| next_label(next_letter))
             .clone();
         result.push_str(&label);
         return;
     }
-
     // Operators and punctuation: keep as-is
     if !node.is_named() {
         let text = node_text(source, node);

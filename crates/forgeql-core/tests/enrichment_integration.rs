@@ -2191,6 +2191,54 @@ fn dup_logic_pointer_expression_not_false_positive() {
     }
 }
 
+// -----------------------------------------------------------------------
+// §12b — dup_logic: pointer-increment false-positive regression tests
+// -----------------------------------------------------------------------
+
+#[test]
+fn dup_logic_not_false_positive_pointer_increment() {
+    // `!isdigit(*p++) || !isdigit(*p++) || ...` must NOT be flagged.
+    // Each *p++ is side-effectful (advances p), so the operands are NOT
+    // duplicates even though they are textually identical.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE fql_kind = 'if' WHERE enclosing_fn = 'dupLogicNotFalsePositiveIncrement'",
+    );
+    let qr = as_query(&r);
+    for m in &qr.results {
+        let dl = field(m, "dup_logic");
+        assert_eq!(
+            dl, "false",
+            "dupLogicNotFalsePositiveIncrement: *p++ conditions must not flag dup_logic, got {dl}"
+        );
+    }
+}
+
+#[test]
+fn no_repeated_calls_with_side_effectful_args() {
+    // `isdigit(*p++)` called multiple times in a condition must NOT be counted
+    // as a repeated_condition_call — each call reads a different byte.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'noRepeatedCallsWithSideEffects'",
+    );
+    let qr = as_query(&r);
+    assert_eq!(
+        qr.results.len(),
+        1,
+        "expected exactly one noRepeatedCallsWithSideEffects function"
+    );
+    let m = &qr.results[0];
+    assert_eq!(
+        field(m, "has_repeated_condition_calls"),
+        "false",
+        "isdigit(*p++) repeated calls must not be flagged as has_repeated_condition_calls"
+    );
+}
 // =======================================================================
 // §13 — Phase 8 new enrichment fields
 // =======================================================================

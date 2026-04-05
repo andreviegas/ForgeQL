@@ -276,6 +276,15 @@ void redundancyPatterns(int* ptr1, int* ptr2) {
     }
 }
 
+/* has_repeated_condition_calls should be FALSE when all calls of the same
+ * function have side-effectful arguments (*p++): each call reads a different
+ * value, so they are not equivalent repeated calls. */
+void noRepeatedCallsWithSideEffects(const char *p) {
+    // isdigit is called many times but each argument is *p++ — distinct.
+    if (!isdigit(*p++) || !isdigit(*p++) || !isdigit(*p++)) {
+        (void)p;
+    }
+}
 /* Duplicate logic — repeated sub-expressions within one condition */
 #define FLAG1 0x01
 #define FLAG2 0x02
@@ -308,6 +317,19 @@ void dupLogicPatterns(int a, int b, int x, int *ptr) {
     if (ptr != nullptr && *ptr != 0) {
         (void)ptr;
     }
+}
+
+/* dup_logic should be FALSE for pointer-increment conditions:
+ * each *p++ reads a different byte, so the operands are semantically
+ * distinct even though their source text is identical. */
+void dupLogicNotFalsePositiveIncrement(const char *p) {
+    // Each !isdigit(*p++) advances p — these are NOT duplicate operands.
+    if (!isdigit(*p++) || !isdigit(*p++) || *p++ != '-' ||
+        !isdigit(*p++) || !isdigit(*p++) || *p++ != '-' ||
+        !isdigit(*p++) || !isdigit(*p++)) {
+        (void)p;
+    }
+    // arr[i++] same rule: each increment is a distinct read — NOT a dup.
 }
 
 /* Duplicate conditions — same skeleton in two ifs */

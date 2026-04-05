@@ -185,6 +185,7 @@ fn collect_condition_info(
                     source,
                     condition_calls,
                     config.call_expression_kind(),
+                    config.update_kinds(),
                 );
                 *null_checks += count_null_checks(
                     cond,
@@ -217,11 +218,20 @@ fn collect_condition_info(
 }
 
 /// Collect all `call_expression` function names inside a condition subtree.
+///
+/// If a call expression's arguments contain a side-effectful `update_expression`
+/// (e.g. `isdigit(*p++)`), the call reads a *different* value each time even
+/// though the function name is the same.  We use a per-position unique key for
+/// such calls so they are never counted as repeated-condition-calls.
+///
+/// For languages without `++`/`--` (Python, Rust, …) `update_raw_kinds` is
+/// empty and the check is a no-op.
 fn collect_calls_in_subtree(
     node: tree_sitter::Node<'_>,
     source: &[u8],
     calls: &mut HashMap<String, usize>,
     call_expression_raw_kind: &str,
+    update_raw_kinds: &[String],
 ) {
     let mut cursor = node.walk();
     let mut visit = true;
@@ -233,7 +243,17 @@ fn collect_calls_in_subtree(
         {
             let name = node_text(source, func_node);
             if !name.is_empty() {
-                *calls.entry(name).or_insert(0) += 1;
+                // If any argument to this call contains a ++/-- side-effect,
+                // treat the call as unique at this position so it is never
+                // matched against other occurrences of the same name.
+                let key = if !update_raw_kinds.is_empty()
+                    && has_update_descendant(cursor.node(), update_raw_kinds)
+                {
+                    format!("{name}@{}", cursor.node().start_byte())
+                } else {
+                    name
+                };
+                *calls.entry(key).or_insert(0) += 1;
             }
         }
 
@@ -257,6 +277,36 @@ fn collect_calls_in_subtree(
     }
 }
 
+/// Walk `node`'s subtree (incl. itself) and return `true` if any descendant
+/// has a grammar kind listed in `update_raw_kinds` (i.e. `++` / `--`).
+fn has_update_descendant(node: tree_sitter::Node<'_>, update_raw_kinds: &[String]) -> bool {
+    let mut cursor = node.walk();
+    let mut visit = true;
+    loop {
+        if visit && update_raw_kinds.iter().any(|k| k == cursor.node().kind()) {
+            return true;
+        }
+        if visit && cursor.goto_first_child() {
+            continue;
+        }
+        if cursor.goto_next_sibling() {
+            visit = true;
+            continue;
+        }
+        loop {
+            if !cursor.goto_parent() {
+                return false;
+            }
+            if cursor.node() == node {
+                return false;
+            }
+            if cursor.goto_next_sibling() {
+                visit = true;
+                break;
+            }
+        }
+    }
+}
 /// Count null-check comparisons in a condition subtree.
 ///
 /// Matches: `== nullptr`, `!= nullptr`, `== NULL`, `!= NULL`, `== 0` when the
