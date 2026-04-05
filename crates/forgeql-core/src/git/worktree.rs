@@ -492,5 +492,61 @@ mod tests {
         let info = create(&bare, "s-auto", &branch, &wt_path, None)
             .expect("auto-branch resume must succeed");
         assert_eq!(info.path, wt_path);
+        assert_eq!(info.path, wt_path);
+    }
+
+    /// Composite key test: same `as_branch` alias but different base branches
+    /// must produce independent worktrees and git branches with no collision.
+    /// This validates the engine's `branch.alias` / `fql/branch/alias` scheme.
+    ///
+    /// The fql/ prefix is required because git loose refs store branch names as
+    /// paths under refs/heads/.  If a branch named `main` already exists at
+    /// refs/heads/main (a file), creating `main/fix-comments` would require
+    /// refs/heads/main to be a directory — which git rejects.  The fql/ namespace
+    /// sidesteps this entirely: refs/heads/fql/main/fix-comments is unambiguous.
+    #[test]
+    fn same_alias_different_base_branch_no_collision() {
+        let tmp = tempdir().unwrap();
+        let bare = make_bare_repo(tmp.path());
+        let branch = default_branch(&bare);
+        let wt_main = tmp.path().join("main.fix-comments");
+        let wt_dev = tmp.path().join("dev.fix-comments");
+
+        // Simulates: USE source.main AS 'fix-comments'
+        create(
+            &bare,
+            "main.fix-comments",
+            &branch,
+            &wt_main,
+            Some("fql/main/fix-comments"),
+        )
+        .expect("main-based worktree must succeed");
+
+        // Simulates: USE source.dev AS 'fix-comments' — dev doesn't exist so we
+        // reuse the same branch for this test, but wt_name and git branch differ.
+        create(
+            &bare,
+            "dev.fix-comments",
+            &branch,
+            &wt_dev,
+            Some("fql/dev/fix-comments"),
+        )
+        .expect("dev-based worktree must succeed");
+
+        assert!(wt_main.exists(), "main worktree must exist");
+        assert!(wt_dev.exists(), "dev worktree must exist");
+        assert_ne!(wt_main, wt_dev, "worktree paths must differ");
+
+        let repo = Repository::open_bare(&bare).unwrap();
+        assert!(
+            repo.find_branch("fql/main/fix-comments", BranchType::Local)
+                .is_ok(),
+            "fql/main/fix-comments branch must exist"
+        );
+        assert!(
+            repo.find_branch("fql/dev/fix-comments", BranchType::Local)
+                .is_ok(),
+            "fql/dev/fix-comments branch must exist"
+        );
     }
 }

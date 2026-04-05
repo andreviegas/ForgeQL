@@ -403,6 +403,7 @@ impl ForgeQLEngine {
     }
 
     /// `USE source.branch [AS 'custom-branch']` — create or resume a session.
+    #[allow(clippy::too_many_lines)]
     fn use_source(
         &mut self,
         source_name: &str,
@@ -421,7 +422,8 @@ impl ForgeQLEngine {
         // `self.sessions` to avoid holding a shared borrow across a mutable one.
         let resume_outcome: Option<(String, Option<usize>)> = {
             if let Some((existing_id, existing_session)) = self.sessions.iter().find(|(_, s)| {
-                s.source_name == source_name && s.custom_branch.as_deref() == Some(as_branch)
+                s.source_name == source_name
+                    && s.custom_branch.as_deref() == Some(&format!("fql/{branch}/{as_branch}"))
             }) {
                 // Compare the bare repo's current branch tip to what we
                 // indexed.  If `branch_head` returns None (repo unavailable
@@ -465,7 +467,9 @@ impl ForgeQLEngine {
                     branches: Vec::new(),
                     symbols_indexed: Some(symbols_indexed),
                     resumed: true,
-                    message: Some(format!("as_branch: {as_branch}")),
+                    message: Some(format!(
+                        "resumed in-memory session for fql/{branch}/{as_branch}"
+                    )),
                 }));
             }
             Some((stale_id, None)) => {
@@ -488,16 +492,22 @@ impl ForgeQLEngine {
             .to_path_buf();
 
         let session_id = generate_session_id();
-        // Worktree folder name: sanitize '/' → '-' for filesystem safety.
-        let wt_name = as_branch.replace('/', "-");
+        // Composite key: base-branch.alias for filesystem (flat, no nesting)
+        // and fql/base-branch/alias for the git branch name.
+        // Using the fql/ namespace prefix avoids the git loose-ref collision
+        // where refs/heads/<branch> already exists as a file when we try to
+        // create refs/heads/<branch>/<alias>.
+        let wt_name = format!("{branch}.{as_branch}");
+        let git_branch = format!("fql/{branch}/{as_branch}");
         let wt_path = self.data_dir.join("worktrees").join(&wt_name);
 
+        let wt_existed = wt_path.exists();
         drop(worktree::create(
             &repo_path,
             &wt_name,
             branch,
             &wt_path,
-            Some(as_branch),
+            Some(&git_branch),
         )?);
 
         let mut session = Session::new(
@@ -508,7 +518,7 @@ impl ForgeQLEngine {
             branch,
             Arc::clone(&self.lang_registry),
         );
-        session.custom_branch = Some(as_branch.to_string());
+        session.custom_branch = Some(git_branch);
         session.worktree_name = wt_name;
 
         // Use resume_index() so an existing disk cache at
@@ -534,8 +544,14 @@ impl ForgeQLEngine {
             session_id: Some(sid),
             branches: Vec::new(),
             symbols_indexed: Some(symbols_indexed),
-            resumed: false,
-            message: Some(format!("as_branch: {as_branch}")),
+            resumed: wt_existed,
+            message: if wt_existed {
+                Some(format!(
+                    "resumed existing worktree for fql/{branch}/{as_branch} — uncommitted changes preserved"
+                ))
+            } else {
+                Some(format!("created new worktree for fql/{branch}/{as_branch}"))
+            },
         }))
     }
 

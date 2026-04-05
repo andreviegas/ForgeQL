@@ -9,6 +9,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Composite worktree key: `branch.alias` on disk, `fql/branch/alias` in git** —
+  `USE source.main AS 'fix-comments'` now creates worktree directory
+  `main.fix-comments` and git branch `fql/main/fix-comments`. Previously both were
+  just `fix-comments`, meaning two agents using the same alias on different base
+  branches (`main` vs `dev`) would silently share a worktree. Now each
+  `(base-branch, alias)` pair is a distinct, collision-free identity:
+  - Filesystem: `data_dir/worktrees/main.fix-comments/` (flat, no nesting)
+  - Git branch: `fql/main/fix-comments` (under `fql/` namespace, visible in `SHOW BRANCHES`)
+  - The `fql/` prefix avoids a git loose-ref collision: `refs/heads/main` already
+    exists as a file, so `refs/heads/main/fix-comments` is impossible without it.
+  - On resume: the same `USE source.main AS 'fix-comments'` reconnects to the
+    same worktree — uncommitted changes are preserved across server restarts.
+  - On collision (same alias, same base): a warning is returned in `message` so
+    agents know they may be resuming another agent's uncommitted work.
 - **`USE` requires `AS 'branch-name'` (breaking change)** — `USE source.branch`
   without an `AS` clause is now a parse error. Every `USE` command must supply a
   human-readable branch alias, e.g. `USE forgeql-pub.main AS 'my-feature-branch'`.
