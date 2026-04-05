@@ -430,16 +430,7 @@ fn find_symbols_without_session_fails() {
     assert!(engine.execute(None, &op).is_err());
 }
 
-#[test]
-fn disconnect_unknown_session_fails() {
-    let tmp = tempdir().unwrap();
-    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-    assert!(
-        engine
-            .execute(Some("s_ghost"), &ForgeQLIR::Disconnect)
-            .is_err()
-    );
-}
+// (disconnect_unknown_session_fails removed — DISCONNECT command eliminated)
 
 // -----------------------------------------------------------------------
 // Result serialization round-trip

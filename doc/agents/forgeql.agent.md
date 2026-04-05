@@ -96,11 +96,14 @@ FIND symbols
 
 ### Session
 ```sql
-USE source.branch [AS 'alias']
+USE source.branch AS 'alias'
 SHOW SOURCES
 SHOW BRANCHES
-DISCONNECT
 ```
+
+Sessions persist across server restarts — the worktree and any uncommitted changes are
+preserved. To reconnect (or hand off to another agent), use the same `USE` command.
+Worktrees idle for more than 48 hours are cleaned up automatically by the server.
 
 ### FIND
 ```sql

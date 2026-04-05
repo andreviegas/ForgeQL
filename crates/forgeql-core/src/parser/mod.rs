@@ -174,8 +174,6 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
             })
         }
 
-        Rule::disconnect_stmt => Ok(ForgeQLIR::Disconnect),
-
         Rule::change_stmt => parse_change(pair),
 
         Rule::copy_stmt => parse_copy_or_move(pair, false),
@@ -843,12 +841,7 @@ mod tests {
         assert!(matches!(ops[0], ForgeQLIR::ShowBranches));
     }
 
-    #[test]
-    fn parse_disconnect() {
-        let ops = parse("DISCONNECT").unwrap();
-        assert_eq!(ops.len(), 1);
-        assert!(matches!(ops[0], ForgeQLIR::Disconnect));
-    }
+    // (parse_disconnect test removed — DISCONNECT command eliminated)
 
     // -----------------------------------------------------------------------
     // SHOW commands (Code Exposure API)

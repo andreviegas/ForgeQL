@@ -475,10 +475,6 @@ fn execute_and_print(
                         log_source.clone_from(name);
                     }
                 }
-                // Clear session on DISCONNECT.
-                if matches!(op, ForgeQLIR::Disconnect) {
-                    *session = SessionFile::default();
-                }
                 let output = match format {
                     CliFormat::Text => format!("{result}"),
                     CliFormat::Compact => compact::to_compact(&result),

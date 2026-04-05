@@ -269,8 +269,6 @@ impl ForgeQLEngine {
             } => self.use_source(source, branch, as_branch),
             ForgeQLIR::ShowSources => self.show_sources(),
             ForgeQLIR::ShowBranches => self.show_branches(session_id),
-            ForgeQLIR::Disconnect => self.disconnect(session_id),
-
             // --- Read-only queries ---
             ForgeQLIR::FindSymbols { clauses } => self.find_symbols(session_id, clauses),
             ForgeQLIR::FindUsages { of, clauses } => self.find_usages(session_id, of, clauses),
@@ -554,72 +552,6 @@ impl ForgeQLEngine {
             },
         }))
     }
-
-    /// `DISCONNECT` — remove the session, delete its worktree and session branch.
-    fn disconnect(&mut self, session_id: Option<&str>) -> Result<ForgeQLResult> {
-        let sid = session_id.ok_or_else(|| {
-            anyhow::anyhow!("session_id required — run USE <source>.<branch> first")
-        })?;
-        if sid.is_empty() {
-            bail!("session_id required — run USE <source>.<branch> first");
-        }
-
-        let session = self
-            .sessions
-            .remove(sid)
-            .ok_or_else(|| anyhow::anyhow!("session '{sid}' not found"))?;
-
-        let repo_path = self.data_dir.join(format!("{}.git", session.source_name));
-        let wt_name = &session.worktree_name;
-        let custom_branch = &session.custom_branch;
-
-        if let Err(err) = worktree::remove(&repo_path, wt_name) {
-            warn!(%wt_name, error = %err, "disconnect: worktree remove failed");
-        }
-        // Determine the session branch name (custom or auto-generated).
-        let auto_branch = format!("forgeql/{wt_name}");
-        let session_branch = custom_branch.as_deref().unwrap_or(&auto_branch);
-
-        // Delete the branch if it contains no real source changes compared
-        // to the base branch (ignoring ForgeQL control files).
-        let disconnect_msg = match git::source_changes(&repo_path, &session.branch, session_branch)
-        {
-            Ok(changed) if changed.is_empty() => {
-                if let Err(err) = worktree::delete_branch(&repo_path, session_branch) {
-                    warn!(%session_branch, error = %err, "disconnect: branch delete failed");
-                }
-                info!(%session_branch, "deleted branch — no source changes");
-                format!(
-                    "branch {session_branch} deleted (no source changes vs {})",
-                    session.branch
-                )
-            }
-            Ok(changed) => {
-                info!(%session_branch, files = ?changed, "keeping branch — has source changes");
-                format!(
-                    "branch {session_branch} kept — {} changed file(s): {}",
-                    changed.len(),
-                    changed.join(", ")
-                )
-            }
-            Err(err) => {
-                warn!(%session_branch, error = %err, "disconnect: could not diff trees, keeping branch");
-                format!("branch {session_branch} kept — diff error: {err}")
-            }
-        };
-
-        info!(%sid, "session disconnected and cleaned up");
-        Ok(ForgeQLResult::SourceOp(SourceOpResult {
-            op: "disconnect".to_string(),
-            source_name: None,
-            session_id: Some(sid.to_string()),
-            branches: Vec::new(),
-            symbols_indexed: None,
-            resumed: false,
-            message: Some(disconnect_msg),
-        }))
-    }
-
     /// `SHOW SOURCES` — list all registered sources.
     #[allow(clippy::unnecessary_wraps)] // uniform Result return across all ops
     fn show_sources(&self) -> Result<ForgeQLResult> {
@@ -2507,21 +2439,9 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn engine_disconnect_without_session_fails() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-        let result = engine.execute(None, &ForgeQLIR::Disconnect);
-        assert!(result.is_err());
-    }
+    // (engine_disconnect_without_session_fails test removed — DISCONNECT eliminated)
 
-    #[test]
-    fn engine_disconnect_unknown_session_fails() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-        let result = engine.execute(Some("s_unknown"), &ForgeQLIR::Disconnect);
-        assert!(result.is_err());
-    }
+    // (engine_disconnect_unknown_session_fails removed — DISCONNECT command eliminated)
 
     #[test]
     fn engine_find_symbols_without_session_fails() {

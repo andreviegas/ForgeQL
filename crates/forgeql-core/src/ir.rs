@@ -167,12 +167,8 @@ pub enum ForgeQLIR {
     ShowSources,
 
     /// `SHOW BRANCHES` — list branches of the current session source.
+    /// `SHOW BRANCHES` — list branches of the current session source.
     ShowBranches,
-
-    /// `DISCONNECT` — end the current session, delete its worktree and
-    ///  per-session git branch.  `session_id` is supplied via the HTTP params
-    ///  (same as FIND / RENAME), not embedded in the DSL statement.
-    Disconnect,
 
     // ------------------------------------------------------------------
     // Queries (read-only)

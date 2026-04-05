@@ -7,7 +7,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **`DISCONNECT` command eliminated** — sessions are now fully managed by a server-side
+  48-hour TTL. Worktrees persist across server restarts and are shared between agents.
+  Multiple agents can reconnect to the same branch with `USE source.branch AS 'alias'`
+  at any time — uncommitted changes are preserved. There is no explicit session-end
+  ceremony; `COMMIT` is the natural terminal action.
+
 ### Changed
+
+- **MCP surface collapsed to a single `run_fql` tool** — `use_source`, `find_symbols`,
+  `find_usages`, `show_body`, and `disconnect` tool definitions removed. All ForgeQL
+  operations go through `run_fql` with raw FQL syntax. One tool, one mental model.
+  - `run_fql` now extracts `session_id` from `USE` responses and prepends an
+    `⚠️ IMPORTANT: Pass session_id "..." in ALL subsequent run_fql calls.` hint.
+  - Removed param structs: `UseSourceParams`, `FindSymbolsParams`, `FindUsagesParams`,
+    `ShowBodyParams`, `DisconnectParams`; removed dead `run_engine` helper.
+  - Updated `doc/architecture.md`, `doc/syntax.md`, `doc/agents/forgeql.agent.md`,
+    `doc/agents/claude-code/CLAUDE.md`.
 
 - **Composite worktree key: `branch.alias` on disk, `fql/branch/alias` in git** —
   `USE source.main AS 'fix-comments'` now creates worktree directory

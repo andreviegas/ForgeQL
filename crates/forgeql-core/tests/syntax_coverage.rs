@@ -1848,14 +1848,7 @@ fn error_change_nonexistent_file() {
     assert!(!err.is_empty());
 }
 
-#[test]
-fn error_disconnect_without_session() {
-    let tmp = tempdir().unwrap();
-    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-    let ops = parser::parse("DISCONNECT").unwrap();
-    let op = ops.first().unwrap();
-    assert!(engine.execute(Some("no-such-session"), op).is_err());
-}
+// (error_disconnect_without_session removed — DISCONNECT command eliminated)
 
 // =======================================================================
 // Phase 9 — Parser-level coverage (every clause combination parses)
@@ -2018,10 +2011,7 @@ fn parse_use_stmt_with_as() {
     parser::parse("USE my-source.main AS 'my-alias'").expect("parse USE AS");
 }
 
-#[test]
-fn parse_disconnect() {
-    parser::parse("DISCONNECT").expect("parse DISCONNECT");
-}
+// (parse_disconnect removed — DISCONNECT command eliminated)
 
 #[test]
 fn parse_change_matching() {

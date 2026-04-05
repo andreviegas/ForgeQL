@@ -1103,15 +1103,6 @@
       "required_args": [],
       "clauses": [],
       "explosion_cap": 1
-    },
-    {
-      "id": "disconnect",
-      "syntax": "DISCONNECT",
-      "category": "session",
-      "result_type": null,
-      "required_args": [],
-      "clauses": [],
-      "explosion_cap": 1
     }
   ],
   "test_values": {

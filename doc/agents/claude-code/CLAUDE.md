@@ -72,11 +72,14 @@ The local workspace may be empty — never fall back to local filesystem tools (
 
 ### Session
 ```sql
-USE source.branch [AS 'alias']
+USE source.branch AS 'alias'
 SHOW SOURCES
 SHOW BRANCHES
-DISCONNECT
 ```
+
+Sessions persist across server restarts. To reconnect or hand off to another agent, use
+the same `USE` command — the worktree and uncommitted changes are preserved.
+Worktrees idle for more than 48 hours are cleaned up automatically.
 
 ### FIND
 ```sql

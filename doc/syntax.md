@@ -51,17 +51,19 @@ CREATE SOURCE 'name' FROM 'url'
 
 REFRESH SOURCE 'name'
 
-USE source_name.branch [AS 'alias']
+USE source_name.branch AS 'alias'
 
 SHOW SOURCES
 
 SHOW BRANCHES
-
-DISCONNECT
 ```
 
 `source_name` is an unquoted identifier that may contain hyphens (e.g. `pisco-code`).
 `branch` is an unquoted identifier (e.g. `main`, `v1_3_0`).
+
+Sessions start automatically on the first `USE` and persist until the worktree has been
+idle for 48 hours (server-side TTL). There is no explicit disconnect command — multiple
+agents can reconnect to the same worktree at any time with the same `USE` command.
 
 ---
 

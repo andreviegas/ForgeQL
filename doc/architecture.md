@@ -67,7 +67,6 @@ pub enum ForgeQLIR {
     UseSource { source, branch, as_branch },
     ShowSources,
     ShowBranches,
-    Disconnect,
 
     // Queries — all carry Clauses
     FindSymbols { clauses },
@@ -159,18 +158,17 @@ Clauses that do not apply to a given result type are silently skipped. There is 
 
 ### MCP Layer
 
-The MCP layer exposes tools to the agent via the MCP JSON-RPC protocol over stdio:
+The MCP layer exposes a **single tool** to the agent via the MCP JSON-RPC protocol over stdio:
 
 | Tool | Purpose |
 |---|---|
-| `run_fql` | Execute any FQL statement — the primary tool for agents that generate query strings |
-| `use_source` | Start or resume a session on a specific branch |
-| `find_symbols` | Search symbols by pattern (structured parameters) |
-| `find_usages` | Find all references to a symbol |
-| `show_body` | Show function body with optional depth control |
-| `disconnect` | End the active session and release the worktree |
+| `run_fql` | Execute any ForgeQL statement — `USE`, `FIND`, `SHOW`, `CHANGE`, `BEGIN TRANSACTION`, `COMMIT`, `ROLLBACK`, `VERIFY`, `SHOW SOURCES`, `SHOW BRANCHES` |
 
-`CREATE SOURCE` and `REFRESH SOURCE` are intentionally blocked through MCP — they must be run via the interpreter.
+Every ForgeQL operation is accessible through `run_fql`. There are no separate tools for individual operations — one tool, one mental model, no ambiguity about which tool to reach for.
+
+Sessions start with `USE source.branch AS 'alias'` and are cleaned up automatically: worktrees idle for more than 48 hours are removed by a server-side background task. Multiple agents can work on the same branch by reconnecting with the same `USE` command — the worktree and any uncommitted changes are preserved.
+
+`CREATE SOURCE` and `REFRESH SOURCE` are intentionally blocked through MCP — they must be run via the interpreter or CLI.
 
 ### Agent Guardrails
 

@@ -108,56 +108,6 @@ pub(crate) struct RunFqlParams {
     /// Mutations, transactions, and source ops always return JSON.
     pub format: Option<OutputFormat>,
 }
-
-/// Parameters for `use_source` — start or resume a session.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct UseSourceParams {
-    /// Source name (registered via `create_source`).
-    pub source: String,
-    /// Branch to check out (e.g. "main").
-    pub branch: String,
-    /// Custom branch alias (e.g. "agent/refactor-signal-api"). Required — every USE must name a branch.
-    pub as_branch: String,
-}
-
-/// Parameters for `find_symbols` — search symbols by name pattern.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct FindSymbolsParams {
-    /// Glob pattern to match symbol names (e.g. "set%").
-    pub pattern: String,
-    /// Session ID (required).
-    pub session_id: String,
-    /// Maximum number of results.
-    pub limit: Option<usize>,
-}
-
-/// Parameters for `find_usages` — find all usages of a symbol.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct FindUsagesParams {
-    /// Exact symbol name to find usages of.
-    pub symbol: String,
-    /// Session ID (required).
-    pub session_id: String,
-}
-
-/// Parameters for `show_body` — show the body of a function/method.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct ShowBodyParams {
-    /// Symbol name to show the body of.
-    pub symbol: String,
-    /// Session ID (required).
-    pub session_id: String,
-    /// Collapse depth (0 = signature only, default; 1+ = progressive body reveal).
-    pub depth: Option<usize>,
-}
-
-/// Parameters for `disconnect` — end a session and clean up.
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(crate) struct DisconnectParams {
-    /// Session ID to disconnect.
-    pub session_id: String,
-}
-
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
@@ -254,16 +204,6 @@ fn exec_engine(
     drop(guard);
     Ok(result)
 }
-
-/// Execute a parsed `ForgeQLIR` operation and return a JSON `CallToolResult`.
-fn run_engine(
-    engine: &Mutex<ForgeQLEngine>,
-    session_id: Option<&str>,
-    op: &ForgeQLIR,
-) -> Result<CallToolResult, ErrorData> {
-    Ok(json_result(&exec_engine(engine, session_id, op)?.to_json()))
-}
-
 // -----------------------------------------------------------------------
 // Tool definitions — the `#[tool_router]` macro scans these
 // -----------------------------------------------------------------------
@@ -305,6 +245,7 @@ impl ForgeQlMcp {
         // exactly as if each were sent in a separate run_fql call.
         let format = params.format.unwrap_or_default();
         let mut log_source = self.resolve_source(params.session_id.as_deref());
+        let mut session_hint: Option<String> = None;
         let mut outputs: Vec<String> = Vec::with_capacity(ops.len());
         for (source_text, op) in &ops {
             let t0 = std::time::Instant::now();
@@ -312,6 +253,15 @@ impl ForgeQlMcp {
             let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
             if let ForgeQLIR::UseSource { source, .. } = op {
                 log_source.clone_from(source);
+            }
+            // Extract session_id from USE responses and build a hint for the agent.
+            if session_hint.is_none()
+                && let ForgeQLResult::SourceOp(ref sop) = result
+                && let Some(sid) = sop.session_id.as_deref()
+            {
+                session_hint = Some(format!(
+                    "⚠️ IMPORTANT: Pass session_id \"{sid}\" in ALL subsequent run_fql calls."
+                ));
             }
             let output = match format {
                 OutputFormat::Csv => compact::to_compact(&result),
@@ -323,138 +273,18 @@ impl ForgeQlMcp {
         }
         // Single statement → return its result directly (no wrapping).
         // Multiple statements → return a JSON array so the agent sees every result.
-        if let [single] = outputs.as_slice() {
-            Ok(json_result(single))
+        let body = if let [single] = outputs.as_slice() {
+            single.clone()
         } else {
-            let combined = format!("[{}]", outputs.join(","));
-            Ok(json_result(&combined))
-        }
-    }
-
-    /// Start or resume a session on a source branch.
-    #[tool(
-        name = "use_source",
-        description = "Start or resume a session on a source branch. Returns a session_id that MUST be passed to every subsequent tool call (find_symbols, find_usages, show_body, run_fql, disconnect)."
-    )]
-    fn use_source(
-        &self,
-        Parameters(params): Parameters<UseSourceParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        debug!(source = %params.source, branch = %params.branch, "use_source");
-        let fql = format!(
-            "USE {}.{} AS '{}'",
-            params.source, params.branch, params.as_branch
-        );
-        let op = ForgeQLIR::UseSource {
-            source: params.source.clone(),
-            branch: params.branch,
-            as_branch: params.as_branch,
+            format!("[{}]", outputs.join(","))
         };
-        let t0 = std::time::Instant::now();
-        let result = exec_engine(&self.engine, None, &op)?;
-        let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let output = result.to_json();
-        self.log_query(&fql, &result, &output, elapsed_ms, &params.source);
-
-        // Extract session_id and prepend a prominent reminder so agents
-        // do not forget to pass it in every subsequent tool call.
-        let session_hint = if let ForgeQLResult::SourceOp(ref op) = result {
-            op.session_id.as_deref().map(|sid| {
-                format!(
-                    "⚠️ IMPORTANT: Pass session_id \"{sid}\" in ALL subsequent tool calls \
-                     (find_symbols, find_usages, show_body, run_fql, disconnect)."
-                )
-            })
-        } else {
-            None
-        };
-
         match session_hint {
             Some(hint) => Ok(CallToolResult::success(vec![
                 Content::text(hint),
-                Content::text(output),
+                Content::text(body),
             ])),
-            None => Ok(json_result(&output)),
+            None => Ok(json_result(&body)),
         }
-    }
-
-    /// Search for symbols matching a name pattern.
-    #[tool(
-        name = "find_symbols",
-        description = "Find symbols matching a name pattern (e.g. 'set%'). Defaults to LIMIT 20; pass limit to override. For full query flexibility (WHERE, ORDER BY, etc.) use run_fql."
-    )]
-    fn find_symbols(
-        &self,
-        Parameters(params): Parameters<FindSymbolsParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        debug!(pattern = %params.pattern, "find_symbols");
-        let fql = if let Some(limit) = params.limit {
-            format!(
-                "FIND symbols WHERE name LIKE '{}' LIMIT {limit}",
-                params.pattern
-            )
-        } else {
-            format!("FIND symbols WHERE name LIKE '{}'", params.pattern)
-        };
-        let ops = parser::parse(&fql).map_err(parse_error)?;
-        let op = ops
-            .first()
-            .ok_or_else(|| ErrorData::internal_error("parse returned empty", None))?;
-        run_engine(&self.engine, Some(&params.session_id), op)
-    }
-
-    /// Find all usages of a symbol across the codebase.
-    #[tool(
-        name = "find_usages",
-        description = "Find all usages of a symbol across the indexed codebase. Results are capped at 20; use run_fql with LIMIT N to override."
-    )]
-    fn find_usages(
-        &self,
-        Parameters(params): Parameters<FindUsagesParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        debug!(symbol = %params.symbol, "find_usages");
-        let fql = format!("FIND usages OF '{}'", params.symbol);
-        let ops = parser::parse(&fql).map_err(parse_error)?;
-        let op = ops
-            .first()
-            .ok_or_else(|| ErrorData::internal_error("parse returned empty", None))?;
-        run_engine(&self.engine, Some(&params.session_id), op)
-    }
-
-    /// Show the body of a function or method.
-    #[tool(
-        name = "show_body",
-        description = "Show the body of a function or method. Default depth=0 returns signature only. Use depth=1 to see one level of structure, depth=2 for more detail, etc. Never skip directly to a high depth for large functions."
-    )]
-    fn show_body(
-        &self,
-        Parameters(params): Parameters<ShowBodyParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        debug!(symbol = %params.symbol, depth = ?params.depth, "show_body");
-        let fql = if let Some(depth) = params.depth {
-            format!("SHOW body OF '{}' DEPTH {depth}", params.symbol)
-        } else {
-            format!("SHOW body OF '{}'", params.symbol)
-        };
-        let ops = parser::parse(&fql).map_err(parse_error)?;
-        let op = ops
-            .first()
-            .ok_or_else(|| ErrorData::internal_error("parse returned empty", None))?;
-        run_engine(&self.engine, Some(&params.session_id), op)
-    }
-
-    /// End a session and clean up its worktree.
-    #[tool(
-        name = "disconnect",
-        description = "End a session and clean up its worktree and branch"
-    )]
-    fn disconnect(
-        &self,
-        Parameters(params): Parameters<DisconnectParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        debug!(session_id = %params.session_id, "disconnect");
-        let op = ForgeQLIR::Disconnect;
-        run_engine(&self.engine, Some(&params.session_id), &op)
     }
 }
 
@@ -668,40 +498,5 @@ mod tests {
             text.contains("tokens_approx"),
             "compact output should have tokens_approx: {text}"
         );
-    }
-
-    #[test]
-    fn find_symbols_tool_with_limit() {
-        let (mcp, session_id, _dir) = mcp_with_session();
-        let result = mcp.find_symbols(Parameters(FindSymbolsParams {
-            pattern: "%".to_string(),
-            session_id,
-            limit: Some(2),
-        }));
-        let call_result = result.expect("should succeed");
-        assert!(!call_result.content.is_empty());
-    }
-
-    #[test]
-    fn find_usages_tool() {
-        let (mcp, session_id, _dir) = mcp_with_session();
-        let result = mcp.find_usages(Parameters(FindUsagesParams {
-            symbol: "encenderMotor".to_string(),
-            session_id,
-        }));
-        let call_result = result.expect("should succeed");
-        assert!(!call_result.content.is_empty());
-    }
-
-    #[test]
-    fn show_body_tool() {
-        let (mcp, session_id, _dir) = mcp_with_session();
-        let result = mcp.show_body(Parameters(ShowBodyParams {
-            symbol: "encenderMotor".to_string(),
-            session_id,
-            depth: None,
-        }));
-        let call_result = result.expect("should succeed");
-        assert!(!call_result.content.is_empty());
     }
 }

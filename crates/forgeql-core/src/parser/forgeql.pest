@@ -59,7 +59,6 @@ statement = {
   | create_source_stmt
   | refresh_source_stmt
   | use_stmt
-  | disconnect_stmt
   | show_body_stmt
   | show_context_stmt
   | show_signature_stmt
@@ -89,10 +88,6 @@ use_stmt = { "USE" ~ source_name ~ "." ~ identifier ~ "AS" ~ string_literal }
 
 show_sources_stmt  = { "SHOW" ~ "SOURCES" }
 show_branches_stmt = { "SHOW" ~ "BRANCHES" }
-
-/// DISCONNECT — ends the caller's session, deletes its worktree and branch.
-/// No arguments: session_id comes from HTTP params / CLI state.
-disconnect_stmt = { "DISCONNECT" }
 
 // -----------------------------------------------------------------------
 // Code Exposure API — SHOW commands
