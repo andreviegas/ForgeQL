@@ -7,6 +7,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **CVE: path traversal in `SHOW LINES`, `CHANGE FILE`, `COPY LINES`,
+  `MOVE LINES`** — Rust's `PathBuf::join` silently replaces the base path
+  when the argument is absolute, allowing any file on the host filesystem
+  to be read or overwritten by passing an absolute path (e.g.
+  `SHOW LINES 1-40 OF '/home/user/.ssh/id_rsa'`) or a `..`-escape
+  sequence.  Fixed by adding `Workspace::safe_path()` which rejects
+  absolute paths and normalises `..` components before checking the result
+  still starts with the worktree root.  All four entry points are now
+  guarded: `show_lines`, `ChangeFiles::plan`, `exec_copy_lines` (src +
+  dst), `exec_move_lines` (src + dst).  Five regression tests added.
 ### Added
 
 - **Python language support** — new `forgeql-lang-python` crate adds
