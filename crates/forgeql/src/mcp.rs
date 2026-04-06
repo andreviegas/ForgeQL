@@ -57,11 +57,12 @@ impl ForgeQlMcp {
         output: &str,
         elapsed_ms: u64,
         source: &str,
+        budget_line: Option<&str>,
     ) {
         if let Ok(mut guard) = self.logger.lock()
             && let Some(ref mut l) = *guard
         {
-            l.log(fql, result, output, elapsed_ms, source);
+            l.log(fql, result, output, elapsed_ms, source, budget_line);
         }
     }
 
@@ -141,15 +142,21 @@ fn json_result(json: &str) -> CallToolResult {
 ///
 /// All `ForgeQL` responses are single top-level JSON objects, so we splice
 /// the field in before the closing `}`.
-fn append_meta(output: &str) -> String {
+fn append_meta(output: &str, budget_line: Option<&str>) -> String {
     /// Approximate number of UTF-8 characters per LLM token.
     const CHARS_PER_TOKEN: usize = 4;
     let tokens_approx = output.len().div_ceil(CHARS_PER_TOKEN);
+    let budget_csv = budget_line
+        .map(|b| format!("\n\"line_budget\",\"{b}\""))
+        .unwrap_or_default();
+    let budget_json = budget_line
+        .map(|b| format!(",\"line_budget\":\"{b}\""))
+        .unwrap_or_default();
     output.strip_suffix('}').map_or_else(
-        // Compact CSV — append as final row.
-        || format!("{output}\n\"tokens_approx\",{tokens_approx}"),
-        // JSON object — splice field before closing brace.
-        |prefix| format!("{prefix},\"tokens_approx\":{tokens_approx}}}"),
+        // Compact CSV — append as final rows.
+        || format!("{output}{budget_csv}\n\"tokens_approx\",{tokens_approx}"),
+        // JSON object — splice fields before closing brace.
+        |prefix| format!("{prefix}{budget_json},\"tokens_approx\":{tokens_approx}}}"),
     )
 }
 
@@ -172,7 +179,7 @@ fn exec_engine(
     engine: &Mutex<ForgeQLEngine>,
     session_id: Option<&str>,
     op: &ForgeQLIR,
-) -> Result<ForgeQLResult, ErrorData> {
+) -> Result<(ForgeQLResult, Option<forgeql_core::budget::BudgetSnapshot>), ErrorData> {
     // Acquire the lock, recovering from poison if a previous request panicked.
     let mut guard = match engine.lock() {
         Ok(g) => g,
@@ -201,10 +208,15 @@ fn exec_engine(
     })?
     .map_err(engine_error)?;
 
+    // Query budget status while the lock is still held.
+    // Use budget_status_for_op so admin commands (ShowBranches, ShowSources,
+    // CreateSource, RefreshSource) produce no snapshot — they should not
+    // appear in the budget log with stale delta values.
+    let budget_snap = session_id.and_then(|sid| guard.budget_status_for_op(sid, op));
+
     drop(guard);
-    Ok(result)
+    Ok((result, budget_snap))
 }
-// -----------------------------------------------------------------------
 // Tool definitions — the `#[tool_router]` macro scans these
 // -----------------------------------------------------------------------
 
@@ -249,7 +261,8 @@ impl ForgeQlMcp {
         let mut outputs: Vec<String> = Vec::with_capacity(ops.len());
         for (source_text, op) in &ops {
             let t0 = std::time::Instant::now();
-            let result = exec_engine(&self.engine, params.session_id.as_deref(), op)?;
+            let (result, budget_snap) =
+                exec_engine(&self.engine, params.session_id.as_deref(), op)?;
             let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
             if let ForgeQLIR::UseSource { source, .. } = op {
                 log_source.clone_from(source);
@@ -267,8 +280,21 @@ impl ForgeQlMcp {
                 OutputFormat::Csv => compact::to_compact(&result),
                 OutputFormat::Json => result.to_json(),
             };
-            let output = append_meta(&output);
-            self.log_query(source_text, &result, &output, elapsed_ms, &log_source);
+            let budget_line = budget_snap
+                .as_ref()
+                .map(forgeql_core::budget::BudgetSnapshot::status_line);
+            let budget_fixed = budget_snap
+                .as_ref()
+                .map(forgeql_core::budget::BudgetSnapshot::fixed_status_line);
+            let output = append_meta(&output, budget_line.as_deref());
+            self.log_query(
+                source_text,
+                &result,
+                &output,
+                elapsed_ms,
+                &log_source,
+                budget_fixed.as_deref(),
+            );
             outputs.push(output);
         }
         // Single statement → return its result directly (no wrapping).

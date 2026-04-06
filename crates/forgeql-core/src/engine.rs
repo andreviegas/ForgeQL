@@ -301,6 +301,31 @@ impl ForgeQLEngine {
             result.relativize_paths(root);
         }
 
+        // Deduct disclosed source lines from the session's line budget.
+        // Always call deduct_budget even for commands that return 0 source
+        // lines (FIND, mutations, CHANGE, COPY, MOVE) so that the recovery
+        // windowing logic still runs — non-consuming commands may grant a
+        // positive delta if a new recovery window has opened.
+        //
+        // Admin / source-management commands (CreateSource, RefreshSource,
+        // ShowSources, ShowBranches) are exempt: they do not read tree-sitter
+        // AST data and should not participate in either deduction or recovery.
+        // UseSource is already exempt because it executes without a session_id.
+        let is_admin_op = matches!(
+            op,
+            ForgeQLIR::CreateSource { .. }
+                | ForgeQLIR::RefreshSource { .. }
+                | ForgeQLIR::ShowSources
+                | ForgeQLIR::ShowBranches
+        );
+        if !is_admin_op
+            && let Some(sid) = session_id
+            && let Some(session) = self.sessions.get_mut(sid)
+        {
+            let lines = result.source_lines_count();
+            let _ = session.deduct_budget(lines);
+        }
+
         Ok(result)
     }
 
@@ -316,6 +341,37 @@ impl ForgeQLEngine {
         self.sessions.len()
     }
 
+    /// Return the current budget snapshot for a session.
+    /// Returns `None` if no budget is active OR if the last operation was an
+    /// admin-exempt command (`CreateSource`, `RefreshSource`, `ShowSources`, `ShowBranches`)
+    /// — those commands should not appear in the budget log.
+    #[must_use]
+    pub fn budget_status(&self, session_id: &str) -> Option<crate::budget::BudgetSnapshot> {
+        self.sessions
+            .get(session_id)
+            .and_then(Session::budget_snapshot)
+    }
+
+    /// Return `Some(snapshot)` only for non-admin ops, `None` for admin-exempt commands.
+    #[must_use]
+    pub fn budget_status_for_op(
+        &self,
+        session_id: &str,
+        op: &ForgeQLIR,
+    ) -> Option<crate::budget::BudgetSnapshot> {
+        let is_admin = matches!(
+            op,
+            ForgeQLIR::CreateSource { .. }
+                | ForgeQLIR::RefreshSource { .. }
+                | ForgeQLIR::ShowSources
+                | ForgeQLIR::ShowBranches
+        );
+        if is_admin {
+            None
+        } else {
+            self.budget_status(session_id)
+        }
+    }
     /// Number of registered sources.
     #[must_use]
     pub fn source_count(&self) -> usize {
@@ -408,7 +464,27 @@ impl ForgeQLEngine {
         branch: &str,
         as_branch: &str,
     ) -> Result<ForgeQLResult> {
-        info!(%source_name, %branch, ?as_branch, "starting session");
+        // Validate: the alias must differ from the source branch name.
+        // Equal names (e.g. USE src.main AS 'main') are meaningless —
+        // the worktree would be named fql/main/main and the budget key
+        // would be ambiguous.
+        if as_branch == branch {
+            return Err(crate::error::ForgeError::InvalidInput(format!(
+                "alias '{as_branch}' must differ from the source branch '{branch}'"
+            ))
+            .into());
+        }
+
+        // Compute the budget branch key:
+        //   - trunk branches (main/master) → use the alias (the feature name)
+        //   - feature branches → use the branch itself (alias is just local)
+        let budget_branch = if matches!(branch, "main" | "master") {
+            as_branch
+        } else {
+            branch
+        };
+
+        info!(%source_name, %branch, ?as_branch, %budget_branch, "starting session");
 
         // Session resume: if an in-memory session already exists for this
         // source + branch + as_branch combination, reuse it — unless the
@@ -529,6 +605,12 @@ impl ForgeQLEngine {
             load_verify_config(&repo_path, source_name, &session.worktree_path)
         {
             session.frozen_workdir = Some(workdir);
+            if let Some(ref budget_cfg) = config.line_budget {
+                // Sweep expired budget files before initialising the budget
+                // for this session — clean up abandoned branches for free.
+                crate::budget::sweep_expired(&self.data_dir);
+                session.init_budget(budget_cfg, wt_existed, &self.data_dir, budget_branch);
+            }
             session.frozen_verify_steps = Some(config.verify_steps);
         }
 
@@ -712,6 +794,86 @@ impl ForgeQLEngine {
         }))
     }
 
+    // -------------------------------------------------------------------
+    // Show-line cap helper
+    // -------------------------------------------------------------------
+
+    /// Apply all source-line output caps in one place.
+    ///
+    /// Must be called **after** WHERE predicates have been applied so that
+    /// the counts reflect post-filter line totals.
+    ///
+    /// Caps applied in order:
+    /// 1. Explicit `LIMIT` + `OFFSET` from the agent's clauses.
+    /// 2. Implicit `DEFAULT_SHOW_LINE_LIMIT` block when no explicit `LIMIT`
+    ///    was given — returns zero lines and a guidance hint.
+    /// 3. Budget critical cap — truncates to `critical_max_lines` when the
+    ///    session budget is in critical state.
+    fn apply_show_lines_cap(
+        show_result: &mut ShowResult,
+        clauses: Option<&Clauses>,
+        budget_max: Option<usize>,
+    ) {
+        // Operates only on source-line outputs.
+        let total = match &show_result.content {
+            ShowContent::Lines { lines, .. } => lines.len(),
+            _ => return,
+        };
+
+        // ---- Explicit LIMIT + OFFSET, or implicit line cap ----
+        if let Some(clauses) = clauses {
+            if clauses.limit.is_some() {
+                // Agent gave an explicit LIMIT — honour OFFSET + LIMIT.
+                if let ShowContent::Lines { lines, .. } = &mut show_result.content {
+                    let offset = clauses.offset.unwrap_or(0);
+                    if offset > 0 && offset < total {
+                        *lines = lines.split_off(offset);
+                    } else if offset >= total {
+                        lines.clear();
+                    }
+                    let limit = clauses.limit.unwrap_or(total);
+                    if lines.len() > limit {
+                        lines.truncate(limit);
+                    }
+                }
+            } else if total > DEFAULT_SHOW_LINE_LIMIT {
+                // No explicit LIMIT and output exceeds the cap.
+                // Block the output entirely — return zero lines + guidance.
+                if let ShowContent::Lines { lines, .. } = &mut show_result.content {
+                    lines.clear();
+                }
+                show_result.total_lines = Some(total);
+                show_result.hint = Some(format!(
+                    "Blocked: this SHOW command would return {total} lines \
+                     (limit is {DEFAULT_SHOW_LINE_LIMIT} without an explicit LIMIT clause). \
+                     Use FIND symbols WHERE to locate the exact symbol you need — \
+                     it returns file path and line numbers. \
+                     Then use SHOW LINES n-m OF 'file' to read only those lines. \
+                     If you really need all {total} lines, re-run with LIMIT {total}."
+                ));
+            }
+        }
+
+        // ---- Budget critical cap ----
+        if let Some(max) = budget_max {
+            let count = match &show_result.content {
+                ShowContent::Lines { lines, .. } => lines.len(),
+                _ => return,
+            };
+            if count > max {
+                if let ShowContent::Lines { lines, .. } = &mut show_result.content {
+                    lines.truncate(max);
+                }
+                show_result.hint = Some(format!(
+                    "Budget critical: output capped to {max} lines \
+                     (requested {count}).  Use FIND to narrow your search."
+                ));
+            }
+        }
+    }
+
+    // ===================================================================
+    // Code exposure — SHOW commands
     // ===================================================================
     // Code exposure — SHOW commands
     // ===================================================================
@@ -875,71 +1037,32 @@ impl ForgeQLEngine {
             _ => {}
         }
 
-        // Apply WHERE predicates to source-line results BEFORE the line cap.
+        // Extract clauses for ShowContent::Lines variants.
+        let show_clauses: Option<&Clauses> = match op {
+            ForgeQLIR::ShowBody { clauses, .. }
+            | ForgeQLIR::ShowLines { clauses, .. }
+            | ForgeQLIR::ShowContext { clauses, .. } => Some(clauses),
+            _ => None,
+        };
+
+        // Apply WHERE predicates BEFORE the line caps.
         // This lets queries like `SHOW body OF 'fn' WHERE text MATCHES 'TODO'`
         // filter over the full function body, not just the first N lines.
-        if let ShowContent::Lines { lines, .. } = &mut show_result.content {
-            let clauses = match op {
-                ForgeQLIR::ShowBody { clauses, .. }
-                | ForgeQLIR::ShowLines { clauses, .. }
-                | ForgeQLIR::ShowContext { clauses, .. } => Some(clauses),
-                _ => None,
-            };
-            if let Some(clauses) = clauses {
-                // Apply only WHERE predicates here; LIMIT/OFFSET are handled
-                // by the line-cap logic below.
-                for predicate in &clauses.where_predicates {
-                    let pred = predicate.clone();
-                    lines.retain(|line| crate::filter::eval_predicate(line, &pred));
-                }
+        if let (ShowContent::Lines { lines, .. }, Some(clauses)) =
+            (&mut show_result.content, show_clauses)
+        {
+            for predicate in &clauses.where_predicates {
+                let pred = predicate.clone();
+                lines.retain(|line| crate::filter::eval_predicate(line, &pred));
             }
         }
 
-        // ----------------------------------------------------------
-        // Implicit line cap for SHOW commands that return source lines.
-        // When no explicit LIMIT was given, truncate to DEFAULT_SHOW_LINE_LIMIT
-        // and attach a hint explaining how to paginate.
-        // When LIMIT was given, honour OFFSET + LIMIT as pagination.
-        // ----------------------------------------------------------
-        if let ShowContent::Lines { lines, .. } = &mut show_result.content {
-            let clauses = match op {
-                ForgeQLIR::ShowBody { clauses, .. }
-                | ForgeQLIR::ShowLines { clauses, .. }
-                | ForgeQLIR::ShowContext { clauses, .. } => Some(clauses),
-                _ => None,
-            };
-            if let Some(clauses) = clauses {
-                let total = lines.len();
-                let has_explicit_limit = clauses.limit.is_some();
-
-                if has_explicit_limit {
-                    // Agent explicitly requested LIMIT — honour it.
-                    let offset = clauses.offset.unwrap_or(0);
-                    if offset > 0 && offset < total {
-                        *lines = lines.split_off(offset);
-                    } else if offset >= total {
-                        lines.clear();
-                    }
-                    let limit = clauses.limit.unwrap_or(total);
-                    if lines.len() > limit {
-                        lines.truncate(limit);
-                    }
-                } else if total > DEFAULT_SHOW_LINE_LIMIT {
-                    // No explicit LIMIT and output exceeds the cap.
-                    // Block the output entirely — return zero lines + guidance.
-                    lines.clear();
-                    show_result.total_lines = Some(total);
-                    show_result.hint = Some(format!(
-                        "Blocked: this SHOW command would return {total} lines \
-                         (limit is {DEFAULT_SHOW_LINE_LIMIT} without an explicit LIMIT clause). \
-                         Use FIND symbols WHERE to locate the exact symbol you need — \
-                         it returns file path and line numbers. \
-                         Then use SHOW LINES n-m OF 'file' to read only those lines. \
-                         If you really need all {total} lines, re-run with LIMIT {total}.",
-                    ));
-                }
-            }
-        }
+        // Apply all caps: explicit LIMIT/OFFSET, implicit DEFAULT_SHOW_LINE_LIMIT,
+        // and budget critical cap.
+        let budget_max = session_id
+            .and_then(|sid| self.sessions.get(sid))
+            .and_then(Session::budget_critical_max_lines);
+        Self::apply_show_lines_cap(&mut show_result, show_clauses, budget_max);
 
         Ok(ForgeQLResult::Show(show_result))
     }
@@ -1510,8 +1633,8 @@ impl ForgeQLEngine {
             &session_id,
             "test-user",
             workspace_root.to_path_buf(),
-            "local", // synthetic source name
-            "main",  // synthetic branch name
+            "local",       // synthetic source name
+            "test-branch", // synthetic branch name (not main/master to allow budget tests)
             Arc::clone(&self.lang_registry),
         );
         session.build_index()?;
@@ -1519,6 +1642,21 @@ impl ForgeQLEngine {
         let sid = session_id.clone();
         drop(self.sessions.insert(session_id, session));
         Ok(sid)
+    }
+
+    /// Activate a line budget for an existing session.
+    ///
+    /// Test-only helper — in production, the budget is initialized during `USE`.
+    #[cfg(feature = "test-helpers")]
+    pub fn init_session_budget(
+        &mut self,
+        session_id: &str,
+        config: &crate::config::LineBudgetConfig,
+    ) {
+        let data_dir = self.data_dir.clone();
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            session.init_budget(config, false, &data_dir, "test-branch");
+        }
     }
 }
 

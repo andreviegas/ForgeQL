@@ -19,7 +19,8 @@ use tracing::{debug, info};
 use crate::ast::cache::CachedIndex;
 use crate::ast::index::SymbolTable;
 use crate::ast::lang::LanguageRegistry;
-use crate::config::VerifyStep;
+use crate::budget::{BudgetSnapshot, BudgetState};
+use crate::config::{LineBudgetConfig, VerifyStep};
 use crate::workspace::Workspace;
 
 /// Sentinel file written inside each worktree directory on every `touch()`.
@@ -116,6 +117,16 @@ pub struct Session {
     pub frozen_workdir: Option<PathBuf>,
     /// Language support registry for tree-sitter parsing and enrichment.
     lang_registry: Arc<LanguageRegistry>,
+    /// Optional line-budget tracker.  `None` when the `.forgeql.yaml` does
+    /// not contain a `line_budget` section.
+    budget: Option<BudgetState>,
+    /// Root data directory (`~/.forgeql`) used to derive the budget file
+    /// path.  Set by `init_budget`; `None` until budget is first initialised.
+    budget_data_dir: Option<PathBuf>,
+    /// The branch key used as the filename stem for the budget file.
+    /// Differs from `branch` when branching off trunk: if `branch` is
+    /// `main`/`master` this holds the `as_branch` alias instead.
+    budget_branch: Option<String>,
 }
 
 impl Session {
@@ -150,9 +161,11 @@ impl Session {
             frozen_verify_steps: None,
             frozen_workdir: None,
             lang_registry,
+            budget: None,
+            budget_data_dir: None,
+            budget_branch: None,
         }
     }
-
     /// Parse all source files in the worktree and build a fresh `SymbolTable`.
     ///
     /// The resulting index is persisted to `<worktree>/.forgeql-index` for
@@ -344,6 +357,72 @@ impl Session {
             .unwrap_or_default()
             .as_secs();
         let _ = std::fs::write(self.worktree_path.join(SESSION_SENTINEL), now.to_string());
+    }
+}
+
+// -----------------------------------------------------------------------
+// Budget integration
+
+impl Session {
+    /// Initialise the line-budget for this session.
+    ///
+    /// `data_dir` is the `ForgeQL` data root (`~/.forgeql`).
+    /// `budget_branch` is the computed budget key — the feature branch name,
+    /// derived by the engine from the `USE` command (see `use_source`).
+    /// When `resumed` is `true` the persisted budget is restored from disk;
+    /// otherwise a fresh budget is created.
+    pub fn init_budget(
+        &mut self,
+        config: &LineBudgetConfig,
+        resumed: bool,
+        data_dir: &std::path::Path,
+        budget_branch: &str,
+    ) {
+        self.budget_data_dir = Some(data_dir.to_path_buf());
+        self.budget_branch = Some(budget_branch.to_string());
+        self.budget = Some(if resumed {
+            BudgetState::load(config, data_dir, &self.source_name, budget_branch)
+        } else {
+            BudgetState::new(config)
+        });
+    }
+
+    /// Deduct `lines` from the budget and persist the new state.
+    /// Returns `None` when no budget is configured.
+    pub fn deduct_budget(&mut self, lines: usize) -> Option<BudgetSnapshot> {
+        let data_dir = self.budget_data_dir.clone()?;
+        let budget_branch = self.budget_branch.clone()?;
+        let budget = self.budget.as_mut()?;
+        let snap = budget.deduct(lines);
+        budget.save(&data_dir, &self.source_name, &budget_branch);
+        Some(snap)
+    }
+
+    /// Reset the budget delta to zero for non-consuming commands.
+    pub const fn reset_budget_delta(&mut self) {
+        if let Some(ref mut b) = self.budget {
+            b.reset_delta();
+        }
+    }
+
+    /// Return `true` if a budget is active and in critical state.
+    #[must_use]
+    pub fn is_budget_critical(&self) -> bool {
+        self.budget.as_ref().is_some_and(BudgetState::is_critical)
+    }
+    /// Maximum lines allowed when in critical state.
+    #[must_use]
+    pub fn budget_critical_max_lines(&self) -> Option<usize> {
+        self.budget
+            .as_ref()
+            .filter(|b| b.is_critical())
+            .map(BudgetState::critical_max_lines)
+    }
+
+    /// Current budget snapshot (without deducting).
+    #[must_use]
+    pub fn budget_snapshot(&self) -> Option<BudgetSnapshot> {
+        self.budget.as_ref().map(BudgetState::snapshot)
     }
 }
 

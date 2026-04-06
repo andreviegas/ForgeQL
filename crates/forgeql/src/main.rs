@@ -481,7 +481,7 @@ fn execute_and_print(
                     CliFormat::Json => result.to_json_pretty(),
                 };
                 if let Some(ref mut l) = log {
-                    l.log(source_text, &result, &output, elapsed_ms, &log_source);
+                    l.log(source_text, &result, &output, elapsed_ms, &log_source, None);
                 }
                 println!("{output}");
             }

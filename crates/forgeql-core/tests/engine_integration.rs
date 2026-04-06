@@ -1354,3 +1354,100 @@ fn member_variable_has_body_symbol_field() {
         other => panic!("expected Query, got {other:?}"),
     }
 }
+
+// -----------------------------------------------------------------------
+// Line-budget integration tests
+// -----------------------------------------------------------------------
+
+const fn budget_config() -> forgeql_core::config::LineBudgetConfig {
+    forgeql_core::config::LineBudgetConfig {
+        initial: 50,
+        ceiling: 200,
+        recovery_base: 10,
+        recovery_window_secs: 60,
+        warning_threshold: 20,
+        critical_threshold: 10,
+        critical_max_lines: 5,
+        idle_reset_secs: 300,
+    }
+}
+
+#[test]
+fn budget_deducts_on_show_lines() {
+    let (mut engine, sid, _dir) = engine_with_session();
+    engine.init_session_budget(&sid, &budget_config());
+
+    // Confirm budget starts at initial.
+    let snap = engine.budget_status(&sid).expect("budget active");
+    assert_eq!(snap.remaining, 50);
+
+    // SHOW LINES returns source lines — budget should decrease.
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "SHOW LINES 1-5 OF 'motor_control.h' LIMIT 5",
+    );
+    let lines_returned = result.source_lines_count();
+    assert!(lines_returned > 0, "should return lines");
+
+    let snap = engine.budget_status(&sid).expect("budget active");
+    // No recovery on SHOW LINES — pure deduction.
+    assert_eq!(snap.remaining, 50 - lines_returned);
+}
+
+#[test]
+fn budget_not_deducted_on_find_symbols() {
+    let (mut engine, sid, _dir) = engine_with_session();
+    engine.init_session_budget(&sid, &budget_config());
+
+    // FIND symbols returns structured data, not source lines.
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE fql_kind = 'function' LIMIT 5",
+    );
+
+    let snap = engine.budget_status(&sid).expect("budget active");
+    // Recovery may increase it, but it should not go below initial.
+    assert!(snap.remaining >= 50, "budget should not decrease for FIND");
+}
+
+#[test]
+fn budget_critical_caps_show_lines() {
+    let (mut engine, sid, _dir) = engine_with_session();
+    let mut cfg = budget_config();
+    cfg.initial = 5;
+    cfg.critical_threshold = 10; // start below critical
+    cfg.critical_max_lines = 3;
+    engine.init_session_budget(&sid, &cfg);
+
+    // Request 10 lines — should be capped to critical_max_lines (3).
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "SHOW LINES 1-10 OF 'motor_control.h' LIMIT 10",
+    );
+    let lines_returned = result.source_lines_count();
+    assert!(
+        lines_returned <= 3,
+        "critical state should cap to 3 lines, got {lines_returned}"
+    );
+
+    // Verify hint mentions budget.
+    if let ForgeQLResult::Show(ref sr) = result {
+        assert!(
+            sr.hint
+                .as_ref()
+                .is_some_and(|h| h.contains("Budget critical")),
+            "hint should mention budget: {:?}",
+            sr.hint
+        );
+    }
+}
+
+#[test]
+fn budget_absent_without_config() {
+    let (engine, sid, _dir) = engine_with_session();
+    // No init_session_budget call — budget should be None.
+    assert!(engine.budget_status(&sid).is_none());
+}

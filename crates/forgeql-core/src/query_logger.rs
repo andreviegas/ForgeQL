@@ -8,7 +8,7 @@
 //! restarts without duplication.
 //!
 //! CSV columns:
-//! `timestamp`, `elapsed_ms`, `source_lines`, `tokens_sent`, `tokens_received`, `command_preview`
+//! CSV columns:`timestamp`, `line_budget`, `elapsed_ms`, `source_lines`, `tokens_sent`, `tokens_received`, `command_preview`
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -70,6 +70,7 @@ impl QueryLogger {
         result_output: &str,
         elapsed_ms: u64,
         source: &str,
+        budget_line: Option<&str>,
     ) {
         let sanitized = Self::sanitize_source(source);
 
@@ -90,7 +91,7 @@ impl QueryLogger {
         if needs_header {
             let _ = writeln!(
                 file,
-                "timestamp,elapsed_ms,source_lines,tokens_sent,tokens_received,command_preview"
+                "timestamp,line_budget,elapsed_ms,source_lines,tokens_sent,tokens_received,command_preview"
             );
         }
 
@@ -109,11 +110,13 @@ impl QueryLogger {
         let source_lines = result.source_lines_count();
         let tokens_sent = fql.len().div_ceil(CHARS_PER_TOKEN);
         let tokens_received = result_output.len().div_ceil(CHARS_PER_TOKEN);
+        let budget = budget_line.unwrap_or("");
 
         let _ = writeln!(
             file,
-            r#""{}",{},{},{},{},"{}""#,
+            "\"{}\",\"{}\",{},{},{},{},\"{}\"",
             iso_timestamp(),
+            budget,
             elapsed_ms,
             source_lines,
             tokens_sent,

@@ -72,6 +72,12 @@ pub enum ForgeError {
 
     #[error("build step '{step}' timed out after {secs}s")]
     BuildTimeout { step: String, secs: u64 },
+
+    // ---------------------------------------------------------------
+    // User input validation
+    // ---------------------------------------------------------------
+    #[error("{0}")]
+    InvalidInput(String),
 }
 
 /// Convenience constructor: wrap a `std::io::Error` with the offending path.

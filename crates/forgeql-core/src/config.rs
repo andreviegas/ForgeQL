@@ -30,6 +30,83 @@ pub struct ForgeConfig {
     /// Extra glob patterns to ignore on top of `.forgeql-ignore`.
     #[serde(default)]
     pub ignore_patterns: Vec<String>,
+
+    /// Line-budget configuration.  When present, the server enforces a
+    /// rolling budget that limits how many source lines an agent may read.
+    #[serde(default)]
+    pub line_budget: Option<LineBudgetConfig>,
+}
+
+/// Configuration for the line-budget system that limits how many source
+/// lines an agent can read per session window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineBudgetConfig {
+    /// Starting line budget for a new session.
+    #[serde(default = "default_initial")]
+    pub initial: usize,
+    /// Maximum the effective budget can grow to over time.
+    #[serde(default = "default_ceiling")]
+    pub ceiling: usize,
+    /// Base number of lines recovered per recovery event.
+    #[serde(default = "default_recovery_base")]
+    pub recovery_base: usize,
+    /// Time window in seconds — recovery halves within the same window.
+    #[serde(default = "default_recovery_window_secs")]
+    pub recovery_window_secs: u64,
+    /// Budget level below which a warning is emitted.
+    #[serde(default = "default_warning_threshold")]
+    pub warning_threshold: usize,
+    /// Budget level below which SHOW LINES is capped.
+    #[serde(default = "default_critical_threshold")]
+    pub critical_threshold: usize,
+    /// Maximum lines returned by SHOW LINES when in critical state.
+    #[serde(default = "default_critical_max_lines")]
+    pub critical_max_lines: usize,
+    /// Seconds of inactivity after which the persisted budget file is
+    /// considered stale and deleted on the next `USE`, giving the agent
+    /// a fresh budget.  Set to 0 to disable expiry.  Default: 300 (5 min).
+    #[serde(default = "default_idle_reset_secs")]
+    pub idle_reset_secs: u64,
+}
+
+const fn default_initial() -> usize {
+    200
+}
+const fn default_ceiling() -> usize {
+    2000
+}
+const fn default_recovery_base() -> usize {
+    20
+}
+const fn default_recovery_window_secs() -> u64 {
+    60
+}
+const fn default_warning_threshold() -> usize {
+    100
+}
+const fn default_critical_threshold() -> usize {
+    50
+}
+const fn default_critical_max_lines() -> usize {
+    15
+}
+const fn default_idle_reset_secs() -> u64 {
+    300
+}
+
+impl Default for LineBudgetConfig {
+    fn default() -> Self {
+        Self {
+            initial: default_initial(),
+            ceiling: default_ceiling(),
+            recovery_base: default_recovery_base(),
+            recovery_window_secs: default_recovery_window_secs(),
+            warning_threshold: default_warning_threshold(),
+            critical_threshold: default_critical_threshold(),
+            critical_max_lines: default_critical_max_lines(),
+            idle_reset_secs: default_idle_reset_secs(),
+        }
+    }
 }
 
 /// One named build or test step.
