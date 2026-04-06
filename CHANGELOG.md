@@ -2,10 +2,84 @@
 
 All notable changes to ForgeQL will be documented in this file.
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+---
+
+## [Unreleased] — 2026-04-06
+
+### Changed — budget: remove effective_max ratchet
+- `effective_max` field removed from `BudgetState`, `BudgetSnapshot`, and
+  `PersistedBudget`. The ratchet mechanism blocked rewards on fresh sessions,
+  forcing the agent to deplete budget before earning any recovery.
+- `try_recover()` now guards against `remaining >= ceiling` (not `effective_max`).
+  Recovery fires on every FIND/CHANGE/MOVE/COPY whenever `remaining < ceiling`.
+- `load()` simplified: single `remaining.min(ceiling)` clamp, no two-step restore.
+- Tests and integration test updated to reflect new recovery-on-first-deduct behavior.
+- ForgeQL commands used: `CHANGE FILE ... LINES n-m WITH NOTHING`, `CHANGE FILE ... LINES n-m WITH <<RUST...RUST`, `VERIFY build`, `COMMIT MESSAGE`.
+
+### Fixed — budget reward display
+- `BudgetState::deduct()`: capture `before` **before** `try_recover()` so the
+  reported delta reflects the full net change (recovery gain minus line cost).
+  Previously FIND and other zero-line commands always showed `+0` even when
+  recovery fired; they now correctly display the positive recovery amount.
+
+### Changed — admin command exemption from budget
+- `Engine::execute()`: `CreateSource`, `RefreshSource`, `ShowSources`, and
+  `ShowBranches` are now **exempt** from budget deduction and recovery.  These
+  commands are non-tree-sitter source-management operations; they should not
+  participate in the reward/deduction cycle.  `UseSource` was already exempt
+  (no session_id at execution time).
+
+### Fixed — fixed indentation on `BudgetState::deduct` signature
+- `pub fn deduct` had drifted to column 0 inside its `impl` block from a
+  previous edit; restored to the correct 4-space indentation.
+
+### Added — relaxed DSL quoting
+- `string_literal` now accepts **double-quoted** strings (`"value"`) in
+  addition to the existing single-quoted form (`'value'`), everywhere the DSL
+  accepts a string.
+- New `bare_value` terminal: accepts unquoted alphanumeric tokens (plus
+  underscores, colons, hyphens, dots, and forward-slashes) as string values
+  wherever quoting is optional.
+- New `any_value` rule (`string_literal | bare_value`) is used in all
+  positions where quoting is optional: `WHERE` predicates, `OF` targets
+  (SHOW / FIND usages), `IN`, `EXCLUDE`, `MATCHING` patterns, COPY/MOVE file
+  paths, and BEGIN/ROLLBACK/VERIFY step names.
+- `CHANGE … MATCHING` and `COMMIT MESSAGE` still require explicit quoting
+  (content that may contain spaces).
+- `file_list` (CHANGE FILE/FILES path list) still requires explicit quoting
+  for safety on mutations.
+- `unquote()` updated to strip both `'` and `"` delimiters.
+- `parse_predicate()` updated to handle `Rule::any_value` (was `Rule::string_literal`).
+
+### Fixed — USE hyphenated branch
+- `use_stmt` grammar: the **branch** position now uses `source_name` (allows
+  hyphens) instead of `identifier` (letters/digits/underscores/colons only).
+  `USE forgeql-pub.line-budget AS 'lb2'` — previously a DSL parse error — now
+  parses correctly.  The AS target also accepts `any_value` so bare branch
+  names like `USE forgeql-pub.main AS my-feature` work without quotes.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Added
+
+- **Line-budget system** — configurable per-session budget that limits how many
+  source lines an agent can read.  Configured via `line_budget` section in
+  `.forgeql.yaml`.  Features:
+  - Rolling budget with diminishing-returns recovery within time windows
+  - Warning state (below threshold) and critical state (caps SHOW LINES output)
+  - Budget status (`remaining/effective_max (delta)`) included in every MCP
+    response via `line_budget` metadata field
+  - Persisted to `.budgets/{source}@{branch}.json` under the `ForgeQL` data dir
+  - Budget file key uses the **feature branch name**, not the worktree alias:
+    `USE src.main AS feat` → `src@feat.json`; `USE src.feat AS feat2` → `src@feat.json`
+  - `USE src.X AS X` (alias equals branch) is rejected with a clear error
+  - `idle_reset_secs` (default 300): expired files are auto-deleted on next `USE`
+    via `sweep_expired()` — restores full budget after an idle gap, no cron needed
+  - Budget delta reflects recovery on every command, including non-consuming ones
+  - Warning and critical states include actionable token-saving tips in
+    `status_line()` surfaced directly in each MCP response
 
 ### Fixed
 
