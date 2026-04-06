@@ -290,6 +290,7 @@ ForgeQL/
 │   │       │   ├── mod.rs        # Workspace root discovery, file enumeration
 │   │       │   └── file_io.rs    # Atomic write, .forgeql-ignore support
 │   │       ├── engine.rs         # Command dispatch + session management + SHOW guardrails
+│   │       ├── budget.rs         # BudgetState: deduction, recovery, persistence, sweep
 │   │       ├── compact.rs        # Compact CSV output renderer (MCP mode)
 │   │       ├── filter.rs         # apply_clauses(), ClauseTarget trait
 │   │       ├── ir.rs             # ForgeQLIR, Clauses, Predicate, ChangeTarget
@@ -301,6 +302,11 @@ ForgeQL/
 │   ├── forgeql-lang-cpp/         # C++ language support crate
 │   │   └── src/
 │   │       └── lib.rs            # CppLanguage, CPP_CONFIG, map_kind(), cpp_registry()
+│   ├── forgeql-lang-python/      # Python language support crate
+│   │   ├── config/
+│   │   │   └── python.json       # kind_map, enricher hints, node kind sets
+│   │   └── src/
+│   │       └── lib.rs            # PythonLanguage, PYTHON_CONFIG, python_registry()
 │   └── forgeql-lang-rust/        # Rust language support crate
 │       ├── config/
 │       │   └── rust.json         # kind_map, enricher hints, node kind sets

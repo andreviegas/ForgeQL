@@ -33,7 +33,7 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
 | Symbol | Meaning |
 |---|---|
 | `UPPERCASE` | Keyword — write exactly as shown |
-| `'string'` | String literal — single quotes only |
+| `'string'` or `"string"` | String literal — single or double quotes |
 | `N` | Integer literal |
 | `n-m` | Inclusive line range, e.g. `10-25` |
 | `[ … ]` | Optional element |
@@ -59,11 +59,15 @@ SHOW BRANCHES
 ```
 
 `source_name` is an unquoted identifier that may contain hyphens (e.g. `pisco-code`).
-`branch` is an unquoted identifier (e.g. `main`, `v1_3_0`).
+`branch` is an unquoted identifier that may contain hyphens (e.g. `main`, `v1_3_0`, `line-budget`).
+`alias` is the worktree branch name — single/double-quoted or bare (unquoted).
 
 Sessions start automatically on the first `USE` and persist until the worktree has been
 idle for 48 hours (server-side TTL). There is no explicit disconnect command — multiple
 agents can reconnect to the same worktree at any time with the same `USE` command.
+
+Worktree identity uses a composite key: filesystem directory = `branch.alias` (flat),
+git branch = `fql/branch/alias` (under the `fql/` namespace).
 
 ---
 
@@ -243,7 +247,20 @@ verify_steps:
   - name: test
     command: "cmake --build build && ctest --test-dir build"
     timeout_secs: 120
+line_budget:
+  ceiling: 5000           # max lines per session
+  warning_pct: 20         # warning state below 20% remaining
+  critical_pct: 5         # critical state below 5% — caps SHOW LINES output
+  recovery_pct: 2         # recovery per qualifying command (% of ceiling)
+  recovery_window_secs: 60
+  idle_reset_secs: 300    # auto-delete budget file after idle gap
 ```
+
+**Line budget:** when `line_budget` is present, each session tracks how many source
+lines the agent has consumed. Budget status (`remaining/ceiling (delta)`) is returned
+in every MCP response via the `line_budget` metadata field. Budget files are persisted
+to `.budgets/{source}@{branch}.json` under the ForgeQL data directory. Expired files
+are auto-deleted on the next `USE` via `sweep_expired()`.
 
 ---
 
@@ -298,10 +315,16 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 
 | Value syntax | Type |
 |---|---|
-| `'text'` | String |
+| `'text'` | String (single-quoted) |
+| `"text"` | String (double-quoted) |
+| `bare_value` | Unquoted string — alphanumeric, `_`, `:`, `-`, `.`, `/` (where quoting is optional) |
 | `42` | Integer |
 | `-10` | Signed integer |
 | `true` / `false` | Boolean (reserved) |
+
+**Quoting rules:** `CHANGE … MATCHING` and `COMMIT MESSAGE` require explicit quotes
+(content may contain spaces). `CHANGE FILE` paths require explicit quotes for mutation
+safety. All other positions accept bare values or either quote style.
 
 ---
 

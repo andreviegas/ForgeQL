@@ -5,7 +5,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 
 ## Critical Rules
 
-1. Always start with `USE source.branch` before any query.
+1. Always start with `USE source.branch AS 'alias'` before any query. The `AS` clause is mandatory.
 2. Never use Bash tools (grep, find, cat, less) or Read File for source code. ForgeQL manages all code access.
 3. Never brute-force read code. Use FIND to locate symbols, then SHOW LINES for exact ranges.
 4. SHOW commands without LIMIT are blocked beyond 40 lines. If blocked, use FIND to get file + line numbers, then SHOW LINES n-m.
@@ -80,6 +80,13 @@ SHOW BRANCHES
 Sessions persist across server restarts. To reconnect or hand off to another agent, use
 the same `USE` command — the worktree and uncommitted changes are preserved.
 Worktrees idle for more than 48 hours are cleaned up automatically.
+
+Worktree identity uses a composite key: filesystem = `branch.alias`, git branch =
+`fql/branch/alias`. The `fql/` namespace avoids git loose-ref collisions.
+
+**Line budget:** if configured, each session tracks consumed source lines. Budget
+status is returned in every response. When budget is low, use tighter `WHERE` filters,
+`LIMIT`, and `DEPTH 0`/`1` to conserve lines.
 
 ### FIND
 ```sql

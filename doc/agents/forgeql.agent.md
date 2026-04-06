@@ -105,6 +105,14 @@ Sessions persist across server restarts — the worktree and any uncommitted cha
 preserved. To reconnect (or hand off to another agent), use the same `USE` command.
 Worktrees idle for more than 48 hours are cleaned up automatically by the server.
 
+Worktree identity uses a composite key: filesystem = `branch.alias`, git branch =
+`fql/branch/alias`. The `fql/` namespace avoids git loose-ref collisions.
+
+**Line budget:** if the source has a `line_budget` section in `.forgeql.yaml`, each
+session tracks consumed source lines. Budget status is returned in every MCP response.
+When the budget enters warning or critical state, reduce output by using tighter
+`WHERE` filters, `LIMIT`, and `DEPTH 0`/`1` before expanding.
+
 ### FIND
 ```sql
 FIND symbols [clauses]

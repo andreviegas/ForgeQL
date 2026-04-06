@@ -2,65 +2,12 @@
 
 All notable changes to ForgeQL will be documented in this file.
 
+ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-04-06
-
-### Changed — budget: remove effective_max ratchet
-- `effective_max` field removed from `BudgetState`, `BudgetSnapshot`, and
-  `PersistedBudget`. The ratchet mechanism blocked rewards on fresh sessions,
-  forcing the agent to deplete budget before earning any recovery.
-- `try_recover()` now guards against `remaining >= ceiling` (not `effective_max`).
-  Recovery fires on every FIND/CHANGE/MOVE/COPY whenever `remaining < ceiling`.
-- `load()` simplified: single `remaining.min(ceiling)` clamp, no two-step restore.
-- Tests and integration test updated to reflect new recovery-on-first-deduct behavior.
-- ForgeQL commands used: `CHANGE FILE ... LINES n-m WITH NOTHING`, `CHANGE FILE ... LINES n-m WITH <<RUST...RUST`, `VERIFY build`, `COMMIT MESSAGE`.
-
-### Fixed — budget reward display
-- `BudgetState::deduct()`: capture `before` **before** `try_recover()` so the
-  reported delta reflects the full net change (recovery gain minus line cost).
-  Previously FIND and other zero-line commands always showed `+0` even when
-  recovery fired; they now correctly display the positive recovery amount.
-
-### Changed — admin command exemption from budget
-- `Engine::execute()`: `CreateSource`, `RefreshSource`, `ShowSources`, and
-  `ShowBranches` are now **exempt** from budget deduction and recovery.  These
-  commands are non-tree-sitter source-management operations; they should not
-  participate in the reward/deduction cycle.  `UseSource` was already exempt
-  (no session_id at execution time).
-
-### Fixed — fixed indentation on `BudgetState::deduct` signature
-- `pub fn deduct` had drifted to column 0 inside its `impl` block from a
-  previous edit; restored to the correct 4-space indentation.
-
-### Added — relaxed DSL quoting
-- `string_literal` now accepts **double-quoted** strings (`"value"`) in
-  addition to the existing single-quoted form (`'value'`), everywhere the DSL
-  accepts a string.
-- New `bare_value` terminal: accepts unquoted alphanumeric tokens (plus
-  underscores, colons, hyphens, dots, and forward-slashes) as string values
-  wherever quoting is optional.
-- New `any_value` rule (`string_literal | bare_value`) is used in all
-  positions where quoting is optional: `WHERE` predicates, `OF` targets
-  (SHOW / FIND usages), `IN`, `EXCLUDE`, `MATCHING` patterns, COPY/MOVE file
-  paths, and BEGIN/ROLLBACK/VERIFY step names.
-- `CHANGE … MATCHING` and `COMMIT MESSAGE` still require explicit quoting
-  (content that may contain spaces).
-- `file_list` (CHANGE FILE/FILES path list) still requires explicit quoting
-  for safety on mutations.
-- `unquote()` updated to strip both `'` and `"` delimiters.
-- `parse_predicate()` updated to handle `Rule::any_value` (was `Rule::string_literal`).
-
-### Fixed — USE hyphenated branch
-- `use_stmt` grammar: the **branch** position now uses `source_name` (allows
-  hyphens) instead of `identifier` (letters/digits/underscores/colons only).
-  `USE forgeql-pub.line-budget AS 'lb2'` — previously a DSL parse error — now
-  parses correctly.  The AS target also accepts `any_value` so bare branch
-  names like `USE forgeql-pub.main AS my-feature` work without quotes.
-ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
+## [0.32.0] — 2026-04-06
 
 ### Added
 
@@ -69,7 +16,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `.forgeql.yaml`.  Features:
   - Rolling budget with diminishing-returns recovery within time windows
   - Warning state (below threshold) and critical state (caps SHOW LINES output)
-  - Budget status (`remaining/effective_max (delta)`) included in every MCP
+  - Budget status (`remaining/ceiling (delta)`) included in every MCP
     response via `line_budget` metadata field
   - Persisted to `.budgets/{source}@{branch}.json` under the `ForgeQL` data dir
   - Budget file key uses the **feature branch name**, not the worktree alias:
@@ -80,33 +27,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Budget delta reflects recovery on every command, including non-consuming ones
   - Warning and critical states include actionable token-saving tips in
     `status_line()` surfaced directly in each MCP response
+  - Admin commands (`CreateSource`, `RefreshSource`, `ShowSources`, `ShowBranches`)
+    are exempt from budget deduction and recovery
 
-### Fixed
-
-- **`.forgeql-index` leaks into squash commits after BEGIN → ROLLBACK cycles** —
-  `exec_rollback` set `last_clean_oid` to `checkpoint.pre_txn_oid` unconditionally.
-  After a complete BEGIN → ROLLBACK cycle, HEAD pointed at the checkpoint commit
-  (which includes `.forgeql-index`).  The next BEGIN captured that checkpoint OID
-  as `pre_txn_oid`, and subsequent ROLLBACK wrote it into `last_clean_oid`.
-  When COMMIT ran, `squash_commit_on_branch` used this stale checkpoint OID as
-  the squash parent — producing a commit that showed `.forgeql-index` as deleted
-  relative to its parent.  Fixed by clearing `last_clean_oid` to `None` when the
-  checkpoint stack becomes empty after rollback, so the next `BEGIN TRANSACTION`
-  captures a fresh pre-transaction base.
-
-- **`CHANGE FILE LINES n-m WITH NOTHING` parse error** — the grammar rule
-  `change_lines_delete` only accepted bare `NOTHING` after the line range,
-  causing `LINES n-m WITH NOTHING` to fail with "expected content_value".
-  Made the `WITH` keyword optional (`"WITH"?`) so both `LINES 3-5 NOTHING`
-  and `LINES 3-5 WITH NOTHING` are accepted.  Parser and integration tests
-  added for the new syntax.
-### Removed
-
-- **`DISCONNECT` command eliminated** — sessions are now fully managed by a server-side
-  48-hour TTL. Worktrees persist across server restarts and are shared between agents.
-  Multiple agents can reconnect to the same branch with `USE source.branch AS 'alias'`
-  at any time — uncommitted changes are preserved. There is no explicit session-end
-  ceremony; `COMMIT` is the natural terminal action.
+- **Relaxed DSL quoting** —
+  - `string_literal` now accepts **double-quoted** strings (`"value"`) in
+    addition to the existing single-quoted form (`'value'`), everywhere the DSL
+    accepts a string.
+  - New `bare_value` terminal: accepts unquoted alphanumeric tokens (plus
+    underscores, colons, hyphens, dots, and forward-slashes) as string values
+    wherever quoting is optional.
+  - New `any_value` rule (`string_literal | bare_value`) is used in all
+    positions where quoting is optional: `WHERE` predicates, `OF` targets
+    (SHOW / FIND usages), `IN`, `EXCLUDE`, `MATCHING` patterns, COPY/MOVE file
+    paths, and BEGIN/ROLLBACK/VERIFY step names.
+  - `CHANGE … MATCHING` and `COMMIT MESSAGE` still require explicit quoting
+    (content that may contain spaces).
+  - `file_list` (CHANGE FILE/FILES path list) still requires explicit quoting
+    for safety on mutations.
 
 ### Changed
 
@@ -115,10 +53,6 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   operations go through `run_fql` with raw FQL syntax. One tool, one mental model.
   - `run_fql` now extracts `session_id` from `USE` responses and prepends an
     `⚠️ IMPORTANT: Pass session_id "..." in ALL subsequent run_fql calls.` hint.
-  - Removed param structs: `UseSourceParams`, `FindSymbolsParams`, `FindUsagesParams`,
-    `ShowBodyParams`, `DisconnectParams`; removed dead `run_engine` helper.
-  - Updated `doc/architecture.md`, `doc/syntax.md`, `doc/agents/forgeql.agent.md`,
-    `doc/agents/claude-code/CLAUDE.md`.
 
 - **Composite worktree key: `branch.alias` on disk, `fql/branch/alias` in git** —
   `USE source.main AS 'fix-comments'` now creates worktree directory
@@ -134,198 +68,48 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     same worktree — uncommitted changes are preserved across server restarts.
   - On collision (same alias, same base): a warning is returned in `message` so
     agents know they may be resuming another agent's uncommitted work.
+
 - **`USE` requires `AS 'branch-name'` (breaking change)** — `USE source.branch`
   without an `AS` clause is now a parse error. Every `USE` command must supply a
   human-readable branch alias, e.g. `USE forgeql-pub.main AS 'my-feature-branch'`.
-  This enforces the convention that every agent session works on a named branch,
-  making diffs reviewable without decoding session IDs.
-  - Grammar (`forgeql.pest`): `AS string_literal` clause made mandatory in `use_stmt`.
-  - IR (`ir.rs`): `UseSource.as_branch` changed from `Option<String>` to `String`.
-  - Engine (`engine.rs`): `use_source` signature updated; session lookup now always
-    matches on `custom_branch`; worktree name derived directly from `as_branch`.
-  - MCP tool (`mcp.rs`): `UseSourceParams.as_branch` changed from `Option<String>`
-    to `String`.
-  - CLI auto-resume (`main.rs`): sessions without a saved `as_branch` are silently
-    cleared rather than resumed with a broken state.
-  - SMS test fixture (`syntax.json`): `as_branch` moved from `optional_args` to
-    `required_args`; base syntax updated to include the `AS` clause.
+
+### Removed
+
+- **`DISCONNECT` command eliminated** — sessions are now fully managed by a server-side
+  48-hour TTL. Worktrees persist across server restarts and are shared between agents.
+  Multiple agents can reconnect to the same branch with `USE source.branch AS 'alias'`
+  at any time — uncommitted changes are preserved. There is no explicit session-end
+  ceremony; `COMMIT` is the natural terminal action.
+
 ### Fixed
 
-- **`dup_logic` false positive with `*p++` in conditions** — `skeleton_walk`
-  assigned the same letter to every occurrence of a side-effectful expression
-  (e.g. `*p++`, `arr[i++]`) because the mapping was keyed solely by source
-  text.  Since each `*p++` advances the pointer and reads a *different* byte,
-  the operands are semantically distinct even though their text is identical.
-  Fixed by adding `subtree_has_update()` to detect `++`/`--` descendants and
-  using a position-unique key (`text + "@" + start_byte`) in the `call_expression`,
-  `subscript_expression`, and `address_of` branches of `skeleton_walk`.
+- **`.forgeql-index` leaks into squash commits after BEGIN → ROLLBACK cycles** —
+  Fixed by clearing `last_clean_oid` to `None` when the checkpoint stack becomes
+  empty after rollback.
 
-- **`has_repeated_condition_calls` false positive with `isdigit(*p++)`** —
-  `collect_calls_in_subtree` counted each `isdigit(*p++)` occurrence as the
-  same repeated condition call, because only the function name (not its
-  arguments) was used as the key.  When arguments contain a side-effectful
-  `++`/`--` operator the call effectively has a different argument each time.
-  Fixed by adding `has_update_descendant()` and using a per-position unique key
-  for such calls.
+- **`CHANGE FILE LINES n-m WITH NOTHING` parse error** — made the `WITH` keyword
+  optional so both `LINES 3-5 NOTHING` and `LINES 3-5 WITH NOTHING` are accepted.
 
-  Both fixes are language-agnostic via `config.update_kinds()`.  Languages
-  without `++`/`--` operators (Python, Rust, Swift, …) have an empty
-  `update_raw_kinds` slice and see no behaviour change.
+- **USE hyphenated branch** — `use_stmt` grammar: the **branch** position now uses
+  `source_name` (allows hyphens) instead of `identifier`.
+  `USE forgeql-pub.line-budget AS 'lb2'` now parses correctly.  The AS target also
+  accepts `any_value` so bare branch names work without quotes.
+
+- **Budget reward display** — `BudgetState::deduct()` now captures `before` **before**
+  `try_recover()` so the reported delta reflects the full net change.
+
+- **`dup_logic` false positive with `*p++` in conditions** — fixed by using a
+  position-unique key for side-effectful expressions in `skeleton_walk`.
+
+- **`has_repeated_condition_calls` false positive with `isdigit(*p++)`** — fixed by
+  using a per-position unique key for calls containing `++`/`--` operators.
+
 ### Security
 
-- **CVE: path traversal in `SHOW LINES`, `CHANGE FILE`, `COPY LINES`,
-  `MOVE LINES`** — Rust's `PathBuf::join` silently replaces the base path
-  when the argument is absolute, allowing any file on the host filesystem
-  to be read or overwritten by passing an absolute path (e.g.
-  `SHOW LINES 1-40 OF '/home/user/.ssh/id_rsa'`) or a `..`-escape
-  sequence.  Fixed by adding `Workspace::safe_path()` which rejects
-  absolute paths and normalises `..` components before checking the result
-  still starts with the worktree root.  All four entry points are now
-  guarded: `show_lines`, `ChangeFiles::plan`, `exec_copy_lines` (src +
-  dst), `exec_move_lines` (src + dst).  Five regression tests added.
-### Added
-
-- **Python language support** — new `forgeql-lang-python` crate adds
-  first-class Python indexing via `tree-sitter-python`.  All `fql_kind`
-  values (`function`, `class`, `variable`, `import`, `namespace` for
-  modules, etc.) are mapped with full classification for `.py` and `.pyi`
-  files.  All enrichment fields work across C++, Rust, and Python without
-  query changes.
-
-- **Scope-aware `ShadowEnricher`** — rewritten with an iterative
-  `WorkItem<'tree>` walker that uses the new `is_scope_creating_kind()`
-  config method.  Python false positives from `if`/`for` blocks (which do
-  not create variable scopes in Python) are eliminated.  C++ for-loop
-  initializer declarations (`for (int i = 0; ...)`) now correctly detect
-  shadowing of an outer `i` via an `in_block_direct` flag that controls
-  whether the current scope is re-checked.
-
-- **Branch-depth-aware dead-store detection** — `DeclDistanceEnricher`
-  now tracks branch nesting depth during its DFS walk using a
-  `depth_stack: Vec<bool>` maintained alongside the cursor.  Two new
-  enrichment fields are emitted:
-  - `dead_store_conditional`: `"true"` when a dead-store assignment occurs
-    inside a branch or loop (`branch_depth > 0`).
-  - `decl_far_conditional`: `"true"` when a far-declared variable
-    (`decl_distance ≥ 2`) lives inside a branch or loop.
-  Variables at `branch_depth = 0` continue to set the existing
-  `has_unused_reassign` field unconditionally.
-
-- **Unused-param detection integrated into `DeclDistanceEnricher`** —
-  `has_unused_param`, `unused_param_count`, and `unused_params` are now
-  emitted by the declaration-distance pass, which already performs a
-  complete identifier walk.  The standalone `UnusedParamEnricher` is now
-  a no-op stub; all three fields are populated without any extra AST
-  traversal.
-
-- **New `LanguageConfig` control-flow scoping fields** — five new fields
-  enable language-agnostic scope and branch analysis:
-  `scope_creating_raw_kinds`, `branch_raw_kinds`, `loop_raw_kinds`,
-  `exception_handler_raw_kinds`, `block_scoped_declaration_raw_kinds`.
-  Five corresponding `is_*_kind()` methods added.
-  `is_scope_creating_kind()` falls back to `block_raw_kind` when the new
-  vec is empty, so existing language configs require no changes.
-
-- **Line numbers in text output** — `FIND` results in text/REPL format now
-  include the 1-based source line number appended to the file path
-  (`motor.c:42`) so all three output formats (text, JSON, compact) carry
-  equivalent information.
-
-- **`enclosing_fn` field for control-flow nodes** — every `if`, `switch`,
-  `for`, `while`, and `do` row now carries an `enclosing_fn` enrichment
-  field with the name of the containing function.  This lets agents invoke
-  `SHOW body OF` directly from a CF-enrichment query result (e.g.
-  `FIND symbols WHERE mixed_logic = true`) without a separate lookup.
-
-- **`SymbolRow` — unified per-row display model** — `SymbolRow` is the
-  single source of truth for what each formatter renders.  Adding a new
-  display column now requires only two changes (add field to `SymbolRow`,
-  populate in `from_match`) instead of one edit per formatter.  The compact
-  schema hint is automatically extended to `[name,path,line,enclosing_fn,...]`
-  when at least one result in the response carries `enclosing_fn`.
-
-- **Heredoc syntax documented** — `doc/syntax.md` and
-  `doc/agents/forgeql.agent.md` now include the `WITH <<TAG...TAG` heredoc
-  alternative for all three CHANGE `WITH` forms (`LINES n-m WITH`,
-  `MATCHING ... WITH`, and whole-file `WITH`).  Rules, examples, and a
-  comparison table show how to avoid single-quote escaping for Rust char
-  literals, lifetimes, and C-style string escapes.
-
-- **`enclosing_fn` field added to syntax reference** — the
-  `ControlFlowEnricher` table in `doc/syntax.md` and the Control Flow
-  enrichment section in `doc/agents/forgeql.agent.md` now document the
-  `enclosing_fn` field on `if`, `switch`, `for`, `while`, and `do` nodes.
-
-- **`.forgeql.yaml` sidecar placement documented** — `doc/syntax.md` now
-  states that the config file may be placed in the directory directly above
-  the repo root (outside the tracked tree) as well as in the repo root
-  itself.
-
-### Fixed
-
-- **`ShadowEnricher` false positives from `#ifdef`/`#else` siblings** —
-  `walk_scopes_iterative` now honours `skip_node_kinds` (`preproc_else`,
-  `preproc_elif`) when iterating over a node's children, in both the
-  scope-creating and the generic-recurse paths.  Previously, declarations
-  in the `#ifdef` arm accumulated into `current_scope` and then a matching
-  declaration in the `#else` arm was reported as a shadow — incorrect because
-  the two arms are mutually exclusive at runtime.  Real shadows (a variable
-  inside `#ifdef` that shadows an outer-scope variable) are still detected.
-  Cache bumped to v14.
-
-- **`has_unused_reassign` false positives for uninitialized declarations** —
-  `DeclDistanceEnricher` previously seeded every unconditional local
-  declaration as "written not read", which caused the very first assignment to
-  a bare uninitialized variable (e.g. `int x;` or `let x;`) to be misreported
-  as a dead store.  Only declarations that carry an explicit initializer value
-  (e.g. `int x = 0;`, `int x = fn()`, Rust `let x = ...`) are now seeded.
-  This eliminates the large class of false positives where code follows the
-  common C/C++ pattern of declaring a variable then immediately assigning it
-  from a function call: `uint8_t mod; mod = read_reg(...); use(mod);`.
-  Genuine dead stores — where a variable is initialized *and* then
-  unconditionally overwritten before being read — continue to be detected.
-  Cache bumped to v13.
-
-- **Python `condition_tests` under-counted** — tree-sitter-python's
-  `comparison_operator` node uses `"operators"` (plural) for its operator
-  field instead of the singular `"operator"` used by most grammars.
-  `count_condition_tests` now tries both field names.  Python word
-  operators (`and`, `or`) are now recognised as logical operators and
-  counted; the condition skeleton also preserves `and`, `or`, and `not`
-  as operator tokens.
-
-- **Python `param_count` and for-loop variable names wrong** —
-  `MetricsEnricher` now uses language-agnostic parameter counting for
-  Python (where parameters are bare `identifier` children of `parameters`),
-  and for-loop iteration variable names are correctly extracted from
-  Python `for_statement` nodes.
-
-- **Data-flow enrichers non-functional for Python** —
-  `extract_declarator_name`, `collect_local_declarations`,
-  `is_in_declaration`, and `collect_parameter_names` are now fully
-  language-agnostic.  When `declarator_field` is empty (Python uses
-  assignment nodes as declarations), they fall back to standard
-  tree-sitter field names (`pattern`, `left`, `name`).  This enables
-  `decl_distance`, dead-store, escape, and shadow enrichers for Python.
-  `collect_local_declarations` also adds first-seen-per-name deduplication
-  to prevent double-counting reassigned variables.
-
-- **CSV query log routed to wrong file in multi-session MCP mode** — in a
-  long-running MCP server with multiple simultaneous sessions on different
-  sources, all query log entries were written to a single `unknown.csv`
-  file regardless of which source was queried.  A new
-  `source_name_for_session()` engine method resolves the correct source
-  name at log time; the `QueryLogger` is now sessionless (no fixed
-  `source` field) so each call routes to the source-specific CSV file.
-
-- **`ROLLBACK` triggered full reindex on large codebases** — checkpoint
-  commits now include the `.forgeql-index` binary cache, so
-  `git reset --hard` to a checkpoint automatically restores the correct
-  cached index.  `Session::save_index()` is called by `reindex_session()`
-  after every mutation to keep the on-disk cache current.
-  `stage_and_commit_clean()` and `squash_commit_on_branch()` still exclude
-  `.forgeql-index` from user-facing commits.  Eliminates the ~30 s full
-  tree-sitter reparse on `ROLLBACK` for large codebases.
+- **Path traversal in `SHOW LINES`, `CHANGE FILE`, `COPY LINES`, `MOVE LINES`** —
+  `Workspace::safe_path()` rejects absolute paths and normalises `..` components
+  before checking the result still starts with the worktree root.  All four entry
+  points are now guarded.
 
 ## [0.31.2] - 2026-03-29
 
