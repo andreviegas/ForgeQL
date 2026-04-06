@@ -15,9 +15,12 @@ COMMENT    = _{ "--" ~ (!"\n" ~ ANY)* ~ "\n"? }
 // Terminals
 // -----------------------------------------------------------------------
 
-/// Single-quoted string literal: `'value'`.
-string_literal = { "'" ~ inner_string ~ "'" }
-inner_string   = @{ (!"'" ~ ANY)* }
+/// Quoted string literal — single or double-quoted.
+string_literal = { single_str_lit | double_str_lit }
+/// Single-quoted literal: `'value'`.
+single_str_lit = @{ "'" ~ (!"'" ~ ANY)* ~ "'" }
+/// Double-quoted literal: `"value"`.
+double_str_lit = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
 /// Content value — a single-quoted literal or a heredoc block.
 /// Used wherever CHANGE accepts replacement text.
@@ -46,6 +49,13 @@ boolean_literal = { "true" | "false" }
 /// Source name — like identifier but also allows hyphens (e.g. `pisco-code`).
 source_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | "-")* }
 
+/// Bare (unquoted) value — ASCII alphanumeric, underscores, colons, hyphens, dots, slashes.
+/// Stops at any whitespace. Use quoted forms when the value contains spaces or wildcards (*).
+bare_value = @{ (ASCII_ALPHANUMERIC | "_" | ":" | "-" | "." | "/")+ }
+
+/// Any value: a quoted literal (single or double) or a bare (unquoted) token.
+/// Use this in contexts where quoting is optional (predicates, OF targets, IN/EXCLUDE paths).
+any_value = { string_literal | bare_value }
 // -----------------------------------------------------------------------
 // Top-level program
 // -----------------------------------------------------------------------
@@ -84,7 +94,7 @@ refresh_source_stmt = { "REFRESH" ~ "SOURCE" ~ string_literal }
 /// `USE pisco-code.main AS 'agent/refactor-signal-api'`
 /// Source names allow hyphens; AS target is string_literal to allow '/' in branch names.
 /// Note: AS 'branch-name' is MANDATORY — USE without AS is a parse error.
-use_stmt = { "USE" ~ source_name ~ "." ~ identifier ~ "AS" ~ string_literal }
+use_stmt = { "USE" ~ source_name ~ "." ~ source_name ~ "AS" ~ any_value }
 
 show_sources_stmt  = { "SHOW" ~ "SOURCES" }
 show_branches_stmt = { "SHOW" ~ "BRANCHES" }
@@ -94,25 +104,25 @@ show_branches_stmt = { "SHOW" ~ "BRANCHES" }
 // -----------------------------------------------------------------------
 
 /// `SHOW body OF 'func' [DEPTH n]`
-show_body_stmt = { "SHOW" ~ "body" ~ "OF" ~ string_literal ~ clauses }
+show_body_stmt = { "SHOW" ~ "body" ~ "OF" ~ any_value ~ clauses }
 
 /// `SHOW context OF 'symbol' [IN 'file'] [LINES n]`
-show_context_stmt = { "SHOW" ~ "context" ~ "OF" ~ string_literal ~ clauses }
+show_context_stmt = { "SHOW" ~ "context" ~ "OF" ~ any_value ~ clauses }
 
 /// `SHOW signature OF 'symbol'`
-show_signature_stmt = { "SHOW" ~ "signature" ~ "OF" ~ string_literal ~ clauses }
+show_signature_stmt = { "SHOW" ~ "signature" ~ "OF" ~ any_value ~ clauses }
 
 /// `SHOW outline OF 'file'`
-show_outline_stmt = { "SHOW" ~ "outline" ~ "OF" ~ string_literal ~ clauses }
+show_outline_stmt = { "SHOW" ~ "outline" ~ "OF" ~ any_value ~ clauses }
 
 /// `SHOW members OF 'ClassName'`
-show_members_stmt = { "SHOW" ~ "members" ~ "OF" ~ string_literal ~ clauses }
+show_members_stmt = { "SHOW" ~ "members" ~ "OF" ~ any_value ~ clauses }
 
 /// `SHOW callees OF 'func'`
-show_callees_stmt = { "SHOW" ~ "callees" ~ "OF" ~ string_literal ~ clauses }
+show_callees_stmt = { "SHOW" ~ "callees" ~ "OF" ~ any_value ~ clauses }
 
 /// `SHOW LINES n-m OF 'file'`
-show_lines_stmt = { "SHOW" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ string_literal ~ clauses }
+show_lines_stmt = { "SHOW" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ any_value ~ clauses }
 
 // -----------------------------------------------------------------------
 // Queries
@@ -120,7 +130,7 @@ show_lines_stmt = { "SHOW" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ string_lit
 
 find_stmt   = { "FIND" ~ find_target ~ clauses }
 find_target = {
-    (("usages" | "callees") ~ "OF" ~ string_literal)
+    (("usages" | "callees") ~ "OF" ~ any_value)
   | "files"
   | "globals"
   | "symbols"
@@ -141,7 +151,7 @@ change_target = {
   | change_with_content
 }
 
-change_matching     = { "MATCHING" ~ string_literal ~ "WITH" ~ content_value }
+change_matching     = { "MATCHING" ~ any_value ~ "WITH" ~ content_value }
 change_lines_delete = { "LINES" ~ number ~ "-" ~ number ~ "WITH"? ~ "NOTHING" }
 change_lines_range  = { "LINES" ~ number ~ "-" ~ number ~ "WITH" ~ content_value }
 change_delete       = { "WITH" ~ "NOTHING" }
@@ -151,8 +161,8 @@ change_with_content = { "WITH" ~ content_value }
 /// Copies lines n..=m (1-based, inclusive) from src into dst.
 /// When AT LINE k is omitted the lines are appended at end of file.
 copy_stmt = {
-    "COPY" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ string_literal
-    ~ "TO" ~ string_literal
+    "COPY" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ any_value
+    ~ "TO" ~ any_value
     ~ ("AT" ~ "LINE" ~ number)?
 }
 
@@ -160,8 +170,8 @@ copy_stmt = {
 /// Like COPY but also deletes lines n..=m from src after insertion.
 /// Same-file moves are handled atomically (ordering preserved).
 move_stmt = {
-    "MOVE" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ string_literal
-    ~ "TO" ~ string_literal
+    "MOVE" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ any_value
+    ~ "TO" ~ any_value
     ~ ("AT" ~ "LINE" ~ number)?
 }
 
@@ -170,12 +180,12 @@ move_stmt = {
 // -----------------------------------------------------------------------
 
 transaction_stmt = {
-    "BEGIN" ~ "TRANSACTION" ~ string_literal
+    "BEGIN" ~ "TRANSACTION" ~ any_value
 }
 
-rollback_stmt = { "ROLLBACK" ~ ("TRANSACTION" ~ string_literal)? }
+rollback_stmt = { "ROLLBACK" ~ ("TRANSACTION" ~ any_value)? }
 
-verify_stmt = { "VERIFY" ~ "build" ~ string_literal }
+verify_stmt = { "VERIFY" ~ "build" ~ any_value }
 commit_stmt = { "COMMIT" ~ "MESSAGE" ~ string_literal }
 
 // -----------------------------------------------------------------------
@@ -209,10 +219,10 @@ having_clause = { "HAVING" ~ predicate }
 predicate       = { field_name ~ compare_op ~ predicate_value }
 field_name      = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 compare_op      = { ">="  | "<=" | "!=" | "NOT" ~ "MATCHES" | "NOT" ~ "LIKE" | "MATCHES" | "LIKE" | ">" | "<" | "=" }
-predicate_value = { string_literal | signed_number | boolean_literal }
+predicate_value = { signed_number | boolean_literal | any_value }
 
-in_clause      = { "IN"      ~ string_literal }
-exclude_clause = { "EXCLUDE" ~ string_literal }
+in_clause      = { "IN"      ~ any_value }
+exclude_clause = { "EXCLUDE" ~ any_value }
 
 order_clause   = { "ORDER"   ~ "BY" ~ field_name ~ sort_dir? }
 sort_dir       = { "ASC" | "DESC" }

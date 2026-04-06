@@ -312,11 +312,11 @@ fn parse_predicate(pair: pest::iterators::Pair<'_, Rule>) -> Option<Predicate> {
     let mut parts = pair.into_inner();
     let field = parts.next()?.as_str().to_string();
     let op = parse_compare_op(parts.next()?.as_str());
-    // predicate_value = { string_literal | signed_number | boolean_literal }
+    // predicate_value = { signed_number | boolean_literal | any_value }
     let val_pair = parts.next()?;
     let inner = val_pair.into_inner().next()?;
     let value = match inner.as_rule() {
-        Rule::string_literal => PredicateValue::String(unquote(inner.as_str())),
+        Rule::any_value => PredicateValue::String(unquote(inner.as_str())),
         Rule::signed_number => PredicateValue::Number(inner.as_str().parse().unwrap_or(0)),
         Rule::boolean_literal => PredicateValue::Bool(inner.as_str() == "true"),
         _ => return None,
@@ -571,7 +571,7 @@ fn parse_transaction(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR,
 
 /// Strip the surrounding single-quotes from a `string_literal` token.
 fn unquote(s: &str) -> String {
-    s.trim_matches('\'').to_string()
+    s.trim_matches(|c: char| c == '\'' || c == '"').to_string()
 }
 
 /// Extract the string content from a `content_value` pair, handling both
@@ -1461,6 +1461,83 @@ mod tests {
                 assert_eq!(p.field, "line");
                 assert_eq!(p.op, CompareOp::Gte);
                 assert_eq!(p.value, PredicateValue::Number(-100));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    // ── Relaxed quoting (double-quoted and bare values) ──────────────────────
+
+    #[test]
+    fn parse_use_source_hyphenated_branch() {
+        // Branch position now uses source_name instead of identifier → hyphens accepted.
+        let ops = parse("USE forgeql-pub.line-budget AS 'lb2'").unwrap();
+        match &ops[0] {
+            ForgeQLIR::UseSource {
+                source,
+                branch,
+                as_branch,
+            } => {
+                assert_eq!(source, "forgeql-pub");
+                assert_eq!(branch, "line-budget");
+                assert_eq!(as_branch, "lb2");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+    #[test]
+    fn parse_where_bare_value() {
+        // WHERE field = bare_value (no quotes).
+        let ops = parse("FIND symbols WHERE fql_kind = function").unwrap();
+        match &ops[0] {
+            ForgeQLIR::FindSymbols { clauses } => {
+                let p = &clauses.where_predicates[0];
+                assert_eq!(p.field, "fql_kind");
+                assert_eq!(p.value, PredicateValue::String("function".into()));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_where_double_quoted_value() {
+        // WHERE field = "value" (double quotes).
+        let ops = parse(r#"FIND symbols WHERE fql_kind = "function""#).unwrap();
+        match &ops[0] {
+            ForgeQLIR::FindSymbols { clauses } => {
+                let p = &clauses.where_predicates[0];
+                assert_eq!(p.field, "fql_kind");
+                assert_eq!(p.value, PredicateValue::String("function".into()));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_show_body_bare_name() {
+        // SHOW body OF symbol_name (no quotes).
+        let ops = parse("SHOW body OF sweep_expired").unwrap();
+        match &ops[0] {
+            ForgeQLIR::ShowBody { symbol, .. } => {
+                assert_eq!(symbol, "sweep_expired");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_use_source_bare_as_branch() {
+        // AS target accepts bare (unquoted) value.
+        let ops = parse("USE forgeql-pub.main AS my-feature").unwrap();
+        match &ops[0] {
+            ForgeQLIR::UseSource {
+                source,
+                branch,
+                as_branch,
+            } => {
+                assert_eq!(source, "forgeql-pub");
+                assert_eq!(branch, "main");
+                assert_eq!(as_branch, "my-feature");
             }
             _ => panic!("wrong variant"),
         }
