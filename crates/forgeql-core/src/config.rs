@@ -70,28 +70,28 @@ pub struct LineBudgetConfig {
 }
 
 const fn default_initial() -> usize {
-    200
+    1000
 }
 const fn default_ceiling() -> usize {
-    2000
+    3000
 }
 const fn default_recovery_base() -> usize {
-    20
+    50
 }
 const fn default_recovery_window_secs() -> u64 {
-    60
+    30
 }
 const fn default_warning_threshold() -> usize {
-    100
+    250
 }
 const fn default_critical_threshold() -> usize {
     50
 }
 const fn default_critical_max_lines() -> usize {
-    15
+    20
 }
 const fn default_idle_reset_secs() -> u64 {
-    300
+    200
 }
 
 impl Default for LineBudgetConfig {

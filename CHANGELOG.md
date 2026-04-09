@@ -7,6 +7,50 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.33.0] — 2026-04-09
+
+### Added
+
+- **Proportional mutation recovery** — mutations now earn budget back at a 1:1
+  ratio for every source line written, bypassing the rolling-window halving.
+  `CHANGE`, `COPY`, and `MOVE` all report `lines_written` in the response and
+  grant that exact amount as budget recovery (capped at ceiling).  Deletions
+  (`LINES n-m WITH NOTHING`, `WITH ''`) correctly yield `lines_written: 0`.
+
+- **Anti-pattern fragmentation tip** — the session tracks the last 5
+  `SHOW LINES` reads.  When 3 or more sequential reads target the same file
+  with adjacent or overlapping ranges (≤ 20-line gap), a hint is injected:
+  *"Use `SHOW body OF 'function_name'` to read an entire function in one
+  operation, or use a single wider `SHOW LINES` range."*  Switching to a
+  different file resets the sequence.
+
+- **`lines_written` field in mutation results** — `MutationResult` now includes
+  `lines_written: usize`, surfaced in both JSON and compact output for all
+  mutation types (`change_content`, `copy_lines`, `move_lines`).
+
+### Changed
+
+- **Line-budget config defaults retuned** — defaults adjusted based on
+  real-world agent session analysis (bulk comment-translation workloads):
+
+  | Parameter | Old | New | Rationale |
+  |---|---|---|---|
+  | `initial` | 200 | 1000 | Agents ran out too quickly on medium files |
+  | `ceiling` | 2000 | 3000 | Higher headroom for long sessions |
+  | `recovery_base` | 20 | 50 | Faster recovery between read bursts |
+  | `recovery_window_secs` | 60 | 30 | Shorter halving window, less punishing |
+  | `warning_threshold` | 40 | 250 | Earlier warning gives agents more time to adapt |
+  | `critical_threshold` | 10 | 50 | More buffer before hard-cap kicks in |
+  | `critical_max_lines` | 10 | 20 | Usable reads even in critical state |
+  | `idle_reset_secs` | 300 | 200 | Faster stale-budget cleanup |
+
+- **Mutation budget accounting** — mutations now call `session.reward_budget()`
+  instead of `session.deduct_budget(0)`.  The old path gave only flat
+  rolling-window recovery; the new path grants proportional recovery first,
+  then applies rolling-window recovery on top.
+
+---
+
 ## [0.32.0] — 2026-04-06
 
 ### Added

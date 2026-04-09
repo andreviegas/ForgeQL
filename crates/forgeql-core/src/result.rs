@@ -316,6 +316,11 @@ pub struct MutationResult {
     pub files_changed: Vec<PathBuf>,
     /// Total number of individual byte-range edits.
     pub edit_count: usize,
+    /// Total number of lines in all replacement texts.
+    ///
+    /// Used by the budget system: the agent earns proportional recovery
+    /// based on how many lines it actually wrote.
+    pub lines_written: usize,
     /// Unified diff (populated for dry-run and explain modes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff: Option<String>,
@@ -557,6 +562,24 @@ impl ForgeQLResult {
             lines.len()
         } else {
             0
+        }
+    }
+
+    /// Inject a hint string into the result.
+    ///
+    /// For `Show` results, appends to the existing `hint` field.
+    /// For other result types, the hint is silently dropped.
+    pub fn inject_hint(&mut self, tip: &str) {
+        if let Self::Show(show) = self {
+            match show.hint {
+                Some(ref mut existing) => {
+                    existing.push(' ');
+                    existing.push_str(tip);
+                }
+                None => {
+                    show.hint = Some(tip.to_string());
+                }
+            }
         }
     }
 }
@@ -1046,6 +1069,7 @@ mod tests {
             applied: true,
             files_changed: vec![],
             edit_count: 0,
+            lines_written: 0,
             diff: None,
             suggestions: vec![],
         });
@@ -1111,6 +1135,7 @@ mod tests {
                 PathBuf::from("include/signal_controller.hpp"),
             ],
             edit_count: 5,
+            lines_written: 0,
             diff: None,
             suggestions: vec![SuggestionEntry {
                 path: PathBuf::from("src/signal_controller.cpp"),
@@ -1312,6 +1337,7 @@ mod tests {
             applied: true,
             files_changed: vec![PathBuf::from("src/main.cpp")],
             edit_count: 4,
+            lines_written: 0,
             diff: None,
             suggestions: vec![],
         };

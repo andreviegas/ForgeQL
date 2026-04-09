@@ -127,6 +127,10 @@ pub struct Session {
     /// Differs from `branch` when branching off trunk: if `branch` is
     /// `main`/`master` this holds the `as_branch` alias instead.
     budget_branch: Option<String>,
+    /// Rolling record of recent SHOW LINES reads, used to detect sequential
+    /// overlapping/adjacent range reads on the same file and emit tips.
+    /// Stored as `(file_path, start_line, end_line)`.
+    recent_show_lines: Vec<(String, usize, usize)>,
 }
 
 impl Session {
@@ -164,6 +168,7 @@ impl Session {
             budget: None,
             budget_data_dir: None,
             budget_branch: None,
+            recent_show_lines: Vec::new(),
         }
     }
     /// Parse all source files in the worktree and build a fresh `SymbolTable`.
@@ -398,6 +403,19 @@ impl Session {
         Some(snap)
     }
 
+    /// Grant proportional budget recovery for a mutation that wrote code.
+    ///
+    /// Unlike `deduct_budget(0)` which triggers the rolling-window recovery,
+    /// this rewards the agent 1:1 for every line written.
+    pub fn reward_budget(&mut self, lines_written: usize) -> Option<BudgetSnapshot> {
+        let data_dir = self.budget_data_dir.clone()?;
+        let budget_branch = self.budget_branch.clone()?;
+        let budget = self.budget.as_mut()?;
+        let snap = budget.reward_mutation(lines_written);
+        budget.save(&data_dir, &self.source_name, &budget_branch);
+        Some(snap)
+    }
+
     /// Reset the budget delta to zero for non-consuming commands.
     pub const fn reset_budget_delta(&mut self) {
         if let Some(ref mut b) = self.budget {
@@ -423,6 +441,66 @@ impl Session {
     #[must_use]
     pub fn budget_snapshot(&self) -> Option<BudgetSnapshot> {
         self.budget.as_ref().map(BudgetState::snapshot)
+    }
+
+    // ---------------------------------------------------------------
+    // Anti-pattern detection: sequential overlapping SHOW LINES
+    // ---------------------------------------------------------------
+
+    /// Maximum number of recent reads to track.
+    const MAX_RECENT_READS: usize = 5;
+
+    /// Record a SHOW LINES read and return a tip if a fragmentation
+    /// anti-pattern is detected (3+ sequential adjacent/overlapping
+    /// reads on the same file).
+    pub fn record_show_lines(&mut self, file: &str, start: usize, end: usize) -> Option<String> {
+        self.recent_show_lines.push((file.to_string(), start, end));
+        if self.recent_show_lines.len() > Self::MAX_RECENT_READS {
+            drop(self.recent_show_lines.remove(0));
+        }
+
+        self.detect_fragmentation_hint()
+    }
+
+    /// Clear the recent reads history (called on non-SHOW-LINES commands
+    /// to avoid false positives when reads are interleaved with other ops).
+    pub fn clear_recent_show_lines(&mut self) {
+        self.recent_show_lines.clear();
+    }
+
+    /// Check the recent reads for 3+ sequential adjacent/overlapping
+    /// ranges on the same file.
+    fn detect_fragmentation_hint(&self) -> Option<String> {
+        if self.recent_show_lines.len() < 3 {
+            return None;
+        }
+
+        // Look at the last 3 entries.
+        let len = self.recent_show_lines.len();
+        let a = &self.recent_show_lines[len - 3];
+        let b = &self.recent_show_lines[len - 2];
+        let c = &self.recent_show_lines[len - 1];
+
+        // Must all target the same file.
+        if a.0 != b.0 || b.0 != c.0 {
+            return None;
+        }
+
+        // Check if they form a sequential pattern:
+        // each start is within 20 lines of the previous end (adjacent/overlapping).
+        let b_adjacent = b.1 <= a.2 + 20;
+        let c_adjacent = c.1 <= b.2 + 20;
+
+        if b_adjacent && c_adjacent {
+            Some(format!(
+                "Tip: 3 sequential SHOW LINES reads on '{}'. \
+                 Use SHOW body OF 'function_name' to read an entire function \
+                 in one operation, or use a single wider SHOW LINES range.",
+                c.0
+            ))
+        } else {
+            None
+        }
     }
 }
 

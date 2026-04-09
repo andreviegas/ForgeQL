@@ -261,6 +261,33 @@ impl BudgetState {
         self.snapshot()
     }
 
+    /// Grant proportional recovery based on lines actually written by a
+    /// mutation (CHANGE / COPY / MOVE).
+    ///
+    /// This bypasses the rolling-window halving entirely: the agent earns
+    /// back lines 1:1 for every line it writes, capped at the ceiling.
+    /// The philosophy is that productive work (writing code) deserves full
+    /// credit, whereas passive reads are subject to the normal diminishing
+    /// recovery.
+    pub fn reward_mutation(&mut self, lines_written: usize) -> BudgetSnapshot {
+        if lines_written == 0 {
+            return self.snapshot();
+        }
+
+        let before = self.remaining;
+        self.remaining = (self.remaining + lines_written).min(self.config.ceiling);
+        self.last_delta = self.remaining.cast_signed() - before.cast_signed();
+
+        debug!(
+            lines_written,
+            remaining = self.remaining,
+            delta = self.last_delta,
+            "budget: mutation reward"
+        );
+
+        self.snapshot()
+    }
+
     /// Check whether the budget is in critical state (SHOW LINES should be capped).
     #[must_use]
     pub const fn is_critical(&self) -> bool {
@@ -495,5 +522,39 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let state = BudgetState::load(&cfg, tmp.path(), "test-source", "test-branch");
         assert_eq!(state.remaining, cfg.initial);
+    }
+
+    #[test]
+    fn reward_mutation_adds_lines_written() {
+        let cfg = test_config();
+        let mut state = BudgetState::new(&cfg);
+        // Drain budget.
+        state.deduct(80);
+        assert_eq!(state.remaining, 20);
+        // Write 50 lines → earn back 50.
+        let snap = state.reward_mutation(50);
+        assert_eq!(snap.remaining, 70);
+        assert_eq!(snap.delta, 50);
+    }
+
+    #[test]
+    fn reward_mutation_capped_at_ceiling() {
+        let cfg = test_config();
+        let mut state = BudgetState::new(&cfg);
+        state.remaining = 490;
+        // Writing 100 lines should cap at ceiling (500), not reach 590.
+        let snap = state.reward_mutation(100);
+        assert_eq!(snap.remaining, 500);
+        assert_eq!(snap.delta, 10);
+    }
+
+    #[test]
+    fn reward_mutation_zero_is_noop() {
+        let cfg = test_config();
+        let mut state = BudgetState::new(&cfg);
+        state.deduct(50);
+        let before = state.remaining;
+        let snap = state.reward_mutation(0);
+        assert_eq!(snap.remaining, before);
     }
 }

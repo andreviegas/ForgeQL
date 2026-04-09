@@ -207,6 +207,7 @@ impl ForgeQLEngine {
     /// # Errors
     /// Returns `Err` for session-not-found, index-not-ready, git failures,
     /// transform planning errors, and other operational failures.
+    #[allow(clippy::too_many_lines)]
     pub fn execute(&mut self, session_id: Option<&str>, op: &ForgeQLIR) -> Result<ForgeQLResult> {
         self.commands_served += 1;
 
@@ -303,9 +304,14 @@ impl ForgeQLEngine {
 
         // Deduct disclosed source lines from the session's line budget.
         // Always call deduct_budget even for commands that return 0 source
-        // lines (FIND, mutations, CHANGE, COPY, MOVE) so that the recovery
-        // windowing logic still runs — non-consuming commands may grant a
-        // positive delta if a new recovery window has opened.
+        // lines (FIND, transactions) so that the recovery windowing logic
+        // still runs — non-consuming commands may grant a positive delta if
+        // a new recovery window has opened.
+        //
+        // Mutations (CHANGE, COPY, MOVE) get proportional reward instead:
+        // the agent earns back 1 line of budget for every line it writes.
+        // This bypasses the rolling-window halving so bulk-edit tasks (e.g.
+        // comment translation) remain sustainable.
         //
         // Admin / source-management commands (CreateSource, RefreshSource,
         // ShowSources, ShowBranches) are exempt: they do not read tree-sitter
@@ -322,8 +328,31 @@ impl ForgeQLEngine {
             && let Some(sid) = session_id
             && let Some(session) = self.sessions.get_mut(sid)
         {
-            let lines = result.source_lines_count();
-            let _ = session.deduct_budget(lines);
+            if let ForgeQLResult::Mutation(ref m) = result {
+                // Productive work: reward proportional to lines written.
+                let _ = session.reward_budget(m.lines_written);
+                session.clear_recent_show_lines();
+            } else {
+                let lines = result.source_lines_count();
+                let _ = session.deduct_budget(lines);
+
+                // Track SHOW LINES reads for anti-pattern detection.
+                // On 3+ sequential adjacent reads on the same file, inject
+                // a tip into the result suggesting SHOW body instead.
+                if let ForgeQLIR::ShowLines {
+                    file,
+                    start_line,
+                    end_line,
+                    ..
+                } = op
+                {
+                    if let Some(tip) = session.record_show_lines(file, *start_line, *end_line) {
+                        result.inject_hint(&tip);
+                    }
+                } else {
+                    session.clear_recent_show_lines();
+                }
+            }
         }
 
         Ok(result)
@@ -1084,6 +1113,7 @@ impl ForgeQLEngine {
         let files_changed: Vec<PathBuf> =
             plan.file_edits.iter().map(|fe| fe.path.clone()).collect();
         let edit_count = plan.edit_count();
+        let lines_written = plan.lines_written();
         let suggestions = convert_suggestions(&plan);
 
         // Merge before generating preview (compact_diff_plan reads files).
@@ -1108,6 +1138,7 @@ impl ForgeQLEngine {
             applied: true,
             files_changed,
             edit_count,
+            lines_written,
             diff,
             suggestions,
         }))
@@ -1183,6 +1214,7 @@ impl ForgeQLEngine {
         let files_changed: Vec<PathBuf> =
             plan.file_edits.iter().map(|fe| fe.path.clone()).collect();
         let edit_count = plan.edit_count();
+        let lines_written = plan.lines_written();
 
         plan.merge_by_file()?;
 
@@ -1201,6 +1233,7 @@ impl ForgeQLEngine {
             applied: true,
             files_changed,
             edit_count,
+            lines_written,
             diff,
             suggestions: Vec::new(),
         }))

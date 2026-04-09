@@ -137,6 +137,26 @@ impl TransformPlan {
         self.file_edits.iter().map(|fe| fe.edits.len()).sum()
     }
 
+    /// Total number of lines in all replacement texts across every edit.
+    ///
+    /// Used by the budget system to grant proportional recovery: the agent
+    /// earns back lines for productive work (writing code), not just flat
+    /// recovery from the rolling window.
+    #[must_use]
+    pub fn lines_written(&self) -> usize {
+        self.file_edits
+            .iter()
+            .flat_map(|fe| &fe.edits)
+            .map(|edit| {
+                if edit.replacement.is_empty() {
+                    0
+                } else {
+                    edit.replacement.lines().count()
+                }
+            })
+            .sum()
+    }
+
     /// Merge all `FileEdit` entries that target the same path into a single
     /// `FileEdit` per file, then validate that no edits overlap.
     ///
@@ -478,5 +498,33 @@ mod tests {
         plan.merge_by_file().unwrap();
         let fe = &plan.file_edits[0];
         assert_eq!(fe.edits.len(), 2);
+    }
+
+    #[test]
+    fn lines_written_counts_replacement_lines() {
+        let plan = TransformPlan {
+            file_edits: vec![FileEdit {
+                path: "file.cpp".into(),
+                edits: vec![
+                    ByteRangeEdit::new(0..10, "line1\nline2\nline3\n"),
+                    ByteRangeEdit::new(20..30, "single_line"),
+                ],
+            }],
+            suggestions: vec![],
+        };
+        // 3 lines from first edit + 1 from second = 4
+        assert_eq!(plan.lines_written(), 4);
+    }
+
+    #[test]
+    fn lines_written_deletion_is_zero() {
+        let plan = TransformPlan {
+            file_edits: vec![FileEdit {
+                path: "file.cpp".into(),
+                edits: vec![ByteRangeEdit::new(0..10, "")],
+            }],
+            suggestions: vec![],
+        };
+        assert_eq!(plan.lines_written(), 0);
     }
 }

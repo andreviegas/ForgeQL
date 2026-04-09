@@ -989,6 +989,7 @@ mod tests {
             applied: true,
             files_changed: vec![],
             edit_count: 0,
+            lines_written: 0,
             diff: None,
             suggestions: vec![],
         });
