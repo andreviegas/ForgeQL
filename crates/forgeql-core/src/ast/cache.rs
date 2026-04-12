@@ -30,7 +30,7 @@ use crate::ast::index::{IndexRow, SymbolTable, UsageSite};
 ///      skipped during the shadow walk (honouring `skip_node_kinds`), eliminating false positives
 ///      where a variable in one `#ifdef`/`#else` arm appeared to shadow the same variable in the
 ///      sibling arm (mutually exclusive at runtime).
-pub const CURRENT_VERSION: u32 = 14;
+pub const CURRENT_VERSION: u32 = 15;
 
 // -----------------------------------------------------------------------
 // CachedIndex
