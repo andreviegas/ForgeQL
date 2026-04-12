@@ -842,6 +842,7 @@ impl ForgeQLEngine {
         show_result: &mut ShowResult,
         clauses: Option<&Clauses>,
         budget_max: Option<usize>,
+        is_explicit_range: bool,
     ) {
         // Operates only on source-line outputs.
         let total = match &show_result.content {
@@ -865,7 +866,7 @@ impl ForgeQLEngine {
                         lines.truncate(limit);
                     }
                 }
-            } else if total > DEFAULT_SHOW_LINE_LIMIT {
+            } else if !is_explicit_range && total > DEFAULT_SHOW_LINE_LIMIT {
                 // No explicit LIMIT and output exceeds the cap.
                 // Block the output entirely — return zero lines + guidance.
                 if let ShowContent::Lines { lines, .. } = &mut show_result.content {
@@ -1074,6 +1075,11 @@ impl ForgeQLEngine {
             _ => None,
         };
 
+        // SHOW LINES n-m has a user-specified range — the implicit 40-line cap
+        // should NOT block it.  Only SHOW body / SHOW context are subject to
+        // the implicit cap (they can produce unbounded output).
+        let is_explicit_range = matches!(op, ForgeQLIR::ShowLines { .. });
+
         // Apply WHERE predicates BEFORE the line caps.
         // This lets queries like `SHOW body OF 'fn' WHERE text MATCHES 'TODO'`
         // filter over the full function body, not just the first N lines.
@@ -1091,7 +1097,12 @@ impl ForgeQLEngine {
         let budget_max = session_id
             .and_then(|sid| self.sessions.get(sid))
             .and_then(Session::budget_critical_max_lines);
-        Self::apply_show_lines_cap(&mut show_result, show_clauses, budget_max);
+        Self::apply_show_lines_cap(
+            &mut show_result,
+            show_clauses,
+            budget_max,
+            is_explicit_range,
+        );
 
         Ok(ForgeQLResult::Show(show_result))
     }
