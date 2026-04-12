@@ -2394,6 +2394,11 @@ fn convert_show_json(op: &ForgeQLIR, json: &serde_json::Value) -> Result<ShowRes
         .and_then(serde_json::Value::as_u64)
         .map(|n| usize::try_from(n).unwrap_or(usize::MAX));
 
+    let metadata = json
+        .get("metadata")
+        .and_then(serde_json::Value::as_object)
+        .cloned();
+
     Ok(ShowResult {
         op: op_name,
         symbol,
@@ -2403,6 +2408,7 @@ fn convert_show_json(op: &ForgeQLIR, json: &serde_json::Value) -> Result<ShowRes
         end_line,
         total_lines: None,
         hint: None,
+        metadata,
     })
 }
 

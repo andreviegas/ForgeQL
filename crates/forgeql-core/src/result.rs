@@ -189,6 +189,11 @@ pub struct ShowResult {
     /// cap, telling the agent how to see the remaining lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Enrichment metadata for DEPTH 0 results (lines, `param_count`, etc.).
+    /// Present only when SHOW body returns a signature-only view so the agent
+    /// can decide whether to request deeper expansion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// The payload of a SHOW result — either structured lines or a list of members.
@@ -1088,6 +1093,7 @@ mod tests {
             end_line: Some(44),
             total_lines: None,
             hint: None,
+            metadata: None,
             content: ShowContent::Lines {
                 lines: vec![
                     SourceLine {

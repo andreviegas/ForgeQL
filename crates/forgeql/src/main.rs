@@ -562,6 +562,7 @@ mod tests {
             file: Some(PathBuf::from("src/foo.cpp")),
             total_lines: None,
             hint: None,
+            metadata: None,
             content: ShowContent::Lines {
                 lines: (1..=n)
                     .map(|i| SourceLine {
@@ -602,6 +603,7 @@ mod tests {
             file: None,
             total_lines: None,
             hint: None,
+            metadata: None,
             content: ShowContent::Members {
                 members: vec![MemberEntry {
                     fql_kind: "field".to_string(),

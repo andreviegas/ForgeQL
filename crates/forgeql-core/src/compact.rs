@@ -116,6 +116,19 @@ fn compact_lines(s: &ShowResult, lines: &[SourceLine]) -> String {
         }
         row(&mut out, &[&q("hint"), &q(hint)]);
     }
+    // DEPTH 0 metadata: enrichment fields (lines, param_count, etc.).
+    if let Some(ref meta) = s.metadata {
+        let pairs: Vec<String> = meta
+            .iter()
+            .map(|(k, v)| {
+                let val = v.as_str().unwrap_or("");
+                format!("{k}={val}")
+            })
+            .collect();
+        if !pairs.is_empty() {
+            row(&mut out, &[&q("metadata"), &q(&pairs.join(","))]);
+        }
+    }
     chomp(&mut out);
     out
 }
@@ -482,6 +495,7 @@ mod tests {
             end_line: None,
             total_lines: None,
             hint: None,
+            metadata: None,
             content: ShowContent::Outline {
                 entries: vec![
                     OutlineEntry {
@@ -524,6 +538,7 @@ mod tests {
             end_line: None,
             total_lines: None,
             hint: None,
+            metadata: None,
             content: ShowContent::Outline {
                 entries: vec![
                     OutlineEntry {
@@ -564,6 +579,7 @@ mod tests {
             end_line: Some(55),
             total_lines: None,
             hint: None,
+            metadata: None,
             content: ShowContent::Members {
                 members: vec![
                     MemberEntry {
@@ -611,6 +627,7 @@ mod tests {
             end_line: Some(44),
             total_lines: None,
             hint: None,
+            metadata: None,
             content: ShowContent::Lines {
                 lines: vec![
                     SourceLine {
@@ -655,6 +672,7 @@ mod tests {
             end_line: Some(125),
             total_lines: None,
             hint: None,
+            metadata: None,
             content: ShowContent::Signature {
                 signature: "void setPeakLevel(int level)".into(),
                 line: 125,
@@ -680,6 +698,7 @@ mod tests {
             end_line: None,
             total_lines: None,
             hint: None,
+            metadata: None,
             content: ShowContent::CallGraph {
                 direction: CallDirection::Callees,
                 entries: vec![
@@ -718,6 +737,7 @@ mod tests {
             end_line: None,
             total_lines: None,
             hint: None,
+            metadata: None,
             content: ShowContent::FileList {
                 files: vec![
                     FileEntry {

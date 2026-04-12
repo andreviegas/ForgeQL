@@ -746,7 +746,41 @@ pub fn show_body(
 
     let fn_end_line = fn_node.end_position().row + 1;
     let path_str = workspace.relative(&def.path).display().to_string();
-    Ok(serde_json::json!({
+
+    // When DEPTH 0, include enrichment metadata so the agent can make
+    // informed decisions (e.g. how many lines, params, branches) without
+    // a separate FIND query.
+    let metadata: serde_json::Value = if depth == Some(0) && !def.fields.is_empty() {
+        let selected: serde_json::Map<String, serde_json::Value> = def
+            .fields
+            .iter()
+            .filter(|(k, _)| {
+                matches!(
+                    k.as_str(),
+                    "lines"
+                        | "param_count"
+                        | "return_count"
+                        | "branch_count"
+                        | "is_recursive"
+                        | "has_todo"
+                        | "has_shadow"
+                        | "has_escape"
+                        | "has_unused_param"
+                        | "enclosing_type"
+                )
+            })
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect();
+        if selected.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::Object(selected)
+        }
+    } else {
+        serde_json::Value::Null
+    };
+
+    let mut result = serde_json::json!({
         "op":         "show_body",
         "symbol":     symbol,
         "path":       path_str,
@@ -756,7 +790,11 @@ pub fn show_body(
         "byte_start": fn_start,
         "depth":      depth,
         "lines":      lines,
-    }))
+    });
+    if !metadata.is_null() {
+        result["metadata"] = metadata;
+    }
+    Ok(result)
 }
 
 /// `SHOW callers OF 'func'`
