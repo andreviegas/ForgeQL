@@ -157,6 +157,27 @@ fn common_prefix_depth(paths: &[&str]) -> usize {
     }
     common
 }
+/// Normalize a glob pattern so that bare directory paths match recursively.
+///
+/// If `pattern` looks like a plain directory path (no `*`, `?` wildcards,
+/// and either ends with `/` or contains no `.` in its last segment), append
+/// `/**` so `IN 'src'` and `IN 'crates/'` behave like `IN 'src/**'`.
+fn normalize_glob(pattern: &str) -> std::borrow::Cow<'_, str> {
+    let trimmed = pattern.trim_end_matches('/');
+    // Already contains wildcard characters — return as-is.
+    if trimmed.contains('*') || trimmed.contains('?') {
+        return std::borrow::Cow::Borrowed(pattern);
+    }
+    // If the pattern ends with `/`, it's clearly a directory.
+    // If the last segment has no `.`, treat it as a directory too
+    // (e.g. `src`, `crates/forgeql-core`).
+    let last_seg = trimmed.rsplit('/').next().unwrap_or(trimmed);
+    if pattern.ends_with('/') || !last_seg.contains('.') {
+        std::borrow::Cow::Owned(format!("{trimmed}/**"))
+    } else {
+        std::borrow::Cow::Borrowed(pattern)
+    }
+}
 
 // -----------------------------------------------------------------------
 // Glob path matching
@@ -166,8 +187,12 @@ fn common_prefix_depth(paths: &[&str]) -> usize {
 ///
 /// Supports `*`, `**`, and `?` wildcards.  Tries every suffix of `path`'s
 /// segments so that relative patterns work against absolute worktree paths.
+///
+/// Bare directory paths are auto-normalized: `src` and `crates/` become
+/// `src/**` and `crates/**` respectively.
 #[must_use]
 pub fn glob_matches(path: &std::path::Path, pattern: &str) -> bool {
+    let pattern = normalize_glob(pattern);
     let path_str = path.to_string_lossy();
     let path_segs: Vec<&str> = path_str.split('/').filter(|s| !s.is_empty()).collect();
     let pattern_segs: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
