@@ -1954,6 +1954,30 @@ fn find_symbols_prefilter(
     (results, remaining)
 }
 
+/// Split a qualified name like `CachedIndex::save` or `MyClass.method` into
+/// `(owner, member)`.  Returns `None` for bare names without a separator.
+///
+/// Tries `::` first (Rust, C++), then `.` (Python, JS, Java).
+/// This is language-agnostic — the separator is detected from the name itself.
+fn split_qualified_name(name: &str) -> Option<(&str, &str)> {
+    // Try `::` first (higher precedence — avoids false splits in `A::B.c`)
+    if let Some(pos) = name.rfind("::") {
+        let owner = &name[..pos];
+        let member = &name[pos + 2..];
+        if !owner.is_empty() && !member.is_empty() {
+            return Some((owner, member));
+        }
+    }
+    // Fall back to `.`
+    if let Some(pos) = name.rfind('.') {
+        let owner = &name[..pos];
+        let member = &name[pos + 1..];
+        if !owner.is_empty() && !member.is_empty() {
+            return Some((owner, member));
+        }
+    }
+    None
+}
 /// Resolve a symbol name to a single [`IndexRow`] using SHOW command clauses.
 ///
 /// 1. Finds all definition rows matching `name` in the index.
@@ -1970,6 +1994,27 @@ fn resolve_symbol<'a>(
     root: &Path,
 ) -> Result<&'a crate::ast::index::IndexRow> {
     use crate::filter::eval_predicate;
+
+    // Qualified name resolution: split on `::` or `.` separators.
+    // If the name contains a separator, look up the member name and filter
+    // by the `enclosing_type` enrichment field set by MemberEnricher.
+    if let Some((owner, member)) = split_qualified_name(name) {
+        let candidates = index.find_all_defs(member);
+        let matched: Vec<&crate::ast::index::IndexRow> = candidates
+            .into_iter()
+            .filter(|row| {
+                row.fields
+                    .get("enclosing_type")
+                    .is_some_and(|et| et == owner)
+            })
+            .collect();
+        if !matched.is_empty() {
+            #[allow(clippy::expect_used)]
+            return Ok(matched.last().expect("matched is non-empty"));
+        }
+        // Fall through: the qualified name may be resolved via body_symbol
+        // redirect (C++ out-of-line definitions) or as-is in the index.
+    }
 
     let candidates = index.find_all_defs(name);
     if candidates.is_empty() {

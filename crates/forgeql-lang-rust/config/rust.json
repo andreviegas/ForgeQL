@@ -37,7 +37,8 @@
     "field_kinds": ["field_declaration"],
     "parameter_kind": "parameter",
     "member_body_kind": "field_declaration_list",
-    "member_kinds": ["field_declaration"]
+    "member_kinds": ["field_declaration"],
+    "owner_container_kinds": ["impl_item", "trait_item"]
   },
 
   "control_flow": {

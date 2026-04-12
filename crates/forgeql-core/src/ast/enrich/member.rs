@@ -1,4 +1,10 @@
-/// Member declaration enrichment.
+/// Member declaration and owner enrichment.
+///
+/// For function/method nodes inside an owner container (impl block, class,
+/// trait, etc.), adds:
+///
+/// - `enclosing_type`: the name of the enclosing owner, enabling qualified
+///   name resolution (e.g. `CachedIndex::save`, `MyClass.method`).
 ///
 /// For `field_declaration` nodes, adds:
 ///
@@ -34,6 +40,22 @@ impl NodeEnricher for MemberEnricher {
         fields: &mut HashMap<String, String>,
     ) {
         let config = ctx.language_config;
+
+        // For function nodes, compute `enclosing_type` by walking up to the
+        // nearest owner container (impl block, class, trait, etc.).
+        // This enables qualified name resolution: `CachedIndex::save`.
+        if config.is_function_kind(ctx.node.kind()) {
+            if let Some(owner_name) = enclosing_owner_name(
+                ctx.node,
+                ctx.source,
+                config.owner_container_kinds(),
+                ctx.language_support,
+            ) {
+                drop(fields.insert("enclosing_type".to_string(), owner_name));
+            }
+            return;
+        }
+
         if !config.is_field_kind(ctx.node.kind()) {
             return;
         }
@@ -110,6 +132,29 @@ fn enclosing_type_name(
                 .child_by_field_name("name")
                 .map(|n| node_text(source, n))
                 .filter(|s| !s.is_empty());
+        }
+        current = parent.parent();
+    }
+    None
+}
+
+/// Walk up the parent chain to find an enclosing *owner container* and return
+/// its name via the language's `extract_name`.
+///
+/// This is language-agnostic: it uses `owner_container_kinds` (from the JSON
+/// config) to identify containers, and `LanguageSupport::extract_name` to get
+/// the owner name — which handles `impl_item` (Rust), `class_specifier` (C++),
+/// `class_definition` (Python), etc.
+fn enclosing_owner_name(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    owner_kinds: &[String],
+    lang: &dyn crate::ast::lang::LanguageSupport,
+) -> Option<String> {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if owner_kinds.iter().any(|s| s == parent.kind()) {
+            return lang.extract_name(parent, source);
         }
         current = parent.parent();
     }

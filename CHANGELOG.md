@@ -6,7 +6,32 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
+---
 
+## [Unreleased] — UX Improvements Branch
+
+### Added
+
+- **Qualified name resolution** (`SHOW body OF 'CachedIndex::save'`):
+  - New `enclosing_type` enrichment field on function nodes inside owner
+    containers (impl blocks, classes, traits).
+  - `resolve_symbol()` now splits qualified names on `::` (Rust/C++) or
+    `.` (Python) and filters by `enclosing_type`.
+  - Falls through to `body_symbol` redirect for C++ out-of-line definitions.
+  - Language-agnostic: driven by `owner_container_kinds` in JSON config +
+    `LanguageSupport::extract_name()`.
+
+### Changed files
+
+- `crates/forgeql-lang-rust/config/rust.json` — added `owner_container_kinds`
+- `crates/forgeql-lang-cpp/config/cpp.json` — added `owner_container_kinds`
+- `crates/forgeql-lang-python/config/python.json` — added `owner_container_kinds`
+- `crates/forgeql-core/src/ast/lang_json.rs` — `owner_container_kinds` in `DefinitionsSection`
+- `crates/forgeql-core/src/ast/lang.rs` — `owner_container_raw_kinds` field + accessor
+- `crates/forgeql-core/src/ast/enrich/member.rs` — `enclosing_type` enrichment + `enclosing_owner_name()` helper
+- `crates/forgeql-core/src/engine.rs` — `split_qualified_name()` + qualified name logic in `resolve_symbol()`
+
+---
 ## [0.33.0] — 2026-04-09
 
 ### Added

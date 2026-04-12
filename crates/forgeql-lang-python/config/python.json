@@ -38,7 +38,8 @@
     "field_kinds": [],
     "parameter_kind": "",
     "member_body_kind": "block",
-    "member_kinds": ["function_definition", "assignment"]
+    "member_kinds": ["function_definition", "assignment"],
+    "owner_container_kinds": ["class_definition"]
   },
 
   "control_flow": {

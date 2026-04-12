@@ -84,6 +84,10 @@ pub struct LanguageConfig {
     /// Raw kinds for members inside a type body.
     pub(crate) member_raw_kinds: Vec<String>,
 
+    /// Raw kinds for owner containers (impl blocks, classes) whose name is
+    /// used to build qualified names (e.g. `CachedIndex::save`).
+    pub(crate) owner_container_raw_kinds: Vec<String>,
+
     /// Raw kind for comments.
     pub(crate) comment_raw_kind: String,
 
@@ -816,6 +820,13 @@ impl LanguageConfig {
     #[must_use]
     pub fn type_kinds(&self) -> &[String] {
         &self.type_raw_kinds
+    }
+
+    /// Raw kinds for owner containers (impl blocks, classes) that can
+    /// enclose methods.  Used to compute `enclosing_type` on function rows.
+    #[must_use]
+    pub fn owner_container_kinds(&self) -> &[String] {
+        &self.owner_container_raw_kinds
     }
 
     /// Raw kinds for any definition (function, type, variable, etc.).

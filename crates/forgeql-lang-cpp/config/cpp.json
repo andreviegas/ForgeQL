@@ -51,7 +51,8 @@
     "field_kinds": ["field_declaration"],
     "parameter_kind": "parameter_declaration",
     "member_body_kind": "field_declaration_list",
-    "member_kinds": ["field_declaration"]
+    "member_kinds": ["field_declaration"],
+    "owner_container_kinds": ["class_specifier", "struct_specifier"]
   },
 
   "control_flow": {

@@ -202,6 +202,11 @@ pub struct DefinitionsSection {
     #[serde(default)]
     pub member_kinds: Vec<String>,
 
+    /// Node kinds that act as owner containers for methods/functions.
+    /// For Rust: `impl_item`, `trait_item`.  For C++: `class_specifier`, `struct_specifier`.
+    #[serde(default)]
+    pub owner_container_kinds: Vec<String>,
+
     /// Declaration kinds that are block-scoped.
     /// Empty = all declaration kinds are block-scoped (default for C++, Rust, Python).
     #[serde(default)]
@@ -500,6 +505,7 @@ impl LanguageConfigJson {
             parameter_raw_kind: self.definitions.parameter_kind,
             member_body_raw_kind: self.definitions.member_body_kind,
             member_raw_kinds: self.definitions.member_kinds,
+            owner_container_raw_kinds: self.definitions.owner_container_kinds,
             comment_raw_kind: self.syntax.comment,
             number_literal_raw_kinds: self.literals.number_kinds,
             digit_separator,
