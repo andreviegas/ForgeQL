@@ -8,7 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ---
 ---
 
-## [Unreleased] — UX Improvements Branch
+## [0.34.0] — 2026-04-12
 
 ### Added
 
@@ -60,7 +60,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `crates/forgeql-core/src/ast/lang_json.rs` — `owner_container_kinds` in `DefinitionsSection`
 - `crates/forgeql-core/src/ast/lang.rs` — `owner_container_raw_kinds` field + accessor
 - `crates/forgeql-core/src/ast/enrich/member.rs` — `enclosing_type` enrichment + `enclosing_owner_name()`
+
 ---
+
 ## [0.33.0] — 2026-04-09
 
 ### Added
