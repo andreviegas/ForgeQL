@@ -8,7 +8,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 1. Always start with `USE source.branch AS 'alias'` before any query. The `AS` clause is mandatory.
 2. Never use Bash tools (grep, find, cat, less) or Read File for source code. ForgeQL manages all code access.
 3. Never brute-force read code. Use FIND to locate symbols, then SHOW LINES for exact ranges.
-4. SHOW commands without LIMIT are blocked beyond 40 lines. If blocked, use FIND to get file + line numbers, then SHOW LINES n-m.
+4. **SHOW body and SHOW context** without LIMIT are blocked beyond 40 lines. If blocked, use FIND to get file + line numbers, then SHOW LINES n-m. **SHOW LINES n-m always returns the full requested range** — explicit line ranges bypass the cap.
 5. Stack WHERE clauses aggressively before executing. Multiple WHERE clauses combine as AND — filter first, read later.
 6. Filter inside SHOW LINES — never read then grep. `SHOW LINES 1-400 OF 'file' WHERE text LIKE '%pattern%'` returns only matching lines.
 7. Always ORDER BY in GROUP BY queries. Use `ORDER BY count ASC` to surface lowest-scope candidates first. Add HAVING constraints to filter at aggregate level.
@@ -24,7 +24,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 ```
 
 **Progressive disclosure for SHOW body:**
-- `DEPTH 0` — signature only (default, cheapest)
+- `DEPTH 0` — signature + enrichment metadata row (default, cheapest)
 - `DEPTH 1` — control-flow skeleton
 - `DEPTH 99` — full source (add LIMIT)
 
@@ -34,7 +34,8 @@ The local workspace may be empty — never fall back to local filesystem tools (
 |---|---|
 | Find a symbol | `FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...'] [IN 'path/**']` |
 | Read specific lines | `SHOW LINES n-m OF 'file'` |
-| Symbol signature | `SHOW body OF 'name' DEPTH 0` |
+| Symbol signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
+| Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
 | Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` |
 | File structure | `SHOW outline OF 'file' [WHERE fql_kind = '...']` |
@@ -61,6 +62,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 ## Efficiency
 
 - All commands accept `WHERE`, `GROUP BY`, `ORDER BY`, `LIMIT`, `OFFSET` — combine freely.
+- `IN 'src'` and `IN 'crates/'` auto-expand to `IN 'src/**'` — bare directory paths are always safe.
 - Multiple `WHERE` clauses combine as AND.
 - FIND defaults to 20 rows without LIMIT.
 - Format defaults to CSV (~60% fewer tokens). Use `format=JSON` only when parsing fields programmatically.
@@ -269,6 +271,7 @@ Computed at index time. Use in `WHERE` clauses like any other field.
 | `body_symbol` | `field` (methods) | Qualified name linking to out-of-line definition (e.g. `Class::method`) |
 | `member_kind` | `field` | `"method"` or `"field"` |
 | `owner_kind` | `field` | Enclosing type kind (e.g. `class`, `struct`) |
+| `enclosing_type` | `function` | Name of the enclosing class/struct/impl block. Enables qualified name resolution: `SHOW body OF 'Class::method'` |
 
 ### Declaration Distance
 

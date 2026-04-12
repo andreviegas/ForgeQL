@@ -8,7 +8,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 1. Always start with `USE source.branch` before any query.
 2. Never use local filesystem tools for code reading. ForgeQL manages all code access.
 3. Never brute-force read code. Use FIND to locate symbols, then SHOW LINES for exact ranges.
-4. SHOW commands without LIMIT are blocked beyond 40 lines. Follow the guidance message.
+4. SHOW body and SHOW context without LIMIT are blocked beyond 40 lines. Follow the guidance message. SHOW LINES n-m always returns the full requested range — explicit line ranges bypass the cap.
 
 ## Query Workflow
 
@@ -21,7 +21,8 @@ The right way to find and read code:
 
 - Find a symbol: `FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...']`
 - Read specific lines: `SHOW LINES n-m OF 'file'`
-- Function signature: `SHOW body OF 'name' DEPTH 0`
+- Function signature (+ metadata): `SHOW body OF 'name' DEPTH 0`
+- Qualified symbol: `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'`
 - Control flow: `SHOW body OF 'name' DEPTH 1`
 - Blast radius: `FIND usages OF 'name' GROUP BY file ORDER BY count DESC`
 - File structure: `SHOW outline OF 'file'`
@@ -32,6 +33,7 @@ The right way to find and read code:
 ## Efficiency
 
 - All commands accept WHERE, GROUP BY, ORDER BY, LIMIT, OFFSET — combine freely.
+- `IN 'src'` and `IN 'crates/'` auto-expand to `IN 'src/**'` — bare paths are always safe.
 - Multiple WHERE clauses combine as AND — stack them to narrow results.
 - FIND defaults to 20 rows. Add LIMIT N for more.
 - SHOW body defaults to DEPTH 0 (signature only). Increment progressively.

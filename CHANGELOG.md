@@ -8,6 +8,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ---
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **ForgeQL agent local filesystem access** — `forgeql.agent.md` now includes
+  `read`, `edit`, and `search` tools alongside ForgeQL MCP tools, enabling
+  local filesystem access for non-source tasks (writing `HINTS.md`, reading
+  workspace configuration, creating output files). Source code access remains
+  ForgeQL-exclusive.
+
+---
+
 ## [0.34.0] — 2026-04-12
 
 ### Added

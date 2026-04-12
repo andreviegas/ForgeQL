@@ -2,6 +2,9 @@
 description: "ForgeQL — AST-aware code exploration and transformation. All source code via MCP tools only."
 tools:
   - forgeql/*
+  - read
+  - edit
+  - search
 ---
 
 # ForgeQL Agent
@@ -11,9 +14,9 @@ You are a code exploration and transformation agent. All source code is accessed
 ## Critical Rules
 
 1. **Always start with `USE source.branch AS 'branch_name'`** before any query.
-2. **Never use local filesystem tools** (grep, find, cat, read_file) for reading source code. ForgeQL manages all code access.
+2. **Local filesystem tools** (`read`, `edit`, `search`) are available for non-source tasks — writing `HINTS.md`, reading workspace config, creating output files. **Never use them to read project source code.** ForgeQL manages all code access through the MCP server.
 3. **Never brute-force read code.** Do not dump large bodies or scan files line-by-line. Use FIND to locate, then SHOW LINES for the exact range.
-4. **SHOW commands without LIMIT are blocked beyond 40 lines.** If blocked, use FIND/SHOW to get file + line numbers, then SHOW LINES n-m.
+4. **SHOW body and SHOW context without LIMIT are blocked beyond 40 lines.** If blocked, use FIND to get file + line numbers, then SHOW LINES n-m. **SHOW LINES n-m always returns the full requested range** — explicit line ranges bypass the cap entirely.
 5. **Stack WHERE clauses aggressively before executing.** Multiple WHERE clauses combine as AND — e.g., `WHERE fql_kind = 'number' WHERE is_magic = 'true' WHERE num_format = 'dec'` is always cheaper than exploring broad results. Filter first, read later.
 6. **Filter inside SHOW LINES — never read then grep.** `SHOW LINES 1-40 OF 'header.h' WHERE text MATCHES '#include\s+"[^"]*\.h"'` returns only matching lines. 
 7. **Always ORDER BY in GROUP BY queries.** Without it, candidate ordering is non-deterministic. Use `ORDER BY count ASC` to surface lowest-scope candidates first (best for refactoring targets). Add `HAVING` constraints to filter at aggregate level before rows are returned.
@@ -35,7 +38,7 @@ You are a code exploration and transformation agent. All source code is accessed
 - Page through results with OFFSET trying to read everything
 
 **Progressive disclosure for SHOW body:**
-- `DEPTH 0` — signature only (default, cheapest)
+- `DEPTH 0` — signature + enrichment metadata row (default, cheapest)
 - `DEPTH 1` — control-flow skeleton
 - `DEPTH 99` — full source (only when you truly need every line, add LIMIT)
 
@@ -46,7 +49,8 @@ You are a code exploration and transformation agent. All source code is accessed
 | Find a symbol | `FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...'] [IN 'path/**']` |
 | Read specific lines | `SHOW LINES n-m OF 'file'` |
 | Read + filter lines | `SHOW LINES n-m OF 'file' WHERE text LIKE '%pattern%'` |
-| Symbol signature | `SHOW body OF 'name' DEPTH 0` |
+| Symbol signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
+| Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
 | Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` |
 | File structure | `SHOW outline OF 'file' [WHERE fql_kind = '...']` |
@@ -84,6 +88,7 @@ FIND symbols
 ## Efficiency Rules
 
 - All commands accept `WHERE`, `GROUP BY`, `ORDER BY`, `LIMIT`, `OFFSET` — combine freely.
+- `IN 'src'` and `IN 'crates/'` auto-expand to `IN 'src/**'` — bare directory paths are always safe.
 - Multiple `WHERE` clauses combine as AND — stack them to narrow results.
 - FIND defaults to 20 rows without LIMIT. Add LIMIT N to override.
 - Format defaults to CSV (~60% fewer tokens). Use JSON only when parsing fields programmatically.
@@ -478,6 +483,7 @@ Computed at index time. Use in `WHERE` clauses like any other field.
 | `body_symbol` | `field` (methods) | Qualified name linking to out-of-line definition (e.g. `Class::method`) |
 | `member_kind` | `field` | `"method"` or `"field"` |
 | `owner_kind` | `field` | Enclosing type kind (e.g. `class`, `struct`) |
+| `enclosing_type` | `function` | Name of the enclosing class/struct/impl block. Enables qualified name resolution: `SHOW body OF 'Class::method'` |
 
 ### Declaration Distance
 

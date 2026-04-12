@@ -49,7 +49,8 @@ USE source_name.branch
 |---|---|
 | Find a symbol | `FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...']` |
 | Read specific lines | `SHOW LINES n-m OF 'file'` |
-| Function signature | `SHOW body OF 'name' DEPTH 0` |
+| Function signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
+| Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
 | Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` |
 | File structure | `SHOW outline OF 'file'` |
@@ -60,9 +61,10 @@ USE source_name.branch
 ## Efficiency
 
 - All commands accept `WHERE`, `GROUP BY`, `ORDER BY`, `LIMIT`, `OFFSET` — combine freely.
+- `IN 'src'` and `IN 'crates/'` auto-expand to `IN 'src/**'` — bare directory paths are always safe.
 - Multiple `WHERE` clauses combine as AND.
 - FIND defaults to 20 rows. Add LIMIT N for more.
-- SHOW commands returning more than 40 lines without explicit LIMIT are blocked.
+- SHOW body and SHOW context returning more than 40 lines without explicit LIMIT are blocked. **SHOW LINES n-m always returns the full requested range** — use it freely for any range size.
 - Format defaults to CSV (~60% fewer tokens).
 - Every response includes `tokens_approx` — if large, narrow with WHERE, IN, EXCLUDE.
 
