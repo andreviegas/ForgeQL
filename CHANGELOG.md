@@ -21,16 +21,45 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Language-agnostic: driven by `owner_container_kinds` in JSON config +
     `LanguageSupport::extract_name()`.
 
+- **IN auto-glob bare paths** — `IN 'src'` and `IN 'crates/'` now
+  automatically expand to `IN 'src/**'` and `IN 'crates/**'`.
+  Implemented via `normalize_glob()` in `query.rs`, benefiting all callers
+  of `glob_matches()` and `relative_glob_matches()`.
+
+- **SHOW LINES n-m bypasses implicit 40-line cap** — explicit line ranges
+  are user-specified and should not be blocked by the implicit
+  `DEFAULT_SHOW_LINE_LIMIT`. Only `SHOW body` and `SHOW context`
+  (unbounded output) remain subject to the cap.
+
+- **Actionable error messages** — symbol-not-found errors now suggest
+  similar names from the index (`suggest_similar()`) and provide
+  `FIND symbols WHERE name LIKE` guidance.  Filter-eliminated errors
+  report which clauses (IN, EXCLUDE, WHERE) removed candidates.
+
+- **DEPTH 0 enrichment metadata** — `SHOW body OF 'func' DEPTH 0`
+  now includes a `metadata` row in compact output with selected
+  enrichment fields (lines, param_count, branch_count, is_recursive,
+  etc.) so the agent can make informed decisions without a separate
+  FIND query.
+
+- **FIND files recursive default with IN** — when `IN` is specified
+  without an explicit `DEPTH`, defaults to full depth instead of 0,
+  showing individual files rather than collapsed directories.
+
 ### Changed files
 
+- `crates/forgeql-core/src/ast/query.rs` — `normalize_glob()` auto-appends `/**` to bare paths
+- `crates/forgeql-core/src/ast/index.rs` — `suggest_similar()` for fuzzy name suggestions
+- `crates/forgeql-core/src/ast/show.rs` — metadata extraction on DEPTH 0
+- `crates/forgeql-core/src/engine.rs` — `apply_show_lines_cap()` bypass for explicit ranges, actionable errors in `resolve_symbol()`, recursive depth default for FIND files
+- `crates/forgeql-core/src/result.rs` — `metadata` field on `ShowResult`
+- `crates/forgeql-core/src/compact.rs` — metadata rendering in compact output
 - `crates/forgeql-lang-rust/config/rust.json` — added `owner_container_kinds`
 - `crates/forgeql-lang-cpp/config/cpp.json` — added `owner_container_kinds`
 - `crates/forgeql-lang-python/config/python.json` — added `owner_container_kinds`
 - `crates/forgeql-core/src/ast/lang_json.rs` — `owner_container_kinds` in `DefinitionsSection`
 - `crates/forgeql-core/src/ast/lang.rs` — `owner_container_raw_kinds` field + accessor
-- `crates/forgeql-core/src/ast/enrich/member.rs` — `enclosing_type` enrichment + `enclosing_owner_name()` helper
-- `crates/forgeql-core/src/engine.rs` — `split_qualified_name()` + qualified name logic in `resolve_symbol()`
-
+- `crates/forgeql-core/src/ast/enrich/member.rs` — `enclosing_type` enrichment + `enclosing_owner_name()`
 ---
 ## [0.33.0] — 2026-04-09
 
