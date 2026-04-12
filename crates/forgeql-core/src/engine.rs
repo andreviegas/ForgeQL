@@ -1998,6 +1998,7 @@ fn split_qualified_name(name: &str) -> Option<(&str, &str)> {
 ///    `IN '*.ext'`.
 /// 4. Returns the last matching row (preserving v1 last-write-wins semantics
 ///    within a single language).
+#[allow(clippy::too_many_lines)]
 fn resolve_symbol<'a>(
     index: &'a SymbolTable,
     name: &str,
@@ -2029,7 +2030,17 @@ fn resolve_symbol<'a>(
 
     let candidates = index.find_all_defs(name);
     if candidates.is_empty() {
-        bail!("symbol '{name}' not found in index");
+        let suggestions = index.suggest_similar(name, 5);
+        if suggestions.is_empty() {
+            bail!("symbol '{name}' not found in index");
+        }
+        bail!(
+            "symbol '{name}' not found in index. \
+             Did you mean one of: {}? \
+             Use FIND symbols WHERE name LIKE \
+             '%{name}%' to search.",
+            suggestions.join(", ")
+        );
     }
 
     // Single candidate — fast path, skip filtering.
@@ -2058,7 +2069,26 @@ fn resolve_symbol<'a>(
         .collect();
 
     if filtered.is_empty() {
-        bail!("symbol '{name}' not found after applying WHERE/IN/EXCLUDE filters");
+        use std::fmt::Write;
+        let mut hint = format!(
+            "symbol '{name}' exists in the index \
+             but all candidates were eliminated by filters."
+        );
+        if let Some(ref glob) = clauses.in_glob {
+            let _ = write!(hint, " IN '{glob}' excluded all matches.");
+        }
+        if let Some(ref glob) = clauses.exclude_glob {
+            let _ = write!(hint, " EXCLUDE '{glob}' removed matches.");
+        }
+        if !clauses.where_predicates.is_empty() {
+            hint.push_str(" WHERE predicates filtered all remaining candidates.");
+        }
+        let _ = write!(
+            hint,
+            " Try removing filters or use \
+             FIND symbols WHERE name = '{name}' to see all occurrences."
+        );
+        bail!("{hint}");
     }
 
     // Prefer actual definitions (non-empty fql_kind) over reference-only

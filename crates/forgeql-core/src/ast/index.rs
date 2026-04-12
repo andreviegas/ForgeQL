@@ -264,6 +264,27 @@ impl SymbolTable {
         })
     }
 
+    /// Return up to `max` symbol names that are similar to `query`.
+    ///
+    /// Uses case-insensitive prefix matching and substring matching to
+    /// find plausible alternatives when a symbol lookup fails.
+    #[must_use]
+    pub fn suggest_similar(&self, query: &str, max: usize) -> Vec<&str> {
+        let lower = query.to_ascii_lowercase();
+        let mut results: Vec<&str> = self
+            .name_index
+            .keys()
+            .filter(|name| {
+                let nl = name.to_ascii_lowercase();
+                nl.starts_with(&lower) || lower.starts_with(&nl) || nl.contains(&lower)
+            })
+            .map(String::as_str)
+            .take(max)
+            .collect();
+        results.sort_unstable();
+        results.truncate(max);
+        results
+    }
     /// Return an iterator over all rows matching a tree-sitter node kind.
     pub fn rows_by_kind(&self, kind: &str) -> impl Iterator<Item = &IndexRow> {
         self.kind_index
