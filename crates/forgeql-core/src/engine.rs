@@ -752,7 +752,7 @@ impl ForgeQLEngine {
         let configs = self.lang_registry.configs();
         let (mut results, remaining) = find_symbols_prefilter(index, clauses, root, &configs);
 
-        validate_order_by_field(&remaining, &results)?;
+        validate_order_by_field(&remaining, &results, &configs)?;
         crate::filter::apply_clauses(&mut results, &remaining);
 
         let total = results.len();
@@ -820,7 +820,8 @@ impl ForgeQLEngine {
             ..clauses.clone()
         };
 
-        validate_order_by_field(&remaining, &results)?;
+        let configs = self.lang_registry.configs();
+        validate_order_by_field(&remaining, &results, &configs)?;
 
         crate::filter::apply_clauses(&mut results, &remaining);
         let total = results.len();
@@ -2236,16 +2237,20 @@ fn resolve_body_symbol<'a>(
 
 /// Validate the `ORDER BY` field against a result set, returning an error if
 /// the field is not recognised for any item.
+/// Validate that the ORDER BY field is either a known built-in field, a known
+/// enrichment field, or present in at least one result item.
 ///
-/// This runs before `apply_clauses` (against the full unfiltered set) so that
-/// callers get a clear diagnostic instead of silently receiving default order.
-/// Static built-in fields (`name`, `kind`, `node_kind`, `path`, `file`,
-/// `line`, `usages`, `count`) are always accepted even when the result set is
-/// empty.  Unknown dynamic fields are accepted when at least one item carries
-/// them.
+/// When the ORDER BY field is a recognised enrichment field (from any
+/// registered language config), we accept it unconditionally — items that
+/// lack the field will sort to the end (`field_num` returns None, which the
+/// sort comparator already handles).  This allows queries like
+/// `FIND symbols WHERE has_assignment_in_condition = 'true' ORDER BY lines DESC`
+/// to work even when the result set contains symbol types (e.g. `if`) that
+/// don't carry the `lines` enrichment field themselves.
 fn validate_order_by_field(
     clauses: &Clauses,
     results: &[crate::result::SymbolMatch],
+    lang_configs: &[&crate::ast::lang::LanguageConfig],
 ) -> Result<()> {
     use crate::filter::ClauseTarget as _;
 
@@ -2264,6 +2269,11 @@ fn validate_order_by_field(
         return Ok(());
     };
     if STATIC_FIELDS.contains(&order.field.as_str()) {
+        return Ok(());
+    }
+
+    // Accept any known enrichment field — items without it sort to the end.
+    if field_to_kinds(lang_configs, &order.field).is_some() {
         return Ok(());
     }
 
@@ -2864,7 +2874,7 @@ mod tests {
             "count",
         ] {
             assert!(
-                validate_order_by_field(&clauses_with_order(field), &results).is_ok(),
+                validate_order_by_field(&clauses_with_order(field), &results, &[]).is_ok(),
                 "expected Ok for ORDER BY {field}"
             );
         }
@@ -2873,7 +2883,7 @@ mod tests {
     #[test]
     fn validate_order_by_field_rejects_unknown_field() {
         let results = vec![make_sym("foo"), make_sym("bar")];
-        let err = validate_order_by_field(&clauses_with_order("invalid_field"), &results);
+        let err = validate_order_by_field(&clauses_with_order("invalid_field"), &results, &[]);
         assert!(err.is_err(), "expected Err for ORDER BY invalid_field");
         let msg = err.unwrap_err().to_string();
         assert!(
@@ -2888,20 +2898,20 @@ mod tests {
         sym.fields
             .insert("signature".to_string(), "void foo()".to_string());
         let results = vec![sym];
-        assert!(validate_order_by_field(&clauses_with_order("signature"), &results).is_ok());
+        assert!(validate_order_by_field(&clauses_with_order("signature"), &results, &[]).is_ok());
     }
 
     #[test]
     fn validate_order_by_field_ok_when_results_empty() {
         let results: Vec<crate::result::SymbolMatch> = Vec::new();
         // Should not error even for unknown field when result set is empty.
-        assert!(validate_order_by_field(&clauses_with_order("unknown_xyz"), &results).is_ok());
+        assert!(validate_order_by_field(&clauses_with_order("unknown_xyz"), &results, &[]).is_ok());
     }
 
     #[test]
     fn validate_order_by_field_no_order_by_always_ok() {
         let results = vec![make_sym("foo")];
-        assert!(validate_order_by_field(&Clauses::default(), &results).is_ok());
+        assert!(validate_order_by_field(&Clauses::default(), &results, &[]).is_ok());
     }
 
     /// `FIND globals` now maps to `FIND symbols WHERE node_kind = 'declaration'`
