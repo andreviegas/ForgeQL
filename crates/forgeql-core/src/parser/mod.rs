@@ -645,6 +645,12 @@ fn enrich_parse_error(input: &str, mut msg: String) -> String {
              Example: WHERE name LIKE '%read%' (matches any name containing \"read\")",
         );
     }
+    if upper.starts_with("USE ") && !upper.contains(" AS ") {
+        msg.push_str(
+            "\n\nHint: USE requires an AS clause to name the session.\n\
+             Example: USE source.branch AS 'my-session'",
+        );
+    }
     msg
 }
 
@@ -1336,9 +1342,12 @@ mod tests {
     fn parse_use_source_without_as_is_a_parse_error() {
         // This test replaces parse_use_source_without_as_has_no_as_branch.
         // AS 'branch-name' is now mandatory — omitting it must be a parse error.
+        let err = parse("USE pisco-code.main");
+        assert!(err.is_err(), "USE without AS should be a parse error");
+        let msg = format!("{}", err.unwrap_err());
         assert!(
-            parse("USE pisco-code.main").is_err(),
-            "USE without AS should be a parse error"
+            msg.contains("USE requires an AS clause"),
+            "error should hint about AS clause; got: {msg}"
         );
     }
 
