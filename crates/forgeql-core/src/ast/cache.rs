@@ -51,7 +51,9 @@ use crate::ast::lang::MacroDef;
 ///       integration in `DeclDistanceEnricher` (dead-store suppression) and
 ///       `EscapeEnricher` (address-of detection); extended `MacroExpandEnricher`
 ///       with `expanded_reads`, `expansion_failed`, `expansion_failure_reason` fields.
-pub const CURRENT_VERSION: u32 = 22;
+///   23. `source_name` stored in `CachedIndex` via `from_table_and_macros`; stale-worktree
+///       validation on cache resume now activates for macro-enabled sessions.
+pub const CURRENT_VERSION: u32 = 23;
 
 // -----------------------------------------------------------------------
 // CachedIndex
@@ -65,6 +67,10 @@ pub struct CachedIndex {
     /// The git commit hash this index was built from.
     /// Empty string when git is unavailable.
     pub commit_hash: String,
+    /// Source name this index was built from (e.g. "forgeql-pub").
+    /// Used to detect stale worktree reuse across different sources.
+    #[serde(default)]
+    pub source_name: String,
     /// All indexed AST rows (flat list — replaces symbols/defines/enums).
     pub rows: Vec<IndexRow>,
     /// Usage sites: name → all identifier occurrences.
@@ -80,14 +86,15 @@ pub struct CachedIndex {
 
 impl CachedIndex {
     /// Create a `CachedIndex` by taking ownership of a `SymbolTable`.
-    ///
-    /// This avoids cloning millions of rows.  Use `into_table()` after
-    /// `save()` to recover the table.
-    #[must_use]
-    pub fn from_table(table: SymbolTable, commit_hash: impl Into<String>) -> Self {
+    pub fn from_table(
+        table: SymbolTable,
+        commit_hash: impl Into<String>,
+        source_name: impl Into<String>,
+    ) -> Self {
         Self {
             version: CURRENT_VERSION,
             commit_hash: commit_hash.into(),
+            source_name: source_name.into(),
             rows: table.rows,
             usages: table.usages,
             file_hashes: HashMap::new(),
@@ -104,10 +111,12 @@ impl CachedIndex {
         table: SymbolTable,
         macro_table: MacroTable,
         commit_hash: impl Into<String>,
+        source_name: impl Into<String>,
     ) -> Self {
         Self {
             version: CURRENT_VERSION,
             commit_hash: commit_hash.into(),
+            source_name: source_name.into(),
             rows: table.rows,
             usages: table.usages,
             file_hashes: HashMap::new(),
@@ -228,7 +237,7 @@ mod tests {
         let path = dir.path().join(".forgeql-index");
 
         let original = sample_table();
-        let cached = CachedIndex::from_table(original, "abc123");
+        let cached = CachedIndex::from_table(original, "abc123", "test-source");
 
         cached.save(&path).expect("save");
         let loaded = CachedIndex::load(&path).expect("load");
@@ -242,7 +251,7 @@ mod tests {
     #[test]
     fn into_table_roundtrip() {
         let original = sample_table();
-        let cached = CachedIndex::from_table(original, "");
+        let cached = CachedIndex::from_table(original, "", "");
         let recovered = cached.into_table();
 
         assert!(recovered.find_def("foo").is_some());
@@ -273,6 +282,7 @@ mod tests {
         let wrong = CachedIndex {
             version: 999,
             commit_hash: String::new(),
+            source_name: String::new(),
             rows: Vec::new(),
             usages: HashMap::new(),
             file_hashes: HashMap::new(),

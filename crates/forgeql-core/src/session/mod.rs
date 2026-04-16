@@ -196,7 +196,7 @@ impl Session {
         let (table, macro_table) = SymbolTable::build(&workspace, &self.lang_registry)?;
 
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        let cached = CachedIndex::from_table_and_macros(table, macro_table, &commit_hash);
+        let cached = CachedIndex::from_table_and_macros(table, macro_table, &commit_hash, &self.source_name);
         let cache_path = self.worktree_path.join(".forgeql-index");
         cached.save(&cache_path)?;
 
@@ -227,7 +227,11 @@ impl Session {
         let head_oid = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
 
         match CachedIndex::load(&cache_path) {
-            Ok(cached) if cached.commit_hash == head_oid => {
+            Ok(cached)
+                if cached.commit_hash == head_oid
+                    && (cached.source_name.is_empty()
+                        || cached.source_name == self.source_name) =>
+            {
                 debug!(
                     session = %self.id,
                     commit = %head_oid,
@@ -237,6 +241,17 @@ impl Session {
                 let (table, macro_table) = cached.into_table_and_macros();
                 self.index = Some(table);
                 self.macro_table = Some(macro_table);
+            }
+            Ok(cached)
+                if !cached.source_name.is_empty() && cached.source_name != self.source_name =>
+            {
+                debug!(
+                    session = %self.id,
+                    cached_source = %cached.source_name,
+                    expected_source = %self.source_name,
+                    "cache source mismatch — rebuilding index"
+                );
+                self.build_index()?;
             }
             Ok(cached) => {
                 debug!(
@@ -312,7 +327,7 @@ impl Session {
             .ok_or_else(|| anyhow::anyhow!("cannot save: session {} has no index", self.id))?;
         let macro_table = self.macro_table.take().unwrap_or_default();
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        let cached = CachedIndex::from_table_and_macros(table, macro_table, &commit_hash);
+        let cached = CachedIndex::from_table_and_macros(table, macro_table, &commit_hash, &self.source_name);
         let cache_path = self.worktree_path.join(".forgeql-index");
         cached.save(&cache_path)?;
         let (table, macro_table) = cached.into_table_and_macros();
