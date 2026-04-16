@@ -101,8 +101,10 @@ pub(crate) enum OutputFormat {
 pub(crate) struct RunFqlParams {
     /// The `ForgeQL` statement to execute (e.g. "FIND symbols WHERE name LIKE 'set%'").
     pub fql: String,
-    /// Session ID from a previous USE command.  Required for queries
-    /// and mutations; optional for CREATE SOURCE.
+    /// The alias used in `USE source.branch AS 'alias'`.
+    /// Required for all queries and mutations after the initial USE.
+    /// Because the alias equals the session key, you can always reconstruct it
+    /// from the USE command you issued — there is no opaque token to track.
     pub session_id: Option<String>,
     /// Output format: "CSV" (default, compact grouped CSV) or "JSON" (full structured).
     /// CSV groups repeated fields and drops derivable data for minimum token usage.
@@ -228,7 +230,7 @@ impl ForgeQlMcp {
     /// structured JSON results.  All `ForgeQL` operations are supported.
     #[tool(
         name = "run_fql",
-        description = "Execute any ForgeQL statement (FIND, SHOW, RENAME, etc.). OUTPUT: format defaults to CSV (pass format=JSON only when parsing fields programmatically). LIMIT: FIND queries without LIMIT default to 20 rows; add LIMIT N to override; when total > results.len() more rows exist. WORKFLOW: start narrow (WHERE/IN/LIMIT), verify, then widen."
+        description = "Execute any ForgeQL statement. CONNECT FIRST: USE source.branch AS 'alias' — the alias you choose becomes the session_id for all subsequent calls. OUTPUT: format defaults to CSV (pass format=JSON only when parsing fields programmatically). LIMIT: FIND queries without LIMIT default to 20 rows; add LIMIT N to override; when total > results.len() more rows exist. WORKFLOW: start narrow (WHERE/IN/LIMIT), verify, then widen."
     )]
     fn run_fql(
         &self,
@@ -267,13 +269,19 @@ impl ForgeQlMcp {
             if let ForgeQLIR::UseSource { source, .. } = op {
                 log_source.clone_from(source);
             }
-            // Extract session_id from USE responses and build a hint for the agent.
+            // After auto-reconnect the session now exists — re-resolve the
+            // source name so the query lands in the right CSV log file.
+            if log_source == "unknown" {
+                log_source = self.resolve_source(params.session_id.as_deref());
+            }
+            // Extract session_id (alias) from USE responses and build a hint for the agent.
             if session_hint.is_none()
                 && let ForgeQLResult::SourceOp(ref sop) = result
                 && let Some(sid) = sop.session_id.as_deref()
             {
                 session_hint = Some(format!(
-                    "⚠️ IMPORTANT: Pass session_id \"{sid}\" in ALL subsequent run_fql calls."
+                    "\u{26a0}\u{fe0f} IMPORTANT: Pass session_id \"{sid}\" in ALL subsequent run_fql calls. \
+                     This equals the alias you chose in AS '...' — you can always reconstruct it."
                 ));
             }
             let output = match format {
@@ -333,7 +341,9 @@ impl ServerHandler for ForgeQlMcp {
                Use FIND symbols WHERE to locate code by name, kind, or enrichment field.\n\
              - NEVER fall back to local filesystem tools (grep, find, cat, read_file). \
                ForgeQL manages all code access; the local workspace may be empty.\n\
-             - Always start with USE source.branch before any query.\n\
+             - Always start with USE source.branch AS 'alias' before any query. \
+               The alias you choose IS the session_id — pass it in every subsequent call. \
+               Example: USE myrepo.main AS 'my-session' → session_id = \"my-session\".\n\
              \n\
              QUERY STRATEGY (all commands accept WHERE, GROUP BY, ORDER BY, \
              LIMIT, OFFSET — combine them freely):\n\

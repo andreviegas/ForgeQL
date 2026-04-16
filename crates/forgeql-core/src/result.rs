@@ -1169,7 +1169,7 @@ mod tests {
         let result = ForgeQLResult::SourceOp(SourceOpResult {
             op: "use_source".to_string(),
             source_name: Some("pisco-code".to_string()),
-            session_id: Some("s1710502345678".to_string()),
+            session_id: Some("my-session".to_string()), // alias-style: equals the AS 'alias'
             branches: vec!["main".to_string(), "develop".to_string()],
             symbols_indexed: Some(668),
             resumed: false,

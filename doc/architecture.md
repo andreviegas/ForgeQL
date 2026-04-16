@@ -168,6 +168,10 @@ Every ForgeQL operation is accessible through `run_fql`. There are no separate t
 
 Sessions start with `USE source.branch AS 'alias'` and are cleaned up automatically: worktrees idle for more than 48 hours are removed by a server-side background task. Multiple agents can work on the same branch by reconnecting with the same `USE` command — the worktree and any uncommitted changes are preserved.
 
+The **alias you supply in `AS '...'` is the `session_id`** — it is deterministic and reconstructable from the `USE` command the model already knows. There is no opaque generated token to track across calls; if a model forgets its `session_id` it simply re-issues `USE source.branch AS 'same-alias'` to reconnect.
+
+**Auto-reconnect:** if the server restarts and a client passes a `session_id` whose worktree still exists on disk, the engine transparently re-creates the in-memory session — no `USE` command required. The source name and branch are derived from the worktree directory name and git metadata.
+
 `CREATE SOURCE` and `REFRESH SOURCE` are intentionally blocked through MCP — they must be run via the interpreter or CLI.
 
 ### Agent Guardrails

@@ -211,6 +211,15 @@ impl ForgeQLEngine {
     pub fn execute(&mut self, session_id: Option<&str>, op: &ForgeQLIR) -> Result<ForgeQLResult> {
         self.commands_served += 1;
 
+        // Auto-reconnect: if the client passes a valid alias that's no longer in
+        // memory (e.g. after a server restart), silently restore the session from
+        // the matching on-disk worktree before touching or querying it.
+        if let Some(sid) = session_id
+            && !self.sessions.contains_key(sid)
+        {
+            self.try_auto_reconnect(sid);
+        }
+
         // Keep session alive on every request.
         if let Some(sid) = session_id
             && let Some(session) = self.sessions.get_mut(sid)
@@ -523,11 +532,9 @@ impl ForgeQLEngine {
         //
         // We collect the decision into `resume_outcome` before mutating
         // `self.sessions` to avoid holding a shared borrow across a mutable one.
+        // Because the alias is the session key (see below), an O(1) lookup suffices.
         let resume_outcome: Option<(String, Option<usize>)> = {
-            if let Some((existing_id, existing_session)) = self.sessions.iter().find(|(_, s)| {
-                s.source_name == source_name
-                    && s.custom_branch.as_deref() == Some(&format!("fql/{branch}/{as_branch}"))
-            }) {
+            if let Some((existing_id, existing_session)) = self.sessions.get_key_value(as_branch) {
                 // Compare the bare repo's current branch tip to what we
                 // indexed.  If `branch_head` returns None (repo unavailable
                 // or branch missing) we treat the session as fresh to avoid
@@ -594,7 +601,10 @@ impl ForgeQLEngine {
             .path()
             .to_path_buf();
 
-        let session_id = generate_session_id();
+        // The alias is the session key — deterministic, memorable, and
+        // reconstructable from the USE command the model already knows.
+        // No opaque generated ID needed.
+        let session_id = as_branch.to_string();
         // Composite key: base-branch.alias for filesystem (flat, no nesting)
         // and fql/base-branch/alias for the git branch name.
         // Using the fql/ namespace prefix avoids the git loose-ref collision
@@ -645,6 +655,9 @@ impl ForgeQLEngine {
 
         let symbols_indexed = session.index().map_or(0, |idx| idx.rows.len());
         let sid = session_id.clone();
+
+        // Write the initial timestamp so background pruners see this worktree as active.
+        session.touch();
         drop(self.sessions.insert(session_id, session));
 
         Ok(ForgeQLResult::SourceOp(SourceOpResult {
@@ -1632,6 +1645,69 @@ impl ForgeQLEngine {
         })
     }
 
+    /// Attempt to silently restore a session from disk after a server restart.
+    ///
+    /// When the alias (= `session_id`) is not in memory but a matching worktree
+    /// directory exists on disk, this reads the persisted `.forgeql-meta` file
+    /// (written by `use_source` at session creation time) to recover the
+    /// source name and branch, then re-executes `USE` transparently.
+    ///
+    /// On success the session is restored exactly as if the client had re-issued
+    /// the `USE` command.  On any failure the call is a silent no-op and the
+    /// subsequent `require_session` will return the normal "not found" error.
+    fn try_auto_reconnect(&mut self, alias: &str) {
+        let wt_dir = self.data_dir.join("worktrees");
+        let target_suffix = format!(".{alias}");
+
+        // Scan for a worktree directory whose name ends with .{alias}.
+        let wt_path = std::fs::read_dir(&wt_dir).map_or(None, |entries| {
+            entries
+                .flatten()
+                .find(|e| e.file_name().to_string_lossy().ends_with(&target_suffix))
+                .map(|e| e.path())
+        });
+
+        let Some(wt_path) = wt_path else {
+            debug!(%alias, "auto-reconnect: no matching worktree directory on disk");
+            return;
+        };
+
+        // Derive branch from the directory name: "{branch}.{alias}".
+        let dir_name = wt_path.file_name().unwrap_or_default().to_string_lossy();
+        let Some(branch) = dir_name.strip_suffix(&target_suffix) else {
+            debug!(%alias, %dir_name, "auto-reconnect: unexpected directory name format");
+            return;
+        };
+
+        // Derive source_name from the git worktree's link to its bare repo.
+        // For a linked worktree, `repo.path()` returns
+        // `<data_dir>/<source>.git/worktrees/<wt_name>/`, so going up two
+        // parents gives us the bare repo directory `<source>.git`.
+        let source_name: String = match git2::Repository::open(&wt_path) {
+            Ok(repo) => {
+                // .../source.git/worktrees/wt_name/ → .../source.git
+                let Some(bare) = repo.path().parent().and_then(Path::parent) else {
+                    debug!(%alias, "auto-reconnect: cannot derive bare repo path");
+                    return;
+                };
+                let Some(stem) = bare.file_stem().and_then(std::ffi::OsStr::to_str) else {
+                    debug!(%alias, path = %bare.display(), "auto-reconnect: cannot derive source name");
+                    return;
+                };
+                String::from(stem)
+            }
+            Err(err) => {
+                debug!(%alias, %err, "auto-reconnect: cannot open worktree repo");
+                return;
+            }
+        };
+
+        match self.use_source(&source_name, branch, alias) {
+            Ok(_) => info!(%alias, %source_name, %branch, "session auto-reconnected from disk"),
+            Err(err) => warn!(%alias, %err, "auto-reconnect attempt failed"),
+        }
+    }
+
     /// Return the source name associated with the given session, if it exists.
     #[must_use]
     pub fn source_name_for_session(&self, session_id: &str) -> Option<&str> {
@@ -1691,6 +1767,7 @@ impl ForgeQLEngine {
         session.build_index()?;
 
         let sid = session_id.clone();
+        session.touch();
         drop(self.sessions.insert(session_id, session));
         Ok(sid)
     }
@@ -1743,7 +1820,11 @@ fn load_verify_config(
     })
 }
 
-/// Generate a time-based session ID.
+/// Generate a time-based session ID for test-only local sessions.
+///
+/// Production sessions use the alias from `USE … AS 'alias'` as their key.
+/// This helper is only needed by `register_local_session` (test feature flag).
+#[cfg(feature = "test-helpers")]
 fn generate_session_id() -> String {
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2640,19 +2721,27 @@ mod tests {
         Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
     }
 
+    #[cfg(feature = "test-helpers")]
     #[test]
     fn generate_session_id_starts_with_s() {
         let id = generate_session_id();
-        assert!(id.starts_with('s'), "session ID must start with 's': {id}");
+        assert!(
+            id.starts_with('s'),
+            "test helper session ID must start with 's': {id}"
+        );
     }
 
+    #[cfg(feature = "test-helpers")]
     #[test]
     fn generate_session_id_unique() {
         let id1 = generate_session_id();
         // Wait 1 ms to ensure different timestamp.
         std::thread::sleep(std::time::Duration::from_millis(1));
         let id2 = generate_session_id();
-        assert_ne!(id1, id2, "consecutive session IDs should differ");
+        assert_ne!(
+            id1, id2,
+            "consecutive test-helper session IDs should differ"
+        );
     }
 
     #[test]

@@ -18,7 +18,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   workspace configuration, creating output files). Source code access remains
   ForgeQL-exclusive.
 
-## [0.35.0] — 2026-04-16
+## [0.36.0] — 2026-04-16
+
+### Changed
+
+- **Alias is now the session key** — `USE source.branch AS 'alias'` now uses
+  the alias directly as the `session_id` instead of generating an opaque
+  time-based token. The `session_id` returned by `USE` always equals the alias
+  the caller supplied, making it trivially reconstructable without persisting
+  any external state. LLM clients that forget to forward the session_id can
+  recover by re-issuing the original `USE` command or simply by passing the
+  alias they already chose.
+- **Session resume is O(1)** — the internal session lookup on reconnect changed
+  from an O(n) linear scan to a direct hash-map lookup keyed by alias.
+- **MCP tool description updated** — `run_fql` description and `with_instructions`
+  now explicitly state that the alias from `AS '...'` equals the `session_id`.
+- **`generate_session_id()`** is now test-only; production sessions no longer
+  generate opaque time-based IDs.
+- **Auto-reconnect after server restart** — when a client passes a `session_id`
+  that is no longer in memory but whose worktree still exists on disk, the
+  engine transparently re-creates the session by deriving `source_name` and
+  `branch` from the worktree directory name and git metadata.  No `.forgeql-meta`
+  sidecar file is needed; the existing filesystem layout is sufficient.
 
 ### Added — Guard Enrichment: Phases 1–5 (cache v22)
 

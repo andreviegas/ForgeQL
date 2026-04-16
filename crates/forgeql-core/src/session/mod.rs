@@ -69,7 +69,7 @@ pub struct Checkpoint {
 /// managing concurrency at the registry level.
 #[derive(Debug)]
 pub struct Session {
-    /// Unique session identifier (e.g. a UUID v4 string).
+    /// Session identifier — equals the alias supplied in `USE … AS 'alias'`.
     pub id: String,
     /// Identifier of the user who owns this session.
     pub user_id: String,
