@@ -1013,14 +1013,11 @@ impl ForgeQLEngine {
                 // handled above so they become no-ops here; GROUP BY, HAVING,
                 // WHERE, ORDER BY, LIMIT, OFFSET all run normally.
                 crate::filter::apply_clauses(&mut entries, clauses);
-                // When IN is specified, default to full depth so the agent
-                // sees individual files, not collapsed directories.
-                let default_depth = if clauses.in_glob.is_some() {
-                    usize::MAX
-                } else {
-                    DEFAULT_BODY_DEPTH
-                };
-                let max_depth = clauses.depth.unwrap_or(default_depth);
+                // Always show individual files — the LIMIT clause (default 20)
+                // already caps how many entries are returned.  Previously, when
+                // no IN was specified the depth was set to DEFAULT_BODY_DEPTH (0)
+                // which collapsed everything into a single '/' directory entry.
+                let max_depth = clauses.depth.unwrap_or(usize::MAX);
                 // When GROUP BY was requested the pipeline has already
                 // aggregated entries and stored per-group counts; skip the
                 // depth-grouping step so those results are not disturbed.
