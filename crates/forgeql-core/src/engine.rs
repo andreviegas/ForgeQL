@@ -2379,8 +2379,8 @@ fn field_to_kinds_for_config(
         "has_catch_all" => Some(config.switch_kinds().to_vec()),
         // metrics.rs — multiple definition kinds
         "lines" | "member_count" | "has_doc" => Some(config.definition_kinds().to_vec()),
-        // metrics.rs — qualifier flags
-        "is_const" | "is_volatile" | "is_static" => {
+        // metrics.rs — qualifier flags / scope.rs — is_exported
+        "is_const" | "is_volatile" | "is_static" | "is_exported" => {
             let mut kinds = config.declaration_kinds().to_vec();
             kinds.extend_from_slice(config.function_kinds());
             Some(kinds)
