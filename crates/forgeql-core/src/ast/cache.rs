@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::ast::enrich::macro_table::MacroTable;
 use crate::ast::index::{IndexRow, SymbolTable, UsageSite};
+use crate::ast::lang::MacroDef;
 
 // -----------------------------------------------------------------------
 // Current format version
@@ -30,7 +32,26 @@ use crate::ast::index::{IndexRow, SymbolTable, UsageSite};
 ///      skipped during the shadow walk (honouring `skip_node_kinds`), eliminating false positives
 ///      where a variable in one `#ifdef`/`#else` arm appeared to shadow the same variable in the
 ///      sibling arm (mutually exclusive at runtime).
-pub const CURRENT_VERSION: u32 = 15;
+/// v15: Guard config section added (`block_guard_kinds`, etc.) — no index schema change.
+/// v16: Guard stack in `collect_nodes()`: all `#ifdef`/`#else`/`#elif` branches are now indexed;
+///      symbols inside guarded blocks carry `guard`, `guard_defines`, `guard_negates`,
+///      `guard_mentions`, `guard_group_id`, `guard_branch`, `guard_kind` enrichment fields.
+///   17. Rust `#[cfg(...)]` attributes inject guard enrichment fields (`guard_kind = "attribute"`).
+///   18. Macro infrastructure: `MacroDef`, `MacroTable`, `MacroExpander`, `resolve_macro` scaffolding.
+///   19. `MacroExpandEnricher` adds `macro_def_file`, `macro_def_line`, `macro_arity`, `macro_expansion` to `macro_call` rows.
+///   20. Bug fix: C++ `macro_invocation` nodes now indexed as `macro_call` rows (`extract_name`
+///       was missing the `"macro_invocation"` arm). **Policy**: bump this version for ANY
+///       behavioral change that alters which rows are indexed or what enrichment fields are
+///       populated — not only for structural `CachedIndex` field changes.
+///   21. Bug fixes: synced `RustLanguageInline` and `CppLanguageInline` with production
+///       implementations (added `macro_invocation` arm, `scoped_identifier` guard).
+///       Added test coverage for Rust `#[cfg(...)]` attribute guard enrichment.
+///   22. Complete macro expansion pipeline: C++ `call_expression` → `macro_call`
+///       re-tagging via `MacroTable` lookup in `collect_nodes`; macro expansion
+///       integration in `DeclDistanceEnricher` (dead-store suppression) and
+///       `EscapeEnricher` (address-of detection); extended `MacroExpandEnricher`
+///       with `expanded_reads`, `expansion_failed`, `expansion_failure_reason` fields.
+pub const CURRENT_VERSION: u32 = 22;
 
 // -----------------------------------------------------------------------
 // CachedIndex
@@ -51,6 +72,10 @@ pub struct CachedIndex {
     /// Git blob hash per file at index-build time (for incremental update).
     /// Empty until Phase D.
     pub file_hashes: HashMap<PathBuf, String>,
+    /// Macro definitions collected during the first indexing pass.
+    /// Empty when the source language has no macro-expansion support.
+    #[serde(default)]
+    pub macro_defs: Vec<MacroDef>,
 }
 
 impl CachedIndex {
@@ -66,6 +91,27 @@ impl CachedIndex {
             rows: table.rows,
             usages: table.usages,
             file_hashes: HashMap::new(),
+            macro_defs: Vec::new(),
+        }
+    }
+
+    /// Create a `CachedIndex` from a `SymbolTable` and a `MacroTable`.
+    ///
+    /// The macro definitions are flattened into `macro_defs` for serialisation.
+    /// Use `into_table_and_macros()` to recover both tables after loading.
+    #[must_use]
+    pub fn from_table_and_macros(
+        table: SymbolTable,
+        macro_table: MacroTable,
+        commit_hash: impl Into<String>,
+    ) -> Self {
+        Self {
+            version: CURRENT_VERSION,
+            commit_hash: commit_hash.into(),
+            rows: table.rows,
+            usages: table.usages,
+            file_hashes: HashMap::new(),
+            macro_defs: macro_table.into_defs(),
         }
     }
 
@@ -73,6 +119,7 @@ impl CachedIndex {
     ///
     /// Secondary indexes (`name_index`, `kind_index`) are rebuilt from `rows`
     /// via `push_row`, matching `SymbolTable::build()` behaviour.
+    /// Macro definitions are discarded; use `into_table_and_macros` if needed.
     #[must_use]
     pub fn into_table(self) -> SymbolTable {
         let mut table = SymbolTable::default();
@@ -81,6 +128,25 @@ impl CachedIndex {
         }
         table.usages = self.usages;
         table
+    }
+
+    /// Reconstruct a `SymbolTable` and a `MacroTable` from this cache.
+    ///
+    /// This is the counterpart to `from_table_and_macros` — prefer it over
+    /// `into_table` whenever the macro table is also needed.
+    #[must_use]
+    pub fn into_table_and_macros(self) -> (SymbolTable, MacroTable) {
+        let mut symbol_table = SymbolTable::default();
+        for row in self.rows {
+            symbol_table.push_row(row);
+        }
+        symbol_table.usages = self.usages;
+
+        let mut macro_table = MacroTable::new();
+        for def in self.macro_defs {
+            macro_table.insert(def);
+        }
+        (symbol_table, macro_table)
     }
 
     /// Serialize and write to `path` atomically.
@@ -210,6 +276,7 @@ mod tests {
             rows: Vec::new(),
             usages: HashMap::new(),
             file_hashes: HashMap::new(),
+            macro_defs: Vec::new(),
         };
         wrong.save(&path).expect("save");
 

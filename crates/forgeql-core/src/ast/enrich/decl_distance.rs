@@ -20,6 +20,9 @@ use super::data_flow_utils::{
     LocalDecl, collect_local_declarations, collect_parameter_names, is_compound_assign_or_update,
     is_in_declaration, is_inside_parameter_list, is_write_context,
 };
+use super::guard_utils::{
+    GuardFrame, GuardInfo, are_guards_exclusive, build_guard_frame, guard_info_from_stack,
+};
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::lang::LanguageConfig;
 
@@ -131,6 +134,7 @@ struct AnalyseResult<'a> {
 /// Branch depth is tracked via a `depth_stack` maintained alongside the
 /// cursor DFS — each entry records whether the level was entered by crossing
 /// a branch/loop node.  No recursion is used.
+#[allow(clippy::too_many_lines)] // guard stack management adds necessary lines
 fn analyse_uses<'a>(ctx: &EnrichContext<'a>, locals: &[LocalDecl]) -> AnalyseResult<'a> {
     let source = ctx.source;
     let func = ctx.node;
@@ -142,7 +146,10 @@ fn analyse_uses<'a>(ctx: &EnrichContext<'a>, locals: &[LocalDecl]) -> AnalyseRes
     let mut first_uses: HashMap<&str, usize> = HashMap::new();
     let mut first_use_depths: HashMap<&str, u32> = HashMap::new();
     let mut seen_identifiers: HashSet<String> = HashSet::new();
-    let mut written_not_read: HashMap<&str, bool> = HashMap::new();
+    // `(written, guard)` — tracks whether the last op was a write (not yet read),
+    // and the guard in effect when the write occurred.  Guard info is used to
+    // suppress false-positive dead-store reports for writes in exclusive branches.
+    let mut written_not_read: HashMap<&str, (bool, Option<GuardInfo>)> = HashMap::new();
     let mut has_dead_store = false;
     let mut has_dead_store_conditional = false;
 
@@ -157,7 +164,8 @@ fn analyse_uses<'a>(ctx: &EnrichContext<'a>, locals: &[LocalDecl]) -> AnalyseRes
     //      always valid and must NOT be flagged as a dead store.
     for local in locals {
         if local.branch_depth == 0 && local.has_initializer {
-            let _ = written_not_read.insert(local.name.as_str(), true);
+            // Unconditional declarations have no guard (None).
+            let _ = written_not_read.insert(local.name.as_str(), (true, None));
         }
     }
 
@@ -166,12 +174,70 @@ fn analyse_uses<'a>(ctx: &EnrichContext<'a>, locals: &[LocalDecl]) -> AnalyseRes
     // depth_stack[i] = true if crossing into level i required a branch/loop node.
     let mut depth_stack: Vec<bool> = Vec::new();
     let mut branch_depth: u32 = 0;
-
+    // Mini guard stack: updated in lock-step with the cursor walk.
+    let mut mini_guard_stack: Vec<GuardFrame> = Vec::new();
     loop {
         if visit {
             let node = cursor.node();
             let kind = node.kind();
 
+            // --- Mini guard stack management ---
+            if config.has_guard_support() {
+                while let Some(top) = mini_guard_stack.last() {
+                    if node.start_byte() >= top.guard_byte_range.end {
+                        drop(mini_guard_stack.pop());
+                    } else {
+                        break;
+                    }
+                }
+                if config.is_block_guard_kind(kind)
+                    || config.is_elif_kind(kind)
+                    || config.is_else_kind(kind)
+                {
+                    let frame = build_guard_frame(node, source, config, &mini_guard_stack);
+                    mini_guard_stack.push(frame);
+                }
+            }
+
+            // Macro expansion: when a call_expression matches a macro in
+            // the table, expand it and register contained identifiers as
+            // reads.  This prevents false dead-store positives for patterns
+            // like `err = fn(); __ASSERT(err == 0);`.
+            if let Some(table) = ctx.macro_table {
+                let call_kind = config.call_expression_kind();
+                if !call_kind.is_empty()
+                    && kind == call_kind
+                    && let Some(func_node) = node.child_by_field_name("function")
+                {
+                    let func_name =
+                        std::str::from_utf8(&source[func_node.byte_range()]).unwrap_or("");
+                    if let Some(expander) = ctx.language_support.macro_expander() {
+                        let args = expander.extract_args(node, source);
+                        let mut budget = super::macro_resolve::ExpansionBudget {
+                            max_depth: 1,
+                            max_steps: 1,
+                            steps_remaining: 1,
+                        };
+                        if let Some(result) = super::macro_resolve::resolve_macro(
+                            table,
+                            func_name,
+                            &args,
+                            expander,
+                            &mut budget,
+                            0,
+                        ) {
+                            // Scan expanded text for local variable reads.
+                            for &local_name in local_names.keys() {
+                                if contains_word(&result.expanded, local_name) {
+                                    let _ = seen_identifiers.insert(local_name.to_owned());
+                                    // Mark as read — clears any pending dead-store flag.
+                                    let _ = written_not_read.insert(local_name, (false, None));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if config.is_identifier_kind(kind)
                 && node != func
                 && !is_inside_parameter_list(node, config)
@@ -198,18 +264,27 @@ fn analyse_uses<'a>(ctx: &EnrichContext<'a>, locals: &[LocalDecl]) -> AnalyseRes
 
                             if is_compound {
                                 // Compound assign / ++ / -- : read AND write.
-                                let _ = written_not_read.insert(text, false);
+                                let _ = written_not_read.insert(text, (false, None));
                             } else if is_write {
-                                if written_not_read.get(text) == Some(&true) {
-                                    if branch_depth == 0 {
-                                        has_dead_store = true;
-                                    } else {
-                                        has_dead_store_conditional = true;
+                                let prev = written_not_read.get(text).copied();
+                                if let Some((true, prev_guard)) = prev {
+                                    let write_guard = guard_info_from_stack(&mini_guard_stack);
+                                    // Exclusive guard branches → not a dead store.
+                                    if !guards_exclusive_opts(
+                                        prev_guard.as_ref(),
+                                        write_guard.as_ref(),
+                                    ) {
+                                        if branch_depth == 0 {
+                                            has_dead_store = true;
+                                        } else {
+                                            has_dead_store_conditional = true;
+                                        }
                                     }
                                 }
-                                let _ = written_not_read.insert(text, true);
+                                let write_guard = guard_info_from_stack(&mini_guard_stack);
+                                let _ = written_not_read.insert(text, (true, write_guard));
                             } else {
-                                let _ = written_not_read.insert(text, false);
+                                let _ = written_not_read.insert(text, (false, None));
                             }
                         }
                     }
@@ -253,4 +328,35 @@ fn analyse_uses<'a>(ctx: &EnrichContext<'a>, locals: &[LocalDecl]) -> AnalyseRes
             }
         }
     }
+}
+
+/// Returns `true` if `a` and `b` are in structurally exclusive guard branches.
+/// Returns `false` if either is unconditional (no guard).
+#[inline]
+fn guards_exclusive_opts(a: Option<&GuardInfo>, b: Option<&GuardInfo>) -> bool {
+    match (a, b) {
+        (Some(ga), Some(gb)) => are_guards_exclusive(ga, gb),
+        _ => false,
+    }
+}
+
+/// Word-boundary check: returns `true` if `haystack` contains `word` as a
+/// whole word (not as a substring of a longer identifier).
+fn contains_word(haystack: &str, word: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(word) {
+        let abs = start + pos;
+        let before_ok = abs == 0
+            || !haystack.as_bytes()[abs - 1].is_ascii_alphanumeric()
+                && haystack.as_bytes()[abs - 1] != b'_';
+        let end = abs + word.len();
+        let after_ok = end >= haystack.len()
+            || !haystack.as_bytes()[end].is_ascii_alphanumeric()
+                && haystack.as_bytes()[end] != b'_';
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + 1;
+    }
+    false
 }

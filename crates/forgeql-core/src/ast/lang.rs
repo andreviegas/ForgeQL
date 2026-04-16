@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 // -----------------------------------------------------------------------
 // FQL Kind constants — universal, language-agnostic symbol categories
 // -----------------------------------------------------------------------
@@ -362,6 +364,48 @@ pub struct LanguageConfig {
     /// (e.g. `"char_literal"` for C++).  Empty if not applicable.
     pub(crate) char_literal_raw_kind: String,
 
+    // -- guards --
+    /// Node kinds that open a guarded block (e.g. `preproc_ifdef`, `preproc_if`).
+    pub(crate) block_guard_kinds: Vec<String>,
+    /// Node kinds representing `#elif` branches.
+    pub(crate) elif_kinds: Vec<String>,
+    /// Node kinds representing `#else` branches.
+    pub(crate) else_kinds: Vec<String>,
+    /// Grammar field name for the guard condition expression.
+    pub(crate) guard_condition_field: String,
+    /// Grammar field name for the macro identifier child in `ifdef`/`ifndef`.
+    pub(crate) guard_name_field: String,
+    /// Token text that marks the negated guard variant (e.g. `"#ifndef"`).
+    pub(crate) negate_ifdef_variant: String,
+    /// Attribute name for item-level guards (e.g. `"cfg"` for Rust).
+    pub(crate) item_guard_attribute: String,
+    /// Regex for file-level guard comments (e.g. Go build tags).
+    pub(crate) file_guard_pattern: String,
+    /// Regex for OS/arch extraction from file suffix.
+    pub(crate) file_guard_suffix_pattern: String,
+    /// Node kinds for comptime conditional blocks (e.g. Zig).
+    pub(crate) comptime_guard_kinds: Vec<String>,
+    /// Regex patterns for compile-time guard detection in `if` conditions.
+    pub(crate) builtin_guard_patterns: Vec<String>,
+    /// Regex patterns for heuristic environment guards.
+    pub(crate) env_guard_patterns: Vec<String>,
+    /// Regex for directory-based source set extraction (Kotlin).
+    pub(crate) source_set_pattern: String,
+
+    // -- macros --
+    /// Token texts that prefix macro definitions (e.g. `["#define"]` for C/C++).
+    pub(crate) macro_def_markers: Vec<String>,
+    /// Raw tree-sitter kinds for macro definitions
+    /// (e.g. `["preproc_function_def", "preproc_def"]` for C/C++).
+    pub(crate) macro_def_kinds: Vec<String>,
+    /// Raw kind for macro invocations (e.g. `"macro_invocation"` for C++).
+    /// Empty string when the language has no distinct invocation node kind.
+    pub(crate) macro_invocation_kind: String,
+    /// Grammar field name for the macro parameter list.
+    pub(crate) macro_parameters_field: String,
+    /// Grammar field name for the macro body/value.
+    pub(crate) macro_value_field: String,
+
     /// Raw tree-sitter kind → FQL kind mapping used by the data-driven
     /// `map_kind` implementation. Built from the `kind_map` section of
     /// the language JSON config.
@@ -460,6 +504,120 @@ impl LanguageConfig {
     #[must_use]
     pub fn is_skip_kind(&self, kind: &str) -> bool {
         self.skip_node_kinds.iter().any(|s| s == kind)
+    }
+
+    /// Is this a guard-opening block kind (e.g. `preproc_ifdef`, `preproc_if`)?
+    #[must_use]
+    pub fn is_block_guard_kind(&self, kind: &str) -> bool {
+        self.block_guard_kinds.iter().any(|s| s == kind)
+    }
+
+    /// Is this an `#elif` guard branch kind?
+    #[must_use]
+    pub fn is_elif_kind(&self, kind: &str) -> bool {
+        self.elif_kinds.iter().any(|s| s == kind)
+    }
+
+    /// Is this an `#else` guard branch kind?
+    #[must_use]
+    pub fn is_else_kind(&self, kind: &str) -> bool {
+        self.else_kinds.iter().any(|s| s == kind)
+    }
+
+    /// Grammar field name for the guard condition expression.
+    #[must_use]
+    pub fn guard_condition_field(&self) -> &str {
+        &self.guard_condition_field
+    }
+
+    /// Grammar field name for the macro identifier child in `ifdef`/`ifndef`.
+    #[must_use]
+    pub fn guard_name_field(&self) -> &str {
+        &self.guard_name_field
+    }
+
+    /// Attribute name for item-level guards (e.g. `"cfg"` for Rust).
+    #[must_use]
+    pub fn item_guard_attribute(&self) -> &str {
+        &self.item_guard_attribute
+    }
+
+    /// Returns `true` if this language has any guard configuration set.
+    #[must_use]
+    pub const fn has_guard_support(&self) -> bool {
+        !self.block_guard_kinds.is_empty()
+            || !self.item_guard_attribute.is_empty()
+            || !self.file_guard_pattern.is_empty()
+            || !self.comptime_guard_kinds.is_empty()
+            || !self.env_guard_patterns.is_empty()
+    }
+
+    /// Token text for the negated guard variant (e.g. `"#ifndef"`).
+    #[must_use]
+    pub fn negate_ifdef_variant(&self) -> &str {
+        &self.negate_ifdef_variant
+    }
+
+    /// Regex for OS/arch extraction from file suffix.
+    #[must_use]
+    pub fn file_guard_suffix_pattern(&self) -> &str {
+        &self.file_guard_suffix_pattern
+    }
+
+    /// Regex patterns for compile-time guard detection in `if` conditions.
+    #[must_use]
+    pub fn builtin_guard_patterns(&self) -> &[String] {
+        &self.builtin_guard_patterns
+    }
+
+    /// Regex patterns for heuristic environment guard detection in `if` conditions.
+    #[must_use]
+    pub fn env_guard_patterns(&self) -> &[String] {
+        &self.env_guard_patterns
+    }
+
+    /// Regex for directory-based source set extraction.
+    #[must_use]
+    pub fn source_set_pattern(&self) -> &str {
+        &self.source_set_pattern
+    }
+
+    // -- macro config accessors ----------------------------------------
+
+    /// Token texts that prefix macro definitions (e.g. `["#define"]`).
+    #[must_use]
+    pub fn macro_def_markers(&self) -> &[String] {
+        &self.macro_def_markers
+    }
+
+    /// Raw tree-sitter kinds for macro definitions.
+    #[must_use]
+    pub fn macro_def_kinds(&self) -> &[String] {
+        &self.macro_def_kinds
+    }
+
+    /// Raw kind for macro invocations.  Empty string when not applicable.
+    #[must_use]
+    pub fn macro_invocation_kind(&self) -> &str {
+        &self.macro_invocation_kind
+    }
+
+    /// Grammar field name for the macro parameter list.
+    #[must_use]
+    pub fn macro_parameters_field(&self) -> &str {
+        &self.macro_parameters_field
+    }
+
+    /// Grammar field name for the macro body/value.
+    #[must_use]
+    pub fn macro_value_field(&self) -> &str {
+        &self.macro_value_field
+    }
+
+    /// Whether this language has macro-expansion support configured.
+    #[must_use]
+    pub const fn has_macro_support(&self) -> bool {
+        !self.macro_def_kinds.is_empty()
     }
 
     /// Is this a usage-site identifier kind?
@@ -1140,6 +1298,61 @@ impl LanguageConfig {
 }
 
 // -----------------------------------------------------------------------
+// MacroDef — single preprocessor / text macro definition
+// -----------------------------------------------------------------------
+
+/// A single macro definition extracted during the first indexing pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MacroDef {
+    /// Macro name.
+    pub name: String,
+    /// Parameter names for function-like macros.
+    /// `None` for object-like (constant) macros.
+    pub params: Option<Vec<String>>,
+    /// Expansion body text (post-`\` line-continuation joining).
+    pub body: String,
+    /// Source file that contains this definition.
+    pub file: std::path::PathBuf,
+    /// 1-based source line of the definition.
+    pub line: u32,
+    /// Guard group id from the guard stack at the definition site, if any.
+    pub guard_group_id: Option<u64>,
+    /// Guard branch text at the definition site, if any.
+    pub guard_branch: Option<String>,
+}
+
+// -----------------------------------------------------------------------
+// MacroExpander trait
+// -----------------------------------------------------------------------
+
+/// Language-specific macro expansion strategy.
+///
+/// Language crates implement this trait to enable the two-pass
+/// macro-expansion pipeline.  The default [`LanguageSupport::macro_expander`]
+/// returns `None`, meaning no expansion for that language.
+pub trait MacroExpander: Send + Sync {
+    /// Extract a macro definition from a definition AST node.
+    ///
+    /// Returns `None` when `node` is not a supported definition kind.
+    fn extract_def(
+        &self,
+        node: tree_sitter::Node<'_>,
+        source: &[u8],
+        config: &LanguageConfig,
+    ) -> Option<MacroDef>;
+
+    /// Extract argument texts from a macro invocation node.
+    fn extract_args(&self, node: tree_sitter::Node<'_>, source: &[u8]) -> Vec<String>;
+
+    /// Substitute parameter names with argument values in an expansion body.
+    fn substitute(&self, body: &str, params: &[String], args: &[String]) -> String;
+
+    /// Wrap expanded source text so it can be re-parsed as a standalone statement.
+    fn wrap_for_reparse<'a>(&self, expanded: &'a str) -> std::borrow::Cow<'a, str>;
+}
+
+// -----------------------------------------------------------------------
+// LanguageSupport trait
 // LanguageSupport trait
 // -----------------------------------------------------------------------
 
@@ -1167,6 +1380,14 @@ pub trait LanguageSupport: Send + Sync {
 
     /// Static language configuration used by enrichers.
     fn config(&self) -> &'static LanguageConfig;
+
+    /// Optional macro expander for two-pass expansion.
+    ///
+    /// Returns `None` by default — languages without macro-expansion support
+    /// do not need to override this method.
+    fn macro_expander(&self) -> Option<&dyn MacroExpander> {
+        None
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -1339,6 +1560,14 @@ impl LanguageSupport for CppLanguageInline {
                 if text.is_empty() { None } else { Some(text) }
             }
 
+            // macro_invocation: extract the macro name via the "macro" field.
+            // NOTE: tree-sitter-cpp 0.23.x rarely produces macro_invocation nodes
+            // in practice — see forgeql-lang-cpp for details.
+            "macro_invocation" => node
+                .child_by_field_name("macro")
+                .map(|n| cpp_node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
             _ => None,
         }
     }
@@ -1447,6 +1676,11 @@ impl LanguageSupport for RustLanguageInline {
     }
 
     fn extract_name(&self, node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+        // scoped_identifier nodes are references, not definitions.
+        if node.kind() == "scoped_identifier" {
+            return None;
+        }
+
         if let Some(name_node) = node.child_by_field_name("name") {
             let text = rust_node_text(source, name_node);
             if !text.is_empty() {
@@ -1472,6 +1706,12 @@ impl LanguageSupport for RustLanguageInline {
 
             "let_declaration" => node
                 .child_by_field_name("pattern")
+                .map(|n| rust_node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
+            // macro invocations: extract the macro path (field "macro")
+            "macro_invocation" => node
+                .child_by_field_name("macro")
                 .map(|n| rust_node_text(source, n))
                 .filter(|s| !s.is_empty()),
 
@@ -1706,7 +1946,7 @@ mod tests {
         assert_eq!(config.scope_separator, "::");
         assert!(!config.function_raw_kinds.is_empty());
         assert!(!config.type_raw_kinds.is_empty());
-        assert!(!config.skip_node_kinds.is_empty());
+        // skip_node_kinds may be empty if all formerly-skipped nodes are handled by guard config
         assert!(!config.usage_node_kinds.is_empty());
     }
 
@@ -1729,7 +1969,7 @@ mod tests {
         assert!(cfg.is_assignment_kind("assignment_expression"));
         assert!(cfg.is_update_kind("update_expression"));
         assert!(cfg.is_string_literal_kind("string_literal"));
-        assert!(cfg.is_skip_kind("preproc_else"));
+        assert!(!cfg.is_skip_kind("preproc_else")); // now traversed as a guard branch
         assert!(cfg.is_usage_node_kind("identifier"));
         assert!(cfg.is_shift_expression_kind("shift_expression"));
         assert!(cfg.is_template_misparse_kind("template_function"));

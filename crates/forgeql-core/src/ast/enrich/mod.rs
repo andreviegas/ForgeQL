@@ -9,7 +9,6 @@
 ///
 /// Zero changes to `collect_nodes()`, `index_file()`, or `filter.rs`.
 use std::collections::HashMap;
-use std::path::Path;
 
 use super::index::{IndexRow, SymbolTable};
 use super::lang::{LanguageConfig, LanguageSupport};
@@ -21,6 +20,10 @@ pub mod data_flow_utils;
 pub mod decl_distance;
 pub mod escape;
 pub mod fallthrough;
+pub mod guard_utils;
+pub mod macro_expand_enrich;
+pub mod macro_resolve;
+pub mod macro_table;
 pub mod member;
 pub mod metrics;
 pub mod naming;
@@ -44,13 +47,20 @@ pub struct EnrichContext<'a> {
     /// Full source text of the file (bytes).
     pub source: &'a [u8],
     /// Absolute path to the source file.
-    pub path: &'a Path,
+    pub path: &'a std::path::Path,
     /// Language identifier (e.g. `"cpp"`).
     pub language_name: &'a str,
     /// Language-specific configuration (node kinds, separators, etc.).
     pub language_config: &'a LanguageConfig,
     /// Full language support trait object (for `extract_name`, `map_kind`, etc.).
     pub language_support: &'a dyn LanguageSupport,
+    /// Guard stack at this node's position in the tree walk.
+    /// Empty slice for unconditionally compiled code.
+    pub guard_stack: &'a [guard_utils::GuardFrame],
+    /// Macro definition table from the first indexing pass.
+    /// `None` for languages without macro-expansion support, or during
+    /// the first pass itself.
+    pub macro_table: Option<&'a macro_table::MacroTable>,
 }
 
 // -----------------------------------------------------------------------
@@ -118,5 +128,6 @@ pub fn default_enrichers() -> Vec<Box<dyn NodeEnricher>> {
         Box::new(fallthrough::FallthroughEnricher),
         Box::new(recursion::RecursionEnricher),
         Box::new(todo::TodoEnricher),
+        Box::new(macro_expand_enrich::MacroExpandEnricher),
     ]
 }

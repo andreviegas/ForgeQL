@@ -45,7 +45,7 @@ fn setup_workspace() -> (tempfile::TempDir, Workspace, SymbolTable) {
 
     let ws = Workspace::new(dir.path()).expect("new workspace");
     let registry = LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]);
-    let idx = SymbolTable::build(&ws, &registry).expect("build index");
+    let (idx, _macro_table) = SymbolTable::build(&ws, &registry).expect("build index");
     (dir, ws, idx)
 }
 

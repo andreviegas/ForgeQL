@@ -14,11 +14,15 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use crate::ast::enrich::guard_utils::{
+    GuardFrame, build_env_guard_frame, build_guard_frame, collect_attribute_guard_frames,
+    inject_guard_fields,
+};
+use crate::ast::enrich::macro_table::MacroTable;
 use crate::ast::enrich::{EnrichContext, NodeEnricher, default_enrichers};
 use crate::ast::lang::{LanguageRegistry, LanguageSupport};
 use crate::error::ForgeError;
 use crate::workspace::Workspace;
-
 // -----------------------------------------------------------------------
 // IndexRow — the universal row type
 // -----------------------------------------------------------------------
@@ -106,7 +110,10 @@ impl SymbolTable {
     ///
     /// # Errors
     /// Returns `Err` if the tree-sitter language cannot be set.
-    pub fn build(workspace: &Workspace, lang_registry: &LanguageRegistry) -> Result<Self> {
+    pub fn build(
+        workspace: &Workspace,
+        lang_registry: &LanguageRegistry,
+    ) -> Result<(Self, MacroTable)> {
         // 1 — collect file paths that have a registered language.
         let paths: Vec<PathBuf> = workspace
             .files()
@@ -115,8 +122,39 @@ impl SymbolTable {
 
         debug!(files = paths.len(), "indexing files in parallel");
 
-        // 2 — parse + enrich each file in parallel, merging via tree
-        //     reduction so merges also happen across multiple cores.
+        // Pass 1 — collect macro definitions (parallel, per-file, then merged).
+        let macro_table: MacroTable = paths
+            .par_iter()
+            .filter_map(|path| {
+                let lang = lang_registry.language_for_path(path)?;
+                let _ = lang.macro_expander()?;
+                let mut parser = tree_sitter::Parser::new();
+                if parser.set_language(&lang.tree_sitter_language()).is_err() {
+                    return None;
+                }
+                match collect_macro_defs_for_file(&mut parser, path, lang.as_ref()) {
+                    Ok(defs) if !defs.is_empty() => {
+                        let mut local = MacroTable::new();
+                        for def in defs {
+                            local.insert(def);
+                        }
+                        Some(local)
+                    }
+                    _ => None,
+                }
+            })
+            .reduce(MacroTable::new, |mut acc, local| {
+                acc.merge_from(local);
+                acc
+            });
+
+        debug!(
+            macro_defs = macro_table.def_count(),
+            "first-pass macro collection complete"
+        );
+
+        // Pass 2 — parse + enrich each file in parallel, merging via tree
+        // reduction so merges also happen across multiple cores.
         let mut table: Self = paths
             .par_iter()
             .filter_map(|path| {
@@ -135,6 +173,7 @@ impl SymbolTable {
                     &mut file_table,
                     &enrichers,
                     lang.as_ref(),
+                    Some(&macro_table),
                 ) {
                     Ok(count) => {
                         debug!(
@@ -163,13 +202,13 @@ impl SymbolTable {
             "index built"
         );
 
-        // 4 — run post_pass for each enricher (aggregation, cross-row metrics).
+        // Post-pass — run post_pass for each enricher (aggregation, cross-row metrics).
         let enrichers = default_enrichers();
         for enricher in &enrichers {
             enricher.post_pass(&mut table);
         }
 
-        Ok(table)
+        Ok((table, macro_table))
     }
 
     /// Merge another `SymbolTable` into this one.
@@ -356,7 +395,7 @@ impl SymbolTable {
                     parser
                         .set_language(&lang.tree_sitter_language())
                         .map_err(|e| ForgeError::TreeSitterLanguage(e.to_string()))?;
-                    match index_file(&mut parser, path, self, &enrichers, lang.as_ref()) {
+                    match index_file(&mut parser, path, self, &enrichers, lang.as_ref(), None) {
                         Ok(count) => {
                             debug!(path = %path.display(), rows = count, "reindexed");
                         }
@@ -382,10 +421,65 @@ impl SymbolTable {
 }
 
 // -----------------------------------------------------------------------
-// Index one file
+// First-pass macro collector
+// -----------------------------------------------------------------------
+
+/// Walk the AST of a single file and collect all macro definitions.
+///
+/// Returns an empty `Vec` when the language has no `macro_expander()`.
+///
+/// # Errors
+/// Returns an error if the file cannot be read or tree-sitter parsing fails.
+fn collect_macro_defs_for_file(
+    parser: &mut tree_sitter::Parser,
+    path: &Path,
+    language: &dyn LanguageSupport,
+) -> Result<Vec<crate::ast::lang::MacroDef>> {
+    let Some(expander) = language.macro_expander() else {
+        return Ok(Vec::new());
+    };
+    let source = crate::workspace::file_io::read_bytes(path)?;
+    let tree = parser
+        .parse(&source, None)
+        .ok_or_else(|| ForgeError::AstParse {
+            path: path.to_path_buf(),
+        })?;
+    let config = language.config();
+    let mut cursor = tree.root_node().walk();
+    let mut defs = Vec::new();
+    loop {
+        let node = cursor.node();
+        if config.macro_def_kinds().iter().any(|k| k == node.kind())
+            && let Some(mut def) = expander.extract_def(node, &source, config)
+        {
+            def.file = path.to_path_buf();
+            defs.push(def);
+        }
+        if !config.is_skip_kind(node.kind()) && cursor.goto_first_child() {
+            continue;
+        }
+        if cursor.goto_next_sibling() {
+            continue;
+        }
+        loop {
+            if !cursor.goto_parent() {
+                return Ok(defs);
+            }
+            if cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Index one file (second pass)
 // -----------------------------------------------------------------------
 
 /// Index a single file, adding its rows to `table`.
+///
+/// `macro_table` — optional table of macro definitions built during the
+/// first pass; passed through to [`EnrichContext`] for macro-aware enrichers.
 ///
 /// # Errors
 /// Returns an error if the file cannot be read or tree-sitter parsing fails.
@@ -395,6 +489,7 @@ pub fn index_file(
     table: &mut SymbolTable,
     enrichers: &[Box<dyn NodeEnricher>],
     language: &dyn LanguageSupport,
+    macro_table: Option<&MacroTable>,
 ) -> Result<usize> {
     let source = crate::workspace::file_io::read_bytes(path)?;
     let tree = parser
@@ -415,6 +510,7 @@ pub fn index_file(
         language,
         table,
         enrichers,
+        macro_table,
     );
 
     Ok(table.rows.len() - before)
@@ -436,6 +532,8 @@ pub fn index_file(
 ///
 /// Uses iterative depth-first traversal via `TreeCursor` navigation to
 /// avoid stack overflow on large codebases (e.g. Zephyr RTOS).
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 fn collect_nodes(
     source: &[u8],
     path: &Path,
@@ -444,12 +542,48 @@ fn collect_nodes(
     language: &dyn LanguageSupport,
     table: &mut SymbolTable,
     enrichers: &[Box<dyn NodeEnricher>],
+    macro_table: Option<&MacroTable>,
 ) {
     let config = language.config();
     let lang_name = language.name();
+    let mut guard_stack: Vec<GuardFrame> = Vec::new();
+    // Pre-compile env_guard_patterns once per file.
+    let env_guard_regex: Option<regex::RegexSet> = if config.env_guard_patterns().is_empty() {
+        None
+    } else {
+        regex::RegexSet::new(config.env_guard_patterns()).ok()
+    };
 
     loop {
         let node = cursor.node();
+
+        // --- Guard stack management ---
+        // Pop frames whose byte scope we've left.
+        while let Some(frame) = guard_stack.last() {
+            if node.start_byte() >= frame.guard_byte_range.end {
+                drop(guard_stack.pop());
+            } else {
+                break;
+            }
+        }
+        // Push a new frame when entering a block-guard-opening node.
+        if config.has_guard_support()
+            && (config.is_block_guard_kind(node.kind())
+                || config.is_elif_kind(node.kind())
+                || config.is_else_kind(node.kind()))
+        {
+            let frame = build_guard_frame(node, source, config, &guard_stack);
+            guard_stack.push(frame);
+        }
+        // Push a heuristic guard frame for env-guarded `if` nodes
+        // (e.g. Python `if TYPE_CHECKING:` or `if sys.platform == "linux":`).
+        if let Some(regex_set) = &env_guard_regex
+            && language.map_kind(node.kind()) == Some("if")
+            && let Some(frame) = build_env_guard_frame(node, source, config, regex_set)
+        {
+            guard_stack.push(frame);
+        }
+        // --- End guard stack management ---
 
         // Skip alternate conditional-compilation branches entirely.
         let skip = config.is_skip_kind(node.kind());
@@ -463,11 +597,27 @@ fn collect_nodes(
                 language_name: lang_name,
                 language_config: config,
                 language_support: language,
+                guard_stack: &guard_stack,
+                macro_table,
             };
 
             // Every named node becomes a row.
             if let Some(name) = language.extract_name(node, source) {
                 let mut fields = extract_fields(node, source, ts_language);
+
+                // Inject guard fields from the current block-guard stack.
+                if !guard_stack.is_empty() {
+                    inject_guard_fields(&guard_stack, &mut fields);
+                }
+
+                // Inject item-level attribute guards (e.g. Rust `#[cfg(...)]`).
+                let attr_guard_name = config.item_guard_attribute();
+                if !attr_guard_name.is_empty() {
+                    let attr_frames = collect_attribute_guard_frames(node, source, attr_guard_name);
+                    if !attr_frames.is_empty() {
+                        inject_guard_fields(&attr_frames, &mut fields);
+                    }
+                }
 
                 // Run all enrichers on this row.
                 for enricher in enrichers {
@@ -487,8 +637,50 @@ fn collect_nodes(
                     fields,
                 };
                 table.push_row(row);
-            }
+            } else if let Some(mtable) = macro_table {
+                // Re-tag: tree-sitter-cpp parses C macro calls as
+                // call_expression, not macro_invocation.  When extract_name
+                // returns None for a call_expression whose function name is
+                // in the MacroTable, emit a macro_call row.
+                let call_kind = config.call_expression_kind();
+                if !call_kind.is_empty()
+                    && node.kind() == call_kind
+                    && let Some(func_node) = node.child_by_field_name("function")
+                {
+                    let func_name = node_text(source, func_node);
+                    if !func_name.is_empty() && mtable.contains(&func_name) {
+                        let mut fields = extract_fields(node, source, ts_language);
 
+                        if !guard_stack.is_empty() {
+                            inject_guard_fields(&guard_stack, &mut fields);
+                        }
+                        let attr_guard_name = config.item_guard_attribute();
+                        if !attr_guard_name.is_empty() {
+                            let attr_frames =
+                                collect_attribute_guard_frames(node, source, attr_guard_name);
+                            if !attr_frames.is_empty() {
+                                inject_guard_fields(&attr_frames, &mut fields);
+                            }
+                        }
+
+                        for enricher in enrichers {
+                            enricher.enrich_row(&ctx, &func_name, &mut fields);
+                        }
+
+                        let row = IndexRow {
+                            name: func_name,
+                            node_kind: node.kind().to_string(),
+                            fql_kind: "macro_call".to_string(),
+                            language: lang_name.to_string(),
+                            path: path.to_path_buf(),
+                            byte_range: node.byte_range(),
+                            line: node.start_position().row + 1,
+                            fields,
+                        };
+                        table.push_row(row);
+                    }
+                }
+            }
             // Run extra_rows() for every node (even if extract_name returned None).
             for enricher in enrichers {
                 for row in enricher.extra_rows(&ctx) {
@@ -695,6 +887,7 @@ mod tests {
             &mut table,
             &default_enrichers(),
             &CppLanguageInline,
+            None,
         )
         .unwrap();
         assert!(table.find_def("alpha").is_some());
@@ -725,6 +918,7 @@ mod tests {
             &mut table,
             &default_enrichers(),
             &CppLanguageInline,
+            None,
         )
         .unwrap();
         table

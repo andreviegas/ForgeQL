@@ -20,8 +20,10 @@
 
 use std::sync::{Arc, OnceLock};
 
-use forgeql_core::ast::lang::{LanguageConfig, LanguageRegistry, LanguageSupport};
+use forgeql_core::ast::lang::{LanguageConfig, LanguageRegistry, LanguageSupport, MacroExpander};
 use forgeql_core::ast::lang_json::LanguageConfigJson;
+
+pub(crate) mod macro_expand;
 
 /// C/C++ language support for ForgeQL.
 pub struct CppLanguage;
@@ -111,6 +113,19 @@ impl LanguageSupport for CppLanguage {
                 if text.is_empty() { None } else { Some(text) }
             }
 
+            // macro_invocation: extract the macro name via the "macro" field.
+            //
+            // NOTE: tree-sitter-cpp 0.23.x rarely produces macro_invocation nodes
+            // in practice — both statement-position and declaration-position macro calls
+            // are parsed as expression_statement(call_expression(...)) instead.
+            // See macro_expand.rs tests `call_expr_macro_structure` and
+            // `decl_position_macro_is_also_call_expression` for confirmation.
+            // Full C/C++ macro-call indexing requires the two-pass pipeline (Task 4.2).
+            "macro_invocation" => node
+                .child_by_field_name("macro")
+                .map(|n| node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
             _ => None,
         }
     }
@@ -121,6 +136,11 @@ impl LanguageSupport for CppLanguage {
 
     fn config(&self) -> &'static LanguageConfig {
         cpp_config()
+    }
+
+    fn macro_expander(&self) -> Option<&dyn MacroExpander> {
+        static EXPANDER: macro_expand::CppMacroExpander = macro_expand::CppMacroExpander;
+        Some(&EXPANDER)
     }
 }
 

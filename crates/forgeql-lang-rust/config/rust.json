@@ -148,6 +148,18 @@
     "has_implicit_truthiness": false
   },
 
+  "guards": {
+    "item_guard_attribute": "cfg"
+  },
+
+  "macros": {
+    "def_markers": ["macro_rules!"],
+    "def_kinds": ["macro_definition"],
+    "invocation_kind": "macro_invocation",
+    "parameters_field": "",
+    "value_field": ""
+  },
+
   "kind_map": {
     "function_item": "function",
     "struct_item": "struct",
@@ -172,6 +184,7 @@
     "while_expression": "while",
     "for_expression": "for",
     "loop_expression": "while",
-    "match_expression": "switch"
+    "match_expression": "switch",
+    "macro_invocation": "macro_call"
   }
 }

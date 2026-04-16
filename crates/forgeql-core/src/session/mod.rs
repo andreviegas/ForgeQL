@@ -17,6 +17,7 @@ use anyhow::Result;
 use tracing::{debug, info};
 
 use crate::ast::cache::CachedIndex;
+use crate::ast::enrich::macro_table::MacroTable;
 use crate::ast::index::SymbolTable;
 use crate::ast::lang::LanguageRegistry;
 use crate::budget::{BudgetSnapshot, BudgetState};
@@ -90,6 +91,9 @@ pub struct Session {
     pub worktree_name: String,
     /// In-memory symbol index, populated by `build_index` or `resume_index`.
     index: Option<SymbolTable>,
+    /// Macro definitions collected during the two-pass indexing pipeline.
+    /// `None` until `build_index` or `resume_index` completes.
+    macro_table: Option<MacroTable>,
     /// The commit hash the current `index` was built from.
     cached_commit: Option<String>,
     /// Monotonic timestamp of the last request that touched this session.
@@ -158,6 +162,7 @@ impl Session {
             custom_branch: None,
             worktree_name,
             index: None,
+            macro_table: None,
             cached_commit: None,
             last_active: std::time::Instant::now(),
             checkpoints: Vec::new(),
@@ -188,14 +193,14 @@ impl Session {
             "building symbol index"
         );
         let workspace = Workspace::new(&self.worktree_path)?;
-        let table = SymbolTable::build(&workspace, &self.lang_registry)?;
+        let (table, macro_table) = SymbolTable::build(&workspace, &self.lang_registry)?;
 
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        let cached = CachedIndex::from_table(table, &commit_hash);
+        let cached = CachedIndex::from_table_and_macros(table, macro_table, &commit_hash);
         let cache_path = self.worktree_path.join(".forgeql-index");
         cached.save(&cache_path)?;
 
-        let table = cached.into_table();
+        let (table, macro_table) = cached.into_table_and_macros();
 
         debug!(
             session = %self.id,
@@ -205,6 +210,7 @@ impl Session {
         );
 
         self.index = Some(table);
+        self.macro_table = Some(macro_table);
         self.cached_commit = Some(commit_hash);
         Ok(())
     }
@@ -228,7 +234,9 @@ impl Session {
                     "cache hit — restoring index from disk"
                 );
                 self.cached_commit = Some(head_oid);
-                self.index = Some(cached.into_table());
+                let (table, macro_table) = cached.into_table_and_macros();
+                self.index = Some(table);
+                self.macro_table = Some(macro_table);
             }
             Ok(cached) => {
                 debug!(
@@ -302,11 +310,14 @@ impl Session {
             .index
             .take()
             .ok_or_else(|| anyhow::anyhow!("cannot save: session {} has no index", self.id))?;
+        let macro_table = self.macro_table.take().unwrap_or_default();
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        let cached = CachedIndex::from_table(table, &commit_hash);
+        let cached = CachedIndex::from_table_and_macros(table, macro_table, &commit_hash);
         let cache_path = self.worktree_path.join(".forgeql-index");
         cached.save(&cache_path)?;
-        self.index = Some(cached.into_table());
+        let (table, macro_table) = cached.into_table_and_macros();
+        self.index = Some(table);
+        self.macro_table = Some(macro_table);
         debug!(
             session = %self.id,
             commit = %commit_hash,

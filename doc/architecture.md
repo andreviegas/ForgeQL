@@ -269,7 +269,8 @@ ForgeQL/
 │   │       │                     #   control_flow, operators, metrics, casts,
 │   │       │                     #   redundancy, scope, member, decl_distance,
 │   │       │                     #   escape, shadow, unused_param, fallthrough,
-│   │       │                     #   recursion, todo)
+│   │       │                     #   recursion, todo, macro_expand_enrich)
+│   │       │                     #   + guard_utils (guard stack + exclusivity)
 │   │       ├── parser/
 │   │       │   ├── forgeql.pest  # PEG grammar
 │   │       │   └── mod.rs        # Parser functions → IR
@@ -301,17 +302,19 @@ ForgeQL/
 │   │       └── query_logger.rs   # FQL statement logging (--log-queries)
 │   ├── forgeql-lang-cpp/         # C++ language support crate
 │   │   └── src/
-│   │       └── lib.rs            # CppLanguage, CPP_CONFIG, map_kind(), cpp_registry()
+│   │       ├── lib.rs            # CppLanguage, CPP_CONFIG, map_kind(), cpp_registry()
+│   │       └── macro_expand.rs   # CppMacroExpander — extract_def, extract_args, substitute
 │   ├── forgeql-lang-python/      # Python language support crate
 │   │   ├── config/
-│   │   │   └── python.json       # kind_map, enricher hints, node kind sets
+│   │   │   └── python.json       # kind_map, enricher hints, node kind sets, env_guard_patterns
 │   │   └── src/
 │   │       └── lib.rs            # PythonLanguage, PYTHON_CONFIG, python_registry()
 │   └── forgeql-lang-rust/        # Rust language support crate
 │       ├── config/
-│       │   └── rust.json         # kind_map, enricher hints, node kind sets
+│       │   └── rust.json         # kind_map, enricher hints, node kind sets, macros section
 │       └── src/
-│           └── lib.rs            # RustLanguage, RUST_CONFIG, rust_registry()
+│           ├── lib.rs            # RustLanguage, RUST_CONFIG, rust_registry()
+│           └── macro_expand.rs   # RustMacroExpander — macro_rules! extraction + expansion
 ├── doc/
 │   ├── syntax.md                 # Command and clause reference
 │   ├── architecture.md           # This file
@@ -332,7 +335,7 @@ ForgeQL's core (`forgeql-core`) contains zero language-specific code. All langua
 
 ### Key Abstractions (defined in `ast/lang.rs`)
 
-**`LanguageConfig`** — a static struct containing all language-specific data: node kind sets, modifier maps, cast kinds, number suffixes, comment prefixes, visibility keywords, and data-flow analysis node kinds (`parameter_list_raw_kind`, `identifier_raw_kind`, `assignment_raw_kinds`, `update_raw_kinds`, `init_declarator_raw_kind`, `block_raw_kind`). Each language crate defines a `static CPP_CONFIG: LanguageConfig` (or equivalent).
+**`LanguageConfig`** — a static struct containing all language-specific data: node kind sets, modifier maps, cast kinds, number suffixes, comment prefixes, visibility keywords, data-flow analysis node kinds (`parameter_list_raw_kind`, `identifier_raw_kind`, `assignment_raw_kinds`, `update_raw_kinds`, `init_declarator_raw_kind`, `block_raw_kind`), and guard configuration (`block_guard_kinds`, `elif_kinds`, `else_kinds`, `condition_field`, `name_field`, `negate_ifdef_variant`). Each language crate defines a `static CPP_CONFIG: LanguageConfig` (or equivalent).
 
 **`LanguageSupport`** — a trait that every language crate implements:
 
@@ -361,9 +364,10 @@ Always use `WHERE fql_kind = 'function'` rather than `WHERE node_kind = 'functio
 
 ```
 forgeql (binary)
-├── forgeql-core        zero language grammars
-├── forgeql-lang-cpp    tree-sitter-cpp + CppLanguage
-└── forgeql-lang-rust   tree-sitter-rust + RustLanguage
+├── forgeql-core          zero language grammars
+├── forgeql-lang-cpp      tree-sitter-cpp + CppLanguage + CppMacroExpander
+├── forgeql-lang-python   tree-sitter-python + PythonLanguage
+└── forgeql-lang-rust     tree-sitter-rust + RustLanguage + RustMacroExpander
 ```
 
 `forgeql-core` depends on `tree-sitter` (the library) but NOT on any grammar crate. Grammar dependencies live exclusively in language crates.

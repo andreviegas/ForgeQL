@@ -137,6 +137,16 @@
     "params_share_body_scope": true
   },
 
+  "guards": {
+    "condition_field": "condition",
+    "env_guard_patterns": [
+      "(?i)\\bTYPE_CHECKING\\b",
+      "sys\\.platform\\s*[=!]=",
+      "sys\\.version_info",
+      "os\\.name\\s*[=!]="
+    ]
+  },
+
   "kind_map": {
     "function_definition": "function",
     "class_definition": "class",

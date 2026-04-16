@@ -18,6 +18,9 @@
 use std::collections::{BTreeSet, HashMap};
 
 use super::data_flow_utils::{collect_parameter_names, extract_declarator_name};
+use super::guard_utils::{
+    GuardFrame, GuardInfo, are_guards_exclusive, build_guard_frame, guard_info_from_stack,
+};
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::lang::LanguageConfig;
 
@@ -73,7 +76,9 @@ enum WorkItem<'tree> {
         in_block_direct: bool,
     },
     /// Restore scope state after finishing a scope-creating block.
-    ExitScope { saved_current: BTreeSet<String> },
+    ExitScope {
+        saved_current: HashMap<String, Option<GuardInfo>>,
+    },
 }
 
 /// Iterative (non-recursive) scope-aware shadow walk.
@@ -88,15 +93,23 @@ fn walk_scopes_iterative(
     params: BTreeSet<String>,
     shadowed: &mut BTreeSet<String>,
 ) {
+    // Convert params to guard-aware map.  Params are always unconditional.
+    let params_map: HashMap<String, Option<GuardInfo>> =
+        params.into_iter().map(|p| (p, None)).collect();
+
     // In Python-style languages the params and function body share one scope:
     // start with params already in `current_scope` and an empty outer stack.
     // In C++/Rust-style languages params are an outer scope and the function
     // body is an inner scope.
     let (mut scope_stack, mut current_scope) = if config.params_share_body_scope() {
-        (Vec::<BTreeSet<String>>::new(), params)
+        (Vec::<HashMap<String, Option<GuardInfo>>>::new(), params_map)
     } else {
-        (vec![params], BTreeSet::new())
+        (vec![params_map], HashMap::new())
     };
+
+    // Mini guard stack: maintained in parallel with the tree walk using the
+    // same byte-range based push/pop logic as `collect_nodes()`.
+    let mut mini_guard_stack: Vec<GuardFrame> = Vec::new();
 
     // Seed with body's direct children in reverse so they pop in forward order.
     let mut work: Vec<WorkItem<'_>> = Vec::new();
@@ -121,6 +134,26 @@ fn walk_scopes_iterative(
             } => {
                 let kind = node.kind();
 
+                // --- Mini guard stack management ---
+                if config.has_guard_support() {
+                    // Pop frames whose byte scope we've left.
+                    while let Some(top) = mini_guard_stack.last() {
+                        if node.start_byte() >= top.guard_byte_range.end {
+                            drop(mini_guard_stack.pop());
+                        } else {
+                            break;
+                        }
+                    }
+                    // Push a frame when entering a guard-opening node.
+                    if config.is_block_guard_kind(kind)
+                        || config.is_elif_kind(kind)
+                        || config.is_else_kind(kind)
+                    {
+                        let frame = build_guard_frame(node, source, config, &mini_guard_stack);
+                        mini_guard_stack.push(frame);
+                    }
+                }
+
                 if config.is_scope_creating_kind(kind) {
                     // Open a new scope: save current state, push it for inner
                     // block to check against, start fresh current_scope.
@@ -131,11 +164,6 @@ fn walk_scopes_iterative(
                     });
                     for i in (0..node.child_count()).rev() {
                         if let Some(child) = node.child(i) {
-                            // Skip preprocessor alternate branches (preproc_else,
-                            // preproc_elif) even inside scope-creating nodes.
-                            if config.is_skip_kind(child.kind()) {
-                                continue;
-                            }
                             work.push(WorkItem::Visit {
                                 node: child,
                                 in_block_direct: true,
@@ -144,31 +172,31 @@ fn walk_scopes_iterative(
                     }
                 } else if config.is_declaration_kind(kind) {
                     if let Some(name) = extract_declarator_name(node, source, config) {
+                        let decl_guard = guard_info_from_stack(&mini_guard_stack);
+
                         // Direct children of a block: shadow only if name is in an outer scope.
                         // Non-direct (for-loop init etc.): also shadow if in current scope.
-                        // For Python-style languages, only outer scopes (scope_stack)
-                        // trigger shadows. The `current_scope` check is suppressed
-                        // because params live there and reassigning a param is not a shadow.
-                        let is_shadow = scope_stack.iter().any(|s| s.contains(&name))
-                            || (!config.params_share_body_scope()
-                                && !in_block_direct
-                                && current_scope.contains(&name));
-                        if is_shadow {
+                        // Guard exclusivity suppresses false positives from #ifdef/#else siblings.
+                        let is_outer_shadow = scope_stack.iter().any(|s| {
+                            s.get(&name).is_some_and(|existing| {
+                                !guards_exclusive_opt(existing.as_ref(), decl_guard.as_ref())
+                            })
+                        });
+                        let is_current_shadow = !config.params_share_body_scope()
+                            && !in_block_direct
+                            && current_scope.get(&name).is_some_and(|existing| {
+                                !guards_exclusive_opt(existing.as_ref(), decl_guard.as_ref())
+                            });
+
+                        if is_outer_shadow || is_current_shadow {
                             let _ = shadowed.insert(name.clone());
                         }
-                        let _ = current_scope.insert(name);
+                        let _ = current_scope.insert(name, decl_guard);
                     }
                 } else {
-                    // Non-scope, non-declaration: recurse into children (non-direct context).
-                    // Skip preprocessor alternate branches (preproc_else, preproc_elif) so
-                    // that variables declared under #ifdef and #else arms do not appear to
-                    // shadow each other — those branches are mutually exclusive at runtime.
-                    // This matches the skip_node_kinds filter used during indexing.
+                    // Non-scope, non-declaration: recurse into children.
                     for i in (0..node.child_count()).rev() {
                         if let Some(child) = node.child(i) {
-                            if config.is_skip_kind(child.kind()) {
-                                continue;
-                            }
                             work.push(WorkItem::Visit {
                                 node: child,
                                 in_block_direct: false,
@@ -178,5 +206,15 @@ fn walk_scopes_iterative(
                 }
             }
         }
+    }
+}
+
+/// Returns `true` if `a` and `b` are in structurally exclusive guard branches.
+/// Returns `false` if either is unconditional (no guard).
+#[inline]
+fn guards_exclusive_opt(a: Option<&GuardInfo>, b: Option<&GuardInfo>) -> bool {
+    match (a, b) {
+        (Some(ga), Some(gb)) => are_guards_exclusive(ga, gb),
+        _ => false,
     }
 }

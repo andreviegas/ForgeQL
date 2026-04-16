@@ -99,7 +99,7 @@ pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicat
                 _ => return true,
             };
             item.field_str(&predicate.field)
-                .is_none_or(|v| !like_match(v, pat))
+                .is_some_and(|v| !like_match(v, pat))
         }
         // ---- Regex MATCHES operators ----
         CompareOp::Matches => {
@@ -122,7 +122,7 @@ pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicat
                 return true;
             };
             item.field_str(&predicate.field)
-                .is_none_or(|v| !re.is_match(v))
+                .is_some_and(|v| !re.is_match(v))
         }
         CompareOp::Eq => match &predicate.value {
             PredicateValue::String(s) => item
@@ -134,9 +134,9 @@ pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicat
         CompareOp::NotEq => match &predicate.value {
             PredicateValue::String(s) => item
                 .field_str(&predicate.field)
-                .is_none_or(|v| !v.eq_ignore_ascii_case(s)),
-            PredicateValue::Number(n) => item.field_num(&predicate.field).is_none_or(|v| v != *n),
-            PredicateValue::Bool(_) => true,
+                .is_some_and(|v| !v.eq_ignore_ascii_case(s)),
+            PredicateValue::Number(n) => item.field_num(&predicate.field).is_some_and(|v| v != *n),
+            PredicateValue::Bool(_) => false,
         },
         // ---- Numeric operators ----
         CompareOp::Gt => numeric_rhs(&predicate.value)

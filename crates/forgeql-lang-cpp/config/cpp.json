@@ -16,7 +16,7 @@
     "function_declarator": "function_declarator",
     "init_declarator": "init_declarator",
     "comment": "comment",
-    "skip_node_kinds": ["preproc_else", "preproc_elif"],
+    "skip_node_kinds": [],
     "usage_node_kinds": ["identifier", "field_identifier", "type_identifier"],
     "statement_boundary_kinds": [
       "expression_statement",
@@ -194,6 +194,23 @@
     "has_implicit_truthiness": true
   },
 
+  "guards": {
+    "block_guard_kinds": ["preproc_ifdef", "preproc_if"],
+    "elif_kinds": ["preproc_elif"],
+    "else_kinds": ["preproc_else"],
+    "condition_field": "condition",
+    "name_field": "name",
+    "negate_ifdef_variant": "#ifndef"
+  },
+
+  "macros": {
+    "def_markers": ["#define"],
+    "def_kinds": ["preproc_function_def", "preproc_def"],
+    "invocation_kind": "macro_invocation",
+    "parameters_field": "parameters",
+    "value_field": "value"
+  },
+
   "kind_map": {
     "function_definition": "function",
     "class_specifier": "class",
@@ -221,6 +238,7 @@
     "for_statement": "for",
     "for_range_loop": "for",
     "switch_statement": "switch",
-    "do_statement": "do"
+    "do_statement": "do",
+    "macro_invocation": "macro_call"
   }
 }

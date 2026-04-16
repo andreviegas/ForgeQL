@@ -88,6 +88,14 @@ pub struct LanguageConfigJson {
     #[serde(default)]
     pub capabilities: CapabilitiesSection,
 
+    /// Preprocessor / compiler guard configuration.
+    #[serde(default)]
+    pub guards: GuardsSection,
+
+    /// Macro expansion configuration.
+    #[serde(default)]
+    pub macros: MacrosSection,
+
     /// Raw tree-sitter kind → FQL kind mapping.
     #[serde(default)]
     pub kind_map: HashMap<String, String>,
@@ -451,7 +459,96 @@ pub struct CapabilitiesSection {
     pub params_share_body_scope: bool,
 }
 
+/// Preprocessor / compiler guard configuration.
+#[derive(Deserialize, Default)]
+pub struct GuardsSection {
+    /// Node kinds that open a guarded block (e.g. `preproc_ifdef`, `preproc_if`).
+    #[serde(default)]
+    pub block_guard_kinds: Vec<String>,
+
+    /// Node kinds representing `#elif` branches.
+    #[serde(default)]
+    pub elif_kinds: Vec<String>,
+
+    /// Node kinds representing `#else` branches.
+    #[serde(default)]
+    pub else_kinds: Vec<String>,
+
+    /// Grammar field name for the guard condition expression.
+    #[serde(default)]
+    pub condition_field: String,
+
+    /// Grammar field name for the macro identifier child in `ifdef`/`ifndef`.
+    #[serde(default)]
+    pub name_field: String,
+
+    /// Token text that marks the negated guard variant (e.g. `"#ifndef"`).
+    #[serde(default)]
+    pub negate_ifdef_variant: String,
+
+    /// Attribute name for item-level guards (e.g. `"cfg"` for Rust).
+    #[serde(default)]
+    pub item_guard_attribute: String,
+
+    /// Regex for file-level guard comments (e.g. Go build tags).
+    #[serde(default)]
+    pub file_guard_pattern: String,
+
+    /// Regex for OS/arch extraction from file suffix.
+    #[serde(default)]
+    pub file_guard_suffix_pattern: String,
+
+    /// Node kinds for comptime conditional blocks (e.g. Zig).
+    #[serde(default)]
+    pub comptime_guard_kinds: Vec<String>,
+
+    /// Regex patterns for compile-time guard detection in `if` conditions.
+    #[serde(default)]
+    pub builtin_guard_patterns: Vec<String>,
+
+    /// Regex patterns for heuristic environment guards.
+    #[serde(default)]
+    pub env_guard_patterns: Vec<String>,
+
+    /// Regex for directory-based source set extraction (Kotlin).
+    #[serde(default)]
+    pub source_set_pattern: String,
+}
+
 // -----------------------------------------------------------------------
+// MacrosSection
+// -----------------------------------------------------------------------
+
+/// Macro expansion configuration for a language.
+///
+/// All fields default to empty/blank so languages without macro support
+/// can omit the entire `"macros"` section from their JSON config.
+#[derive(Deserialize, Default)]
+pub struct MacrosSection {
+    /// Token texts that prefix macro definitions (e.g. `["#define"]` for C/C++).
+    #[serde(default)]
+    pub def_markers: Vec<String>,
+
+    /// Raw tree-sitter kinds for macro definitions
+    /// (e.g. `["preproc_function_def", "preproc_def"]` for C/C++).
+    #[serde(default)]
+    pub def_kinds: Vec<String>,
+
+    /// Raw kind for macro invocations (e.g. `"macro_invocation"` for C++).
+    #[serde(default)]
+    pub invocation_kind: String,
+
+    /// Grammar field name for the macro parameter list.
+    #[serde(default)]
+    pub parameters_field: String,
+
+    /// Grammar field name for the macro body/value.
+    #[serde(default)]
+    pub value_field: String,
+}
+
+// -----------------------------------------------------------------------
+// Default value functions for #[serde(default = "...")]
 // Default value functions for #[serde(default = "...")]
 // -----------------------------------------------------------------------
 
@@ -487,6 +584,7 @@ impl LanguageConfigJson {
     /// Extracts the `digit_separator` from a single-character string into
     /// `Option<char>` (as expected by `LanguageConfig`).
     #[must_use]
+    #[allow(clippy::too_many_lines)]
     pub fn into_language_config(self) -> LanguageConfig {
         let digit_separator = self
             .literals
@@ -569,6 +667,24 @@ impl LanguageConfigJson {
             condition_clause_raw_kind: self.control_flow.condition_clause,
             comma_expression_raw_kind: self.expressions.comma,
             char_literal_raw_kind: self.literals.char_kind,
+            block_guard_kinds: self.guards.block_guard_kinds,
+            elif_kinds: self.guards.elif_kinds,
+            else_kinds: self.guards.else_kinds,
+            guard_condition_field: self.guards.condition_field,
+            guard_name_field: self.guards.name_field,
+            negate_ifdef_variant: self.guards.negate_ifdef_variant,
+            item_guard_attribute: self.guards.item_guard_attribute,
+            file_guard_pattern: self.guards.file_guard_pattern,
+            file_guard_suffix_pattern: self.guards.file_guard_suffix_pattern,
+            comptime_guard_kinds: self.guards.comptime_guard_kinds,
+            builtin_guard_patterns: self.guards.builtin_guard_patterns,
+            env_guard_patterns: self.guards.env_guard_patterns,
+            source_set_pattern: self.guards.source_set_pattern,
+            macro_def_markers: self.macros.def_markers,
+            macro_def_kinds: self.macros.def_kinds,
+            macro_invocation_kind: self.macros.invocation_kind,
+            macro_parameters_field: self.macros.parameters_field,
+            macro_value_field: self.macros.value_field,
             kind_map: self.kind_map,
         }
     }

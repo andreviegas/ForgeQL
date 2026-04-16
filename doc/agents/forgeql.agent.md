@@ -554,3 +554,38 @@ Detects TODO, FIXME, HACK, and XXX markers in comments inside function bodies.
 | `has_todo` | `function` | `"true"` if any marker comment is found |
 | `todo_count` | `function` | Total marker occurrences |
 | `todo_tags` | `function` | Comma-separated, sorted unique tags (e.g. `"FIXME,TODO"`) |
+
+### Guard / Preprocessor Fields (C/C++)
+
+Tags every symbol inside a `#ifdef`/`#if`/`#elif`/`#else` block with its
+compilation guard condition.  All fields are queryable with `WHERE`, `ORDER BY`,
+and `GROUP BY`.
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `guard` | all symbols | Raw condition text: `"CONFIG_X"`, `"!X"`, `"defined(A) && defined(B)"` |
+| `guard_defines` | all symbols | Comma-separated symbols that must be **defined** |
+| `guard_negates` | all symbols | Comma-separated symbols that must be **undefined** |
+| `guard_mentions` | all symbols | All mentioned symbols (superset of defines + negates) |
+| `guard_group_id` | all symbols | Unique ID for the block; all arms share it |
+| `guard_branch` | all symbols | `0` = if, `1` = first elif/else, `2` = second, … |
+| `guard_kind` | all symbols | `"preprocessor"` for C/C++; `"attribute"` for Rust `#[cfg]` (Phase 2) |
+
+```sql
+-- All code that REQUIRES CONFIG_NET
+FIND symbols WHERE guard_defines LIKE '%CONFIG_NET%'
+
+-- All code compiled when CONFIG_NET is ABSENT
+FIND symbols WHERE guard_negates LIKE '%CONFIG_NET%'
+
+-- Both directions
+FIND symbols WHERE guard_mentions LIKE '%CONFIG_NET%'
+
+-- Unconditionally compiled code
+FIND symbols WHERE guard = ''
+```
+
+**Note:** `ShadowEnricher` and `DeclDistanceEnricher` use `guard_group_id` +
+`guard_branch` to suppress false positives from opposite arms of the same
+`#ifdef` block.  You do not need to filter guard fields manually to get
+accurate shadow or dead-store results.

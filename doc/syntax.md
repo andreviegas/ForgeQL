@@ -338,7 +338,7 @@ Applies to: `FIND symbols`, `FIND usages OF`, `FIND callees OF`
 |---|---|---|
 | `name` | string | Symbol name |
 | `fql_kind` | string | Universal kind: `function`, `class`, `struct`, `enum`, `variable`, `field`, etc. |
-| `language` | string | Language name: `cpp`, `rust`, etc. |
+| `language` | string | Language name: `cpp`, `rust`, `python`, etc. |
 | `path` | string | Relative file path (also used by `IN`/`EXCLUDE` globs) |
 | `line` | integer | 1-based start line |
 | `usages` | integer | Reference count across the index |
@@ -554,12 +554,11 @@ Detects variables declared in inner scopes that shadow an outer-scope variable o
 | `shadow_count` | `function` | Number of shadowing declarations |
 | `shadow_vars` | `function` | Comma-separated names of shadowed variables |
 
-> **Known limitation — `#ifdef` blocks:** tree-sitter parses C/C++ without
-> running the preprocessor, so variables declared inside `#ifdef` / `#else`
-> branches both appear in the same AST.  A variable declared in the `#else`
-> arm can appear to shadow one in the `#ifdef` arm even though only one
-> branch is ever compiled.  Use `EXCLUDE` to skip affected files or verify
-> results manually.
+> **Note — `#ifdef` blocks:** As of Phase 1, the ShadowEnricher uses
+> structural guard exclusivity (`guard_group_id` + `guard_branch`) to
+> suppress false positives from `#ifdef`/`#else` siblings.  Variables
+> declared in opposite arms of the same guard group are no longer reported
+> as shadows.
 
 #### UnusedParamEnricher
 
@@ -599,6 +598,79 @@ Detects TODO, FIXME, HACK, and XXX markers in comments inside function bodies. W
 | `todo_count` | `function` | Total number of marker occurrences |
 | `todo_tags` | `function` | Comma-separated, sorted unique tags found (e.g. `"FIXME,TODO"`) |
 
+#### GuardEnricher
+
+Tags every symbol inside a C/C++ `#ifdef`/`#if`/`#elif`/`#else` block with
+the guard condition that controls its compilation.  Guard fields are injected
+into **every** indexed symbol row by `collect_nodes()` — no separate enricher
+call is needed.  All seven fields are queryable via `WHERE`, `ORDER BY`, and
+`GROUP BY`.
+
+| Field | Applies to | Description |
+|---|---|---|
+| `guard` | all symbols | Raw guard condition text (e.g. `"defined(CONFIG_SMP)"`, `"!X"`, `"Y && X"`) |
+| `guard_defines` | all symbols | Comma-separated symbols that **must be defined** for this branch |
+| `guard_negates` | all symbols | Comma-separated symbols that **must be undefined** for this branch |
+| `guard_mentions` | all symbols | All symbols mentioned in the condition (superset of defines + negates) |
+| `guard_group_id` | all symbols | Unique u64 identifying the `#ifdef`/`#if` block; all arms share the same ID |
+| `guard_branch` | all symbols | Ordinal within the group: `0` = if, `1` = first elif/else, `2` = second, … |
+| `guard_kind` | all symbols | `"preprocessor"` \| `"attribute"` \| `"build_tag"` \| `"comptime"` \| `"heuristic"` |
+
+**Guard field decomposition rules:**
+
+| Source | `guard` | `guard_defines` | `guard_negates` | `guard_mentions` |
+|---|---|---|---|---|
+| `#ifdef X` | `"X"` | `"X"` | `""` | `"X"` |
+| `#ifndef X` | `"!X"` | `""` | `"X"` | `"X"` |
+| `#if defined(A) && defined(B)` | `"defined(A) && defined(B)"` | `"A,B"` | `""` | `"A,B"` |
+| `#else` of `#ifdef X` | `"!X"` | `""` | `"X"` | `"X"` |
+| Nested `#ifdef X` inside `#ifdef Y` | `"Y && X"` | `"Y,X"` | `""` | `"Y,X"` |
+
+**Example queries:**
+
+```sql
+-- All code that REQUIRES CONFIG_BT
+FIND symbols WHERE guard_defines LIKE '%CONFIG_BT%'
+
+-- All code compiled when CONFIG_BT is ABSENT
+FIND symbols WHERE guard_negates LIKE '%CONFIG_BT%'
+
+-- All code that MENTIONS CONFIG_BT (either direction)
+FIND symbols WHERE guard_mentions LIKE '%CONFIG_BT%'
+
+-- Unconditionally compiled code only
+FIND symbols WHERE guard = ''
+
+-- Count symbols per guard define
+FIND symbols GROUP BY guard ORDER BY count DESC
+```
+
+**Structural exclusivity:** Two symbols with the same `guard_group_id` and
+different `guard_branch` are definitively mutually exclusive — they are in
+opposite arms of the same `#ifdef` block.  The ShadowEnricher and
+DeclDistanceEnricher use this fact to eliminate false positives.
+
+#### MacroExpandEnricher
+
+Enriches `macro_call` rows with macro definition metadata and best-effort
+single-level expansion text.  Registered after `TodoEnricher` in the enricher
+pipeline.  Requires a `MacroTable` populated during the two-pass indexing
+pipeline.
+
+| Field | Applies to | Description |
+|---|---|---|
+| `macro_def_file` | `macro_call` | Source file of the resolved macro definition |
+| `macro_def_line` | `macro_call` | 1-based line of the definition |
+| `macro_arity` | `macro_call` | Parameter count (`"0"` for object-like macros) |
+| `macro_expansion` | `macro_call` | Best-effort single-level expansion text |
+| `expanded_reads` | `macro_call` | Local variable names read in expanded text |
+| `expanded_has_escape` | `macro_call` | `"true"` if expanded text contains `&local` escape |
+| `expansion_depth` | `macro_call` | Expansion nesting depth (currently always `"1"`) |
+| `expansion_failed` | `macro_call` | `"true"` when macro resolution fails |
+| `expansion_failure_reason` | `macro_call` | Reason for failure (e.g. `"definition not found"`) |
+
+**Supported languages:** C/C++ (`CppMacroExpander`) and Rust (`RustMacroExpander` for `macro_rules!`).
+
 ---
 
 ## Advanced Patterns
@@ -636,10 +708,48 @@ FIND symbols
   WHERE usages = 0
   IN 'include/**'
 
+-- Dead code behind guards (unreferenced guarded functions)
+FIND symbols
+  WHERE fql_kind = 'function'
+  WHERE guard != ''
+  WHERE usages = 0
+  EXCLUDE 'test/**'
+  ORDER BY lines DESC
+
 -- Symbol distribution (spot bloated files)
 FIND symbols
   GROUP BY file
   HAVING count >= 20
+  ORDER BY count DESC
+```
+
+### Guard analysis pipeline
+
+```sql
+-- All code gated on a specific config option
+FIND symbols WHERE guard_defines LIKE '%CONFIG_BT%'
+
+-- Code compiled only when a feature is ABSENT
+FIND symbols WHERE guard_negates LIKE '%CONFIG_SMP%'
+
+-- Large functions in #else branches (often forgotten)
+FIND symbols
+  WHERE fql_kind = 'function'
+  WHERE guard_branch = '1'
+  ORDER BY lines DESC
+  LIMIT 15
+
+-- Recursive functions behind guards
+FIND symbols
+  WHERE is_recursive = 'true'
+  WHERE guard != ''
+  ORDER BY recursion_count DESC
+
+-- Guard distribution by kind
+FIND symbols
+  WHERE guard != ''
+  GROUP BY guard_kind
+  HAVING count >= 1
   ORDER BY count DESC
 ```
 

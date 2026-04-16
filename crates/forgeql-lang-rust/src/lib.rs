@@ -16,9 +16,10 @@
 
 use std::sync::{Arc, OnceLock};
 
-use forgeql_core::ast::lang::{LanguageConfig, LanguageRegistry, LanguageSupport};
+use forgeql_core::ast::lang::{LanguageConfig, LanguageRegistry, LanguageSupport, MacroExpander};
 use forgeql_core::ast::lang_json::LanguageConfigJson;
 
+pub(crate) mod macro_expand;
 /// Rust language support for ForgeQL.
 pub struct RustLanguage;
 
@@ -99,6 +100,12 @@ impl LanguageSupport for RustLanguage {
                 .map(|n| node_text(source, n))
                 .filter(|s| !s.is_empty()),
 
+            // macro invocations: extract the macro path (field "macro")
+            "macro_invocation" => node
+                .child_by_field_name("macro")
+                .map(|n| node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
             _ => None,
         }
     }
@@ -109,6 +116,11 @@ impl LanguageSupport for RustLanguage {
 
     fn config(&self) -> &'static LanguageConfig {
         rust_config()
+    }
+
+    fn macro_expander(&self) -> Option<&dyn MacroExpander> {
+        static EXPANDER: macro_expand::RustMacroExpander = macro_expand::RustMacroExpander;
+        Some(&EXPANDER)
     }
 }
 
@@ -284,5 +296,55 @@ mod tests {
 
         let name = lang.extract_name(enum_node, source);
         assert_eq!(name.as_deref(), Some("State"));
+    }
+    #[test]
+    fn extract_name_macro_invocation() {
+        let lang = RustLanguage;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&lang.tree_sitter_language())
+            .expect("set language");
+
+        let source = b"fn main() { println!(\"hello\"); }";
+        let tree = parser.parse(source, None).expect("parse");
+        let root = tree.root_node();
+
+        // Walk into body to find macro_invocation node.
+        let func = root.child(0).expect("function_item");
+        let body = func.child_by_field_name("body").expect("block");
+
+        // Walk body children to find macro_invocation.
+        let mut macro_node = None;
+        for i in 0..body.named_child_count() {
+            let child = body.named_child(i).unwrap();
+            eprintln!("body child {i}: kind={}", child.kind());
+            if child.kind() == "macro_invocation" {
+                macro_node = Some(child);
+                break;
+            }
+            // It might be inside expression_statement
+            if child.kind() == "expression_statement" {
+                for j in 0..child.named_child_count() {
+                    let inner = child.named_child(j).unwrap();
+                    eprintln!("  expression_statement child {j}: kind={}", inner.kind());
+                    if inner.kind() == "macro_invocation" {
+                        macro_node = Some(inner);
+                        break;
+                    }
+                }
+            }
+        }
+
+        let node = macro_node.expect("macro_invocation not found in AST");
+        assert_eq!(node.kind(), "macro_invocation");
+
+        // Now test extract_name on this node.
+        let name = lang.extract_name(node, source);
+        assert_eq!(
+            name.as_deref(),
+            Some("println"),
+            "extract_name should return macro name; tree:\n{}",
+            root.to_sexp()
+        );
     }
 }

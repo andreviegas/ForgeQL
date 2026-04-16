@@ -134,3 +134,8 @@ fn deeply_nested(a: i32) -> i32 {
 fn many_params(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32) -> i32 {
     return a + b + c + d + e + f;
 }
+
+fn with_macros() {
+    println!("hello");
+    vec![1, 2, 3];
+}

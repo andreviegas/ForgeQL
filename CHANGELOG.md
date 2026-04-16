@@ -18,6 +18,71 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   workspace configuration, creating output files). Source code access remains
   ForgeQL-exclusive.
 
+## [0.35.0] — 2026-04-16
+
+### Added — Guard Enrichment: Phases 1–5 (cache v22)
+
+- **Guard enrichment fields** — every symbol inside a C/C++ `#ifdef`/`#if`/`#elif`/`#else` block is now tagged with seven guard fields injected by `collect_nodes()`:
+  - `guard` — raw guard condition text (e.g. `"defined(CONFIG_SMP)"`, `"!X"`, `"Y && X"`)
+  - `guard_defines` — comma-separated symbols that must be defined for this branch
+  - `guard_negates` — comma-separated symbols that must be undefined for this branch
+  - `guard_mentions` — all symbols mentioned in the condition (superset of defines + negates)
+  - `guard_group_id` — unique u64 identifying the `#ifdef`/`#if` block; all arms share the same ID
+  - `guard_branch` — ordinal within the group: `0` = if, `1` = first elif/else, `2` = second, …
+  - `guard_kind` — `"preprocessor"` | `"attribute"` | `"heuristic"`
+
+- **Rust `#[cfg(...)]` attribute guards (Phase 2)** — `guard_kind = "attribute"` for `#[cfg(test)]`, `#[cfg(feature = "...")]`, etc. Extracts condition, defines, and mentions from Rust attribute syntax.
+
+- **Python heuristic guards (Phase 3)** — `guard_kind = "heuristic"` for `TYPE_CHECKING`, `sys.platform`, and similar runtime platform-conditional patterns. Infrastructure via `env_guard_patterns` + `build_env_guard_frame`.
+
+- **Guard-aware ShadowEnricher (Task 1.3)** — `walk_scopes_iterative` maintains a mini guard stack; declarations in opposite `#ifdef`/`#else` arms (same `guard_group_id`, different `guard_branch`) no longer produce false-positive shadow reports. Scope maps changed from `BTreeSet<String>` to `HashMap<String, Option<GuardInfo>>`.
+
+- **Guard-aware DeclDistanceEnricher (Task 1.4)** — dead-store detection uses structural `guard_group_id`/`guard_branch` exclusivity checks. Writes in exclusive `#ifdef`/`#else` branches no longer trigger `has_unused_reassign = "true"`.
+
+- **`LanguageConfig` guards section** — `block_guard_kinds`, `elif_kinds`, `else_kinds`, `condition_field`, `name_field`, `negate_ifdef_variant` with accessor methods `has_guard_support()`, `is_block_guard_kind()`, `is_elif_kind()`, `is_else_kind()`, `guard_condition_field()`, `guard_name_field()`, `negate_ifdef_variant()`.
+
+- **`guard_utils.rs`** — `GuardFrame`, `GuardInfo`, `NEXT_GUARD_GROUP_ID`, `inject_guard_fields()`, `guard_info_from_fields()`, `guard_info_from_stack()`, `build_guard_frame()`, `decompose_condition()`, `parse_condition_text()`, `static_guard_kind()`, `are_guards_exclusive()`.
+
+- **`EnrichContext` guard stack** — now carries `guard_stack: &[GuardFrame]` for use by enrichers.
+
+### Added — Macro Expansion Pipeline (Phase 4–5)
+
+- **MacroExpandEnricher (Phase 4, Task 4.4)** — enriches `macro_call` rows with `macro_def_file`, `macro_def_line`, `macro_arity`, `macro_expansion` fields. Graceful failure reporting via `expansion_failed` and `expansion_failure_reason`.
+
+- **C++ MacroExpander (Phase 4)** — shared macro infrastructure (`MacroDef`, `MacroTable`, `MacroExpander`, `resolve_macro`), two-pass macro collection pipeline, `CachedIndex` macro persistence.
+
+- **C++ `call_expression` re-tagging (Task 4.2)** — `collect_nodes()` re-tags `call_expression` → `macro_call` via `MacroTable` lookup when `extract_name` returns `None`.
+
+- **DeclDistanceEnricher macro expansion (Task 4.4)** — scans expanded text for local variable reads using `contains_word()` to suppress false dead-store positives.
+
+- **EscapeEnricher macro expansion (Task 4.5)** — detects `&local` patterns in expanded macro text as address-of escapes (tier 2).
+
+- **Extended MacroExpandEnricher (Task 4.7)** — `expanded_reads`, `expanded_has_escape`, `expansion_depth` fields for successful expansions.
+
+- **RustMacroExpander (Phase 5)** — `macro_rules!` extraction and expansion for Rust: `extract_def()`, `extract_args()`, `substitute()`, `wrap_for_reparse()`.
+
+### Changed
+
+- **`cpp.json`** — `guards` block added; `preproc_else` and `preproc_elif` removed from `skip_node_kinds` so all guard branches are now traversed and indexed.
+- **`rust.json`** — added `"macros"` section and `"macro_invocation": "macro_call"` to `kind_map`.
+- **`RustLanguage::extract_name()`** — handles `macro_invocation` via `child_by_field_name("macro")`.
+- **Cache version** bumped through v17 → v18 → v19 → v20 → v21 → v22 across all phases.
+
+### Fixed
+
+- **Negation operator NULL semantics** — `!=`, `NOT LIKE`, and `NOT MATCHES` now return `false` when the field does not exist on a row, matching documented NULL semantics. Previously `is_none_or()` returned `true` for missing fields, causing false positives.
+- **`RustLanguageInline.extract_name`** — synced with production `RustLanguage`: added `"macro_invocation"` arm and `"scoped_identifier"` early return guard.
+- **`CppLanguageInline.extract_name`** — synced with production `CppLanguage`: added `"macro_invocation"` arm.
+- **C++ `macro_invocation` nodes** now indexed as `macro_call` rows.
+
+### Tests
+
+- `rust_macro_invocation_indexed_as_macro_call`
+- `rust_cfg_attribute_ast_structure`
+- `rust_cfg_attribute_guard_indexed`
+- `cpp_config_is_consistent` updated for guard traversal
+- `query_methods_kind_membership` updated: `preproc_else` is no longer a skip kind
+
 ---
 
 ## [0.34.0] — 2026-04-12

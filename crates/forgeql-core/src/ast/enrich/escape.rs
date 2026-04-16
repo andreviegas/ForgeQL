@@ -97,6 +97,50 @@ impl NodeEnricher for EscapeEnricher {
             );
         });
 
+        // Phase 5b: Macro expansion — check if any macro call in the
+        // function body expands to contain `&<local_var>`.
+        if let Some(table) = ctx.macro_table
+            && let Some(expander) = ctx.language_support.macro_expander()
+        {
+            let call_kind = config.call_expression_kind();
+            if !call_kind.is_empty() {
+                walk_dfs(ctx.node, |node| {
+                    if node.kind() != call_kind {
+                        return;
+                    }
+                    let Some(func_node) = node.child_by_field_name("function") else {
+                        return;
+                    };
+                    let func_name = node_text(ctx.source, func_node);
+                    let args = expander.extract_args(node, ctx.source);
+                    let mut budget = super::macro_resolve::ExpansionBudget {
+                        max_depth: 1,
+                        max_steps: 1,
+                        steps_remaining: 1,
+                    };
+                    if let Some(result) = super::macro_resolve::resolve_macro(
+                        table,
+                        &func_name,
+                        &args,
+                        expander,
+                        &mut budget,
+                        0,
+                    ) {
+                        for &local_name in &local_names {
+                            let pattern = format!("&{local_name}");
+                            if result.expanded.contains(&pattern) {
+                                escaping.push(local_name.to_string());
+                                let _ = kinds_seen.insert("address_of");
+                                if best_tier == 0 || best_tier > 2 {
+                                    best_tier = 2;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
         if escaping.is_empty() {
             return;
         }

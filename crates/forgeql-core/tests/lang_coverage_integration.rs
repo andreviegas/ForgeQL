@@ -69,7 +69,7 @@ fn index_canonical(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
     let enrichers = default_enrichers();
     let mut table = SymbolTable::default();
 
-    let count = index_file(&mut parser, &path, &mut table, &enrichers, lang)
+    let count = index_file(&mut parser, &path, &mut table, &enrichers, lang, None)
         .expect("index_file should succeed");
 
     assert!(count > 0, "expected at least one indexed row");
@@ -160,4 +160,169 @@ fn rust_language_field_populated() {
             row.language
         );
     }
+}
+
+fn walk_for_macros(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    out: &mut Vec<(usize, Option<String>)>,
+) {
+    if node.kind() == "macro_invocation" {
+        let name = node.child_by_field_name("macro").map(|n| {
+            std::str::from_utf8(&source[n.byte_range()])
+                .unwrap_or("?")
+                .to_string()
+        });
+        out.push((node.start_position().row + 1, name));
+    }
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            walk_for_macros(child, source, out);
+        }
+    }
+}
+
+#[test]
+fn rust_macro_invocation_indexed_as_macro_call() {
+    let table = index_canonical(&RustLanguageInline, "canonical.rs");
+
+    // Debug: parse the file and walk looking for macro_invocation nodes
+    let path = fixtures_dir().join("canonical.rs");
+    let source = std::fs::read(&path).expect("read fixture");
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&RustLanguageInline.tree_sitter_language())
+        .expect("set_language");
+    let tree = parser.parse(&source, None).expect("parse");
+
+    let mut macro_nodes = Vec::new();
+    walk_for_macros(tree.root_node(), &source, &mut macro_nodes);
+
+    let has_macro_calls = table.rows.iter().any(|r| r.fql_kind == "macro_call");
+
+    // Report both what tree-sitter found and what index_file produced
+    assert!(
+        has_macro_calls,
+        "expected macro_call rows; got 0.\n\
+         macro_invocation AST nodes found: {:?}\n\
+         All indexed rows: {:#?}",
+        macro_nodes,
+        table
+            .rows
+            .iter()
+            .map(|r| (&r.name, &r.node_kind, &r.fql_kind, r.line))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn rust_cfg_attribute_ast_structure() {
+    // Verify tree-sitter-rust AST structure for `#[cfg(test)] fn guarded_fn() {}`
+    let source = b"#[cfg(test)]\nfn guarded_fn() {}\n";
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&RustLanguageInline.tree_sitter_language())
+        .expect("set_language");
+    let tree = parser.parse(&source[..], None).expect("parse");
+    let root = tree.root_node();
+
+    // Collect all named children of root with their kind
+    let mut kinds = Vec::new();
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        kinds.push((child.kind().to_string(), child.start_position().row + 1));
+    }
+
+    // tree-sitter-rust should produce attribute_item as a SIBLING of function_item
+    assert!(
+        kinds.iter().any(|(k, _)| k == "attribute_item"),
+        "attribute_item should be a root-level sibling. Got: {kinds:?}",
+    );
+    assert!(
+        kinds.iter().any(|(k, _)| k == "function_item"),
+        "function_item should be a root-level sibling. Got: {kinds:?}",
+    );
+
+    // Verify prev_named_sibling relationship (this is what collect_attribute_guard_frames uses)
+    let fn_node = root
+        .named_children(&mut root.walk())
+        .find(|c| c.kind() == "function_item")
+        .expect("function_item node");
+    let prev_sib = fn_node
+        .prev_named_sibling()
+        .expect("should have prev sibling");
+    assert_eq!(
+        prev_sib.kind(),
+        "attribute_item",
+        "prev_named_sibling of function_item should be attribute_item",
+    );
+}
+
+#[test]
+fn rust_cfg_attribute_guard_indexed() {
+    // Write a temp Rust file with #[cfg(test)] guarded function
+    let source = "#[cfg(test)]\nfn guarded_fn() {}\n\nfn unguarded_fn() {}\n";
+    let dir = std::env::temp_dir().join("forgeql_test_guard");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test_guard.rs");
+    std::fs::write(&path, source).unwrap();
+
+    let lang = RustLanguageInline;
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&lang.tree_sitter_language())
+        .expect("set_language");
+    let enrichers = default_enrichers();
+    let mut table = SymbolTable::default();
+    let _count = index_file(&mut parser, &path, &mut table, &enrichers, &lang, None)
+        .expect("index_file should succeed");
+
+    // Find the guarded function
+    let guarded = table
+        .rows
+        .iter()
+        .find(|r| r.name == "guarded_fn" && r.fql_kind == "function")
+        .unwrap_or_else(|| {
+            panic!(
+                "guarded_fn not found. Rows: {:?}",
+                table
+                    .rows
+                    .iter()
+                    .map(|r| (&r.name, &r.fql_kind, r.line, &r.fields))
+                    .collect::<Vec<_>>()
+            )
+        });
+
+    // Check guard_kind field
+    let guard_kind = guarded.fields.get("guard_kind").map(String::as_str);
+    assert_eq!(
+        guard_kind,
+        Some("attribute"),
+        "guarded_fn should have guard_kind=attribute. Fields: {:?}",
+        guarded.fields,
+    );
+
+    // Check guard text (field name is "guard", not "guard_text")
+    let guard = guarded.fields.get("guard").map(String::as_str);
+    assert_eq!(
+        guard,
+        Some("test"),
+        "guarded_fn should have guard=test. Fields: {:?}",
+        guarded.fields,
+    );
+
+    // The unguarded function should NOT have guard_kind
+    let unguarded = table
+        .rows
+        .iter()
+        .find(|r| r.name == "unguarded_fn" && r.fql_kind == "function")
+        .expect("unguarded_fn should be indexed");
+    assert!(
+        !unguarded.fields.contains_key("guard_kind"),
+        "unguarded_fn should not have guard_kind. Fields: {:?}",
+        unguarded.fields,
+    );
+
+    // Cleanup
+    let _ = std::fs::remove_dir_all(&dir);
 }
