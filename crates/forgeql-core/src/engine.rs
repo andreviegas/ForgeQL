@@ -710,6 +710,7 @@ impl ForgeQLEngine {
             results,
             total,
             metric_hint: None,
+            group_by_field: None,
         }))
     }
 
@@ -761,12 +762,17 @@ impl ForgeQLEngine {
         }
 
         let metric_hint = detect_metric_hint(clauses);
+        let group_by_field = match &clauses.group_by {
+            Some(crate::ir::GroupBy::Field(f)) if f != "fql_kind" && f != "file" => Some(f.clone()),
+            _ => None,
+        };
 
         Ok(ForgeQLResult::Query(QueryResult {
             op: "find_symbols".to_string(),
             results,
             total,
             metric_hint,
+            group_by_field,
         }))
     }
 
@@ -834,6 +840,7 @@ impl ForgeQLEngine {
             results,
             total,
             metric_hint: None,
+            group_by_field: None,
         }))
     }
 

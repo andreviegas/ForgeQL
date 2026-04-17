@@ -1631,6 +1631,7 @@ mod invariant_tests {
             results: items,
             total,
             metric_hint: None,
+            group_by_field: None,
         })
     }
 

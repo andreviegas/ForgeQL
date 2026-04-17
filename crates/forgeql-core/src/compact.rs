@@ -330,38 +330,51 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
         .results
         .iter()
         .any(|r| r.fields.contains_key("enclosing_fn"));
-    let schema = if has_enclosing_fn {
-        format!("[name,path,line,enclosing_fn,{metric_label}]")
+
+    // When GROUP BY uses a custom field (not fql_kind/file), show the group
+    // key value as the row label instead of fql_kind.
+    if let Some(ref group_field) = query.group_by_field {
+        let schema = format!("[{metric_label}]");
+        row(&mut out, &[&q(group_field), &q(&schema)]);
+        // Group by the custom field value.
+        let groups = group_symbols_by_field(query, group_field);
+        for (key, count) in &groups {
+            row(&mut out, &[&q(key), &count.to_string()]);
+        }
     } else {
-        format!("[name,path,line,{metric_label}]")
-    };
-    row(&mut out, &[&q("fql_kind"), &q(&schema)]);
-    // Group by fql_kind.
-    let groups = group_symbols_by_kind(query);
-    for (kind, items) in &groups {
-        let brackets: Vec<String> = items
-            .iter()
-            .map(|(sr, metric)| {
-                if has_enclosing_fn {
-                    bracket(&[
-                        &sr.name,
-                        &sr.path,
-                        &sr.line.to_string(),
-                        sr.enclosing_fn.as_deref().unwrap_or(""),
-                        &metric.to_string(),
-                    ])
-                } else {
-                    bracket(&[
-                        &sr.name,
-                        &sr.path,
-                        &sr.line.to_string(),
-                        &metric.to_string(),
-                    ])
-                }
-            })
-            .collect();
-        let val = q(&brackets.join(","));
-        row(&mut out, &[&q(kind), &val]);
+        let schema = if has_enclosing_fn {
+            format!("[name,path,line,enclosing_fn,{metric_label}]")
+        } else {
+            format!("[name,path,line,{metric_label}]")
+        };
+        row(&mut out, &[&q("fql_kind"), &q(&schema)]);
+        // Group by fql_kind.
+        let groups = group_symbols_by_kind(query);
+        for (kind, items) in &groups {
+            let brackets: Vec<String> = items
+                .iter()
+                .map(|(sr, metric)| {
+                    if has_enclosing_fn {
+                        bracket(&[
+                            &sr.name,
+                            &sr.path,
+                            &sr.line.to_string(),
+                            sr.enclosing_fn.as_deref().unwrap_or(""),
+                            &metric.to_string(),
+                        ])
+                    } else {
+                        bracket(&[
+                            &sr.name,
+                            &sr.path,
+                            &sr.line.to_string(),
+                            &metric.to_string(),
+                        ])
+                    }
+                })
+                .collect();
+            let val = q(&brackets.join(","));
+            row(&mut out, &[&q(kind), &val]);
+        }
     }
     chomp(&mut out);
     out
@@ -371,6 +384,26 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
 // Grouping helpers (preserve insertion order)
 // -----------------------------------------------------------------------
 
+/// Group symbols by a custom field value, returning `(key, count)` pairs.
+///
+/// Used when GROUP BY targets a non-standard field like `guard_kind`.
+fn group_symbols_by_field(query: &QueryResult, field: &str) -> Vec<(String, usize)> {
+    let mut groups: Vec<(String, usize)> = Vec::new();
+    for r in &query.results {
+        let key = r
+            .fields
+            .get(field)
+            .cloned()
+            .unwrap_or_else(|| "(empty)".to_string());
+        let count = r.count.unwrap_or(1);
+        if let Some(g) = groups.iter_mut().find(|(k, _)| k == &key) {
+            g.1 += count;
+        } else {
+            groups.push((key, count));
+        }
+    }
+    groups
+}
 /// Group symbols by `fql_kind` using [`SymbolRow`] for field extraction.
 ///
 /// Returns `(kind, Vec<(SymbolRow, metric)>)`.  The metric value is:
@@ -774,6 +807,7 @@ mod tests {
             op: "find_symbols".into(),
             total: 3,
             metric_hint: None,
+            group_by_field: None,
             results: vec![
                 SymbolMatch {
                     name: "encenderMotor".into(),
@@ -833,6 +867,7 @@ mod tests {
             op: "find_symbols".into(),
             total: 1,
             metric_hint: None,
+            group_by_field: None,
             results: vec![SymbolMatch {
                 name: "(a&&(b||c))".into(),
                 node_kind: Some("if_statement".into()),
@@ -865,6 +900,7 @@ mod tests {
             op: "find_usages".into(),
             total: 3,
             metric_hint: None,
+            group_by_field: None,
             results: vec![
                 SymbolMatch {
                     name: "encenderMotor".into(),
@@ -917,6 +953,7 @@ mod tests {
             op: "count_usages".into(),
             total: 2,
             metric_hint: None,
+            group_by_field: None,
             results: vec![
                 SymbolMatch {
                     name: "src/signal.cpp".into(),
@@ -960,6 +997,7 @@ mod tests {
             op: "find_symbols".into(),
             total: 2,
             metric_hint: Some("member_count".into()),
+            group_by_field: None,
             results: vec![
                 SymbolMatch {
                     name: "Serial_Protocol".into(),

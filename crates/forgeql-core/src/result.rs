@@ -67,6 +67,10 @@ pub struct QueryResult {
     /// as the last column instead of the default `usages`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric_hint: Option<String>,
+    /// When a GROUP BY on a custom field is used (e.g. `guard_kind`), this
+    /// stores the field name so the compact renderer can group by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_by_field: Option<String>,
 }
 
 /// A single row in a query result set.
@@ -953,6 +957,7 @@ mod tests {
             }],
             total: 1,
             metric_hint: None,
+            group_by_field: None,
         });
 
         let json_string = result.to_json();
@@ -987,6 +992,7 @@ mod tests {
             }],
             total: 1,
             metric_hint: None,
+            group_by_field: None,
         });
         let csv = result.to_csv();
         let v: serde_json::Value = serde_json::from_str(&csv).unwrap();
@@ -1020,6 +1026,7 @@ mod tests {
             }],
             total: 1,
             metric_hint: None,
+            group_by_field: None,
         });
         let csv = result.to_csv();
         let v: serde_json::Value = serde_json::from_str(&csv).unwrap();
@@ -1052,6 +1059,7 @@ mod tests {
             }],
             total: 1,
             metric_hint: None,
+            group_by_field: None,
         });
         let csv = result.to_csv();
         let v: serde_json::Value = serde_json::from_str(&csv).unwrap();
@@ -1259,6 +1267,7 @@ mod tests {
             results: vec![],
             total: 0,
             metric_hint: None,
+            group_by_field: None,
         };
         let output = format!("{result}");
         assert!(output.contains("No results"));
@@ -1281,6 +1290,7 @@ mod tests {
             }],
             total: 1,
             metric_hint: None,
+            group_by_field: None,
         };
         let output = format!("{result}");
         assert!(output.contains("setPeakLevel"));
@@ -1308,6 +1318,7 @@ mod tests {
             }],
             total: 1,
             metric_hint: None,
+            group_by_field: None,
         };
         let output = format!("{result}");
         assert!(output.contains("via traverse_trees"));
@@ -1331,6 +1342,7 @@ mod tests {
             }],
             total: 100,
             metric_hint: None,
+            group_by_field: None,
         };
         let output = format!("{result}");
         assert!(output.contains("1 of 100 shown"));
