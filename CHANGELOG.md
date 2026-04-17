@@ -10,6 +10,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- **Bug 1.1**: `FIND files` without `IN` clause now defaults depth correctly instead of returning 0 results.
+- **Bug 1.3 / Imp 2.7**: `ORDER BY` now accepts known enrichment fields (e.g. `lines`, `param_count`, `is_recursive`, `has_cast`, `cast_count`, `is_exported`, `cast_safety`).
+- **Bug 1.4**: `is_exported` now correctly detects Rust `pub fn` functions via `visibility_modifier` AST node in `ScopeEnricher`.
+- **Bug 1.5**: Cast enrichment exposed at function level via `CastEnricher::enrich_row` — adds `has_cast` and `cast_count` fields.
+- **Bug 1.6 / Imp 2.2**: Naming convention (`has_`/`is_`/`_count`) documented in `doc/syntax.md`.
+
+### Improved
+
+- **Imp 2.1**: `USE` parse errors now include a hint suggesting `USE source.branch AS alias` format.
+- **Imp 2.3**: `FIND globals` changed from `node_kind="declaration"` to `fql_kind="variable"` for language-agnostic behavior.
+- **Imp 2.5**: `GROUP BY` on custom enrichment fields now renders field-value groups in compact output. Added `group_by_field` to `QueryResult`.
+- **Imp 2.6**: Stale worktree validation — `CachedIndex` stores and validates `source_name` on resume.
 ### Changed
 
 - **ForgeQL agent local filesystem access** — `forgeql.agent.md` now includes
