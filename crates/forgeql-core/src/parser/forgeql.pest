@@ -151,7 +151,8 @@ change_target = {
   | change_with_content
 }
 
-change_matching     = { "MATCHING" ~ any_value ~ "WITH" ~ content_value }
+change_matching     = { "MATCHING" ~ word_modifier? ~ any_value ~ "WITH" ~ content_value }
+word_modifier       = { "WORD" }
 change_lines_delete = { "LINES" ~ number ~ "-" ~ number ~ "WITH"? ~ "NOTHING" }
 change_lines_range  = { "LINES" ~ number ~ "-" ~ number ~ "WITH" ~ content_value }
 change_delete       = { "WITH" ~ "NOTHING" }

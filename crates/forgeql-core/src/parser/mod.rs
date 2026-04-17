@@ -400,6 +400,7 @@ fn parse_find(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeE
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
     let mut inner = pair.into_inner();
 
@@ -427,6 +428,11 @@ fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, Forg
     let target = match target_inner.as_rule() {
         Rule::change_matching => {
             let mut m = target_inner.into_inner();
+            // Check for optional WORD modifier.
+            let word_boundary = m.peek().is_some_and(|p| p.as_rule() == Rule::word_modifier);
+            if word_boundary {
+                let _ = m.next(); // consume the WORD token
+            }
             let pattern = next_str(&mut m, "change_matching: expected pattern")?;
             let replacement = m
                 .next()
@@ -435,6 +441,7 @@ fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, Forg
             ChangeTarget::Matching {
                 pattern,
                 replacement,
+                word_boundary,
             }
         }
         Rule::change_lines_delete => {
@@ -1008,7 +1015,7 @@ mod tests {
             ForgeQLIR::ChangeContent { files, target, .. } => {
                 assert_eq!(files, &["file.cpp"]);
                 assert!(
-                    matches!(target, ChangeTarget::Matching { pattern, replacement }
+                    matches!(target, ChangeTarget::Matching { pattern, replacement, .. }
                     if pattern == "#define BAUD 9600" && replacement == "constexpr uint32_t BAUD = 9600;")
                 );
             }
@@ -1016,6 +1023,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_change_matching_word() {
+        let ops =
+            parse("CHANGE FILE 'file.cpp' MATCHING WORD 'declaration' WITH 'variable'").unwrap();
+        match &ops[0] {
+            ForgeQLIR::ChangeContent { target, .. } => match target {
+                ChangeTarget::Matching {
+                    pattern,
+                    replacement,
+                    word_boundary,
+                } => {
+                    assert_eq!(pattern, "declaration");
+                    assert_eq!(replacement, "variable");
+                    assert!(word_boundary, "WORD modifier should set word_boundary=true");
+                }
+                other => panic!("expected Matching, got {other:?}"),
+            },
+            _ => panic!("wrong variant"),
+        }
+    }
     #[test]
     fn parse_change_lines() {
         let ops = parse("CHANGE FILE 'file.cpp' LINES 10-15 WITH 'new code'").unwrap();
@@ -1074,7 +1101,7 @@ mod tests {
             ForgeQLIR::ChangeContent { files, target, .. } => {
                 assert_eq!(files, &["x.cpp"]);
                 assert!(
-                    matches!(target, ChangeTarget::Matching { pattern, replacement }
+                    matches!(target, ChangeTarget::Matching { pattern, replacement, .. }
                     if pattern == "old_fn" && replacement == "new_fn")
                 );
             }

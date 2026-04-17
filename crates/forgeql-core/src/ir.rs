@@ -338,10 +338,14 @@ pub enum ForgeQLIR {
 pub enum ChangeTarget {
     /// `WITH '...'` — create file (if absent) or overwrite its entire content.
     WithContent { content: String },
-    /// `MATCHING 'text' WITH '...'` — find a unique text match and replace it.
+    /// `MATCHING [WORD] 'text' WITH '...'` — find text matches and replace them.
+    /// When `word_boundary` is true the pattern is wrapped in `\b...\b` so
+    /// that only whole-word occurrences are replaced.
     Matching {
         pattern: String,
         replacement: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        word_boundary: bool,
     },
     /// `LINES n-m WITH '...'` — replace a 1-based inclusive line range.
     Lines {

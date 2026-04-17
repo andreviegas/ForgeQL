@@ -73,6 +73,7 @@ fn change_matching_replaces_unique_occurrence() {
         ChangeTarget::Matching {
             pattern: pattern.to_string(),
             replacement: "#pragma once\n// ForgeQL was here".to_string(),
+            word_boundary: false,
         },
     );
     let plan = c.plan(&ctx(), &ws, &idx).expect("plan");
@@ -211,6 +212,7 @@ fn change_matching_with_glob_expands_to_matching_files() {
         ChangeTarget::Matching {
             pattern: "encenderMotor".to_string(),
             replacement: "startMotor".to_string(),
+            word_boundary: false,
         },
     );
     let plan = c.plan(&ctx(), &ws, &idx).expect("glob plan");
@@ -245,6 +247,7 @@ fn change_glob_no_match_returns_error() {
         ChangeTarget::Matching {
             pattern: "x".to_string(),
             replacement: "y".to_string(),
+            word_boundary: false,
         },
     );
     let err = c.plan(&ctx(), &ws, &idx).unwrap_err();

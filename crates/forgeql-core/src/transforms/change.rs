@@ -154,7 +154,8 @@ fn resolve_target(rel_path: &str, abs_path: &Path, target: &ChangeTarget) -> Res
         ChangeTarget::Matching {
             pattern,
             replacement,
-        } => resolve_matching(rel_path, abs_path, pattern, replacement),
+            word_boundary,
+        } => resolve_matching(rel_path, abs_path, pattern, replacement, *word_boundary),
         ChangeTarget::Lines {
             start,
             end,
@@ -181,16 +182,23 @@ fn resolve_matching(
     abs_path: &Path,
     pattern: &str,
     replacement: &str,
+    word_boundary: bool,
 ) -> Result<FileEdit> {
     let source = crate::workspace::file_io::read_bytes(abs_path)?;
     let text =
         std::str::from_utf8(&source).map_err(|e| anyhow!("{rel_path}: not valid UTF-8: {e}"))?;
 
     // Collect every occurrence of the pattern (byte offsets).
-    let mut ranges: Vec<std::ops::Range<usize>> = text
-        .match_indices(pattern)
-        .map(|(start, _)| start..start + pattern.len())
-        .collect();
+    let mut ranges: Vec<std::ops::Range<usize>> = if word_boundary {
+        let escaped = regex::escape(pattern);
+        let re = regex::Regex::new(&format!(r"\b{escaped}\b"))
+            .map_err(|e| anyhow!("{rel_path}: invalid WORD pattern: {e}"))?;
+        re.find_iter(text).map(|m| m.start()..m.end()).collect()
+    } else {
+        text.match_indices(pattern)
+            .map(|(start, _)| start..start + pattern.len())
+            .collect()
+    };
 
     if ranges.is_empty() {
         // Return an empty FileEdit — the caller decides whether to skip or error.
@@ -362,6 +370,7 @@ mod tests {
         let target = ChangeTarget::Matching {
             pattern: "x".into(),
             replacement: "y".into(),
+            word_boundary: false,
         };
         assert!(validate_multi_file(&files, &target).is_ok());
     }
@@ -402,6 +411,7 @@ mod tests {
             ChangeTarget::Matching {
                 pattern: "a".into(),
                 replacement: "b".into(),
+                word_boundary: false,
             },
             ChangeTarget::Lines {
                 start: 1,
@@ -422,7 +432,7 @@ mod tests {
         let path = dir.path().join("buttons.cpp");
         std::fs::write(&path, "Button a;\nButton b;\nint Button_count = 2;\n").expect("write");
 
-        let fe = resolve_matching("buttons.cpp", &path, "Button", "PushButton").unwrap();
+        let fe = resolve_matching("buttons.cpp", &path, "Button", "PushButton", false).unwrap();
 
         // All three occurrences should produce three edits.
         assert_eq!(
@@ -444,7 +454,7 @@ mod tests {
         let path = dir.path().join("single.cpp");
         std::fs::write(&path, "void oldName() {}").expect("write");
 
-        let fe = resolve_matching("single.cpp", &path, "oldName", "newName").unwrap();
+        let fe = resolve_matching("single.cpp", &path, "oldName", "newName", false).unwrap();
         assert_eq!(fe.edits.len(), 1);
         assert_eq!(fe.edits[0].replacement, "newName");
     }
@@ -454,11 +464,52 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("miss.cpp");
         std::fs::write(&path, "nothing here").expect("write");
-        let fe = resolve_matching("miss.cpp", &path, "nonexistent", "x")
+        let fe = resolve_matching("miss.cpp", &path, "nonexistent", "x", false)
             .expect("should succeed with empty edits");
         assert!(fe.edits.is_empty());
     }
 
+    // ── MATCHING WORD boundary ─────────────────────────────────────────
+
+    #[test]
+    fn resolve_matching_word_boundary_skips_compound_terms() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("compound.cpp");
+        std::fs::write(
+            &path,
+            "field_declaration foo;\nvoid declaration() {}\nint declaration = 0;\n",
+        )
+        .expect("write");
+
+        let fe = resolve_matching("compound.cpp", &path, "declaration", "variable", true).unwrap();
+
+        // Only the standalone "declaration" occurrences should be replaced,
+        // NOT the "declaration" inside "field_declaration".
+        assert_eq!(
+            fe.edits.len(),
+            2,
+            "expected 2 edits (standalone only), got {}: {fe:?}",
+            fe.edits.len()
+        );
+    }
+
+    #[test]
+    fn resolve_matching_word_boundary_false_replaces_all() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("compound2.cpp");
+        std::fs::write(&path, "field_declaration foo;\nvoid declaration() {}\n").expect("write");
+
+        let fe =
+            resolve_matching("compound2.cpp", &path, "declaration", "variable", false).unwrap();
+
+        // Without WORD, all 3 occurrences (including inside compound) are replaced.
+        assert_eq!(
+            fe.edits.len(),
+            2,
+            "expected 2 edits (all substrings), got {}: {fe:?}",
+            fe.edits.len()
+        );
+    }
     // ── CHANGE LINES trailing newline ────────────────────────────────────
 
     #[test]
