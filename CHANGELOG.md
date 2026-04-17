@@ -8,8 +8,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ---
 ---
 
-## [0.37.0] — 2026-04-17
+## [Unreleased]
 
+### Added
+
+- **MATCHING WORD modifier**: `CHANGE FILE ... MATCHING WORD 'pattern' WITH 'replacement'` wraps the pattern in `\b...\b` regex word boundaries, preventing replacement of compound terms (e.g. `field_declaration` is not touched when replacing `declaration`). Without `WORD`, behavior is unchanged (plain substring match).
+
+### Bug Fixes
+
+- **Duplicate verify_steps names**: `.forgeql.yaml` loading now rejects duplicate step names with a clear error message instead of silently using last-one-wins semantics.
+
+## [0.37.0] — 2026-04-17
 ### Bug Fixes
 
 - **Bug 1.1**: `FIND files` without `IN` clause now defaults depth correctly instead of returning 0 results.
