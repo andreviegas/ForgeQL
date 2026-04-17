@@ -93,7 +93,7 @@ FIND files [clauses]
 | Command | Returns |
 |---|---|
 | `FIND symbols` | All indexed AST nodes. Use `WHERE fql_kind = '...'` to narrow. |
-| `FIND globals` | Shorthand for file-scope `declaration` nodes only. |
+| `FIND globals` | Shorthand for `WHERE fql_kind = 'variable'` — file-scope variables, constants, and statics across all supported languages. |
 | `FIND usages OF` | Every identifier reference to the named symbol. |
 | `FIND callees OF` | Symbols called from inside the named function body. Alias for `SHOW callees OF`. |
 | `FIND files` | Files in the worktree. Supports `WHERE`, `DEPTH`, `ORDER BY size`, etc. |

@@ -92,7 +92,7 @@ pub enum ForgeQLIR {
 }
 ```
 
-Note: `FIND callees OF 'x'` and `FIND globals` are accepted by the grammar but the parser routes them to `ShowCallees` and `FindSymbols` (with a `node_kind` predicate) respectively — they are syntactic aliases, not separate IR variants.
+Note: `FIND callees OF 'x'` and `FIND globals` are accepted by the grammar but the parser routes them to `ShowCallees` and `FindSymbols` (with a `fql_kind = "variable"` predicate) respectively — they are syntactic aliases, not separate IR variants.
 
 ---
 
