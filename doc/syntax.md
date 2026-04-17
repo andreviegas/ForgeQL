@@ -419,6 +419,16 @@ If a field does not exist on a row, `WHERE` evaluates to false (SQL `NULL` seman
 
 Computed at index time. Queryable with `WHERE` like any other field.
 
+**Naming convention for enrichment fields:**
+
+| Prefix | Meaning | Example |
+|---|---|---|
+| `is_` | Intrinsic property of the symbol itself | `is_recursive`, `is_exported`, `is_const`, `is_magic` |
+| `has_` | The symbol's body **contains** something | `has_shadow`, `has_escape`, `has_fallthrough`, `has_cast`, `has_todo` |
+| `_count` | Numeric count (often paired with `has_` or `is_`) | `shadow_count`, `cast_count`, `recursion_count`, `param_count` |
+
+> **Rule of thumb:** `is_X` describes *what a symbol is*; `has_X` describes *what it contains*.
+> For example, a function `is_recursive` (it calls itself) and `has_shadow` (variables inside it shadow outer ones).
 #### NamingEnricher
 
 | Field | Applies to | Description |
@@ -498,7 +508,8 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | `cast_style` | `cast` | `"c_style"` (named C++ casts not indexed in tree-sitter-cpp 0.23) |
 | `cast_target_type` | `cast` | Target type text |
 | `cast_safety` | `cast` | `"safe"`, `"moderate"`, or `"unsafe"` |
-
+| `has_cast` | `function` | `"true"` if the function body contains any cast expressions |
+| `cast_count` | `function` | Number of cast expressions in the body |
 #### RedundancyEnricher
 
 | Field | Applies to | Description |
@@ -515,8 +526,7 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | `scope` | `variable` | `"file"` (top-level) or `"local"` (inside function/block) |
 | `storage` | `variable` | `"static"`, `"extern"`, or absent |
 | `binding_kind` | `variable` | `"function"` or `"variable"` |
-| `is_exported` | `variable` | `"true"` for file-scope declarations without `static` storage |
-
+| `is_exported` | `variable`, `function` | `"true"` for file-scope declarations without `static` storage (C/C++) or `pub` functions (Rust) |
 #### MemberEnricher
 
 | Field | Applies to | Description |
