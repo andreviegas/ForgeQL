@@ -4,10 +4,15 @@
 /// - `cast_style`: from `LanguageConfig::cast_kinds`
 /// - `cast_target_type`: the target type text
 /// - `cast_safety`: `"safe"` / `"moderate"` / `"unsafe"` from config
+///
+/// `enrich_row()` also adds to `function` rows:
+/// - `has_cast`: `"true"` if the function body contains any cast expressions.
+/// - `cast_count`: number of cast expressions in the body.
 use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::index::{IndexRow, node_text};
+use crate::ast::lang::LanguageConfig;
 
 /// Enricher that indexes cast expressions with style metadata.
 pub struct CastEnricher;
@@ -17,6 +22,29 @@ impl NodeEnricher for CastEnricher {
         "casts"
     }
 
+    fn enrich_row(
+        &self,
+        ctx: &EnrichContext<'_>,
+        _name: &str,
+        fields: &mut HashMap<String, String>,
+    ) {
+        let config = ctx.language_config;
+        if !config.is_function_kind(ctx.node.kind()) {
+            return;
+        }
+
+        let Some(body) = ctx.node.child_by_field_name("body") else {
+            return;
+        };
+
+        let mut count = 0u32;
+        count_casts(body, config, &mut count);
+
+        if count > 0 {
+            drop(fields.insert("has_cast".into(), "true".into()));
+            drop(fields.insert("cast_count".into(), count.to_string()));
+        }
+    }
     fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
         let kind = ctx.node.kind();
         let config = ctx.language_config;
@@ -98,4 +126,16 @@ fn extract_template_type(
     }
 
     String::new()
+}
+
+/// Walk a subtree counting cast expressions.
+fn count_casts(node: tree_sitter::Node<'_>, config: &LanguageConfig, count: &mut u32) {
+    if config.cast_info(node.kind()).is_some() {
+        *count += 1;
+    }
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            count_casts(child, config, count);
+        }
+    }
 }

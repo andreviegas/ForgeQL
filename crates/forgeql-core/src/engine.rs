@@ -2359,14 +2359,16 @@ fn field_to_kinds_for_config(
         "shift_direction" | "shift_operand" | "shift_amount" => {
             Some(config.shift_expression_kinds().to_vec())
         }
-        // casts.rs
-        "cast_style" | "cast_target_type" => Some(
+        // casts.rs — per-cast-node fields
+        "cast_style" | "cast_target_type" | "cast_safety" => Some(
             config
                 .cast_kind_triples()
                 .iter()
                 .map(|(raw_kind, _, _)| raw_kind.clone())
                 .collect(),
         ),
+        // casts.rs — per-function fields
+        "has_cast" | "cast_count" => Some(config.function_raw_kinds.clone()),
         // control_flow.rs
         "condition_tests"
         | "paren_depth"
