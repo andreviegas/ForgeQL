@@ -136,7 +136,23 @@ impl ForgeConfig {
             .with_context(|| format!("reading config file '{}'", path.display()))?;
         let config: Self = serde_yml::from_str(&text)
             .with_context(|| format!("parsing config file '{}'", path.display()))?;
+        config.validate(path)?;
         Ok(config)
+    }
+
+    /// Validate the config for semantic errors (e.g. duplicate step names).
+    fn validate(&self, path: &Path) -> Result<()> {
+        let mut seen = std::collections::HashSet::new();
+        for step in &self.verify_steps {
+            if !seen.insert(&step.name) {
+                anyhow::bail!(
+                    "{}: duplicate verify_steps name '{}' — each step must have a unique name",
+                    path.display(),
+                    step.name
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Search for `.forgeql.yaml` by walking up from `start` to the filesystem root.
@@ -160,5 +176,40 @@ impl ForgeConfig {
     #[must_use]
     pub fn step(&self, name: &str) -> Option<&VerifyStep> {
         self.verify_steps.iter().find(|s| s.name == name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_rejects_duplicate_verify_step_names() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".forgeql.yaml");
+        std::fs::write(
+            &path,
+            "workspace_root: .\nverify_steps:\n  - name: build\n    command: make\n  - name: build\n    command: make all\n",
+        )
+        .expect("write");
+        let err = ForgeConfig::load(&path).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("duplicate verify_steps name 'build'"),
+            "expected duplicate error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_accepts_unique_verify_step_names() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".forgeql.yaml");
+        std::fs::write(
+            &path,
+            "workspace_root: .\nverify_steps:\n  - name: build\n    command: make\n  - name: test\n    command: make test\n",
+        )
+        .expect("write");
+        let config = ForgeConfig::load(&path).expect("should load successfully");
+        assert_eq!(config.verify_steps.len(), 2);
     }
 }
