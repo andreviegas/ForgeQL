@@ -2947,7 +2947,7 @@ mod tests {
         let mut engine = ForgeQLEngine::new(data_dir, make_registry()).unwrap();
         let session_id = engine.register_local_session(tmp.path()).unwrap();
 
-        // FIND globals → FIND symbols WHERE node_kind = 'declaration'
+        // FIND globals → FIND symbols WHERE fql_kind = 'variable' WHERE scope = 'file'
         let op = crate::parser::parse("FIND globals LIMIT 200").unwrap();
         let result = engine.execute(Some(&session_id), &op[0]).unwrap();
         let results = match result {
@@ -2955,13 +2955,13 @@ mod tests {
             other => panic!("expected Query, got: {other:?}"),
         };
 
-        // All returned rows must be file-scope declaration nodes.
+        // All returned rows must be file-scope variable nodes.
         for r in &results {
             assert_eq!(
-                r.node_kind.as_deref(),
-                Some("declaration"),
-                "FIND globals must only return declaration nodes, got {:?} for '{}'",
-                r.node_kind,
+                r.fql_kind.as_deref(),
+                Some("variable"),
+                "FIND globals must only return variable nodes, got {:?} for '{}'",
+                r.fql_kind,
                 r.name,
             );
             assert_eq!(

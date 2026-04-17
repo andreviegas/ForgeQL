@@ -379,11 +379,11 @@ fn parse_find(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeE
     match target_str {
         "globals" => {
             // Convenience alias: FIND globals →
-            //   FIND symbols WHERE node_kind = 'declaration' WHERE scope = 'file'
+            //   FIND symbols WHERE fql_kind = 'variable' WHERE scope = 'file'
             let kind_pred = Predicate {
-                field: "node_kind".into(),
+                field: "fql_kind".into(),
                 op: CompareOp::Eq,
-                value: PredicateValue::String("declaration".into()),
+                value: PredicateValue::String("variable".into()),
             };
             let scope_pred = Predicate {
                 field: "scope".into(),
@@ -1270,14 +1270,14 @@ mod tests {
                 let kind_pred = clauses
                     .where_predicates
                     .iter()
-                    .find(|p| p.field == "node_kind");
+                    .find(|p| p.field == "fql_kind");
                 assert!(
                     kind_pred.is_some(),
-                    "globals should add a node_kind predicate"
+                    "globals should add a fql_kind predicate"
                 );
                 let kp = kind_pred.unwrap();
                 assert_eq!(kp.op, CompareOp::Eq);
-                assert_eq!(kp.value, PredicateValue::String("declaration".into()));
+                assert_eq!(kp.value, PredicateValue::String("variable".into()));
 
                 let scope_pred = clauses.where_predicates.iter().find(|p| p.field == "scope");
                 assert!(scope_pred.is_some(), "globals should add a scope predicate");
@@ -1297,10 +1297,10 @@ mod tests {
                 let kind_pred = clauses
                     .where_predicates
                     .iter()
-                    .find(|p| p.field == "node_kind");
+                    .find(|p| p.field == "fql_kind");
                 assert!(
                     kind_pred.is_some(),
-                    "globals should add a node_kind predicate"
+                    "globals should add a fql_kind predicate"
                 );
                 let scope_pred = clauses.where_predicates.iter().find(|p| p.field == "scope");
                 assert!(scope_pred.is_some(), "globals should add a scope predicate");
@@ -1321,10 +1321,10 @@ mod tests {
                 let kind_pred = clauses
                     .where_predicates
                     .iter()
-                    .find(|p| p.field == "node_kind");
+                    .find(|p| p.field == "fql_kind");
                 assert!(
                     kind_pred.is_some(),
-                    "globals should add a node_kind predicate"
+                    "globals should add a fql_kind predicate"
                 );
                 let scope_pred = clauses.where_predicates.iter().find(|p| p.field == "scope");
                 assert!(scope_pred.is_some(), "globals should add a scope predicate");
