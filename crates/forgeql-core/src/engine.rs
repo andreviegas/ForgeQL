@@ -743,6 +743,7 @@ impl ForgeQLEngine {
 
     /// `FIND symbols WHERE name LIKE 'pattern' ...`
     fn find_symbols(&self, session_id: Option<&str>, clauses: &Clauses) -> Result<ForgeQLResult> {
+        reject_text_filter(clauses)?;
         let sid = require_session_id(session_id)?;
         let session = self.require_session(sid)?;
         let index = session
@@ -783,6 +784,7 @@ impl ForgeQLEngine {
         of: &str,
         clauses: &Clauses,
     ) -> Result<ForgeQLResult> {
+        reject_text_filter(clauses)?;
         let sid = require_session_id(session_id)?;
         let session = self.require_session(sid)?;
         let index = session
@@ -990,6 +992,7 @@ impl ForgeQLEngine {
             } => show::show_lines(&workspace, file, *start_line, *end_line)
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
             ForgeQLIR::FindFiles { clauses } => {
+                reject_text_filter(clauses)?;
                 let glob = clauses.in_glob.as_deref().unwrap_or("**");
                 // IN / EXCLUDE are applied by find_files(); build typed entries
                 // so the full clause pipeline (WHERE, GROUP BY, HAVING, ORDER BY,
@@ -2304,6 +2307,23 @@ fn validate_order_by_field(
         order.field,
         STATIC_FIELDS.join(", ")
     )
+}
+
+/// Reject `WHERE text …` on FIND queries — `text` is only available on
+/// commands that return source lines (SHOW body, SHOW LINES, SHOW context).
+fn reject_text_filter(clauses: &Clauses) -> Result<()> {
+    if clauses
+        .where_predicates
+        .iter()
+        .any(|p| p.field == "text" || p.field == "content")
+    {
+        bail!(
+            "WHERE text/content is not available on FIND queries — \
+             it only works on commands that return source lines \
+             (SHOW body, SHOW LINES, SHOW context)"
+        );
+    }
+    Ok(())
 }
 
 // -----------------------------------------------------------------------

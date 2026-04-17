@@ -828,6 +828,11 @@ SHOW body OF 'PiscoCode::run' DEPTH 99
   WHERE text MATCHES '(?i)TODO|FIXME'
 ```
 
+> **Note — `WHERE text` / `WHERE content` scope:** These predicates are only
+> valid on commands that return source lines: `SHOW body`, `SHOW LINES`, and
+> `SHOW context`.  Using them on `FIND` queries (symbols, usages, files) will
+> return a clear error instead of silently producing 0 results.
+
 > **Tip — exclude test directories:**  Enrichment queries on large codebases
 > can be noisy if the results include test harnesses, mocks, and generated
 > test code.  Add `EXCLUDE` clauses to focus on production code:

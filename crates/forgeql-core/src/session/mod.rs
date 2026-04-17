@@ -196,7 +196,8 @@ impl Session {
         let (table, macro_table) = SymbolTable::build(&workspace, &self.lang_registry)?;
 
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        let cached = CachedIndex::from_table_and_macros(table, macro_table, &commit_hash, &self.source_name);
+        let cached =
+            CachedIndex::from_table_and_macros(table, macro_table, &commit_hash, &self.source_name);
         let cache_path = self.worktree_path.join(".forgeql-index");
         cached.save(&cache_path)?;
 
@@ -327,7 +328,8 @@ impl Session {
             .ok_or_else(|| anyhow::anyhow!("cannot save: session {} has no index", self.id))?;
         let macro_table = self.macro_table.take().unwrap_or_default();
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        let cached = CachedIndex::from_table_and_macros(table, macro_table, &commit_hash, &self.source_name);
+        let cached =
+            CachedIndex::from_table_and_macros(table, macro_table, &commit_hash, &self.source_name);
         let cache_path = self.worktree_path.join(".forgeql-index");
         cached.save(&cache_path)?;
         let (table, macro_table) = cached.into_table_and_macros();
