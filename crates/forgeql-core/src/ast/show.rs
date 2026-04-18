@@ -8,15 +8,14 @@
 //! All entry points return a `serde_json::Value` in a consistent shape:
 //! `{ "op": "<op_name>", ... }` so the executor can return them directly.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use crate::{
     ast::{
-        index::{IndexRow, SymbolTable},
+        index::IndexRow,
         lang::{LanguageConfig, LanguageRegistry},
     },
     workspace::Workspace,
@@ -169,7 +168,7 @@ pub(crate) fn find_function_node_for_symbol<'t>(
 }
 
 /// Find a type node (struct/class/enum) whose `name` field text equals `name`.
-fn find_type_node_by_name<'t>(
+pub(super) fn find_type_node_by_name<'t>(
     root: tree_sitter::Node<'t>,
     source: &[u8],
     name: &str,
@@ -245,7 +244,7 @@ fn collect_collapsed(
 /// - All source lines inside the collapsed block are omitted.
 /// - Every entry in the returned vec carries its true file-absolute line
 ///   number so the caller can display them directly.
-fn emit_body_lines(
+pub(super) fn emit_body_lines(
     source: &[u8],
     fn_node: tree_sitter::Node<'_>,
     max_cs_depth: usize,
@@ -332,7 +331,7 @@ fn emit_body_lines(
 ///
 /// Uses `child_count()` / `child(i)` instead of a `TreeCursor` to avoid
 /// any cursor-state issues when starting from a non-root node.
-fn collect_callees_walk(
+pub(super) fn collect_callees_walk(
     source: &[u8],
     node: tree_sitter::Node<'_>,
     out: &mut Vec<String>,
@@ -378,7 +377,7 @@ fn extract_line_at(source: &[u8], byte_offset: usize) -> String {
 ///
 /// A `*` anywhere is treated as a "match anything" wildcard using the `ignore`
 /// crate's override builder.  A literal string is matched as a path suffix.
-fn path_matches(root: &Path, path: &Path, pattern: &str) -> bool {
+pub(super) fn path_matches(root: &Path, path: &Path, pattern: &str) -> bool {
     let rel = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
     // Simple suffix match for non-glob patterns (most common case).
     if !pattern.contains('*') && !pattern.contains('?') && !pattern.contains('[') {
@@ -394,6 +393,14 @@ fn path_matches(root: &Path, path: &Path, pattern: &str) -> bool {
         .map(|ov| ov.matched(&*rel, false).is_whitelist())
         .unwrap_or(false)
 }
+
+mod body;
+mod callees;
+mod members;
+
+pub use body::show_body;
+pub use callees::{show_callees, show_callers, show_lines};
+pub use members::{show_members, show_outline};
 
 // -----------------------------------------------------------------------
 // Public API
@@ -504,466 +511,6 @@ pub fn show_signature(
         "line":       start_line,
         "byte_start": def.byte_range.start,
         "signature":  signature,
-    }))
-}
-
-/// `SHOW outline OF 'file'`
-///
-/// Returns all indexed symbols (functions, variables, types, macros, enums)
-/// in the file, sorted by byte offset, each with its kind and 1-based line
-/// number.  The `file` argument may be a glob pattern or a path suffix.
-///
-/// # Errors
-/// Returns an error only if neither `index` nor workspace can be accessed
-/// (in practice, always returns `Ok`).
-pub fn show_outline(index: &SymbolTable, workspace: &Workspace, file: &str) -> Result<Value> {
-    let root = workspace.root();
-
-    // Cache file bytes to avoid re-reading the same file for every symbol.
-    let mut byte_cache: HashMap<PathBuf, Vec<u8>> = HashMap::new();
-
-    let line_for = |cache: &mut HashMap<PathBuf, Vec<u8>>, path: &Path, offset: usize| -> usize {
-        let src = cache
-            .entry(path.to_path_buf())
-            .or_insert_with(|| crate::workspace::file_io::read_bytes(path).unwrap_or_default());
-        byte_to_line(src, offset) + 1
-    };
-
-    let mut entries: Vec<(usize, Value)> = Vec::new();
-
-    for row in &index.rows {
-        if !path_matches(root, &row.path, file) {
-            continue;
-        }
-        let rel = workspace.relative(&row.path).display().to_string();
-        let ln = line_for(&mut byte_cache, &row.path, row.byte_range.start);
-        let kind = if row.fql_kind.is_empty() {
-            &row.node_kind
-        } else {
-            &row.fql_kind
-        };
-        entries.push((
-            row.byte_range.start,
-            serde_json::json!({
-                "name": row.name,
-                "fql_kind": kind,
-                "path": rel,
-                "line": ln,
-            }),
-        ));
-    }
-
-    entries.sort_by_key(|(offset, _)| *offset);
-    let results: Vec<Value> = entries.into_iter().map(|(_, v)| v).collect();
-
-    Ok(serde_json::json!({
-        "op":      "show_outline",
-        "file":    file,
-        "results": results,
-    }))
-}
-
-/// `SHOW members OF 'ClassName'`
-///
-/// Re-parses the file containing the struct/class/enum and returns its
-/// direct member declarations (fields, methods, enumerators) with their
-/// 1-based line numbers.
-///
-/// # Errors
-/// Returns an error if the file cannot be read or the AST node for the
-/// type is not found.
-pub fn show_members(
-    def: &IndexRow,
-    workspace: &Workspace,
-    symbol: &str,
-    lang_registry: &LanguageRegistry,
-) -> Result<Value> {
-    let lang = lang_registry
-        .language_for_path(&def.path)
-        .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
-    let config = lang.config();
-    let (source, tree) = parse_file(&def.path, lang_registry)?;
-    let root = tree.root_node();
-
-    let type_node = find_type_node_by_name(root, &source, symbol, config)
-        .ok_or_else(|| anyhow!("AST node for '{symbol}' not found in file"))?;
-
-    let mut members: Vec<Value> = Vec::new();
-
-    if let Some(body) = type_node.child_by_field_name("body") {
-        let mut cursor = body.walk();
-        if cursor.goto_first_child() {
-            loop {
-                let child = cursor.node();
-                let ln = byte_to_line(&source, child.start_byte()) + 1;
-                let ck = child.kind();
-                if config.is_field_kind(ck) {
-                    let text = std::str::from_utf8(&source[child.byte_range()])
-                        .unwrap_or("")
-                        .trim()
-                        .trim_end_matches(';')
-                        .to_string();
-                    if !text.is_empty() {
-                        members.push(serde_json::json!({
-                            "fql_kind": "field",
-                            "text": text,
-                            "line": ln,
-                        }));
-                    }
-                } else if config.is_function_kind(ck) {
-                    // Inline method definition — show signature only.
-                    let body_start = child
-                        .child_by_field_name("body")
-                        .map_or_else(|| child.end_byte(), |b| b.start_byte());
-                    let sig = std::str::from_utf8(&source[child.start_byte()..body_start])
-                        .unwrap_or("")
-                        .trim_end()
-                        .to_string();
-                    if !sig.is_empty() {
-                        members.push(serde_json::json!({
-                            "fql_kind": "method",
-                            "text": sig,
-                            "line": ln,
-                        }));
-                    }
-                } else if config.is_declaration_kind(ck) {
-                    // Method declaration (forward declaration / pure virtual).
-                    let text = std::str::from_utf8(&source[child.byte_range()])
-                        .unwrap_or("")
-                        .trim()
-                        .trim_end_matches(';')
-                        .to_string();
-                    if !text.is_empty() {
-                        members.push(serde_json::json!({
-                            "fql_kind": "method",
-                            "text": text,
-                            "line": ln,
-                        }));
-                    }
-                } else if config.is_enumerator_kind(ck)
-                    && let Some(name_node) = child.child_by_field_name("name")
-                {
-                    let name = std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("");
-                    if !name.is_empty() {
-                        members.push(serde_json::json!({
-                            "fql_kind": "enumerator",
-                            "text": name,
-                            "line": ln,
-                        }));
-                    }
-                }
-                if !cursor.goto_next_sibling() {
-                    break;
-                }
-            }
-        }
-    }
-
-    let byte_start = type_node.start_byte();
-    let start_line = type_node.start_position().row + 1;
-    let end_line = type_node.end_position().row + 1;
-    let path_str = workspace.relative(&def.path).display().to_string();
-    Ok(serde_json::json!({
-        "op":         "show_members",
-        "symbol":     symbol,
-        "path":       path_str,
-        "start_line": start_line,
-        "end_line":   end_line,
-        "byte_start": byte_start,
-        "members":    members,
-    }))
-}
-
-/// `SHOW body OF 'func' [DEPTH n]`
-///
-/// Returns the function definition as a structured `lines` array
-/// `[{"line": N, "text": "..."}]` where every `line` is the file-absolute
-/// 1-based line number.
-///
-/// - `DEPTH` absent → full body, all lines included
-/// - `DEPTH 0` → signature only (lines up to but not including the `{`)
-/// - `DEPTH n` (n ≥ 1) → body with compound statements at depth > n
-///   collapsed to `{ }` on their opening line; inner lines are omitted
-///
-/// # Errors
-/// Returns an error if the symbol is not indexed, the file cannot be parsed,
-/// or the AST node for the function is not found.
-pub fn show_body(
-    def: &IndexRow,
-    workspace: &Workspace,
-    symbol: &str,
-    depth: Option<usize>,
-    lang_registry: &LanguageRegistry,
-) -> Result<Value> {
-    let lang = lang_registry
-        .language_for_path(&def.path)
-        .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
-    let config = lang.config();
-    let (source, tree) = parse_file(&def.path, lang_registry)?;
-    let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start, config)
-        .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
-
-    let fn_start = fn_node.start_byte();
-    let fn_start_line = byte_to_line(&source, fn_start); // 0-based
-
-    let lines: Vec<Value> = match depth {
-        None => {
-            // Full body — number every line from fn_start_line.
-            let text = std::str::from_utf8(&source[fn_node.byte_range()]).unwrap_or("");
-            text.split('\n')
-                .enumerate()
-                .map(|(i, raw)| {
-                    serde_json::json!({
-                        "line": fn_start_line + i + 1,
-                        "text": raw.trim_end_matches('\r'),
-                    })
-                })
-                .collect()
-        }
-        Some(0) => {
-            // Signature only — stop before the body compound_statement.
-            let body_start = fn_node
-                .child_by_field_name("body")
-                .map_or_else(|| fn_node.end_byte(), |b| b.start_byte());
-            let sig = std::str::from_utf8(&source[fn_node.start_byte()..body_start])
-                .unwrap_or("")
-                .trim_end();
-            sig.split('\n')
-                .enumerate()
-                .map(|(i, raw)| {
-                    serde_json::json!({
-                        "line": fn_start_line + i + 1,
-                        "text": raw.trim_end_matches('\r'),
-                    })
-                })
-                .collect()
-        }
-        Some(n) => emit_body_lines(&source, fn_node, n, config)
-            .into_iter()
-            .map(|(ln, text)| serde_json::json!({ "line": ln, "text": text }))
-            .collect(),
-    };
-
-    let fn_end_line = fn_node.end_position().row + 1;
-    let path_str = workspace.relative(&def.path).display().to_string();
-
-    // When DEPTH 0, include enrichment metadata so the agent can make
-    // informed decisions (e.g. how many lines, params, branches) without
-    // a separate FIND query.
-    let metadata: serde_json::Value = if depth == Some(0) && !def.fields.is_empty() {
-        let selected: serde_json::Map<String, serde_json::Value> = def
-            .fields
-            .iter()
-            .filter(|(k, _)| {
-                matches!(
-                    k.as_str(),
-                    "lines"
-                        | "param_count"
-                        | "return_count"
-                        | "branch_count"
-                        | "is_recursive"
-                        | "has_todo"
-                        | "has_shadow"
-                        | "has_escape"
-                        | "has_unused_param"
-                        | "enclosing_type"
-                )
-            })
-            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-            .collect();
-        if selected.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::Value::Object(selected)
-        }
-    } else {
-        serde_json::Value::Null
-    };
-
-    let mut result = serde_json::json!({
-        "op":         "show_body",
-        "symbol":     symbol,
-        "path":       path_str,
-        "start_line": fn_start_line + 1,
-        "end_line":   fn_end_line,
-        "line":       fn_start_line + 1,
-        "byte_start": fn_start,
-        "depth":      depth,
-        "lines":      lines,
-    });
-    if !metadata.is_null() {
-        result["metadata"] = metadata;
-    }
-    Ok(result)
-}
-
-/// `SHOW callers OF 'func'`
-///
-/// Returns all reference sites for `symbol` from the usage index, with
-/// their file path and 1-based line number.
-///
-/// Note: the index does not distinguish call sites from type references or
-/// identifier appearances.  The full reference list is returned.  Agents
-/// should treat this as an upper bound on actual callers.
-///
-/// # Errors
-/// This function currently always returns `Ok`.
-pub fn show_callers(index: &SymbolTable, workspace: &Workspace, symbol: &str) -> Result<Value> {
-    let sites = index.usages.get(symbol).map_or(&[] as &[_], Vec::as_slice);
-
-    // Cache file bytes to compute line numbers without per-site file reads.
-    let mut byte_cache: HashMap<PathBuf, Vec<u8>> = HashMap::new();
-
-    let results: Vec<Value> = sites
-        .iter()
-        .map(|s| {
-            let path_str = workspace.relative(&s.path).display().to_string();
-            let src = byte_cache.entry(s.path.clone()).or_insert_with(|| {
-                crate::workspace::file_io::read_bytes(&s.path).unwrap_or_default()
-            });
-            let line = byte_to_line(src, s.byte_range.start) + 1;
-            serde_json::json!({
-                "path":       path_str,
-                "line":       line,
-                "byte_start": s.byte_range.start,
-            })
-        })
-        .collect();
-
-    Ok(serde_json::json!({
-        "op":      "show_callers",
-        "symbol":  symbol,
-        "results": results,
-    }))
-}
-
-/// `SHOW callees OF 'func'`
-///
-/// Re-parses the file containing `symbol`, locates the `function_definition`
-/// node, then walks its body collecting `call_expression` targets.
-///
-/// Results are sorted and deduplicated.
-///
-/// # Errors
-/// Returns an error if the file cannot be parsed or the AST node for the
-/// function is not found.
-pub fn show_callees(
-    def: &IndexRow,
-    index: &SymbolTable,
-    workspace: &Workspace,
-    symbol: &str,
-    lang_registry: &LanguageRegistry,
-) -> Result<Value> {
-    let lang = lang_registry
-        .language_for_path(&def.path)
-        .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
-    let config = lang.config();
-    let (source, tree) = parse_file(&def.path, lang_registry)?;
-    let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start, config)
-        .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
-
-    let mut callees: Vec<String> = Vec::new();
-    collect_callees_walk(
-        &source,
-        fn_node,
-        &mut callees,
-        config.call_expression_kind(),
-    );
-    callees.sort();
-    callees.dedup();
-
-    let path_str = workspace.relative(&def.path).display().to_string();
-    let results: Vec<Value> = callees
-        .iter()
-        .map(|name| {
-            index.find_def(name).map_or_else(
-                || serde_json::json!({ "name": name }),
-                |callee_def| {
-                    let callee_path = workspace.relative(&callee_def.path).display().to_string();
-                    serde_json::json!({
-                        "name": name,
-                        "path": callee_path,
-                        "line": callee_def.line,
-                    })
-                },
-            )
-        })
-        .collect();
-
-    Ok(serde_json::json!({
-        "op":      "show_callees",
-        "symbol":  symbol,
-        "path":    path_str,
-        "results": results,
-    }))
-}
-
-// -----------------------------------------------------------------------
-// Raw file views — no tree-sitter needed
-// -----------------------------------------------------------------------
-
-/// `SHOW LINES n-m OF 'file'` — return 1-based inclusive line range.
-///
-/// Both `start_line` and `end_line` are 1-based.  `end_line` is clamped to
-/// the file's last line if it exceeds the actual line count.  The response
-/// includes an annotation per line and a `byte_start` field marking the byte
-/// offset of the first line so callers can relate the result to byte-range
-/// SHOW AT queries.
-///
-/// # Errors
-/// Returns `Err` when the file cannot be read, the file is not valid UTF-8,
-/// or `start_line` is 0 or beyond the last line.
-pub fn show_lines(
-    workspace: &Workspace,
-    file: &str,
-    start_line: usize,
-    end_line: usize,
-) -> Result<Value> {
-    let path = workspace.safe_path(file)?;
-    let source = crate::workspace::file_io::read_bytes(&path)?;
-    let text = std::str::from_utf8(&source)
-        .map_err(|e| anyhow!("file '{file}' is not valid UTF-8: {e}"))?;
-
-    let all_lines: Vec<&str> = text.split('\n').collect();
-    let total = all_lines.len();
-
-    if start_line == 0 || start_line > total {
-        return Err(anyhow!(
-            "start_line {start_line} is out of range (file has {total} line(s))"
-        ));
-    }
-    let clamped_end = end_line.min(total);
-
-    if start_line > clamped_end {
-        return Err(anyhow!(
-            "start_line {start_line} is greater than end_line {clamped_end}"
-        ));
-    }
-
-    // Compute the byte offset of the first requested line.
-    let byte_start: usize = all_lines[..start_line - 1]
-        .iter()
-        .map(|l| l.len() + 1) // +1 for the '\n'
-        .sum();
-
-    let lines: Vec<Value> = all_lines[start_line - 1..clamped_end]
-        .iter()
-        .enumerate()
-        .map(|(i, line_text)| {
-            serde_json::json!({
-                "line": start_line + i,
-                "text": line_text,
-            })
-        })
-        .collect();
-
-    Ok(serde_json::json!({
-        "op":         "show_lines",
-        "file":       file,
-        "start_line": start_line,
-        "end_line":   clamped_end,
-        "byte_start": byte_start,
-        "lines":      lines,
     }))
 }
 
