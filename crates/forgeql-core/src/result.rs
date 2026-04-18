@@ -1382,4 +1382,117 @@ mod tests {
         assert!(output.contains("-old"));
         assert!(output.contains("+new"));
     }
+
+    // ------------------------------------------------------------------
+    // source_lines_count
+    // ------------------------------------------------------------------
+
+    fn make_lines_result(n: usize) -> ForgeQLResult {
+        ForgeQLResult::Show(ShowResult {
+            op: "show_lines".to_string(),
+            symbol: None,
+            file: Some(PathBuf::from("src/foo.cpp")),
+            total_lines: None,
+            hint: None,
+            metadata: None,
+            content: ShowContent::Lines {
+                lines: (1..=n)
+                    .map(|i| SourceLine {
+                        line: i,
+                        text: format!("line {i}"),
+                        marker: None,
+                    })
+                    .collect(),
+                byte_start: None,
+                depth: None,
+            },
+            start_line: Some(1),
+            end_line: Some(n),
+        })
+    }
+
+    #[test]
+    fn source_lines_count_zero_for_empty_lines_vec() {
+        assert_eq!(make_lines_result(0).source_lines_count(), 0);
+    }
+
+    #[test]
+    fn source_lines_count_matches_lines_vec_length() {
+        assert_eq!(make_lines_result(1).source_lines_count(), 1);
+        assert_eq!(make_lines_result(42).source_lines_count(), 42);
+        assert_eq!(make_lines_result(70).source_lines_count(), 70);
+    }
+
+    #[test]
+    fn source_lines_count_increases_with_more_lines() {
+        // Simulates SHOW BODY DEPTH 1 (10 lines) vs DEPTH 2 (13 lines).
+        assert!(
+            make_lines_result(13).source_lines_count() > make_lines_result(10).source_lines_count()
+        );
+    }
+
+    #[test]
+    fn source_lines_count_zero_for_query_result() {
+        let r = ForgeQLResult::Query(QueryResult {
+            op: "find_symbols".to_string(),
+            results: vec![],
+            total: 0,
+            metric_hint: None,
+            group_by_field: None,
+        });
+        assert_eq!(r.source_lines_count(), 0);
+    }
+
+    #[test]
+    fn source_lines_count_zero_for_show_members() {
+        let r = ForgeQLResult::Show(ShowResult {
+            op: "show_members".to_string(),
+            symbol: Some("MyClass".to_string()),
+            file: None,
+            total_lines: None,
+            hint: None,
+            metadata: None,
+            content: ShowContent::Members {
+                members: vec![MemberEntry {
+                    fql_kind: "field".to_string(),
+                    text: "int x;".to_string(),
+                    line: 1,
+                }],
+                byte_start: 0,
+            },
+            start_line: None,
+            end_line: None,
+        });
+        assert_eq!(r.source_lines_count(), 0);
+    }
+
+    #[test]
+    fn source_lines_count_zero_for_show_outline() {
+        let r = ForgeQLResult::Show(ShowResult {
+            op: "show_outline".to_string(),
+            symbol: None,
+            file: Some(PathBuf::from("src/foo.cpp")),
+            total_lines: None,
+            hint: None,
+            metadata: None,
+            content: ShowContent::Outline { entries: vec![] },
+            start_line: None,
+            end_line: None,
+        });
+        assert_eq!(r.source_lines_count(), 0);
+    }
+
+    #[test]
+    fn source_lines_count_zero_for_source_op_result() {
+        let r = ForgeQLResult::SourceOp(SourceOpResult {
+            op: "use_source".to_string(),
+            source_name: None,
+            session_id: Some("sid".to_string()),
+            branches: vec![],
+            symbols_indexed: None,
+            resumed: false,
+            message: None,
+        });
+        assert_eq!(r.source_lines_count(), 0);
+    }
 }
