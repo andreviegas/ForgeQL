@@ -768,4 +768,464 @@ mod tests {
         assert_eq!(entries[0].name, "init_motor");
         assert_eq!(entries[1].name, "init_sensor");
     }
+
+    // -- like_match edge cases -----------------------------------------
+
+    #[test]
+    fn like_match_empty_both() {
+        assert!(like_match("", ""));
+    }
+
+    #[test]
+    fn like_match_empty_pattern_nonempty_text() {
+        assert!(!like_match("foo", ""));
+    }
+
+    #[test]
+    fn like_match_percent_alone_matches_anything() {
+        assert!(like_match("anything", "%"));
+        assert!(like_match("", "%"));
+    }
+
+    #[test]
+    fn like_match_underscore_at_start() {
+        assert!(like_match("a", "_"));
+        assert!(!like_match("", "_"));
+    }
+
+    #[test]
+    fn like_match_underscore_at_end() {
+        assert!(like_match("z", "_"));
+        assert!(!like_match("ab", "_"));
+    }
+
+    #[test]
+    fn like_match_consecutive_percent() {
+        assert!(like_match("ab", "%%b"));
+    }
+
+    #[test]
+    fn like_match_pattern_longer_than_text() {
+        assert!(!like_match("ab", "abc"));
+    }
+
+    #[test]
+    fn like_match_only_underscores() {
+        assert!(like_match("ab", "__"));
+        assert!(!like_match("a", "__"));
+        assert!(!like_match("abc", "__"));
+    }
+
+    // -- path_glob_matches ---------------------------------------------
+
+    #[test]
+    fn path_glob_matches_exact_file() {
+        assert!(path_glob_matches(
+            std::path::Path::new("src/foo.rs"),
+            "src/foo.rs"
+        ));
+    }
+
+    #[test]
+    fn path_glob_matches_no_match() {
+        assert!(!path_glob_matches(
+            std::path::Path::new("src/foo.h"),
+            "src/**/*.cpp"
+        ));
+    }
+
+    #[test]
+    fn path_glob_matches_double_star() {
+        assert!(path_glob_matches(
+            std::path::Path::new("src/a/b/c.rs"),
+            "src/**"
+        ));
+    }
+
+    #[test]
+    fn path_glob_matches_extension_wildcard() {
+        assert!(path_glob_matches(
+            std::path::Path::new("bar.cpp"),
+            "**/*.cpp"
+        ));
+        assert!(!path_glob_matches(
+            std::path::Path::new("bar.rs"),
+            "**/*.cpp"
+        ));
+    }
+
+    #[test]
+    fn path_glob_matches_single_star() {
+        assert!(path_glob_matches(
+            std::path::Path::new("src/foo.rs"),
+            "src/*.rs"
+        ));
+        // single * does not cross directory boundary
+        assert!(!path_glob_matches(
+            std::path::Path::new("src/sub/foo.rs"),
+            "src/*.rs"
+        ));
+    }
+
+    // -- eval_predicate ------------------------------------------------
+
+    fn make_pred(field: &str, op: CompareOp, value: PredicateValue) -> crate::ir::Predicate {
+        crate::ir::Predicate {
+            field: field.into(),
+            op,
+            value,
+        }
+    }
+
+    #[test]
+    fn eval_pred_eq_case_insensitive() {
+        let sym = make_symbol("foo", "function", 0);
+        let pred = make_pred(
+            "fql_kind",
+            CompareOp::Eq,
+            PredicateValue::String("FUNCTION".into()),
+        );
+        assert!(
+            eval_predicate(&sym, &pred),
+            "Eq must compare case-insensitively"
+        );
+    }
+
+    #[test]
+    fn eval_pred_noteq_matches_different_value() {
+        let sym = make_symbol("foo", "struct", 0);
+        let pred = make_pred(
+            "fql_kind",
+            CompareOp::NotEq,
+            PredicateValue::String("function".into()),
+        );
+        assert!(eval_predicate(&sym, &pred));
+    }
+
+    #[test]
+    fn eval_pred_like_absent_field_is_false() {
+        // "signature" field does not exist on this symbol → Like returns false.
+        let sym = make_symbol("foo", "function", 0);
+        let pred = make_pred(
+            "signature",
+            CompareOp::Like,
+            PredicateValue::String("%".into()),
+        );
+        assert!(!eval_predicate(&sym, &pred));
+    }
+
+    #[test]
+    fn eval_pred_notlike_absent_field_is_false() {
+        // NotLike with absent field: is_some_and returns false (not true).
+        let sym = make_symbol("foo", "function", 0);
+        let pred = make_pred(
+            "signature",
+            CompareOp::NotLike,
+            PredicateValue::String("%".into()),
+        );
+        assert!(
+            !eval_predicate(&sym, &pred),
+            "NotLike on absent field must be false, not true"
+        );
+    }
+
+    #[test]
+    fn eval_pred_bool_eq_always_false() {
+        let sym = make_symbol("foo", "function", 0);
+        let pred = make_pred("name", CompareOp::Eq, PredicateValue::Bool(true));
+        assert!(
+            !eval_predicate(&sym, &pred),
+            "Bool predicate with Eq must always return false"
+        );
+    }
+
+    #[test]
+    fn eval_pred_bool_noteq_always_false() {
+        let sym = make_symbol("foo", "function", 0);
+        let pred = make_pred("name", CompareOp::NotEq, PredicateValue::Bool(false));
+        assert!(
+            !eval_predicate(&sym, &pred),
+            "Bool predicate with NotEq must always return false"
+        );
+    }
+
+    #[test]
+    fn eval_pred_gt_gte_lt_lte_numeric() {
+        let sym = make_symbol("foo", "function", 5);
+        assert!(eval_predicate(
+            &sym,
+            &make_pred("usages", CompareOp::Gt, PredicateValue::Number(4))
+        ));
+        assert!(eval_predicate(
+            &sym,
+            &make_pred("usages", CompareOp::Gte, PredicateValue::Number(5))
+        ));
+        assert!(eval_predicate(
+            &sym,
+            &make_pred("usages", CompareOp::Lt, PredicateValue::Number(6))
+        ));
+        assert!(eval_predicate(
+            &sym,
+            &make_pred("usages", CompareOp::Lte, PredicateValue::Number(5))
+        ));
+        assert!(!eval_predicate(
+            &sym,
+            &make_pred("usages", CompareOp::Gt, PredicateValue::Number(5))
+        ));
+    }
+
+    #[test]
+    fn eval_pred_numeric_absent_field_is_false() {
+        let sym = SymbolMatch {
+            name: "x".into(),
+            node_kind: None,
+            fql_kind: None,
+            language: None,
+            path: None,
+            line: None,
+            usages_count: None, // absent numeric field
+            fields: HashMap::new(),
+            count: None,
+        };
+        let pred = make_pred("usages", CompareOp::Gt, PredicateValue::Number(0));
+        assert!(
+            !eval_predicate(&sym, &pred),
+            "Gt on absent numeric field must be false"
+        );
+    }
+
+    #[test]
+    fn eval_pred_matches_valid_regex() {
+        let sym = make_symbol("init_motor", "function", 0);
+        let pred = make_pred(
+            "name",
+            CompareOp::Matches,
+            PredicateValue::String("^init_".into()),
+        );
+        assert!(eval_predicate(&sym, &pred));
+    }
+
+    #[test]
+    fn eval_pred_matches_invalid_regex_is_false() {
+        let sym = make_symbol("foo", "function", 0);
+        let pred = make_pred(
+            "name",
+            CompareOp::Matches,
+            PredicateValue::String("[invalid".into()),
+        );
+        assert!(
+            !eval_predicate(&sym, &pred),
+            "invalid regex must return false, not panic"
+        );
+    }
+
+    #[test]
+    fn eval_pred_notmatches_invalid_regex_is_true() {
+        // NotMatches with invalid regex returns true (safe default — don't exclude).
+        let sym = make_symbol("foo", "function", 0);
+        let pred = make_pred(
+            "name",
+            CompareOp::NotMatches,
+            PredicateValue::String("[invalid".into()),
+        );
+        assert!(
+            eval_predicate(&sym, &pred),
+            "invalid regex with NotMatches must return true"
+        );
+    }
+
+    // -- apply_clauses gap tests ---------------------------------------
+
+    #[test]
+    fn apply_clauses_offset_skips_first_n() {
+        let mut items: Vec<SymbolMatch> = ["a", "b", "c", "d", "e"]
+            .iter()
+            .map(|n| make_symbol(n, "function", 0))
+            .collect();
+        let clauses = Clauses {
+            offset: Some(2),
+            ..Default::default()
+        };
+        apply_clauses(&mut items, &clauses);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].name, "c");
+    }
+
+    #[test]
+    fn apply_clauses_offset_and_limit() {
+        let mut items: Vec<SymbolMatch> = (0..8_u32)
+            .map(|i| make_symbol(&i.to_string(), "function", 0))
+            .collect();
+        let clauses = Clauses {
+            offset: Some(2),
+            limit: Some(3),
+            ..Default::default()
+        };
+        apply_clauses(&mut items, &clauses);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].name, "2");
+        assert_eq!(items[2].name, "4");
+    }
+
+    #[test]
+    fn apply_clauses_offset_beyond_length_returns_empty() {
+        let mut items = vec![make_symbol("a", "function", 0)];
+        let clauses = Clauses {
+            offset: Some(100),
+            ..Default::default()
+        };
+        apply_clauses(&mut items, &clauses);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn apply_clauses_group_by_injects_count() {
+        // 3 functions + 1 struct → GROUP BY fql_kind → 2 groups with counts.
+        let mut items = vec![
+            make_symbol("a", "function", 0),
+            make_symbol("b", "function", 0),
+            make_symbol("c", "function", 0),
+            make_symbol("d", "struct", 0),
+        ];
+        let clauses = Clauses {
+            group_by: Some(crate::ir::GroupBy::Field("fql_kind".into())),
+            ..Default::default()
+        };
+        apply_clauses(&mut items, &clauses);
+        assert_eq!(items.len(), 2, "two groups expected");
+        let func = items
+            .iter()
+            .find(|s| s.fql_kind.as_deref() == Some("function"))
+            .unwrap();
+        assert_eq!(func.count, Some(3), "function group count must be 3");
+        let strct = items
+            .iter()
+            .find(|s| s.fql_kind.as_deref() == Some("struct"))
+            .unwrap();
+        assert_eq!(strct.count, Some(1), "struct group count must be 1");
+    }
+
+    #[test]
+    fn apply_clauses_having_filters_after_group() {
+        // HAVING count >= 2 removes singleton groups.
+        let mut items = vec![
+            make_symbol("a", "function", 0),
+            make_symbol("b", "function", 0),
+            make_symbol("c", "function", 0),
+            make_symbol("d", "struct", 0),
+        ];
+        let clauses = Clauses {
+            group_by: Some(crate::ir::GroupBy::Field("fql_kind".into())),
+            having_predicates: vec![Predicate {
+                field: "count".into(),
+                op: CompareOp::Gte,
+                value: PredicateValue::Number(2),
+            }],
+            ..Default::default()
+        };
+        apply_clauses(&mut items, &clauses);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].fql_kind.as_deref(), Some("function"));
+    }
+
+    #[test]
+    fn apply_clauses_multiple_where_are_and() {
+        // WHERE fql_kind = "function" AND name LIKE "init%"
+        // Only "init_motor" should survive.
+        let mut items = vec![
+            make_symbol("init_motor", "function", 0),
+            make_symbol("init_sensor", "struct", 0), // wrong kind
+            make_symbol("run_motor", "function", 0), // wrong name
+        ];
+        let clauses = Clauses {
+            where_predicates: vec![
+                Predicate {
+                    field: "fql_kind".into(),
+                    op: CompareOp::Eq,
+                    value: PredicateValue::String("function".into()),
+                },
+                Predicate {
+                    field: "name".into(),
+                    op: CompareOp::Like,
+                    value: PredicateValue::String("init%".into()),
+                },
+            ],
+            ..Default::default()
+        };
+        apply_clauses(&mut items, &clauses);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "init_motor");
+    }
+
+    #[test]
+    fn apply_clauses_order_by_tiebreaker_is_name() {
+        // Two symbols with the same usages — secondary sort must be by name ASC.
+        let mut items = vec![
+            make_symbol("zebra", "function", 5),
+            make_symbol("alpha", "function", 5),
+            make_symbol("middle", "function", 5),
+        ];
+        let clauses = Clauses {
+            order_by: Some(OrderBy {
+                field: "usages".into(),
+                direction: crate::ir::SortDirection::Asc,
+            }),
+            ..Default::default()
+        };
+        apply_clauses(&mut items, &clauses);
+        assert_eq!(items[0].name, "alpha");
+        assert_eq!(items[1].name, "middle");
+        assert_eq!(items[2].name, "zebra");
+    }
+
+    #[test]
+    fn apply_clauses_in_glob_no_match_returns_empty() {
+        let mut items = vec![
+            make_symbol("foo", "function", 0), // path: src/foo.cpp
+        ];
+        let clauses = Clauses {
+            in_glob: Some("include/**".into()),
+            ..Default::default()
+        };
+        apply_clauses(&mut items, &clauses);
+        assert!(
+            items.is_empty(),
+            "IN glob that matches nothing must produce empty result"
+        );
+    }
+
+    #[test]
+    fn apply_clauses_exclude_combined_with_where() {
+        // Exclude src/ paths, keep non-src. Then WHERE keeps only "function".
+        // Both "src/foo.cpp" items are excluded, only "lib/bar.cpp" "function" survives.
+        let mut items: Vec<SymbolMatch> = vec![
+            {
+                let mut s = make_symbol("foo", "function", 0);
+                s.path = Some(PathBuf::from("src/foo.cpp"));
+                s
+            },
+            {
+                let mut s = make_symbol("bar", "function", 0);
+                s.path = Some(PathBuf::from("lib/bar.cpp"));
+                s
+            },
+            {
+                let mut s = make_symbol("baz", "struct", 0);
+                s.path = Some(PathBuf::from("lib/baz.cpp"));
+                s
+            },
+        ];
+        let clauses = Clauses {
+            exclude_glob: Some("src/**".into()),
+            where_predicates: vec![Predicate {
+                field: "fql_kind".into(),
+                op: CompareOp::Eq,
+                value: PredicateValue::String("function".into()),
+            }],
+            ..Default::default()
+        };
+        apply_clauses(&mut items, &clauses);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "bar");
+    }
 }
