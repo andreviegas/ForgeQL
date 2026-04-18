@@ -629,3 +629,120 @@ pub fn build_env_guard_frame(
         guard_byte_range: node.byte_range(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- strip_cfg_wrapper -----------------------------------------------
+
+    #[test]
+    fn strip_cfg_wrapper_feature() {
+        // cfg(feature = "alloc") → feature = "alloc"
+        let res = strip_cfg_wrapper(r#"cfg(feature = "alloc")"#, "cfg");
+        assert_eq!(res, Some(r#"feature = "alloc""#));
+    }
+
+    #[test]
+    fn strip_cfg_wrapper_all() {
+        let res = strip_cfg_wrapper("all(unix, target_os = \"linux\")", "all");
+        assert_eq!(res, Some("unix, target_os = \"linux\""));
+    }
+
+    #[test]
+    fn strip_cfg_wrapper_no_match() {
+        let res = strip_cfg_wrapper("not(feature = \"x\")", "cfg");
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn strip_cfg_wrapper_missing_paren() {
+        let res = strip_cfg_wrapper("cfg feature", "cfg");
+        assert!(res.is_none());
+    }
+
+    // -- cfg_extract_key ------------------------------------------------
+
+    #[test]
+    fn cfg_extract_key_simple_key_only() {
+        assert_eq!(cfg_extract_key("unix"), "unix");
+    }
+
+    #[test]
+    fn cfg_extract_key_key_value_pair() {
+        assert_eq!(cfg_extract_key("feature = \"alloc\""), "feature");
+    }
+
+    #[test]
+    fn cfg_extract_key_with_underscores() {
+        assert_eq!(cfg_extract_key("target_os = \"linux\""), "target_os");
+    }
+
+    #[test]
+    fn cfg_extract_key_empty_is_empty() {
+        assert_eq!(cfg_extract_key(""), "");
+    }
+
+    #[test]
+    fn cfg_extract_key_invalid_chars_is_empty() {
+        // Keys with invalid characters return empty string.
+        assert_eq!(cfg_extract_key("not(unix)"), "");
+    }
+
+    // -- cfg_simple_ident -----------------------------------------------
+
+    #[test]
+    fn cfg_simple_ident_bare_word() {
+        assert_eq!(cfg_simple_ident("unix"), "unix");
+    }
+
+    #[test]
+    fn cfg_simple_ident_with_value_is_empty() {
+        // Has '=' → not a simple ident.
+        assert_eq!(cfg_simple_ident("feature = \"x\""), "");
+    }
+
+    #[test]
+    fn cfg_simple_ident_empty_is_empty() {
+        assert_eq!(cfg_simple_ident(""), "");
+    }
+
+    #[test]
+    fn cfg_simple_ident_with_parens_is_empty() {
+        assert_eq!(cfg_simple_ident("all(unix)"), "");
+    }
+
+    #[test]
+    fn cfg_simple_ident_trims_whitespace() {
+        assert_eq!(cfg_simple_ident("  unix  "), "unix");
+    }
+
+    // -- split_cfg_top_level --------------------------------------------
+
+    #[test]
+    fn split_cfg_top_level_single_element() {
+        let parts = split_cfg_top_level("unix");
+        assert_eq!(parts, vec!["unix"]);
+    }
+
+    #[test]
+    fn split_cfg_top_level_two_elements() {
+        let parts = split_cfg_top_level("unix, windows");
+        assert_eq!(parts, vec!["unix", " windows"]);
+    }
+
+    #[test]
+    fn split_cfg_top_level_nested_parens_skip_inner_comma() {
+        // "all(a, b), unix" — the comma inside all(...) must not split.
+        let parts = split_cfg_top_level("all(a, b), unix");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "all(a, b)");
+        assert_eq!(parts[1].trim(), "unix");
+    }
+
+    #[test]
+    fn split_cfg_top_level_empty_string() {
+        let parts = split_cfg_top_level("");
+        assert_eq!(parts, vec![""]);
+    }
+}
