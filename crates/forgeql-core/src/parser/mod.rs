@@ -1144,4 +1144,63 @@ mod tests {
             _ => panic!("wrong variant"),
         }
     }
+    // -- missing error path tests -----------------------------------------
+
+    #[test]
+    fn parse_use_missing_dot_is_error() {
+        // USE requires "source.branch" with a dot separator.
+        assert!(
+            parse("USE pisco main AS 'my-alias'").is_err(),
+            "USE without dot separator should be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_find_unknown_target_is_error() {
+        assert!(
+            parse("FIND everything").is_err(),
+            "FIND with unknown target should be a parse error"
+        );
+    }
+
+    // -- comparison operator round-trips ----------------------------------
+
+    #[test]
+    fn parse_where_usages_lt() {
+        let ops = parse("FIND symbols WHERE usages < 3").unwrap();
+        match &ops[0] {
+            ForgeQLIR::FindSymbols { clauses } => {
+                let p = &clauses.where_predicates[0];
+                assert_eq!(p.op, CompareOp::Lt);
+                assert_eq!(p.value, PredicateValue::Number(3));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_where_name_matches() {
+        let ops = parse("FIND symbols WHERE name MATCHES '^get_'").unwrap();
+        match &ops[0] {
+            ForgeQLIR::FindSymbols { clauses } => {
+                let p = &clauses.where_predicates[0];
+                assert_eq!(p.op, CompareOp::Matches);
+                assert_eq!(p.value, PredicateValue::String("^get_".into()));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_where_name_not_matches() {
+        let ops = parse("FIND symbols WHERE name NOT MATCHES '^test_'").unwrap();
+        match &ops[0] {
+            ForgeQLIR::FindSymbols { clauses } => {
+                let p = &clauses.where_predicates[0];
+                assert_eq!(p.op, CompareOp::NotMatches);
+                assert_eq!(p.value, PredicateValue::String("^test_".into()));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
 }
