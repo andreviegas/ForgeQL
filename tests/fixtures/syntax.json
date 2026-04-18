@@ -336,6 +336,50 @@
         "arithmetic",
         "bitwise",
         "shift"
+      ],
+      "enclosing_fn": [
+        "foo",
+        "bar",
+        "process"
+      ],
+      "enclosing_type": [
+        "Motor",
+        "State"
+      ],
+      "expanded_reads": [
+        "motorPrincipal",
+        "speed"
+      ],
+      "expansion_failure_reason": [
+        "no_definition",
+        "budget_exhausted",
+        "unknown"
+      ],
+      "guard": [
+        "defined(CONFIG_SMP)",
+        "!X"
+      ],
+      "guard_defines": [
+        "CONFIG_SMP",
+        "__cplusplus"
+      ],
+      "guard_kind": [
+        "preprocessor",
+        "attribute",
+        "build_tag",
+        "comptime",
+        "heuristic"
+      ],
+      "guard_mentions": [
+        "CONFIG_SMP",
+        "__cplusplus"
+      ],
+      "guard_negates": [
+        "CONFIG_SMP"
+      ],
+      "macro_expansion": [
+        "static_cast<int>(x)",
+        "foo()"
       ]
     },
     "numeric": {
@@ -436,6 +480,37 @@
         255,
         10,
         3
+      ],
+      "branch_count": [
+        0,
+        1,
+        2,
+        5
+      ],
+      "cast_count": [
+        0,
+        1,
+        2
+      ],
+      "expansion_depth": [
+        1,
+        2,
+        3
+      ],
+      "guard_branch": [
+        0,
+        1,
+        2
+      ],
+      "guard_group_id": [
+        1,
+        2,
+        3
+      ],
+      "macro_def_line": [
+        1,
+        10,
+        50
       ]
     },
     "boolean": {
@@ -520,6 +595,18 @@
         false
       ],
       "has_unused_reassign": [
+        true,
+        false
+      ],
+      "has_cast": [
+        true,
+        false
+      ],
+      "expanded_has_escape": [
+        true,
+        false
+      ],
+      "expansion_failed": [
         true,
         false
       ]
@@ -673,7 +760,7 @@
         "OFFSET"
       ],
       "explosion_cap": 200,
-      "notes": "Convenience alias: implicitly adds WHERE node_kind = 'declaration' WHERE scope = 'file'"
+      "notes": "Convenience alias: implicitly adds WHERE fql_kind = 'variable' WHERE scope = 'file'"
     },
     {
       "id": "show_body",
@@ -1416,6 +1503,18 @@
       "ull",
       "f",
       "ll"
+    ],
+    "guard_kind_values": [
+      "preprocessor",
+      "attribute",
+      "build_tag",
+      "comptime",
+      "heuristic"
+    ],
+    "expansion_failure_reason_values": [
+      "no_definition",
+      "budget_exhausted",
+      "unknown"
     ]
   },
   "assertion_tiers": {
@@ -1531,6 +1630,19 @@
     "for_style": "for_style_values",
     "operator_category": "operator_category_values",
     "num_sign": "num_sign_values",
-    "num_suffix": "num_suffix_values"
+    "num_suffix": "num_suffix_values",
+    "has_cast": "bool_values",
+    "expanded_has_escape": "bool_values",
+    "expansion_failed": "bool_values",
+    "enclosing_fn": "functions",
+    "enclosing_type": "types",
+    "expanded_reads": "string_values",
+    "expansion_failure_reason": "expansion_failure_reason_values",
+    "guard": "string_values",
+    "guard_defines": "string_values",
+    "guard_kind": "guard_kind_values",
+    "guard_mentions": "string_values",
+    "guard_negates": "string_values",
+    "macro_expansion": "string_values"
   }
 }

@@ -2,20 +2,6 @@
 
 All notable changes to ForgeQL will be documented in this file.
 
-## [Unreleased] — 2025-07-15
-
-### Refactor — `forgeql` crate: split `main.rs` into focused modules
-
-- **`cli.rs`** — `Cli`, `CliFormat`, `Commands`, `Mode`, `detect_mode` / `detect_mode_impl` (injectable for tests)
-- **`session.rs`** — `SessionFile`, `session_config_dir_from`, `session_load_from`, `session_save_to`, `session_try_resume` (all with injectable-IO design; zero `unsafe env::set_var` in tests)
-- **`execute.rs`** — `resolve_fql_input`, `update_session_from_result`, `format_result`, `execute_and_print`
-- **`runner/`** — submodules `repl`, `pipe`, `one_shot`, `mcp_stdio`
-- **`main.rs`** — rewritten as ~82-line pure orchestrator
-- **`forgeql-core/src/result.rs`** — 7 new `source_lines_count` tests relocated from `main.rs`
-- 33 unit tests total (12 in `cli.rs` + 21 in `execute.rs`/`session.rs`/`result.rs`), all with full clippy compliance (`--deny warnings`)
-
-#### ForgeQL commands used
-- `BEGIN TRANSACTION`, `CHANGE FILE … WITH`, `CHANGE FILE … LINES n-m WITH`, `VERIFY build 'fmt-apply'`, `VERIFY build 'test-all-before-commit'`, `COMMIT MESSAGE`
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
@@ -31,6 +17,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Bug Fixes
 
 - **Duplicate verify_steps names**: `.forgeql.yaml` loading now rejects duplicate step names with a clear error message instead of silently using last-one-wins semantics.
+
+## [0.37.1] — 2026-04-18
+
+### Bug Fixes
+
+- **`FIND globals WHERE node_kind = ...` silently dropped predicate**: When `FIND globals` (which implicitly adds `WHERE fql_kind = 'variable'`) was combined with an explicit `WHERE node_kind = '...'`, the `node_kind` predicate was stripped from post-filters because `kind_exact.is_some()` didn't account for the index-selection priority (`fql_kind` wins). Result: all file-scope variables returned unfiltered. Now only strips the `node_kind` predicate when it was actually used for the index shortcut.
+
+### Refactor
+
+- **`forgeql` crate: split `main.rs` into focused modules** — `cli.rs` (Clap structs + `detect_mode`), `session.rs` (injectable-IO session persistence), `execute.rs` (FQL resolution + formatting), `runner/` (repl, pipe, one_shot, mcp_stdio), `main.rs` reduced to ~82-line orchestrator. 56 new unit tests.
+
+### Improved
+
+- **SMS test coverage**: Added 19 missing enrichment fields to `syntax.json` (`branch_count`, `cast_count`, `enclosing_fn`, `enclosing_type`, `expanded_has_escape`, `expanded_reads`, `expansion_depth`, `expansion_failed`, `expansion_failure_reason`, `guard`, `guard_branch`, `guard_defines`, `guard_group_id`, `guard_kind`, `guard_mentions`, `guard_negates`, `has_cast`, `macro_def_line`, `macro_expansion`). Corrected stale `find_globals` notes from `node_kind = 'declaration'` to `fql_kind = 'variable'`.
 
 ## [0.37.0] — 2026-04-17
 ### Bug Fixes

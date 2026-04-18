@@ -1964,12 +1964,16 @@ fn find_symbols_prefilter(
         };
 
     // Collect non-usages predicates not already handled by index lookups.
+    // Only strip a predicate when its index shortcut was actually selected.
+    // The row-source priority is: fql_kind > node_kind > inferred > full scan,
+    // so node_kind is only used when fql_kind is absent.
+    let kind_used_for_index = kind_exact.is_some() && fql_kind_exact.is_none();
     let non_usages_preds: Vec<_> = clauses
         .where_predicates
         .iter()
         .filter(|p| !is_usages_pred(p))
         .filter(|p| fql_kind_exact.is_none() || !(p.field == "fql_kind" && p.op == CompareOp::Eq))
-        .filter(|p| kind_exact.is_none() || !(p.field == "node_kind" && p.op == CompareOp::Eq))
+        .filter(|p| !(kind_used_for_index && p.field == "node_kind" && p.op == CompareOp::Eq))
         .filter(|p| name_like.is_none() || !(p.field == "name" && p.op == CompareOp::Like))
         .collect();
 
@@ -3032,5 +3036,56 @@ mod tests {
                 "local variable '{local}' must NOT appear in FIND globals; got: {names:?}"
             );
         }
+    }
+
+    /// `FIND globals WHERE node_kind = 'enum_specifier'` must return zero results,
+    /// not silently drop the `node_kind` predicate and return all variables.
+    ///
+    /// Regression: the `non_usages_preds` filter incorrectly stripped the
+    /// `node_kind` predicate when `fql_kind_exact` was also present, because
+    /// the `kind_exact.is_some()` guard didn't account for the index-selection
+    /// priority (`fql_kind` wins over `node_kind`).
+    #[cfg(feature = "test-helpers")]
+    #[test]
+    fn find_globals_with_conflicting_node_kind_returns_empty() {
+        use std::fs;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let fixtures = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("tests/fixtures");
+        fs::copy(
+            fixtures.join("motor_control.h"),
+            tmp.path().join("motor_control.h"),
+        )
+        .unwrap();
+        fs::copy(
+            fixtures.join("motor_control.cpp"),
+            tmp.path().join("motor_control.cpp"),
+        )
+        .unwrap();
+
+        let data_dir = tmp.path().join("data");
+        let mut engine = ForgeQLEngine::new(data_dir, make_registry()).unwrap();
+        let session_id = engine.register_local_session(tmp.path()).unwrap();
+
+        // FIND globals adds fql_kind='variable' + scope='file' implicitly.
+        // Adding WHERE node_kind = 'enum_specifier' must further filter,
+        // not be silently dropped.
+        let op = crate::parser::parse("FIND globals WHERE node_kind = 'enum_specifier' LIMIT 200")
+            .unwrap();
+        let result = engine.execute(Some(&session_id), &op[0]).unwrap();
+        let results = match result {
+            ForgeQLResult::Query(qr) => qr.results,
+            other => panic!("expected Query, got: {other:?}"),
+        };
+
+        assert!(
+            results.is_empty(),
+            "FIND globals WHERE node_kind = 'enum_specifier' should return 0 results \
+             (no variable has node_kind='enum_specifier'), got {} results: {:?}",
+            results.len(),
+            results.iter().map(|r| &r.name).collect::<Vec<_>>(),
+        );
     }
 }
