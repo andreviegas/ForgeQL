@@ -1,37 +1,21 @@
-#![allow(unused_imports)]
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "test-helpers")]
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use crate::{
-    ast::{index::SymbolTable, lang::LanguageRegistry, query, show},
-    config::ForgeConfig,
-    context::RequestContext,
-    git::{
-        self as git,
-        source::{Source, SourceRegistry},
-        worktree,
-    },
-    ir::{Clauses, ForgeQLIR},
-    result::{
-        BeginTransactionResult, CallDirection, CallGraphEntry, CommitResult, FileEntry,
-        ForgeQLResult, MemberEntry, MutationResult, OutlineEntry, QueryResult, RollbackResult,
-        ShowContent, ShowResult, SourceLine, SourceOpResult, SuggestionEntry, SymbolMatch,
-        VerifyBuildResult,
-    },
-    session::{Checkpoint, Session, read_last_active},
-    transforms::copy_move::{plan_copy_lines, plan_copy_lines_at, plan_move_lines},
-    transforms::diff::{CompactDiffConfig, compact_diff_plan},
-    transforms::{TransformPlan, plan_from_ir},
-    verify,
+    ast::index::SymbolTable,
+    git::worktree,
+    session::{Session, read_last_active},
     workspace::Workspace,
 };
 
 use super::ForgeQLEngine;
-use super::{SESSION_TTL_SECS, generate_session_id, require_session_id};
+#[cfg(feature = "test-helpers")]
+use super::generate_session_id;
+use super::{SESSION_TTL_SECS, require_session_id};
 
 impl ForgeQLEngine {
     pub fn evict_idle_sessions(&mut self) {

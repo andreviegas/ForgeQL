@@ -1,37 +1,16 @@
-#![allow(unused_imports)]
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
-use tracing::{debug, info, warn};
+use anyhow::Result;
+use tracing::info;
 
 use crate::{
-    ast::{index::SymbolTable, lang::LanguageRegistry, query, show},
-    config::ForgeConfig,
-    context::RequestContext,
-    git::{
-        self as git,
-        source::{Source, SourceRegistry},
-        worktree,
-    },
-    ir::{Clauses, ForgeQLIR},
-    result::{
-        BeginTransactionResult, CallDirection, CallGraphEntry, CommitResult, FileEntry,
-        ForgeQLResult, MemberEntry, MutationResult, OutlineEntry, QueryResult, RollbackResult,
-        ShowContent, ShowResult, SourceLine, SourceOpResult, SuggestionEntry, SymbolMatch,
-        VerifyBuildResult,
-    },
-    session::{Checkpoint, Session, read_last_active},
-    transforms::copy_move::{plan_copy_lines, plan_copy_lines_at, plan_move_lines},
-    transforms::diff::{CompactDiffConfig, compact_diff_plan},
-    transforms::{TransformPlan, plan_from_ir},
-    verify,
-    workspace::Workspace,
+    git::{self as git, source::Source, worktree},
+    result::{ForgeQLResult, QueryResult, SourceOpResult, SymbolMatch},
+    session::Session,
 };
 
 use super::ForgeQLEngine;
-use super::{generate_session_id, load_verify_config, require_session_id};
+use super::{load_verify_config, require_session_id};
 
 impl ForgeQLEngine {
     pub(super) fn create_source(&mut self, name: &str, url: &str) -> Result<ForgeQLResult> {

@@ -1,39 +1,18 @@
-#![allow(unused_imports)]
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use tracing::{debug, info, warn};
 
 use crate::{
-    ast::{index::SymbolTable, lang::LanguageRegistry, query, show},
-    config::ForgeConfig,
-    context::RequestContext,
-    git::{
-        self as git,
-        source::{Source, SourceRegistry},
-        worktree,
-    },
+    ast::{query, show},
     ir::{Clauses, ForgeQLIR},
-    result::{
-        BeginTransactionResult, CallDirection, CallGraphEntry, CommitResult, FileEntry,
-        ForgeQLResult, MemberEntry, MutationResult, OutlineEntry, QueryResult, RollbackResult,
-        ShowContent, ShowResult, SourceLine, SourceOpResult, SuggestionEntry, SymbolMatch,
-        VerifyBuildResult,
-    },
-    session::{Checkpoint, Session, read_last_active},
-    transforms::copy_move::{plan_copy_lines, plan_copy_lines_at, plan_move_lines},
-    transforms::diff::{CompactDiffConfig, compact_diff_plan},
-    transforms::{TransformPlan, plan_from_ir},
-    verify,
-    workspace::Workspace,
+    result::{FileEntry, ForgeQLResult, ShowContent},
+    session::Session,
 };
 
 use super::ForgeQLEngine;
 use super::{
-    DEFAULT_BODY_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_SHOW_LINE_LIMIT, convert_show_json,
-    reject_text_filter, resolve_body_symbol, resolve_symbol,
+    DEFAULT_BODY_DEPTH, DEFAULT_CONTEXT_LINES, convert_show_json, reject_text_filter,
+    resolve_body_symbol, resolve_symbol,
 };
 
 impl ForgeQLEngine {
