@@ -1161,4 +1161,223 @@ mod tests {
         });
         assert_eq!(r.source_lines_count(), 0);
     }
+    // -- compact_name edge cases -----------------------------------------
+
+    #[test]
+    fn compact_name_short_returned_as_is() {
+        let name = "short_sym";
+        let result = compact_name(name);
+        assert_eq!(result.as_ref(), name);
+    }
+
+    #[test]
+    fn compact_name_exactly_120_chars_returned_as_is() {
+        let name = "a".repeat(120);
+        let result = compact_name(&name);
+        assert_eq!(
+            result.as_ref(),
+            name.as_str(),
+            "exactly 120 chars must not be truncated"
+        );
+    }
+
+    #[test]
+    fn compact_name_121_chars_truncated_with_ellipsis() {
+        let name = "b".repeat(121);
+        let result = compact_name(&name);
+        // First 120 bytes + "…" (U+2026, 3 bytes in UTF-8)
+        let expected = format!("{}…", "b".repeat(120));
+        assert_eq!(result.as_ref(), expected.as_str());
+    }
+
+    #[test]
+    fn compact_name_with_newline_returns_len_format() {
+        let name = "line1\nline2";
+        let result = compact_name(name);
+        assert_eq!(result.as_ref(), "len:11");
+    }
+
+    // -- ShowResult Display variants -------------------------------------
+
+    #[test]
+    fn display_show_result_lines_variant() {
+        let result = ShowResult {
+            op: "show_body".to_string(),
+            symbol: Some("myFunc".to_string()),
+            file: Some(PathBuf::from("src/lib.cpp")),
+            content: ShowContent::Lines {
+                lines: vec![SourceLine {
+                    line: 10,
+                    text: "void myFunc() {}".to_string(),
+                    marker: None,
+                }],
+                byte_start: None,
+                depth: None,
+            },
+            start_line: None,
+            end_line: None,
+            total_lines: None,
+            hint: None,
+            metadata: None,
+        };
+        let output = format!("{result}");
+        assert!(
+            output.contains("--- myFunc ---"),
+            "symbol header must appear"
+        );
+        assert!(output.contains("src/lib.cpp"), "file must appear");
+        assert!(
+            output.contains("void myFunc()"),
+            "source line text must appear"
+        );
+        assert!(output.contains("10"), "line number must appear");
+    }
+
+    #[test]
+    fn display_show_result_signature_variant() {
+        let result = ShowResult {
+            op: "show_signature".to_string(),
+            symbol: Some("myFunc".to_string()),
+            file: None,
+            content: ShowContent::Signature {
+                signature: "void myFunc(int x)".to_string(),
+                line: 42,
+                byte_start: 0,
+            },
+            start_line: None,
+            end_line: None,
+            total_lines: None,
+            hint: None,
+            metadata: None,
+        };
+        let output = format!("{result}");
+        assert!(output.contains("42"), "signature line number must appear");
+        assert!(
+            output.contains("void myFunc(int x)"),
+            "signature text must appear"
+        );
+    }
+
+    #[test]
+    fn display_show_result_outline_variant() {
+        let result = ShowResult {
+            op: "show_outline".to_string(),
+            symbol: None,
+            file: Some(PathBuf::from("src/api.h")),
+            content: ShowContent::Outline {
+                entries: vec![OutlineEntry {
+                    name: "ApiHandler".to_string(),
+                    fql_kind: "class".to_string(),
+                    path: PathBuf::from("src/api.h"),
+                    line: 5,
+                }],
+            },
+            start_line: None,
+            end_line: None,
+            total_lines: None,
+            hint: None,
+            metadata: None,
+        };
+        let output = format!("{result}");
+        assert!(output.contains("ApiHandler"), "class name must appear");
+        assert!(output.contains("class"), "fql_kind must appear");
+        assert!(output.contains('5'), "line number must appear");
+    }
+
+    #[test]
+    fn display_show_result_members_variant() {
+        let result = ShowResult {
+            op: "show_members".to_string(),
+            symbol: Some("Foo".to_string()),
+            file: None,
+            content: ShowContent::Members {
+                members: vec![MemberEntry {
+                    fql_kind: "field".to_string(),
+                    text: "int count;".to_string(),
+                    line: 7,
+                }],
+                byte_start: 0,
+            },
+            start_line: None,
+            end_line: None,
+            total_lines: None,
+            hint: None,
+            metadata: None,
+        };
+        let output = format!("{result}");
+        assert!(output.contains("int count;"), "member text must appear");
+        assert!(output.contains("field"), "member kind must appear");
+    }
+
+    #[test]
+    fn display_show_result_callgraph_variant() {
+        let result = ShowResult {
+            op: "show_callees".to_string(),
+            symbol: Some("process".to_string()),
+            file: None,
+            content: ShowContent::CallGraph {
+                direction: CallDirection::Callees,
+                entries: vec![CallGraphEntry {
+                    name: "write_buf".to_string(),
+                    path: Some(PathBuf::from("src/io.cpp")),
+                    line: Some(88),
+                    byte_start: None,
+                }],
+            },
+            start_line: None,
+            end_line: None,
+            total_lines: None,
+            hint: None,
+            metadata: None,
+        };
+        let output = format!("{result}");
+        assert!(output.contains("write_buf"), "callee name must appear");
+        assert!(output.contains("src/io.cpp"), "callee path must appear");
+        assert!(output.contains("88"), "callee line must appear");
+    }
+
+    #[test]
+    fn display_show_result_filelist_variant() {
+        let result = ShowResult {
+            op: "find_files".to_string(),
+            symbol: None,
+            file: None,
+            content: ShowContent::FileList {
+                files: vec![FileEntry {
+                    path: PathBuf::from("src/main.cpp"),
+                    depth: None,
+                    extension: "cpp".to_string(),
+                    size: 1024,
+                    count: None,
+                }],
+                total: 1,
+            },
+            start_line: None,
+            end_line: None,
+            total_lines: None,
+            hint: None,
+            metadata: None,
+        };
+        let output = format!("{result}");
+        assert!(output.contains("src/main.cpp"), "file path must appear");
+        assert!(output.contains("(1 files)"), "total count must appear");
+    }
+
+    // -- RollbackResult Display ------------------------------------------
+
+    #[test]
+    fn display_rollback_result_contains_name_and_oid() {
+        use crate::result::RollbackResult;
+        let result = RollbackResult {
+            name: "my-checkpoint".to_string(),
+            reset_to_oid: "abc123def456".to_string(),
+        };
+        let output = format!("{result}");
+        assert!(
+            output.contains("my-checkpoint"),
+            "checkpoint name must appear"
+        );
+        assert!(output.contains("abc123def456"), "OID must appear");
+        assert!(output.contains("Rolled back"), "action label must appear");
+    }
 }
