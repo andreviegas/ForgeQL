@@ -210,4 +210,155 @@ mod tests {
         // 2 is magic
         assert!(matches!(2_i64, v if !matches!(v, -1..=1)));
     }
+
+    // -- detect_format edge cases ------------------------------------
+
+    #[test]
+    fn detect_format_zero_is_dec_not_oct() {
+        // "0" has length 1 so the oct branch (len > 1 && starts_with '0') is skipped.
+        assert_eq!(detect_format("0"), "dec");
+    }
+
+    #[test]
+    fn detect_format_uppercase_hex_prefix() {
+        assert_eq!(detect_format("0X1A"), "hex");
+    }
+
+    #[test]
+    fn detect_format_uppercase_bin_prefix() {
+        assert_eq!(detect_format("0B1010"), "bin");
+    }
+
+    #[test]
+    fn detect_format_octal_two_digit() {
+        assert_eq!(detect_format("077"), "oct");
+        assert_eq!(detect_format("01"), "oct");
+    }
+
+    #[test]
+    fn detect_format_scientific_negative_exp() {
+        assert_eq!(detect_format("1e-5"), "scientific");
+    }
+
+    #[test]
+    fn detect_format_scientific_uppercase_e() {
+        assert_eq!(detect_format("2E10"), "scientific");
+    }
+
+    #[test]
+    fn detect_format_scientific_before_float() {
+        // "1.5e3" contains both '.' and 'e' — scientific must take priority.
+        assert_eq!(detect_format("1.5e3"), "scientific");
+    }
+
+    #[test]
+    fn detect_format_float_no_exp() {
+        assert_eq!(detect_format("0.5"), "float");
+        assert_eq!(detect_format("1.0"), "float");
+    }
+
+    // -- detect_suffix_with_table edge cases -------------------------
+
+    #[test]
+    fn suffix_detection_uppercase() {
+        let s = cpp_config().number_suffix_table();
+        // Uppercase suffixes must be detected (table entries are lowercased, input
+        // is lowercased by the caller — simulate that here).
+        assert_eq!(detect_suffix_with_table("100u", s), "u");
+        assert_eq!(detect_suffix_with_table("100ul", s), "ul");
+        assert_eq!(detect_suffix_with_table("100ull", s), "ull");
+        assert_eq!(detect_suffix_with_table("100ll", s), "ll");
+    }
+
+    #[test]
+    fn suffix_detection_long_l() {
+        let s = cpp_config().number_suffix_table();
+        assert_eq!(detect_suffix_with_table("42l", s), "l");
+    }
+
+    #[test]
+    fn suffix_detection_hex_with_u_suffix() {
+        let s = cpp_config().number_suffix_table();
+        // 0xffu: the trailing 'u' is a suffix; 'f' is a hex digit, not a suffix.
+        assert_eq!(detect_suffix_with_table("0xffu", s), "u");
+    }
+
+    #[test]
+    fn suffix_detection_plain_int_no_suffix() {
+        let s = cpp_config().number_suffix_table();
+        assert_eq!(detect_suffix_with_table("1234", s), "");
+    }
+
+    // -- strip_suffix_with_table edge cases --------------------------
+
+    #[test]
+    fn strip_suffix_removes_u_suffix() {
+        let s = cpp_config().number_suffix_table();
+        assert_eq!(strip_suffix_with_table("42u", s), "42");
+    }
+
+    #[test]
+    fn strip_suffix_removes_ul_suffix() {
+        let s = cpp_config().number_suffix_table();
+        assert_eq!(strip_suffix_with_table("100ul", s), "100");
+    }
+
+    #[test]
+    fn strip_suffix_hex_with_u_leaves_hex_intact() {
+        let s = cpp_config().number_suffix_table();
+        // 0xffu → strip 'u' → "0xff"
+        assert_eq!(strip_suffix_with_table("0xffu", s), "0xff");
+    }
+
+    #[test]
+    fn strip_suffix_no_suffix_unchanged() {
+        let s = cpp_config().number_suffix_table();
+        assert_eq!(strip_suffix_with_table("42", s), "42");
+    }
+
+    #[test]
+    fn strip_suffix_hex_f_not_stripped() {
+        let s = cpp_config().number_suffix_table();
+        // 0xff: 'f' is a digit, the suffix table hit for single-char hex digits is skipped.
+        assert_eq!(strip_suffix_with_table("0xff", s), "0xff");
+    }
+
+    // -- parse_value edge cases --------------------------------------
+
+    #[test]
+    fn parse_value_scientific_rounds_down() {
+        // 1e3 = 1000.0 → truncated to 1000 as i64.
+        assert_eq!(parse_value("1e3", "scientific"), 1000);
+    }
+
+    #[test]
+    fn parse_value_float_truncated() {
+        assert_eq!(parse_value("3.9", "float"), 3);
+    }
+
+    #[test]
+    fn parse_value_overflow_returns_zero() {
+        // A decimal value beyond i64::MAX — unwrap_or(0) must not panic.
+        assert_eq!(parse_value("99999999999999999999999", "dec"), 0);
+    }
+
+    #[test]
+    fn parse_value_empty_string_returns_zero() {
+        assert_eq!(parse_value("", "dec"), 0);
+    }
+
+    #[test]
+    fn parse_value_hex_with_uppercase() {
+        assert_eq!(parse_value("0XFF", "hex"), 255);
+    }
+
+    #[test]
+    fn parse_value_binary() {
+        assert_eq!(parse_value("0b1111", "bin"), 15);
+    }
+
+    #[test]
+    fn parse_value_octal() {
+        assert_eq!(parse_value("010", "oct"), 8);
+    }
 }
