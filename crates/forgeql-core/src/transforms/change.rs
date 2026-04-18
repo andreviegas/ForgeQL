@@ -544,4 +544,77 @@ mod tests {
         let fe = resolve_lines("lines3.c", &path, 2, 2, "").unwrap();
         assert_eq!(fe.edits[0].replacement, "", "empty content = line deletion");
     }
+    // -- is_glob ----------------------------------------------------------
+
+    #[test]
+    fn is_glob_double_star_is_glob() {
+        assert!(is_glob("src/**/*.rs"), "** must be recognised as a glob");
+    }
+
+    #[test]
+    fn is_glob_question_mark_is_glob() {
+        assert!(is_glob("file?.rs"), "? must be recognised as a glob");
+    }
+
+    #[test]
+    fn is_glob_bracket_char_class_is_glob() {
+        assert!(is_glob("[abc].rs"), "[ must be recognised as a glob");
+    }
+
+    #[test]
+    fn is_glob_plain_path_is_not_glob() {
+        assert!(!is_glob("src/foo/bar.rs"), "plain path is not a glob");
+    }
+
+    #[test]
+    fn is_glob_empty_string_is_not_glob() {
+        assert!(!is_glob(""), "empty string is not a glob");
+    }
+
+    // -- lines_to_byte_range CRLF -----------------------------------------
+
+    #[test]
+    fn lines_to_byte_range_crlf_endings() {
+        // Windows CRLF: each line ends with \r\n
+        let source = b"first\r\nsecond\r\nthird\r\n";
+        // Line 2 should cover "second\r\n"
+        let (start, end) = lines_to_byte_range(source, 2, 2).unwrap();
+        let slice = &source[start..end];
+        assert_eq!(slice, b"second\r\n");
+    }
+
+    #[test]
+    fn lines_to_byte_range_mixed_lf_crlf() {
+        // Mixed line endings — only \n triggers line count increment
+        let source = b"lf\ncrlf\r\nend\n";
+        // Line 1 = "lf\n", line 2 = "crlf\r\n", line 3 = "end\n"
+        let (start, end) = lines_to_byte_range(source, 2, 2).unwrap();
+        assert_eq!(&source[start..end], b"crlf\r\n");
+    }
+
+    // -- resolve_delete ---------------------------------------------------
+
+    #[test]
+    fn resolve_delete_creates_full_clear_edit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("target.cpp");
+        let content = "first line\nsecond line\n";
+        std::fs::write(&path, content).expect("write");
+
+        let fe = resolve_delete("target.cpp", &path).unwrap();
+        assert_eq!(fe.edits.len(), 1);
+        // The single edit should span the whole file (0..content.len()).
+        assert_eq!(fe.edits[0].start, 0);
+        assert_eq!(fe.edits[0].end, content.len());
+        assert_eq!(fe.edits[0].replacement, "");
+    }
+
+    #[test]
+    fn resolve_delete_nonexistent_file_errors() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ghost.cpp");
+        // File was never created.
+        let result = resolve_delete("ghost.cpp", &path);
+        assert!(result.is_err(), "missing file must return an error");
+    }
 }
