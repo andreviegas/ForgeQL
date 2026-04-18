@@ -1049,4 +1049,100 @@ mod tests {
             "data members should not have body_symbol"
         );
     }
+    // -- find_all_defs ---------------------------------------------------
+
+    #[test]
+    fn find_all_defs_empty_for_unknown_name() {
+        let table = two_row_table();
+        let defs = table.find_all_defs("nonexistent");
+        assert!(defs.is_empty(), "unknown symbol must return empty vec");
+    }
+
+    #[test]
+    fn find_all_defs_returns_all_matching_rows() {
+        // Push the same name into two files to simulate a multi-file workspace.
+        let mut table = SymbolTable::default();
+        let make_row = |path: &str| IndexRow {
+            name: "shared".to_string(),
+            node_kind: "function_definition".to_string(),
+            fql_kind: String::new(),
+            language: String::new(),
+            path: PathBuf::from(path),
+            byte_range: 0..10,
+            line: 1,
+            fields: HashMap::new(),
+        };
+        table.push_row(make_row("src/a.cpp"));
+        table.push_row(make_row("src/b.cpp"));
+
+        let defs = table.find_all_defs("shared");
+        assert_eq!(defs.len(), 2, "both rows must be returned");
+    }
+
+    #[test]
+    fn find_all_defs_single_result() {
+        let table = two_row_table();
+        let defs = table.find_all_defs("foo");
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "foo");
+    }
+
+    // -- suggest_similar -------------------------------------------------
+
+    #[test]
+    fn suggest_similar_prefix_match() {
+        let table = two_row_table(); // has "foo" and "bar"
+        let suggestions = table.suggest_similar("fo", 10);
+        assert!(suggestions.contains(&"foo"), "prefix 'fo' must match 'foo'");
+    }
+
+    #[test]
+    fn suggest_similar_substring_match() {
+        let table = two_row_table(); // has "foo" and "bar"
+        let suggestions = table.suggest_similar("oo", 10);
+        assert!(
+            suggestions.contains(&"foo"),
+            "substring 'oo' must match 'foo'"
+        );
+    }
+
+    #[test]
+    fn suggest_similar_case_insensitive() {
+        let table = two_row_table(); // has "foo"
+        let suggestions = table.suggest_similar("FOO", 10);
+        assert!(
+            suggestions.contains(&"foo"),
+            "uppercase query must match lowercase name"
+        );
+    }
+
+    #[test]
+    fn suggest_similar_no_match_returns_empty() {
+        let table = two_row_table();
+        let suggestions = table.suggest_similar("zzz_nonexistent", 10);
+        assert!(suggestions.is_empty(), "no match must return empty vec");
+    }
+
+    #[test]
+    fn suggest_similar_respects_max_limit() {
+        // Build a table with 5 symbols that all start with "sym".
+        let mut table = SymbolTable::default();
+        for i in 0..5_usize {
+            table.push_row(IndexRow {
+                name: format!("sym_{i}"),
+                node_kind: "function_definition".to_string(),
+                fql_kind: String::new(),
+                language: String::new(),
+                path: PathBuf::from("src/lib.cpp"),
+                byte_range: 0..10,
+                line: 1,
+                fields: HashMap::new(),
+            });
+        }
+        let suggestions = table.suggest_similar("sym", 3);
+        assert!(
+            suggestions.len() <= 3,
+            "result must not exceed max limit of 3"
+        );
+    }
 }
