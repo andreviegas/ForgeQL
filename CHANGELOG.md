@@ -2,6 +2,20 @@
 
 All notable changes to ForgeQL will be documented in this file.
 
+## [Unreleased] — 2025-07-15
+
+### Refactor — `forgeql` crate: split `main.rs` into focused modules
+
+- **`cli.rs`** — `Cli`, `CliFormat`, `Commands`, `Mode`, `detect_mode` / `detect_mode_impl` (injectable for tests)
+- **`session.rs`** — `SessionFile`, `session_config_dir_from`, `session_load_from`, `session_save_to`, `session_try_resume` (all with injectable-IO design; zero `unsafe env::set_var` in tests)
+- **`execute.rs`** — `resolve_fql_input`, `update_session_from_result`, `format_result`, `execute_and_print`
+- **`runner/`** — submodules `repl`, `pipe`, `one_shot`, `mcp_stdio`
+- **`main.rs`** — rewritten as ~82-line pure orchestrator
+- **`forgeql-core/src/result.rs`** — 7 new `source_lines_count` tests relocated from `main.rs`
+- 33 unit tests total (12 in `cli.rs` + 21 in `execute.rs`/`session.rs`/`result.rs`), all with full clippy compliance (`--deny warnings`)
+
+#### ForgeQL commands used
+- `BEGIN TRANSACTION`, `CHANGE FILE … WITH`, `CHANGE FILE … LINES n-m WITH`, `VERIFY build 'fmt-apply'`, `VERIFY build 'test-all-before-commit'`, `COMMIT MESSAGE`
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
