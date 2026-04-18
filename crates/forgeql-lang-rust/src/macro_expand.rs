@@ -135,11 +135,7 @@ impl MacroExpander for RustMacroExpander {
 // Private helpers
 // -----------------------------------------------------------------------
 
-fn node_text(source: &[u8], node: tree_sitter::Node<'_>) -> String {
-    std::str::from_utf8(&source[node.byte_range()])
-        .unwrap_or("")
-        .to_string()
-}
+use forgeql_core::ast::lang::node_text;
 
 /// Iterate non-recursive (direct) children of `node`.
 fn walk_children(node: tree_sitter::Node<'_>) -> impl Iterator<Item = tree_sitter::Node<'_>> {

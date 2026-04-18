@@ -16,7 +16,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use forgeql_core::ast::lang::{LanguageConfig, LanguageRegistry, LanguageSupport};
+use forgeql_core::ast::lang::{LanguageConfig, LanguageRegistry, LanguageSupport, node_text};
 use forgeql_core::ast::lang_json::LanguageConfigJson;
 
 /// Python language support for ForgeQL.
@@ -130,16 +130,6 @@ impl LanguageSupport for PythonLanguage {
     fn config(&self) -> &'static LanguageConfig {
         python_config()
     }
-}
-
-// -----------------------------------------------------------------------
-// Python helper functions
-// -----------------------------------------------------------------------
-
-fn node_text(source: &[u8], node: tree_sitter::Node<'_>) -> String {
-    std::str::from_utf8(&source[node.byte_range()])
-        .unwrap_or("")
-        .to_string()
 }
 
 // -----------------------------------------------------------------------

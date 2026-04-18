@@ -107,11 +107,7 @@ impl MacroExpander for CppMacroExpander {
 // Private helpers
 // -----------------------------------------------------------------------
 
-fn node_text(source: &[u8], node: tree_sitter::Node<'_>) -> String {
-    std::str::from_utf8(&source[node.byte_range()])
-        .unwrap_or("")
-        .to_string()
-}
+use forgeql_core::ast::lang::node_text;
 
 fn extract_param_names(source: &[u8], params_node: tree_sitter::Node<'_>) -> Vec<String> {
     (0..params_node.named_child_count())

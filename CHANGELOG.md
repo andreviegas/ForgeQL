@@ -8,6 +8,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ---
 ---
 
+## [0.37.3] — 2026-04-18
+
+### Refactor
+
+- **Deduplicated `node_text()` helper**: Moved 5 identical copies (from `forgeql-lang-{cpp,rust,python}/src/lib.rs` and `macro_expand.rs`) into a single `pub fn node_text()` in `forgeql_core::ast::lang`. All lang crates now import from core.
+
 ## [0.37.2] — 2026-04-18
 
 ### Bug Fixes

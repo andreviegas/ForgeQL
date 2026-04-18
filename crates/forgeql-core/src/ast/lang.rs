@@ -1391,6 +1391,22 @@ pub trait LanguageSupport: Send + Sync {
 }
 
 // -----------------------------------------------------------------------
+// Shared helpers for LanguageSupport implementations
+// -----------------------------------------------------------------------
+
+/// Extract the UTF-8 text of a tree-sitter node from the source buffer.
+///
+/// Returns an empty string if the byte range is not valid UTF-8.
+/// This is the canonical helper that all language crates should use
+/// inside their [`LanguageSupport::extract_name`] implementations.
+#[must_use]
+pub fn node_text(source: &[u8], node: tree_sitter::Node<'_>) -> String {
+    std::str::from_utf8(&source[node.byte_range()])
+        .unwrap_or("")
+        .to_string()
+}
+
+// -----------------------------------------------------------------------
 // LanguageRegistry — maps file extensions to language implementations
 // -----------------------------------------------------------------------
 

@@ -16,7 +16,9 @@
 
 use std::sync::{Arc, OnceLock};
 
-use forgeql_core::ast::lang::{LanguageConfig, LanguageRegistry, LanguageSupport, MacroExpander};
+use forgeql_core::ast::lang::{
+    LanguageConfig, LanguageRegistry, LanguageSupport, MacroExpander, node_text,
+};
 use forgeql_core::ast::lang_json::LanguageConfigJson;
 
 pub(crate) mod macro_expand;
@@ -122,16 +124,6 @@ impl LanguageSupport for RustLanguage {
         static EXPANDER: macro_expand::RustMacroExpander = macro_expand::RustMacroExpander;
         Some(&EXPANDER)
     }
-}
-
-// -----------------------------------------------------------------------
-// Rust helper functions
-// -----------------------------------------------------------------------
-
-fn node_text(source: &[u8], node: tree_sitter::Node<'_>) -> String {
-    std::str::from_utf8(&source[node.byte_range()])
-        .unwrap_or("")
-        .to_string()
 }
 
 // -----------------------------------------------------------------------
