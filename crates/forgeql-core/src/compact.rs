@@ -1055,4 +1055,91 @@ mod tests {
         assert!(output.contains("rename_symbol"));
         assert!(output.contains("applied"));
     }
+    // -- Low-level CSV helpers -----------------------------------------
+
+    #[test]
+    fn q_empty_string() {
+        assert_eq!(q(""), r#""""#);
+    }
+
+    #[test]
+    fn q_plain_string() {
+        assert_eq!(q("hello"), r#""hello""#);
+    }
+
+    #[test]
+    fn q_embedded_double_quote() {
+        // Input: say "hi"  →  escaped: say ""hi""  →  wrapped: "say ""hi"""
+        assert_eq!(q("say \"hi\""), "\"say \"\"hi\"\"\"");
+    }
+
+    #[test]
+    fn q_only_double_quotes() {
+        // Input: ""  →  escaped: """"  →  wrapped: """""" (6 quotes total)
+        assert_eq!(q("\"\""), "\"\"\"\"\"\"");
+    }
+
+    #[test]
+    fn bracket_empty() {
+        assert_eq!(bracket(&[]), "[]");
+    }
+
+    #[test]
+    fn bracket_single() {
+        assert_eq!(bracket(&["a"]), "[a]");
+    }
+
+    #[test]
+    fn bracket_multiple() {
+        assert_eq!(bracket(&["a", "b", "c"]), "[a,b,c]");
+    }
+
+    #[test]
+    fn row_basic_two_fields() {
+        let mut out = String::new();
+        row(&mut out, &["alpha", "beta"]);
+        assert_eq!(out, "alpha,beta\n");
+    }
+
+    #[test]
+    fn row_single_field() {
+        let mut out = String::new();
+        row(&mut out, &["only"]);
+        assert_eq!(out, "only\n");
+    }
+
+    #[test]
+    fn row_appends_to_existing_string() {
+        let mut out = "first\n".to_string();
+        row(&mut out, &["second"]);
+        assert_eq!(out, "first\nsecond\n");
+    }
+
+    #[test]
+    fn chomp_removes_trailing_newline() {
+        let mut s = "hello\n".to_string();
+        chomp(&mut s);
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn chomp_no_newline_unchanged() {
+        let mut s = "hello".to_string();
+        chomp(&mut s);
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn chomp_empty_string_unchanged() {
+        let mut s = String::new();
+        chomp(&mut s);
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn chomp_only_newline_becomes_empty() {
+        let mut s = "\n".to_string();
+        chomp(&mut s);
+        assert_eq!(s, "");
+    }
 }
