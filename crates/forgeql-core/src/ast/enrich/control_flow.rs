@@ -751,3 +751,140 @@ fn has_default_case(switch_node: tree_sitter::Node<'_>) -> bool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- max_paren_depth -------------------------------------------------
+
+    #[test]
+    fn max_paren_depth_no_parens() {
+        assert_eq!(max_paren_depth("a && b"), 0);
+    }
+
+    #[test]
+    fn max_paren_depth_one_level() {
+        assert_eq!(max_paren_depth("(a && b)"), 1);
+    }
+
+    #[test]
+    fn max_paren_depth_two_levels() {
+        assert_eq!(max_paren_depth("((a))"), 2);
+    }
+
+    #[test]
+    fn max_paren_depth_two_separate_groups_max_one() {
+        assert_eq!(max_paren_depth("(a) && (b)"), 1);
+    }
+
+    #[test]
+    fn max_paren_depth_empty_string() {
+        assert_eq!(max_paren_depth(""), 0);
+    }
+
+    // -- strip_outer_parens ----------------------------------------------
+
+    #[test]
+    fn strip_outer_parens_matched_pair() {
+        assert_eq!(strip_outer_parens("(a && b)"), "a && b");
+    }
+
+    #[test]
+    fn strip_outer_parens_no_parens_unchanged() {
+        assert_eq!(strip_outer_parens("a && b"), "a && b");
+    }
+
+    #[test]
+    fn strip_outer_parens_two_separate_groups_unchanged() {
+        // "(a) && (b)" — outer parens don't match each other.
+        assert_eq!(strip_outer_parens("(a) && (b)"), "(a) && (b)");
+    }
+
+    #[test]
+    fn strip_outer_parens_empty_string() {
+        assert_eq!(strip_outer_parens(""), "");
+    }
+
+    #[test]
+    fn strip_outer_parens_with_whitespace() {
+        assert_eq!(strip_outer_parens("  (x)  "), "x");
+    }
+
+    #[test]
+    fn strip_outer_parens_nested_strips_one_level() {
+        assert_eq!(strip_outer_parens("((x))"), "(x)");
+    }
+
+    // -- split_top_level -------------------------------------------------
+
+    #[test]
+    fn split_top_level_two_parts_and() {
+        let parts = split_top_level("a && b", "&&");
+        assert_eq!(parts, vec!["a ", " b"]);
+    }
+
+    #[test]
+    fn split_top_level_three_parts_or() {
+        let parts = split_top_level("a || b || c", "||");
+        assert_eq!(parts, vec!["a ", " b ", " c"]);
+    }
+
+    #[test]
+    fn split_top_level_respects_nesting() {
+        // "(a && b) && c" — the inner && is inside parens, only top-level && splits.
+        let parts = split_top_level("(a && b) && c", "&&");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[1].trim(), "c");
+    }
+
+    #[test]
+    fn split_top_level_no_operator_returns_empty() {
+        let parts = split_top_level("a && b", "||");
+        assert!(parts.is_empty());
+    }
+
+    #[test]
+    fn split_top_level_empty_string_no_split() {
+        let parts = split_top_level("", "&&");
+        // Empty string: no operator found → empty vec.
+        assert!(parts.is_empty());
+    }
+
+    // -- detect_dup_logic ------------------------------------------------
+
+    #[test]
+    fn detect_dup_logic_no_dup() {
+        assert!(!detect_dup_logic("a && b"));
+    }
+
+    #[test]
+    fn detect_dup_logic_exact_dup_and() {
+        assert!(detect_dup_logic("a && a"));
+    }
+
+    #[test]
+    fn detect_dup_logic_exact_dup_or() {
+        assert!(detect_dup_logic("x || x"));
+    }
+
+    #[test]
+    fn detect_dup_logic_three_different_no_dup() {
+        assert!(!detect_dup_logic("a && b && c"));
+    }
+
+    #[test]
+    fn detect_dup_logic_three_with_dup() {
+        assert!(detect_dup_logic("a && b && a"));
+    }
+
+    #[test]
+    fn detect_dup_logic_wrapped_in_outer_parens() {
+        assert!(detect_dup_logic("(a && a)"));
+    }
+
+    #[test]
+    fn detect_dup_logic_empty_string() {
+        assert!(!detect_dup_logic(""));
+    }
+}
