@@ -951,4 +951,324 @@ mod tests {
         // Total char count: 1 (prefix) + 19 + 1 (…) + 20 = 41.
         assert_eq!(result.chars().count(), 41);
     }
+    // --- line_start_offsets -----------------------------------------------
+
+    #[test]
+    fn line_start_offsets_empty_string() {
+        // Empty text: only one "line" starting at byte 0.
+        let offsets = line_start_offsets("");
+        assert_eq!(offsets, vec![0]);
+    }
+
+    #[test]
+    fn line_start_offsets_single_line_no_newline() {
+        let offsets = line_start_offsets("hello");
+        assert_eq!(offsets, vec![0]);
+    }
+
+    #[test]
+    fn line_start_offsets_two_lines() {
+        // "one\ntwo" → lines start at 0 and 4.
+        let offsets = line_start_offsets("one\ntwo");
+        assert_eq!(offsets, vec![0, 4]);
+    }
+
+    #[test]
+    fn line_start_offsets_trailing_newline() {
+        // "abc\n" → offsets are 0 and 4 (empty trailing "line").
+        let offsets = line_start_offsets("abc\n");
+        assert_eq!(offsets, vec![0, 4]);
+    }
+
+    #[test]
+    fn line_start_offsets_three_lines() {
+        let offsets = line_start_offsets("a\nbb\nccc");
+        assert_eq!(offsets, vec![0, 2, 5]);
+    }
+
+    // --- byte_offset_to_line -------------------------------------------------
+
+    #[test]
+    fn byte_offset_to_line_start() {
+        let offsets = vec![0, 5, 10];
+        assert_eq!(byte_offset_to_line(&offsets, 0), 0);
+    }
+
+    #[test]
+    fn byte_offset_to_line_exact_boundary() {
+        let offsets = vec![0, 5, 10];
+        // Byte 5 is exactly the start of line 1 → line index 1.
+        assert_eq!(byte_offset_to_line(&offsets, 5), 1);
+    }
+
+    #[test]
+    fn byte_offset_to_line_within_line() {
+        let offsets = vec![0, 5, 10];
+        // Byte 7 is inside line 1 (started at 5) → line index 1.
+        assert_eq!(byte_offset_to_line(&offsets, 7), 1);
+    }
+
+    #[test]
+    fn byte_offset_to_line_past_end() {
+        let offsets = vec![0, 5, 10];
+        // Past the last known start → clamps to last line index (2).
+        assert_eq!(byte_offset_to_line(&offsets, 100), 2);
+    }
+
+    // --- merge_change_ranges ------------------------------------------------
+
+    #[test]
+    fn merge_change_ranges_single_unchanged() {
+        let mut r = vec![ChangeRange {
+            old_start: 2,
+            old_end: 5,
+            new_start: 2,
+            new_end: 5,
+        }];
+        merge_change_ranges(&mut r);
+        assert_eq!(r.len(), 1);
+    }
+
+    #[test]
+    fn merge_change_ranges_non_overlapping() {
+        let mut r = vec![
+            ChangeRange {
+                old_start: 0,
+                old_end: 2,
+                new_start: 0,
+                new_end: 2,
+            },
+            ChangeRange {
+                old_start: 10,
+                old_end: 12,
+                new_start: 10,
+                new_end: 12,
+            },
+        ];
+        merge_change_ranges(&mut r);
+        assert_eq!(r.len(), 2);
+    }
+
+    #[test]
+    fn merge_change_ranges_overlapping() {
+        let mut r = vec![
+            ChangeRange {
+                old_start: 0,
+                old_end: 5,
+                new_start: 0,
+                new_end: 5,
+            },
+            ChangeRange {
+                old_start: 3,
+                old_end: 8,
+                new_start: 3,
+                new_end: 8,
+            },
+        ];
+        merge_change_ranges(&mut r);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].old_end, 8);
+        assert_eq!(r[0].new_end, 8);
+    }
+
+    #[test]
+    fn merge_change_ranges_adjacent() {
+        // Adjacent ranges (end == start of next): the condition uses <=, so
+        // the second range's old_start (3) <= the first range's old_end (3) → MERGED.
+        let mut r = vec![
+            ChangeRange {
+                old_start: 0,
+                old_end: 3,
+                new_start: 0,
+                new_end: 3,
+            },
+            ChangeRange {
+                old_start: 3,
+                old_end: 6,
+                new_start: 3,
+                new_end: 6,
+            },
+        ];
+        merge_change_ranges(&mut r);
+        // Adjacent ranges are merged into one by the <= check.
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].old_end, 6);
+    }
+
+    // --- gaps_from_matches --------------------------------------------------
+
+    #[test]
+    fn gaps_from_matches_no_matches_one_range() {
+        // No common lines → entire span is one change range.
+        let ranges = gaps_from_matches(3, 3, &[]);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].old_start, 0);
+        assert_eq!(ranges[0].old_end, 3);
+        assert_eq!(ranges[0].new_end, 3);
+    }
+
+    #[test]
+    fn gaps_from_matches_full_coverage_no_ranges() {
+        // All lines match → no change ranges.
+        let matches = vec![(0, 0), (1, 1), (2, 2)];
+        let ranges = gaps_from_matches(3, 3, &matches);
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn gaps_from_matches_gap_at_start() {
+        // First line differs, rest match: gap [0..1, 0..1].
+        let matches = vec![(1, 1), (2, 2)];
+        let ranges = gaps_from_matches(3, 3, &matches);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].old_start, 0);
+        assert_eq!(ranges[0].old_end, 1);
+    }
+
+    #[test]
+    fn gaps_from_matches_gap_at_end() {
+        // First lines match, last line differs.
+        let matches = vec![(0, 0), (1, 1)];
+        let ranges = gaps_from_matches(3, 3, &matches);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].old_start, 2);
+        assert_eq!(ranges[0].old_end, 3);
+    }
+
+    // --- change_ranges (integration of lcs + gaps) --------------------------
+
+    #[test]
+    fn change_ranges_identical_is_empty() {
+        let lines = vec!["a", "b", "c"];
+        let ranges = change_ranges(&lines, &lines);
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn change_ranges_completely_different() {
+        let old = vec!["a", "b"];
+        let new = vec!["x", "y"];
+        let ranges = change_ranges(&old, &new);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].old_start, 0);
+        assert_eq!(ranges[0].old_end, 2);
+    }
+
+    #[test]
+    fn change_ranges_single_line_change_middle() {
+        let old = vec!["a", "b", "c"];
+        let new = vec!["a", "B", "c"];
+        let ranges = change_ranges(&old, &new);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].old_start, 1);
+        assert_eq!(ranges[0].old_end, 2);
+        assert_eq!(ranges[0].new_start, 1);
+        assert_eq!(ranges[0].new_end, 2);
+    }
+
+    // --- build_hunks / render_hunk ------------------------------------------
+
+    #[test]
+    fn build_hunks_empty_ranges_returns_empty() {
+        let old: Vec<&str> = vec!["a"];
+        let new: Vec<&str> = vec!["a"];
+        let hunks = build_hunks(&old, &new, &[]);
+        assert!(hunks.is_empty());
+    }
+
+    #[test]
+    fn render_hunk_header_format() {
+        // Single-line change: old line "foo" replaced by "bar".
+        let old = vec!["ctx1", "ctx2", "ctx3", "foo", "ctx4", "ctx5", "ctx6"];
+        let new = vec!["ctx1", "ctx2", "ctx3", "bar", "ctx4", "ctx5", "ctx6"];
+        let cr = ChangeRange {
+            old_start: 3,
+            old_end: 4,
+            new_start: 3,
+            new_end: 4,
+        };
+        let hunk = render_hunk(&old, &new, &[cr]);
+        assert!(hunk.starts_with("@@"), "hunk must start with @@: {hunk}");
+        assert!(hunk.contains("-foo"), "removed line must have - prefix");
+        assert!(hunk.contains("+bar"), "added line must have + prefix");
+        assert!(
+            hunk.contains(" ctx1") || hunk.contains(" ctx2"),
+            "context lines must have space prefix"
+        );
+    }
+
+    #[test]
+    fn render_hunk_add_only() {
+        // Line inserted between existing lines.
+        let old = vec!["a", "b"];
+        let new = vec!["a", "NEW", "b"];
+        let cr = ChangeRange {
+            old_start: 1,
+            old_end: 1,
+            new_start: 1,
+            new_end: 2,
+        };
+        let hunk = render_hunk(&old, &new, &[cr]);
+        assert!(hunk.contains("+NEW"), "added line must appear");
+        // The @@ header contains '-' so check diff-body lines specifically.
+        assert!(
+            !hunk.lines().any(|l| l.starts_with('-')),
+            "no removal lines in add-only hunk: {hunk}"
+        );
+    }
+
+    #[test]
+    fn render_hunk_delete_only() {
+        // One line removed.
+        let old = vec!["a", "REMOVE", "b"];
+        let new = vec!["a", "b"];
+        let cr = ChangeRange {
+            old_start: 1,
+            old_end: 2,
+            new_start: 1,
+            new_end: 1,
+        };
+        let hunk = render_hunk(&old, &new, &[cr]);
+        assert!(hunk.contains("-REMOVE"), "removed line must appear");
+        // The @@ header contains '+' so check diff-body lines specifically.
+        assert!(
+            !hunk.lines().any(|l| l.starts_with('+')),
+            "no addition lines in delete-only hunk: {hunk}"
+        );
+    }
+
+    #[test]
+    fn unified_diff_delete_only_line() {
+        let old = "a\nDELETED\nb\n";
+        let new = "a\nb\n";
+        let d = unified_diff(old, new, Path::new("f.c"));
+        assert!(d.contains("-DELETED"));
+    }
+
+    #[test]
+    fn unified_diff_path_appears_in_headers() {
+        let old = "x\n";
+        let new = "y\n";
+        let d = unified_diff(old, new, Path::new("src/myfile.cpp"));
+        assert!(d.contains("--- a/src/myfile.cpp"));
+        assert!(d.contains("+++ b/src/myfile.cpp"));
+    }
+
+    #[test]
+    fn truncate_line_prefix_only_unchanged() {
+        // A line with only a prefix character and no content should not truncate.
+        let result = truncate_line("+", 40);
+        assert_eq!(result.as_ref(), "+");
+    }
+
+    #[test]
+    fn truncate_line_unicode_content() {
+        // Unicode chars (multi-byte): truncation must count chars, not bytes.
+        // Build a 41-char content (all 'é' which is 2 UTF-8 bytes each).
+        let line = format!("+{}", "é".repeat(41));
+        let result = truncate_line(&line, 40);
+        assert!(result.contains('\u{2026}'), "must be truncated");
+        // char count: prefix(1) + 19 + ellipsis(1) + 20 = 41 chars
+        assert_eq!(result.chars().count(), 41);
+    }
 }
