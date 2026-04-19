@@ -60,6 +60,8 @@ impl fmt::Display for QueryResult {
         Ok(())
     }
 }
+impl fmt::Display for ShowResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(ref symbol) = self.symbol {
             writeln!(formatter, "--- {symbol} ---")?;
         }

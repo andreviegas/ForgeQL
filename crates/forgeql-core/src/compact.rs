@@ -313,23 +313,21 @@ fn compact_count_usages(query: &QueryResult) -> String {
 /// FIND symbols / defines / enums / includes → grouped by `fql_kind`.
 fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
     let mut out = String::with_capacity(query.results.len() * 50);
+    let rows = query.projected_rows();
     // Header.
     let tot = query.total.to_string();
     row(&mut out, &[&q(&query.op), &tot]);
     // Schema hint — GROUP BY always displays the aggregated count (per-symbol
     // fields are meaningless for a group representative).  Without GROUP BY,
     // use the enrichment field name from metric_hint, else "usages".
-    let is_grouped = query.results.iter().any(|r| r.count.is_some());
+    let is_grouped = rows.iter().any(|sr| sr.count.is_some());
     let metric_label = if is_grouped {
         "count"
     } else {
         query.metric_hint.as_deref().unwrap_or("usages")
     };
     // Include enclosing_fn in the schema when at least one result carries it.
-    let has_enclosing_fn = query
-        .results
-        .iter()
-        .any(|r| r.fields.contains_key("enclosing_fn"));
+    let has_enclosing_fn = rows.iter().any(|sr| sr.enclosing_fn.is_some());
 
     // When GROUP BY uses a custom field (not fql_kind/file), show the group
     // key value as the row label instead of fql_kind.
@@ -337,7 +335,7 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
         let schema = format!("[{metric_label}]");
         row(&mut out, &[&q(group_field), &q(&schema)]);
         // Group by the custom field value.
-        let groups = group_symbols_by_field(query, group_field);
+        let groups = group_rows_by_field(&rows);
         for (key, count) in &groups {
             row(&mut out, &[&q(key), &count.to_string()]);
         }
@@ -349,25 +347,25 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
         };
         row(&mut out, &[&q("fql_kind"), &q(&schema)]);
         // Group by fql_kind.
-        let groups = group_symbols_by_kind(query);
+        let groups = group_rows_by_kind(&rows);
         for (kind, items) in &groups {
             let brackets: Vec<String> = items
                 .iter()
-                .map(|(sr, metric)| {
+                .map(|sr| {
                     if has_enclosing_fn {
                         bracket(&[
                             &sr.name,
                             &sr.path,
                             &sr.line.to_string(),
                             sr.enclosing_fn.as_deref().unwrap_or(""),
-                            &metric.to_string(),
+                            &sr.metric().to_string(),
                         ])
                     } else {
                         bracket(&[
                             &sr.name,
                             &sr.path,
                             &sr.line.to_string(),
-                            &metric.to_string(),
+                            &sr.metric().to_string(),
                         ])
                     }
                 })
@@ -384,18 +382,14 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
 // Grouping helpers (preserve insertion order)
 // -----------------------------------------------------------------------
 
-/// Group symbols by a custom field value, returning `(key, count)` pairs.
+/// Group projected rows by their custom group key, returning `(key, count)` pairs.
 ///
 /// Used when GROUP BY targets a non-standard field like `guard_kind`.
-fn group_symbols_by_field(query: &QueryResult, field: &str) -> Vec<(String, usize)> {
+fn group_rows_by_field(rows: &[SymbolRow]) -> Vec<(String, usize)> {
     let mut groups: Vec<(String, usize)> = Vec::new();
-    for r in &query.results {
-        let key = r
-            .fields
-            .get(field)
-            .cloned()
-            .unwrap_or_else(|| "(empty)".to_string());
-        let count = r.count.unwrap_or(1);
+    for sr in rows {
+        let key = sr.group_key.as_deref().unwrap_or("(empty)").to_string();
+        let count = sr.count.unwrap_or(1);
         if let Some(g) = groups.iter_mut().find(|(k, _)| k == &key) {
             g.1 += count;
         } else {
@@ -404,36 +398,18 @@ fn group_symbols_by_field(query: &QueryResult, field: &str) -> Vec<(String, usiz
     }
     groups
 }
-/// Group symbols by `fql_kind` using [`SymbolRow`] for field extraction.
+
+/// Group projected rows by `kind` (`fql_kind`).
 ///
-/// Returns `(kind, Vec<(SymbolRow, metric)>)`.  The metric value is:
-/// - `count`       when a GROUP BY aggregated count is present
-/// - enrichment field value  when `metric_hint` is set
-/// - `usages_count` otherwise
-fn group_symbols_by_kind(query: &QueryResult) -> Vec<(String, Vec<(SymbolRow, usize)>)> {
-    let hint = query.metric_hint.as_deref();
-    let mut groups: Vec<(String, Vec<(SymbolRow, usize)>)> = Vec::new();
-    for r in &query.results {
-        let sr = SymbolRow::from_match(r);
-        // GROUP BY → always show the aggregated count (per-symbol fields
-        // are meaningless for a representative row).
-        // No GROUP BY → enrichment field if metric_hint is set, else usages.
-        let metric = r.count.unwrap_or_else(|| {
-            hint.map_or_else(
-                || r.usages_count.unwrap_or(0),
-                |field| {
-                    r.fields
-                        .get(field)
-                        .and_then(|v| v.parse::<usize>().ok())
-                        .unwrap_or(0)
-                },
-            )
-        });
+/// Returns `(kind, Vec<&SymbolRow>)`.
+fn group_rows_by_kind<'a>(rows: &'a [SymbolRow]) -> Vec<(String, Vec<&'a SymbolRow>)> {
+    let mut groups: Vec<(String, Vec<&'a SymbolRow>)> = Vec::new();
+    for sr in rows {
         if let Some(g) = groups.iter_mut().find(|(k, _)| k == &sr.kind) {
-            g.1.push((sr, metric));
+            g.1.push(sr);
         } else {
             let kind = sr.kind.clone();
-            groups.push((kind, vec![(sr, metric)]));
+            groups.push((kind, vec![sr]));
         }
     }
     groups

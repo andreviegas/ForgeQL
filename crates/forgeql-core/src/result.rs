@@ -223,20 +223,9 @@ impl SymbolRow {
         }
     }
 
-    /// Convenience wrapper without context — used when no query-level
-    /// metadata is available (e.g. standalone row formatting).
-    pub(crate) fn from_match(row: &SymbolMatch) -> Self {
-        let ctx = QueryContext {
-            metric_hint: None,
-            group_by_field: None,
-        };
-        Self::from_match_with_ctx(row, &ctx)
-    }
-
     /// The numeric value to show in the last column.
     ///
     /// Priority: `count` (GROUP BY) → `metric_value` (enrichment) → `usages`.
-    #[allow(dead_code)] // Used in upcoming formatter migration (Phases 2–4).
     pub(crate) fn metric(&self) -> usize {
         if let Some(c) = self.count {
             return c;
@@ -251,7 +240,6 @@ impl SymbolRow {
 }
 
 // -----------------------------------------------------------------------
-// Show results
 // Show results
 // -----------------------------------------------------------------------
 
