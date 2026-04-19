@@ -8,6 +8,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ---
 ---
 
+## [0.37.5] — 2026-04-19
+
+### Bug Fixes
+
+- **Fixed `= 69` value leak in text formatter**: The Display impl for QueryResult no longer accesses `SymbolMatch.fields` directly. All formatters now use `projected_rows()` which extracts only display-relevant fields.
+
+### Refactor
+
+- **Unified output projection via `SymbolRow`**: Extended `SymbolRow` with `usages`, `count`, `metric_value`, `group_key` fields. Added `QueryContext` and `projected_rows()` as the single entry point for all formatters.
+- **Text formatter (display.rs)**: Rewritten to use `projected_rows()` exclusively.
+- **Compact formatter (compact.rs)**: `compact_find_grouped_by_kind()` rewritten with `group_rows_by_kind()`/`group_rows_by_field()` operating on `&[SymbolRow]`.
+- **JSON serialization (convert.rs)**: `to_json()`/`to_json_pretty()` now build custom JSON for Query results using projected rows — raw `SymbolMatch.fields` HashMap is never serialized.
+
+### Removed
+
+- **Deleted `to_csv()`**: Dead code, replaced by `to_compact()` long ago.
+- **Deleted `SymbolRow::from_match()`**: No longer needed; all callers use `projected_rows()`.
+
+---
+
 ## [0.37.4] — 2026-04-19
 
 ### Tests
