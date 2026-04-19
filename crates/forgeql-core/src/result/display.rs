@@ -1,7 +1,7 @@
 //! `fmt::Display` implementations for all `ForgeQL` result types.
 use super::{
     BeginTransactionResult, CommitResult, ForgeQLResult, MutationResult, PlanResult, QueryResult,
-    RollbackResult, ShowContent, ShowResult, SourceOpResult, SymbolRow, VerifyBuildResult,
+    RollbackResult, ShowContent, ShowResult, SourceOpResult, VerifyBuildResult,
 };
 use std::fmt;
 
@@ -29,8 +29,8 @@ impl fmt::Display for QueryResult {
         if self.results.is_empty() {
             return writeln!(formatter, "No results.");
         }
-        for row in &self.results {
-            let sr = SymbolRow::from_match(row);
+        let rows = self.projected_rows();
+        for sr in &rows {
             write!(formatter, "{}", sr.name)?;
             if !sr.kind.is_empty() {
                 write!(formatter, " | {}", sr.kind)?;
@@ -41,14 +41,11 @@ impl fmt::Display for QueryResult {
             if let Some(ref fn_name) = sr.enclosing_fn {
                 write!(formatter, " | via {fn_name}")?;
             }
-            if let Some(usages) = row.usages_count {
+            if let Some(usages) = sr.usages {
                 write!(formatter, " | usages: {usages}")?;
             }
-            if let Some(count) = row.count {
+            if let Some(count) = sr.count {
                 write!(formatter, " | count: {count}")?;
-            }
-            if let Some(value) = row.fields.get("value") {
-                write!(formatter, " = {value}")?;
             }
             writeln!(formatter)?;
         }
@@ -63,9 +60,6 @@ impl fmt::Display for QueryResult {
         Ok(())
     }
 }
-
-impl fmt::Display for ShowResult {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(ref symbol) = self.symbol {
             writeln!(formatter, "--- {symbol} ---")?;
         }
