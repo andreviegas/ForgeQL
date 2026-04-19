@@ -75,6 +75,28 @@ pub struct QueryResult {
     pub group_by_field: Option<String>,
 }
 
+#[allow(dead_code)] // Used in upcoming formatter migration (Phases 2–4).
+impl QueryResult {
+    /// Build a [`QueryContext`] from query-level metadata.
+    pub(crate) fn query_context(&self) -> QueryContext<'_> {
+        QueryContext {
+            metric_hint: self.metric_hint.as_deref(),
+            group_by_field: self.group_by_field.as_deref(),
+        }
+    }
+
+    /// Project all result rows into display-ready [`SymbolRow`] values.
+    ///
+    /// This is the **single entry point** for all output formatters.
+    /// No formatter should access `self.results` directly for display.
+    pub(crate) fn projected_rows(&self) -> Vec<SymbolRow> {
+        let ctx = self.query_context();
+        self.results
+            .iter()
+            .map(|r| SymbolRow::from_match_with_ctx(r, &ctx))
+            .collect()
+    }
+}
 /// A single row in a query result set.
 ///
 /// Flat row model: every query produces a uniform `SymbolMatch` populated
@@ -112,6 +134,24 @@ pub struct SymbolMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<usize>,
 }
+// -----------------------------------------------------------------------
+// Query context — carries query-level metadata for row projection
+// -----------------------------------------------------------------------
+
+/// Context extracted from a [`QueryResult`] that controls which fields
+/// [`SymbolRow::from_match_with_ctx`] populates.
+///
+/// Formatters never see `SymbolMatch` directly — they receive projected
+/// `SymbolRow` values built using this context.
+pub(crate) struct QueryContext<'a> {
+    /// When the query uses a numeric WHERE/ORDER BY on an enrichment field
+    /// (e.g. `lines`, `param_count`), this names that field so its value
+    /// appears as the metric column instead of `usages`.
+    pub metric_hint: Option<&'a str>,
+    /// When GROUP BY targets a custom field (not `fql_kind`/`file`), this
+    /// names that field so its value is extracted into `SymbolRow::group_key`.
+    pub group_by_field: Option<&'a str>,
+}
 
 // -----------------------------------------------------------------------
 // Per-row display data — consumed by all output formatters
@@ -124,10 +164,11 @@ pub struct SymbolMatch {
 /// only two changes:
 ///
 /// 1. Add the field here.
-/// 2. Populate it in [`SymbolRow::from_match`].
+/// 2. Populate it in [`SymbolRow::from_match_with_ctx`].
 ///
 /// No per-formatter changes needed unless the formatter has format-specific
 /// layout choices (e.g. compact groups by `kind`, text uses `via` prefix).
+#[allow(dead_code)] // Fields used in upcoming formatter migration (Phases 2–4).
 pub(crate) struct SymbolRow {
     /// Compact display name (long names are truncated to 120 chars).
     pub name: String,
@@ -140,10 +181,22 @@ pub(crate) struct SymbolRow {
     /// Enclosing function name — populated for control-flow nodes (if/switch/for/while).
     /// `None` for top-level symbols (functions, structs, etc.).
     pub enclosing_fn: Option<String>,
+    /// Number of times this symbol is referenced across the codebase.
+    pub usages: Option<usize>,
+    /// Per-group count — populated after GROUP BY aggregation.
+    pub count: Option<usize>,
+    /// Value of the enrichment field named by `QueryContext::metric_hint`.
+    /// Shown as the last column instead of `usages` when present.
+    pub metric_value: Option<String>,
+    /// Value of the custom GROUP BY field (e.g. `guard_kind = "preprocessor"`).
+    /// Used as the row label/group key when GROUP BY targets an enrichment field.
+    pub group_key: Option<String>,
 }
 
 impl SymbolRow {
-    pub(crate) fn from_match(row: &SymbolMatch) -> Self {
+    /// Build a display row from a query match, using query-level context to
+    /// decide which enrichment fields to extract.
+    pub(crate) fn from_match_with_ctx(row: &SymbolMatch, ctx: &QueryContext<'_>) -> Self {
         Self {
             name: compact_name(&row.name).into_owned(),
             kind: row
@@ -159,7 +212,41 @@ impl SymbolRow {
                 .unwrap_or_default(),
             line: row.line.unwrap_or(0),
             enclosing_fn: row.fields.get("enclosing_fn").cloned(),
+            usages: row.usages_count,
+            count: row.count,
+            metric_value: ctx
+                .metric_hint
+                .and_then(|field| row.fields.get(field).cloned()),
+            group_key: ctx
+                .group_by_field
+                .and_then(|field| row.fields.get(field).cloned()),
         }
+    }
+
+    /// Convenience wrapper without context — used when no query-level
+    /// metadata is available (e.g. standalone row formatting).
+    pub(crate) fn from_match(row: &SymbolMatch) -> Self {
+        let ctx = QueryContext {
+            metric_hint: None,
+            group_by_field: None,
+        };
+        Self::from_match_with_ctx(row, &ctx)
+    }
+
+    /// The numeric value to show in the last column.
+    ///
+    /// Priority: `count` (GROUP BY) → `metric_value` (enrichment) → `usages`.
+    #[allow(dead_code)] // Used in upcoming formatter migration (Phases 2–4).
+    pub(crate) fn metric(&self) -> usize {
+        if let Some(c) = self.count {
+            return c;
+        }
+        if let Some(ref v) = self.metric_value
+            && let Ok(n) = v.parse::<usize>()
+        {
+            return n;
+        }
+        self.usages.unwrap_or(0)
     }
 }
 
