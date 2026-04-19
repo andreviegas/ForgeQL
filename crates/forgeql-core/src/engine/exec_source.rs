@@ -195,7 +195,12 @@ impl ForgeQLEngine {
         // Using the fql/ namespace prefix avoids the git loose-ref collision
         // where refs/heads/<branch> already exists as a file when we try to
         // create refs/heads/<branch>/<alias>.
-        let wt_name = format!("{branch}.{as_branch}");
+        // Slashes in branch or alias would create nested directories when used
+        // in a filesystem path, so replace them with dashes for the worktree
+        // directory name.
+        let safe_branch = branch.replace('/', "-");
+        let safe_alias = as_branch.replace('/', "-");
+        let wt_name = format!("{safe_branch}.{safe_alias}");
         let git_branch = format!("fql/{branch}/{as_branch}");
         let wt_path = self.data_dir.join("worktrees").join(&wt_name);
 
