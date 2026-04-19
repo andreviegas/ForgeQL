@@ -75,7 +75,6 @@ pub struct QueryResult {
     pub group_by_field: Option<String>,
 }
 
-#[allow(dead_code)] // Used in upcoming formatter migration (Phases 2–4).
 impl QueryResult {
     /// Build a [`QueryContext`] from query-level metadata.
     pub(crate) fn query_context(&self) -> QueryContext<'_> {
@@ -679,7 +678,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn query_result_round_trips_through_json() {
+    fn query_result_json_contains_projected_fields() {
         let result = ForgeQLResult::Query(QueryResult {
             op: "find_symbols".to_string(),
             results: vec![SymbolMatch {
@@ -702,22 +701,24 @@ mod tests {
         });
 
         let json_string = result.to_json();
-        let deserialized: ForgeQLResult = serde_json::from_str(&json_string).unwrap();
-
-        match deserialized {
-            ForgeQLResult::Query(query_result) => {
-                assert_eq!(query_result.op, "find_symbols");
-                assert_eq!(query_result.results.len(), 1);
-                assert_eq!(query_result.results[0].name, "setPeakLevel");
-                assert_eq!(query_result.total, 1);
-            }
-            other => panic!("expected Query variant, got: {other:?}"),
-        }
+        let v: serde_json::Value = serde_json::from_str(&json_string).unwrap();
+        assert_eq!(v["op"], "find_symbols");
+        assert_eq!(v["total"], 1);
+        assert_eq!(v["results"][0]["name"], "setPeakLevel");
+        assert_eq!(v["results"][0]["usages"], 3);
+        // Raw fields must not leak.
+        assert!(
+            v["results"][0].get("signature").is_none(),
+            "enrichment field must not leak"
+        );
+        assert!(
+            v["results"][0].get("fields").is_none(),
+            "fields HashMap must not leak"
+        );
     }
 
     #[test]
-    fn csv_find_result_has_header_and_usages_count() {
-        // FIND query: usages_count is populated, count is None.
+    fn json_find_result_includes_usages() {
         let result = ForgeQLResult::Query(QueryResult {
             op: "find_symbols".to_string(),
             results: vec![SymbolMatch {
@@ -735,56 +736,64 @@ mod tests {
             metric_hint: None,
             group_by_field: None,
         });
-        let csv = result.to_csv();
-        let v: serde_json::Value = serde_json::from_str(&csv).unwrap();
-        // First element of results is the header row.
-        assert_eq!(
-            v["results"][0],
-            serde_json::json!(["name", "node_kind", "path", "count"])
-        );
-        // Data row has the usages_count in the 4th column.
-        assert_eq!(v["results"][1][0], "setPeakLevel");
-        assert_eq!(v["results"][1][3], "7");
+        let json = result.to_json();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["op"], "find_symbols");
         assert_eq!(v["total"], 1);
+        assert_eq!(v["results"][0]["name"], "setPeakLevel");
+        assert_eq!(v["results"][0]["usages"], 7);
+        // Must NOT contain raw fields HashMap.
+        assert!(
+            v["results"][0].get("fields").is_none(),
+            "fields must not leak"
+        );
     }
 
     #[test]
-    fn csv_find_usages_header_says_line_not_count() {
-        // FIND usages without GROUP BY: each row is a call site; the 4th
-        // column is the line number, so the header must say "line".
+    fn json_find_result_excludes_raw_fields() {
+        // Ensure the fields HashMap is never serialized.
+        let mut fields = HashMap::new();
+        fields.insert("value".to_string(), "69".to_string());
+        fields.insert("num_format".to_string(), "dec".to_string());
         let result = ForgeQLResult::Query(QueryResult {
-            op: "find_usages".to_string(),
+            op: "find_symbols".to_string(),
             results: vec![SymbolMatch {
-                name: "processData".to_string(),
-                node_kind: Some("identifier".to_string()),
-                fql_kind: None,
+                name: "SOME_CONST".to_string(),
+                node_kind: Some("number_literal".to_string()),
+                fql_kind: Some("number".to_string()),
                 language: None,
-                path: Some(PathBuf::from("src/main.cpp")),
-                line: Some(42),
-                usages_count: None,
-                fields: HashMap::new(),
+                path: Some(PathBuf::from("src/defs.h")),
+                line: Some(10),
+                usages_count: Some(3),
+                fields,
                 count: None,
             }],
             total: 1,
             metric_hint: None,
             group_by_field: None,
         });
-        let csv = result.to_csv();
-        let v: serde_json::Value = serde_json::from_str(&csv).unwrap();
-        assert_eq!(
-            v["results"][0],
-            serde_json::json!(["name", "node_kind", "path", "line"]),
-            "header must say 'line' for find_usages op"
+        let json = result.to_json();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // Projected fields should be present.
+        assert_eq!(v["results"][0]["name"], "SOME_CONST");
+        assert_eq!(v["results"][0]["kind"], "number");
+        // Raw HashMap keys must NOT appear.
+        assert!(
+            v["results"][0].get("value").is_none(),
+            "value must not leak"
         );
-        assert_eq!(
-            v["results"][1][3], "42",
-            "line number must appear in column 4"
+        assert!(
+            v["results"][0].get("num_format").is_none(),
+            "num_format must not leak"
+        );
+        assert!(
+            v["results"][0].get("fields").is_none(),
+            "fields must not leak"
         );
     }
 
     #[test]
-    fn csv_count_group_by_uses_count_field() {
-        // COUNT … GROUP BY file: count is populated, usages_count is None.
+    fn json_count_group_by_includes_count() {
         let result = ForgeQLResult::Query(QueryResult {
             op: "count_usages".to_string(),
             results: vec![SymbolMatch {
@@ -802,22 +811,13 @@ mod tests {
             metric_hint: None,
             group_by_field: None,
         });
-        let csv = result.to_csv();
-        let v: serde_json::Value = serde_json::from_str(&csv).unwrap();
-        // Header row present.
-        assert_eq!(
-            v["results"][0],
-            serde_json::json!(["name", "node_kind", "path", "count"])
-        );
-        // Data row: count field (not usages_count) must appear in column 4.
-        assert_eq!(
-            v["results"][1][3], "4",
-            "count field must map to csv column 4: {csv}"
-        );
+        let json = result.to_json();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["results"][0]["count"], 4);
     }
 
     #[test]
-    fn csv_non_query_result_falls_back_to_json() {
+    fn json_non_query_result_uses_serde() {
         let result = ForgeQLResult::Mutation(MutationResult {
             op: "rename_symbol".to_string(),
             applied: true,
@@ -827,8 +827,8 @@ mod tests {
             diff: None,
             suggestions: vec![],
         });
-        let output = result.to_csv();
-        // Must fall back to full JSON, not crash or return empty.
+        let output = result.to_json();
+        // Must fall back to full serde JSON, not crash or return empty.
         assert!(output.contains("rename_symbol"), "fallback JSON: {output}");
         assert!(output.contains("applied"), "fallback JSON: {output}");
     }

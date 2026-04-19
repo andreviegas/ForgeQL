@@ -2392,30 +2392,34 @@ fn result_display_find_symbols() {
 }
 
 #[test]
-fn result_to_json_roundtrip() {
+fn result_to_json_projected_fields() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols LIMIT 5");
     let json = r.to_json();
-    let deserialized: ForgeQLResult = serde_json::from_str(&json).expect("deserialize");
-    match deserialized {
-        ForgeQLResult::Query(qr) => {
-            assert!(qr.results.len() <= 5);
-        }
-        other => panic!("expected Query, got {other:?}"),
+    let v: serde_json::Value = serde_json::from_str(&json).expect("JSON must be valid");
+    let rows = v["results"].as_array().expect("results array");
+    assert!(rows.len() <= 5);
+    for row in rows {
+        assert!(row.get("fields").is_none(), "fields must not leak");
     }
 }
 
 #[test]
-fn result_to_csv_find_symbols() {
+fn result_to_json_find_symbols() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(
         &mut e,
         &sid,
         "FIND symbols WHERE fql_kind = 'function' LIMIT 5",
     );
-    let csv = r.to_csv();
-    // CSV output should be valid JSON (our format wraps CSV in JSON envelope).
-    let _v: serde_json::Value = serde_json::from_str(&csv).expect("CSV should be valid JSON");
+    let json = r.to_json();
+    // JSON output must be valid and contain projected fields only.
+    let v: serde_json::Value = serde_json::from_str(&json).expect("JSON must be valid");
+    assert!(v["results"].is_array());
+    // No raw fields HashMap should be present.
+    if let Some(first) = v["results"].as_array().and_then(|a| a.first()) {
+        assert!(first.get("fields").is_none(), "fields must not leak");
+    }
 }
 
 #[test]

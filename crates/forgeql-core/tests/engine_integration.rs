@@ -437,7 +437,7 @@ fn find_symbols_without_session_fails() {
 // -----------------------------------------------------------------------
 
 #[test]
-fn result_round_trips_through_json() {
+fn result_json_contains_projected_fields() {
     let (mut engine, sid, _dir) = engine_with_session();
     let result = execute_fql(
         &mut engine,
@@ -445,15 +445,16 @@ fn result_round_trips_through_json() {
         "FIND symbols WHERE name LIKE 'encender%'",
     );
 
-    // Serialize → deserialize and verify structure is preserved.
+    // Verify projected JSON structure.
     let json = result.to_json();
-    let deserialized: ForgeQLResult = serde_json::from_str(&json).expect("deserialize");
-    match deserialized {
-        ForgeQLResult::Query(qr) => {
-            assert_eq!(qr.op, "find_symbols");
-            assert!(!qr.results.is_empty());
-        }
-        other => panic!("expected Query, got: {other:?}"),
+    let v: serde_json::Value = serde_json::from_str(&json).expect("JSON must be valid");
+    assert_eq!(v["op"], "find_symbols");
+    let rows = v["results"].as_array().expect("results array");
+    assert!(!rows.is_empty());
+    // Each row must have projected fields, not raw SymbolMatch.
+    for row in rows {
+        assert!(!row["name"].as_str().unwrap_or("").is_empty());
+        assert!(row.get("fields").is_none(), "fields must not leak");
     }
 }
 
@@ -896,26 +897,27 @@ fn find_symbols_no_duplicate_rows() {
 }
 
 // -----------------------------------------------------------------------
-// BUG #3: FIND usages without GROUP BY — count column must be non-empty
+// FIND usages JSON — line field must be present
 // -----------------------------------------------------------------------
 
 #[test]
-fn find_usages_csv_count_column_is_non_empty() {
+fn find_usages_json_line_field_is_present() {
     let (mut engine, sid, _dir) = engine_with_session();
 
     // 'encenderMotor' appears in comments, macro bodies, and calls in the .cpp.
-    // Without GROUP BY each usage site is a separate row; the count column
-    // falls back to the 1-based line number so agents can distinguish rows.
     let result = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
-    let csv = result.to_csv();
-    let v: serde_json::Value = serde_json::from_str(&csv).expect("CSV must be valid JSON");
+    let json = result.to_json();
+    let v: serde_json::Value = serde_json::from_str(&json).expect("JSON must be valid");
     let rows = v["results"].as_array().expect("results array");
-    // Skip header row (index 0); every data row must have a non-empty 4th column.
-    for row in rows.iter().skip(1) {
-        let col4 = row[3].as_str().unwrap_or("");
+    // Every row must have a name and line.
+    for row in rows {
         assert!(
-            !col4.is_empty(),
-            "count/line column must not be empty in FIND usages CSV rows: {csv}"
+            !row["name"].as_str().unwrap_or("").is_empty(),
+            "name must not be empty: {json}"
+        );
+        assert!(
+            row["line"].as_u64().is_some(),
+            "line must be present: {json}"
         );
     }
 }
