@@ -177,6 +177,81 @@ impl ForgeConfig {
     pub fn step(&self, name: &str) -> Option<&VerifyStep> {
         self.verify_steps.iter().find(|s| s.name == name)
     }
+
+    /// Write a commented template sidecar config file at
+    /// `<data_dir>/<source_name>.forgeql.yaml`.
+    ///
+    /// Does nothing when the file already exists (idempotent).  Returns the
+    /// path when the file was newly created, `None` when it already existed
+    /// or when a write error occurred (non-fatal).
+    #[must_use]
+    pub fn write_sidecar_template(
+        data_dir: &std::path::Path,
+        source_name: &str,
+    ) -> Option<std::path::PathBuf> {
+        let path = data_dir.join(format!("{source_name}.forgeql.yaml"));
+        if path.exists() {
+            return None;
+        }
+        let template = format!(
+            "\
+# .forgeql.yaml — ForgeQL configuration for source '{source_name}'
+#
+# This sidecar file lives next to the bare repo in the ForgeQL data directory
+# (not inside the repository itself), so it never needs to be committed.
+# All fields shown here are the defaults — delete any line you do not need to
+# override, or remove a whole block to disable that subsystem.
+#
+# Documentation: https://forgeql.dev/docs/configuration
+
+workspace_root: .
+
+# ── Line Budget ───────────────────────────────────────────────────────────────
+# Controls how many source lines an agent may read per rolling session window.
+# Remove the entire `line_budget:` block to disable the budget system entirely,
+# which will leave the `line_budget` column empty in the CSV query log.
+line_budget:
+  # Starting line allowance for a brand-new session.
+  initial: 1000
+  # The budget can never grow above this ceiling, no matter how many
+  # recovery events occur.
+  ceiling: 3000
+  # Lines credited back per recovery event.  The first recovery in a window
+  # grants the full base; subsequent ones in the same window are halved.
+  recovery_base: 50
+  # Duration of the recovery window in seconds.
+  recovery_window_secs: 30
+  # When the remaining budget drops below this level, every response will
+  # include a warning so the agent knows to be more selective.
+  warning_threshold: 250
+  # When the remaining budget drops below this level, SHOW LINES output is
+  # capped to `critical_max_lines` to slow consumption automatically.
+  critical_threshold: 50
+  # Hard cap on lines returned by SHOW LINES while in critical state.
+  critical_max_lines: 20
+  # Seconds of inactivity after which the persisted budget file is treated as
+  # stale and deleted, giving the next session a fresh budget.
+  # Set to 0 to disable automatic expiry.
+  idle_reset_secs: 200
+
+# ── Verify Steps ──────────────────────────────────────────────────────────────
+# Named build/test commands executed by `VERIFY build '<name>'`.
+# The VERIFY command will fail with \"step not found\" until at least one step
+# is defined here.  Uncomment and adapt the examples below to your project.
+#
+# verify_steps:
+#   - name: test
+#     command: \"cargo test\"
+#     timeout_secs: 120
+#
+#   - name: build
+#     command: \"cargo build --release\"
+#     timeout_secs: 300
+"
+        );
+        std::fs::write(&path, template).ok()?;
+        Some(path)
+    }
 }
 
 #[cfg(test)]

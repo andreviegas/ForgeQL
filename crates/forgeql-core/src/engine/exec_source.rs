@@ -41,9 +41,19 @@ impl ForgeQLEngine {
         } else {
             Source::clone_from(name, url, &self.data_dir)?
         };
-
         let registered = self.registry.insert(source)?;
         let branches = registered.branches().unwrap_or_default();
+
+        // Write a commented template sidecar config the first time this source
+        // is created, so newcomers get a ready-to-edit file without any extra
+        // setup.  The call is idempotent and non-fatal.
+        let template_msg = crate::config::ForgeConfig::write_sidecar_template(&self.data_dir, name)
+            .map(|p| {
+                format!(
+                    "config template written to '{}' — review and adjust before running VERIFY",
+                    p.display()
+                )
+            });
 
         Ok(ForgeQLResult::SourceOp(SourceOpResult {
             op: "create_source".to_string(),
@@ -52,7 +62,7 @@ impl ForgeQLEngine {
             branches,
             symbols_indexed: None,
             resumed: already_on_disk,
-            message: None,
+            message: template_msg,
         }))
     }
 
