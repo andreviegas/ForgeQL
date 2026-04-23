@@ -3,6 +3,18 @@
 All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased] — 2026-04-23
+
+### Added
+- **`CREATE SOURCE` now writes a sidecar config template** on first clone.
+  A commented `.forgeql.yaml` (e.g. `myrepo.forgeql.yaml`) is placed next to
+  the bare repo in the ForgeQL data directory, giving newcomers a ready-to-edit
+  file with all `line_budget` defaults and a commented `verify_steps` example.
+  The call is idempotent (skipped when the file already exists) and non-fatal.
+  The result message tells the agent the exact path.
+  - `ForgeConfig::write_sidecar_template()` added to `crates/forgeql-core/src/config.rs`
+  - Wired into `create_source()` in `crates/forgeql-core/src/engine/exec_source.rs`
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
