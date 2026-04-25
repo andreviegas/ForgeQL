@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 
 use crate::{
     ast::query,
-    ir::Clauses,
+    ir::{Clauses, GroupBy},
     result::{ForgeQLResult, QueryResult, ShowContent, ShowResult, SymbolMatch},
 };
 
@@ -12,6 +14,86 @@ use super::{
     reject_text_filter, require_session_id, validate_order_by_field,
 };
 
+/// Try to answer a `FIND symbols GROUP BY <field>` query entirely from
+/// pre-aggregated `IndexStats` without scanning individual rows.
+///
+/// Returns `None` when the query has WHERE predicates, IN/EXCLUDE globs, or
+/// targets a field not covered by `IndexStats`.
+fn try_group_by_stats_fast_path(
+    index: &crate::ast::index::SymbolTable,
+    clauses: &Clauses,
+) -> Option<(Vec<SymbolMatch>, Clauses)> {
+    // Must have a GROUP BY on a supported field, no WHERE filters, no globs.
+    if !clauses.where_predicates.is_empty()
+        || clauses.in_glob.is_some()
+        || clauses.exclude_glob.is_some()
+    {
+        return None;
+    }
+
+    let group_field = match &clauses.group_by {
+        Some(GroupBy::Field(f)) => f.clone(),
+        _ => return None,
+    };
+
+    let map: Vec<(String, usize)> = match group_field.as_str() {
+        "fql_kind" => index
+            .stats
+            .by_fql_kind
+            .iter()
+            .map(|(k, &v)| (k.clone(), v))
+            .collect(),
+        "language" | "lang" => index
+            .stats
+            .by_language
+            .iter()
+            .map(|(k, &v)| (k.clone(), v))
+            .collect(),
+        _ => return None,
+    };
+
+    let results: Vec<SymbolMatch> = map
+        .into_iter()
+        .map(|(key, count)| {
+            let fql_kind = if group_field == "fql_kind" {
+                Some(key.clone())
+            } else {
+                None
+            };
+            let language = if group_field == "language" || group_field == "lang" {
+                Some(key.clone())
+            } else {
+                None
+            };
+            SymbolMatch {
+                name: key,
+                node_kind: None,
+                fql_kind,
+                language,
+                path: None,
+                line: None,
+                usages_count: None,
+                fields: HashMap::new(),
+                count: Some(count),
+            }
+        })
+        .collect();
+
+    // Remaining clauses: HAVING, ORDER BY, OFFSET, LIMIT — group_by already consumed.
+    let remaining = Clauses {
+        where_predicates: Vec::new(),
+        having_predicates: clauses.having_predicates.clone(),
+        order_by: clauses.order_by.clone(),
+        group_by: None,
+        limit: clauses.limit,
+        offset: clauses.offset,
+        in_glob: None,
+        exclude_glob: None,
+        depth: None,
+    };
+
+    Some((results, remaining))
+}
 impl ForgeQLEngine {
     pub(super) fn find_symbols(
         &self,
@@ -27,6 +109,29 @@ impl ForgeQLEngine {
         let root = &session.worktree_path;
 
         let configs = self.lang_registry.configs();
+
+        // Fast path: GROUP BY fql_kind / language with no WHERE/IN/EXCLUDE —
+        // answered from pre-aggregated IndexStats in O(groups) instead of O(rows).
+        if let Some((mut results, remaining)) = try_group_by_stats_fast_path(index, clauses) {
+            crate::filter::apply_clauses(&mut results, &remaining);
+            let total = results.len();
+            if clauses.limit.is_none() {
+                results.truncate(DEFAULT_QUERY_LIMIT);
+            }
+            let metric_hint = detect_metric_hint(clauses);
+            let group_by_field = match &clauses.group_by {
+                Some(GroupBy::Field(f)) if f != "fql_kind" && f != "file" => Some(f.clone()),
+                _ => None,
+            };
+            return Ok(ForgeQLResult::Query(QueryResult {
+                op: "find_symbols".to_string(),
+                results,
+                total,
+                metric_hint,
+                group_by_field,
+            }));
+        }
+
         let (mut results, remaining) = find_symbols_prefilter(index, clauses, root, &configs);
 
         validate_order_by_field(&remaining, &results, &configs)?;
@@ -39,7 +144,7 @@ impl ForgeQLEngine {
 
         let metric_hint = detect_metric_hint(clauses);
         let group_by_field = match &clauses.group_by {
-            Some(crate::ir::GroupBy::Field(f)) if f != "fql_kind" && f != "file" => Some(f.clone()),
+            Some(GroupBy::Field(f)) if f != "fql_kind" && f != "file" => Some(f.clone()),
             _ => None,
         };
 

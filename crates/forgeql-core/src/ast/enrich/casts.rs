@@ -93,6 +93,7 @@ impl NodeEnricher for CastEnricher {
             path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
+            usages_count: 0,
             fields,
         }]
     }

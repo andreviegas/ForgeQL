@@ -52,6 +52,11 @@ pub struct IndexRow {
     pub byte_range: Range<usize>,
     /// 1-based start line number of the node.
     pub line: usize,
+    /// Number of times this symbol name appears as an identifier reference
+    /// across the indexed workspace.  Precomputed at build time so queries
+    /// can filter/sort by `usages` without a per-row `HashMap` lookup.
+    #[serde(default)]
+    pub usages_count: u32,
     /// Dynamic fields extracted from tree-sitter grammar field IDs.
     /// Keys are grammar field names (e.g. `"type"`, `"body"`, `"declarator"`).
     /// Values are the source text of the first child at that field.
@@ -77,6 +82,22 @@ pub struct UsageSite {
 }
 
 // -----------------------------------------------------------------------
+// IndexStats — pre-aggregated group counts
+// -----------------------------------------------------------------------
+
+/// Pre-aggregated per-group symbol counts, computed once at build time.
+///
+/// Enables O(1) `GROUP BY fql_kind` and `GROUP BY language` queries without
+/// scanning the full row list.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct IndexStats {
+    /// Symbol count per `fql_kind` value.
+    pub by_fql_kind: HashMap<String, usize>,
+    /// Symbol count per `language` value.
+    pub by_language: HashMap<String, usize>,
+}
+
+// -----------------------------------------------------------------------
 // SymbolTable
 // -----------------------------------------------------------------------
 
@@ -87,6 +108,7 @@ pub struct UsageSite {
 /// - `usages`:     symbol name → all identifier occurrence sites
 /// - `name_index`: symbol name → row indices for O(1) name lookup
 /// - `kind_index`: node kind  → row indices for fast kind filtering
+/// - `stats`:      pre-aggregated group counts for O(1) GROUP BY
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SymbolTable {
     /// All indexed AST nodes (definitions, declarations, macros, includes).
@@ -99,6 +121,9 @@ pub struct SymbolTable {
     kind_index: HashMap<String, Vec<usize>>,
     /// FQL kind → row indices for fast universal-kind filtering.
     fql_kind_index: HashMap<String, Vec<usize>>,
+    /// Pre-aggregated group counts for O(1) GROUP BY on `fql_kind` / `language`.
+    #[serde(default)]
+    pub stats: IndexStats,
 }
 
 impl SymbolTable {
@@ -208,6 +233,9 @@ impl SymbolTable {
             enricher.post_pass(&mut table);
         }
 
+        // Precompute per-row usages_count from the completed usages map.
+        table.populate_usage_counts();
+
         Ok((table, macro_table))
     }
 
@@ -233,6 +261,18 @@ impl SymbolTable {
                     .entry(row.fql_kind.clone())
                     .or_default()
                     .push(offset + i);
+                *self
+                    .stats
+                    .by_fql_kind
+                    .entry(row.fql_kind.clone())
+                    .or_insert(0) += 1;
+            }
+            if !row.language.is_empty() {
+                *self
+                    .stats
+                    .by_language
+                    .entry(row.language.clone())
+                    .or_insert(0) += 1;
             }
             self.rows.push(row);
         }
@@ -259,8 +299,42 @@ impl SymbolTable {
                 .entry(row.fql_kind.clone())
                 .or_default()
                 .push(index);
+            *self
+                .stats
+                .by_fql_kind
+                .entry(row.fql_kind.clone())
+                .or_insert(0) += 1;
+        }
+        if !row.language.is_empty() {
+            *self
+                .stats
+                .by_language
+                .entry(row.language.clone())
+                .or_insert(0) += 1;
         }
         self.rows.push(row);
+    }
+
+    /// Fill `IndexRow::usages_count` for every row from the `usages` map.
+    ///
+    /// Must be called after both `rows` and `usages` are fully populated.
+    /// Skips rows where `usages_count` is already non-zero (idempotent on
+    /// indexes built with a version that persists the field).
+    pub fn populate_usage_counts(&mut self) {
+        for i in 0..self.rows.len() {
+            // Extract the bare name suffix (after last `::`) as an owned
+            // String to release the immutable borrow on `self.rows[i]`
+            // before we look up `self.usages`.
+            let usages_key = {
+                let n = &self.rows[i].name;
+                n.rsplit("::").next().unwrap_or(n).to_owned()
+            };
+            let count = self
+                .usages
+                .get(&usages_key)
+                .map_or(0, |v| u32::try_from(v.len()).unwrap_or(u32::MAX));
+            self.rows[i].usages_count = count;
+        }
     }
 
     /// Record a usage site for `name` at `byte_range` / `line` in `path`.
@@ -340,6 +414,16 @@ impl SymbolTable {
             .flat_map(|v| v.iter().map(|&i| &self.rows[i]))
     }
 
+    /// Return an iterator over all rows with an exact name match.
+    ///
+    /// O(1) lookup via `name_index`; suitable for wildcard-free `LIKE` and
+    /// fully-anchored `MATCHES` predicates.
+    pub fn rows_by_name(&self, name: &str) -> impl Iterator<Item = &IndexRow> {
+        self.name_index
+            .get(name)
+            .into_iter()
+            .flat_map(|v| v.iter().map(|&i| &self.rows[i]))
+    }
     // -------------------------------------------------------------------
     // Incremental update
     // -------------------------------------------------------------------
@@ -634,6 +718,7 @@ fn collect_nodes(
                     path: path.to_path_buf(),
                     byte_range: node.byte_range(),
                     line: node.start_position().row + 1,
+                    usages_count: 0,
                     fields,
                 };
                 table.push_row(row);
@@ -675,6 +760,7 @@ fn collect_nodes(
                             path: path.to_path_buf(),
                             byte_range: node.byte_range(),
                             line: node.start_position().row + 1,
+                            usages_count: 0,
                             fields,
                         };
                         table.push_row(row);
@@ -778,6 +864,7 @@ mod tests {
             path: PathBuf::from("a.cpp"),
             byte_range: 0..30,
             line: 1,
+            usages_count: 0,
             fields: HashMap::new(),
         });
         table.push_row(IndexRow {
@@ -788,6 +875,7 @@ mod tests {
             path: PathBuf::from("b.cpp"),
             byte_range: 0..30,
             line: 1,
+            usages_count: 0,
             fields: HashMap::new(),
         });
         table.add_usage("foo".to_string(), Path::new("a.cpp"), 0..3, 1);
@@ -806,6 +894,7 @@ mod tests {
             path: PathBuf::from("src/alpha.cpp"),
             byte_range: 0..10,
             line: 1,
+            usages_count: 0,
             fields: HashMap::new(),
         });
         assert_eq!(table.rows.len(), 1);
@@ -824,6 +913,7 @@ mod tests {
             path: PathBuf::from("inc/foo.h"),
             byte_range: 0..10,
             line: 1,
+            usages_count: 0,
             fields: HashMap::new(),
         });
         table.push_row(IndexRow {
@@ -834,6 +924,7 @@ mod tests {
             path: PathBuf::from("src/foo.cpp"),
             byte_range: 0..50,
             line: 1,
+            usages_count: 0,
             fields: HashMap::new(),
         });
         let def = table.find_def("foo").expect("should find foo");
@@ -1070,6 +1161,7 @@ mod tests {
             path: PathBuf::from(path),
             byte_range: 0..10,
             line: 1,
+            usages_count: 0,
             fields: HashMap::new(),
         };
         table.push_row(make_row("src/a.cpp"));
@@ -1136,6 +1228,7 @@ mod tests {
                 path: PathBuf::from("src/lib.cpp"),
                 byte_range: 0..10,
                 line: 1,
+                usages_count: 0,
                 fields: HashMap::new(),
             });
         }

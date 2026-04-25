@@ -313,6 +313,7 @@ mod tests {
                 path: PathBuf::from("src/main.cpp"),
                 byte_range: start..start + 10,
                 line: i + 1,
+                usages_count: 0,
                 fields: HashMap::new(),
             });
         }
@@ -396,6 +397,7 @@ mod tests {
             path: PathBuf::from("a.cpp"),
             byte_range: 0..6,
             line: 1,
+            usages_count: 0,
             fields: HashMap::new(),
         });
         table.push_row(IndexRow {
@@ -406,6 +408,7 @@ mod tests {
             path: PathBuf::from("a.cpp"),
             byte_range: 10..15,
             line: 2,
+            usages_count: 0,
             fields: HashMap::new(),
         });
         // Pure name scan: both rows match 'my%' regardless of node_kind.
@@ -433,6 +436,7 @@ mod tests {
             path: PathBuf::from("src/led_controller.cpp"),
             byte_range: 100..115,
             line: 5,
+            usages_count: 0,
             fields: HashMap::new(),
         });
 
@@ -468,6 +472,7 @@ mod tests {
             path: PathBuf::from("src/net.cpp"),
             byte_range: 0..13,
             line: 1,
+            usages_count: 0,
             fields: HashMap::new(),
         });
         // Pure name pattern '%' matches all rows regardless of path.

@@ -106,6 +106,13 @@ impl MacroTable {
     pub fn into_defs(self) -> Vec<MacroDef> {
         self.defs.into_values().flatten().collect()
     }
+
+    /// Borrow all macro definitions as a flat vector (for cache serialization
+    /// without consuming the table).
+    #[must_use]
+    pub fn to_defs(&self) -> Vec<MacroDef> {
+        self.defs.values().flatten().cloned().collect()
+    }
 }
 
 #[cfg(test)]

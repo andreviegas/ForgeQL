@@ -50,10 +50,12 @@ use crate::ast::lang::MacroDef;
 ///       re-tagging via `MacroTable` lookup in `collect_nodes`; macro expansion
 ///       integration in `DeclDistanceEnricher` (dead-store suppression) and
 ///       `EscapeEnricher` (address-of detection); extended `MacroExpandEnricher`
-///       with `expanded_reads`, `expansion_failed`, `expansion_failure_reason` fields.
 ///   23. `source_name` stored in `CachedIndex` via `from_table_and_macros`; stale-worktree
 ///       validation on cache resume now activates for macro-enabled sessions.
-pub const CURRENT_VERSION: u32 = 23;
+///   24. `IndexRow::usages_count` (u32) added — precomputed from `usages` map at build time.
+///       `IndexStats` (`by_fql_kind`, `by_language`) added to `SymbolTable` (in-memory only,
+///       not persisted in `CachedIndex`); populated via `push_row`/`merge` on every load.
+pub const CURRENT_VERSION: u32 = 24;
 
 // -----------------------------------------------------------------------
 // CachedIndex
@@ -150,12 +152,42 @@ impl CachedIndex {
             symbol_table.push_row(row);
         }
         symbol_table.usages = self.usages;
+        symbol_table.populate_usage_counts();
 
         let mut macro_table = MacroTable::new();
         for def in self.macro_defs {
             macro_table.insert(def);
         }
         (symbol_table, macro_table)
+    }
+
+    /// Serialize `table` and `macro_table` to `path` without taking ownership.
+    ///
+    /// Unlike `from_table_and_macros` + `save`, this keeps the caller's
+    /// `SymbolTable` (with its already-built secondary indexes) alive, so
+    /// `build_index` can assign it directly without a second O(N) rebuild.
+    ///
+    /// # Errors
+    /// Returns `Err` if serialization or the atomic write fails.
+    pub fn save_from_parts(
+        table: &SymbolTable,
+        macro_table: &MacroTable,
+        commit_hash: &str,
+        source_name: &str,
+        path: &Path,
+    ) -> Result<()> {
+        let snapshot = Self {
+            version: CURRENT_VERSION,
+            commit_hash: commit_hash.to_owned(),
+            source_name: source_name.to_owned(),
+            rows: table.rows.clone(),
+            usages: table.usages.clone(),
+            file_hashes: HashMap::new(),
+            macro_defs: macro_table.to_defs(),
+        };
+        let bytes = bincode::serialize(&snapshot)?;
+        crate::workspace::file_io::write_atomic(path, &bytes)?;
+        Ok(())
     }
 
     /// Serialize and write to `path` atomically.
@@ -188,7 +220,6 @@ impl CachedIndex {
         Ok(index)
     }
 }
-
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------
@@ -211,6 +242,7 @@ mod tests {
             path: PathBuf::from("src/foo.cpp"),
             byte_range: 10..20,
             line: 1,
+            usages_count: 0,
             fields: HashMap::new(),
         });
         let _ = t.usages.insert(

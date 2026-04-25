@@ -514,6 +514,24 @@ pub(crate) fn detect_metric_hint(clauses: &Clauses) -> Option<String> {
     None
 }
 
+/// If `pat` is of the form `^literal$` where `literal` contains no regex
+/// metacharacters (`.*+?[](){}|\`), return the literal substring.
+///
+/// This lets `MATCHES '^exact_name$'` be routed to the O(1) `name_index`
+/// instead of invoking the regex engine per row.
+fn extract_anchored_literal(pat: &str) -> Option<&str> {
+    let inner = pat.strip_prefix('^')?.strip_suffix('$')?;
+    // Reject anything with regex metacharacters — must be a pure literal.
+    if inner.chars().any(|c| ".*+?[](){}|\\".contains(c)) {
+        return None;
+    }
+    // Reject case-insensitive flag or other inline flags.
+    if inner.starts_with("(?") {
+        return None;
+    }
+    Some(inner)
+}
+
 /// Pre-filter symbol rows using secondary indexes and WHERE predicates
 /// before materializing `SymbolMatch`.  Returns `(results, remaining_clauses)`
 /// where `remaining_clauses` contains only the parts not yet applied.
@@ -562,6 +580,22 @@ pub(crate) fn find_symbols_prefilter(
         }
     });
 
+    // Fast path: `name MATCHES '^literal$'` with no regex metacharacters is
+    // equivalent to an exact equality lookup in the name_index.  Using the
+    // name_index directly skips the per-row regex engine entirely.
+    let name_matches_anchored: Option<&str> = clauses.where_predicates.iter().find_map(|p| {
+        if p.field == "name"
+            && p.op == CompareOp::Matches
+            && let PredicateValue::String(ref s) = p.value
+        {
+            extract_anchored_literal(s.as_str())
+        } else {
+            None
+        }
+    });
+
+    // Combined: either source gives an O(1) name_index hit.
+    let name_literal: Option<&str> = name_matches_anchored;
     let is_usages_pred = |p: &crate::ir::Predicate| p.field == "usages";
 
     // When no explicit kind predicate, infer raw kind(s) from enrichment fields.
@@ -572,9 +606,14 @@ pub(crate) fn find_symbols_prefilter(
         None
     };
 
-    // Row source: fql_kind_index (universal) > kind_index (power-user) > inferred > full scan.
+    // Row source priority: name_index (literal) > fql_kind_index > kind_index > inferred > full scan.
+    // When a literal name is known we bypass the kind indexes and let any kind
+    // predicates be re-evaluated per row (the result set is tiny: 1-few rows).
+    let use_name_index = name_literal.is_some();
     let candidates: Box<dyn Iterator<Item = &crate::ast::index::IndexRow>> =
-        if let Some(fql_kind) = fql_kind_exact {
+        if let Some(literal) = name_literal {
+            Box::new(index.rows_by_name(literal))
+        } else if let Some(fql_kind) = fql_kind_exact {
             Box::new(index.rows_by_fql_kind(fql_kind))
         } else if let Some(kind) = kind_exact {
             Box::new(index.rows_by_kind(kind))
@@ -591,17 +630,22 @@ pub(crate) fn find_symbols_prefilter(
         };
 
     // Collect non-usages predicates not already handled by index lookups.
-    // Only strip a predicate when its index shortcut was actually selected.
-    // The row-source priority is: fql_kind > node_kind > inferred > full scan,
-    // so node_kind is only used when fql_kind is absent.
-    let kind_used_for_index = kind_exact.is_some() && fql_kind_exact.is_none();
+    // Strip a predicate only when its corresponding index shortcut was taken.
+    let kind_used_for_index = kind_exact.is_some() && fql_kind_exact.is_none() && !use_name_index;
     let non_usages_preds: Vec<_> = clauses
         .where_predicates
         .iter()
         .filter(|p| !is_usages_pred(p))
-        .filter(|p| fql_kind_exact.is_none() || !(p.field == "fql_kind" && p.op == CompareOp::Eq))
+        // Strip fql_kind only when fql_kind_index was the candidate source.
+        .filter(|p| {
+            use_name_index
+                || fql_kind_exact.is_none()
+                || !(p.field == "fql_kind" && p.op == CompareOp::Eq)
+        })
         .filter(|p| !(kind_used_for_index && p.field == "node_kind" && p.op == CompareOp::Eq))
         .filter(|p| name_like.is_none() || !(p.field == "name" && p.op == CompareOp::Like))
+        // Strip an anchored MATCHES predicate that was resolved via name_index.
+        .filter(|p| !(use_name_index && p.field == "name" && p.op == CompareOp::Matches))
         .collect();
 
     // Filter on raw IndexRow — no heap allocation per rejected row.
@@ -648,8 +692,8 @@ pub(crate) fn find_symbols_prefilter(
         if !seen.insert(key.to_owned()) {
             continue;
         }
-        let usages_key = def.name.rsplit("::").next().unwrap_or(&def.name);
-        let usages = index.usages.get(usages_key).map_or(0, Vec::len);
+        // usages_count is precomputed at index-build time; no HashMap lookup needed.
+        let usages = def.usages_count as usize;
         results.push(SymbolMatch {
             name: def.name.clone(),
             node_kind: Some(def.node_kind.clone()),
