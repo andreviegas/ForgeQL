@@ -4,6 +4,36 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.3] — 2026-04-25
+
+### Performance
+
+- **Eliminated redundant `SymbolTable` rebuild after `build_index`**: Previously,
+  `build_index` round-tripped through `CachedIndex` (move into cache → save →
+  move back out), triggering a full O(N) secondary-index rebuild via `push_row`
+  for every symbol. A new `CachedIndex::save_from_parts` method borrows the
+  freshly-built `SymbolTable` to serialize it without consuming it, eliminating
+  the rebuild entirely.
+
+- **Anchored `MATCHES '^name$'` routed through `name_index`**: Queries like
+  `WHERE name MATCHES '^gpio_pin_set$'` previously compiled the regex and
+  evaluated it against every row (O(N) — 146 s on 2.7 M Zephyr symbols). A new
+  `extract_anchored_literal` function detects `^literal$` patterns with no
+  special chars and routes them directly through the O(1) `name_index` hash map.
+
+- **`usages_count: u32` precomputed on `IndexRow`**: The per-row usage count is
+  now stored directly on `IndexRow` (populated by `populate_usage_counts()` at
+  build time). Engine queries that filter or sort by `usages` read
+  `row.usages_count` directly instead of looking up the `HashMap<String, Vec<_>>`
+  on every row. Cache version bumped to 24.
+
+- **`IndexStats` for O(1) `GROUP BY fql_kind / language`**: `SymbolTable` now
+  carries a `stats: IndexStats` field with pre-aggregated counts by `fql_kind`
+  and `language`, maintained in `push_row` and `merge`. A new
+  `try_group_by_stats_fast_path` in `exec_find.rs` short-circuits unfiltered
+  `GROUP BY fql_kind ORDER BY count DESC` queries to return instantly instead of
+  scanning all symbols (11 s → <5 ms on Zephyr).
+
 ## [0.38.2] — 2026-04-25
 
 ### Bug Fixes
