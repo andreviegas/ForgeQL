@@ -4,6 +4,28 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.2] — 2026-04-25
+
+### Bug Fixes
+
+- **Cross-source worktree corruption fixed**: When the same `(branch, alias)`
+  pair was used against two different sources (e.g. `USE foo.main AS 'r'`
+  followed by `USE bar.main AS 'r'`), both sessions resolved to the same
+  worktree directory `worktrees/main.r/`. The second `USE` silently took
+  ownership of the first source's worktree — including its `.forgeql-index`
+  and any uncommitted changes — leading to confusing query results and
+  potential data loss. Two changes harden this:
+  - **Worktree directory now includes the source name**: layout is
+    `worktrees/{source}.{branch}.{alias}/`, making collisions impossible by
+    construction. (`exec_source.rs`: `use_source()`)
+  - **`worktree::create()` validates the gitdir backlink** when reusing an
+    existing directory and refuses to silently hand it to a different bare
+    repo. Returns a clear error instead. (`git/worktree.rs`: `create()`)
+  - Auto-reconnect (`exec_session.rs`: `try_auto_reconnect()`) updated to
+    parse the new `{source}.{branch}.{alias}` layout.
+  - Pre-0.38.2 worktrees on disk become orphans (auto-reconnect skips them
+    with a debug log). Remove them manually if disk space matters.
+
 ## [0.38.1] — 2026-04-25
 
 ### Added
@@ -16,9 +38,6 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `ForgeConfig::write_sidecar_template()` added to `crates/forgeql-core/src/config.rs`
   - Wired into `create_source()` in `crates/forgeql-core/src/engine/exec_source.rs`
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
-
----
----
 
 ## [0.38.0] — 2026-04-19
 

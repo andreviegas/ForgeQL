@@ -188,6 +188,11 @@ impl ForgeQLEngine {
         let target_suffix = format!(".{alias}");
 
         // Scan for a worktree directory whose name ends with .{alias}.
+        // Since the new naming format is "{source}.{branch}.{alias}", multiple
+        // sources could in principle have a worktree ending in the same alias.
+        // We pick the first one whose git metadata still resolves cleanly —
+        // the use_source() retry will validate the (source, branch, alias)
+        // tuple end-to-end.
         let wt_path = std::fs::read_dir(&wt_dir).map_or(None, |entries| {
             entries
                 .flatten()
@@ -197,13 +202,6 @@ impl ForgeQLEngine {
 
         let Some(wt_path) = wt_path else {
             debug!(%alias, "auto-reconnect: no matching worktree directory on disk");
-            return;
-        };
-
-        // Derive branch from the directory name: "{branch}.{alias}".
-        let dir_name = wt_path.file_name().unwrap_or_default().to_string_lossy();
-        let Some(branch) = dir_name.strip_suffix(&target_suffix) else {
-            debug!(%alias, %dir_name, "auto-reconnect: unexpected directory name format");
             return;
         };
 
@@ -228,6 +226,22 @@ impl ForgeQLEngine {
                 debug!(%alias, %err, "auto-reconnect: cannot open worktree repo");
                 return;
             }
+        };
+
+        // Directory name layout: "{source}.{branch}.{alias}".
+        // Strip the known prefix and suffix to recover the branch component.
+        // Branch may itself contain '.' so we strip both ends rather than split.
+        let dir_name = wt_path.file_name().unwrap_or_default().to_string_lossy();
+        let source_prefix = format!("{source_name}.");
+        let Some(branch) = dir_name
+            .strip_prefix(&source_prefix)
+            .and_then(|rest| rest.strip_suffix(&target_suffix))
+        else {
+            debug!(
+                %alias, %dir_name, %source_name,
+                "auto-reconnect: directory name does not match the source.branch.alias layout — likely a legacy pre-0.38.2 layout, skipping",
+            );
+            return;
         };
 
         match self.use_source(&source_name, branch, alias) {

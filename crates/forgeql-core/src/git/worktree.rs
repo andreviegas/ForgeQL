@@ -92,8 +92,29 @@ pub fn create(
     };
 
     // If the worktree directory already exists on disk (stale from a previous
-    // server lifecycle), skip the `worktree()` call and reuse it.
+    // server lifecycle), verify it really belongs to *this* bare repo before
+    // reusing it.  Without this check, two sources whose worktree paths
+    // happened to collide (legacy layout pre-0.38.2) could silently hand a
+    // worktree from one source to a session for another — corrupting both.
     if worktree_path.exists() {
+        let belongs_here = Repository::open(worktree_path).is_ok_and(|existing| {
+            existing
+                .path()
+                .canonicalize()
+                .ok()
+                .and_then(|p| p.parent().and_then(Path::parent).map(Path::to_path_buf))
+                .zip(repo_path.canonicalize().ok())
+                .is_some_and(|(found_bare, expected_bare)| found_bare == expected_bare)
+        });
+        if !belongs_here {
+            bail!(
+                "worktree directory '{}' exists but does not belong to bare repo '{}' \
+                 — refusing to reuse to avoid cross-source corruption. \
+                 Remove the stale directory or pick a different alias.",
+                worktree_path.display(),
+                repo_path.display(),
+            );
+        }
         info!(name, branch, session_branch = %session_branch_name,
               path = %worktree_path.display(), "worktree already on disk — resuming");
         return Ok(WorktreeInfo {
@@ -547,6 +568,40 @@ mod tests {
             repo.find_branch("fql/dev/fix-comments", BranchType::Local)
                 .is_ok(),
             "fql/dev/fix-comments branch must exist"
+        );
+    }
+
+    /// Regression test for the cross-source corruption bug fixed in 0.38.2.
+    /// Pre-fix, `create()` resumed any pre-existing directory at
+    /// `worktree_path` without checking which bare repo it belonged to —
+    /// so two sources whose worktree paths collided on disk would silently
+    /// share a worktree.  The fix verifies the gitdir backlink and refuses
+    /// to reuse a worktree that points to a different bare repo.
+    #[test]
+    fn create_refuses_worktree_belonging_to_different_bare_repo() {
+        let tmp = tempdir().unwrap();
+        let bare_a = make_bare_repo(&tmp.path().join("a"));
+        let bare_b = make_bare_repo(&tmp.path().join("b"));
+        let branch_a = default_branch(&bare_a);
+        let branch_b = default_branch(&bare_b);
+        let shared_path = tmp.path().join("shared.wt");
+
+        // First source legitimately creates the worktree.
+        create(&bare_a, "shared.wt", &branch_a, &shared_path, None)
+            .expect("first source must create worktree");
+        assert!(shared_path.exists());
+
+        // Second source tries to use the same worktree path — must fail loudly
+        // rather than silently hand it the wrong source's worktree.
+        let result = create(&bare_b, "shared.wt", &branch_b, &shared_path, None);
+        assert!(
+            result.is_err(),
+            "create() must refuse a worktree that belongs to a different bare repo"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("does not belong to bare repo"),
+            "error must mention cross-source corruption, got: {err_msg}"
         );
     }
 }

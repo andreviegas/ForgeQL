@@ -200,17 +200,23 @@ impl ForgeQLEngine {
         // reconstructable from the USE command the model already knows.
         // No opaque generated ID needed.
         let session_id = as_branch.to_string();
-        // Composite key: base-branch.alias for filesystem (flat, no nesting)
-        // and fql/base-branch/alias for the git branch name.
-        // Using the fql/ namespace prefix avoids the git loose-ref collision
-        // where refs/heads/<branch> already exists as a file when we try to
-        // create refs/heads/<branch>/<alias>.
-        // Slashes in branch or alias would create nested directories when used
+        // Composite key: source.branch.alias for filesystem (flat, no nesting)
+        // and fql/branch/alias for the git branch name.
+        // Including the source name in the directory makes the worktree path
+        // globally unique across sources — without it, two `USE` calls with
+        // the same branch and alias against different sources would collide
+        // on disk and corrupt each other (e.g. `USE foo.main AS 'r'` and
+        // `USE bar.main AS 'r'` would both resolve to `worktrees/main.r/`).
+        // Using the fql/ namespace prefix on the git branch avoids the loose-ref
+        // collision where refs/heads/<branch> already exists as a file when we
+        // try to create refs/heads/<branch>/<alias>.
+        // Slashes in any component would create nested directories when used
         // in a filesystem path, so replace them with dashes for the worktree
         // directory name.
+        let safe_source = source_name.replace('/', "-");
         let safe_branch = branch.replace('/', "-");
         let safe_alias = as_branch.replace('/', "-");
-        let wt_name = format!("{safe_branch}.{safe_alias}");
+        let wt_name = format!("{safe_source}.{safe_branch}.{safe_alias}");
         let git_branch = format!("fql/{branch}/{as_branch}");
         let wt_path = self.data_dir.join("worktrees").join(&wt_name);
 
