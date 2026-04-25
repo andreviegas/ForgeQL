@@ -4,7 +4,7 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 2026-04-23
+## [0.38.1] — 2026-04-25
 
 ### Added
 - **`CREATE SOURCE` now writes a sidecar config template** on first clone.

@@ -195,49 +195,28 @@ impl ForgeConfig {
         }
         let template = format!(
             "\
-# .forgeql.yaml — ForgeQL configuration for source '{source_name}'
+# .forgeql.yaml — ForgeQL config for source '{source_name}'
 #
-# This sidecar file lives next to the bare repo in the ForgeQL data directory
-# (not inside the repository itself), so it never needs to be committed.
-# All fields shown here are the defaults — delete any line you do not need to
-# override, or remove a whole block to disable that subsystem.
-#
-# Documentation: https://forgeql.dev/docs/configuration
+# Sidecar file: lives in the ForgeQL data dir, not inside the repo.
+# Defaults shown — delete lines you don't need, remove a block to disable it.
+# Docs: https://github.com/andreviegas/ForgeQL
 
 workspace_root: .
 
 # ── Line Budget ───────────────────────────────────────────────────────────────
-# Controls how many source lines an agent may read per rolling session window.
-# Remove the entire `line_budget:` block to disable the budget system entirely,
-# which will leave the `line_budget` column empty in the CSV query log.
+# Source-line allowance per session. Remove block to disable the budget system.
 line_budget:
-  # Starting line allowance for a brand-new session.
-  initial: 1000
-  # The budget can never grow above this ceiling, no matter how many
-  # recovery events occur.
-  ceiling: 3000
-  # Lines credited back per recovery event.  The first recovery in a window
-  # grants the full base; subsequent ones in the same window are halved.
-  recovery_base: 50
-  # Duration of the recovery window in seconds.
-  recovery_window_secs: 30
-  # When the remaining budget drops below this level, every response will
-  # include a warning so the agent knows to be more selective.
-  warning_threshold: 250
-  # When the remaining budget drops below this level, SHOW LINES output is
-  # capped to `critical_max_lines` to slow consumption automatically.
-  critical_threshold: 50
-  # Hard cap on lines returned by SHOW LINES while in critical state.
-  critical_max_lines: 20
-  # Seconds of inactivity after which the persisted budget file is treated as
-  # stale and deleted, giving the next session a fresh budget.
-  # Set to 0 to disable automatic expiry.
-  idle_reset_secs: 200
+  initial: 3000             # starting allowance
+  ceiling: 9000             # hard ceiling; budget never exceeds this
+  recovery_base: 200         # lines credited per recovery (halved on repeats)
+  recovery_window_secs: 30  # recovery window in seconds
+  warning_threshold: 250    # warn agent when budget falls below this
+  critical_threshold: 50    # cap SHOW LINES output when budget is critical
+  critical_max_lines: 20    # max lines returned in critical state
+  idle_reset_secs: 120      # idle seconds before budget resets; 0 = never
 
 # ── Verify Steps ──────────────────────────────────────────────────────────────
-# Named build/test commands executed by `VERIFY build '<name>'`.
-# The VERIFY command will fail with \"step not found\" until at least one step
-# is defined here.  Uncomment and adapt the examples below to your project.
+# Named commands run by `VERIFY '<name>'`. Uncomment and adapt to your project.
 #
 # verify_steps:
 #   - name: test
