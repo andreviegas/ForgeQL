@@ -4,6 +4,48 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.4] — 2026-04-25
+
+### Performance
+
+- **Trigram inverted index for fast `MATCHES` / `LIKE` substring queries**: A new
+  `TrigramIndex` (in `ast/trigram.rs`) maps every 3-byte window of each symbol
+  name to the set of row indices containing it. Built in O(N) during `push_row`
+  / `merge`; not serialized (rebuilt on warm reconnect).
+  - `MATCHES '^k_thread_.*$'` — extracts literal `k_thread_`, narrows via
+    trigram, then applies the full regex only to those candidates. Was 40 s on
+    Zephyr; now < 50 ms.
+  - `LIKE '%CONFIG_BT%'` — extracts literal `CONFIG_BT`, narrows via trigram,
+    then applies the full LIKE check. Patterns with no extractable literal of
+    length ≥ 3 fall through to the existing full-scan path unchanged.
+
+- **`TrigramIndex::insert` dedup O(n) instead of O(n²)**: per-name `seen`
+  collection switched from `Vec::contains` to `HashSet`, fixing slow warm-reload
+  on large comment nodes (up to ~9 KB names on Zephyr).
+
+### Fixed
+
+- **`LIKE` / `MATCHES` trigram pre-filter ignored ASCII case folding**: The
+  trigram index was built over original-case bytes, so `WHERE name LIKE '%MOTOR%'`
+  and `WHERE name MATCHES '(?i)Motor'` returned 0 rows. Index now lowercases at
+  insert and lookup, restoring `like_match` / `(?i)` semantics.
+
+- **`SymbolTable::purge_file` did not rebuild the trigram index**: After an
+  incremental file purge, `trigram_index` retained stale row indices while the
+  other secondary indexes were rebuilt. Fixed by clearing and re-populating
+  alongside `name_index` / `kind_index` / `fql_kind_index`.
+
+- **`fql_kind` / `node_kind` predicates silently dropped when combined with
+  `LIKE`**: When a `LIKE` pattern produced trigram candidates, `WHERE fql_kind =
+  'function'` was incorrectly stripped from per-row evaluation, leaking
+  non-matching symbol kinds into results. Fixed with `use_fql_kind_index` /
+  `use_kind_index` flags that only strip a predicate when its index actually
+  supplied the candidates.
+
+- **Multiple `WHERE name LIKE` clauses — second and subsequent silently
+  dropped**: `non_usages_preds` was stripping all `name LIKE` predicates;
+  only the first was ever evaluated. Fixed by removing the blanket LIKE strip.
+
 ## [0.38.3] — 2026-04-25
 
 ### Performance

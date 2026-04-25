@@ -21,6 +21,7 @@ use crate::ast::enrich::guard_utils::{
 use crate::ast::enrich::macro_table::MacroTable;
 use crate::ast::enrich::{EnrichContext, NodeEnricher, default_enrichers};
 use crate::ast::lang::{LanguageRegistry, LanguageSupport};
+use crate::ast::trigram::TrigramIndex;
 use crate::error::ForgeError;
 use crate::workspace::Workspace;
 // -----------------------------------------------------------------------
@@ -124,6 +125,11 @@ pub struct SymbolTable {
     /// Pre-aggregated group counts for O(1) GROUP BY on `fql_kind` / `language`.
     #[serde(default)]
     pub stats: IndexStats,
+    /// Trigram inverted index over symbol names for fast substring / regex pre-filtering.
+    ///
+    /// Not persisted in the cache — rebuilt in O(N) from `rows` during load via `push_row`.
+    #[serde(skip)]
+    pub trigram_index: TrigramIndex,
 }
 
 impl SymbolTable {
@@ -274,6 +280,7 @@ impl SymbolTable {
                     .entry(row.language.clone())
                     .or_insert(0) += 1;
             }
+            self.trigram_index.insert(offset + i, &row.name);
             self.rows.push(row);
         }
 
@@ -312,6 +319,8 @@ impl SymbolTable {
                 .entry(row.language.clone())
                 .or_insert(0) += 1;
         }
+        // Update trigram index before moving `row` into `self.rows`.
+        self.trigram_index.insert(index, &row.name);
         self.rows.push(row);
     }
 
@@ -424,6 +433,16 @@ impl SymbolTable {
             .into_iter()
             .flat_map(|v| v.iter().map(|&i| &self.rows[i]))
     }
+
+    /// Return candidate rows whose names contain `substr` according to the
+    /// trigram index.  The result is a **superset** — callers must still
+    /// verify the full predicate.  Returns `None` when `substr` is too short
+    /// (< 3 bytes) to use trigrams.
+    #[must_use]
+    pub fn trigram_candidates(&self, substr: &str) -> Option<Vec<&IndexRow>> {
+        let ids = self.trigram_index.candidates(substr)?;
+        Some(ids.into_iter().map(|i| &self.rows[i]).collect())
+    }
     // -------------------------------------------------------------------
     // Incremental update
     // -------------------------------------------------------------------
@@ -436,6 +455,7 @@ impl SymbolTable {
         self.name_index.clear();
         self.kind_index.clear();
         self.fql_kind_index.clear();
+        self.trigram_index.clear();
         for (index, row) in self.rows.iter().enumerate() {
             self.name_index
                 .entry(row.name.clone())
@@ -451,6 +471,7 @@ impl SymbolTable {
                     .or_default()
                     .push(index);
             }
+            self.trigram_index.insert(index, &row.name);
         }
 
         for sites in self.usages.values_mut() {

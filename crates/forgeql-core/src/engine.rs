@@ -532,6 +532,18 @@ fn extract_anchored_literal(pat: &str) -> Option<&str> {
     Some(inner)
 }
 
+/// Extract a required literal substring (>= 3 bytes) from a MATCHES regex
+/// pattern for use as a trigram pre-filter.
+fn regex_trigram_literal(pat: &str) -> Option<String> {
+    crate::ast::trigram::extract_regex_literal(pat)
+}
+
+/// Extract a required literal substring (>= 3 bytes) from a SQL LIKE pattern
+/// for use as a trigram pre-filter.
+fn like_trigram_literal(pat: &str) -> Option<String> {
+    crate::ast::trigram::extract_like_literal(pat)
+}
+
 /// Pre-filter symbol rows using secondary indexes and WHERE predicates
 /// before materializing `SymbolMatch`.  Returns `(results, remaining_clauses)`
 /// where `remaining_clauses` contains only the parts not yet applied.
@@ -598,6 +610,32 @@ pub(crate) fn find_symbols_prefilter(
     let name_literal: Option<&str> = name_matches_anchored;
     let is_usages_pred = |p: &crate::ir::Predicate| p.field == "usages";
 
+    // Trigram pre-filter: extract a required literal substring from MATCHES
+    // or LIKE predicates that are NOT already handled by the exact name_index
+    // path.  The trigram index returns a small candidate superset; the full
+    // predicate is still evaluated per-candidate in `non_usages_preds`.
+    let trigram_literal: Option<String> = if name_literal.is_none() {
+        // Prefer the MATCHES pattern literal (usually more selective than LIKE).
+        clauses
+            .where_predicates
+            .iter()
+            .find_map(|p| {
+                if p.field == "name"
+                    && p.op == CompareOp::Matches
+                    && let PredicateValue::String(ref s) = p.value
+                {
+                    return regex_trigram_literal(s.as_str());
+                }
+                None
+            })
+            .or_else(|| {
+                // Fall back to LIKE literal when no MATCHES pattern exists.
+                name_like.and_then(like_trigram_literal)
+            })
+    } else {
+        None
+    };
+
     // When no explicit kind predicate, infer raw kind(s) from enrichment fields.
     // This lets us use the kind_index instead of a full scan.
     let inferred_kinds: Option<Vec<String>> = if fql_kind_exact.is_none() && kind_exact.is_none() {
@@ -606,13 +644,36 @@ pub(crate) fn find_symbols_prefilter(
         None
     };
 
-    // Row source priority: name_index (literal) > fql_kind_index > kind_index > inferred > full scan.
-    // When a literal name is known we bypass the kind indexes and let any kind
-    // predicates be re-evaluated per row (the result set is tiny: 1-few rows).
+    // Row source priority:
+    //   1. name_index  — exact anchored literal (O(1), 100% correct)
+    //   2. trigram     — required substring (O(candidates), superset)
+    //   3. fql_kind_index
+    //   4. kind_index
+    //   5. inferred kinds
+    //   6. full scan
     let use_name_index = name_literal.is_some();
+    // trigram_literal is only computed when name_literal is None, so
+    // use_trigram already implies !use_name_index.
+    let use_trigram = trigram_literal.is_some();
+    // Strip a predicate only when its corresponding index actually supplied
+    // the candidate rows.  Before trigram was introduced, the priority was
+    // name_index → fql_kind_index → kind_index, and the strip logic only
+    // checked !use_name_index.  Now that trigram sits between name_index and
+    // fql_kind_index, the strip logic must also account for whether trigram
+    // was used — otherwise `fql_kind` and `node_kind` predicates are silently
+    // dropped even though fql_kind_index / kind_index was never consulted.
+    let use_fql_kind_index = !use_name_index && !use_trigram && fql_kind_exact.is_some();
+    let use_kind_index =
+        !use_name_index && !use_trigram && fql_kind_exact.is_none() && kind_exact.is_some();
+
     let candidates: Box<dyn Iterator<Item = &crate::ast::index::IndexRow>> =
         if let Some(literal) = name_literal {
             Box::new(index.rows_by_name(literal))
+        } else if let Some(ref substr) = trigram_literal {
+            // trigram_candidates returns None only when substr < 3 bytes,
+            // which can't happen here (extract_*_literal guarantees >= 3).
+            let rows = index.trigram_candidates(substr).unwrap_or_default();
+            Box::new(rows.into_iter())
         } else if let Some(fql_kind) = fql_kind_exact {
             Box::new(index.rows_by_fql_kind(fql_kind))
         } else if let Some(kind) = kind_exact {
@@ -630,20 +691,16 @@ pub(crate) fn find_symbols_prefilter(
         };
 
     // Collect non-usages predicates not already handled by index lookups.
-    // Strip a predicate only when its corresponding index shortcut was taken.
-    let kind_used_for_index = kind_exact.is_some() && fql_kind_exact.is_none() && !use_name_index;
+    // A predicate is stripped only when its index WAS the actual candidate
+    // source — stripping it otherwise would silently skip correct filtering.
     let non_usages_preds: Vec<_> = clauses
         .where_predicates
         .iter()
         .filter(|p| !is_usages_pred(p))
-        // Strip fql_kind only when fql_kind_index was the candidate source.
-        .filter(|p| {
-            use_name_index
-                || fql_kind_exact.is_none()
-                || !(p.field == "fql_kind" && p.op == CompareOp::Eq)
-        })
-        .filter(|p| !(kind_used_for_index && p.field == "node_kind" && p.op == CompareOp::Eq))
-        .filter(|p| name_like.is_none() || !(p.field == "name" && p.op == CompareOp::Like))
+        // Strip fql_kind = X only when fql_kind_index supplied the candidates.
+        .filter(|p| !(use_fql_kind_index && p.field == "fql_kind" && p.op == CompareOp::Eq))
+        // Strip node_kind = X only when kind_index supplied the candidates.
+        .filter(|p| !(use_kind_index && p.field == "node_kind" && p.op == CompareOp::Eq))
         // Strip an anchored MATCHES predicate that was resolved via name_index.
         .filter(|p| !(use_name_index && p.field == "name" && p.op == CompareOp::Matches))
         .collect();

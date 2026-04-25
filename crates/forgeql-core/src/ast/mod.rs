@@ -5,3 +5,4 @@ pub mod lang;
 pub mod lang_json;
 pub mod query;
 pub mod show;
+pub mod trigram;

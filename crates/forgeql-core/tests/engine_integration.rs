@@ -1452,4 +1452,198 @@ fn budget_absent_without_config() {
     let (engine, sid, _dir) = engine_with_session();
     // No init_session_budget call — budget should be None.
     assert!(engine.budget_status(&sid).is_none());
+    assert!(engine.budget_status(&sid).is_none());
+}
+
+// -----------------------------------------------------------------------
+// Regression: multiple WHERE name LIKE predicates — all must be applied
+// -----------------------------------------------------------------------
+
+/// Two `WHERE name LIKE` clauses must both be evaluated.  Before the fix,
+/// only the first was applied (the second was silently stripped from
+/// `non_usages_preds`), so `encenderSistema` leaked through even though it
+/// doesn't contain "Motor".
+#[test]
+fn find_symbols_multiple_name_like_all_applied() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    // Only `encenderMotor` contains both "encender" AND "Motor".
+    // `encenderSistema` has "encender" but NOT "Motor" — must be excluded.
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE name LIKE '%encender%' WHERE name LIKE '%Motor%'",
+    );
+    match result {
+        ForgeQLResult::Query(qr) => {
+            let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
+            assert!(
+                names.contains(&"encenderMotor"),
+                "encenderMotor should be in results: {names:?}"
+            );
+            assert!(
+                !names.contains(&"encenderSistema"),
+                "encenderSistema must NOT be in results (lacks 'Motor'): {names:?}"
+            );
+            // Sanity: every returned name contains both required substrings.
+            for name in &names {
+                assert!(
+                    name.contains("encender") && name.contains("Motor"),
+                    "result '{name}' does not satisfy both LIKE predicates"
+                );
+            }
+        }
+        other => panic!("expected Query, got: {other:?}"),
+    }
+}
+
+// -----------------------------------------------------------------------
+// Regression: fql_kind predicate must not be stripped when trigram is
+// the candidate source (not fql_kind_index)
+// -----------------------------------------------------------------------
+
+/// `WHERE name LIKE '%Motor%' WHERE fql_kind = 'function'` must return only
+/// functions.  Before the fix, the trigram candidate source was used (because
+/// a LIKE predicate was present), but the `fql_kind` predicate was
+/// incorrectly stripped from `non_usages_preds` — so struct/enum/comment
+/// rows also appeared in the output.
+#[test]
+fn find_symbols_like_with_fql_kind_filter_respected() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE name LIKE '%Motor%' WHERE fql_kind = 'function'",
+    );
+    match result {
+        ForgeQLResult::Query(qr) => {
+            // Must include the two known motor functions.
+            let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
+            assert!(
+                names.contains(&"encenderMotor"),
+                "missing encenderMotor: {names:?}"
+            );
+            assert!(
+                names.contains(&"apagarMotor"),
+                "missing apagarMotor: {names:?}"
+            );
+            // Every result must be fql_kind = 'function'.
+            for r in &qr.results {
+                assert_eq!(
+                    r.fql_kind.as_deref(),
+                    Some("function"),
+                    "non-function leaked through fql_kind filter: {} ({:?})",
+                    r.name,
+                    r.fql_kind
+                );
+            }
+        }
+        other => panic!("expected Query, got: {other:?}"),
+    }
+}
+
+/// Same guard for combined multi-LIKE + fql_kind: only `encenderMotor`
+/// matches both `%encender%` AND `%Motor%` AND `fql_kind = 'function'`.
+#[test]
+fn find_symbols_multi_like_with_fql_kind_filter_respected() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE name LIKE '%encender%' WHERE name LIKE '%Motor%' WHERE fql_kind = 'function'",
+    );
+    match result {
+        ForgeQLResult::Query(qr) => {
+            let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
+            assert!(
+                names.contains(&"encenderMotor"),
+                "missing encenderMotor: {names:?}"
+            );
+            assert!(
+                !names.contains(&"encenderSistema"),
+                "encenderSistema must be excluded: {names:?}"
+            );
+            for r in &qr.results {
+                assert_eq!(
+                    r.fql_kind.as_deref(),
+                    Some("function"),
+                    "non-function leaked through fql_kind filter: {} ({:?})",
+                    r.name,
+                    r.fql_kind
+                );
+                assert!(
+                    r.name.contains("encender") && r.name.contains("Motor"),
+                    "result '{}' does not satisfy both LIKE predicates",
+                    r.name
+                );
+            }
+        }
+        other => panic!("expected Query, got: {other:?}"),
+    }
+}
+
+// -----------------------------------------------------------------------
+// Regression: trigram pre-filter must respect like_match's ASCII
+// case-insensitive semantics
+// -----------------------------------------------------------------------
+
+/// `LIKE '%MOTOR%'` (uppercase pattern) must match `encenderMotor` and
+/// `apagarMotor` exactly like `LIKE '%Motor%'`, because `like_match` is
+/// ASCII case-insensitive.  Before the fix the trigram index was built
+/// over original-case bytes, so the uppercase trigrams `MOT`/`OTO`/`TOR`
+/// were never found and the candidate set was empty.
+#[test]
+fn find_symbols_like_uppercase_pattern_matches_mixed_case_names() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE name LIKE '%MOTOR%' WHERE fql_kind = 'function'",
+    );
+    match result {
+        ForgeQLResult::Query(qr) => {
+            let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
+            assert!(
+                names.contains(&"encenderMotor"),
+                "missing encenderMotor: {names:?}"
+            );
+            assert!(
+                names.contains(&"apagarMotor"),
+                "missing apagarMotor: {names:?}"
+            );
+        }
+        other => panic!("expected Query, got: {other:?}"),
+    }
+}
+
+/// Symmetric guard: an `(?i)` regex with a mixed-case literal must
+/// still find both upper- and lower-case names.  The trigram pre-filter
+/// uses the literal verbatim — making the index case-insensitive at
+/// build time keeps this correct.
+#[test]
+fn find_symbols_matches_case_insensitive_flag_returns_all_matches() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE name MATCHES '(?i)Motor' WHERE fql_kind = 'function'",
+    );
+    match result {
+        ForgeQLResult::Query(qr) => {
+            let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
+            assert!(
+                names.contains(&"encenderMotor"),
+                "missing encenderMotor: {names:?}"
+            );
+            assert!(
+                names.contains(&"apagarMotor"),
+                "missing apagarMotor: {names:?}"
+            );
+        }
+        other => panic!("expected Query, got: {other:?}"),
+    }
 }
