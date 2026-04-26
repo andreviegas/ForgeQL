@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version   = "0.39.0"
+version   = "0.40.0"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"
@@ -106,6 +106,9 @@ forgeql-core        = { path = "crates/forgeql-core" }
 forgeql-lang-cpp    = { path = "crates/forgeql-lang-cpp" }
 forgeql-lang-python = { path = "crates/forgeql-lang-python" }
 forgeql-lang-rust   = { path = "crates/forgeql-lang-rust" }
+
+# --- allocator (replaces glibc malloc; returns pages to OS after large frees) ---
+tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
 
 # --- testing ---
 insta            = "1"

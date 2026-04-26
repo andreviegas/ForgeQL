@@ -14,6 +14,15 @@
 // In a binary crate, pub(crate) vs pub inside non-pub modules is ambiguous.
 #![allow(clippy::redundant_pub_crate)]
 
+// Replace glibc malloc with jemalloc.  jemalloc's background decay thread
+// returns freed pages to the OS — critical for recovering RSS after large
+// index frees (e.g. ROLLBACK drop_index + resume_index on zephyr-scale
+// sessions where the working set is >4 GB).
+// Not enabled on Windows: jemalloc does not support MinGW cross-compilation.
+#[cfg(not(windows))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 mod cli;
 mod execute;
 mod mcp;

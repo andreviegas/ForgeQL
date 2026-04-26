@@ -41,6 +41,12 @@ clap      = { workspace = true }
 rustyline = { workspace = true }
 dirs      = { workspace = true }
 
+[target.'cfg(not(windows))'.dependencies]
+# allocator — replace glibc malloc to recover RSS after large index frees
+# (e.g. rollback drop_index+resume_index on zephyr-scale sessions)
+# Not used on Windows: jemalloc does not support MinGW cross-compilation.
+tikv-jemallocator = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 forgeql-core = { path = "../forgeql-core", features = ["test-helpers"] }

@@ -4,6 +4,23 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.0] — 2026-04-26
+
+### Added
+
+- **jemalloc global allocator** — the binary now uses `tikv-jemallocator` with
+  `background_threads` instead of the system glibc malloc. jemalloc's decay
+  background thread returns dirty/muzzy pages to the OS via `madvise()` after
+  large frees. On zephyr-scale sessions (2.7 M symbols, ~4.9 GB live data) this
+  eliminates the post-`ROLLBACK` RSS spike: RSS stays at ~4.8 GB instead of
+  climbing to 15+ GB when glibc would hold freed pages as internal free lists.
+
+### Fixed
+
+- Post-`ROLLBACK` RSS bloat on large sessions. `ROLLBACK` calls `drop_index()`
+  (frees ~4.7 GB) then `resume_index()` (re-allocates ~4.7 GB); glibc never
+  returned the freed pages. jemalloc recovers them within seconds.
+
 ## [0.39.0] — 2026-04-26
 
 ### Added
