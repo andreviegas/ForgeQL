@@ -20,6 +20,7 @@ use crate::ast::enrich::guard_utils::{
 };
 use crate::ast::enrich::macro_table::MacroTable;
 use crate::ast::enrich::{EnrichContext, NodeEnricher, default_enrichers};
+use crate::ast::intern::ColumnarTable;
 use crate::ast::lang::{LanguageRegistry, LanguageSupport};
 use crate::ast::trigram::TrigramIndex;
 use crate::error::ForgeError;
@@ -33,7 +34,7 @@ use crate::workspace::Workspace;
 /// Every named tree-sitter node produces one row.  The `fields` map contains
 /// all grammar fields of the node, auto-extracted by name from the Language
 /// API.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct IndexRow {
     /// Human-readable symbol name (extracted by [`extract_name`]).
     pub name: String,
@@ -62,6 +63,26 @@ pub struct IndexRow {
     /// Keys are grammar field names (e.g. `"type"`, `"body"`, `"declarator"`).
     /// Values are the source text of the first child at that field.
     pub fields: HashMap<String, String>,
+
+    // ------------------------------------------------------------------
+    // Intern IDs — populated by SymbolTable::push_row / merge.
+    // Not serialised: rebuilt in O(N) from the String fields on cache load.
+    // ------------------------------------------------------------------
+    /// Interned `name` — resolve via [`SymbolTable::name_of`].
+    #[serde(skip)]
+    pub name_id: u32,
+    /// Interned `node_kind` — resolve via [`SymbolTable::node_kind_of`].
+    #[serde(skip)]
+    pub node_kind_id: u32,
+    /// Interned `fql_kind` — resolve via [`SymbolTable::fql_kind_of`].
+    #[serde(skip)]
+    pub fql_kind_id: u32,
+    /// Interned `language` — resolve via [`SymbolTable::language_of`].
+    #[serde(skip)]
+    pub language_id: u32,
+    /// Interned `path` — resolve via [`SymbolTable::path_of`].
+    #[serde(skip)]
+    pub path_id: u32,
 }
 
 // -----------------------------------------------------------------------
@@ -130,6 +151,16 @@ pub struct SymbolTable {
     /// Not persisted in the cache — rebuilt in O(N) from `rows` during load via `push_row`.
     #[serde(skip)]
     pub trigram_index: TrigramIndex,
+    /// Interned copies of all top-level string fields in `rows`.
+    ///
+    /// Populated in O(N) during [`push_row`] / `merge` so that every row has
+    /// valid `name_id`, `node_kind_id`, `fql_kind_id`, `language_id`, and
+    /// `path_id` fields.  Not serialised — rebuilt transparently on cache load.
+    ///
+    /// Use [`SymbolTable::name_of`], [`SymbolTable::fql_kind_of`], etc. to
+    /// resolve IDs at output time.
+    #[serde(skip)]
+    pub strings: ColumnarTable,
 }
 
 impl SymbolTable {
@@ -254,13 +285,27 @@ impl SymbolTable {
         let offset = self.rows.len();
 
         // Merge rows and fix secondary indexes.
-        for (i, row) in other.rows.into_iter().enumerate() {
+        for (i, mut row) in other.rows.into_iter().enumerate() {
             let abs = offset + i;
             debug_assert!(
                 u32::try_from(abs).is_ok(),
                 "row index exceeds u32::MAX during merge"
             );
             let abs_u32 = u32::try_from(abs).unwrap_or(u32::MAX);
+            // Intern into the accumulator pool (IDs from `other` are not valid here).
+            let (name_id, node_kind_id, fql_kind_id, language_id, path_id) =
+                self.strings.intern_row(
+                    &row.name,
+                    &row.node_kind,
+                    &row.fql_kind,
+                    &row.language,
+                    &row.path,
+                );
+            row.name_id = name_id;
+            row.node_kind_id = node_kind_id;
+            row.fql_kind_id = fql_kind_id;
+            row.language_id = language_id;
+            row.path_id = path_id;
             self.name_index
                 .entry(row.name.clone())
                 .or_default()
@@ -298,13 +343,26 @@ impl SymbolTable {
     }
 
     /// Append a row and update the secondary indexes.
-    pub fn push_row(&mut self, row: IndexRow) {
+    pub fn push_row(&mut self, mut row: IndexRow) {
         let index = self.rows.len();
         debug_assert!(
             u32::try_from(index).is_ok(),
             "row index exceeds u32::MAX in push_row"
         );
         let index_u32 = u32::try_from(index).unwrap_or(u32::MAX);
+        // Intern all top-level string fields into the shared pool.
+        let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = self.strings.intern_row(
+            &row.name,
+            &row.node_kind,
+            &row.fql_kind,
+            &row.language,
+            &row.path,
+        );
+        row.name_id = name_id;
+        row.node_kind_id = node_kind_id;
+        row.fql_kind_id = fql_kind_id;
+        row.language_id = language_id;
+        row.path_id = path_id;
         self.name_index
             .entry(row.name.clone())
             .or_default()
@@ -334,6 +392,46 @@ impl SymbolTable {
         // Update trigram index before moving `row` into `self.rows`.
         self.trigram_index.insert(index, &row.name);
         self.rows.push(row);
+    }
+
+    // ------------------------------------------------------------------
+    // Intern-pool accessors — resolve row IDs to string/path slices.
+    // These are zero-copy; the returned references borrow from `self.strings`.
+    // ------------------------------------------------------------------
+
+    /// Resolve `row.name_id` to its symbol name.
+    #[must_use]
+    #[inline]
+    pub fn name_of(&self, row: &IndexRow) -> &str {
+        self.strings.names.get(row.name_id)
+    }
+
+    /// Resolve `row.node_kind_id` to its raw tree-sitter node kind.
+    #[must_use]
+    #[inline]
+    pub fn node_kind_of(&self, row: &IndexRow) -> &str {
+        self.strings.node_kinds.get(row.node_kind_id)
+    }
+
+    /// Resolve `row.fql_kind_id` to its universal FQL kind string.
+    #[must_use]
+    #[inline]
+    pub fn fql_kind_of(&self, row: &IndexRow) -> &str {
+        self.strings.fql_kinds.get(row.fql_kind_id)
+    }
+
+    /// Resolve `row.language_id` to its language identifier string.
+    #[must_use]
+    #[inline]
+    pub fn language_of(&self, row: &IndexRow) -> &str {
+        self.strings.languages.get(row.language_id)
+    }
+
+    /// Resolve `row.path_id` to its source file path.
+    #[must_use]
+    #[inline]
+    pub fn path_of(&self, row: &IndexRow) -> &std::path::Path {
+        self.strings.paths.get(row.path_id)
     }
 
     /// Fill `IndexRow::usages_count` for every row from the `usages` map.
@@ -778,6 +876,7 @@ fn collect_nodes(
                     line: node.start_position().row + 1,
                     usages_count: 0,
                     fields,
+                    ..Default::default()
                 };
                 table.push_row(row);
             } else if let Some(mtable) = macro_table {
@@ -820,6 +919,7 @@ fn collect_nodes(
                             line: node.start_position().row + 1,
                             usages_count: 0,
                             fields,
+                            ..Default::default()
                         };
                         table.push_row(row);
                     }
@@ -924,6 +1024,7 @@ mod tests {
             line: 1,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         });
         table.push_row(IndexRow {
             name: "bar".to_string(),
@@ -935,6 +1036,7 @@ mod tests {
             line: 1,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         });
         table.add_usage("foo".to_string(), Path::new("a.cpp"), 0..3, 1);
         table.add_usage("foo".to_string(), Path::new("b.cpp"), 10..13, 1);
@@ -954,6 +1056,7 @@ mod tests {
             line: 1,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         });
         assert_eq!(table.rows.len(), 1);
         assert_eq!(table.name_index["alpha"], vec![0u32]);
@@ -973,6 +1076,7 @@ mod tests {
             line: 1,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         });
         table.push_row(IndexRow {
             name: "foo".to_string(),
@@ -984,6 +1088,7 @@ mod tests {
             line: 1,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         });
         let def = table.find_def("foo").expect("should find foo");
         assert_eq!(def.node_kind, "function_definition");
@@ -1033,6 +1138,7 @@ mod tests {
             line: 1,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         });
         table.push_row(IndexRow {
             name: "f2".to_string(),
@@ -1044,6 +1150,7 @@ mod tests {
             line: 1,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         });
         assert_eq!(table.stats.by_fql_kind.get("function"), Some(&2));
         assert_eq!(table.stats.by_language.get("cpp"), Some(&2));
@@ -1261,6 +1368,7 @@ mod tests {
             line: 1,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         };
         table.push_row(make_row("src/a.cpp"));
         table.push_row(make_row("src/b.cpp"));
@@ -1328,6 +1436,7 @@ mod tests {
                 line: 1,
                 usages_count: 0,
                 fields: HashMap::new(),
+                ..Default::default()
             });
         }
         let suggestions = table.suggest_similar("sym", 3);

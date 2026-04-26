@@ -244,6 +244,7 @@ mod tests {
             line: 1,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         });
         let _ = t.usages.insert(
             "foo".to_string(),

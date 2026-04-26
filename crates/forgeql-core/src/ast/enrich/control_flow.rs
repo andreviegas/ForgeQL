@@ -108,6 +108,7 @@ impl NodeEnricher for ControlFlowEnricher {
             line: ctx.node.start_position().row + 1,
             usages_count: 0,
             fields,
+            ..Default::default()
         }]
     }
 

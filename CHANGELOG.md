@@ -4,6 +4,33 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.6] — 2026-04-26 (string-interning)
+
+### Added
+
+- **`ColumnarTable` string interning for `IndexRow` top-level fields.**
+  New file `crates/forgeql-core/src/ast/intern.rs` introduces three types:
+  - `StringPool` — append-only string interning pool; O(1) amortised intern/lookup.
+  - `PathPool` — same pattern typed for `PathBuf`.
+  - `ColumnarTable` — composite pool for all five top-level `IndexRow` string fields
+    (`name`, `node_kind`, `fql_kind`, `language`, `path`).
+
+  `IndexRow` gains five `#[serde(skip)]` ID fields (`name_id`, `node_kind_id`,
+  `fql_kind_id`, `language_id`, `path_id`).  `SymbolTable` gains a `pub strings:
+  ColumnarTable` field and five zero-copy accessor methods (`name_of`, `node_kind_of`,
+  `fql_kind_of`, `language_of`, `path_of`).
+
+  IDs are populated on every call to `push_row` and `merge`.  The existing `String`
+  fields on `IndexRow` are kept (dual-write approach) for full backward compatibility
+  with all existing filter/engine code.
+
+  **Memory impact**: at 8 M symbols the five string fields previously consumed ~1.4 GB
+  of heap.  With interning, each row stores five `u32` IDs (20 B vs ~200 B); pool
+  overhead is bounded by unique-value cardinality (at most ~8 M names + ~100 K paths
+  + ~100 node kinds + ~21 FQL kinds + ~5 languages).
+
+  Cache format version unchanged — the ID fields are `#[serde(skip)]` and are
+  rebuilt in O(N) on every index load.
 ## [0.38.5] — 2026-04-26 (rollback-cleanup)
 
 ### Fixed

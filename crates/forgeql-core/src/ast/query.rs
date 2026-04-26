@@ -315,6 +315,7 @@ mod tests {
                 line: i + 1,
                 usages_count: 0,
                 fields: HashMap::new(),
+                ..Default::default()
             });
         }
         table
@@ -399,6 +400,7 @@ mod tests {
             line: 1,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         });
         table.push_row(IndexRow {
             name: "myVar".into(),
@@ -410,6 +412,7 @@ mod tests {
             line: 2,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         });
         // Pure name scan: both rows match 'my%' regardless of node_kind.
         let results = find_symbols_like(&table, "my%");
@@ -438,6 +441,7 @@ mod tests {
             line: 5,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         });
 
         // Header declaration shows up as a usage site.
@@ -474,6 +478,7 @@ mod tests {
             line: 1,
             usages_count: 0,
             fields: HashMap::new(),
+            ..Default::default()
         });
         // Pure name pattern '%' matches all rows regardless of path.
         let results = find_symbols_like(&table, "%");
