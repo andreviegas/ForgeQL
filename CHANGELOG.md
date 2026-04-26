@@ -4,6 +4,33 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.0] — 2026-04-26
+
+### Added
+
+- **`SHOW STATS [FOR 'session_id']`** — new FQL command that reports per-session
+  internal diagnostics: row counts, distinct name/path counts, usage-site counts,
+  trigram index size, and a component-by-component heap-memory estimate (rows,
+  usages, secondary indexes, trigram, and intern pools). Includes `by_language`
+  and `by_fql_kind` breakdowns. When no `FOR` clause is given, all loaded
+  sessions are reported.
+- **`SymbolTable::mem_estimate()`** — returns a `MemEstimate` struct with
+  approximate heap-byte counts for every major component of the index.
+  Uses `size_of` for fixed parts and capacity-based accounting for
+  `String` / `Vec` / `HashMap` heap allocations.
+- **`PathPool::iter()`** — iterate interned paths in insertion order.
+- **`TrigramIndex::posting_iter()` / `posting_len()`** — read-only accessors
+  over trigram posting lists, used by `mem_estimate()`.
+
+### Fixed
+
+- **`GROUP BY language` (and `GROUP BY node_kind`, `GROUP BY fql_kind`, `GROUP BY path`)
+  returned `"(empty)"` for all rows.** `SymbolRow::from_match_with_ctx` was
+  using `row.fields.get(field)` for every group field, but `language` etc.
+  are structured `SymbolMatch` fields, not entries in the enrichment `fields`
+  HashMap. Fixed by matching on the field name and reading from the correct
+  struct field before falling back to the HashMap.
+
 ## [0.38.7] - 2025-07-25
 
 ### Changed
