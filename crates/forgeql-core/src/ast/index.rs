@@ -101,6 +101,58 @@ pub struct IndexStats {
 }
 
 // -----------------------------------------------------------------------
+// MemEstimate — output of SymbolTable::mem_estimate()
+// -----------------------------------------------------------------------
+
+/// Approximate heap-memory breakdown for a [`SymbolTable`].
+///
+/// All values are in bytes. Use [`SymbolTable::mem_estimate`] to obtain one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MemEstimate {
+    /// Heap bytes used by `rows: Vec<IndexRow>` including the per-row
+    /// `fields: HashMap<String,String>` enrichment payloads.
+    pub rows_bytes: usize,
+    /// Total number of indexed rows.
+    pub rows_count: usize,
+    /// Heap bytes used by `usages: HashMap<String, Vec<UsageSite>>`.
+    pub usages_bytes: usize,
+    /// Number of distinct symbol names with usage sites.
+    pub usages_symbols: usize,
+    /// Total number of individual usage-site entries.
+    pub usages_sites: usize,
+    /// Heap bytes used by `name_index: HashMap<u32, Vec<u32>>`.
+    pub name_index_bytes: usize,
+    /// Heap bytes used by `kind_index: HashMap<u32, Vec<u32>>`.
+    pub kind_index_bytes: usize,
+    /// Heap bytes used by `fql_kind_index: HashMap<u32, Vec<u32>>`.
+    pub fql_kind_index_bytes: usize,
+    /// Heap bytes used by `trigram_index: TrigramIndex`.
+    pub trigram_bytes: usize,
+    /// Number of distinct trigrams in the trigram index.
+    pub trigram_entries: usize,
+    /// Heap bytes used by `strings: ColumnarTable` (all five intern pools).
+    pub strings_bytes: usize,
+    /// Number of distinct interned symbol names.
+    pub strings_names: usize,
+    /// Number of distinct interned paths.
+    pub strings_paths: usize,
+}
+
+impl MemEstimate {
+    /// Sum of all component estimates — approximate total heap bytes.
+    #[must_use]
+    pub fn total_bytes(&self) -> usize {
+        self.rows_bytes
+            + self.usages_bytes
+            + self.name_index_bytes
+            + self.kind_index_bytes
+            + self.fql_kind_index_bytes
+            + self.trigram_bytes
+            + self.strings_bytes
+    }
+}
+
+// -----------------------------------------------------------------------
 // SymbolTable
 // -----------------------------------------------------------------------
 
@@ -585,6 +637,118 @@ impl SymbolTable {
     pub fn trigram_candidates(&self, substr: &str) -> Option<Vec<&IndexRow>> {
         let ids = self.trigram_index.candidates(substr)?;
         Some(ids.into_iter().map(|i| &self.rows[i]).collect())
+    }
+
+    // -------------------------------------------------------------------
+    // Memory diagnostics
+    // -------------------------------------------------------------------
+
+    /// Compute a breakdown of approximate heap consumption (in bytes) for
+    /// all major components of this `SymbolTable`.
+    ///
+    /// All figures are **estimates** using `std::mem::size_of` for fixed-size
+    /// parts plus per-element heap allocations for `String`, `Vec`, and
+    /// `HashMap`.  HashMap overhead uses 56 B/bucket as a conservative
+    /// approximation for `std::collections::HashMap` on 64-bit platforms.
+    #[must_use]
+    pub fn mem_estimate(&self) -> MemEstimate {
+        // --- rows: Vec<IndexRow> ---
+        // Each IndexRow has fixed fields + one HashMap<String,String> (fields).
+        let row_fixed = std::mem::size_of::<IndexRow>(); // byte_range, line, usages_count, ids
+        let row_fields_heap: usize = self
+            .rows
+            .iter()
+            .map(|r| {
+                r.fields
+                    .iter()
+                    .map(|(k, v)| k.capacity() + v.capacity() + 56)
+                    .sum::<usize>()
+                    + r.fields.capacity() * 56
+            })
+            .sum();
+        let rows_bytes =
+            self.rows.capacity() * row_fixed + row_fields_heap;
+
+        // --- usages: HashMap<String, Vec<UsageSite>> ---
+        let usage_site_fixed = std::mem::size_of::<UsageSite>();
+        let usages_bytes: usize = self
+            .usages
+            .iter()
+            .map(|(k, v)| {
+                k.capacity()
+                    + v.capacity() * (usage_site_fixed + 8) // UsageSite + PathBuf heap
+                    + v.iter().map(|s| s.path.capacity()).sum::<usize>()
+                    + 56 // bucket overhead
+            })
+            .sum::<usize>()
+            + self.usages.capacity() * 56;
+
+        // --- name_index: HashMap<u32, Vec<u32>> ---
+        let name_index_bytes: usize = self
+            .name_index
+            .values()
+            .map(|v| v.capacity() * 4 + 24 + 56)
+            .sum::<usize>()
+            + self.name_index.capacity() * 56;
+
+        // --- kind_index ---
+        let kind_index_bytes: usize = self
+            .kind_index
+            .values()
+            .map(|v| v.capacity() * 4 + 24 + 56)
+            .sum::<usize>()
+            + self.kind_index.capacity() * 56;
+
+        // --- fql_kind_index ---
+        let fql_kind_index_bytes: usize = self
+            .fql_kind_index
+            .values()
+            .map(|v| v.capacity() * 4 + 24 + 56)
+            .sum::<usize>()
+            + self.fql_kind_index.capacity() * 56;
+
+        // --- trigram_index: HashMap<[u8;3], Vec<usize>> ---
+        let trigram_bytes: usize = self
+            .trigram_index
+            .posting_iter()
+            .map(|v| v.capacity() * 8 + 24 + 56)
+            .sum::<usize>()
+            + self.trigram_index.posting_len() * 56;
+
+        // --- strings: ColumnarTable ---
+        // StringPool: Vec<String> + HashMap<String,u32>
+        let string_pool_bytes = |pool: &crate::ast::intern::StringPool| -> usize {
+            pool.iter().map(|s| s.len() + 24).sum::<usize>() // Vec<String> heap
+                + pool.len() * 56 // lookup HashMap buckets (key cloned)
+                + pool.iter().map(str::len).sum::<usize>() // key copies in lookup
+        };
+        let path_pool_bytes: usize = {
+            let p = &self.strings.paths;
+            p.iter().map(|p| p.as_os_str().len() + 24).sum::<usize>()
+                + p.len() * 56
+                + p.iter().map(|p| p.as_os_str().len()).sum::<usize>()
+        };
+        let strings_bytes = string_pool_bytes(&self.strings.names)
+            + string_pool_bytes(&self.strings.node_kinds)
+            + string_pool_bytes(&self.strings.fql_kinds)
+            + string_pool_bytes(&self.strings.languages)
+            + path_pool_bytes;
+
+        MemEstimate {
+            rows_bytes,
+            rows_count: self.rows.len(),
+            usages_bytes,
+            usages_symbols: self.usages.len(),
+            usages_sites: self.usages.values().map(Vec::len).sum(),
+            name_index_bytes,
+            kind_index_bytes,
+            fql_kind_index_bytes,
+            trigram_bytes,
+            trigram_entries: self.trigram_index.posting_len(),
+            strings_bytes,
+            strings_names: self.strings.names.len(),
+            strings_paths: self.strings.paths.len(),
+        }
     }
 
     // -------------------------------------------------------------------
