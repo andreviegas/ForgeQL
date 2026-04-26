@@ -4,11 +4,11 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.38.6] — 2026-04-26 (string-interning)
+## [0.38.6] — 2026-04-26 (string-interning-phase-1)
 
 ### Added
 
-- **`ColumnarTable` string interning for `IndexRow` top-level fields.**
+- **`ColumnarTable` string interning infrastructure (phase 1 — plumbing only).**
   New file `crates/forgeql-core/src/ast/intern.rs` introduces three types:
   - `StringPool` — append-only string interning pool; O(1) amortised intern/lookup.
   - `PathPool` — same pattern typed for `PathBuf`.
@@ -16,21 +16,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     (`name`, `node_kind`, `fql_kind`, `language`, `path`).
 
   `IndexRow` gains five `#[serde(skip)]` ID fields (`name_id`, `node_kind_id`,
-  `fql_kind_id`, `language_id`, `path_id`).  `SymbolTable` gains a `pub strings:
-  ColumnarTable` field and five zero-copy accessor methods (`name_of`, `node_kind_of`,
-  `fql_kind_of`, `language_of`, `path_of`).
+  `fql_kind_id`, `language_id`, `path_id`).  `SymbolTable` gains a `pub(crate)
+  strings: ColumnarTable` field and five zero-copy accessor methods (`name_of`,
+  `node_kind_of`, `fql_kind_of`, `language_of`, `path_of`).
 
   IDs are populated on every call to `push_row` and `merge`.  The existing `String`
-  fields on `IndexRow` are kept (dual-write approach) for full backward compatibility
-  with all existing filter/engine code.
+  fields on `IndexRow` are **kept** (dual-write approach) for full backward
+  compatibility with all existing filter/engine code — see phase 2 below.
 
-  **Memory impact**: at 8 M symbols the five string fields previously consumed ~1.4 GB
-  of heap.  With interning, each row stores five `u32` IDs (20 B vs ~200 B); pool
-  overhead is bounded by unique-value cardinality (at most ~8 M names + ~100 K paths
-  + ~100 node kinds + ~21 FQL kinds + ~5 languages).
+  **Note — no memory reduction in this release.**  Because the original `String` /
+  `PathBuf` fields on `IndexRow` are still present, per-row heap usage
+  *increases* by 20 B (five new `u32` IDs) and `ColumnarTable` is an additional
+  allocation.  The projected ~1.4 GB → ~300 MB saving (at 8 M symbols) will only
+  be realised in **phase 2**, when the duplicated string fields are removed and all
+  consumers are migrated to the `*_of()` accessors.
 
   Cache format version unchanged — the ID fields are `#[serde(skip)]` and are
-  rebuilt in O(N) on every index load.
+  rebuilt in O(N) on every index load.  A future cache-version bump will be
+  required once the original string fields are removed in phase 2.
 ## [0.38.5] — 2026-04-26 (rollback-cleanup)
 
 ### Fixed

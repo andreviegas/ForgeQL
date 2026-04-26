@@ -277,4 +277,39 @@ mod tests {
         assert_eq!(l0, l2);
         assert_eq!(p0, p2, "same path must share ID");
     }
+
+    /// Push many rows sharing the same low-cardinality fields.  The pool sizes
+    /// must reflect unique values only, not row count.
+    #[test]
+    fn pool_dedupes_at_scale() {
+        let mut col = ColumnarTable::default();
+        // 1 000 rows: each has a unique name but shares everything else.
+        for i in 0..1_000_u32 {
+            let _ = col.intern_row(
+                &format!("sym_{i}"),
+                "function_definition",
+                "function",
+                "cpp",
+                Path::new("src/large.cpp"),
+            );
+        }
+        assert_eq!(col.names.len(), 1_000, "every name is unique");
+        assert_eq!(col.node_kinds.len(), 1, "only one node_kind variant");
+        assert_eq!(col.fql_kinds.len(), 1, "only one fql_kind variant");
+        assert_eq!(col.languages.len(), 1, "only one language variant");
+        assert_eq!(col.paths.len(), 1, "all rows share one path");
+    }
+
+    /// IDs returned from `intern` must resolve back to the original string.
+    #[test]
+    fn pool_roundtrip() {
+        let mut pool = StringPool::default();
+        let words = ["alpha", "beta", "gamma", "alpha", "delta", "beta"];
+        let ids: Vec<u32> = words.iter().map(|w| pool.intern(w)).collect();
+        for (w, id) in words.iter().zip(ids.iter()) {
+            assert_eq!(pool.get(*id), *w, "round-trip must be lossless");
+        }
+        // Only 4 unique words.
+        assert_eq!(pool.len(), 4);
+    }
 }

@@ -160,7 +160,32 @@ pub struct SymbolTable {
     /// Use [`SymbolTable::name_of`], [`SymbolTable::fql_kind_of`], etc. to
     /// resolve IDs at output time.
     #[serde(skip)]
-    pub strings: ColumnarTable,
+    pub(crate) strings: ColumnarTable,
+}
+
+// -----------------------------------------------------------------------
+// Private helpers
+// -----------------------------------------------------------------------
+
+/// Intern all five top-level string fields of `row` into `strings` and write
+/// the resulting IDs back onto `row`.
+///
+/// Extracted to avoid repeating the same 12-line pattern in both `push_row`
+/// and `merge`.
+#[inline]
+fn assign_intern_ids(strings: &mut ColumnarTable, row: &mut IndexRow) {
+    let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = strings.intern_row(
+        &row.name,
+        &row.node_kind,
+        &row.fql_kind,
+        &row.language,
+        &row.path,
+    );
+    row.name_id = name_id;
+    row.node_kind_id = node_kind_id;
+    row.fql_kind_id = fql_kind_id;
+    row.language_id = language_id;
+    row.path_id = path_id;
 }
 
 impl SymbolTable {
@@ -293,19 +318,7 @@ impl SymbolTable {
             );
             let abs_u32 = u32::try_from(abs).unwrap_or(u32::MAX);
             // Intern into the accumulator pool (IDs from `other` are not valid here).
-            let (name_id, node_kind_id, fql_kind_id, language_id, path_id) =
-                self.strings.intern_row(
-                    &row.name,
-                    &row.node_kind,
-                    &row.fql_kind,
-                    &row.language,
-                    &row.path,
-                );
-            row.name_id = name_id;
-            row.node_kind_id = node_kind_id;
-            row.fql_kind_id = fql_kind_id;
-            row.language_id = language_id;
-            row.path_id = path_id;
+            assign_intern_ids(&mut self.strings, &mut row);
             self.name_index
                 .entry(row.name.clone())
                 .or_default()
@@ -351,18 +364,7 @@ impl SymbolTable {
         );
         let index_u32 = u32::try_from(index).unwrap_or(u32::MAX);
         // Intern all top-level string fields into the shared pool.
-        let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = self.strings.intern_row(
-            &row.name,
-            &row.node_kind,
-            &row.fql_kind,
-            &row.language,
-            &row.path,
-        );
-        row.name_id = name_id;
-        row.node_kind_id = node_kind_id;
-        row.fql_kind_id = fql_kind_id;
-        row.language_id = language_id;
-        row.path_id = path_id;
+        assign_intern_ids(&mut self.strings, &mut row);
         self.name_index
             .entry(row.name.clone())
             .or_default()
@@ -1444,5 +1446,110 @@ mod tests {
             suggestions.len() <= 3,
             "result must not exceed max limit of 3"
         );
+    }
+
+    // -- intern-pool correctness -----------------------------------------
+
+    /// After `push_row`, the five `*_of()` accessors must return the same
+    /// values as the corresponding `String`/`PathBuf` fields on the row.
+    /// This guards against ID drift while the dual-write approach is in use.
+    #[test]
+    fn accessors_match_string_fields() {
+        let mut table = SymbolTable::default();
+        let rows_in = vec![
+            IndexRow {
+                name: "alpha".to_string(),
+                node_kind: "function_definition".to_string(),
+                fql_kind: "function".to_string(),
+                language: "cpp".to_string(),
+                path: PathBuf::from("src/a.cpp"),
+                byte_range: 0..10,
+                line: 1,
+                usages_count: 0,
+                fields: HashMap::new(),
+                ..Default::default()
+            },
+            IndexRow {
+                name: "beta".to_string(),
+                node_kind: "struct_specifier".to_string(),
+                fql_kind: "struct".to_string(),
+                language: "cpp".to_string(),
+                path: PathBuf::from("src/a.cpp"),
+                byte_range: 10..20,
+                line: 5,
+                usages_count: 0,
+                fields: HashMap::new(),
+                ..Default::default()
+            },
+            IndexRow {
+                name: "gamma".to_string(),
+                node_kind: "function_definition".to_string(),
+                fql_kind: "function".to_string(),
+                language: "rust".to_string(),
+                path: PathBuf::from("src/b.rs"),
+                byte_range: 0..15,
+                line: 1,
+                usages_count: 0,
+                fields: HashMap::new(),
+                ..Default::default()
+            },
+        ];
+        for r in rows_in {
+            table.push_row(r);
+        }
+        for row in &table.rows {
+            assert_eq!(
+                table.name_of(row),
+                row.name.as_str(),
+                "name_of must match row.name"
+            );
+            assert_eq!(
+                table.node_kind_of(row),
+                row.node_kind.as_str(),
+                "node_kind_of must match row.node_kind"
+            );
+            assert_eq!(
+                table.fql_kind_of(row),
+                row.fql_kind.as_str(),
+                "fql_kind_of must match row.fql_kind"
+            );
+            assert_eq!(
+                table.language_of(row),
+                row.language.as_str(),
+                "language_of must match row.language"
+            );
+            assert_eq!(
+                table.path_of(row),
+                row.path.as_path(),
+                "path_of must match row.path"
+            );
+        }
+    }
+
+    /// Rows with the same low-cardinality fields must share pool slots, keeping
+    /// pool sizes bounded by unique-value cardinality rather than row count.
+    #[test]
+    fn intern_pool_sizes_reflect_unique_values() {
+        let mut table = SymbolTable::default();
+        // 100 rows: unique names, shared node_kind/fql_kind/language/path.
+        for i in 0..100_usize {
+            table.push_row(IndexRow {
+                name: format!("fn_{i}"),
+                node_kind: "function_definition".to_string(),
+                fql_kind: "function".to_string(),
+                language: "cpp".to_string(),
+                path: PathBuf::from("src/big.cpp"),
+                byte_range: 0..10,
+                line: i + 1,
+                usages_count: 0,
+                fields: HashMap::new(),
+                ..Default::default()
+            });
+        }
+        assert_eq!(table.strings.names.len(), 100, "100 unique names");
+        assert_eq!(table.strings.node_kinds.len(), 1, "one node_kind");
+        assert_eq!(table.strings.fql_kinds.len(), 1, "one fql_kind");
+        assert_eq!(table.strings.languages.len(), 1, "one language");
+        assert_eq!(table.strings.paths.len(), 1, "one path");
     }
 }
