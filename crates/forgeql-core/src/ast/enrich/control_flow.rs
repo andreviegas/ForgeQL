@@ -15,8 +15,8 @@
 /// - `max_condition_tests`, `max_paren_depth`, `branch_count`
 use std::collections::HashMap;
 
-use super::{EnrichContext, NodeEnricher};
-use crate::ast::index::{IndexRow, SymbolTable, node_text};
+use super::{EnrichContext, ExtraRow, NodeEnricher};
+use crate::ast::index::{SymbolTable, node_text};
 use crate::ast::lang;
 
 /// Enricher for control-flow statement complexity analysis.
@@ -36,7 +36,7 @@ impl NodeEnricher for ControlFlowEnricher {
         "control_flow"
     }
 
-    fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
+    fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<ExtraRow> {
         let kind = ctx.node.kind();
         let config = ctx.language_config;
         if !config.is_control_flow_kind(kind) {
@@ -94,7 +94,7 @@ impl NodeEnricher for ControlFlowEnricher {
             .cloned()
             .unwrap_or_else(|| condition_text_raw.clone());
 
-        vec![IndexRow {
+        vec![ExtraRow {
             name,
             node_kind: kind.to_string(),
             fql_kind: ctx
@@ -102,13 +102,10 @@ impl NodeEnricher for ControlFlowEnricher {
                 .map_kind(kind)
                 .unwrap_or("")
                 .to_string(),
-            language: ctx.language_name.to_string(),
-            path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
-            usages_count: 0,
             fields,
-            ..Default::default()
+            path_override: None,
         }]
     }
 
@@ -124,17 +121,21 @@ impl NodeEnricher for ControlFlowEnricher {
         // When `scope` is Some, we only iterate rows whose path is in the
         // set — this is what makes incremental re-indexing O(P) instead of
         // O(N) on large workspaces.
-        let in_scope = |row: &crate::ast::index::IndexRow| -> bool {
-            scope.as_ref().is_none_or(|s| s.contains(&row.path))
-        };
 
         let (func_metrics, cf_encl) = {
+            let strings = &table.strings;
+            let in_scope = |row: &crate::ast::index::IndexRow| -> bool {
+                scope
+                    .as_ref()
+                    .is_none_or(|s| s.contains(strings.paths.get(row.path_id)))
+            };
+
             let mut funcs_by_file: HashMap<&std::path::Path, Vec<(usize, std::ops::Range<usize>)>> =
                 HashMap::new();
             for (i, row) in table.rows.iter().enumerate() {
-                if row.fql_kind == lang::FQL_FUNCTION && in_scope(row) {
+                if strings.fql_kinds.get(row.fql_kind_id) == lang::FQL_FUNCTION && in_scope(row) {
                     funcs_by_file
-                        .entry(row.path.as_path())
+                        .entry(strings.paths.get(row.path_id))
                         .or_default()
                         .push((i, row.byte_range.clone()));
                 }
@@ -147,13 +148,15 @@ impl NodeEnricher for ControlFlowEnricher {
             // Maps CF row index → enclosing function name.
             let mut cf_encl: HashMap<usize, String> = HashMap::new();
             for (cf_idx, row) in table.rows.iter().enumerate() {
-                if !CF_FQL_KINDS.contains(&row.fql_kind.as_str()) {
+                let row_fql_kind = strings.fql_kinds.get(row.fql_kind_id);
+                if !CF_FQL_KINDS.contains(&row_fql_kind) {
                     continue;
                 }
                 if !in_scope(row) {
                     continue;
                 }
-                if let Some(funcs) = funcs_by_file.get(row.path.as_path()) {
+                let row_path = strings.paths.get(row.path_id);
+                if let Some(funcs) = funcs_by_file.get(row_path) {
                     // Binary search: find the last function whose start ≤ row start.
                     let pos =
                         funcs.partition_point(|(_, range)| range.start <= row.byte_range.start);
@@ -175,7 +178,9 @@ impl NodeEnricher for ControlFlowEnricher {
                             entry.1 = entry.1.max(depth);
                             entry.2 += 1;
                             // Record enclosing function name for this CF row.
-                            drop(cf_encl.insert(cf_idx, table.rows[func_idx].name.clone()));
+                            let fn_name =
+                                strings.names.get(table.rows[func_idx].name_id).to_owned();
+                            drop(cf_encl.insert(cf_idx, fn_name));
                         }
                     }
                 }

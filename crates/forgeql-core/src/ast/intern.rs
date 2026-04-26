@@ -22,6 +22,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 // -----------------------------------------------------------------------
 // StringPool — append-only interning store
 // -----------------------------------------------------------------------
@@ -33,7 +35,7 @@ use std::path::{Path, PathBuf};
 /// ever grows, never reorders.
 ///
 /// [`intern`]: StringPool::intern
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct StringPool {
     strings: Vec<String>,
     lookup: HashMap<String, u32>,
@@ -68,6 +70,18 @@ impl StringPool {
         self.strings.get(id as usize).map_or("", String::as_str)
     }
 
+    /// Return the ID for `s` if it has been interned, without inserting.
+    #[must_use]
+    #[inline]
+    pub fn get_id(&self, s: &str) -> Option<u32> {
+        self.lookup.get(s).copied()
+    }
+
+    /// Iterate all interned strings in insertion order.
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        self.strings.iter().map(String::as_str)
+    }
+
     /// Number of unique strings stored.
     #[must_use]
     #[inline]
@@ -85,7 +99,6 @@ impl StringPool {
 
 // -----------------------------------------------------------------------
 // PathPool — same pattern, typed for PathBuf
-// -----------------------------------------------------------------------
 
 /// Append-only path interning pool.
 ///
@@ -93,7 +106,7 @@ impl StringPool {
 /// Paths deduplicate aggressively: at 8 M symbols over ~100 K files the
 /// average deduplication ratio is ~80×, reducing the effective per-row cost
 /// from ~59 B to 4 B.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PathPool {
     paths: Vec<PathBuf>,
     lookup: HashMap<PathBuf, u32>,
@@ -127,6 +140,13 @@ impl PathPool {
         self.paths
             .get(id as usize)
             .map_or_else(|| Path::new(""), PathBuf::as_path)
+    }
+
+    /// Return the ID for `p` if it has been interned, without inserting.
+    #[must_use]
+    #[inline]
+    pub fn get_id(&self, p: &Path) -> Option<u32> {
+        self.lookup.get(p).copied()
     }
 
     /// Number of unique paths stored.
@@ -167,7 +187,7 @@ impl PathPool {
 ///
 /// [`IndexRow`]: crate::ast::index::IndexRow
 /// [`SymbolTable`]: crate::ast::index::SymbolTable
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ColumnarTable {
     /// Symbol name pool.  High cardinality (~unique per codebase); deduplicates
     /// overloaded / identically-named symbols across files.

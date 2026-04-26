@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::enrich::macro_table::MacroTable;
 use crate::ast::index::{IndexRow, SymbolTable, UsageSite};
+use crate::ast::intern::ColumnarTable;
 use crate::ast::lang::MacroDef;
 
 // -----------------------------------------------------------------------
@@ -52,10 +53,9 @@ use crate::ast::lang::MacroDef;
 ///       `EscapeEnricher` (address-of detection); extended `MacroExpandEnricher`
 ///   23. `source_name` stored in `CachedIndex` via `from_table_and_macros`; stale-worktree
 ///       validation on cache resume now activates for macro-enabled sessions.
-///   24. `IndexRow::usages_count` (u32) added — precomputed from `usages` map at build time.
-///       `IndexStats` (`by_fql_kind`, `by_language`) added to `SymbolTable` (in-memory only,
-///       not persisted in `CachedIndex`); populated via `push_row`/`merge` on every load.
-pub const CURRENT_VERSION: u32 = 24;
+///   25. String fields removed from `IndexRow`; only ID fields remain. The `ColumnarTable`
+///       string pool is now serialised as the `strings` field of `CachedIndex`.
+pub const CURRENT_VERSION: u32 = 25;
 
 // -----------------------------------------------------------------------
 // CachedIndex
@@ -84,6 +84,10 @@ pub struct CachedIndex {
     /// Empty when the source language has no macro-expansion support.
     #[serde(default)]
     pub macro_defs: Vec<MacroDef>,
+    /// String intern pool — all unique names, kinds, languages, and paths.
+    /// Must be restored to `SymbolTable::strings` when calling `into_table`.
+    #[serde(default)]
+    pub strings: ColumnarTable,
 }
 
 impl CachedIndex {
@@ -101,6 +105,7 @@ impl CachedIndex {
             usages: table.usages,
             file_hashes: HashMap::new(),
             macro_defs: Vec::new(),
+            strings: table.strings,
         }
     }
 
@@ -123,21 +128,21 @@ impl CachedIndex {
             usages: table.usages,
             file_hashes: HashMap::new(),
             macro_defs: macro_table.into_defs(),
+            strings: table.strings,
         }
     }
 
     /// Reconstruct a `SymbolTable` from this cache.
     ///
-    /// Secondary indexes (`name_index`, `kind_index`) are rebuilt from `rows`
-    /// via `push_row`, matching `SymbolTable::build()` behaviour.
+    /// The string pool is restored and secondary indexes are rebuilt from `rows`.
     /// Macro definitions are discarded; use `into_table_and_macros` if needed.
     #[must_use]
     pub fn into_table(self) -> SymbolTable {
         let mut table = SymbolTable::default();
-        for row in self.rows {
-            table.push_row(row);
-        }
+        table.strings = self.strings;
+        table.rows = self.rows;
         table.usages = self.usages;
+        table.rebuild_indexes_from_rows();
         table
     }
 
@@ -148,10 +153,10 @@ impl CachedIndex {
     #[must_use]
     pub fn into_table_and_macros(self) -> (SymbolTable, MacroTable) {
         let mut symbol_table = SymbolTable::default();
-        for row in self.rows {
-            symbol_table.push_row(row);
-        }
+        symbol_table.strings = self.strings;
+        symbol_table.rows = self.rows;
         symbol_table.usages = self.usages;
+        symbol_table.rebuild_indexes_from_rows();
         symbol_table.populate_usage_counts();
 
         let mut macro_table = MacroTable::new();
@@ -184,6 +189,7 @@ impl CachedIndex {
             usages: table.usages.clone(),
             file_hashes: HashMap::new(),
             macro_defs: macro_table.to_defs(),
+            strings: table.strings.clone(),
         };
         let bytes = bincode::serialize(&snapshot)?;
         crate::workspace::file_io::write_atomic(path, &bytes)?;
@@ -229,23 +235,22 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::ast::index::{IndexRow, SymbolTable};
+    use crate::ast::index::SymbolTable;
+    use crate::ast::intern::ColumnarTable;
     use tempfile::tempdir;
 
     fn sample_table() -> SymbolTable {
         let mut t = SymbolTable::default();
-        t.push_row(IndexRow {
-            name: "foo".to_string(),
-            node_kind: "function_definition".to_string(),
-            fql_kind: String::new(),
-            language: String::new(),
-            path: PathBuf::from("src/foo.cpp"),
-            byte_range: 10..20,
-            line: 1,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        });
+        t.push_row_strings(
+            "foo",
+            "function_definition",
+            "",
+            "",
+            std::path::Path::new("src/foo.cpp"),
+            10..20,
+            1,
+            HashMap::new(),
+        );
         let _ = t.usages.insert(
             "foo".to_string(),
             vec![
@@ -274,11 +279,11 @@ mod tests {
 
         cached.save(&path).expect("save");
         let loaded = CachedIndex::load(&path).expect("load");
+        let recovered = loaded.into_table();
 
-        assert_eq!(loaded.version, CURRENT_VERSION);
-        assert_eq!(loaded.commit_hash, "abc123");
-        assert!(loaded.rows.iter().any(|r| r.name == "foo"));
-        assert_eq!(loaded.usages["foo"].len(), 2);
+        assert_eq!(recovered.strings.names.len(), 1);
+        assert!(recovered.find_def("foo").is_some());
+        assert_eq!(recovered.find_usages("foo").len(), 2);
     }
 
     #[test]
@@ -320,6 +325,7 @@ mod tests {
             usages: HashMap::new(),
             file_hashes: HashMap::new(),
             macro_defs: Vec::new(),
+            strings: ColumnarTable::default(),
         };
         wrong.save(&path).expect("save");
 

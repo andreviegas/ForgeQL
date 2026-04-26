@@ -89,16 +89,20 @@ impl NodeEnricher for RedundancyEnricher {
         // considered — duplicate detection is intra-function so unchanged
         // files cannot affect the result.
         let in_scope = |row: &crate::ast::index::IndexRow| -> bool {
-            scope.as_ref().is_none_or(|s| s.contains(&row.path))
+            scope
+                .as_ref()
+                .is_none_or(|s| s.contains(table.strings.paths.get(row.path_id)))
         };
 
         let duplicate_indices = {
             let mut funcs_by_file: HashMap<&std::path::Path, Vec<std::ops::Range<usize>>> =
                 HashMap::new();
             for row in &table.rows {
-                if row.fql_kind == lang::FQL_FUNCTION && in_scope(row) {
+                if table.strings.fql_kinds.get(row.fql_kind_id) == lang::FQL_FUNCTION
+                    && in_scope(row)
+                {
                     funcs_by_file
-                        .entry(row.path.as_path())
+                        .entry(table.strings.paths.get(row.path_id))
                         .or_default()
                         .push(row.byte_range.clone());
                 }
@@ -113,7 +117,7 @@ impl NodeEnricher for RedundancyEnricher {
                 HashMap::new();
 
             for (i, row) in table.rows.iter().enumerate() {
-                if !CF_FQL_KINDS.contains(&row.fql_kind.as_str()) {
+                if !CF_FQL_KINDS.contains(&table.strings.fql_kinds.get(row.fql_kind_id)) {
                     continue;
                 }
                 if !in_scope(row) {
@@ -123,13 +127,14 @@ impl NodeEnricher for RedundancyEnricher {
                     Some(t) if !t.is_empty() => t.as_str(),
                     _ => continue,
                 };
-                if let Some(funcs) = funcs_by_file.get(row.path.as_path()) {
+                let row_path = table.strings.paths.get(row.path_id);
+                if let Some(funcs) = funcs_by_file.get(row_path) {
                     let pos = funcs.partition_point(|range| range.start <= row.byte_range.start);
                     if pos > 0 {
                         let func_range = &funcs[pos - 1];
                         if row.byte_range.end <= func_range.end {
                             func_cf_rows
-                                .entry((row.path.as_path(), func_range.start))
+                                .entry((row_path, func_range.start))
                                 .or_default()
                                 .push((i, ct));
                         }

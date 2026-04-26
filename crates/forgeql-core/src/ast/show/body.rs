@@ -4,7 +4,10 @@ use serde_json::Value;
 
 use super::{byte_to_line, emit_body_lines, find_function_node_for_symbol, parse_file};
 use crate::{
-    ast::{index::IndexRow, lang::LanguageRegistry},
+    ast::{
+        index::{IndexRow, SymbolTable},
+        lang::LanguageRegistry,
+    },
     workspace::Workspace,
 };
 
@@ -19,16 +22,18 @@ use crate::{
 /// or the AST node for the function is not found.
 pub fn show_body(
     def: &IndexRow,
+    table: &SymbolTable,
     workspace: &Workspace,
     symbol: &str,
     depth: Option<usize>,
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
+    let def_path = table.path_of(def);
     let lang = lang_registry
-        .language_for_path(&def.path)
-        .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
+        .language_for_path(def_path)
+        .ok_or_else(|| anyhow!("no language for {}", def_path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(&def.path, lang_registry)?;
+    let (source, tree) = parse_file(def_path, lang_registry)?;
     let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start, config)
         .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 
@@ -74,7 +79,7 @@ pub fn show_body(
     };
 
     let fn_end_line = fn_node.end_position().row + 1;
-    let path_str = workspace.relative(&def.path).display().to_string();
+    let path_str = workspace.relative(table.path_of(def)).display().to_string();
 
     // When DEPTH 0, include enrichment metadata so the agent can make
     // informed decisions (e.g. how many lines, params, branches) without

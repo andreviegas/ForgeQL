@@ -2,7 +2,7 @@
 use std::path::Path;
 
 use super::ClauseTarget;
-use crate::ast::index::IndexRow;
+use crate::ast::index::RowRef;
 
 // -----------------------------------------------------------------------
 // ClauseTarget implementations
@@ -39,40 +39,34 @@ impl ClauseTarget for crate::result::SymbolMatch {
     }
 }
 
-impl ClauseTarget for IndexRow {
+impl ClauseTarget for RowRef<'_> {
     fn field_str(&self, field: &str) -> Option<&str> {
         match field {
-            "name" => Some(self.name.as_str()),
-            "node_kind" => Some(self.node_kind.as_str()),
+            "name" => Some(self.table.name_of(self.row)),
+            "node_kind" => Some(self.table.node_kind_of(self.row)),
             "fql_kind" => {
-                if self.fql_kind.is_empty() {
-                    None
-                } else {
-                    Some(self.fql_kind.as_str())
-                }
+                let s = self.table.fql_kind_of(self.row);
+                if s.is_empty() { None } else { Some(s) }
             }
             "language" | "lang" => {
-                if self.language.is_empty() {
-                    None
-                } else {
-                    Some(self.language.as_str())
-                }
+                let s = self.table.language_of(self.row);
+                if s.is_empty() { None } else { Some(s) }
             }
-            "path" | "file" => self.path.to_str(),
-            other => self.fields.get(other).map(String::as_str),
+            "path" | "file" => self.table.path_of(self.row).to_str(),
+            other => self.row.fields.get(other).map(String::as_str),
         }
     }
 
     fn field_num(&self, field: &str) -> Option<i64> {
         match field {
-            "line" => Some(i64::try_from(self.line).unwrap_or(i64::MAX)),
-            // "usages" requires the index; annotate via SymbolMatch instead.
-            _ => self.fields.get(field)?.parse().ok(),
+            "line" => Some(i64::try_from(self.row.line).unwrap_or(i64::MAX)),
+            "usages" => Some(i64::from(self.row.usages_count)),
+            _ => self.row.fields.get(field)?.parse().ok(),
         }
     }
 
     fn path(&self) -> Option<&Path> {
-        Some(&self.path)
+        Some(self.table.path_of(self.row))
     }
 }
 

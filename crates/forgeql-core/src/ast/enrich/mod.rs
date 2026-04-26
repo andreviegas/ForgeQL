@@ -9,8 +9,10 @@
 ///
 /// Zero changes to `collect_nodes()`, `index_file()`, or `filter.rs`.
 use std::collections::HashMap;
+use std::ops::Range;
+use std::path::PathBuf;
 
-use super::index::{IndexRow, SymbolTable};
+use super::index::SymbolTable;
 use super::lang::{LanguageConfig, LanguageSupport};
 
 pub mod casts;
@@ -64,6 +66,33 @@ pub struct EnrichContext<'a> {
 }
 
 // -----------------------------------------------------------------------
+// ExtraRow — lightweight row descriptor returned by enricher::extra_rows
+// -----------------------------------------------------------------------
+
+/// A new row produced by an enricher for a node kind that `extract_name()` skips.
+///
+/// Contains only the string data needed to construct an [`IndexRow`].
+/// `language` and `path` are inherited from [`EnrichContext`] by the caller
+/// in `collect_nodes` — enrichers do not need to repeat them.
+pub struct ExtraRow {
+    /// Symbol name for this synthetic row.
+    pub name: String,
+    /// Raw tree-sitter node kind string.
+    pub node_kind: String,
+    /// Universal FQL kind string (empty if no mapping exists).
+    pub fql_kind: String,
+    /// Byte range of the AST node in the source file.
+    pub byte_range: Range<usize>,
+    /// 1-based start line number.
+    pub line: usize,
+    /// Enrichment fields.
+    pub fields: HashMap<String, String>,
+    /// Optional owned path override (most enrichers leave this `None`,
+    /// meaning the path comes from `EnrichContext::path`).
+    pub path_override: Option<PathBuf>,
+}
+
+// -----------------------------------------------------------------------
 // NodeEnricher trait
 // -----------------------------------------------------------------------
 
@@ -85,12 +114,12 @@ pub trait NodeEnricher: Send + Sync {
     ) {
     }
 
-    /// Produce NEW [`IndexRow`]s for node kinds that `extract_name()` skips.
+    /// Produce NEW rows for node kinds that `extract_name()` skips.
     ///
     /// Called for *every* AST node during the walk (even unnamed ones).
     /// The default implementation returns an empty vec.
     #[allow(unused_variables)]
-    fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
+    fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<ExtraRow> {
         vec![]
     }
 

@@ -19,7 +19,7 @@ pub fn find_symbols_like<'a>(table: &'a SymbolTable, pattern: &str) -> Vec<&'a I
     table
         .rows
         .iter()
-        .filter(|r| like_match(&r.name, pattern))
+        .filter(|r| like_match(table.name_of(r), pattern))
         .collect()
 }
 
@@ -296,27 +296,25 @@ pub fn like_match(name: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::*;
-    use crate::ast::index::{IndexRow, UsageSite};
+    use crate::ast::index::UsageSite;
 
     fn table_with_symbols(names: &[&str]) -> SymbolTable {
         let mut table = SymbolTable::default();
         for (i, &name) in names.iter().enumerate() {
             let start = i * 20;
-            table.push_row(IndexRow {
-                name: name.to_string(),
-                node_kind: "function_definition".to_string(),
-                fql_kind: String::new(),
-                language: String::new(),
-                path: PathBuf::from("src/main.cpp"),
-                byte_range: start..start + 10,
-                line: i + 1,
-                usages_count: 0,
-                fields: HashMap::new(),
-                ..Default::default()
-            });
+            table.push_row_strings(
+                name,
+                "function_definition",
+                "",
+                "",
+                Path::new("src/main.cpp"),
+                start..start + 10,
+                i + 1,
+                HashMap::new(),
+            );
         }
         table
     }
@@ -327,7 +325,7 @@ mod tests {
     fn like_suffix_wildcard_matches_prefix() {
         let table = table_with_symbols(&["setPeakLevel", "setBaseLevel", "getPeakLevel"]);
         let results = find_symbols_like(&table, "set%");
-        let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+        let names: Vec<&str> = results.iter().map(|r| table.name_of(r)).collect();
         assert!(names.contains(&"setPeakLevel"), "should match setPeakLevel");
         assert!(names.contains(&"setBaseLevel"), "should match setBaseLevel");
         assert!(
@@ -341,7 +339,7 @@ mod tests {
         let table = table_with_symbols(&["showCode", "setPeakLevel"]);
         let results = find_symbols_like(&table, "showCode");
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name, "showCode");
+        assert_eq!(table.name_of(results[0]), "showCode");
     }
 
     #[test]
@@ -369,7 +367,7 @@ mod tests {
     fn like_infix_wildcard_matches_substring() {
         let table = table_with_symbols(&["peak_level_", "base_level_", "repeat_count_"]);
         let results = find_symbols_like(&table, "%level%");
-        let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+        let names: Vec<&str> = results.iter().map(|r| table.name_of(r)).collect();
         assert!(names.contains(&"peak_level_"));
         assert!(names.contains(&"base_level_"));
         assert!(!names.contains(&"repeat_count_"));
@@ -379,7 +377,7 @@ mod tests {
     fn like_underscore_matches_single_char() {
         let table = table_with_symbols(&["foo", "fao", "faoo"]);
         let results = find_symbols_like(&table, "f_o");
-        let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+        let names: Vec<&str> = results.iter().map(|r| table.name_of(r)).collect();
         assert!(names.contains(&"foo"));
         assert!(names.contains(&"fao"));
         assert!(!names.contains(&"faoo"), "_ matches exactly one char");
@@ -390,34 +388,30 @@ mod tests {
     #[test]
     fn find_symbols_like_returns_all_name_matches_regardless_of_kind() {
         let mut table = SymbolTable::default();
-        table.push_row(IndexRow {
-            name: "myFunc".into(),
-            node_kind: "function_definition".into(),
-            fql_kind: String::new(),
-            language: String::new(),
-            path: PathBuf::from("a.cpp"),
-            byte_range: 0..6,
-            line: 1,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        });
-        table.push_row(IndexRow {
-            name: "myVar".into(),
-            node_kind: "declaration".into(),
-            fql_kind: String::new(),
-            language: String::new(),
-            path: PathBuf::from("a.cpp"),
-            byte_range: 10..15,
-            line: 2,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        });
+        table.push_row_strings(
+            "myFunc",
+            "function_definition",
+            "",
+            "",
+            Path::new("a.cpp"),
+            0..6,
+            1,
+            HashMap::new(),
+        );
+        table.push_row_strings(
+            "myVar",
+            "declaration",
+            "",
+            "",
+            Path::new("a.cpp"),
+            10..15,
+            2,
+            HashMap::new(),
+        );
         // Pure name scan: both rows match 'my%' regardless of node_kind.
         let results = find_symbols_like(&table, "my%");
         assert_eq!(results.len(), 2);
-        let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+        let names: Vec<&str> = results.iter().map(|r| table.name_of(r)).collect();
         assert!(names.contains(&"myFunc"));
         assert!(names.contains(&"myVar"));
     }
@@ -431,18 +425,16 @@ mod tests {
         let mut table = SymbolTable::default();
 
         // Function row with definition in a .cpp file.
-        table.push_row(IndexRow {
-            name: "shouldTurnLedOn".into(),
-            node_kind: "function_definition".into(),
-            fql_kind: String::new(),
-            language: String::new(),
-            path: PathBuf::from("src/led_controller.cpp"),
-            byte_range: 100..115,
-            line: 5,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        });
+        table.push_row_strings(
+            "shouldTurnLedOn",
+            "function_definition",
+            "",
+            "",
+            Path::new("src/led_controller.cpp"),
+            100..115,
+            5,
+            HashMap::new(),
+        );
 
         // Header declaration shows up as a usage site.
         table.usages.insert(
@@ -468,18 +460,16 @@ mod tests {
     #[test]
     fn find_symbols_like_matches_by_name_not_path() {
         let mut table = SymbolTable::default();
-        table.push_row(IndexRow {
-            name: "processPacket".into(),
-            node_kind: "function_definition".into(),
-            fql_kind: String::new(),
-            language: String::new(),
-            path: PathBuf::from("src/net.cpp"),
-            byte_range: 0..13,
-            line: 1,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        });
+        table.push_row_strings(
+            "processPacket",
+            "function_definition",
+            "",
+            "",
+            Path::new("src/net.cpp"),
+            0..13,
+            1,
+            HashMap::new(),
+        );
         // Pure name pattern '%' matches all rows regardless of path.
         let results = find_symbols_like(&table, "%");
         assert_eq!(results.len(), 1);

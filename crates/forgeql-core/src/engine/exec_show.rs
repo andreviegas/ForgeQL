@@ -29,13 +29,15 @@ impl ForgeQLEngine {
             ForgeQLIR::ShowContext { symbol, clauses } => {
                 let context_lines = clauses.depth.unwrap_or(DEFAULT_CONTEXT_LINES);
                 resolve_symbol(index, symbol, clauses, root)
-                    .and_then(|def| show::show_context(def, &workspace, symbol, context_lines))
+                    .and_then(|def| {
+                        show::show_context(def, index, &workspace, symbol, context_lines)
+                    })
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
             ForgeQLIR::ShowSignature { symbol, clauses } => {
                 resolve_symbol(index, symbol, clauses, root)
                     .and_then(|def| {
-                        show::show_signature(def, &workspace, symbol, &self.lang_registry)
+                        show::show_signature(def, index, &workspace, symbol, &self.lang_registry)
                     })
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
@@ -44,7 +46,7 @@ impl ForgeQLEngine {
             ForgeQLIR::ShowMembers { symbol, clauses } => {
                 resolve_symbol(index, symbol, clauses, root)
                     .and_then(|def| {
-                        show::show_members(def, &workspace, symbol, &self.lang_registry)
+                        show::show_members(def, index, &workspace, symbol, &self.lang_registry)
                     })
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
@@ -53,6 +55,7 @@ impl ForgeQLEngine {
                     .and_then(|def| {
                         show::show_body(
                             def,
+                            index,
                             &workspace,
                             symbol,
                             Some(clauses.depth.unwrap_or(DEFAULT_BODY_DEPTH)),

@@ -554,6 +554,7 @@ pub(crate) fn find_symbols_prefilter(
     root: &std::path::Path,
     lang_configs: &[&crate::ast::lang::LanguageConfig],
 ) -> (Vec<SymbolMatch>, Clauses) {
+    use crate::ast::index::RowRef;
     use crate::filter::{eval_predicate, like_match};
     use crate::ir::{CompareOp, PredicateValue};
 
@@ -708,21 +709,23 @@ pub(crate) fn find_symbols_prefilter(
     // Filter on raw IndexRow — no heap allocation per rejected row.
     let filtered = candidates.filter(|row| {
         if let Some(pat) = name_like
-            && !like_match(&row.name, pat)
+            && !like_match(index.name_of(row), pat)
         {
             return false;
         }
         if let Some(ref glob) = clauses.in_glob
-            && !crate::ast::query::relative_glob_matches(&row.path, glob, root)
+            && !crate::ast::query::relative_glob_matches(index.path_of(row), glob, root)
         {
             return false;
         }
         if let Some(ref glob) = clauses.exclude_glob
-            && crate::ast::query::relative_glob_matches(&row.path, glob, root)
+            && crate::ast::query::relative_glob_matches(index.path_of(row), glob, root)
         {
             return false;
         }
-        non_usages_preds.iter().all(|p| eval_predicate(*row, p))
+        non_usages_preds
+            .iter()
+            .all(|p| eval_predicate(&RowRef { row, table: index }, p))
     });
 
     // Materialize SymbolMatch only for survivors, dedup inline.
@@ -745,26 +748,28 @@ pub(crate) fn find_symbols_prefilter(
         if results.len() >= early_limit {
             break;
         }
-        let key = (&def.name, &def.path, &def.node_kind, def.line);
-        if !seen.insert(key.to_owned()) {
+        let key = (def.name_id, def.path_id, def.node_kind_id, def.line);
+        if !seen.insert(key) {
             continue;
         }
         // usages_count is precomputed at index-build time; no HashMap lookup needed.
         let usages = def.usages_count as usize;
+        let fql = index.fql_kind_of(def);
+        let lang = index.language_of(def);
         results.push(SymbolMatch {
-            name: def.name.clone(),
-            node_kind: Some(def.node_kind.clone()),
-            fql_kind: if def.fql_kind.is_empty() {
+            name: index.name_of(def).to_owned(),
+            node_kind: Some(index.node_kind_of(def).to_owned()),
+            fql_kind: if fql.is_empty() {
                 None
             } else {
-                Some(def.fql_kind.clone())
+                Some(fql.to_owned())
             },
-            language: if def.language.is_empty() {
+            language: if lang.is_empty() {
                 None
             } else {
-                Some(def.language.clone())
+                Some(lang.to_owned())
             },
-            path: Some(def.path.clone()),
+            path: Some(index.path_of(def).to_owned()),
             line: Some(def.line),
             usages_count: Some(usages),
             fields: def.fields.clone(),
@@ -833,6 +838,7 @@ pub(crate) fn resolve_symbol<'a>(
     clauses: &Clauses,
     root: &Path,
 ) -> Result<&'a crate::ast::index::IndexRow> {
+    use crate::ast::index::RowRef;
     use crate::filter::eval_predicate;
 
     // Qualified name resolution: split on `::` or `.` separators.
@@ -880,19 +886,19 @@ pub(crate) fn resolve_symbol<'a>(
         .into_iter()
         .filter(|row| {
             if let Some(ref glob) = clauses.in_glob
-                && !crate::ast::query::relative_glob_matches(&row.path, glob, root)
+                && !crate::ast::query::relative_glob_matches(index.path_of(row), glob, root)
             {
                 return false;
             }
             if let Some(ref glob) = clauses.exclude_glob
-                && crate::ast::query::relative_glob_matches(&row.path, glob, root)
+                && crate::ast::query::relative_glob_matches(index.path_of(row), glob, root)
             {
                 return false;
             }
             clauses
                 .where_predicates
                 .iter()
-                .all(|p| eval_predicate(*row, p))
+                .all(|p| eval_predicate(&RowRef { row, table: index }, p))
         })
         .collect();
 
@@ -925,7 +931,7 @@ pub(crate) fn resolve_symbol<'a>(
     let defs: Vec<&crate::ast::index::IndexRow> = filtered
         .iter()
         .copied()
-        .filter(|row| !row.fql_kind.is_empty())
+        .filter(|row| !index.fql_kind_of(row).is_empty())
         .collect();
     let best = if defs.is_empty() { &filtered } else { &defs };
 
@@ -933,11 +939,8 @@ pub(crate) fn resolve_symbol<'a>(
     let mut languages: Vec<&str> = best
         .iter()
         .filter_map(|r| {
-            if r.language.is_empty() {
-                None
-            } else {
-                Some(r.language.as_str())
-            }
+            let lang = index.language_of(r);
+            if lang.is_empty() { None } else { Some(lang) }
         })
         .collect();
     languages.sort_unstable();

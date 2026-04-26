@@ -10,8 +10,8 @@
 /// - `cast_count`: number of cast expressions in the body.
 use std::collections::HashMap;
 
-use super::{EnrichContext, NodeEnricher};
-use crate::ast::index::{IndexRow, node_text};
+use super::{EnrichContext, ExtraRow, NodeEnricher};
+use crate::ast::index::node_text;
 use crate::ast::lang::LanguageConfig;
 
 /// Enricher that indexes cast expressions with style metadata.
@@ -45,7 +45,7 @@ impl NodeEnricher for CastEnricher {
             drop(fields.insert("cast_count".into(), count.to_string()));
         }
     }
-    fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
+    fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<ExtraRow> {
         let kind = ctx.node.kind();
         let config = ctx.language_config;
 
@@ -81,7 +81,7 @@ impl NodeEnricher for CastEnricher {
             }
         );
 
-        vec![IndexRow {
+        vec![ExtraRow {
             name,
             node_kind: kind.to_string(),
             fql_kind: ctx
@@ -89,13 +89,10 @@ impl NodeEnricher for CastEnricher {
                 .map_kind(kind)
                 .unwrap_or("")
                 .to_string(),
-            language: ctx.language_name.to_string(),
-            path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
-            usages_count: 0,
             fields,
-            ..Default::default()
+            path_override: None,
         }]
     }
 }

@@ -34,22 +34,13 @@ use crate::workspace::Workspace;
 /// Every named tree-sitter node produces one row.  The `fields` map contains
 /// all grammar fields of the node, auto-extracted by name from the Language
 /// API.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+///
+/// All five top-level string fields (name, node kind, FQL kind, language, path)
+/// are stored only as interned IDs.  Resolve them at output time via the
+/// `SymbolTable::name_of`, `node_kind_of`, `fql_kind_of`, `language_of`, and
+/// `path_of` accessor methods.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexRow {
-    /// Human-readable symbol name (extracted by [`extract_name`]).
-    pub name: String,
-    /// Raw tree-sitter node kind (e.g. `"function_definition"`,
-    /// `"struct_specifier"`, `"preproc_def"`).
-    pub node_kind: String,
-    /// Universal FQL kind (e.g. `"function"`, `"class"`, `"number"`).
-    /// Empty string when no mapping exists for this `node_kind`.
-    #[serde(default)]
-    pub fql_kind: String,
-    /// Language identifier (e.g. `"cpp"`, `"typescript"`).
-    #[serde(default)]
-    pub language: String,
-    /// Source file path (absolute path used internally).
-    pub path: PathBuf,
     /// Byte range of the full AST node in the source file.
     pub byte_range: Range<usize>,
     /// 1-based start line number of the node.
@@ -63,25 +54,15 @@ pub struct IndexRow {
     /// Keys are grammar field names (e.g. `"type"`, `"body"`, `"declarator"`).
     /// Values are the source text of the first child at that field.
     pub fields: HashMap<String, String>,
-
-    // ------------------------------------------------------------------
-    // Intern IDs — populated by SymbolTable::push_row / merge.
-    // Not serialised: rebuilt in O(N) from the String fields on cache load.
-    // ------------------------------------------------------------------
-    /// Interned `name` — resolve via [`SymbolTable::name_of`].
-    #[serde(skip)]
+    /// Interned symbol name — resolve via [`SymbolTable::name_of`].
     pub name_id: u32,
-    /// Interned `node_kind` — resolve via [`SymbolTable::node_kind_of`].
-    #[serde(skip)]
+    /// Interned raw tree-sitter node kind — resolve via [`SymbolTable::node_kind_of`].
     pub node_kind_id: u32,
-    /// Interned `fql_kind` — resolve via [`SymbolTable::fql_kind_of`].
-    #[serde(skip)]
+    /// Interned universal FQL kind — resolve via [`SymbolTable::fql_kind_of`].
     pub fql_kind_id: u32,
-    /// Interned `language` — resolve via [`SymbolTable::language_of`].
-    #[serde(skip)]
+    /// Interned language identifier — resolve via [`SymbolTable::language_of`].
     pub language_id: u32,
-    /// Interned `path` — resolve via [`SymbolTable::path_of`].
-    #[serde(skip)]
+    /// Interned source file path — resolve via [`SymbolTable::path_of`].
     pub path_id: u32,
 }
 
@@ -125,37 +106,38 @@ pub struct IndexStats {
 
 /// The full index for one workspace.
 ///
-/// `build()` parses every C/C++ source file and fills:
-/// - `rows`:       all named AST nodes (functions, types, macros, etc.)
-/// - `usages`:     symbol name → all identifier occurrence sites
-/// - `name_index`: symbol name → row indices for O(1) name lookup
-/// - `kind_index`: node kind  → row indices for fast kind filtering
-/// - `stats`:      pre-aggregated group counts for O(1) GROUP BY
+/// `build()` parses every source file and fills:
+/// - `rows`:            all named AST nodes (functions, types, macros, etc.)
+/// - `usages`:          symbol name → all identifier occurrence sites
+/// - `name_index`:      `name_id` → row indices for O(1) name lookup
+/// - `kind_index`:      `node_kind_id` → row indices for fast kind filtering
+/// - `stats`:           pre-aggregated group counts for O(1) GROUP BY
+/// - `strings`:         intern pool for all five top-level string fields
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SymbolTable {
     /// All indexed AST nodes (definitions, declarations, macros, includes).
     pub rows: Vec<IndexRow>,
     /// Symbol name → all sites where the identifier text appears.
     pub usages: HashMap<String, Vec<UsageSite>>,
-    /// Name → row indices lookup for O(1) access.
-    name_index: HashMap<String, Vec<u32>>,
-    /// Node kind → row indices for fast kind filtering.
-    kind_index: HashMap<String, Vec<u32>>,
-    /// FQL kind → row indices for fast universal-kind filtering.
-    fql_kind_index: HashMap<String, Vec<u32>>,
+    /// Name ID → row indices lookup for O(1) access.
+    name_index: HashMap<u32, Vec<u32>>,
+    /// Node kind ID → row indices for fast kind filtering.
+    kind_index: HashMap<u32, Vec<u32>>,
+    /// FQL kind ID → row indices for fast universal-kind filtering.
+    fql_kind_index: HashMap<u32, Vec<u32>>,
     /// Pre-aggregated group counts for O(1) GROUP BY on `fql_kind` / `language`.
     #[serde(default)]
     pub stats: IndexStats,
     /// Trigram inverted index over symbol names for fast substring / regex pre-filtering.
     ///
-    /// Not persisted in the cache — rebuilt in O(N) from `rows` during load via `push_row`.
+    /// Not persisted in the cache — rebuilt in O(N) during
+    /// [`SymbolTable::rebuild_indexes_from_rows`] on cache load.
     #[serde(skip)]
     pub trigram_index: TrigramIndex,
-    /// Interned copies of all top-level string fields in `rows`.
+    /// Interned copies of all five top-level string fields in `rows`.
     ///
-    /// Populated in O(N) during [`push_row`] / `merge` so that every row has
-    /// valid `name_id`, `node_kind_id`, `fql_kind_id`, `language_id`, and
-    /// `path_id` fields.  Not serialised — rebuilt transparently on cache load.
+    /// Not serialised in `SymbolTable` — saved separately in `CachedIndex.strings`
+    /// and restored by `CachedIndex::into_table`.
     ///
     /// Use [`SymbolTable::name_of`], [`SymbolTable::fql_kind_of`], etc. to
     /// resolve IDs at output time.
@@ -163,24 +145,32 @@ pub struct SymbolTable {
     pub(crate) strings: ColumnarTable,
 }
 
+/// A row reference pairing an [`IndexRow`] with its owning [`SymbolTable`].
+///
+/// This is needed wherever string fields of a row must be resolved (e.g. for
+/// filter evaluation) without storing the strings directly in `IndexRow`.
+pub struct RowRef<'t> {
+    pub row: &'t IndexRow,
+    pub table: &'t SymbolTable,
+}
+
 // -----------------------------------------------------------------------
 // Private helpers
 // -----------------------------------------------------------------------
 
-/// Intern all five top-level string fields of `row` into `strings` and write
-/// the resulting IDs back onto `row`.
+/// Remap `row`'s five ID fields from `src` pool into `dst` pool.
 ///
-/// Extracted to avoid repeating the same 12-line pattern in both `push_row`
-/// and `merge`.
+/// Used in [`SymbolTable::merge`] where IDs from the incoming table
+/// are valid only in `src.strings` and must be re-interned into `dst.strings`.
 #[inline]
-fn assign_intern_ids(strings: &mut ColumnarTable, row: &mut IndexRow) {
-    let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = strings.intern_row(
-        &row.name,
-        &row.node_kind,
-        &row.fql_kind,
-        &row.language,
-        &row.path,
-    );
+fn reassign_intern_ids(src: &ColumnarTable, dst: &mut ColumnarTable, row: &mut IndexRow) {
+    let name = src.names.get(row.name_id);
+    let node_kind = src.node_kinds.get(row.node_kind_id);
+    let fql_kind = src.fql_kinds.get(row.fql_kind_id);
+    let language = src.languages.get(row.language_id);
+    let path = src.paths.get(row.path_id);
+    let (name_id, node_kind_id, fql_kind_id, language_id, path_id) =
+        dst.intern_row(name, node_kind, fql_kind, language, path);
     row.name_id = name_id;
     row.node_kind_id = node_kind_id;
     row.fql_kind_id = fql_kind_id;
@@ -317,35 +307,30 @@ impl SymbolTable {
                 "row index exceeds u32::MAX during merge"
             );
             let abs_u32 = u32::try_from(abs).unwrap_or(u32::MAX);
-            // Intern into the accumulator pool (IDs from `other` are not valid here).
-            assign_intern_ids(&mut self.strings, &mut row);
+            // Remap IDs: values from `other.strings` are not valid in `self.strings`.
+            reassign_intern_ids(&other.strings, &mut self.strings, &mut row);
+            let fql_kind = self.strings.fql_kinds.get(row.fql_kind_id).to_owned();
+            let language = self.strings.languages.get(row.language_id).to_owned();
+            let name_str = self.strings.names.get(row.name_id).to_owned();
             self.name_index
-                .entry(row.name.clone())
+                .entry(row.name_id)
                 .or_default()
                 .push(abs_u32);
             self.kind_index
-                .entry(row.node_kind.clone())
+                .entry(row.node_kind_id)
                 .or_default()
                 .push(abs_u32);
-            if !row.fql_kind.is_empty() {
+            if !fql_kind.is_empty() {
                 self.fql_kind_index
-                    .entry(row.fql_kind.clone())
+                    .entry(row.fql_kind_id)
                     .or_default()
                     .push(abs_u32);
-                *self
-                    .stats
-                    .by_fql_kind
-                    .entry(row.fql_kind.clone())
-                    .or_insert(0) += 1;
+                *self.stats.by_fql_kind.entry(fql_kind).or_insert(0) += 1;
             }
-            if !row.language.is_empty() {
-                *self
-                    .stats
-                    .by_language
-                    .entry(row.language.clone())
-                    .or_insert(0) += 1;
+            if !language.is_empty() {
+                *self.stats.by_language.entry(language).or_insert(0) += 1;
             }
-            self.trigram_index.insert(abs, &row.name);
+            self.trigram_index.insert(abs, &name_str);
             self.rows.push(row);
         }
 
@@ -356,44 +341,78 @@ impl SymbolTable {
     }
 
     /// Append a row and update the secondary indexes.
-    pub fn push_row(&mut self, mut row: IndexRow) {
+    ///
+    /// The row must have pre-filled `name_id`, `node_kind_id`, `fql_kind_id`,
+    /// `language_id`, and `path_id` — set by `table.strings.intern_row()` in
+    /// `collect_nodes` before calling this method.
+    pub fn push_row(&mut self, row: IndexRow) {
         let index = self.rows.len();
         debug_assert!(
             u32::try_from(index).is_ok(),
             "row index exceeds u32::MAX in push_row"
         );
         let index_u32 = u32::try_from(index).unwrap_or(u32::MAX);
-        // Intern all top-level string fields into the shared pool.
-        assign_intern_ids(&mut self.strings, &mut row);
+        let fql_kind = self.strings.fql_kinds.get(row.fql_kind_id).to_owned();
+        let language = self.strings.languages.get(row.language_id).to_owned();
+        let name_str = self.strings.names.get(row.name_id).to_owned();
         self.name_index
-            .entry(row.name.clone())
+            .entry(row.name_id)
             .or_default()
             .push(index_u32);
         self.kind_index
-            .entry(row.node_kind.clone())
+            .entry(row.node_kind_id)
             .or_default()
             .push(index_u32);
-        if !row.fql_kind.is_empty() {
+        if !fql_kind.is_empty() {
             self.fql_kind_index
-                .entry(row.fql_kind.clone())
+                .entry(row.fql_kind_id)
                 .or_default()
                 .push(index_u32);
-            *self
-                .stats
-                .by_fql_kind
-                .entry(row.fql_kind.clone())
-                .or_insert(0) += 1;
+            *self.stats.by_fql_kind.entry(fql_kind).or_insert(0) += 1;
         }
-        if !row.language.is_empty() {
-            *self
-                .stats
-                .by_language
-                .entry(row.language.clone())
-                .or_insert(0) += 1;
+        if !language.is_empty() {
+            *self.stats.by_language.entry(language).or_insert(0) += 1;
         }
-        // Update trigram index before moving `row` into `self.rows`.
-        self.trigram_index.insert(index, &row.name);
+        self.trigram_index.insert(index, &name_str);
         self.rows.push(row);
+    }
+
+    /// Rebuild all secondary indexes and stats from `self.rows` in O(N).
+    ///
+    /// Used after cache load (when the pool is restored from `CachedIndex.strings`)
+    /// and after [`purge_file`].  Clears all secondary indexes before rebuilding.
+    pub fn rebuild_indexes_from_rows(&mut self) {
+        self.name_index.clear();
+        self.kind_index.clear();
+        self.fql_kind_index.clear();
+        self.trigram_index.clear();
+        self.stats.by_fql_kind.clear();
+        self.stats.by_language.clear();
+        for (index, row) in self.rows.iter().enumerate() {
+            let index_u32 = u32::try_from(index).unwrap_or(u32::MAX);
+            let fql_kind = self.strings.fql_kinds.get(row.fql_kind_id).to_owned();
+            let language = self.strings.languages.get(row.language_id).to_owned();
+            let name_str = self.strings.names.get(row.name_id).to_owned();
+            self.name_index
+                .entry(row.name_id)
+                .or_default()
+                .push(index_u32);
+            self.kind_index
+                .entry(row.node_kind_id)
+                .or_default()
+                .push(index_u32);
+            if !fql_kind.is_empty() {
+                self.fql_kind_index
+                    .entry(row.fql_kind_id)
+                    .or_default()
+                    .push(index_u32);
+                *self.stats.by_fql_kind.entry(fql_kind).or_insert(0) += 1;
+            }
+            if !language.is_empty() {
+                *self.stats.by_language.entry(language).or_insert(0) += 1;
+            }
+            self.trigram_index.insert(index, &name_str);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -444,10 +463,10 @@ impl SymbolTable {
     pub fn populate_usage_counts(&mut self) {
         for i in 0..self.rows.len() {
             // Extract the bare name suffix (after last `::`) as an owned
-            // String to release the immutable borrow on `self.rows[i]`
+            // String to release the immutable borrow on `self.strings`
             // before we look up `self.usages`.
             let usages_key = {
-                let n = &self.rows[i].name;
+                let n = self.strings.names.get(self.rows[i].name_id);
                 n.rsplit("::").next().unwrap_or(n).to_owned()
             };
             let count = self
@@ -457,8 +476,6 @@ impl SymbolTable {
             self.rows[i].usages_count = count;
         }
     }
-
-    /// Record a usage site for `name` at `byte_range` / `line` in `path`.
     pub fn add_usage(&mut self, name: String, path: &Path, byte_range: Range<usize>, line: usize) {
         self.usages.entry(name).or_default().push(UsageSite {
             path: path.to_path_buf(),
@@ -479,8 +496,9 @@ impl SymbolTable {
     /// (last-write-wins, matching v1 behaviour).
     #[must_use]
     pub fn find_def(&self, name: &str) -> Option<&IndexRow> {
+        let id = self.strings.names.get_id(name)?;
         self.name_index
-            .get(name)?
+            .get(&id)?
             .last()
             .map(|&idx| &self.rows[idx as usize])
     }
@@ -493,7 +511,10 @@ impl SymbolTable {
     /// different files/languages.
     #[must_use]
     pub fn find_all_defs(&self, name: &str) -> Vec<&IndexRow> {
-        self.name_index.get(name).map_or_else(Vec::new, |indices| {
+        let Some(id) = self.strings.names.get_id(name) else {
+            return Vec::new();
+        };
+        self.name_index.get(&id).map_or_else(Vec::new, |indices| {
             indices
                 .iter()
                 .map(|&idx| &self.rows[idx as usize])
@@ -509,31 +530,36 @@ impl SymbolTable {
     pub fn suggest_similar(&self, query: &str, max: usize) -> Vec<&str> {
         let lower = query.to_ascii_lowercase();
         let mut results: Vec<&str> = self
-            .name_index
-            .keys()
+            .strings
+            .names
+            .iter()
             .filter(|name| {
                 let nl = name.to_ascii_lowercase();
                 nl.starts_with(&lower) || lower.starts_with(&nl) || nl.contains(&lower)
             })
-            .map(String::as_str)
             .take(max)
             .collect();
         results.sort_unstable();
         results.truncate(max);
         results
     }
+
     /// Return an iterator over all rows matching a tree-sitter node kind.
     pub fn rows_by_kind(&self, kind: &str) -> impl Iterator<Item = &IndexRow> {
-        self.kind_index
-            .get(kind)
+        self.strings
+            .node_kinds
+            .get_id(kind)
+            .and_then(|id| self.kind_index.get(&id))
             .into_iter()
             .flat_map(|v| v.iter().map(|&i| &self.rows[i as usize]))
     }
 
     /// Return an iterator over all rows matching a universal FQL kind.
     pub fn rows_by_fql_kind(&self, fql_kind: &str) -> impl Iterator<Item = &IndexRow> {
-        self.fql_kind_index
-            .get(fql_kind)
+        self.strings
+            .fql_kinds
+            .get_id(fql_kind)
+            .and_then(|id| self.fql_kind_index.get(&id))
             .into_iter()
             .flat_map(|v| v.iter().map(|&i| &self.rows[i as usize]))
     }
@@ -543,8 +569,10 @@ impl SymbolTable {
     /// O(1) lookup via `name_index`; suitable for wildcard-free `LIKE` and
     /// fully-anchored `MATCHES` predicates.
     pub fn rows_by_name(&self, name: &str) -> impl Iterator<Item = &IndexRow> {
-        self.name_index
-            .get(name)
+        self.strings
+            .names
+            .get_id(name)
+            .and_then(|id| self.name_index.get(&id))
             .into_iter()
             .flat_map(|v| v.iter().map(|&i| &self.rows[i as usize]))
     }
@@ -558,68 +586,28 @@ impl SymbolTable {
         let ids = self.trigram_index.candidates(substr)?;
         Some(ids.into_iter().map(|i| &self.rows[i]).collect())
     }
+
     // -------------------------------------------------------------------
     // Incremental update
     // -------------------------------------------------------------------
 
     /// Remove all entries associated with `path` and rebuild secondary indexes.
-    /// Remove all entries associated with `path` and rebuild secondary indexes.
     pub fn purge_file(&mut self, path: &Path) {
-        self.rows.retain(|row| row.path != path);
+        let path_id = self.strings.paths.get_id(path);
+        if let Some(pid) = path_id {
+            self.rows.retain(|row| row.path_id != pid);
+        }
 
         // Rebuild secondary indexes from scratch.
-        self.name_index.clear();
-        self.kind_index.clear();
-        self.fql_kind_index.clear();
-        self.trigram_index.clear();
-        self.stats.by_fql_kind.clear();
-        self.stats.by_language.clear();
-        for (index, row) in self.rows.iter().enumerate() {
-            debug_assert!(
-                u32::try_from(index).is_ok(),
-                "row index exceeds u32::MAX in purge_file"
-            );
-            let index_u32 = u32::try_from(index).unwrap_or(u32::MAX);
-            self.name_index
-                .entry(row.name.clone())
-                .or_default()
-                .push(index_u32);
-            self.kind_index
-                .entry(row.node_kind.clone())
-                .or_default()
-                .push(index_u32);
-            if !row.fql_kind.is_empty() {
-                self.fql_kind_index
-                    .entry(row.fql_kind.clone())
-                    .or_default()
-                    .push(index_u32);
-                *self
-                    .stats
-                    .by_fql_kind
-                    .entry(row.fql_kind.clone())
-                    .or_insert(0) += 1;
-            }
-            if !row.language.is_empty() {
-                *self
-                    .stats
-                    .by_language
-                    .entry(row.language.clone())
-                    .or_insert(0) += 1;
-            }
-            self.trigram_index.insert(index, &row.name);
-        }
+        self.rebuild_indexes_from_rows();
 
         for sites in self.usages.values_mut() {
             sites.retain(|usage| usage.path != path);
         }
         self.usages.retain(|_, sites| !sites.is_empty());
     }
-
-    /// Purge and re-index a batch of files.
-    ///
     /// # Errors
-    /// Returns `Err` if the tree-sitter language cannot be set or any file
-    /// fails to parse.
+    /// Returns an error if parsing fails for any of the provided paths.
     pub fn reindex_files(
         &mut self,
         paths: &[PathBuf],
@@ -867,20 +855,20 @@ fn collect_nodes(
                 }
 
                 let fql_kind_val = language.map_kind(node.kind()).unwrap_or("");
-
-                let row = IndexRow {
-                    name,
-                    node_kind: node.kind().to_string(),
-                    fql_kind: fql_kind_val.to_string(),
-                    language: lang_name.to_string(),
-                    path: path.to_path_buf(),
+                let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = table
+                    .strings
+                    .intern_row(&name, node.kind(), fql_kind_val, lang_name, path);
+                table.push_row(IndexRow {
+                    name_id,
+                    node_kind_id,
+                    fql_kind_id,
+                    language_id,
+                    path_id,
                     byte_range: node.byte_range(),
                     line: node.start_position().row + 1,
                     usages_count: 0,
                     fields,
-                    ..Default::default()
-                };
-                table.push_row(row);
+                });
             } else if let Some(mtable) = macro_table {
                 // Re-tag: tree-sitter-cpp parses C macro calls as
                 // call_expression, not macro_invocation.  When extract_name
@@ -911,26 +899,45 @@ fn collect_nodes(
                             enricher.enrich_row(&ctx, &func_name, &mut fields);
                         }
 
-                        let row = IndexRow {
-                            name: func_name,
-                            node_kind: node.kind().to_string(),
-                            fql_kind: "macro_call".to_string(),
-                            language: lang_name.to_string(),
-                            path: path.to_path_buf(),
+                        let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = table
+                            .strings
+                            .intern_row(&func_name, node.kind(), "macro_call", lang_name, path);
+                        table.push_row(IndexRow {
+                            name_id,
+                            node_kind_id,
+                            fql_kind_id,
+                            language_id,
+                            path_id,
                             byte_range: node.byte_range(),
                             line: node.start_position().row + 1,
                             usages_count: 0,
                             fields,
-                            ..Default::default()
-                        };
-                        table.push_row(row);
+                        });
                     }
                 }
             }
             // Run extra_rows() for every node (even if extract_name returned None).
             for enricher in enrichers {
-                for row in enricher.extra_rows(&ctx) {
-                    table.push_row(row);
+                for extra in enricher.extra_rows(&ctx) {
+                    let extra_path = extra.path_override.as_deref().unwrap_or(path);
+                    let (eni, enk, enf, enl, enp) = table.strings.intern_row(
+                        &extra.name,
+                        &extra.node_kind,
+                        &extra.fql_kind,
+                        lang_name,
+                        extra_path,
+                    );
+                    table.push_row(IndexRow {
+                        name_id: eni,
+                        node_kind_id: enk,
+                        fql_kind_id: enf,
+                        language_id: enl,
+                        path_id: enp,
+                        byte_range: extra.byte_range,
+                        line: extra.line,
+                        usages_count: 0,
+                        fields: extra.fields,
+                    });
                 }
             }
 
@@ -1008,6 +1015,38 @@ pub(crate) fn node_text(source: &[u8], node: tree_sitter::Node<'_>) -> String {
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
+impl SymbolTable {
+    /// Test helper: intern string fields and append a row.
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_row_strings(
+        &mut self,
+        name: &str,
+        node_kind: &str,
+        fql_kind: &str,
+        language: &str,
+        path: &std::path::Path,
+        byte_range: std::ops::Range<usize>,
+        line: usize,
+        fields: HashMap<String, String>,
+    ) {
+        let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = self
+            .strings
+            .intern_row(name, node_kind, fql_kind, language, path);
+        self.push_row(IndexRow {
+            name_id,
+            node_kind_id,
+            fql_kind_id,
+            language_id,
+            path_id,
+            byte_range,
+            line,
+            usages_count: 0,
+            fields,
+        });
+    }
+}
+
+#[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -1016,30 +1055,26 @@ mod tests {
 
     fn two_row_table() -> SymbolTable {
         let mut table = SymbolTable::default();
-        table.push_row(IndexRow {
-            name: "foo".to_string(),
-            node_kind: "function_definition".to_string(),
-            fql_kind: String::new(),
-            language: String::new(),
-            path: PathBuf::from("a.cpp"),
-            byte_range: 0..30,
-            line: 1,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        });
-        table.push_row(IndexRow {
-            name: "bar".to_string(),
-            node_kind: "function_definition".to_string(),
-            fql_kind: String::new(),
-            language: String::new(),
-            path: PathBuf::from("b.cpp"),
-            byte_range: 0..30,
-            line: 1,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        });
+        table.push_row_strings(
+            "foo",
+            "function_definition",
+            "",
+            "",
+            Path::new("a.cpp"),
+            0..30,
+            1,
+            HashMap::new(),
+        );
+        table.push_row_strings(
+            "bar",
+            "function_definition",
+            "",
+            "",
+            Path::new("b.cpp"),
+            0..30,
+            1,
+            HashMap::new(),
+        );
         table.add_usage("foo".to_string(), Path::new("a.cpp"), 0..3, 1);
         table.add_usage("foo".to_string(), Path::new("b.cpp"), 10..13, 1);
         table
@@ -1048,52 +1083,52 @@ mod tests {
     #[test]
     fn push_row_updates_secondary_indexes() {
         let mut table = SymbolTable::default();
-        table.push_row(IndexRow {
-            name: "alpha".to_string(),
-            node_kind: "function_definition".to_string(),
-            fql_kind: String::new(),
-            language: String::new(),
-            path: PathBuf::from("src/alpha.cpp"),
-            byte_range: 0..10,
-            line: 1,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        });
+        table.push_row_strings(
+            "alpha",
+            "function_definition",
+            "",
+            "",
+            Path::new("src/alpha.cpp"),
+            0..10,
+            1,
+            HashMap::new(),
+        );
         assert_eq!(table.rows.len(), 1);
-        assert_eq!(table.name_index["alpha"], vec![0u32]);
-        assert_eq!(table.kind_index["function_definition"], vec![0u32]);
+        let name_id = table.strings.names.get_id("alpha").unwrap();
+        let kind_id = table
+            .strings
+            .node_kinds
+            .get_id("function_definition")
+            .unwrap();
+        assert_eq!(table.name_index[&name_id], vec![0u32]);
+        assert_eq!(table.kind_index[&kind_id], vec![0u32]);
     }
 
     #[test]
     fn find_def_returns_last_row_for_name() {
         let mut table = SymbolTable::default();
-        table.push_row(IndexRow {
-            name: "foo".to_string(),
-            node_kind: "declaration".to_string(),
-            fql_kind: String::new(),
-            language: String::new(),
-            path: PathBuf::from("inc/foo.h"),
-            byte_range: 0..10,
-            line: 1,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        });
-        table.push_row(IndexRow {
-            name: "foo".to_string(),
-            node_kind: "function_definition".to_string(),
-            fql_kind: String::new(),
-            language: String::new(),
-            path: PathBuf::from("src/foo.cpp"),
-            byte_range: 0..50,
-            line: 1,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        });
+        table.push_row_strings(
+            "foo",
+            "declaration",
+            "",
+            "",
+            Path::new("inc/foo.h"),
+            0..10,
+            1,
+            HashMap::new(),
+        );
+        table.push_row_strings(
+            "foo",
+            "function_definition",
+            "",
+            "",
+            Path::new("src/foo.cpp"),
+            0..50,
+            1,
+            HashMap::new(),
+        );
         let def = table.find_def("foo").expect("should find foo");
-        assert_eq!(def.node_kind, "function_definition");
+        assert_eq!(table.node_kind_of(def), "function_definition");
     }
 
     #[test]
@@ -1101,8 +1136,8 @@ mod tests {
         let table = two_row_table();
         let fns: Vec<&IndexRow> = table.rows_by_kind("function_definition").collect();
         assert_eq!(fns.len(), 2);
-        assert!(fns.iter().any(|r| r.name == "foo"));
-        assert!(fns.iter().any(|r| r.name == "bar"));
+        assert!(fns.iter().any(|r| table.name_of(r) == "foo"));
+        assert!(fns.iter().any(|r| table.name_of(r) == "bar"));
     }
 
     #[test]
@@ -1130,30 +1165,26 @@ mod tests {
     fn purge_file_rebuilds_index_stats() {
         // Two rows in two files, both contributing to fql_kind / language stats.
         let mut table = SymbolTable::default();
-        table.push_row(IndexRow {
-            name: "f1".to_string(),
-            node_kind: "function_definition".to_string(),
-            fql_kind: "function".to_string(),
-            language: "cpp".to_string(),
-            path: PathBuf::from("a.cpp"),
-            byte_range: 0..10,
-            line: 1,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        });
-        table.push_row(IndexRow {
-            name: "f2".to_string(),
-            node_kind: "function_definition".to_string(),
-            fql_kind: "function".to_string(),
-            language: "cpp".to_string(),
-            path: PathBuf::from("b.cpp"),
-            byte_range: 0..10,
-            line: 1,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        });
+        table.push_row_strings(
+            "f1",
+            "function_definition",
+            "function",
+            "cpp",
+            Path::new("a.cpp"),
+            0..10,
+            1,
+            HashMap::new(),
+        );
+        table.push_row_strings(
+            "f2",
+            "function_definition",
+            "function",
+            "cpp",
+            Path::new("b.cpp"),
+            0..10,
+            1,
+            HashMap::new(),
+        );
         assert_eq!(table.stats.by_fql_kind.get("function"), Some(&2));
         assert_eq!(table.stats.by_language.get("cpp"), Some(&2));
 
@@ -1226,7 +1257,7 @@ mod tests {
     fn indexes_function_definition() {
         let table = index_snippet("void processSignal(int speed) { return; }");
         let row = table.find_def("processSignal").expect("indexed");
-        assert_eq!(row.node_kind, "function_definition");
+        assert_eq!(table.node_kind_of(row), "function_definition");
         assert_eq!(row.line, 1);
     }
 
@@ -1243,7 +1274,7 @@ mod tests {
         let decl = table
             .find_def("setup")
             .expect("member declaration should be indexed");
-        assert_eq!(decl.node_kind, "field_declaration");
+        assert_eq!(table.node_kind_of(decl), "field_declaration");
     }
 
     #[test]
@@ -1254,15 +1285,15 @@ mod tests {
         // find_def returns the last row for a name — the field_declaration
         // from the class body comes after the bare function_definition.
         let last = table.find_def("setup").expect("setup");
-        assert_eq!(last.node_kind, "field_declaration");
+        assert_eq!(table.node_kind_of(last), "field_declaration");
         // The bare function_definition is still in the table.
         let has_bare_def = table
             .rows
             .iter()
-            .any(|r| r.name == "setup" && r.node_kind == "function_definition");
+            .any(|r| table.name_of(r) == "setup" && table.node_kind_of(r) == "function_definition");
         assert!(has_bare_def, "bare function_definition should exist");
         let qualified = table.find_def("Motor::setup").expect("qualified setup");
-        assert_eq!(qualified.node_kind, "function_definition");
+        assert_eq!(table.node_kind_of(qualified), "function_definition");
     }
 
     #[test]
@@ -1273,48 +1304,48 @@ mod tests {
         let load = table
             .find_def("loadSignalCode")
             .expect("member declaration indexed");
-        assert_eq!(load.node_kind, "field_declaration");
+        assert_eq!(table.node_kind_of(load), "field_declaration");
         let get = table
             .find_def("getValue")
             .expect("member declaration indexed");
-        assert_eq!(get.node_kind, "field_declaration");
+        assert_eq!(table.node_kind_of(get), "field_declaration");
     }
 
     #[test]
     fn indexes_member_data_field() {
         let table = index_snippet("struct Point { int x; double y; };");
         let x = table.find_def("x").expect("data member indexed");
-        assert_eq!(x.node_kind, "field_declaration");
+        assert_eq!(table.node_kind_of(x), "field_declaration");
         let y = table.find_def("y").expect("data member indexed");
-        assert_eq!(y.node_kind, "field_declaration");
+        assert_eq!(table.node_kind_of(y), "field_declaration");
     }
 
     #[test]
     fn indexes_struct_specifier() {
         let table = index_snippet("struct Motor { int speed; };");
         let row = table.find_def("Motor").expect("indexed");
-        assert_eq!(row.node_kind, "struct_specifier");
+        assert_eq!(table.node_kind_of(row), "struct_specifier");
     }
 
     #[test]
     fn indexes_preproc_def() {
         let table = index_snippet("#define BAUD_RATE 9600");
         let row = table.find_def("BAUD_RATE").expect("indexed");
-        assert_eq!(row.node_kind, "preproc_def");
+        assert_eq!(table.node_kind_of(row), "preproc_def");
     }
 
     #[test]
     fn indexes_enum_specifier() {
         let table = index_snippet("enum class State { Idle, Running };");
         let row = table.find_def("State").expect("indexed");
-        assert_eq!(row.node_kind, "enum_specifier");
+        assert_eq!(table.node_kind_of(row), "enum_specifier");
     }
 
     #[test]
     fn indexes_preproc_include() {
         let table = index_snippet("#include <stdint.h>");
         let row = table.find_def("stdint.h").expect("indexed");
-        assert_eq!(row.node_kind, "preproc_include");
+        assert_eq!(table.node_kind_of(row), "preproc_include");
     }
 
     #[test]
@@ -1330,7 +1361,7 @@ mod tests {
             "class Motor { void setup(int speed); };\nvoid Motor::setup(int speed) {}",
         );
         let decl = table.find_def("setup").expect("member declaration indexed");
-        assert_eq!(decl.node_kind, "field_declaration");
+        assert_eq!(table.node_kind_of(decl), "field_declaration");
         assert_eq!(
             decl.fields.get("body_symbol").map(String::as_str),
             Some("Motor::setup"),
@@ -1360,20 +1391,26 @@ mod tests {
     fn find_all_defs_returns_all_matching_rows() {
         // Push the same name into two files to simulate a multi-file workspace.
         let mut table = SymbolTable::default();
-        let make_row = |path: &str| IndexRow {
-            name: "shared".to_string(),
-            node_kind: "function_definition".to_string(),
-            fql_kind: String::new(),
-            language: String::new(),
-            path: PathBuf::from(path),
-            byte_range: 0..10,
-            line: 1,
-            usages_count: 0,
-            fields: HashMap::new(),
-            ..Default::default()
-        };
-        table.push_row(make_row("src/a.cpp"));
-        table.push_row(make_row("src/b.cpp"));
+        table.push_row_strings(
+            "shared",
+            "function_definition",
+            "",
+            "",
+            Path::new("src/a.cpp"),
+            0..10,
+            1,
+            HashMap::new(),
+        );
+        table.push_row_strings(
+            "shared",
+            "function_definition",
+            "",
+            "",
+            Path::new("src/b.cpp"),
+            0..10,
+            1,
+            HashMap::new(),
+        );
 
         let defs = table.find_all_defs("shared");
         assert_eq!(defs.len(), 2, "both rows must be returned");
@@ -1384,8 +1421,10 @@ mod tests {
         let table = two_row_table();
         let defs = table.find_all_defs("foo");
         assert_eq!(defs.len(), 1);
-        assert_eq!(defs[0].name, "foo");
+        assert_eq!(table.name_of(defs[0]), "foo");
     }
+
+    // -- suggest_similar -------------------------------------------------
 
     // -- suggest_similar -------------------------------------------------
 
@@ -1428,18 +1467,16 @@ mod tests {
         // Build a table with 5 symbols that all start with "sym".
         let mut table = SymbolTable::default();
         for i in 0..5_usize {
-            table.push_row(IndexRow {
-                name: format!("sym_{i}"),
-                node_kind: "function_definition".to_string(),
-                fql_kind: String::new(),
-                language: String::new(),
-                path: PathBuf::from("src/lib.cpp"),
-                byte_range: 0..10,
-                line: 1,
-                usages_count: 0,
-                fields: HashMap::new(),
-                ..Default::default()
-            });
+            table.push_row_strings(
+                &format!("sym_{i}"),
+                "function_definition",
+                "",
+                "",
+                Path::new("src/lib.cpp"),
+                0..10,
+                1,
+                HashMap::new(),
+            );
         }
         let suggestions = table.suggest_similar("sym", 3);
         assert!(
@@ -1450,79 +1487,60 @@ mod tests {
 
     // -- intern-pool correctness -----------------------------------------
 
-    /// After `push_row`, the five `*_of()` accessors must return the same
-    /// values as the corresponding `String`/`PathBuf` fields on the row.
-    /// This guards against ID drift while the dual-write approach is in use.
+    /// Verify that the five accessor methods return the expected strings
+    /// after rows are pushed via `push_row_strings`.
     #[test]
     fn accessors_match_string_fields() {
         let mut table = SymbolTable::default();
-        let rows_in = vec![
-            IndexRow {
-                name: "alpha".to_string(),
-                node_kind: "function_definition".to_string(),
-                fql_kind: "function".to_string(),
-                language: "cpp".to_string(),
-                path: PathBuf::from("src/a.cpp"),
-                byte_range: 0..10,
-                line: 1,
-                usages_count: 0,
-                fields: HashMap::new(),
-                ..Default::default()
-            },
-            IndexRow {
-                name: "beta".to_string(),
-                node_kind: "struct_specifier".to_string(),
-                fql_kind: "struct".to_string(),
-                language: "cpp".to_string(),
-                path: PathBuf::from("src/a.cpp"),
-                byte_range: 10..20,
-                line: 5,
-                usages_count: 0,
-                fields: HashMap::new(),
-                ..Default::default()
-            },
-            IndexRow {
-                name: "gamma".to_string(),
-                node_kind: "function_definition".to_string(),
-                fql_kind: "function".to_string(),
-                language: "rust".to_string(),
-                path: PathBuf::from("src/b.rs"),
-                byte_range: 0..15,
-                line: 1,
-                usages_count: 0,
-                fields: HashMap::new(),
-                ..Default::default()
-            },
+        let data = [
+            (
+                "alpha",
+                "function_definition",
+                "function",
+                "cpp",
+                "src/a.cpp",
+                0..10usize,
+                1usize,
+            ),
+            (
+                "beta",
+                "struct_specifier",
+                "struct",
+                "cpp",
+                "src/a.cpp",
+                10..20,
+                5,
+            ),
+            (
+                "gamma",
+                "function_definition",
+                "function",
+                "rust",
+                "src/b.rs",
+                0..15,
+                1,
+            ),
         ];
-        for r in rows_in {
-            table.push_row(r);
+        for &(name, nk, fql, lang, path, ref br, line) in &data {
+            table.push_row_strings(
+                name,
+                nk,
+                fql,
+                lang,
+                Path::new(path),
+                br.clone(),
+                line,
+                HashMap::new(),
+            );
         }
-        for row in &table.rows {
-            assert_eq!(
-                table.name_of(row),
-                row.name.as_str(),
-                "name_of must match row.name"
-            );
-            assert_eq!(
-                table.node_kind_of(row),
-                row.node_kind.as_str(),
-                "node_kind_of must match row.node_kind"
-            );
-            assert_eq!(
-                table.fql_kind_of(row),
-                row.fql_kind.as_str(),
-                "fql_kind_of must match row.fql_kind"
-            );
-            assert_eq!(
-                table.language_of(row),
-                row.language.as_str(),
-                "language_of must match row.language"
-            );
-            assert_eq!(
-                table.path_of(row),
-                row.path.as_path(),
-                "path_of must match row.path"
-            );
+        for (row, &(exp_name, exp_nk, exp_fql, exp_lang, exp_path, _, _)) in
+            table.rows.iter().zip(data.iter())
+        {
+            assert_eq!(table.name_of(row), exp_name, "name_of");
+            assert_eq!(table.node_kind_of(row), exp_nk, "node_kind_of");
+            assert_eq!(table.fql_kind_of(row), exp_fql, "fql_kind_of");
+            assert_eq!(table.language_of(row), exp_lang, "language_of");
+            assert_eq!(table.path_of(row), Path::new(exp_path), "path_of");
         }
     }
 
@@ -1533,18 +1551,16 @@ mod tests {
         let mut table = SymbolTable::default();
         // 100 rows: unique names, shared node_kind/fql_kind/language/path.
         for i in 0..100_usize {
-            table.push_row(IndexRow {
-                name: format!("fn_{i}"),
-                node_kind: "function_definition".to_string(),
-                fql_kind: "function".to_string(),
-                language: "cpp".to_string(),
-                path: PathBuf::from("src/big.cpp"),
-                byte_range: 0..10,
-                line: i + 1,
-                usages_count: 0,
-                fields: HashMap::new(),
-                ..Default::default()
-            });
+            table.push_row_strings(
+                &format!("fn_{i}"),
+                "function_definition",
+                "function",
+                "cpp",
+                Path::new("src/big.cpp"),
+                0..10,
+                i + 1,
+                HashMap::new(),
+            );
         }
         assert_eq!(table.strings.names.len(), 100, "100 unique names");
         assert_eq!(table.strings.node_kinds.len(), 1, "one node_kind");

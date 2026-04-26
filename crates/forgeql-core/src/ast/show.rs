@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::{
     ast::{
-        index::IndexRow,
+        index::{IndexRow, SymbolTable},
         lang::{LanguageConfig, LanguageRegistry},
     },
     workspace::Workspace,
@@ -417,11 +417,13 @@ pub use members::{show_members, show_outline};
 /// Returns an error if the file cannot be read.
 pub fn show_context(
     def: &IndexRow,
+    table: &SymbolTable,
     workspace: &Workspace,
     symbol: &str,
     context_lines: usize,
 ) -> Result<Value> {
-    let source = crate::workspace::file_io::read_bytes(&def.path)?;
+    let def_path = table.path_of(def);
+    let source = crate::workspace::file_io::read_bytes(def_path)?;
     let center = byte_to_line(&source, def.byte_range.start);
 
     let text = String::from_utf8_lossy(&source);
@@ -438,7 +440,7 @@ pub fn show_context(
         })
         .collect();
 
-    let path_str = workspace.relative(&def.path).display().to_string();
+    let path_str = workspace.relative(def_path).display().to_string();
     Ok(serde_json::json!({
         "op":          "show_context",
         "symbol":      symbol,
@@ -461,20 +463,23 @@ pub fn show_context(
 /// Returns an error if the file cannot be read.
 pub fn show_signature(
     def: &IndexRow,
+    table: &SymbolTable,
     workspace: &Workspace,
     symbol: &str,
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
+    let def_path = table.path_of(def);
     let lang = lang_registry
-        .language_for_path(&def.path)
-        .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
+        .language_for_path(def_path)
+        .ok_or_else(|| anyhow!("no language for {}", def_path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(&def.path, lang_registry)?;
+    let (source, tree) = parse_file(def_path, lang_registry)?;
     let root = tree.root_node();
 
     let start_line = byte_to_line(&source, def.byte_range.start) + 1;
-    let is_func_or_template = config.is_function_kind(def.node_kind.as_str())
-        || config.is_template_declaration_kind(def.node_kind.as_str());
+    let node_kind = table.node_kind_of(def);
+    let is_func_or_template =
+        config.is_function_kind(node_kind) || config.is_template_declaration_kind(node_kind);
     let (signature, end_line) = if is_func_or_template {
         find_function_node_for_symbol(root, def.byte_range.start, config).map_or_else(
             || {
@@ -501,7 +506,7 @@ pub fn show_signature(
         (sig, start_line)
     };
 
-    let path_str = workspace.relative(&def.path).display().to_string();
+    let path_str = workspace.relative(def_path).display().to_string();
     Ok(serde_json::json!({
         "op":         "show_signature",
         "symbol":     symbol,

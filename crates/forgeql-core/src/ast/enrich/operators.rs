@@ -7,9 +7,8 @@
 /// - `shift_expression` / binary with `<<`/`>>`: `shift_direction`, `shift_amount`, `operator_category`
 use std::collections::HashMap;
 
-use super::{EnrichContext, NodeEnricher};
-use crate::ast::index::{IndexRow, node_text};
-
+use super::{EnrichContext, ExtraRow, NodeEnricher};
+use crate::ast::index::node_text;
 /// Enricher for operator analysis (increment, compound assignment, shift).
 pub struct OperatorEnricher;
 
@@ -18,7 +17,7 @@ impl NodeEnricher for OperatorEnricher {
         "operators"
     }
 
-    fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
+    fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<ExtraRow> {
         let kind = ctx.node.kind();
         let config = ctx.language_config;
 
@@ -36,7 +35,7 @@ impl NodeEnricher for OperatorEnricher {
 }
 
 impl OperatorEnricher {
-    fn handle_update(ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
+    fn handle_update(ctx: &EnrichContext<'_>) -> Vec<ExtraRow> {
         let text = node_text(ctx.source, ctx.node);
         if text.is_empty() {
             return vec![];
@@ -60,7 +59,7 @@ impl OperatorEnricher {
         }
         .to_string();
 
-        vec![IndexRow {
+        vec![ExtraRow {
             name,
             node_kind: ctx.node.kind().to_string(),
             fql_kind: ctx
@@ -68,17 +67,14 @@ impl OperatorEnricher {
                 .map_kind(ctx.node.kind())
                 .unwrap_or("")
                 .to_string(),
-            language: ctx.language_name.to_string(),
-            path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
-            usages_count: 0,
             fields,
-            ..Default::default()
+            path_override: None,
         }]
     }
 
-    fn handle_compound_assignment(ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
+    fn handle_compound_assignment(ctx: &EnrichContext<'_>) -> Vec<ExtraRow> {
         let Some(op_node) = ctx.node.child_by_field_name("operator") else {
             return vec![];
         };
@@ -113,7 +109,7 @@ impl OperatorEnricher {
             drop(fields.insert("operand".to_string(), node_text(ctx.source, right)));
         }
 
-        vec![IndexRow {
+        vec![ExtraRow {
             name,
             node_kind: ctx.language_config.compound_assignment_kind().to_string(),
             fql_kind: ctx
@@ -121,17 +117,14 @@ impl OperatorEnricher {
                 .map_kind(ctx.language_config.compound_assignment_kind())
                 .unwrap_or("")
                 .to_string(),
-            language: ctx.language_name.to_string(),
-            path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
-            usages_count: 0,
             fields,
-            ..Default::default()
+            path_override: None,
         }]
     }
 
-    fn handle_shift(ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
+    fn handle_shift(ctx: &EnrichContext<'_>) -> Vec<ExtraRow> {
         let Some(op_node) = ctx.node.child_by_field_name("operator") else {
             return vec![];
         };
@@ -170,7 +163,7 @@ impl OperatorEnricher {
             .first()
             .map_or(node_kind, String::as_str);
 
-        vec![IndexRow {
+        vec![ExtraRow {
             name,
             node_kind: output_kind.to_string(),
             fql_kind: ctx
@@ -178,13 +171,10 @@ impl OperatorEnricher {
                 .map_kind(output_kind)
                 .unwrap_or("")
                 .to_string(),
-            language: ctx.language_name.to_string(),
-            path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
-            usages_count: 0,
             fields,
-            ..Default::default()
+            path_override: None,
         }]
     }
 }

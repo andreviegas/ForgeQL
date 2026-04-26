@@ -4,6 +4,25 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.7] - 2025-07-25
+
+### Changed
+- **PR-E: Remove String fields from `IndexRow`; use ID-only storage.**
+  All five top-level string fields (`name`, `node_kind`, `fql_kind`, `language`,
+  `path`) have been removed from `IndexRow`; only the compact `u32` ID fields
+  remain. String data lives exclusively in `ColumnarTable` (serialised as
+  `CachedIndex.strings`). Resolving a field is now a single pool lookup via
+  the new `SymbolTable` accessor methods: `name_of`, `node_kind_of`,
+  `fql_kind_of`, `language_of`, `path_of`.
+- Cache format version bumped 24 → 25; existing caches are automatically
+  invalidated and rebuilt.
+- `ColumnarTable`, `StringPool`, and `PathPool` now derive
+  `Serialize / Deserialize` so the pool is persisted in `CachedIndex.strings`.
+- `RowRef<'t>` wrapper added to implement `ClauseTarget` for `(IndexRow, SymbolTable)`.
+- `ExtraRow` transit type added in `enrich/mod.rs` for enricher output.
+- All enrichers, show functions, engine query paths, filter impls, and
+  integration tests updated to use accessor methods instead of string fields.
+
 ## [0.38.6] — 2026-04-26 (string-interning-phase-1)
 
 ### Added

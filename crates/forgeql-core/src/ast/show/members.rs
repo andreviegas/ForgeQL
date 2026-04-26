@@ -38,20 +38,19 @@ pub fn show_outline(index: &SymbolTable, workspace: &Workspace, file: &str) -> R
     let mut entries: Vec<(usize, Value)> = Vec::new();
 
     for row in &index.rows {
-        if !path_matches(root, &row.path, file) {
+        if !path_matches(root, index.path_of(row), file) {
             continue;
         }
-        let rel = workspace.relative(&row.path).display().to_string();
-        let ln = line_for(&mut byte_cache, &row.path, row.byte_range.start);
-        let kind = if row.fql_kind.is_empty() {
-            &row.node_kind
-        } else {
-            &row.fql_kind
-        };
+        let row_path = index.path_of(row);
+        let rel = workspace.relative(row_path).display().to_string();
+        let ln = line_for(&mut byte_cache, row_path, row.byte_range.start);
+        let fql = index.fql_kind_of(row);
+        let nk = index.node_kind_of(row);
+        let kind = if fql.is_empty() { nk } else { fql };
         entries.push((
             row.byte_range.start,
             serde_json::json!({
-                "name": row.name,
+                "name": index.name_of(row),
                 "fql_kind": kind,
                 "path": rel,
                 "line": ln,
@@ -80,15 +79,17 @@ pub fn show_outline(index: &SymbolTable, workspace: &Workspace, file: &str) -> R
 /// type is not found.
 pub fn show_members(
     def: &IndexRow,
+    table: &SymbolTable,
     workspace: &Workspace,
     symbol: &str,
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
+    let def_path = table.path_of(def);
     let lang = lang_registry
-        .language_for_path(&def.path)
-        .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
+        .language_for_path(def_path)
+        .ok_or_else(|| anyhow!("no language for {}", def_path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(&def.path, lang_registry)?;
+    let (source, tree) = parse_file(def_path, lang_registry)?;
     let root = tree.root_node();
 
     let type_node = find_type_node_by_name(root, &source, symbol, config)
@@ -168,7 +169,7 @@ pub fn show_members(
     let byte_start = type_node.start_byte();
     let start_line = type_node.start_position().row + 1;
     let end_line = type_node.end_position().row + 1;
-    let path_str = workspace.relative(&def.path).display().to_string();
+    let path_str = workspace.relative(table.path_of(def)).display().to_string();
     Ok(serde_json::json!({
         "op":         "show_members",
         "symbol":     symbol,

@@ -67,11 +67,12 @@ pub fn show_callees(
     symbol: &str,
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
+    let def_path = index.path_of(def);
     let lang = lang_registry
-        .language_for_path(&def.path)
-        .ok_or_else(|| anyhow!("no language for {}", def.path.display()))?;
+        .language_for_path(def_path)
+        .ok_or_else(|| anyhow!("no language for {}", def_path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(&def.path, lang_registry)?;
+    let (source, tree) = parse_file(def_path, lang_registry)?;
     let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start, config)
         .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 
@@ -85,14 +86,18 @@ pub fn show_callees(
     callees.sort();
     callees.dedup();
 
-    let path_str = workspace.relative(&def.path).display().to_string();
+    let def_path = index.path_of(def);
+    let path_str = workspace.relative(def_path).display().to_string();
     let results: Vec<Value> = callees
         .iter()
         .map(|name| {
             index.find_def(name).map_or_else(
                 || serde_json::json!({ "name": name }),
                 |callee_def| {
-                    let callee_path = workspace.relative(&callee_def.path).display().to_string();
+                    let callee_path = workspace
+                        .relative(index.path_of(callee_def))
+                        .display()
+                        .to_string();
                     serde_json::json!({
                         "name": name,
                         "path": callee_path,

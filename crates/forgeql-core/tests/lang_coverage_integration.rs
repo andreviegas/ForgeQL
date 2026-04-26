@@ -91,9 +91,13 @@ fn assert_universal_defs(lang_name: &str, table: &SymbolTable) {
         });
 
         assert_eq!(
-            row.fql_kind, expected.fql_kind,
+            table.fql_kind_of(row),
+            expected.fql_kind,
             "[{}] symbol '{}': expected fql_kind='{}', got='{}'",
-            lang_name, expected.name, expected.fql_kind, row.fql_kind
+            lang_name,
+            expected.name,
+            expected.fql_kind,
+            table.fql_kind_of(row)
         );
 
         assert_eq!(
@@ -143,9 +147,10 @@ fn cpp_language_field_populated() {
     let table = index_canonical(&CppLanguageInline, "canonical.cpp");
     for row in &table.rows {
         assert_eq!(
-            row.language, "cpp",
+            table.language_of(row),
+            "cpp",
             "every row should have language='cpp', got='{}'",
-            row.language
+            table.language_of(row)
         );
     }
 }
@@ -155,9 +160,10 @@ fn rust_language_field_populated() {
     let table = index_canonical(&RustLanguageInline, "canonical.rs");
     for row in &table.rows {
         assert_eq!(
-            row.language, "rust",
+            table.language_of(row),
+            "rust",
             "every row should have language='rust', got='{}'",
-            row.language
+            table.language_of(row)
         );
     }
 }
@@ -198,7 +204,10 @@ fn rust_macro_invocation_indexed_as_macro_call() {
     let mut macro_nodes = Vec::new();
     walk_for_macros(tree.root_node(), &source, &mut macro_nodes);
 
-    let has_macro_calls = table.rows.iter().any(|r| r.fql_kind == "macro_call");
+    let has_macro_calls = table
+        .rows
+        .iter()
+        .any(|r| table.fql_kind_of(r) == "macro_call");
 
     // Report both what tree-sitter found and what index_file produced
     assert!(
@@ -210,7 +219,12 @@ fn rust_macro_invocation_indexed_as_macro_call() {
         table
             .rows
             .iter()
-            .map(|r| (&r.name, &r.node_kind, &r.fql_kind, r.line))
+            .map(|r| (
+                table.name_of(r),
+                table.node_kind_of(r),
+                table.fql_kind_of(r),
+                r.line
+            ))
             .collect::<Vec<_>>()
     );
 }
@@ -278,17 +292,18 @@ fn rust_cfg_attribute_guard_indexed() {
         .expect("index_file should succeed");
 
     // Find the guarded function
+    // Find the guarded function
     let guarded = table
         .rows
         .iter()
-        .find(|r| r.name == "guarded_fn" && r.fql_kind == "function")
+        .find(|r| table.name_of(r) == "guarded_fn" && table.fql_kind_of(r) == "function")
         .unwrap_or_else(|| {
             panic!(
                 "guarded_fn not found. Rows: {:?}",
                 table
                     .rows
                     .iter()
-                    .map(|r| (&r.name, &r.fql_kind, r.line, &r.fields))
+                    .map(|r| (table.name_of(r), table.fql_kind_of(r), r.line, &r.fields))
                     .collect::<Vec<_>>()
             )
         });
@@ -315,7 +330,7 @@ fn rust_cfg_attribute_guard_indexed() {
     let unguarded = table
         .rows
         .iter()
-        .find(|r| r.name == "unguarded_fn" && r.fql_kind == "function")
+        .find(|r| table.name_of(r) == "unguarded_fn" && table.fql_kind_of(r) == "function")
         .expect("unguarded_fn should be indexed");
     assert!(
         !unguarded.fields.contains_key("guard_kind"),

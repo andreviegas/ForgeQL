@@ -10,9 +10,8 @@
 /// - `is_magic`: `"false"` for {0, 1, -1}; `"true"` otherwise
 use std::collections::HashMap;
 
-use super::{EnrichContext, NodeEnricher};
-use crate::ast::index::{IndexRow, node_text};
-
+use super::{EnrichContext, ExtraRow, NodeEnricher};
+use crate::ast::index::node_text;
 /// Enricher that indexes `number_literal` nodes with numeric metadata.
 pub struct NumberEnricher;
 
@@ -21,7 +20,7 @@ impl NodeEnricher for NumberEnricher {
         "numbers"
     }
 
-    fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<IndexRow> {
+    fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<ExtraRow> {
         let config = ctx.language_config;
         if !config.is_number_literal_kind(ctx.node.kind()) {
             return vec![];
@@ -81,7 +80,7 @@ impl NodeEnricher for NumberEnricher {
         let is_magic = !(-1..=1).contains(&value);
         drop(fields.insert("is_magic".to_string(), is_magic.to_string()));
 
-        vec![IndexRow {
+        vec![ExtraRow {
             name: raw,
             node_kind: ctx.node.kind().to_string(),
             fql_kind: ctx
@@ -89,13 +88,10 @@ impl NodeEnricher for NumberEnricher {
                 .map_kind(ctx.node.kind())
                 .unwrap_or("")
                 .to_string(),
-            language: ctx.language_name.to_string(),
-            path: ctx.path.to_path_buf(),
             byte_range: ctx.node.byte_range(),
             line: ctx.node.start_position().row + 1,
-            usages_count: 0,
             fields,
-            ..Default::default()
+            path_override: None,
         }]
     }
 }
