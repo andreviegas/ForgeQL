@@ -149,6 +149,11 @@ impl PathPool {
         self.lookup.get(p).copied()
     }
 
+    /// Iterate all interned paths in insertion order.
+    pub fn iter(&self) -> impl Iterator<Item = &std::path::Path> {
+        self.paths.iter().map(std::path::PathBuf::as_path)
+    }
+
     /// Number of unique paths stored.
     #[must_use]
     #[inline]

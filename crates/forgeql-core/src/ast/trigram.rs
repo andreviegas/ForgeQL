@@ -124,6 +124,17 @@ impl TrigramIndex {
     pub fn is_empty(&self) -> bool {
         self.posting.is_empty()
     }
+
+    /// Total number of entries across all posting lists (used for memory estimates).
+    #[must_use]
+    pub fn posting_len(&self) -> usize {
+        self.posting.len()
+    }
+
+    /// Iterate all posting lists (used for memory estimates).
+    pub fn posting_iter(&self) -> impl Iterator<Item = &Vec<usize>> {
+        self.posting.values()
+    }
 }
 
 // -----------------------------------------------------------------------
