@@ -117,11 +117,11 @@ pub struct SymbolTable {
     /// Symbol name → all sites where the identifier text appears.
     pub usages: HashMap<String, Vec<UsageSite>>,
     /// Name → row indices lookup for O(1) access.
-    name_index: HashMap<String, Vec<usize>>,
+    name_index: HashMap<String, Vec<u32>>,
     /// Node kind → row indices for fast kind filtering.
-    kind_index: HashMap<String, Vec<usize>>,
+    kind_index: HashMap<String, Vec<u32>>,
     /// FQL kind → row indices for fast universal-kind filtering.
-    fql_kind_index: HashMap<String, Vec<usize>>,
+    fql_kind_index: HashMap<String, Vec<u32>>,
     /// Pre-aggregated group counts for O(1) GROUP BY on `fql_kind` / `language`.
     #[serde(default)]
     pub stats: IndexStats,
@@ -234,9 +234,10 @@ impl SymbolTable {
         );
 
         // Post-pass — run post_pass for each enricher (aggregation, cross-row metrics).
+        // `None` scope = process the entire table (full build).
         let enrichers = default_enrichers();
         for enricher in &enrichers {
-            enricher.post_pass(&mut table);
+            enricher.post_pass(&mut table, None);
         }
 
         // Precompute per-row usages_count from the completed usages map.
@@ -254,19 +255,25 @@ impl SymbolTable {
 
         // Merge rows and fix secondary indexes.
         for (i, row) in other.rows.into_iter().enumerate() {
+            let abs = offset + i;
+            debug_assert!(
+                u32::try_from(abs).is_ok(),
+                "row index exceeds u32::MAX during merge"
+            );
+            let abs_u32 = u32::try_from(abs).unwrap_or(u32::MAX);
             self.name_index
                 .entry(row.name.clone())
                 .or_default()
-                .push(offset + i);
+                .push(abs_u32);
             self.kind_index
                 .entry(row.node_kind.clone())
                 .or_default()
-                .push(offset + i);
+                .push(abs_u32);
             if !row.fql_kind.is_empty() {
                 self.fql_kind_index
                     .entry(row.fql_kind.clone())
                     .or_default()
-                    .push(offset + i);
+                    .push(abs_u32);
                 *self
                     .stats
                     .by_fql_kind
@@ -280,7 +287,7 @@ impl SymbolTable {
                     .entry(row.language.clone())
                     .or_insert(0) += 1;
             }
-            self.trigram_index.insert(offset + i, &row.name);
+            self.trigram_index.insert(abs, &row.name);
             self.rows.push(row);
         }
 
@@ -293,19 +300,24 @@ impl SymbolTable {
     /// Append a row and update the secondary indexes.
     pub fn push_row(&mut self, row: IndexRow) {
         let index = self.rows.len();
+        debug_assert!(
+            u32::try_from(index).is_ok(),
+            "row index exceeds u32::MAX in push_row"
+        );
+        let index_u32 = u32::try_from(index).unwrap_or(u32::MAX);
         self.name_index
             .entry(row.name.clone())
             .or_default()
-            .push(index);
+            .push(index_u32);
         self.kind_index
             .entry(row.node_kind.clone())
             .or_default()
-            .push(index);
+            .push(index_u32);
         if !row.fql_kind.is_empty() {
             self.fql_kind_index
                 .entry(row.fql_kind.clone())
                 .or_default()
-                .push(index);
+                .push(index_u32);
             *self
                 .stats
                 .by_fql_kind
@@ -370,7 +382,7 @@ impl SymbolTable {
         self.name_index
             .get(name)?
             .last()
-            .map(|&idx| &self.rows[idx])
+            .map(|&idx| &self.rows[idx as usize])
     }
 
     /// Return all definition rows for a given symbol name.
@@ -382,7 +394,10 @@ impl SymbolTable {
     #[must_use]
     pub fn find_all_defs(&self, name: &str) -> Vec<&IndexRow> {
         self.name_index.get(name).map_or_else(Vec::new, |indices| {
-            indices.iter().map(|&idx| &self.rows[idx]).collect()
+            indices
+                .iter()
+                .map(|&idx| &self.rows[idx as usize])
+                .collect()
         })
     }
 
@@ -412,7 +427,7 @@ impl SymbolTable {
         self.kind_index
             .get(kind)
             .into_iter()
-            .flat_map(|v| v.iter().map(|&i| &self.rows[i]))
+            .flat_map(|v| v.iter().map(|&i| &self.rows[i as usize]))
     }
 
     /// Return an iterator over all rows matching a universal FQL kind.
@@ -420,7 +435,7 @@ impl SymbolTable {
         self.fql_kind_index
             .get(fql_kind)
             .into_iter()
-            .flat_map(|v| v.iter().map(|&i| &self.rows[i]))
+            .flat_map(|v| v.iter().map(|&i| &self.rows[i as usize]))
     }
 
     /// Return an iterator over all rows with an exact name match.
@@ -431,7 +446,7 @@ impl SymbolTable {
         self.name_index
             .get(name)
             .into_iter()
-            .flat_map(|v| v.iter().map(|&i| &self.rows[i]))
+            .flat_map(|v| v.iter().map(|&i| &self.rows[i as usize]))
     }
 
     /// Return candidate rows whose names contain `substr` according to the
@@ -448,6 +463,7 @@ impl SymbolTable {
     // -------------------------------------------------------------------
 
     /// Remove all entries associated with `path` and rebuild secondary indexes.
+    /// Remove all entries associated with `path` and rebuild secondary indexes.
     pub fn purge_file(&mut self, path: &Path) {
         self.rows.retain(|row| row.path != path);
 
@@ -456,20 +472,39 @@ impl SymbolTable {
         self.kind_index.clear();
         self.fql_kind_index.clear();
         self.trigram_index.clear();
+        self.stats.by_fql_kind.clear();
+        self.stats.by_language.clear();
         for (index, row) in self.rows.iter().enumerate() {
+            debug_assert!(
+                u32::try_from(index).is_ok(),
+                "row index exceeds u32::MAX in purge_file"
+            );
+            let index_u32 = u32::try_from(index).unwrap_or(u32::MAX);
             self.name_index
                 .entry(row.name.clone())
                 .or_default()
-                .push(index);
+                .push(index_u32);
             self.kind_index
                 .entry(row.node_kind.clone())
                 .or_default()
-                .push(index);
+                .push(index_u32);
             if !row.fql_kind.is_empty() {
                 self.fql_kind_index
                     .entry(row.fql_kind.clone())
                     .or_default()
-                    .push(index);
+                    .push(index_u32);
+                *self
+                    .stats
+                    .by_fql_kind
+                    .entry(row.fql_kind.clone())
+                    .or_insert(0) += 1;
+            }
+            if !row.language.is_empty() {
+                *self
+                    .stats
+                    .by_language
+                    .entry(row.language.clone())
+                    .or_insert(0) += 1;
             }
             self.trigram_index.insert(index, &row.name);
         }
@@ -515,12 +550,14 @@ impl SymbolTable {
                 debug!(path = %path.display(), "purged (file deleted)");
             }
         }
-
-        // Run post_pass for each enricher after reindexing.
+        // Run post_pass for each enricher, scoped to the changed paths.
+        // This makes incremental re-indexing O(P) instead of O(N) — on
+        // Zephyr (2.7M symbols) it turns ~17s of CHANGE-time post_pass
+        // overhead into milliseconds.
+        let scope: std::collections::HashSet<std::path::PathBuf> = paths.iter().cloned().collect();
         for enricher in &enrichers {
-            enricher.post_pass(self);
+            enricher.post_pass(self, Some(&scope));
         }
-
         Ok(())
     }
 }
@@ -919,8 +956,8 @@ mod tests {
             fields: HashMap::new(),
         });
         assert_eq!(table.rows.len(), 1);
-        assert_eq!(table.name_index["alpha"], vec![0usize]);
-        assert_eq!(table.kind_index["function_definition"], vec![0usize]);
+        assert_eq!(table.name_index["alpha"], vec![0u32]);
+        assert_eq!(table.kind_index["function_definition"], vec![0u32]);
     }
 
     #[test]
@@ -980,6 +1017,46 @@ mod tests {
         table.add_usage("only_here".to_string(), Path::new("x.cpp"), 0..5, 1);
         table.purge_file(Path::new("x.cpp"));
         assert!(!table.usages.contains_key("only_here"));
+    }
+
+    #[test]
+    fn purge_file_rebuilds_index_stats() {
+        // Two rows in two files, both contributing to fql_kind / language stats.
+        let mut table = SymbolTable::default();
+        table.push_row(IndexRow {
+            name: "f1".to_string(),
+            node_kind: "function_definition".to_string(),
+            fql_kind: "function".to_string(),
+            language: "cpp".to_string(),
+            path: PathBuf::from("a.cpp"),
+            byte_range: 0..10,
+            line: 1,
+            usages_count: 0,
+            fields: HashMap::new(),
+        });
+        table.push_row(IndexRow {
+            name: "f2".to_string(),
+            node_kind: "function_definition".to_string(),
+            fql_kind: "function".to_string(),
+            language: "cpp".to_string(),
+            path: PathBuf::from("b.cpp"),
+            byte_range: 0..10,
+            line: 1,
+            usages_count: 0,
+            fields: HashMap::new(),
+        });
+        assert_eq!(table.stats.by_fql_kind.get("function"), Some(&2));
+        assert_eq!(table.stats.by_language.get("cpp"), Some(&2));
+
+        // Purge one file — stats must reflect only the surviving row.
+        table.purge_file(Path::new("a.cpp"));
+        assert_eq!(table.stats.by_fql_kind.get("function"), Some(&1));
+        assert_eq!(table.stats.by_language.get("cpp"), Some(&1));
+
+        // Purge the other — stats must be empty (key removed entirely).
+        table.purge_file(Path::new("b.cpp"));
+        assert!(table.stats.by_fql_kind.is_empty());
+        assert!(table.stats.by_language.is_empty());
     }
 
     #[test]
