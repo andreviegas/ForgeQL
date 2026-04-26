@@ -270,15 +270,13 @@ impl ForgeQLEngine {
                 error = %err,
                 "reindex after mutation failed"
             );
-            return;
         }
-        if let Err(err) = session.save_index() {
-            warn!(
-                session = %session_id,
-                error = %err,
-                "index save after mutation failed"
-            );
-        }
+        // Note: no save_index here. The on-disk cache is only flushed at
+        // meaningful boundaries — BEGIN, COMMIT, TTL eviction, shutdown —
+        // because (a) most mutations are followed by more mutations, not
+        // by a daemon restart, and (b) on Zephyr the serialize+write costs
+        // ~17s per call.  `Session::index_dirty` tracks divergence and
+        // `flush_if_dirty` is called from those four boundary points.
     }
 
     // ===================================================================

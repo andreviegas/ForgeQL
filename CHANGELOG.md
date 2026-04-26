@@ -4,6 +4,257 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.5] — 2026-04-26 (rollback-cleanup)
+
+### Fixed
+
+- **ROLLBACK leaves a spurious checkpoint commit in git history.**
+  `BEGIN TRANSACTION` creates a `"forgeql: checkpoint '...'"` commit to
+  snapshot the worktree (including `.forgeql-index`).  Previously,
+  `ROLLBACK` did `git reset --hard <checkpoint_oid>`, which restored the
+  worktree correctly but left the branch tip pointing at the checkpoint
+  commit — visible in `git log` and VS Code's Source Control graph.
+
+  Fix: after `reset_hard` + `resume_index`, if `oid != pre_txn_oid`
+  (i.e. BEGIN actually created a checkpoint commit), a `git soft_reset`
+  to `pre_txn_oid` moves the branch ref back to the commit that existed
+  before BEGIN, without touching the worktree.  `.forgeql-index` stays
+  on disk for the already-completed `resume_index`.
+
+  Edge cases handled:
+  - `oid == pre_txn_oid` (nothing was staged at BEGIN time, no checkpoint
+    commit was created) → the `soft_reset` is skipped entirely.
+  - `soft_reset` fails (e.g. detached HEAD) → logged as a warning;
+    correctness of the index is unaffected.
+
+### Added
+
+- `git::head_commit_message(repo)` — returns the HEAD commit message as
+  a `String` (no callers yet; kept for future crash-recovery diagnostics).
+
+### Commands used
+
+- `BEGIN TRANSACTION 'pr-c-rollback-cleanup'`
+- `CHANGE FILE 'crates/forgeql-core/src/git/mod.rs'` — added `head_commit_message`
+- `CHANGE FILE 'crates/forgeql-core/src/engine/exec_transaction.rs'` —
+  renamed `_pre_txn_oid` → `pre_txn_oid`; added `soft_reset` to pop the
+  checkpoint commit off the branch tip after ROLLBACK
+- `VERIFY build 'test-all-before-commit'`
+- `COMMIT MESSAGE 'fix: soft_reset to pre_txn_oid after ROLLBACK to remove spurious checkpoint commit'`
+## [0.38.5] — 2026-04-26
+
+### Architecture
+
+- **Restored git-as-source-of-truth for transactional rollback.**  This
+  was the original 0.29.0 design, broken by later refactors.  The fix
+  reverses the "smart-rollback" approach added earlier in PR-C1 in
+  favour of a simpler and provably-correct mechanism:
+  - `BEGIN TRANSACTION` now flushes the in-memory index to
+    `.forgeql-index` *before* `git::stage_and_commit`, guaranteeing
+    that the checkpoint commit captures a cache file matching the
+    in-memory state.  The cache file is intentionally included in
+    checkpoint commits (see `git::CHECKPOINT_EXCLUDED`) for exactly
+    this purpose.
+  - `ROLLBACK` reverts to: `git reset --hard <oid>` →
+    `Session::drop_index` → `Session::resume_index`.  Because the
+    checkpoint commit contains the matching cache, `resume_index`
+    cache-hits and restores a guaranteed-correct index in
+    O(deserialize) — never falls into a full O(N) rebuild.
+  - This is more trustworthy than smart-rollback, which depended on
+    `dirty_paths`/`changed_files_between` correctly enumerating every
+    affected file.  A single missed path could have silently corrupted
+    the in-memory index.  The new approach has one invariant —
+    "save before stage in BEGIN" — instead of four.
+
+### Performance
+
+- **`CHANGE FILE` no longer flushes the on-disk cache** after every
+  mutation.  The in-memory index is updated, `index_dirty = true` is
+  set, and the next BEGIN/COMMIT/eviction-time flush picks it up.  On
+  Zephyr (~2.7 M rows) this drops single-file CHANGE from ~17–18s to
+  ~1s.
+- **`Session::flush_if_dirty`** added — cheap no-op when the index is
+  in sync, full `save_index` when it has diverged.
+- **`Session::index_dirty`** field added; `reindex_files` sets it,
+  `save_index` clears it, `mark_index_dirty` lets `COMMIT` force a
+  flush after HEAD movement (since the cache's `commit_hash` becomes
+  stale even when no rows changed).
+- **`Session::drop_index`** added — clears `index/macro_table/cached_commit`
+  without saving, used by `ROLLBACK` so `resume_index` reads the
+  freshly-restored cache from disk.
+
+### Removed
+
+- The `Session::has_index` accessor (only existed to support the
+  smart-rollback fast path; no remaining callers).
+- The `PathBuf` import in `engine/exec_transaction.rs` (no longer
+  needed once smart-rollback was removed).
+- `git::dirty_paths` and `git::changed_files_between` are kept as
+  helpers but are no longer called from `exec_rollback`.  They may be
+  reused by a future "crash recovery on USE" feature that reindexes
+  uncommitted dirty files after a daemon restart.
+
+### Fixed
+
+- **`COMMIT MESSAGE` now flushes the cache after the commit.**  Since
+  `squash_commit_on_branch` moves HEAD, the cache's `commit_hash`
+  field becomes stale even when no rows changed.  The new
+  `mark_index_dirty` + `flush_if_dirty` sequence ensures the on-disk
+  cache matches the new HEAD, so the next `resume_index` (e.g. after
+  daemon restart) will cache-hit instead of falling through to a full
+  rebuild.
+
+### Notes
+
+- TTL eviction is intentionally *not* a flush point: it deletes the
+  worktree (and with it the `.forgeql-index` file), so flushing first
+  would be wasted work.  Sessions with ongoing transactions preserve
+  their cache via the BEGIN-time checkpoint commits, which live in
+  the bare repo and survive worktree removal.
+- Crash semantics: a daemon kill mid-transaction loses the in-RAM
+  checkpoint stack and `last_clean_oid`, but git refs and any
+  committed checkpoints survive.  The next `USE` lands at HEAD =
+  most-recent-COMMIT (or most-recent-checkpoint OID if a transaction
+  was open) with the matching cache restored from git.
+
+### Commands used
+
+- `BEGIN TRANSACTION 'pr-c1-git-as-truth'`
+- `CHANGE FILE 'crates/forgeql-core/src/session/mod.rs'` — added
+  `index_dirty` field, `flush_if_dirty`, `mark_index_dirty`,
+  `drop_index`; cleared/set the flag in `build_index`/`resume_index`/
+  `reindex_files`/`save_index`.
+- `CHANGE FILE 'crates/forgeql-core/src/engine/exec_transaction.rs'`
+  — flush before BEGIN's stage_and_commit; flush after COMMIT's
+  squash; replaced 70-line smart-rollback block with 14-line
+  reset+resume_index.
+- `CHANGE FILE 'crates/forgeql-core/src/engine/exec_session.rs'` —
+  removed save_index from `reindex_session`.
+- `VERIFY build 'test-all-before-commit'`
+- `COMMIT MESSAGE 'arch: git-as-source-of-truth rollback (PR-C1 step 5)'`
+## [0.38.5] — 2026-04-25 (continued)
+
+### Performance
+
+- **Path-scoped `post_pass` for incremental re-indexing.**
+  `Session::reindex_files` (used by every `CHANGE FILE` and the
+  smart-rollback path) was calling each enricher's `post_pass(&mut table)`
+  unconditionally, which walked the entire `SymbolTable.rows` vector twice
+  per affected enricher.  On Zephyr (~2.7 M rows) this added ~17 s to
+  every single-file CHANGE — a regression introduced when post-pass
+  enrichers (`control_flow`, `redundancy`) were folded into the
+  incremental path.
+  - Changed the `NodeEnricher::post_pass` trait signature to
+    `post_pass(&self, table, scope: Option<&HashSet<PathBuf>>)`.  `None`
+    preserves the old full-table semantics (used by `SymbolTable::build`);
+    `Some(&paths)` filters every row iteration to rows whose `path` is in
+    the set.
+  - Updated `control_flow::post_pass` and `redundancy::post_pass` to
+    apply the filter to all three phases (function lookup, CF row scan,
+    output writes).  Both algorithms are intra-function so unchanged
+    files cannot affect the result — correctness is preserved.
+  - `metrics::post_pass` is a no-op (its work moved into `enrich_row`)
+    and accepts the new parameter unchanged.
+  - All other enrichers (`escape`, `shadow`, `decl_distance`, `todo`,
+    etc.) inherit the trait default, which remains a no-op.
+  - On Zephyr this turns CHANGE-time post_pass overhead from O(N)
+    into O(P × scope_lookup), reducing it from ~17 s to milliseconds.
+
+### Fixed
+
+- **`ROLLBACK` no longer rewrites the on-disk index cache.**
+  After `git reset --hard <checkpoint_oid>` the cached
+  `.forgeql-index`'s `commit_hash` no longer matches HEAD anyway, so
+  immediately calling `save_index` produced a stale-but-fresh blob at
+  the cost of ~17 s on Zephyr.  The cache is now left untouched on
+  rollback; the next mutation or session shutdown will rewrite it.
+  - Commands: `BEGIN TRANSACTION 'pr-c1-scoped-postpass'`,
+    `CHANGE FILE 'crates/forgeql-core/src/engine/exec_transaction.rs'
+    LINES 217-223 …` (drop `save_index`),
+    `CHANGE FILE 'crates/forgeql-core/src/ast/enrich/mod.rs' …` (trait
+    signature), `CHANGE FILE
+    'crates/forgeql-core/src/ast/enrich/{control_flow,redundancy,metrics}.rs'
+    …` (scoped overrides), `CHANGE FILE
+    'crates/forgeql-core/src/ast/index.rs' …` (call sites for build +
+    reindex_files), `VERIFY build 'test-all-before-commit'`,
+    `COMMIT MESSAGE 'perf: scoped post_pass + skip save_index on
+    rollback (PR-C1 step 4)'`.
+## [0.38.5] — 2026-04-25 (continued)
+
+### Fixed
+
+- **`ROLLBACK` no longer triggers a full O(N) re-index on large workspaces.**
+  The 0.29.0 smart-rollback fast path silently broke when the cached
+  `.forgeql-index`'s internal `commit_hash` field could not match the new
+  HEAD after `git reset --hard <checkpoint_oid>` (the cache was saved with
+  the *pre-checkpoint* HEAD, not the checkpoint OID itself), so
+  `resume_index` always fell through to `build_index`. On Zephyr
+  (~2.7 M symbols) this caused multi-second stalls and pushed RSS from
+  ~11 GB to ~29 GB, large enough to trigger OOM kills.
+  - Added `git::dirty_paths` (working-tree status query, excluding
+    `FORGEQL_CONTROL_FILES`) and `git::changed_files_between` (tree-to-tree
+    diff between two commits, also filtering control files).
+  - `exec_rollback` now captures dirty working-tree paths *before*
+    `git reset --hard`, computes the set of files committed during the
+    transaction via `changed_files_between(pre_reset_oid, oid)`, unions
+    them, and dispatches an incremental `Session::reindex_files` covering
+    only that set. When the union is empty the in-memory index is already
+    correct and no work is performed.
+  - Falls back to the pre-existing `resume_index` → `build_index` path
+    only when the in-memory index is missing (`!session.has_index()`) or
+    when an incremental re-index returns an error.
+  - Added `Session::has_index` accessor.
+  - On the OOM-reproducing test sequence this turns ROLLBACK from a
+    multi-GB full rebuild into an O(P) operation (P = changed files).
+  - Commands: `BEGIN TRANSACTION 'pr-c1-smart-rollback'`,
+    `CHANGE FILE 'crates/forgeql-core/src/git/mod.rs' LINES …` (added
+    `changed_files_between` and `dirty_paths`),
+    `CHANGE FILE 'crates/forgeql-core/src/engine/exec_transaction.rs'
+    LINES …` (replaced rollback body, added `PathBuf` import),
+    `CHANGE FILE 'crates/forgeql-core/src/session/mod.rs' LINES …`
+    (added `has_index`), `VERIFY build 'test-all-before-commit'`,
+    `COMMIT MESSAGE 'fix: restore smart-rollback fast path (PR-C1 step 3)'`.
+## [0.38.5] — 2026-04-25
+
+### Performance
+
+- **Posting-list row IDs shrunk from `usize` to `u32`** in
+  `SymbolTable::name_index`, `kind_index`, and `fql_kind_index`
+  (`ast/index.rs`). On 64-bit hosts this halves the per-entry footprint
+  of the three primary secondary indexes — saving roughly 4 bytes per
+  posting-list entry. On Zephyr (~2.7 M rows, ~3 M total posting
+  entries) this removes ~12 MB of resident overhead with no change to
+  query semantics or public API. A `debug_assert!` boundary in
+  `push_row` / `merge` / `purge_file` catches the (currently
+  unreachable) `> u32::MAX` row count case in tests; release builds
+  saturate to `u32::MAX`. Trigram posting lists and `IndexRow` /
+  `UsageSite` line/byte fields are deferred to PR-C2 alongside the
+  string-interning refactor.
+  - Commands: `BEGIN TRANSACTION 'pr-c1-u32-shrink'`,
+    six `CHANGE FILE 'crates/forgeql-core/src/ast/index.rs' LINES …`
+    operations covering struct fields, `merge`, `push_row`,
+    iterator readers, `purge_file`, and tests,
+    `VERIFY build 'test-all-before-commit'`,
+    `COMMIT MESSAGE 'perf: u32 row-ids in primary secondary indexes (PR-C1 step 2)'`.
+
+### Fixed
+
+- **`purge_file` now rebuilds `IndexStats`** (`ast/index.rs`). The
+  incremental purge path used by `reindex_files` previously left
+  `stats.by_fql_kind` and `stats.by_language` stale after files were
+  edited, deleted, or renamed within a session. `GROUP BY fql_kind` and
+  `GROUP BY language` queries could return counts inflated by the
+  pre-edit row population. The rebuild now runs in the same loop that
+  rebuilds `name_index`, `kind_index`, `fql_kind_index`, and the
+  trigram index — keeping every persisted-or-derived structure
+  invalidation hook in one place. Regression test
+  `purge_file_rebuilds_index_stats` enforces this for every future
+  refactor.
+  - Commands: `BEGIN TRANSACTION 'pr-c1-stats-purge'`,
+    `CHANGE FILE 'crates/forgeql-core/src/ast/index.rs' LINES 451-481 WITH ...`,
+    `VERIFY build 'test-all-before-commit'`,
+    `COMMIT MESSAGE 'fix: purge_file rebuilds IndexStats (PR-C1 step 1)'`.
+
 ## [0.38.4] — 2026-04-25
 
 ### Performance

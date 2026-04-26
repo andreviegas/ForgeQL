@@ -338,6 +338,88 @@ pub fn source_changes(
     Ok(changed)
 }
 
+/// Return the list of files that differ between two arbitrary commits in the
+/// given repository, ignoring [`FORGEQL_CONTROL_FILES`].
+///
+/// Used by `ROLLBACK` to compute the minimal set of files that need to be
+/// re-indexed after a `git reset --hard`, avoiding a full O(N) rebuild.
+///
+/// Returns an empty `Vec` when both OIDs point to identical trees (no source
+/// changes between them — e.g. `BEGIN` with a clean tree → `ROLLBACK` with no
+/// intervening edits, or a checkpoint commit that touches only control files).
+///
+/// # Errors
+/// Returns `Err` if either OID cannot be resolved or peeled to a tree.
+pub fn changed_files_between(
+    repo: &Repository,
+    from_oid: &str,
+    to_oid: &str,
+) -> Result<Vec<PathBuf>> {
+    if from_oid == to_oid {
+        return Ok(Vec::new());
+    }
+    let from = git2::Oid::from_str(from_oid)?;
+    let to = git2::Oid::from_str(to_oid)?;
+    let from_tree = repo.find_commit(from)?.tree()?;
+    let to_tree = repo.find_commit(to)?.tree()?;
+
+    let diff = repo.diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None)?;
+
+    let mut changed: Vec<PathBuf> = Vec::new();
+    for delta in diff.deltas() {
+        // Collect both the old and the new path so renames/deletions are
+        // re-indexed correctly (the deleted side must be purged from the
+        // in-memory index, the new side parsed fresh).
+        if let Some(p) = delta.old_file().path()
+            && !FORGEQL_CONTROL_FILES.contains(&p.to_string_lossy().as_ref())
+        {
+            changed.push(p.to_path_buf());
+        }
+        if let Some(p) = delta.new_file().path()
+            && !FORGEQL_CONTROL_FILES.contains(&p.to_string_lossy().as_ref())
+        {
+            changed.push(p.to_path_buf());
+        }
+    }
+    changed.sort();
+    changed.dedup();
+    Ok(changed)
+}
+
+/// Return the list of working-tree paths that differ from `HEAD`, ignoring
+/// [`FORGEQL_CONTROL_FILES`].
+///
+/// Includes both staged and unstaged modifications, additions, deletions,
+/// and renames. Used by `ROLLBACK` to identify files modified during a
+/// transaction that need re-indexing after `git reset --hard` reverts them.
+///
+/// Returns an empty `Vec` when the worktree is clean.
+///
+/// # Errors
+/// Returns `Err` if the status query fails.
+pub fn dirty_paths(repo: &Repository) -> Result<Vec<PathBuf>> {
+    let statuses = repo.statuses(None)?;
+    let mut out: Vec<PathBuf> = Vec::new();
+    for entry in statuses.iter() {
+        let Some(p) = entry.path() else { continue };
+        if FORGEQL_CONTROL_FILES.contains(&p) {
+            continue;
+        }
+        out.push(PathBuf::from(p));
+        if let Some(diff) = entry.head_to_index()
+            && let Some(old) = diff.old_file().path()
+        {
+            let s = old.to_string_lossy();
+            if !FORGEQL_CONTROL_FILES.contains(&s.as_ref()) {
+                out.push(old.to_path_buf());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;

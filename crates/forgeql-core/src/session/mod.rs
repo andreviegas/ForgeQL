@@ -96,6 +96,15 @@ pub struct Session {
     macro_table: Option<MacroTable>,
     /// The commit hash the current `index` was built from.
     cached_commit: Option<String>,
+    /// `true` when in-memory `index` has diverged from the on-disk
+    /// `.forgeql-index` cache (i.e. since the last `save_index`).
+    ///
+    /// Set by `reindex_files` after every mutation; cleared by
+    /// `save_index`.  Used by `BEGIN`, `COMMIT`, and TTL eviction to
+    /// decide whether to flush before relying on git as the source of
+    /// truth — `BEGIN`'s checkpoint commit must contain a fresh cache
+    /// so `ROLLBACK` can restore it via `git reset --hard` and trust it.
+    index_dirty: bool,
     /// Monotonic timestamp of the last request that touched this session.
     /// Used by the TTL eviction task to detect idle sessions.
     last_active: std::time::Instant,
@@ -164,6 +173,7 @@ impl Session {
             index: None,
             macro_table: None,
             cached_commit: None,
+            index_dirty: false,
             last_active: std::time::Instant::now(),
             checkpoints: Vec::new(),
             last_clean_oid: None,
@@ -219,6 +229,7 @@ impl Session {
         self.index = Some(table);
         self.macro_table = Some(macro_table);
         self.cached_commit = Some(commit_hash);
+        self.index_dirty = false;
         Ok(())
     }
 
@@ -248,6 +259,7 @@ impl Session {
                 let (table, macro_table) = cached.into_table_and_macros();
                 self.index = Some(table);
                 self.macro_table = Some(macro_table);
+                self.index_dirty = false;
             }
             Ok(cached)
                 if !cached.source_name.is_empty() && cached.source_name != self.source_name =>
@@ -288,6 +300,14 @@ impl Session {
         self.index.as_ref()
     }
 
+    /// `true` when an index has been built (or loaded from cache) for this
+    /// session.  Used by callers that need to distinguish ""no index yet""
+    /// from ""empty index"" — e.g. ROLLBACK's smart-rollback path.
+    #[must_use]
+    pub const fn has_index(&self) -> bool {
+        self.index.is_some()
+    }
+
     /// Return a mutable reference to the symbol index, if built.
     ///
     /// Used by incremental re-indexing after mutations.
@@ -315,7 +335,12 @@ impl Session {
             .index
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("cannot reindex: session {} has no index", self.id))?;
-        table.reindex_files(paths, &self.lang_registry)
+        table.reindex_files(paths, &self.lang_registry)?;
+        // In-memory index has diverged from the on-disk cache.  The dirty
+        // flag is consulted by `BEGIN` / `COMMIT` / TTL eviction to decide
+        // whether to flush before relying on git as the source of truth.
+        self.index_dirty = true;
+        Ok(())
     }
 
     /// Persist the current in-memory index to `.forgeql-index`.
@@ -347,8 +372,45 @@ impl Session {
             "index saved to disk"
         );
         self.cached_commit = Some(commit_hash);
+        self.index_dirty = false;
         Ok(())
     }
+
+    /// Save the index to disk if it has been modified since the last save.
+    ///
+    /// Cheap no-op when `index_dirty` is `false` — used by `BEGIN`,
+    /// `COMMIT`, and TTL eviction so the on-disk cache is always in sync
+    /// with in-memory state at the moments when git as the source of
+    /// truth must be authoritative (checkpoint commits, user-facing
+    /// commits, session shutdown).
+    ///
+    /// # Errors
+    /// Propagates `save_index` errors when a flush actually happens.
+    pub fn flush_if_dirty(&mut self) -> Result<()> {
+        if self.index_dirty {
+            self.save_index()?;
+        }
+        Ok(())
+    }
+
+    /// Mark the in-memory index as having diverged from the on-disk
+    /// cache.  Used by `COMMIT` (which moves HEAD without touching rows
+    /// but invalidates `commit_hash`) so the next `flush_if_dirty`
+    /// actually writes.
+    pub const fn mark_index_dirty(&mut self) {
+        self.index_dirty = true;
+    }
+
+    /// Drop the in-memory index without saving.  Used by `ROLLBACK` so
+    /// the next `resume_index` reads the freshly-restored
+    /// `.forgeql-index` from disk instead of keeping a stale view.
+    pub fn drop_index(&mut self) {
+        self.index = None;
+        self.macro_table = None;
+        self.cached_commit = None;
+        self.index_dirty = false;
+    }
+
     /// Update the last-active timestamp to now.
     ///
     /// Call this on every request that touches the session so that the TTL

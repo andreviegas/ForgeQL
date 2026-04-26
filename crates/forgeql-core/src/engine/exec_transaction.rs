@@ -22,17 +22,29 @@ impl ForgeQLEngine {
         let sid = require_session_id(session_id)?;
         let worktree_path = self.require_session(sid)?.worktree_path.clone();
 
+        // CRITICAL: flush the in-memory index to `.forgeql-index` BEFORE
+        // staging.  The checkpoint commit deliberately includes the cache
+        // file (see `git::CHECKPOINT_EXCLUDED`) so that ROLLBACK can
+        // restore a guaranteed-correct cache via `git reset --hard`.  If
+        // we don't flush first, the checkpoint captures a stale cache and
+        // ROLLBACK would `resume_index` into a stale view.
+        if let Some(session) = self.sessions.get_mut(sid)
+            && let Err(err) = session.flush_if_dirty()
+        {
+            warn!(error = %err, "BEGIN: flush_if_dirty failed; checkpoint cache may be stale");
+        }
+
         let repo = git::open(&worktree_path)?;
 
         // Record the HEAD *before* the checkpoint commit — this is the
         // "clean" point that COMMIT will squash back to.
         let pre_txn_oid = git::head_oid(&repo)?;
 
-        // Auto-commit dirty state so the checkpoint OID is a complete snapshot.
+        // Auto-commit dirty state (worktree files + freshly-saved cache)
+        // so the checkpoint OID is a complete snapshot.
         // Ignore errors from stage_and_commit (e.g. nothing to commit).
         let checkpoint_msg = format!("forgeql: checkpoint '{name}'");
         let _ = git::stage_and_commit(&repo, &checkpoint_msg);
-
         let oid = git::head_oid(&repo)?;
 
         if let Some(session) = self.sessions.get_mut(sid) {
@@ -92,6 +104,16 @@ impl ForgeQLEngine {
         // Update the clean base for the next commit cycle.
         if let Some(session) = self.sessions.get_mut(sid) {
             session.last_clean_oid = Some(commit_hash.clone());
+            // Always save after COMMIT: HEAD just moved so the cache's
+            // `commit_hash` field is now stale even when no reindex
+            // happened.  Mark dirty first to force the flush.
+            // `stage_and_commit_clean` strips `.forgeql-index` from the
+            // user-facing commit, so the on-disk file's content is purely
+            // a runtime cache untracked by published history.
+            session.mark_index_dirty();
+            if let Err(err) = session.flush_if_dirty() {
+                warn!(error = %err, "COMMIT: post-commit flush failed; cache will rebuild on next USE");
+            }
         }
 
         Ok(ForgeQLResult::Commit(CommitResult {
@@ -124,7 +146,8 @@ impl ForgeQLEngine {
         let sid = require_session_id(session_id)?;
 
         // Pop the checkpoint (releases mutable borrow before reindex).
-        let (label, oid, _pre_txn_oid, worktree_path) = {
+        // Pop the checkpoint (releases mutable borrow before reindex).
+        let (label, oid, pre_txn_oid, worktree_path) = {
             let session = self
                 .sessions
                 .get_mut(sid)
@@ -145,7 +168,7 @@ impl ForgeQLEngine {
             } else {
                 // Pop the most recent checkpoint.
                 session.checkpoints.pop().ok_or_else(|| {
-                    anyhow::anyhow!("no checkpoints available \u{2014} run BEGIN TRANSACTION first")
+                    anyhow::anyhow!("no checkpoints available — run BEGIN TRANSACTION first")
                 })?
             };
 
@@ -168,16 +191,54 @@ impl ForgeQLEngine {
             )
         };
 
-        // Git reset --hard to the checkpoint OID.
+        // Git-as-source-of-truth ROLLBACK.
+        //
+        // The checkpoint commit captured by `BEGIN` deliberately includes
+        // `.forgeql-index` (see `git::CHECKPOINT_EXCLUDED`).  After
+        // `git reset --hard <checkpoint_oid>` the worktree contains both
+        // the file state AND the matching cache file from that point in
+        // time, so `resume_index` is guaranteed to cache-hit and restore
+        // a provably-correct index in O(deserialize) instead of O(rebuild).
+        //
+        // This is intentionally simpler (and more trustworthy) than
+        // computing a diff and incrementally reindexing — git is the
+        // authoritative source of all worktree state, including the
+        // index cache.
         let repo = git::open(&worktree_path)?;
         git::reset_hard(&repo, &oid)?;
 
-        // Try disk-cache first; fall back to full rebuild if stale/missing.
-        if let Some(session) = self.sessions.get_mut(sid)
-            && session.resume_index().is_err()
-            && let Err(err) = session.build_index()
+        if let Some(session) = self.sessions.get_mut(sid) {
+            // Drop the in-memory index so resume_index reads the freshly
+            // restored cache from disk rather than keeping a stale view.
+            session.drop_index();
+            if let Err(err) = session.resume_index() {
+                warn!(error = %err, "rollback: resume_index failed; falling back to build_index");
+                if let Err(err) = session.build_index() {
+                    warn!(error = %err, "rollback: index rebuild failed");
+                }
+            }
+        }
+
+        // Pop the checkpoint commit off the branch tip.
+        //
+        // `BEGIN TRANSACTION` creates a "forgeql: checkpoint '...'" commit on
+        // top of the user's clean work so it can include `.forgeql-index` in
+        // the snapshot.  After `reset_hard` restores the worktree to that
+        // checkpoint, HEAD still points to the checkpoint commit — which then
+        // shows up in `git log` as a spurious entry.
+        //
+        // `soft_reset` to `pre_txn_oid` moves the branch ref back to the
+        // commit that existed before BEGIN was called, without touching the
+        // worktree.  `.forgeql-index` therefore remains on disk for the
+        // already-completed `resume_index` call above.
+        //
+        // Edge case: if `stage_and_commit` inside BEGIN had nothing to commit
+        // (worktree was already clean), `oid == pre_txn_oid` and this is a
+        // no-op.
+        if oid != pre_txn_oid
+            && let Err(err) = git::soft_reset(&repo, &pre_txn_oid)
         {
-            warn!(error = %err, "rollback: index rebuild failed");
+            warn!(error = %err, "rollback: soft_reset to pre_txn_oid failed; checkpoint commit remains in history");
         }
 
         Ok(ForgeQLResult::Rollback(RollbackResult {

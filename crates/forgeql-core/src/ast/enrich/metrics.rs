@@ -75,7 +75,11 @@ impl NodeEnricher for MetricsEnricher {
         }
     }
 
-    fn post_pass(&self, _table: &mut SymbolTable) {
+    fn post_pass(
+        &self,
+        _table: &mut SymbolTable,
+        _scope: Option<&std::collections::HashSet<std::path::PathBuf>>,
+    ) {
         // return_count, goto_count, string_count are now computed in
         // enrich_row() during the tree walk, so no post_pass needed.
     }

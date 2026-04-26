@@ -76,15 +76,27 @@ impl NodeEnricher for RedundancyEnricher {
         drop(fields.insert("null_check_count".to_string(), null_checks.to_string()));
     }
 
-    fn post_pass(&self, table: &mut SymbolTable) {
+    fn post_pass(
+        &self,
+        table: &mut SymbolTable,
+        scope: Option<&std::collections::HashSet<std::path::PathBuf>>,
+    ) {
         // Phase 1 (immutable): build file → sorted-functions lookup, map
         // each CF row to its containing function via binary search, then
         // detect duplicate skeletons within a function.  O(N log F).
+        //
+        // When `scope` is Some, only rows whose path is in the set are
+        // considered — duplicate detection is intra-function so unchanged
+        // files cannot affect the result.
+        let in_scope = |row: &crate::ast::index::IndexRow| -> bool {
+            scope.as_ref().is_none_or(|s| s.contains(&row.path))
+        };
+
         let duplicate_indices = {
             let mut funcs_by_file: HashMap<&std::path::Path, Vec<std::ops::Range<usize>>> =
                 HashMap::new();
             for row in &table.rows {
-                if row.fql_kind == lang::FQL_FUNCTION {
+                if row.fql_kind == lang::FQL_FUNCTION && in_scope(row) {
                     funcs_by_file
                         .entry(row.path.as_path())
                         .or_default()
@@ -102,6 +114,9 @@ impl NodeEnricher for RedundancyEnricher {
 
             for (i, row) in table.rows.iter().enumerate() {
                 if !CF_FQL_KINDS.contains(&row.fql_kind.as_str()) {
+                    continue;
+                }
+                if !in_scope(row) {
                     continue;
                 }
                 let ct = match row.fields.get("condition_text") {

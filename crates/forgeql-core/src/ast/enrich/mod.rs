@@ -98,9 +98,20 @@ pub trait NodeEnricher: Send + Sync {
     ///
     /// Used for aggregation passes (e.g. computing `max_condition_tests`
     /// on parent function rows from child control-flow rows).
-    /// The default implementation is a no-op.
+    ///
+    /// `scope` is `None` for full builds (process the entire table) and
+    /// `Some(&paths)` for incremental re-indexing (process only rows whose
+    /// `path` is in the set).  Implementors that ignore `scope` will still
+    /// be correct but pay the full O(N) cost on every incremental update;
+    /// the default implementation is a no-op so this only affects
+    /// enrichers that override `post_pass`.
     #[allow(unused_variables)]
-    fn post_pass(&self, table: &mut SymbolTable) {}
+    fn post_pass(
+        &self,
+        table: &mut SymbolTable,
+        scope: Option<&std::collections::HashSet<std::path::PathBuf>>,
+    ) {
+    }
 }
 
 // -----------------------------------------------------------------------

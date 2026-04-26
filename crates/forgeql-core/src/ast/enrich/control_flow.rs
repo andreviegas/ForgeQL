@@ -111,18 +111,27 @@ impl NodeEnricher for ControlFlowEnricher {
         }]
     }
 
-    fn post_pass(&self, table: &mut SymbolTable) {
+    fn post_pass(
+        &self,
+        table: &mut SymbolTable,
+        scope: Option<&std::collections::HashSet<std::path::PathBuf>>,
+    ) {
         // Phase 1 (immutable): build file → sorted-functions lookup, then
         // scan CF rows and map each to its containing function via binary
         // search.  This is O(N log F) instead of the previous O(N × F).
-        // Phase 1 (immutable): build file → sorted-functions lookup, then
-        // scan CF rows and map each to its containing function via binary
-        // search.  This is O(N log F) instead of the previous O(N × F).
+        //
+        // When `scope` is Some, we only iterate rows whose path is in the
+        // set — this is what makes incremental re-indexing O(P) instead of
+        // O(N) on large workspaces.
+        let in_scope = |row: &crate::ast::index::IndexRow| -> bool {
+            scope.as_ref().is_none_or(|s| s.contains(&row.path))
+        };
+
         let (func_metrics, cf_encl) = {
             let mut funcs_by_file: HashMap<&std::path::Path, Vec<(usize, std::ops::Range<usize>)>> =
                 HashMap::new();
             for (i, row) in table.rows.iter().enumerate() {
-                if row.fql_kind == lang::FQL_FUNCTION {
+                if row.fql_kind == lang::FQL_FUNCTION && in_scope(row) {
                     funcs_by_file
                         .entry(row.path.as_path())
                         .or_default()
@@ -138,6 +147,9 @@ impl NodeEnricher for ControlFlowEnricher {
             let mut cf_encl: HashMap<usize, String> = HashMap::new();
             for (cf_idx, row) in table.rows.iter().enumerate() {
                 if !CF_FQL_KINDS.contains(&row.fql_kind.as_str()) {
+                    continue;
+                }
+                if !in_scope(row) {
                     continue;
                 }
                 if let Some(funcs) = funcs_by_file.get(row.path.as_path()) {
