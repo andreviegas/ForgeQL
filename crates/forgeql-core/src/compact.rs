@@ -16,8 +16,8 @@
 /// Result types that are already small (mutations, transactions, source ops)
 /// fall back to `to_json()`.
 use crate::result::{
-    CallDirection, FileEntry, ForgeQLResult, MemberEntry, OutlineEntry, QueryResult, ShowContent,
-    ShowResult, SourceLine, SymbolRow,
+    CallDirection, FileEntry, ForgeQLResult, MemberEntry, OutlineEntry, QueryResult, SessionStats,
+    ShowContent, ShowResult, SourceLine, SymbolRow,
 };
 
 // -----------------------------------------------------------------------
@@ -76,6 +76,7 @@ fn compact_show(s: &ShowResult) -> String {
             direction, entries, ..
         } => compact_callgraph(s, direction, entries),
         ShowContent::FileList { files, total } => compact_filelist(files, *total),
+        ShowContent::Stats { sessions } => compact_stats(sessions),
     }
 }
 
@@ -253,6 +254,46 @@ fn compact_filelist(files: &[FileEntry], total: usize) -> String {
         let path = q(&entry.path.to_string_lossy());
         let size = entry.size.to_string();
         row(&mut out, &[&path, &size]);
+    }
+    chomp(&mut out);
+    out
+}
+
+/// SHOW STATS → one section per session with memory and symbol breakdown.
+fn compact_stats(sessions: &[SessionStats]) -> String {
+    if sessions.is_empty() {
+        return "\"show_stats\",\"no sessions loaded\"\n".to_string();
+    }
+    let mut out = String::with_capacity(sessions.len() * 512);
+    row(&mut out, &[&q("show_stats"), &q(&sessions.len().to_string())]);
+    for s in sessions {
+        row(&mut out, &[&q("session"), &q(&s.session_id)]);
+        row(&mut out, &[&q("source"), &q(&s.source)]);
+        row(&mut out, &[&q("branch"), &q(&s.branch)]);
+        row(&mut out, &[&q("rows"), &s.rows.to_string()]);
+        row(&mut out, &[&q("distinct_names"), &s.distinct_names.to_string()]);
+        row(&mut out, &[&q("distinct_paths"), &s.distinct_paths.to_string()]);
+        row(&mut out, &[&q("usage_symbols"), &s.usage_symbols.to_string()]);
+        row(&mut out, &[&q("usage_sites"), &s.usage_sites.to_string()]);
+        row(&mut out, &[&q("trigram_distinct"), &s.trigram_distinct.to_string()]);
+        row(&mut out, &[&q("mem_total_mb"), &format!("{:.1}", s.mem_total_bytes as f64 / 1_048_576.0)]);
+        row(&mut out, &[&q("mem_rows_mb"), &format!("{:.1}", s.mem_rows_bytes as f64 / 1_048_576.0)]);
+        row(&mut out, &[&q("mem_usages_mb"), &format!("{:.1}", s.mem_usages_bytes as f64 / 1_048_576.0)]);
+        row(&mut out, &[&q("mem_indexes_mb"), &format!("{:.1}", s.mem_indexes_bytes as f64 / 1_048_576.0)]);
+        row(&mut out, &[&q("mem_trigram_mb"), &format!("{:.1}", s.mem_trigram_bytes as f64 / 1_048_576.0)]);
+        row(&mut out, &[&q("mem_strings_mb"), &format!("{:.1}", s.mem_strings_bytes as f64 / 1_048_576.0)]);
+        // by_language — sorted for deterministic output
+        let mut langs: Vec<(&String, &usize)> = s.by_language.iter().collect();
+        langs.sort_by_key(|(k, _)| k.as_str());
+        for (lang, count) in &langs {
+            row(&mut out, &[&format!("lang:{lang}"), &count.to_string()]);
+        }
+        // by_fql_kind — sorted
+        let mut kinds: Vec<(&String, &usize)> = s.by_fql_kind.iter().collect();
+        kinds.sort_by_key(|(k, _)| k.as_str());
+        for (kind, count) in &kinds {
+            row(&mut out, &[&format!("kind:{kind}"), &count.to_string()]);
+        }
     }
     chomp(&mut out);
     out

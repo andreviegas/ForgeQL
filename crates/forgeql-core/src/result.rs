@@ -216,9 +216,14 @@ impl SymbolRow {
             metric_value: ctx
                 .metric_hint
                 .and_then(|field| row.fields.get(field).cloned()),
-            group_key: ctx
-                .group_by_field
-                .and_then(|field| row.fields.get(field).cloned()),
+            group_key: ctx.group_by_field.and_then(|field| match field {
+                "language" | "lang" => row.language.clone(),
+                "node_kind" => row.node_kind.clone(),
+                "fql_kind" => row.fql_kind.clone(),
+                "name" => Some(row.name.clone()),
+                "path" => row.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                _ => row.fields.get(field).cloned(),
+            }),
         }
     }
 
@@ -308,6 +313,8 @@ pub enum ShowContent {
     },
     /// File listing results: FIND files.
     FileList { files: Vec<FileEntry>, total: usize },
+    /// Internal stats: SHOW STATS.
+    Stats { sessions: Vec<SessionStats> },
 }
 
 /// A single source line in a SHOW result.
@@ -384,6 +391,45 @@ pub struct FileEntry {
     /// Per-group file count populated after `GROUP BY` aggregation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<usize>,
+}
+
+/// Internal stats for one loaded session, produced by `SHOW STATS`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStats {
+    /// Session alias (the identifier passed to `USE … AS`).
+    pub session_id: String,
+    /// Source name (repo) bound to this session.
+    pub source: String,
+    /// Branch name bound to this session.
+    pub branch: String,
+    /// Total number of indexed rows (symbols).
+    pub rows: usize,
+    /// Distinct symbol names in the intern pool.
+    pub distinct_names: usize,
+    /// Distinct file paths in the intern pool.
+    pub distinct_paths: usize,
+    /// Number of distinct symbols that have at least one usage site.
+    pub usage_symbols: usize,
+    /// Total number of individual usage-site records.
+    pub usage_sites: usize,
+    /// Number of distinct trigrams in the trigram index.
+    pub trigram_distinct: usize,
+    /// Approximate heap bytes consumed by the index (all components).
+    pub mem_total_bytes: usize,
+    /// Approximate heap bytes: `rows` Vec + per-row enrichment HashMaps.
+    pub mem_rows_bytes: usize,
+    /// Approximate heap bytes: usages HashMap.
+    pub mem_usages_bytes: usize,
+    /// Approximate heap bytes: name/kind/fql_kind secondary indexes.
+    pub mem_indexes_bytes: usize,
+    /// Approximate heap bytes: trigram index posting lists.
+    pub mem_trigram_bytes: usize,
+    /// Approximate heap bytes: all five intern pools (ColumnarTable).
+    pub mem_strings_bytes: usize,
+    /// By-language symbol counts (from `IndexStats`).
+    pub by_language: std::collections::HashMap<String, usize>,
+    /// By-fql_kind symbol counts (from `IndexStats`).
+    pub by_fql_kind: std::collections::HashMap<String, usize>,
 }
 
 // -----------------------------------------------------------------------
@@ -602,7 +648,8 @@ impl ForgeQLResult {
                     }
                     ShowContent::Lines { .. }
                     | ShowContent::Signature { .. }
-                    | ShowContent::Members { .. } => {}
+                    | ShowContent::Members { .. }
+                    | ShowContent::Stats { .. } => {}
                 }
             }
             Self::Mutation(m) => {

@@ -1295,6 +1295,7 @@ fn result_count(result: &ForgeQLResult) -> Option<usize> {
             ShowContent::CallGraph { entries, .. } => Some(entries.len()),
             ShowContent::FileList { files, .. } => Some(files.len()),
             ShowContent::Signature { .. } => Some(1),
+            ShowContent::Stats { sessions } => Some(sessions.len()),
         },
         _ => None,
     }

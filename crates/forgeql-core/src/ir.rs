@@ -170,6 +170,14 @@ pub enum ForgeQLIR {
     /// `SHOW BRANCHES` — list branches of the current session source.
     ShowBranches,
 
+    /// `SHOW STATS [FOR 'session_id']` — report internal stats for one or all sessions.
+    /// When `session_id` is `None`, reports aggregate stats across all loaded sessions.
+    ShowStats {
+        /// Optional session alias (the identifier after `AS` in `USE`).
+        /// When `None`, aggregates across all active sessions.
+        session_id: Option<String>,
+    },
+
     // ------------------------------------------------------------------
     // Queries (read-only)
     // ------------------------------------------------------------------

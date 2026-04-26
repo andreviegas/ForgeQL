@@ -116,6 +116,11 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
 
         Rule::show_branches_stmt => Ok(ForgeQLIR::ShowBranches),
 
+        Rule::show_stats_stmt => {
+            let session_id = pair.into_inner().next().map(|p| unquote(p.as_str()));
+            Ok(ForgeQLIR::ShowStats { session_id })
+        }
+
         Rule::show_context_stmt => {
             let mut inner = pair.into_inner();
             let symbol = next_str(&mut inner, "show_context: expected symbol name")?;
@@ -418,6 +423,21 @@ mod tests {
         let ops = parse("SHOW BRANCHES").unwrap();
         assert_eq!(ops.len(), 1);
         assert!(matches!(ops[0], ForgeQLIR::ShowBranches));
+
+    #[test]
+    fn parse_show_stats_no_session() {
+        let ops = parse("SHOW STATS").unwrap();
+        assert!(matches!(ops[0], ForgeQLIR::ShowStats { session_id: None }));
+    }
+
+    #[test]
+    fn parse_show_stats_for_session() {
+        let ops = parse("SHOW STATS FOR 'my-session'").unwrap();
+        assert!(matches!(
+            ops[0],
+            ForgeQLIR::ShowStats { session_id: Some(ref s) } if s == "my-session"
+        ));
+    }
     }
 
     // (parse_disconnect test removed — DISCONNECT command eliminated)

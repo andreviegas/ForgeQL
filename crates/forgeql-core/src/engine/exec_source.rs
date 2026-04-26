@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::{
     git::{self as git, source::Source, worktree},
-    result::{ForgeQLResult, QueryResult, SourceOpResult, SymbolMatch},
+    result::{ForgeQLResult, QueryResult, SessionStats, ShowContent, SourceOpResult, SymbolMatch},
     session::Session,
 };
 
@@ -340,6 +340,57 @@ impl ForgeQLEngine {
             symbols_indexed: None,
             resumed: false,
             message: None,
+        }))
+    }
+
+    /// `SHOW STATS [FOR 'session_id']` — emit internal diagnostics for one or
+    /// all active sessions.
+    ///
+    /// When `for_session` is `Some(sid)`, only that session is included.
+    /// When `None`, all sessions with a ready index are reported.
+    #[allow(clippy::unnecessary_wraps)]
+    pub(super) fn show_stats(&self, for_session: Option<&str>) -> Result<ForgeQLResult> {
+        let sessions: Vec<SessionStats> = self
+            .sessions
+            .iter()
+            .filter(|(id, _)| for_session.map_or(true, |s| *id == s))
+            .filter_map(|(id, session)| {
+                let index = session.index()?;
+                let mem = index.mem_estimate();
+                Some(SessionStats {
+                    session_id: id.clone(),
+                    source: session.source_name.clone(),
+                    branch: session.branch.clone(),
+                    rows: index.rows.len(),
+                    distinct_names: mem.strings_names,
+                    distinct_paths: mem.strings_paths,
+                    usage_symbols: mem.usages_symbols,
+                    usage_sites: mem.usages_sites,
+                    trigram_distinct: mem.trigram_entries,
+                    mem_total_bytes: mem.total_bytes(),
+                    mem_rows_bytes: mem.rows_bytes,
+                    mem_usages_bytes: mem.usages_bytes,
+                    mem_indexes_bytes: mem.name_index_bytes
+                        + mem.kind_index_bytes
+                        + mem.fql_kind_index_bytes,
+                    mem_trigram_bytes: mem.trigram_bytes,
+                    mem_strings_bytes: mem.strings_bytes,
+                    by_language: index.stats.by_language.clone(),
+                    by_fql_kind: index.stats.by_fql_kind.clone(),
+                })
+            })
+            .collect();
+
+        Ok(ForgeQLResult::Show(crate::result::ShowResult {
+            op: "show_stats".to_string(),
+            symbol: None,
+            file: None,
+            content: ShowContent::Stats { sessions },
+            start_line: None,
+            end_line: None,
+            total_lines: None,
+            hint: None,
+            metadata: None,
         }))
     }
 }

@@ -278,6 +278,9 @@ impl ForgeQLEngine {
             } => self.use_source(source, branch, as_branch),
             ForgeQLIR::ShowSources => self.show_sources(),
             ForgeQLIR::ShowBranches => self.show_branches(session_id),
+            ForgeQLIR::ShowStats { session_id: for_session } => {
+                self.show_stats(for_session.as_deref())
+            }
             // --- Read-only queries ---
             ForgeQLIR::FindSymbols { clauses } => self.find_symbols(session_id, clauses),
             ForgeQLIR::FindUsages { of, clauses } => self.find_usages(session_id, of, clauses),
@@ -331,6 +334,7 @@ impl ForgeQLEngine {
                 | ForgeQLIR::RefreshSource { .. }
                 | ForgeQLIR::ShowSources
                 | ForgeQLIR::ShowBranches
+                | ForgeQLIR::ShowStats { .. }
         );
         if !is_admin_op
             && let Some(sid) = session_id

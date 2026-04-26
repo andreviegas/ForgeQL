@@ -78,6 +78,7 @@ statement = {
   | show_lines_stmt
   | show_sources_stmt
   | show_branches_stmt
+  | show_stats_stmt
   | change_stmt
   | copy_stmt
   | move_stmt
@@ -98,6 +99,7 @@ use_stmt = { "USE" ~ source_name ~ "." ~ source_name ~ "AS" ~ any_value }
 
 show_sources_stmt  = { "SHOW" ~ "SOURCES" }
 show_branches_stmt = { "SHOW" ~ "BRANCHES" }
+show_stats_stmt    = { "SHOW" ~ "STATS" ~ ("FOR" ~ any_value)? }
 
 // -----------------------------------------------------------------------
 // Code Exposure API — SHOW commands
