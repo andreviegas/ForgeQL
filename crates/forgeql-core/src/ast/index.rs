@@ -141,7 +141,7 @@ pub struct MemEstimate {
 impl MemEstimate {
     /// Sum of all component estimates — approximate total heap bytes.
     #[must_use]
-    pub fn total_bytes(&self) -> usize {
+    pub const fn total_bytes(&self) -> usize {
         self.rows_bytes
             + self.usages_bytes
             + self.name_index_bytes
@@ -648,7 +648,7 @@ impl SymbolTable {
     ///
     /// All figures are **estimates** using `std::mem::size_of` for fixed-size
     /// parts plus per-element heap allocations for `String`, `Vec`, and
-    /// `HashMap`.  HashMap overhead uses 56 B/bucket as a conservative
+    /// `HashMap`.  `HashMap` overhead uses 56 B/bucket as a conservative
     /// approximation for `std::collections::HashMap` on 64-bit platforms.
     #[must_use]
     pub fn mem_estimate(&self) -> MemEstimate {
@@ -666,8 +666,7 @@ impl SymbolTable {
                     + r.fields.capacity() * 56
             })
             .sum();
-        let rows_bytes =
-            self.rows.capacity() * row_fixed + row_fields_heap;
+        let rows_bytes = self.rows.capacity() * row_fixed + row_fields_heap;
 
         // --- usages: HashMap<String, Vec<UsageSite>> ---
         let usage_site_fixed = std::mem::size_of::<UsageSite>();

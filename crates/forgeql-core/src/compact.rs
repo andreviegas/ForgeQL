@@ -260,28 +260,80 @@ fn compact_filelist(files: &[FileEntry], total: usize) -> String {
 }
 
 /// SHOW STATS → one section per session with memory and symbol breakdown.
+#[allow(clippy::cast_precision_loss)]
 fn compact_stats(sessions: &[SessionStats]) -> String {
     if sessions.is_empty() {
         return "\"show_stats\",\"no sessions loaded\"\n".to_string();
     }
     let mut out = String::with_capacity(sessions.len() * 512);
-    row(&mut out, &[&q("show_stats"), &q(&sessions.len().to_string())]);
+    row(
+        &mut out,
+        &[&q("show_stats"), &q(&sessions.len().to_string())],
+    );
     for s in sessions {
         row(&mut out, &[&q("session"), &q(&s.session_id)]);
         row(&mut out, &[&q("source"), &q(&s.source)]);
         row(&mut out, &[&q("branch"), &q(&s.branch)]);
         row(&mut out, &[&q("rows"), &s.rows.to_string()]);
-        row(&mut out, &[&q("distinct_names"), &s.distinct_names.to_string()]);
-        row(&mut out, &[&q("distinct_paths"), &s.distinct_paths.to_string()]);
-        row(&mut out, &[&q("usage_symbols"), &s.usage_symbols.to_string()]);
+        row(
+            &mut out,
+            &[&q("distinct_names"), &s.distinct_names.to_string()],
+        );
+        row(
+            &mut out,
+            &[&q("distinct_paths"), &s.distinct_paths.to_string()],
+        );
+        row(
+            &mut out,
+            &[&q("usage_symbols"), &s.usage_symbols.to_string()],
+        );
         row(&mut out, &[&q("usage_sites"), &s.usage_sites.to_string()]);
-        row(&mut out, &[&q("trigram_distinct"), &s.trigram_distinct.to_string()]);
-        row(&mut out, &[&q("mem_total_mb"), &format!("{:.1}", s.mem_total_bytes as f64 / 1_048_576.0)]);
-        row(&mut out, &[&q("mem_rows_mb"), &format!("{:.1}", s.mem_rows_bytes as f64 / 1_048_576.0)]);
-        row(&mut out, &[&q("mem_usages_mb"), &format!("{:.1}", s.mem_usages_bytes as f64 / 1_048_576.0)]);
-        row(&mut out, &[&q("mem_indexes_mb"), &format!("{:.1}", s.mem_indexes_bytes as f64 / 1_048_576.0)]);
-        row(&mut out, &[&q("mem_trigram_mb"), &format!("{:.1}", s.mem_trigram_bytes as f64 / 1_048_576.0)]);
-        row(&mut out, &[&q("mem_strings_mb"), &format!("{:.1}", s.mem_strings_bytes as f64 / 1_048_576.0)]);
+        row(
+            &mut out,
+            &[&q("trigram_distinct"), &s.trigram_distinct.to_string()],
+        );
+        row(
+            &mut out,
+            &[
+                &q("mem_total_mb"),
+                &format!("{:.1}", s.mem_total_bytes as f64 / 1_048_576.0),
+            ],
+        );
+        row(
+            &mut out,
+            &[
+                &q("mem_rows_mb"),
+                &format!("{:.1}", s.mem_rows_bytes as f64 / 1_048_576.0),
+            ],
+        );
+        row(
+            &mut out,
+            &[
+                &q("mem_usages_mb"),
+                &format!("{:.1}", s.mem_usages_bytes as f64 / 1_048_576.0),
+            ],
+        );
+        row(
+            &mut out,
+            &[
+                &q("mem_indexes_mb"),
+                &format!("{:.1}", s.mem_indexes_bytes as f64 / 1_048_576.0),
+            ],
+        );
+        row(
+            &mut out,
+            &[
+                &q("mem_trigram_mb"),
+                &format!("{:.1}", s.mem_trigram_bytes as f64 / 1_048_576.0),
+            ],
+        );
+        row(
+            &mut out,
+            &[
+                &q("mem_strings_mb"),
+                &format!("{:.1}", s.mem_strings_bytes as f64 / 1_048_576.0),
+            ],
+        );
         // by_language — sorted for deterministic output
         let mut langs: Vec<(&String, &usize)> = s.by_language.iter().collect();
         langs.sort_by_key(|(k, _)| k.as_str());

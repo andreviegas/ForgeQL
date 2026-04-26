@@ -353,7 +353,7 @@ impl ForgeQLEngine {
         let sessions: Vec<SessionStats> = self
             .sessions
             .iter()
-            .filter(|(id, _)| for_session.map_or(true, |s| *id == s))
+            .filter(|(id, _)| for_session.is_none_or(|s| *id == s))
             .filter_map(|(id, session)| {
                 let index = session.index()?;
                 let mem = index.mem_estimate();

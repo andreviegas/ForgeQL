@@ -423,6 +423,7 @@ mod tests {
         let ops = parse("SHOW BRANCHES").unwrap();
         assert_eq!(ops.len(), 1);
         assert!(matches!(ops[0], ForgeQLIR::ShowBranches));
+    }
 
     #[test]
     fn parse_show_stats_no_session() {
@@ -437,7 +438,6 @@ mod tests {
             ops[0],
             ForgeQLIR::ShowStats { session_id: Some(ref s) } if s == "my-session"
         ));
-    }
     }
 
     // (parse_disconnect test removed — DISCONNECT command eliminated)

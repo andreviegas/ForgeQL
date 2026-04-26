@@ -121,11 +121,25 @@ impl fmt::Display for ShowResult {
                 }
                 writeln!(formatter, "({total} files)")?;
             }
-            ShowContent::Stats { sessions } => {
+            ShowContent::Stats { sessions } =>
+            {
+                #[allow(clippy::cast_precision_loss)]
                 for s in sessions {
-                    writeln!(formatter, "session: {} ({}@{})", s.session_id, s.source, s.branch)?;
-                    writeln!(formatter, "  rows: {}  names: {}  paths: {}", s.rows, s.distinct_names, s.distinct_paths)?;
-                    writeln!(formatter, "  mem_total: {:.1} MB", s.mem_total_bytes as f64 / 1_048_576.0)?;
+                    writeln!(
+                        formatter,
+                        "session: {} ({}@{})",
+                        s.session_id, s.source, s.branch
+                    )?;
+                    writeln!(
+                        formatter,
+                        "  rows: {}  names: {}  paths: {}",
+                        s.rows, s.distinct_names, s.distinct_paths
+                    )?;
+                    writeln!(
+                        formatter,
+                        "  mem_total: {:.1} MB",
+                        s.mem_total_bytes as f64 / 1_048_576.0
+                    )?;
                 }
             }
         }

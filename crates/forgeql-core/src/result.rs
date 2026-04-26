@@ -416,15 +416,15 @@ pub struct SessionStats {
     pub trigram_distinct: usize,
     /// Approximate heap bytes consumed by the index (all components).
     pub mem_total_bytes: usize,
-    /// Approximate heap bytes: `rows` Vec + per-row enrichment HashMaps.
+    /// Approximate heap bytes: `rows` `Vec` + per-row enrichment `HashMap`s.
     pub mem_rows_bytes: usize,
-    /// Approximate heap bytes: usages HashMap.
+    /// Approximate heap bytes: usages `HashMap`.
     pub mem_usages_bytes: usize,
-    /// Approximate heap bytes: name/kind/fql_kind secondary indexes.
+    /// Approximate heap bytes: `name/kind/fql_kind` secondary indexes.
     pub mem_indexes_bytes: usize,
     /// Approximate heap bytes: trigram index posting lists.
     pub mem_trigram_bytes: usize,
-    /// Approximate heap bytes: all five intern pools (ColumnarTable).
+    /// Approximate heap bytes: all five intern pools (`ColumnarTable`).
     pub mem_strings_bytes: usize,
     /// By-language symbol counts (from `IndexStats`).
     pub by_language: std::collections::HashMap<String, usize>,
