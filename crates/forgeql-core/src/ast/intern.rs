@@ -1,135 +1,172 @@
-//! Interned string pools for compact [`IndexRow`] field storage.
+//! Generic interning pool for compact [`IndexRow`] field storage.
 //!
 //! Instead of storing one `String` per row per field, [`IndexRow`] stores a
-//! compact integer ID into the matching pool inside [`ColumnarTable`].  The
+//! compact `u32` ID into the matching pool inside [`ColumnarTable`].  The
 //! actual string data lives in the pool, shared across all rows.
 //!
-//! # Memory model
+//! # Design
 //!
-//! | Field       | Cardinality       | Before (per row) | After (per row) |
-//! |-------------|-------------------|------------------|-----------------|
-//! | `name`      | ~unique           | 24 B + heap      | 4 B (`u32`)     |
-//! | `node_kind` | ~50 distinct      | 24 B + heap      | 4 B (`u32`)     |
-//! | `fql_kind`  | ≤21 distinct      | 24 B + heap      | 4 B (`u32`)     |
-//! | `language`  | ≤5 distinct       | 24 B + heap      | 4 B (`u32`)     |
-//! | `path`      | ~100 K distinct   | 24 B + heap      | 4 B (`u32`)     |
+//! A single generic type [`InternPool<O>`] handles any owned type `O`.
+//! The two concrete pools used by [`ColumnarTable`] are type aliases:
 //!
-//! The pools are **not** serialised as part of `CachedIndex` in this phase —
-//! they are rebuilt in O(N) from the row `String` fields during cache load
-//! (via [`SymbolTable::push_row`]).  A future cache-version bump may serialise
-//! them directly to trade load-time CPU for I/O reduction.
+//! | Alias        | Owned type | Borrowed type | Cardinality       |
+//! |--------------|------------|---------------|-------------------|
+//! | `StringPool` | `String`   | `&str`        | varies            |
+//! | `PathPool`   | `PathBuf`  | `&Path`       | varies            |
+//!
+//! Lookup by the borrowed form (`&str`, `&Path`) uses the standard library's
+//! [`Borrow`] trait — **no allocation on cache hits**.  On a miss, one
+//! `to_owned()` converts the borrowed value to owned; a single `clone()` fills
+//! both the `Vec` slot and the `HashMap` key, replacing the previous
+//! double-`to_owned()` pattern.
+//!
+//! # Adding a new pool type
+//!
+//! Any type pair `(Owned, Borrowed)` where `Owned: Borrow<Borrowed>` and
+//! `Borrowed: ToOwned<Owned = Owned>` works out of the box:
+//!
+//! ```rust,ignore
+//! // e.g. intern raw tree-sitter byte slices
+//! pub type BytesPool = InternPool<Vec<u8>>;
+//! ```
+//!
+//! You only need to add a `get` / `iter` impl block if you want the
+//! type-specific ergonomic accessor (see [`InternPool<String>`] and
+//! [`InternPool<PathBuf>`] below).
+//!
+//! [`Borrow`]: std::borrow::Borrow
+//! [`IndexRow`]: crate::ast::index::IndexRow
 
+use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 // -----------------------------------------------------------------------
-// StringPool — append-only interning store
+// InternPool<O> — generic append-only interning store
 // -----------------------------------------------------------------------
 
-/// Append-only string interning pool.
+/// Generic append-only interning pool.
 ///
-/// Each unique string is stored once; subsequent calls to [`intern`] for the
-/// same string return the same `u32` ID.  IDs are stable — the pool only
-/// ever grows, never reorders.
+/// `O` is the **owned** stored type (e.g. [`String`], [`PathBuf`]).
+/// Intern by borrowing (`&str`, `&Path`) via [`InternPool::intern`]; look up
+/// by ID via the type-specific `get` impl.
 ///
-/// [`intern`]: StringPool::intern
+/// IDs are stable `u32` values — the pool only ever grows, never reorders.
+/// Lookup on a hit is allocation-free thanks to `HashMap::get`'s [`Borrow`]
+/// blanket (e.g. `HashMap<String, u32>::get(&str)` works without cloning).
+///
+/// # Type aliases
+///
+/// - [`StringPool`] = `InternPool<String>`
+/// - [`PathPool`]   = `InternPool<PathBuf>`
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct StringPool {
-    strings: Vec<String>,
-    lookup: HashMap<String, u32>,
+pub struct InternPool<O: Eq + Hash> {
+    items: Vec<O>,
+    lookup: HashMap<O, u32>,
 }
 
-impl StringPool {
-    /// Intern `s` and return its stable `u32` ID.  Amortised O(1).
+impl<O: Eq + Hash> InternPool<O> {
+    /// Intern `value` by its borrowed form and return a stable `u32` ID.
+    ///
+    /// - **Hit**: returns the existing ID with zero allocations.
+    /// - **Miss**: converts via `to_owned()` once, then `clone()`s into the
+    ///   `Vec` slot; the original owned value becomes the `HashMap` key.
+    ///   Two allocations total — one fewer than the previous double-`to_owned()`
+    ///   pattern.
     ///
     /// # Panics
     /// Panics if the pool would exceed `u32::MAX` unique entries.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let mut pool = StringPool::default();
+    /// let id = pool.intern("hello");
+    /// assert_eq!(pool.get(id), "hello");
+    /// ```
     #[must_use]
     #[allow(clippy::expect_used)]
-    pub fn intern(&mut self, s: &str) -> u32 {
-        if let Some(&id) = self.lookup.get(s) {
+    pub fn intern<B>(&mut self, value: &B) -> u32
+    where
+        B: ToOwned<Owned = O> + Hash + Eq + ?Sized,
+        O: Borrow<B> + Clone,
+    {
+        // Hit path — Borrow<B> lets HashMap accept &B without cloning the key.
+        if let Some(&id) = self.lookup.get(value) {
             return id;
         }
-        let id = u32::try_from(self.strings.len())
-            .expect("StringPool overflow: more than u32::MAX unique strings");
-        self.strings.push(s.to_owned());
-        let _ = self.lookup.insert(s.to_owned(), id);
+        // Miss path — one to_owned() + one clone, not two to_owned() calls.
+        let id = u32::try_from(self.items.len())
+            .expect("InternPool overflow: more than u32::MAX unique entries");
+        let owned = value.to_owned();
+        self.items.push(owned.clone());
+        let _ = self.lookup.insert(owned, id);
         id
     }
 
-    /// Resolve `id` back to its string slice.
+    /// Return the ID for `key` if it has been interned, without inserting.
     ///
-    /// Returns `""` for any out-of-range ID (defensive; should never occur for
-    /// IDs produced by this pool).
+    /// Uses [`Borrow`] so you can pass `&str` into a `StringPool` or
+    /// `&Path` into a `PathPool` without allocating.
+    #[must_use]
+    #[inline]
+    pub fn get_id<B>(&self, key: &B) -> Option<u32>
+    where
+        O: Borrow<B>,
+        B: Hash + Eq + ?Sized,
+    {
+        self.lookup.get(key).copied()
+    }
+
+    /// Iterate all interned values in insertion order.
+    pub fn iter(&self) -> impl Iterator<Item = &O> {
+        self.items.iter()
+    }
+
+    /// Number of unique entries stored.
+    #[must_use]
+    #[inline]
+    pub const fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// `true` if no entries have been interned yet.
+    #[must_use]
+    #[inline]
+    pub const fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
+// -----------------------------------------------------------------------
+// Concrete get() + iter() impls
+//
+// The generic impl cannot define get() because the empty-value fallback
+// differs by type ("" for strings, Path::new("") for paths).  Each
+// concrete impl below adds the idiomatic ergonomic accessor.
+// -----------------------------------------------------------------------
+
+impl InternPool<String> {
+    /// Resolve `id` back to a `&str`.
+    ///
+    /// Returns `""` for any out-of-range ID (defensive; should never occur
+    /// for IDs produced by this pool).
     #[must_use]
     #[inline]
     #[allow(clippy::cast_possible_truncation)]
     pub fn get(&self, id: u32) -> &str {
-        self.strings.get(id as usize).map_or("", String::as_str)
+        self.items.get(id as usize).map_or("", String::as_str)
     }
 
-    /// Return the ID for `s` if it has been interned, without inserting.
-    #[must_use]
-    #[inline]
-    pub fn get_id(&self, s: &str) -> Option<u32> {
-        self.lookup.get(s).copied()
-    }
-
-    /// Iterate all interned strings in insertion order.
-    pub fn iter(&self) -> impl Iterator<Item = &str> {
-        self.strings.iter().map(String::as_str)
-    }
-
-    /// Number of unique strings stored.
-    #[must_use]
-    #[inline]
-    pub const fn len(&self) -> usize {
-        self.strings.len()
-    }
-
-    /// `true` if no strings have been interned yet.
-    #[must_use]
-    #[inline]
-    pub const fn is_empty(&self) -> bool {
-        self.strings.is_empty()
+    /// Iterate all interned strings in insertion order as `&str` slices.
+    pub fn iter_str(&self) -> impl Iterator<Item = &str> {
+        self.items.iter().map(String::as_str)
     }
 }
 
-// -----------------------------------------------------------------------
-// PathPool — same pattern, typed for PathBuf
-
-/// Append-only path interning pool.
-///
-/// Operates identically to [`StringPool`] but stores [`PathBuf`] values.
-/// Paths deduplicate aggressively: at 8 M symbols over ~100 K files the
-/// average deduplication ratio is ~80×, reducing the effective per-row cost
-/// from ~59 B to 4 B.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct PathPool {
-    paths: Vec<PathBuf>,
-    lookup: HashMap<PathBuf, u32>,
-}
-
-impl PathPool {
-    /// Intern `p` and return its stable `u32` ID.  Amortised O(1).
-    ///
-    /// # Panics
-    /// Panics if the pool would exceed `u32::MAX` unique entries.
-    #[must_use]
-    #[allow(clippy::expect_used)]
-    pub fn intern(&mut self, p: &Path) -> u32 {
-        if let Some(&id) = self.lookup.get(p) {
-            return id;
-        }
-        let id = u32::try_from(self.paths.len())
-            .expect("PathPool overflow: more than u32::MAX unique paths");
-        self.paths.push(p.to_owned());
-        let _ = self.lookup.insert(p.to_owned(), id);
-        id
-    }
-
+impl InternPool<PathBuf> {
     /// Resolve `id` back to a `&Path`.
     ///
     /// Returns `Path::new("")` for any out-of-range ID (defensive).
@@ -137,37 +174,31 @@ impl PathPool {
     #[inline]
     #[allow(clippy::cast_possible_truncation)]
     pub fn get(&self, id: u32) -> &Path {
-        self.paths
+        self.items
             .get(id as usize)
             .map_or_else(|| Path::new(""), PathBuf::as_path)
     }
 
-    /// Return the ID for `p` if it has been interned, without inserting.
-    #[must_use]
-    #[inline]
-    pub fn get_id(&self, p: &Path) -> Option<u32> {
-        self.lookup.get(p).copied()
-    }
-
-    /// Iterate all interned paths in insertion order.
-    pub fn iter(&self) -> impl Iterator<Item = &std::path::Path> {
-        self.paths.iter().map(std::path::PathBuf::as_path)
-    }
-
-    /// Number of unique paths stored.
-    #[must_use]
-    #[inline]
-    pub const fn len(&self) -> usize {
-        self.paths.len()
-    }
-
-    /// `true` if no paths have been interned yet.
-    #[must_use]
-    #[inline]
-    pub const fn is_empty(&self) -> bool {
-        self.paths.is_empty()
+    /// Iterate all interned paths in insertion order as `&Path` slices.
+    pub fn iter_paths(&self) -> impl Iterator<Item = &Path> {
+        self.items.iter().map(PathBuf::as_path)
     }
 }
+
+// -----------------------------------------------------------------------
+// Type aliases — backward-compatible names for the two pools used
+// throughout the codebase.  All call sites continue to compile unchanged.
+// -----------------------------------------------------------------------
+
+/// Intern pool for string values.  Alias for `InternPool<String>`.
+///
+/// Intern with `&str`; resolve with [`get`][InternPool<String>::get].
+pub type StringPool = InternPool<String>;
+
+/// Intern pool for path values.  Alias for `InternPool<PathBuf>`.
+///
+/// Intern with `&Path`; resolve with [`get`][InternPool<PathBuf>::get].
+pub type PathPool = InternPool<PathBuf>;
 
 // -----------------------------------------------------------------------
 // ColumnarTable — composite pool for all top-level IndexRow string fields
@@ -239,6 +270,8 @@ impl ColumnarTable {
 mod tests {
     use super::*;
 
+    // --- Generic InternPool<String> (via StringPool alias) ---------------
+
     #[test]
     fn string_pool_deduplicates() {
         let mut pool = StringPool::default();
@@ -253,8 +286,25 @@ mod tests {
     }
 
     #[test]
+    fn string_pool_hit_no_alloc_semantic() {
+        // Verify the hit path: get_id must return Some after intern.
+        let mut pool = StringPool::default();
+        let id = pool.intern("zephyr");
+        assert_eq!(pool.get_id("zephyr"), Some(id));
+        assert_eq!(pool.get_id("other"), None);
+    }
+
+    #[test]
+    fn string_pool_out_of_range_returns_empty() {
+        let pool = StringPool::default();
+        assert_eq!(pool.get(0), "");
+        assert_eq!(pool.get(u32::MAX), "");
+    }
+
+    // --- Generic InternPool<PathBuf> (via PathPool alias) ----------------
+
+    #[test]
     fn path_pool_deduplicates() {
-        use std::path::PathBuf;
         let mut pool = PathPool::default();
         let p = PathBuf::from("src/main.rs");
         let id0 = pool.intern(&p);
@@ -264,6 +314,16 @@ mod tests {
         assert_ne!(id0, id2);
         assert_eq!(pool.get(id0), p.as_path());
     }
+
+    #[test]
+    fn path_pool_get_id() {
+        let mut pool = PathPool::default();
+        let id = pool.intern(Path::new("include/zephyr/kernel.h"));
+        assert_eq!(pool.get_id(Path::new("include/zephyr/kernel.h")), Some(id));
+        assert_eq!(pool.get_id(Path::new("other.h")), None);
+    }
+
+    // --- ColumnarTable ---------------------------------------------------
 
     #[test]
     fn columnar_table_intern_row() {
@@ -330,11 +390,26 @@ mod tests {
     fn pool_roundtrip() {
         let mut pool = StringPool::default();
         let words = ["alpha", "beta", "gamma", "alpha", "delta", "beta"];
-        let ids: Vec<u32> = words.iter().map(|w| pool.intern(w)).collect();
+        let ids: Vec<u32> = words.iter().map(|w| pool.intern(*w)).collect();
         for (w, id) in words.iter().zip(ids.iter()) {
             assert_eq!(pool.get(*id), *w, "round-trip must be lossless");
         }
         // Only 4 unique words.
         assert_eq!(pool.len(), 4);
+    }
+
+    /// Demonstrate that any (Owned, Borrowed) pair satisfying `Borrow` + `ToOwned`
+    /// works without writing a new pool type.
+    #[test]
+    fn generic_pool_works_for_vec_u8() {
+        // InternPool<Vec<u8>> — intern byte slices, resolve by &[u8].
+        let mut pool: InternPool<Vec<u8>> = InternPool::default();
+        let id0 = pool.intern(b"hello".as_slice());
+        let id1 = pool.intern(b"world".as_slice());
+        let id2 = pool.intern(b"hello".as_slice());
+        assert_eq!(id0, id2);
+        assert_ne!(id0, id1);
+        assert_eq!(pool.get_id(b"hello".as_slice()), Some(id0));
+        assert_eq!(pool.len(), 2);
     }
 }

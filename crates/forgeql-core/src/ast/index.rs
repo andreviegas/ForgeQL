@@ -584,7 +584,7 @@ impl SymbolTable {
         let mut results: Vec<&str> = self
             .strings
             .names
-            .iter()
+            .iter_str()
             .filter(|name| {
                 let nl = name.to_ascii_lowercase();
                 nl.starts_with(&lower) || lower.starts_with(&nl) || nl.contains(&lower)
@@ -719,7 +719,7 @@ impl SymbolTable {
         let string_pool_bytes = |pool: &crate::ast::intern::StringPool| -> usize {
             pool.iter().map(|s| s.len() + 24).sum::<usize>() // Vec<String> heap
                 + pool.len() * 56 // lookup HashMap buckets (key cloned)
-                + pool.iter().map(str::len).sum::<usize>() // key copies in lookup
+                + pool.iter().map(String::len).sum::<usize>() // key copies in lookup
         };
         let path_pool_bytes: usize = {
             let p = &self.strings.paths;
