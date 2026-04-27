@@ -4,6 +4,21 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.1] — 2026-04-27
+
+### Changed
+
+- **`InternPool<O>` generic intern pool** — `StringPool` and `PathPool` are now
+  type aliases for a single generic `InternPool<O: Eq + Hash>`. Eliminates ~100
+  lines of duplicated intern logic. The miss path now performs one `to_owned()`
+  + one `clone()` instead of two `to_owned()` calls, saving one heap allocation
+  per newly interned entry. Hit path remains allocation-free via `Borrow<B>`.
+  New convenience iterators `iter_str()` → `&str` and `iter_paths()` → `&Path`
+  complement the generic `iter()` → `&O`. All existing call sites unchanged
+  (type aliases preserve the `StringPool` / `PathPool` names).
+  New pool types for future phases (e.g. field-value interning) require only a
+  one-line type alias — no code duplication.
+
 ## [0.40.0] — 2026-04-26
 
 ### Added
