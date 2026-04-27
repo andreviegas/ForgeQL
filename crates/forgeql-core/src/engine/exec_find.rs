@@ -176,12 +176,20 @@ impl ForgeQLEngine {
             .iter()
             .filter(|site| {
                 if let Some(ref glob) = clauses.in_glob
-                    && !crate::ast::query::relative_glob_matches(&site.path, glob, root)
+                    && !crate::ast::query::relative_glob_matches(
+                        index.strings.paths.get(site.path_id),
+                        glob,
+                        root,
+                    )
                 {
                     return false;
                 }
                 if let Some(ref glob) = clauses.exclude_glob
-                    && crate::ast::query::relative_glob_matches(&site.path, glob, root)
+                    && crate::ast::query::relative_glob_matches(
+                        index.strings.paths.get(site.path_id),
+                        glob,
+                        root,
+                    )
                 {
                     return false;
                 }
@@ -192,7 +200,7 @@ impl ForgeQLEngine {
                 node_kind: None,
                 fql_kind: None,
                 language: None,
-                path: Some(site.path.clone()),
+                path: Some(index.strings.paths.get(site.path_id).to_path_buf()),
                 line: Some(site.line),
                 usages_count: None,
                 fields: std::collections::HashMap::new(),

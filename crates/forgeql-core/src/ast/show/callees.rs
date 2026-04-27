@@ -1,6 +1,5 @@
 //! `SHOW callers`, `SHOW callees`, and `SHOW LINES` implementations.
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use serde_json::Value;
@@ -24,15 +23,18 @@ use crate::{
 pub fn show_callers(index: &SymbolTable, workspace: &Workspace, symbol: &str) -> Result<Value> {
     let sites = index.usages.get(symbol).map_or(&[] as &[_], Vec::as_slice);
 
-    // Cache file bytes to compute line numbers without per-site file reads.
-    let mut byte_cache: HashMap<PathBuf, Vec<u8>> = HashMap::new();
+    // Cache file bytes keyed by path_id (u32) to avoid re-reading the same
+    // file multiple times and to skip any PathBuf allocation per site.
+    let mut byte_cache: HashMap<u32, Vec<u8>> = HashMap::new();
 
     let results: Vec<Value> = sites
         .iter()
         .map(|s| {
-            let path_str = workspace.relative(&s.path).display().to_string();
-            let src = byte_cache.entry(s.path.clone()).or_insert_with(|| {
-                crate::workspace::file_io::read_bytes(&s.path).unwrap_or_default()
+            let path = index.strings.paths.get(s.path_id);
+            let path_str = workspace.relative(path).display().to_string();
+            let src = byte_cache.entry(s.path_id).or_insert_with(|| {
+                crate::workspace::file_io::read_bytes(index.strings.paths.get(s.path_id))
+                    .unwrap_or_default()
             });
             let line = byte_to_line(src, s.byte_range.start) + 1;
             serde_json::json!({

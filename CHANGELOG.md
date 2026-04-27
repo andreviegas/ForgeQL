@@ -4,6 +4,39 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.41.0] — 2026-04-27
+
+### Fixed
+
+- **Bug: `UsageSite.path_id` not remapped during parallel-build merge.**
+  In the parallel index build, each file is parsed into its own per-file `SymbolTable`
+  with its own `PathPool`. Usage sites were added with `path_id` values valid only in
+  that per-file pool. During `merge()`, row IDs were correctly remapped via
+  `reassign_intern_ids`, but usage site `path_id`s were merged verbatim — making every
+  usage site point to whatever happened to be at that numeric slot in the global pool
+  (typically the first interned path). Fixed by remapping each `UsageSite.path_id`
+  through `other.strings.paths → self.strings.paths` in the merge loop, identical to
+  how row IDs are remapped. Caught by live regression testing on zephyr-andre (2.7 M
+  symbols, 4.38 M usage sites).
+
+### Changed
+
+- **`UsageSite.path: PathBuf` → `path_id: u32`** — the 4.4 M usage sites on a
+  zephyr-scale session each previously owned a full heap-allocated `PathBuf`.  With only
+  14,234 distinct paths in the workspace that is a **308× duplication** of path data.
+  `path_id` is now an interned ID into the existing `ColumnarTable.paths` pool, which
+  already held every unique path for `IndexRow`.  Resolving a site's path at query time
+  costs a single array index (`paths.get(path_id)`) with zero allocation.
+  - **Cache version bump** — `CURRENT_VERSION` advanced from 25 → 26; existing `.forgeql-index`
+    files are invalidated and will be rebuilt on next session open.
+  - **`add_usage`** interns the path via `self.strings.paths.intern(path)` before pushing.
+  - **`show_callers` byte cache** keyed by `u32` instead of `PathBuf` — eliminating the
+    `clone()` per site.
+  - **`purge_file`** uses `path_id` comparison instead of `PathBuf` equality.
+  - **`mem_estimate`** updated: `UsageSite` is now fully fixed-size; the per-site
+    `PathBuf` heap and capacity terms are removed from the usages estimate.
+  - Estimated RAM saving on zephyr-andre (4.38 M sites × avg 40-byte path): **~280 MB**.
+
 ## [0.40.1] — 2026-04-27
 
 ### Changed
@@ -25,6 +58,15 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `result.rs`, `compact.rs`, and `cache.rs` unchanged (no cache version bump required —
   `IndexStats` is always rebuilt from rows on cache load, never persisted).
   **Commands**: `CHANGE FILE ... LINES n-m WITH <<RUST ... RUST`
+
+### Fixed
+
+- **`mem_estimate()` now accounts for `field_keys` and `field_values` pool bytes.**
+  The two `StringPool`s added in v0.40.0 for field interning were omitted from the
+  `strings_bytes` total in `MemEstimate`.  On zephyr-scale sessions they represent
+  ~20–30 MB of interned enrichment key/value strings that were previously invisible in
+  `SHOW STATS`.
+
 ## [0.40.0] — 2026-04-26
 
 ### Added

@@ -55,7 +55,9 @@ use crate::ast::lang::MacroDef;
 ///       validation on cache resume now activates for macro-enabled sessions.
 ///   25. String fields removed from `IndexRow`; only ID fields remain. The `ColumnarTable`
 ///       string pool is now serialised as the `strings` field of `CachedIndex`.
-pub const CURRENT_VERSION: u32 = 25;
+///   26. `UsageSite.path: PathBuf` replaced by `path_id: u32` (interned into `ColumnarTable.paths`).
+///      Eliminates ~280 MB of duplicated `PathBuf` heap on zephyr-scale sessions.
+pub const CURRENT_VERSION: u32 = 26;
 
 // -----------------------------------------------------------------------
 // CachedIndex
@@ -232,7 +234,7 @@ impl CachedIndex {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::path::PathBuf;
+    use std::path::Path;
 
     use super::*;
     use crate::ast::index::SymbolTable;
@@ -246,26 +248,13 @@ mod tests {
             "function_definition",
             "",
             "",
-            std::path::Path::new("src/foo.cpp"),
+            Path::new("src/foo.cpp"),
             10..20,
             1,
             HashMap::new(),
         );
-        let _ = t.usages.insert(
-            "foo".to_string(),
-            vec![
-                UsageSite {
-                    path: PathBuf::from("src/foo.cpp"),
-                    byte_range: 10..13,
-                    line: 1,
-                },
-                UsageSite {
-                    path: PathBuf::from("src/bar.cpp"),
-                    byte_range: 55..58,
-                    line: 3,
-                },
-            ],
-        );
+        t.add_usage("foo".to_string(), Path::new("src/foo.cpp"), 10..13, 1);
+        t.add_usage("foo".to_string(), Path::new("src/bar.cpp"), 55..58, 3);
         t
     }
 

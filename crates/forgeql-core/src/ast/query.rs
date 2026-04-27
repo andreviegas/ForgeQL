@@ -46,7 +46,7 @@ pub fn find_usages_filtered<'a>(
         |exc| {
             sites
                 .iter()
-                .filter(|s| !glob_matches(&s.path, exc))
+                .filter(|s| !glob_matches(table.strings.paths.get(s.path_id), exc))
                 .collect()
         },
     )
@@ -296,10 +296,9 @@ pub fn like_match(name: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use super::*;
-    use crate::ast::index::UsageSite;
 
     fn table_with_symbols(names: &[&str]) -> SymbolTable {
         let mut table = SymbolTable::default();
@@ -437,20 +436,17 @@ mod tests {
         );
 
         // Header declaration shows up as a usage site.
-        table.usages.insert(
+        table.add_usage(
             "shouldTurnLedOn".into(),
-            vec![
-                UsageSite {
-                    path: PathBuf::from("include/led_controller.hpp"),
-                    byte_range: 50..65,
-                    line: 2,
-                },
-                UsageSite {
-                    path: PathBuf::from("src/led_controller.cpp"),
-                    byte_range: 100..115,
-                    line: 5,
-                },
-            ],
+            Path::new("include/led_controller.hpp"),
+            50..65,
+            2,
+        );
+        table.add_usage(
+            "shouldTurnLedOn".into(),
+            Path::new("src/led_controller.cpp"),
+            100..115,
+            5,
         );
 
         let all = find_symbols_like(&table, "%");
@@ -510,13 +506,11 @@ mod tests {
     #[test]
     fn find_usages_returns_correct_sites() {
         let mut table = SymbolTable::default();
-        let _ = table.usages.insert(
+        table.add_usage(
             "showCode".to_string(),
-            vec![UsageSite {
-                path: PathBuf::from("src/signal_emitter.cpp"),
-                byte_range: 10..20,
-                line: 7,
-            }],
+            Path::new("src/signal_emitter.cpp"),
+            10..20,
+            7,
         );
         let usages = find_usages(&table, "showCode");
         assert_eq!(usages.len(), 1);

@@ -77,8 +77,13 @@ pub struct IndexRow {
 /// A reference (usage) of a symbol — where an identifier token appears.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageSite {
-    /// Source file containing the reference.
-    pub path: PathBuf,
+    /// Interned source file path — resolve via [`ColumnarTable::paths`].
+    ///
+    /// Stored as a `u32` ID into the shared [`PathPool`] so that 4.4 M usage
+    /// sites across 14 K distinct files share a single allocation per path
+    /// instead of one [`PathBuf`] heap allocation per site (~280 MB saved on
+    /// zephyr-scale sessions).
+    pub path_id: u32,
     /// Byte range of the identifier token at this usage site.
     pub byte_range: Range<usize>,
     /// 1-based source line of the identifier token.
@@ -471,9 +476,17 @@ impl SymbolTable {
             self.rows.push(row);
         }
 
-        // Merge usage sites.
+        // Merge usage sites — remap path_id from other.strings.paths into self.strings.paths.
         for (name, sites) in other.usages {
-            self.usages.entry(name).or_default().extend(sites);
+            let remapped: Vec<UsageSite> = sites
+                .into_iter()
+                .map(|s| {
+                    let path = other.strings.paths.get(s.path_id);
+                    let path_id = self.strings.paths.intern(path);
+                    UsageSite { path_id, ..s }
+                })
+                .collect();
+            self.usages.entry(name).or_default().extend(remapped);
         }
     }
 
@@ -605,8 +618,9 @@ impl SymbolTable {
         }
     }
     pub fn add_usage(&mut self, name: String, path: &Path, byte_range: Range<usize>, line: usize) {
+        let path_id = self.strings.paths.intern(path);
         self.usages.entry(name).or_default().push(UsageSite {
-            path: path.to_path_buf(),
+            path_id,
             byte_range,
             line,
         });
@@ -743,15 +757,13 @@ impl SymbolTable {
         let rows_bytes = self.rows.capacity() * row_fixed + row_fields_heap;
 
         // --- usages: HashMap<String, Vec<UsageSite>> ---
+        // UsageSite is now fully fixed-size (path_id: u32, byte_range, line) — no heap per site.
         let usage_site_fixed = std::mem::size_of::<UsageSite>();
         let usages_bytes: usize = self
             .usages
             .iter()
             .map(|(k, v)| {
-                k.capacity()
-                    + v.capacity() * (usage_site_fixed + 8) // UsageSite + PathBuf heap
-                    + v.iter().map(|s| s.path.capacity()).sum::<usize>()
-                    + 56 // bucket overhead
+                k.capacity() + v.capacity() * usage_site_fixed + 56 // bucket overhead
             })
             .sum::<usize>()
             + self.usages.capacity() * 56;
@@ -805,7 +817,9 @@ impl SymbolTable {
             + string_pool_bytes(&self.strings.node_kinds)
             + string_pool_bytes(&self.strings.fql_kinds)
             + string_pool_bytes(&self.strings.languages)
-            + path_pool_bytes;
+            + path_pool_bytes
+            + string_pool_bytes(&self.strings.field_keys)
+            + string_pool_bytes(&self.strings.field_values);
 
         MemEstimate {
             rows_bytes,
@@ -838,8 +852,10 @@ impl SymbolTable {
         // Rebuild secondary indexes from scratch.
         self.rebuild_indexes_from_rows();
 
-        for sites in self.usages.values_mut() {
-            sites.retain(|usage| usage.path != path);
+        if let Some(pid) = path_id {
+            for sites in self.usages.values_mut() {
+                sites.retain(|usage| usage.path_id != pid);
+            }
         }
         self.usages.retain(|_, sites| !sites.is_empty());
     }
@@ -1393,7 +1409,10 @@ mod tests {
 
         let foo_sites = table.find_usages("foo");
         assert_eq!(foo_sites.len(), 1);
-        assert_eq!(foo_sites[0].path, PathBuf::from("b.cpp"));
+        assert_eq!(
+            table.strings.paths.get(foo_sites[0].path_id),
+            Path::new("b.cpp")
+        );
     }
 
     #[test]
