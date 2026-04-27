@@ -92,12 +92,48 @@ pub struct UsageSite {
 ///
 /// Enables O(1) `GROUP BY fql_kind` and `GROUP BY language` queries without
 /// scanning the full row list.
+///
+/// Keys are **interned IDs** from [`ColumnarTable`], not raw strings.  Resolve
+/// to human-readable strings at output time via [`IndexStats::resolved_by_fql_kind`]
+/// and [`IndexStats::resolved_by_language`].
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct IndexStats {
-    /// Symbol count per `fql_kind` value.
-    pub by_fql_kind: HashMap<String, usize>,
-    /// Symbol count per `language` value.
-    pub by_language: HashMap<String, usize>,
+    /// Symbol count per `fql_kind` value (key = `fql_kind_id` from the intern pool).
+    pub by_fql_kind: HashMap<u32, usize>,
+    /// Symbol count per `language` value (key = `language_id` from the intern pool).
+    pub by_language: HashMap<u32, usize>,
+}
+
+impl IndexStats {
+    /// Resolve `by_fql_kind` interned IDs back to string keys for output.
+    ///
+    /// Called by the output layer (`exec_find`, `exec_source`) to produce
+    /// human-readable maps without touching the hot index-build path.
+    #[must_use]
+    pub fn resolved_by_fql_kind(
+        &self,
+        strings: &crate::ast::intern::ColumnarTable,
+    ) -> HashMap<String, usize> {
+        self.by_fql_kind
+            .iter()
+            .map(|(&id, &count)| (strings.fql_kinds.get(id).to_owned(), count))
+            .collect()
+    }
+
+    /// Resolve `by_language` interned IDs back to string keys for output.
+    ///
+    /// Called by the output layer (`exec_find`, `exec_source`) to produce
+    /// human-readable maps without touching the hot index-build path.
+    #[must_use]
+    pub fn resolved_by_language(
+        &self,
+        strings: &crate::ast::intern::ColumnarTable,
+    ) -> HashMap<String, usize> {
+        self.by_language
+            .iter()
+            .map(|(&id, &count)| (strings.languages.get(id).to_owned(), count))
+            .collect()
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -228,6 +264,47 @@ fn reassign_intern_ids(src: &ColumnarTable, dst: &mut ColumnarTable, row: &mut I
     row.fql_kind_id = fql_kind_id;
     row.language_id = language_id;
     row.path_id = path_id;
+}
+
+/// Update all secondary indexes and stats for one newly-interned row.
+///
+/// # Why a free function?
+///
+/// The three call sites (`push_row`, `merge`, `rebuild_indexes_from_rows`) all
+/// need to read `strings` (immutable) while simultaneously mutating the index
+/// maps, stats, and trigram fields.  A `&mut self` method would hold a mutable
+/// borrow over the entire struct, preventing the read of `self.strings`.
+/// A free function with explicit field borrows lets the borrow checker track
+/// the disjoint accesses and allows zero-allocation access to the string pool.
+///
+/// # Option B — `IndexStats` uses `u32` keys
+///
+/// Because `stats.by_fql_kind` and `stats.by_language` now key by interned ID,
+/// this function never calls `.to_owned()` on `fql_kind` or `language` strings.
+/// The only remaining string read is `strings.names.get(row.name_id)` for the
+/// trigram insert — a `&str` borrow from the pool, no allocation.
+#[allow(clippy::too_many_arguments)]
+fn index_row_into_secondaries(
+    name_index: &mut HashMap<u32, Vec<u32>>,
+    kind_index: &mut HashMap<u32, Vec<u32>>,
+    fql_kind_index: &mut HashMap<u32, Vec<u32>>,
+    stats: &mut IndexStats,
+    trigram_index: &mut crate::ast::trigram::TrigramIndex,
+    strings: &ColumnarTable,
+    row: &IndexRow,
+    idx: u32,
+) {
+    name_index.entry(row.name_id).or_default().push(idx);
+    kind_index.entry(row.node_kind_id).or_default().push(idx);
+    if !strings.fql_kinds.get(row.fql_kind_id).is_empty() {
+        fql_kind_index.entry(row.fql_kind_id).or_default().push(idx);
+        *stats.by_fql_kind.entry(row.fql_kind_id).or_insert(0) += 1;
+    }
+    if !strings.languages.get(row.language_id).is_empty() {
+        *stats.by_language.entry(row.language_id).or_insert(0) += 1;
+    }
+    // `get` returns a `&str` borrowed from the pool — zero allocation.
+    trigram_index.insert(idx as usize, strings.names.get(row.name_id));
 }
 
 impl SymbolTable {
@@ -361,28 +438,16 @@ impl SymbolTable {
             let abs_u32 = u32::try_from(abs).unwrap_or(u32::MAX);
             // Remap IDs: values from `other.strings` are not valid in `self.strings`.
             reassign_intern_ids(&other.strings, &mut self.strings, &mut row);
-            let fql_kind = self.strings.fql_kinds.get(row.fql_kind_id).to_owned();
-            let language = self.strings.languages.get(row.language_id).to_owned();
-            let name_str = self.strings.names.get(row.name_id).to_owned();
-            self.name_index
-                .entry(row.name_id)
-                .or_default()
-                .push(abs_u32);
-            self.kind_index
-                .entry(row.node_kind_id)
-                .or_default()
-                .push(abs_u32);
-            if !fql_kind.is_empty() {
-                self.fql_kind_index
-                    .entry(row.fql_kind_id)
-                    .or_default()
-                    .push(abs_u32);
-                *self.stats.by_fql_kind.entry(fql_kind).or_insert(0) += 1;
-            }
-            if !language.is_empty() {
-                *self.stats.by_language.entry(language).or_insert(0) += 1;
-            }
-            self.trigram_index.insert(abs, &name_str);
+            index_row_into_secondaries(
+                &mut self.name_index,
+                &mut self.kind_index,
+                &mut self.fql_kind_index,
+                &mut self.stats,
+                &mut self.trigram_index,
+                &self.strings,
+                &row,
+                abs_u32,
+            );
             self.rows.push(row);
         }
 
@@ -404,28 +469,16 @@ impl SymbolTable {
             "row index exceeds u32::MAX in push_row"
         );
         let index_u32 = u32::try_from(index).unwrap_or(u32::MAX);
-        let fql_kind = self.strings.fql_kinds.get(row.fql_kind_id).to_owned();
-        let language = self.strings.languages.get(row.language_id).to_owned();
-        let name_str = self.strings.names.get(row.name_id).to_owned();
-        self.name_index
-            .entry(row.name_id)
-            .or_default()
-            .push(index_u32);
-        self.kind_index
-            .entry(row.node_kind_id)
-            .or_default()
-            .push(index_u32);
-        if !fql_kind.is_empty() {
-            self.fql_kind_index
-                .entry(row.fql_kind_id)
-                .or_default()
-                .push(index_u32);
-            *self.stats.by_fql_kind.entry(fql_kind).or_insert(0) += 1;
-        }
-        if !language.is_empty() {
-            *self.stats.by_language.entry(language).or_insert(0) += 1;
-        }
-        self.trigram_index.insert(index, &name_str);
+        index_row_into_secondaries(
+            &mut self.name_index,
+            &mut self.kind_index,
+            &mut self.fql_kind_index,
+            &mut self.stats,
+            &mut self.trigram_index,
+            &self.strings,
+            &row,
+            index_u32,
+        );
         self.rows.push(row);
     }
 
@@ -442,31 +495,20 @@ impl SymbolTable {
         self.stats.by_language.clear();
         for (index, row) in self.rows.iter().enumerate() {
             let index_u32 = u32::try_from(index).unwrap_or(u32::MAX);
-            let fql_kind = self.strings.fql_kinds.get(row.fql_kind_id).to_owned();
-            let language = self.strings.languages.get(row.language_id).to_owned();
-            let name_str = self.strings.names.get(row.name_id).to_owned();
-            self.name_index
-                .entry(row.name_id)
-                .or_default()
-                .push(index_u32);
-            self.kind_index
-                .entry(row.node_kind_id)
-                .or_default()
-                .push(index_u32);
-            if !fql_kind.is_empty() {
-                self.fql_kind_index
-                    .entry(row.fql_kind_id)
-                    .or_default()
-                    .push(index_u32);
-                *self.stats.by_fql_kind.entry(fql_kind).or_insert(0) += 1;
-            }
-            if !language.is_empty() {
-                *self.stats.by_language.entry(language).or_insert(0) += 1;
-            }
-            self.trigram_index.insert(index, &name_str);
+            index_row_into_secondaries(
+                &mut self.name_index,
+                &mut self.kind_index,
+                &mut self.fql_kind_index,
+                &mut self.stats,
+                &mut self.trigram_index,
+                &self.strings,
+                row,
+                index_u32,
+            );
         }
     }
 
+    // ------------------------------------------------------------------
     // ------------------------------------------------------------------
     // Intern-pool accessors — resolve row IDs to string/path slices.
     // These are zero-copy; the returned references borrow from `self.strings`.
@@ -1348,13 +1390,32 @@ mod tests {
             1,
             HashMap::new(),
         );
-        assert_eq!(table.stats.by_fql_kind.get("function"), Some(&2));
-        assert_eq!(table.stats.by_language.get("cpp"), Some(&2));
+        // IndexStats now keys by interned u32 — resolve to strings for assertion.
+        assert_eq!(
+            table
+                .stats
+                .resolved_by_fql_kind(&table.strings)
+                .get("function"),
+            Some(&2)
+        );
+        assert_eq!(
+            table.stats.resolved_by_language(&table.strings).get("cpp"),
+            Some(&2)
+        );
 
         // Purge one file — stats must reflect only the surviving row.
         table.purge_file(Path::new("a.cpp"));
-        assert_eq!(table.stats.by_fql_kind.get("function"), Some(&1));
-        assert_eq!(table.stats.by_language.get("cpp"), Some(&1));
+        assert_eq!(
+            table
+                .stats
+                .resolved_by_fql_kind(&table.strings)
+                .get("function"),
+            Some(&1)
+        );
+        assert_eq!(
+            table.stats.resolved_by_language(&table.strings).get("cpp"),
+            Some(&1)
+        );
 
         // Purge the other — stats must be empty (key removed entirely).
         table.purge_file(Path::new("b.cpp"));

@@ -375,8 +375,9 @@ impl ForgeQLEngine {
                         + mem.fql_kind_index_bytes,
                     mem_trigram_bytes: mem.trigram_bytes,
                     mem_strings_bytes: mem.strings_bytes,
-                    by_language: index.stats.by_language.clone(),
-                    by_fql_kind: index.stats.by_fql_kind.clone(),
+                    // Resolve interned u32 IDs to string keys for the output DTO.
+                    by_language: index.stats.resolved_by_language(&index.strings),
+                    by_fql_kind: index.stats.resolved_by_fql_kind(&index.strings),
                 })
             })
             .collect();

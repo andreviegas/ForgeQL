@@ -36,18 +36,17 @@ fn try_group_by_stats_fast_path(
         _ => return None,
     };
 
+    // IndexStats keys are interned u32 IDs — resolve to strings at output time.
     let map: Vec<(String, usize)> = match group_field.as_str() {
         "fql_kind" => index
             .stats
-            .by_fql_kind
-            .iter()
-            .map(|(k, &v)| (k.clone(), v))
+            .resolved_by_fql_kind(&index.strings)
+            .into_iter()
             .collect(),
         "language" | "lang" => index
             .stats
-            .by_language
-            .iter()
-            .map(|(k, &v)| (k.clone(), v))
+            .resolved_by_language(&index.strings)
+            .into_iter()
             .collect(),
         _ => return None,
     };
