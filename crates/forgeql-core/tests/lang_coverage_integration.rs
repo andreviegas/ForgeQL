@@ -125,7 +125,7 @@ fn cpp_bar_has_doc() {
     let table = index_canonical(&CppLanguageInline, "canonical.cpp");
     let bar = table.find_def("bar").expect("bar not found");
     assert_eq!(
-        bar.fields.get("has_doc").map(String::as_str),
+        table.field_str(&bar.fields, "has_doc"),
         Some("true"),
         "[cpp] bar should have has_doc=true"
     );
@@ -136,7 +136,7 @@ fn rust_bar_has_doc() {
     let table = index_canonical(&RustLanguageInline, "canonical.rs");
     let bar = table.find_def("bar").expect("bar not found");
     assert_eq!(
-        bar.fields.get("has_doc").map(String::as_str),
+        table.field_str(&bar.fields, "has_doc"),
         Some("true"),
         "[rust] bar should have has_doc=true"
     );
@@ -303,27 +303,32 @@ fn rust_cfg_attribute_guard_indexed() {
                 table
                     .rows
                     .iter()
-                    .map(|r| (table.name_of(r), table.fql_kind_of(r), r.line, &r.fields))
+                    .map(|r| (
+                        table.name_of(r),
+                        table.fql_kind_of(r),
+                        r.line,
+                        table.resolve_fields(&r.fields)
+                    ))
                     .collect::<Vec<_>>()
             )
         });
 
     // Check guard_kind field
-    let guard_kind = guarded.fields.get("guard_kind").map(String::as_str);
+    let guard_kind = table.field_str(&guarded.fields, "guard_kind");
     assert_eq!(
         guard_kind,
         Some("attribute"),
         "guarded_fn should have guard_kind=attribute. Fields: {:?}",
-        guarded.fields,
+        table.resolve_fields(&guarded.fields),
     );
 
     // Check guard text (field name is "guard", not "guard_text")
-    let guard = guarded.fields.get("guard").map(String::as_str);
+    let guard = table.field_str(&guarded.fields, "guard");
     assert_eq!(
         guard,
         Some("test"),
         "guarded_fn should have guard=test. Fields: {:?}",
-        guarded.fields,
+        table.resolve_fields(&guarded.fields),
     );
 
     // The unguarded function should NOT have guard_kind
@@ -333,9 +338,9 @@ fn rust_cfg_attribute_guard_indexed() {
         .find(|r| table.name_of(r) == "unguarded_fn" && table.fql_kind_of(r) == "function")
         .expect("unguarded_fn should be indexed");
     assert!(
-        !unguarded.fields.contains_key("guard_kind"),
+        table.field_str(&unguarded.fields, "guard_kind").is_none(),
         "unguarded_fn should not have guard_kind. Fields: {:?}",
-        unguarded.fields,
+        table.resolve_fields(&unguarded.fields),
     );
 
     // Cleanup

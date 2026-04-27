@@ -8,17 +8,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **`InternPool<O>` generic intern pool** — `StringPool` and `PathPool` are now
-  type aliases for a single generic `InternPool<O: Eq + Hash>`. Eliminates ~100
-  lines of duplicated intern logic. The miss path now performs one `to_owned()`
-  + one `clone()` instead of two `to_owned()` calls, saving one heap allocation
-  per newly interned entry. Hit path remains allocation-free via `Borrow<B>`.
-  New convenience iterators `iter_str()` → `&str` and `iter_paths()` → `&Path`
-  complement the generic `iter()` → `&O`. All existing call sites unchanged
-  (type aliases preserve the `StringPool` / `PathPool` names).
-  New pool types for future phases (e.g. field-value interning) require only a
-  one-line type alias — no code duplication.
+- **Option A: `index_row_into_secondaries` free function** — the 12-line secondary-index
+  update block that appeared identically in `push_row`, `merge`, and `rebuild_indexes_from_rows`
+  is now a single private free function. The free-function design (not a `&mut self` method)
+  enables Rust split-borrows: `&self.strings` (immutable) coexists with
+  `&mut self.name_index`, `&mut self.kind_index`, `&mut self.fql_kind_index`,
+  `&mut self.stats`, and `&mut self.trigram_index` simultaneously.
+  **Commands**: `CHANGE FILE ... LINES n-m WITH <<RUST ... RUST`
 
+- **Option B: `IndexStats` u32 keys** — `IndexStats::by_fql_kind` and
+  `IndexStats::by_language` changed from `HashMap<String, usize>` to `HashMap<u32, usize>`
+  (interned pool IDs). Eliminates two `to_owned()` String heap allocations per row on all
+  three hot paths. Added `IndexStats::resolved_by_fql_kind` and
+  `IndexStats::resolved_by_language` helpers that convert IDs to strings lazily at
+  query-output time only (`exec_find` GROUP BY fast path, `exec_source` SHOW STATS).
+  `result.rs`, `compact.rs`, and `cache.rs` unchanged (no cache version bump required —
+  `IndexStats` is always rebuilt from rows on cache load, never persisted).
+  **Commands**: `CHANGE FILE ... LINES n-m WITH <<RUST ... RUST`
 ## [0.40.0] — 2026-04-26
 
 ### Added

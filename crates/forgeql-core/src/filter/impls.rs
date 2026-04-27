@@ -53,7 +53,8 @@ impl ClauseTarget for RowRef<'_> {
                 if s.is_empty() { None } else { Some(s) }
             }
             "path" | "file" => self.table.path_of(self.row).to_str(),
-            other => self.row.fields.get(other).map(String::as_str),
+            // Dynamic enrichment fields — resolve via the intern pool (zero alloc).
+            other => self.table.strings.field_str(&self.row.fields, other),
         }
     }
 
@@ -61,7 +62,13 @@ impl ClauseTarget for RowRef<'_> {
         match field {
             "line" => Some(i64::try_from(self.row.line).unwrap_or(i64::MAX)),
             "usages" => Some(i64::from(self.row.usages_count)),
-            _ => self.row.fields.get(field)?.parse().ok(),
+            // Dynamic enrichment fields — resolve string then parse.
+            _ => self
+                .table
+                .strings
+                .field_str(&self.row.fields, field)?
+                .parse()
+                .ok(),
         }
     }
 

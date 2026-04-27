@@ -776,7 +776,7 @@ pub(crate) fn find_symbols_prefilter(
             path: Some(index.path_of(def).to_owned()),
             line: Some(def.line),
             usages_count: Some(usages),
-            fields: def.fields.clone(),
+            fields: index.strings.resolve_fields(&def.fields),
             count: None,
         });
     }
@@ -853,8 +853,9 @@ pub(crate) fn resolve_symbol<'a>(
         let matched: Vec<&crate::ast::index::IndexRow> = candidates
             .into_iter()
             .filter(|row| {
-                row.fields
-                    .get("enclosing_type")
+                index
+                    .strings
+                    .field_str(&row.fields, "enclosing_type")
                     .is_some_and(|et| et == owner)
             })
             .collect();
@@ -976,7 +977,7 @@ pub(crate) fn resolve_body_symbol<'a>(
     root: &Path,
 ) -> Result<&'a crate::ast::index::IndexRow> {
     let def = resolve_symbol(index, name, clauses, root)?;
-    if let Some(target) = def.fields.get("body_symbol")
+    if let Some(target) = index.strings.field_str(&def.fields, "body_symbol")
         && let Some(redirected) = index.find_def(target)
     {
         return Ok(redirected);

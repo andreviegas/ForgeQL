@@ -236,6 +236,19 @@ pub struct ColumnarTable {
     pub languages: StringPool,
     /// Source file path pool.  Deduplication ratio ~80× at 8 M symbols.
     pub paths: PathPool,
+    /// Enrichment field **key** pool — interned names such as `"naming"`,
+    /// `"lines"`, `"param_count"`, `"is_recursive"`.
+    ///
+    /// Low cardinality: the total number of distinct enrichment field names is
+    /// bounded by the set of enrichers (~100 keys across all enrichers).
+    pub field_keys: StringPool,
+    /// Enrichment field **value** pool — interned enrichment values such as
+    /// `"true"`, `"false"`, `"camelCase"`, `"snake_case"`, `"0"`, `"42"`.
+    ///
+    /// Highly repetitive: boolean values collapse to 2 IDs, naming styles to
+    /// ~6 IDs, numeric strings are sparse but small.  Deduplication ratio is
+    /// large relative to 2.7 M rows × ~10 fields each.
+    pub field_values: StringPool,
 }
 
 impl ColumnarTable {
@@ -259,6 +272,76 @@ impl ColumnarTable {
         let language_id = self.languages.intern(language);
         let path_id = self.paths.intern(path);
         (name_id, node_kind_id, fql_kind_id, language_id, path_id)
+    }
+
+    /// Convert a raw `HashMap<String, String>` enrichment map (produced by
+    /// enrichers) into a compact `HashMap<u32, u32>` by interning both keys
+    /// and values.
+    ///
+    /// Called once per row at index-build time.  The raw map is consumed so
+    /// no extra copy is needed.
+    #[must_use]
+    pub fn intern_fields(
+        &mut self,
+        raw: std::collections::HashMap<String, String>,
+    ) -> std::collections::HashMap<u32, u32> {
+        raw.into_iter()
+            .map(|(k, v)| {
+                let kid = self.field_keys.intern(k.as_str());
+                let vid = self.field_values.intern(v.as_str());
+                (kid, vid)
+            })
+            .collect()
+    }
+
+    /// Look up the value of a dynamic enrichment field by its string key.
+    ///
+    /// Returns `None` when either the key was never interned (unknown field)
+    /// or when the field is absent from this particular row's map.  The
+    /// returned `&str` is borrowed from the `field_values` pool — zero
+    /// allocation.
+    #[must_use]
+    pub fn field_str<'a>(
+        &'a self,
+        fields: &std::collections::HashMap<u32, u32>,
+        key: &str,
+    ) -> Option<&'a str> {
+        let key_id = self.field_keys.get_id(key)?;
+        let value_id = fields.get(&key_id)?;
+        Some(self.field_values.get(*value_id))
+    }
+
+    /// Intern a single key/value enrichment field and return the two IDs.
+    ///
+    /// Used by `post_pass` enrichers that write into already-stored rows.
+    /// The caller must hold `&mut self.strings` separately from `&mut self.rows`
+    /// — use the two-phase (intern then apply) pattern to satisfy the borrow
+    /// checker.
+    #[must_use]
+    pub fn intern_field_entry(&mut self, key: &str, value: &str) -> (u32, u32) {
+        let kid = self.field_keys.intern(key);
+        let vid = self.field_values.intern(value);
+        (kid, vid)
+    }
+
+    /// Resolve an interned `HashMap<u32, u32>` field map back to a
+    /// human-readable `HashMap<String, String>` for output.
+    ///
+    /// Called only at query-output time; never on the hot index-build path.
+    #[must_use]
+    pub fn resolve_fields(
+        &self,
+        fields: &std::collections::HashMap<u32, u32>,
+    ) -> std::collections::HashMap<String, String> {
+        fields
+            .iter()
+            .map(|(&k, &v)| {
+                (
+                    self.field_keys.get(k).to_owned(),
+                    self.field_values.get(v).to_owned(),
+                )
+            })
+            .collect()
     }
 }
 

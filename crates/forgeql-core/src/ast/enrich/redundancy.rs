@@ -113,7 +113,10 @@ impl NodeEnricher for RedundancyEnricher {
 
             // Group CF rows by containing function index.
             // Key = (file ptr as usize, func_range_start) to identify a function.
-            let mut func_cf_rows: HashMap<(&std::path::Path, usize), Vec<(usize, &str)>> =
+            // Use String (not &str) for condition_text so the borrow on
+            // table.strings ends within this block, before Phase 2 needs
+            // &mut table.strings to intern the "duplicate_condition" key.
+            let mut func_cf_rows: HashMap<(&std::path::Path, usize), Vec<(usize, String)>> =
                 HashMap::new();
 
             for (i, row) in table.rows.iter().enumerate() {
@@ -123,8 +126,8 @@ impl NodeEnricher for RedundancyEnricher {
                 if !in_scope(row) {
                     continue;
                 }
-                let ct = match row.fields.get("condition_text") {
-                    Some(t) if !t.is_empty() => t.as_str(),
+                let ct = match table.strings.field_str(&row.fields, "condition_text") {
+                    Some(t) if !t.is_empty() => t.to_owned(),
                     _ => continue,
                 };
                 let row_path = table.strings.paths.get(row.path_id);
@@ -149,15 +152,15 @@ impl NodeEnricher for RedundancyEnricher {
             let mut dups: Vec<usize> = Vec::new();
             for cf_rows in func_cf_rows.values() {
                 let mut skeleton_counts: HashMap<&str, Vec<usize>> = HashMap::new();
-                for &(idx, text) in cf_rows {
+                for (idx, text) in cf_rows {
                     let stripped = text
                         .strip_prefix('(')
                         .and_then(|s| s.strip_suffix(')'))
-                        .unwrap_or(text);
+                        .unwrap_or(text.as_str());
                     if stripped.len() <= 4 {
                         continue;
                     }
-                    skeleton_counts.entry(text).or_default().push(idx);
+                    skeleton_counts.entry(text.as_str()).or_default().push(*idx);
                 }
                 for indices in skeleton_counts.values() {
                     if indices.len() > 1 {
@@ -168,17 +171,18 @@ impl NodeEnricher for RedundancyEnricher {
             dups
         };
 
-        // Phase 2 (mutable): apply the duplicate_condition flag.
+        // Phase 2 (mutable): pre-intern the key+value, then apply to rows.
+        // Two-phase pattern keeps borrow of table.strings separate from table.rows.
+        let (k_dup, v_true) = table
+            .strings
+            .intern_field_entry("duplicate_condition", "true");
         for idx in duplicate_indices {
-            drop(
-                table.rows[idx]
-                    .fields
-                    .insert("duplicate_condition".to_string(), "true".to_string()),
-            );
+            let _ = table.rows[idx].fields.insert(k_dup, v_true);
         }
     }
 }
 
+/// Walk a function body and collect call expressions inside conditions,
 /// Walk a function body and collect call expressions inside conditions,
 /// plus count null-check patterns.
 fn collect_condition_info(

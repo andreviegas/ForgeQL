@@ -164,14 +164,12 @@ impl NodeEnricher for ControlFlowEnricher {
                         let (func_idx, ref func_range) = funcs[pos - 1];
                         if row.byte_range.end <= func_range.end {
                             let entry = metrics.entry(func_idx).or_insert((0, 0, 0));
-                            let tests: i64 = row
-                                .fields
-                                .get("condition_tests")
+                            let tests: i64 = strings
+                                .field_str(&row.fields, "condition_tests")
                                 .and_then(|s| s.parse().ok())
                                 .unwrap_or(0);
-                            let depth: i64 = row
-                                .fields
-                                .get("paren_depth")
+                            let depth: i64 = strings
+                                .field_str(&row.fields, "paren_depth")
                                 .and_then(|s| s.parse().ok())
                                 .unwrap_or(0);
                             entry.0 = entry.0.max(tests);
@@ -188,30 +186,43 @@ impl NodeEnricher for ControlFlowEnricher {
             (metrics, cf_encl)
         };
 
-        // Phase 2 (mutable): apply aggregated metrics to function rows.
-        for (func_idx, (max_tests, max_depth, branch_count)) in func_metrics {
+        // Phase 2 (mutable): pre-intern field keys and values, then apply.
+        // Two-phase pattern: intern first (borrows strings), apply second (borrows rows).
+        let phase2_entries: Vec<(usize, u32, u32, u32, u32, u32, u32)> = func_metrics
+            .into_iter()
+            .map(|(func_idx, (max_tests, max_depth, branch_count))| {
+                let (k_tests, v_tests) = table
+                    .strings
+                    .intern_field_entry("max_condition_tests", &max_tests.to_string());
+                let (k_depth, v_depth) = table
+                    .strings
+                    .intern_field_entry("max_paren_depth", &max_depth.to_string());
+                let (k_branch, v_branch) = table
+                    .strings
+                    .intern_field_entry("branch_count", &branch_count.to_string());
+                (
+                    func_idx, k_tests, v_tests, k_depth, v_depth, k_branch, v_branch,
+                )
+            })
+            .collect();
+        for (func_idx, k_tests, v_tests, k_depth, v_depth, k_branch, v_branch) in phase2_entries {
             let row = &mut table.rows[func_idx];
-            drop(
-                row.fields
-                    .insert("max_condition_tests".to_string(), max_tests.to_string()),
-            );
-            drop(
-                row.fields
-                    .insert("max_paren_depth".to_string(), max_depth.to_string()),
-            );
-            drop(
-                row.fields
-                    .insert("branch_count".to_string(), branch_count.to_string()),
-            );
+            let _ = row.fields.insert(k_tests, v_tests);
+            let _ = row.fields.insert(k_depth, v_depth);
+            let _ = row.fields.insert(k_branch, v_branch);
         }
 
-        // Phase 3 (mutable): write enclosing_fn to CF rows.
-        for (cf_idx, fn_name) in cf_encl {
-            drop(
-                table.rows[cf_idx]
-                    .fields
-                    .insert("enclosing_fn".to_string(), fn_name),
-            );
+        // Phase 3 (mutable): pre-intern enclosing_fn key, then write fn name values.
+        let k_encl = table.strings.field_keys.intern("enclosing_fn");
+        let phase3_entries: Vec<(usize, u32)> = cf_encl
+            .into_iter()
+            .map(|(cf_idx, fn_name)| {
+                let v = table.strings.field_values.intern(fn_name.as_str());
+                (cf_idx, v)
+            })
+            .collect();
+        for (cf_idx, v_encl) in phase3_entries {
+            let _ = table.rows[cf_idx].fields.insert(k_encl, v_encl);
         }
     }
 }

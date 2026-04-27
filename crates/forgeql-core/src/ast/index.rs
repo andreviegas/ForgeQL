@@ -50,10 +50,14 @@ pub struct IndexRow {
     /// can filter/sort by `usages` without a per-row `HashMap` lookup.
     #[serde(default)]
     pub usages_count: u32,
-    /// Dynamic fields extracted from tree-sitter grammar field IDs.
-    /// Keys are grammar field names (e.g. `"type"`, `"body"`, `"declarator"`).
-    /// Values are the source text of the first child at that field.
-    pub fields: HashMap<String, String>,
+    /// Dynamic enrichment fields — interned from the raw `HashMap<String, String>`
+    /// produced by enrichers.  Both keys and values are IDs into
+    /// [`ColumnarTable::field_keys`] and [`ColumnarTable::field_values`].
+    ///
+    /// Resolve at output time via [`crate::ast::intern::ColumnarTable::field_str`]
+    /// (single-field lookup) or [`crate::ast::intern::ColumnarTable::resolve_fields`]
+    /// (full map for serialisation).
+    pub fields: HashMap<u32, u32>,
     /// Interned symbol name — resolve via [`SymbolTable::name_of`].
     pub name_id: u32,
     /// Interned raw tree-sitter node kind — resolve via [`SymbolTable::node_kind_of`].
@@ -264,6 +268,22 @@ fn reassign_intern_ids(src: &ColumnarTable, dst: &mut ColumnarTable, row: &mut I
     row.fql_kind_id = fql_kind_id;
     row.language_id = language_id;
     row.path_id = path_id;
+
+    // Remap field key+value IDs: per-file pool IDs are invalid after merge.
+    // Remap field key+value IDs from the per-file pool into the merged pool.
+    // `.to_owned()` copies each string out of `src` before `dst` is borrowed
+    // mutably — satisfying the borrow checker.
+    row.fields = row
+        .fields
+        .iter()
+        .map(|(&kid, &vid)| {
+            let k = src.field_keys.get(kid).to_owned();
+            let v = src.field_values.get(vid).to_owned();
+            let remapped_key = dst.field_keys.intern(k.as_str());
+            let remapped_val = dst.field_values.intern(v.as_str());
+            (remapped_key, remapped_val)
+        })
+        .collect();
 }
 
 /// Update all secondary indexes and stats for one newly-interned row.
@@ -521,6 +541,20 @@ impl SymbolTable {
         self.strings.names.get(row.name_id)
     }
 
+    /// Look up a field value (by string key) in an interned `HashMap<u32, u32>`.
+    #[must_use]
+    #[inline]
+    pub fn field_str<'a>(&'a self, fields: &HashMap<u32, u32>, key: &str) -> Option<&'a str> {
+        self.strings.field_str(fields, key)
+    }
+
+    /// Convert an interned `HashMap<u32, u32>` back to a human-readable `HashMap<String, String>`.
+    #[must_use]
+    #[inline]
+    pub fn resolve_fields(&self, fields: &HashMap<u32, u32>) -> HashMap<String, String> {
+        self.strings.resolve_fields(fields)
+    }
+
     /// Resolve `row.node_kind_id` to its raw tree-sitter node kind.
     #[must_use]
     #[inline]
@@ -695,17 +729,15 @@ impl SymbolTable {
     #[must_use]
     pub fn mem_estimate(&self) -> MemEstimate {
         // --- rows: Vec<IndexRow> ---
-        // Each IndexRow has fixed fields + one HashMap<String,String> (fields).
+        // Each IndexRow has fixed fields + one HashMap<u32,u32> (fields).
+        // After the u32-key/value interning: each entry is 8 bytes + bucket overhead.
         let row_fixed = std::mem::size_of::<IndexRow>(); // byte_range, line, usages_count, ids
         let row_fields_heap: usize = self
             .rows
             .iter()
             .map(|r| {
-                r.fields
-                    .iter()
-                    .map(|(k, v)| k.capacity() + v.capacity() + 56)
-                    .sum::<usize>()
-                    + r.fields.capacity() * 56
+                // 8 bytes per (u32,u32) entry + ~56 bytes/bucket overhead.
+                r.fields.len() * 8 + r.fields.capacity() * 56
             })
             .sum();
         let rows_bytes = self.rows.capacity() * row_fixed + row_fields_heap;
@@ -1063,6 +1095,9 @@ fn collect_nodes(
                 let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = table
                     .strings
                     .intern_row(&name, node.kind(), fql_kind_val, lang_name, path);
+                // Intern field keys+values before storing — converts the temporary
+                // HashMap<String,String> enricher buffer into HashMap<u32,u32>.
+                let fields = table.strings.intern_fields(fields);
                 table.push_row(IndexRow {
                     name_id,
                     node_kind_id,
@@ -1107,6 +1142,7 @@ fn collect_nodes(
                         let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = table
                             .strings
                             .intern_row(&func_name, node.kind(), "macro_call", lang_name, path);
+                        let fields = table.strings.intern_fields(fields);
                         table.push_row(IndexRow {
                             name_id,
                             node_kind_id,
@@ -1132,6 +1168,7 @@ fn collect_nodes(
                         lang_name,
                         extra_path,
                     );
+                    let fields = table.strings.intern_fields(extra.fields);
                     table.push_row(IndexRow {
                         name_id: eni,
                         node_kind_id: enk,
@@ -1141,7 +1178,7 @@ fn collect_nodes(
                         byte_range: extra.byte_range,
                         line: extra.line,
                         usages_count: 0,
-                        fields: extra.fields,
+                        fields,
                     });
                 }
             }
@@ -1237,6 +1274,7 @@ impl SymbolTable {
         let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = self
             .strings
             .intern_row(name, node_kind, fql_kind, language, path);
+        let fields = self.strings.intern_fields(fields);
         self.push_row(IndexRow {
             name_id,
             node_kind_id,
@@ -1587,7 +1625,7 @@ mod tests {
         let decl = table.find_def("setup").expect("member declaration indexed");
         assert_eq!(table.node_kind_of(decl), "field_declaration");
         assert_eq!(
-            decl.fields.get("body_symbol").map(String::as_str),
+            table.strings.field_str(&decl.fields, "body_symbol"),
             Some("Motor::setup"),
             "body_symbol must point to the qualified name"
         );
@@ -1598,12 +1636,11 @@ mod tests {
         let table = index_snippet("struct Point { int x; double y; };");
         let x = table.find_def("x").expect("data member indexed");
         assert!(
-            !x.fields.contains_key("body_symbol"),
+            table.strings.field_str(&x.fields, "body_symbol").is_none(),
             "data members should not have body_symbol"
         );
     }
     // -- find_all_defs ---------------------------------------------------
-
     #[test]
     fn find_all_defs_empty_for_unknown_name() {
         let table = two_row_table();
