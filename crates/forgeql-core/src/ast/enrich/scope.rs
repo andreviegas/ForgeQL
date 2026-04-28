@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
+use crate::ast::enrich::data_flow_utils::has_descendant_kind;
 use crate::ast::index::node_text;
 
 /// Enricher that computes `scope` and `storage` fields for declarations,
@@ -96,19 +97,4 @@ impl NodeEnricher for ScopeEnricher {
             }
         }
     }
-}
-
-/// Check whether `node` or any descendant has kind `target`.
-fn has_descendant_kind(node: tree_sitter::Node<'_>, target: &str) -> bool {
-    if node.kind() == target {
-        return true;
-    }
-    for i in 0..node.named_child_count() {
-        if let Some(child) = node.named_child(i)
-            && has_descendant_kind(child, target)
-        {
-            return true;
-        }
-    }
-    false
 }

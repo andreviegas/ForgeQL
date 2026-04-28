@@ -19,12 +19,11 @@
 /// `body_symbol` allows consumers like `show_body` to resolve a bare member
 /// name (e.g. `loadSignalCode`) to its out-of-line definition
 /// (`SignalSequencer::loadSignalCode`) without any language-specific logic
-/// at query time.
 use std::collections::HashMap;
 
 use super::{EnrichContext, NodeEnricher};
+use crate::ast::enrich::data_flow_utils::has_descendant_kind;
 use crate::ast::index::node_text;
-
 /// Enricher that links member function declarations to their definitions.
 pub struct MemberEnricher;
 
@@ -87,21 +86,6 @@ impl NodeEnricher for MemberEnricher {
             ));
         }
     }
-}
-
-/// Check whether `node` or any descendant has kind `target`.
-fn has_descendant_kind(node: tree_sitter::Node<'_>, target: &str) -> bool {
-    if node.kind() == target {
-        return true;
-    }
-    for i in 0..node.named_child_count() {
-        if let Some(child) = node.named_child(i)
-            && has_descendant_kind(child, target)
-        {
-            return true;
-        }
-    }
-    false
 }
 
 /// Walk up the parent chain to find an enclosing type node.

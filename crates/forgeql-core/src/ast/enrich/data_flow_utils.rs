@@ -301,6 +301,24 @@ pub fn contains_kind(node: tree_sitter::Node<'_>, target_kind: &str) -> bool {
     }
 }
 
+/// Check whether `node` or any named descendant has kind `target`.
+///
+/// Uses recursive child traversal (named children only).  Shared by
+/// `MemberEnricher` and `ScopeEnricher` which previously each carried
+/// an identical private copy of this function.
+pub fn has_descendant_kind(node: tree_sitter::Node<'_>, target: &str) -> bool {
+    if node.kind() == target {
+        return true;
+    }
+    for i in 0..node.named_child_count() {
+        if let Some(child) = node.named_child(i)
+            && has_descendant_kind(child, target)
+        {
+            return true;
+        }
+    }
+    false
+}
 /// Check if `needle` is a descendant of (or equal to) `haystack`.
 pub fn node_is_descendant_of(
     needle: tree_sitter::Node<'_>,
