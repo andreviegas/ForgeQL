@@ -79,10 +79,9 @@ fn collect_todos(
         }
     }
 
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
-            collect_todos(child, source, config, count, tags);
-        }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_todos(child, source, config, count, tags);
     }
 }
 

@@ -64,10 +64,9 @@ fn collect_fallthroughs(node: tree_sitter::Node<'_>, config: &LanguageConfig, co
         // Don't return — there might be nested switches inside cases.
     }
 
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
-            collect_fallthroughs(child, config, count);
-        }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_fallthroughs(child, config, count);
     }
 }
 
@@ -83,14 +82,11 @@ fn check_switch_cases(
     };
 
     // Collect all case_statement children.
-    let mut cases: Vec<tree_sitter::Node<'_>> = Vec::new();
-    for i in 0..body.child_count() {
-        if let Some(child) = body.child(i)
-            && config.is_case_statement_kind(child.kind())
-        {
-            cases.push(child);
-        }
-    }
+    let mut cursor = body.walk();
+    let cases: Vec<tree_sitter::Node<'_>> = body
+        .children(&mut cursor)
+        .filter(|c| config.is_case_statement_kind(c.kind()))
+        .collect();
 
     // Check each case except the last (last case can't fall through).
     for case in cases.iter().take(cases.len().saturating_sub(1)) {

@@ -85,10 +85,9 @@ fn count_self_calls(
         }
     }
 
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
-            count_self_calls(child, func_name, source, config, count);
-        }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        count_self_calls(child, func_name, source, config, count);
     }
 }
 
