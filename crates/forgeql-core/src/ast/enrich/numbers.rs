@@ -165,11 +165,22 @@ fn detect_format(s: &str) -> &'static str {
 /// Parse a number literal string into an i64 value.
 fn parse_value(s: &str, format: &str) -> i64 {
     match format {
-        "hex" => i64::from_str_radix(s.trim_start_matches("0x").trim_start_matches("0X"), 16)
-            .unwrap_or(0),
-        "bin" => {
-            i64::from_str_radix(s.trim_start_matches("0b").trim_start_matches("0B"), 2).unwrap_or(0)
-        }
+        // Use strip_prefix with or_else to handle both upper and lower case
+        // prefixes ("0x"/"0X", "0b"/"0B") without double trim_start_matches chains.
+        "hex" => i64::from_str_radix(
+            s.strip_prefix("0x")
+                .or_else(|| s.strip_prefix("0X"))
+                .unwrap_or(s),
+            16,
+        )
+        .unwrap_or(0),
+        "bin" => i64::from_str_radix(
+            s.strip_prefix("0b")
+                .or_else(|| s.strip_prefix("0B"))
+                .unwrap_or(s),
+            2,
+        )
+        .unwrap_or(0),
         "oct" => i64::from_str_radix(s.trim_start_matches('0'), 8).unwrap_or(0),
         #[allow(clippy::cast_possible_truncation)]
         "float" | "scientific" => s.parse::<f64>().map(|f| f as i64).unwrap_or(0),
