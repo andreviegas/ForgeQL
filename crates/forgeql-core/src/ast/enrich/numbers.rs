@@ -128,17 +128,21 @@ fn strip_suffix_with_table<'a>(lower: &'a str, suffixes: &[(String, String)]) ->
 }
 
 /// Detect the base format of a number literal.
+///
+/// Handles both uppercase and lowercase prefix/exponent characters
+/// (`0X`/`0x`, `0B`/`0b`, `E`/`e`) with a single comparison each,
+/// eliminating the previous `||`-duplicated uppercase branches.
 fn detect_format(s: &str) -> &'static str {
-    if s.starts_with("0x") || s.starts_with("0X") {
+    if s.len() >= 2 && s[..2].eq_ignore_ascii_case("0x") {
         "hex"
-    } else if s.starts_with("0b") || s.starts_with("0B") {
+    } else if s.len() >= 2 && s[..2].eq_ignore_ascii_case("0b") {
         "bin"
     } else if s.len() > 1
         && s.starts_with('0')
         && s.as_bytes().get(1).is_some_and(u8::is_ascii_digit)
     {
         "oct"
-    } else if s.contains('e') || s.contains('E') {
+    } else if s.contains(['e', 'E']) {
         "scientific"
     } else if s.contains('.') {
         "float"
