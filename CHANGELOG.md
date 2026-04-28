@@ -4,6 +4,19 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.42.0] — 2026-04-28
+
+### Refactored
+
+- **metrics.rs** — extracted `count_descendants_where` shared DFS closure; `count_descendants_by_kind` and `count_descendants_by_kinds` delegate to it.
+- **engine.rs** — extracted `find_pred_string` helper (removes 4 repeated `find_map` blocks); extracted `passes_glob_filter` helper (removes 3 duplicated IN/EXCLUDE glob-check blocks).
+- **numbers.rs** — consolidated `detect_format` case pairs using `eq_ignore_ascii_case`/char arrays; extracted `is_hex_digit_suffix` to deduplicate guard shared by `detect_suffix_with_table` and `strip_suffix_with_table`; replaced double `trim_start_matches` chains in `parse_value` with `strip_prefix(...).or_else(...)`.
+- **data_flow_utils.rs** — moved `has_descendant_kind` from `member.rs` and `scope.rs` into the shared module; `contains_kind` now delegates to `find_descendant_by_kind` (removes 26-line DFS loop copy); `collect_parameter_names` uses `children()` iterator.
+- **member.rs** — `enclosing_type_name` delegates to `enclosing_type_node` (removes duplicated while-loop); `enclosing_owner_name` likewise delegates to `enclosing_type_node`.
+- **todo.rs / recursion.rs / fallthrough.rs** — replaced `for i in 0..child_count()` / `node.child(i)` patterns with idiomatic `node.children(&mut cursor)` iterators; `check_switch_cases` converted to `filter+collect`.
+- **scope.rs** — two `named_child_count` indexed loops replaced with `named_children().find()` and `named_children().filter().any()`.
+- **exec_find.rs** — `find_symbols` fast-path and normal-path used identical QueryResult construction; extracted `make_result` closure. Applied `passes_glob_filter` to `find_usages`.
+- **redundancy.rs** — `has_update_descendant` 27-line DFS cursor loop replaced with `contains_kind` delegation (3-line `any()` chain).
 ## [0.41.0] — 2026-04-27
 
 ### Fixed
