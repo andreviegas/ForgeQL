@@ -548,6 +548,29 @@ fn like_trigram_literal(pat: &str) -> Option<String> {
     crate::ast::trigram::extract_like_literal(pat)
 }
 
+/// Return the `&str` value of the first predicate matching `field` and `op`,
+/// or `None` if no such predicate exists or its value is not a string.
+///
+/// Eliminates the repeated `iter().find_map(|p| { if p.field == X && p.op == Y … })`
+/// pattern inside `find_symbols_prefilter`.
+fn find_pred_string<'a>(
+    preds: &'a [crate::ir::Predicate],
+    field: &str,
+    op: crate::ir::CompareOp,
+) -> Option<&'a str> {
+    preds.iter().find_map(|p| {
+        if p.field == field && p.op == op {
+            if let crate::ir::PredicateValue::String(ref s) = p.value {
+                Some(s.as_str())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    })
+}
+
 /// Pre-filter symbol rows using secondary indexes and WHERE predicates
 /// before materializing `SymbolMatch`.  Returns `(results, remaining_clauses)`
 /// where `remaining_clauses` contains only the parts not yet applied.
@@ -560,59 +583,26 @@ pub(crate) fn find_symbols_prefilter(
 ) -> (Vec<SymbolMatch>, Clauses) {
     use crate::ast::index::RowRef;
     use crate::filter::{eval_predicate, like_match};
-    use crate::ir::{CompareOp, PredicateValue};
+    use crate::ir::CompareOp;
 
     // Extract a `fql_kind = value` predicate for the fql_kind_index shortcut (preferred).
     // Extract a `node_kind = value` predicate for the kind_index shortcut (power-user fallback).
-    let fql_kind_exact: Option<&str> = clauses.where_predicates.iter().find_map(|p| {
-        if p.field == "fql_kind"
-            && p.op == CompareOp::Eq
-            && let PredicateValue::String(ref s) = p.value
-        {
-            Some(s.as_str())
-        } else {
-            None
-        }
-    });
-    let kind_exact: Option<&str> = clauses.where_predicates.iter().find_map(|p| {
-        if p.field == "node_kind"
-            && p.op == CompareOp::Eq
-            && let PredicateValue::String(ref s) = p.value
-        {
-            Some(s.as_str())
-        } else {
-            None
-        }
-    });
+    let fql_kind_exact: Option<&str> =
+        find_pred_string(&clauses.where_predicates, "fql_kind", CompareOp::Eq);
+    let kind_exact: Option<&str> =
+        find_pred_string(&clauses.where_predicates, "node_kind", CompareOp::Eq);
 
     // Extract a `name LIKE 'pattern'` predicate for name filtering.
-    let name_like: Option<&str> = clauses.where_predicates.iter().find_map(|p| {
-        if p.field == "name"
-            && p.op == CompareOp::Like
-            && let PredicateValue::String(ref s) = p.value
-        {
-            Some(s.as_str())
-        } else {
-            None
-        }
-    });
+    let name_like: Option<&str> =
+        find_pred_string(&clauses.where_predicates, "name", CompareOp::Like);
 
     // Fast path: `name MATCHES '^literal$'` with no regex metacharacters is
     // equivalent to an exact equality lookup in the name_index.  Using the
     // name_index directly skips the per-row regex engine entirely.
-    let name_matches_anchored: Option<&str> = clauses.where_predicates.iter().find_map(|p| {
-        if p.field == "name"
-            && p.op == CompareOp::Matches
-            && let PredicateValue::String(ref s) = p.value
-        {
-            extract_anchored_literal(s.as_str())
-        } else {
-            None
-        }
-    });
+    let name_literal: Option<&str> =
+        find_pred_string(&clauses.where_predicates, "name", CompareOp::Matches)
+            .and_then(extract_anchored_literal);
 
-    // Combined: either source gives an O(1) name_index hit.
-    let name_literal: Option<&str> = name_matches_anchored;
     let is_usages_pred = |p: &crate::ir::Predicate| p.field == "usages";
 
     // Trigram pre-filter: extract a required literal substring from MATCHES
@@ -627,7 +617,7 @@ pub(crate) fn find_symbols_prefilter(
             .find_map(|p| {
                 if p.field == "name"
                     && p.op == CompareOp::Matches
-                    && let PredicateValue::String(ref s) = p.value
+                    && let crate::ir::PredicateValue::String(ref s) = p.value
                 {
                     return regex_trigram_literal(s.as_str());
                 }
