@@ -11,7 +11,7 @@ use crate::{
 use super::ForgeQLEngine;
 use super::{
     DEFAULT_QUERY_LIMIT, DEFAULT_SHOW_LINE_LIMIT, detect_metric_hint, find_symbols_prefilter,
-    reject_text_filter, require_session_id, validate_order_by_field,
+    passes_glob_filter, reject_text_filter, require_session_id, validate_order_by_field,
 };
 
 /// Try to answer a `FIND symbols GROUP BY <field>` query entirely from
@@ -174,27 +174,7 @@ impl ForgeQLEngine {
         let sites = query::find_usages(index, of);
         let mut results: Vec<SymbolMatch> = sites
             .iter()
-            .filter(|site| {
-                if let Some(ref glob) = clauses.in_glob
-                    && !crate::ast::query::relative_glob_matches(
-                        index.strings.paths.get(site.path_id),
-                        glob,
-                        root,
-                    )
-                {
-                    return false;
-                }
-                if let Some(ref glob) = clauses.exclude_glob
-                    && crate::ast::query::relative_glob_matches(
-                        index.strings.paths.get(site.path_id),
-                        glob,
-                        root,
-                    )
-                {
-                    return false;
-                }
-                true
-            })
+            .filter(|site| passes_glob_filter(index.strings.paths.get(site.path_id), clauses, root))
             .map(|site| SymbolMatch {
                 name: of.to_string(),
                 node_kind: None,

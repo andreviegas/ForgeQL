@@ -572,7 +572,11 @@ fn find_pred_string<'a>(
 }
 
 /// Return `false` if `path` is excluded by the `IN` or `EXCLUDE` glob of `clauses`.
-fn passes_glob_filter(path: &std::path::Path, clauses: &Clauses, root: &std::path::Path) -> bool {
+pub(super) fn passes_glob_filter(
+    path: &std::path::Path,
+    clauses: &Clauses,
+    root: &std::path::Path,
+) -> bool {
     if let Some(ref glob) = clauses.in_glob
         && !crate::ast::query::relative_glob_matches(path, glob, root)
     {
