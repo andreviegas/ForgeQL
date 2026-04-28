@@ -85,17 +85,19 @@ impl NodeEnricher for MetricsEnricher {
     }
 }
 
-/// Count all descendants of a specific kind within the node's subtree.
-fn count_descendants_by_kind(node: tree_sitter::Node<'_>, target_kind: &str) -> usize {
+/// DFS walk counting all descendant nodes (excluding `node` itself)
+/// for which `pred(kind)` returns `true`.
+fn count_descendants_where(
+    node: tree_sitter::Node<'_>,
+    mut pred: impl FnMut(&str) -> bool,
+) -> usize {
     let mut count = 0;
     let mut cursor = node.walk();
     let mut visit = true;
-
     loop {
-        if visit && cursor.node().kind() == target_kind && cursor.node() != node {
+        if visit && cursor.node() != node && pred(cursor.node().kind()) {
             count += 1;
         }
-
         if visit && cursor.goto_first_child() {
             visit = true;
             continue;
@@ -116,36 +118,14 @@ fn count_descendants_by_kind(node: tree_sitter::Node<'_>, target_kind: &str) -> 
     }
 }
 
+/// Count all descendants of a specific kind within the node's subtree.
+fn count_descendants_by_kind(node: tree_sitter::Node<'_>, target_kind: &str) -> usize {
+    count_descendants_where(node, |k| k == target_kind)
+}
+
 /// Count all descendants matching any of the given kinds within the node's subtree.
 fn count_descendants_by_kinds(node: tree_sitter::Node<'_>, target_kinds: &[String]) -> usize {
-    let mut count = 0;
-    let mut cursor = node.walk();
-    let mut visit = true;
-
-    loop {
-        if visit && target_kinds.iter().any(|s| s == cursor.node().kind()) && cursor.node() != node
-        {
-            count += 1;
-        }
-
-        if visit && cursor.goto_first_child() {
-            visit = true;
-            continue;
-        }
-        if cursor.goto_next_sibling() {
-            visit = true;
-            continue;
-        }
-        loop {
-            if !cursor.goto_parent() {
-                return count;
-            }
-            if cursor.goto_next_sibling() {
-                visit = true;
-                break;
-            }
-        }
-    }
+    count_descendants_where(node, |k| target_kinds.iter().any(|s| s == k))
 }
 
 /// Count parameters for a function node.
