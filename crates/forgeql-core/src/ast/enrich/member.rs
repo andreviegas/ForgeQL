@@ -128,12 +128,5 @@ fn enclosing_owner_name(
     owner_kinds: &[String],
     lang: &dyn crate::ast::lang::LanguageSupport,
 ) -> Option<String> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if owner_kinds.iter().any(|s| s == parent.kind()) {
-            return lang.extract_name(parent, source);
-        }
-        current = parent.parent();
-    }
-    None
+    enclosing_type_node(node, owner_kinds).and_then(|owner| lang.extract_name(owner, source))
 }
