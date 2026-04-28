@@ -571,6 +571,20 @@ fn find_pred_string<'a>(
     })
 }
 
+/// Return `false` if `path` is excluded by the `IN` or `EXCLUDE` glob of `clauses`.
+fn passes_glob_filter(path: &std::path::Path, clauses: &Clauses, root: &std::path::Path) -> bool {
+    if let Some(ref glob) = clauses.in_glob
+        && !crate::ast::query::relative_glob_matches(path, glob, root)
+    {
+        return false;
+    }
+    if let Some(ref glob) = clauses.exclude_glob
+        && crate::ast::query::relative_glob_matches(path, glob, root)
+    {
+        return false;
+    }
+    true
+}
 /// Pre-filter symbol rows using secondary indexes and WHERE predicates
 /// before materializing `SymbolMatch`.  Returns `(results, remaining_clauses)`
 /// where `remaining_clauses` contains only the parts not yet applied.
@@ -707,14 +721,7 @@ pub(crate) fn find_symbols_prefilter(
         {
             return false;
         }
-        if let Some(ref glob) = clauses.in_glob
-            && !crate::ast::query::relative_glob_matches(index.path_of(row), glob, root)
-        {
-            return false;
-        }
-        if let Some(ref glob) = clauses.exclude_glob
-            && crate::ast::query::relative_glob_matches(index.path_of(row), glob, root)
-        {
+        if !passes_glob_filter(index.path_of(row), clauses, root) {
             return false;
         }
         non_usages_preds
@@ -880,14 +887,7 @@ pub(crate) fn resolve_symbol<'a>(
     let filtered: Vec<&crate::ast::index::IndexRow> = candidates
         .into_iter()
         .filter(|row| {
-            if let Some(ref glob) = clauses.in_glob
-                && !crate::ast::query::relative_glob_matches(index.path_of(row), glob, root)
-            {
-                return false;
-            }
-            if let Some(ref glob) = clauses.exclude_glob
-                && crate::ast::query::relative_glob_matches(index.path_of(row), glob, root)
-            {
+            if !passes_glob_filter(index.path_of(row), clauses, root) {
                 return false;
             }
             clauses
