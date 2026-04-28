@@ -109,17 +109,10 @@ fn enclosing_type_name(
     source: &[u8],
     type_raw_kinds: &[String],
 ) -> Option<String> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if type_raw_kinds.iter().any(|s| s == parent.kind()) {
-            return parent
-                .child_by_field_name("name")
-                .map(|n| node_text(source, n))
-                .filter(|s| !s.is_empty());
-        }
-        current = parent.parent();
-    }
-    None
+    enclosing_type_node(node, type_raw_kinds)?
+        .child_by_field_name("name")
+        .map(|n| node_text(source, n))
+        .filter(|s| !s.is_empty())
 }
 
 /// Walk up the parent chain to find an enclosing *owner container* and return
