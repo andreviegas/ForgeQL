@@ -270,35 +270,9 @@ pub fn find_leaf_identifier(
     None
 }
 
-/// Check if a subtree contains a node of the given kind.
+/// Check if a subtree contains a node of the given kind (including the root).
 pub fn contains_kind(node: tree_sitter::Node<'_>, target_kind: &str) -> bool {
-    if node.kind() == target_kind {
-        return true;
-    }
-    let mut cursor = node.walk();
-    let mut visit = true;
-    loop {
-        if visit && cursor.node().kind() == target_kind && cursor.node() != node {
-            return true;
-        }
-        if visit && cursor.goto_first_child() {
-            visit = true;
-            continue;
-        }
-        if cursor.goto_next_sibling() {
-            visit = true;
-            continue;
-        }
-        loop {
-            if !cursor.goto_parent() {
-                return false;
-            }
-            if cursor.goto_next_sibling() {
-                visit = true;
-                break;
-            }
-        }
-    }
+    node.kind() == target_kind || find_descendant_by_kind(node, target_kind).is_some()
 }
 
 /// Check whether `node` or any named descendant has kind `target`.
