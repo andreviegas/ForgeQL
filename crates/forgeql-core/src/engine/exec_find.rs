@@ -109,6 +109,23 @@ impl ForgeQLEngine {
 
         let configs = self.lang_registry.configs();
 
+        // Closure shared by the fast path and the normal path to build the
+        // find_symbols QueryResult without repeating metric_hint / group_by_field.
+        let make_result = |results: Vec<crate::result::SymbolMatch>, total: usize| {
+            let metric_hint = detect_metric_hint(clauses);
+            let group_by_field = match &clauses.group_by {
+                Some(GroupBy::Field(f)) if f != "fql_kind" && f != "file" => Some(f.clone()),
+                _ => None,
+            };
+            ForgeQLResult::Query(QueryResult {
+                op: "find_symbols".to_string(),
+                results,
+                total,
+                metric_hint,
+                group_by_field,
+            })
+        };
+
         // Fast path: GROUP BY fql_kind / language with no WHERE/IN/EXCLUDE —
         // answered from pre-aggregated IndexStats in O(groups) instead of O(rows).
         if let Some((mut results, remaining)) = try_group_by_stats_fast_path(index, clauses) {
@@ -117,18 +134,7 @@ impl ForgeQLEngine {
             if clauses.limit.is_none() {
                 results.truncate(DEFAULT_QUERY_LIMIT);
             }
-            let metric_hint = detect_metric_hint(clauses);
-            let group_by_field = match &clauses.group_by {
-                Some(GroupBy::Field(f)) if f != "fql_kind" && f != "file" => Some(f.clone()),
-                _ => None,
-            };
-            return Ok(ForgeQLResult::Query(QueryResult {
-                op: "find_symbols".to_string(),
-                results,
-                total,
-                metric_hint,
-                group_by_field,
-            }));
+            return Ok(make_result(results, total));
         }
 
         let (mut results, remaining) = find_symbols_prefilter(index, clauses, root, &configs);
@@ -141,19 +147,7 @@ impl ForgeQLEngine {
             results.truncate(DEFAULT_QUERY_LIMIT);
         }
 
-        let metric_hint = detect_metric_hint(clauses);
-        let group_by_field = match &clauses.group_by {
-            Some(GroupBy::Field(f)) if f != "fql_kind" && f != "file" => Some(f.clone()),
-            _ => None,
-        };
-
-        Ok(ForgeQLResult::Query(QueryResult {
-            op: "find_symbols".to_string(),
-            results,
-            total,
-            metric_hint,
-            group_by_field,
-        }))
+        Ok(make_result(results, total))
     }
 
     /// `FIND usages OF 'symbol' ...`
