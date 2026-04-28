@@ -301,35 +301,12 @@ fn collect_calls_in_subtree(
     }
 }
 
-/// Walk `node`'s subtree (incl. itself) and return `true` if any descendant
+/// Walk `node`'s subtree (incl. itself) and return `true` if any node
 /// has a grammar kind listed in `update_raw_kinds` (i.e. `++` / `--`).
 fn has_update_descendant(node: tree_sitter::Node<'_>, update_raw_kinds: &[String]) -> bool {
-    let mut cursor = node.walk();
-    let mut visit = true;
-    loop {
-        if visit && update_raw_kinds.iter().any(|k| k == cursor.node().kind()) {
-            return true;
-        }
-        if visit && cursor.goto_first_child() {
-            continue;
-        }
-        if cursor.goto_next_sibling() {
-            visit = true;
-            continue;
-        }
-        loop {
-            if !cursor.goto_parent() {
-                return false;
-            }
-            if cursor.node() == node {
-                return false;
-            }
-            if cursor.goto_next_sibling() {
-                visit = true;
-                break;
-            }
-        }
-    }
+    update_raw_kinds
+        .iter()
+        .any(|k| crate::ast::enrich::data_flow_utils::contains_kind(node, k))
 }
 /// Count null-check comparisons in a condition subtree.
 ///
