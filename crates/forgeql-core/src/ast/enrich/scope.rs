@@ -51,18 +51,18 @@ impl NodeEnricher for ScopeEnricher {
 
             // Extract storage class specifier (static, extern, etc.) if present.
             let mut is_static = false;
-            for i in 0..ctx.node.named_child_count() {
-                if let Some(child) = ctx.node.named_child(i)
-                    && ctx.language_config.is_modifier_node_kind(child.kind())
-                {
-                    let text = node_text(ctx.source, child);
-                    if !text.is_empty() {
-                        if text == "static" {
-                            is_static = true;
-                        }
-                        drop(fields.insert("storage".to_string(), text));
+            let mut cursor = ctx.node.walk();
+            if let Some(child) = ctx
+                .node
+                .named_children(&mut cursor)
+                .find(|c| ctx.language_config.is_modifier_node_kind(c.kind()))
+            {
+                let text = node_text(ctx.source, child);
+                if !text.is_empty() {
+                    if text == "static" {
+                        is_static = true;
                     }
-                    break;
+                    drop(fields.insert("storage".to_string(), text));
                 }
             }
 
@@ -84,16 +84,15 @@ impl NodeEnricher for ScopeEnricher {
 
         // For functions (e.g. Rust pub fn): check for pub visibility modifier.
         if is_func && !fields.contains_key("is_exported") {
-            for i in 0..ctx.node.named_child_count() {
-                if let Some(child) = ctx.node.named_child(i)
-                    && ctx.language_config.is_modifier_node_kind(child.kind())
-                {
-                    let text = node_text(ctx.source, child);
-                    if text == "pub" || text.starts_with("pub(") {
-                        drop(fields.insert("is_exported".to_string(), "true".to_string()));
-                        break;
-                    }
-                }
+            let mut cursor = ctx.node.walk();
+            let is_pub = ctx
+                .node
+                .named_children(&mut cursor)
+                .filter(|c| ctx.language_config.is_modifier_node_kind(c.kind()))
+                .map(|c| node_text(ctx.source, c))
+                .any(|text| text == "pub" || text.starts_with("pub("));
+            if is_pub {
+                drop(fields.insert("is_exported".to_string(), "true".to_string()));
             }
         }
     }

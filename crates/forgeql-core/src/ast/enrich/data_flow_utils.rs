@@ -140,10 +140,8 @@ pub fn collect_parameter_names(
     };
 
     let has_param_kind = !config.parameter_kind().is_empty();
-    for i in 0..param_list.child_count() {
-        let Some(child) = param_list.child(i) else {
-            continue;
-        };
+    let mut cursor = param_list.walk();
+    for child in param_list.children(&mut cursor) {
         if has_param_kind {
             if config.is_parameter_kind(child.kind()) {
                 if let Some(decl) = child.child_by_field_name(config.declarator_field())
