@@ -96,6 +96,17 @@ impl NodeEnricher for NumberEnricher {
     }
 }
 
+/// Return `true` if `suffix` is a single character that is a valid hex digit
+/// (`a`–`f`) AND the literal `lower` starts with `0x`.
+///
+/// Such characters are part of the number itself, not a type suffix, and must
+/// not be treated as one.  Shared by `detect_suffix_with_table` and
+/// `strip_suffix_with_table` which previously each contained an identical guard.
+#[inline]
+fn is_hex_digit_suffix(lower: &str, suffix: &str) -> bool {
+    suffix.len() == 1 && lower.starts_with("0x") && "abcdef".contains(suffix)
+}
+
 /// Detect the type suffix of a number literal using the config suffix table.
 ///
 /// The config table is checked in order (longest suffixes first).
@@ -103,7 +114,7 @@ fn detect_suffix_with_table<'a>(lower: &str, suffixes: &'a [(String, String)]) -
     for (suffix, _) in suffixes {
         if lower.ends_with(suffix.as_str()) {
             // For hex literals, single-char suffixes a-f are digits, not suffixes
-            if suffix.len() == 1 && lower.starts_with("0x") && "abcdef".contains(suffix.as_str()) {
+            if is_hex_digit_suffix(lower, suffix.as_str()) {
                 continue;
             }
             return suffix;
@@ -118,7 +129,7 @@ fn strip_suffix_with_table<'a>(lower: &'a str, suffixes: &[(String, String)]) ->
     for (suf, _) in suffixes {
         if let Some(stripped) = lower.strip_suffix(suf.as_str()) {
             // For hex literals, single-char 'f' etc. are digits not suffixes
-            if suf.len() == 1 && lower.starts_with("0x") && "abcdef".contains(suf.as_str()) {
+            if is_hex_digit_suffix(lower, suf.as_str()) {
                 continue;
             }
             return stripped;
