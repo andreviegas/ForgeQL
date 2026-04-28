@@ -955,8 +955,53 @@ pub(crate) fn resolve_symbol<'a>(
 
     // Last match — preserves v1 last-write-wins within a single language.
     // SAFETY: `best` is guaranteed non-empty by the bail above.
+    // SAFETY: `best` is guaranteed non-empty by the bail above.
     #[allow(clippy::expect_used)]
     Ok(best.last().expect("filtered is non-empty"))
+}
+
+/// Like [`resolve_symbol`] but prefers type definitions (`struct`/`class`/`enum`)
+/// that have members — used for `SHOW members OF` lookups.
+///
+/// When a type is heavily referenced as a pointer (`struct Foo *`) there may be
+/// many reference-only index rows with the same name.  The generic
+/// `resolve_symbol` returns the last one in insertion order, which may be a
+/// reference rather than the definition.  This variant rescans all candidates
+/// and picks the one whose `fql_kind` is a type kind and whose `member_count`
+/// is > 0 when possible.
+pub(crate) fn resolve_type_symbol<'a>(
+    index: &'a SymbolTable,
+    name: &str,
+    clauses: &Clauses,
+    root: &Path,
+) -> Result<&'a crate::ast::index::IndexRow> {
+    let def = resolve_symbol(index, name, clauses, root)?;
+
+    // Fast path: the resolved row already looks like a type definition with members.
+    let fql_kind = index.fql_kind_of(def);
+    let has_members = index
+        .strings
+        .field_str(&def.fields, "member_count")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0)
+        > 0;
+    if (fql_kind == "struct" || fql_kind == "class" || fql_kind == "enum") && has_members {
+        return Ok(def);
+    }
+
+    // Slow path: scan all candidates for a type definition with members.
+    let best_type = index.find_all_defs(name).into_iter().rfind(|row| {
+        let fk = index.fql_kind_of(row);
+        (fk == "struct" || fk == "class" || fk == "enum")
+            && index
+                .strings
+                .field_str(&row.fields, "member_count")
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0)
+                > 0
+    });
+
+    Ok(best_type.unwrap_or(def))
 }
 
 /// Like [`resolve_symbol`] but follows the `body_symbol` redirect.
@@ -978,7 +1023,6 @@ pub(crate) fn resolve_body_symbol<'a>(
     }
     Ok(def)
 }
-
 /// Validate the `ORDER BY` field against a result set, returning an error if
 /// the field is not recognised for any item.
 /// Validate that the ORDER BY field is either a known built-in field, a known

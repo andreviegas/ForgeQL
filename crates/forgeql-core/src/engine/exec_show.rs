@@ -12,7 +12,7 @@ use crate::{
 use super::ForgeQLEngine;
 use super::{
     DEFAULT_BODY_DEPTH, DEFAULT_CONTEXT_LINES, convert_show_json, reject_text_filter,
-    resolve_body_symbol, resolve_symbol,
+    resolve_body_symbol, resolve_symbol, resolve_type_symbol,
 };
 
 impl ForgeQLEngine {
@@ -44,7 +44,7 @@ impl ForgeQLEngine {
             ForgeQLIR::ShowOutline { file, .. } => show::show_outline(index, &workspace, file)
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
             ForgeQLIR::ShowMembers { symbol, clauses } => {
-                resolve_symbol(index, symbol, clauses, root)
+                resolve_type_symbol(index, symbol, clauses, root)
                     .and_then(|def| {
                         show::show_members(def, index, &workspace, symbol, &self.lang_registry)
                     })

@@ -540,7 +540,7 @@ fn number_is_magic_true() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'number_literal' WHERE is_magic = 'true'",
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE is_magic = 'true' LIMIT 100",
     );
     let qr = as_query(&r);
     assert!(!qr.results.is_empty(), "expected magic numbers");
@@ -564,6 +564,57 @@ fn number_is_magic_false() {
     assert!(
         values.contains("0") || values.contains("1"),
         "expected 0 or 1 among non-magic values: {values:?}"
+    );
+}
+
+// NOTE: #define values in tree-sitter-cpp are parsed as `preproc_arg` not
+// `number_literal`, so BUG-06 #define suppression is verified at the config
+// level only — no integration test needed.
+#[test]
+fn number_is_magic_false_enumerator() {
+    // K_FLAG_A = 8 in enum NamedConstants — must NOT be magic (BUG-06)
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '8' WHERE is_magic = 'false'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "8 in enum NamedConstants must NOT be magic (BUG-06)"
+    );
+}
+
+#[test]
+fn number_is_magic_false_const_var() {
+    // kMaxRetries = 3 — file-scope const var initialiser must NOT be magic (BUG-06)
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '3' WHERE is_magic = 'false'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "3 in 'const int kMaxRetries = 3' must NOT be magic (BUG-06)"
+    );
+}
+
+#[test]
+fn number_is_magic_true_bare_expr_regression() {
+    // 42 in bare if-expression must STILL be magic after BUG-06 fix
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '42' WHERE is_magic = 'true'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "42 in bare expression must still be magic after BUG-06 fix"
     );
 }
 
@@ -1384,6 +1435,47 @@ fn metrics_param_count_comparison() {
     );
 }
 
+#[test]
+fn metrics_param_count_no_lambda_inflation() {
+    // outerNoParams has 0 outer params; lambda inside has 2 — must report 0 (BUG-05/NEW-01)
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'outerNoParams'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "outerNoParams");
+    let pc: usize = field(m, "param_count").parse().unwrap();
+    assert_eq!(
+        pc, 0,
+        "outerNoParams has 0 params but lambda params inflated it to {pc}"
+    );
+}
+
+#[test]
+fn metrics_param_count_lambda_sibling() {
+    // outerTwoParams has 2 outer params; lambda inside has 3 — must report 2 (BUG-05/NEW-01)
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'outerTwoParams'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "outerTwoParams");
+    let pc: usize = field(m, "param_count").parse().unwrap();
+    assert_eq!(
+        pc, 2,
+        "outerTwoParams has 2 outer params (lambda's 3 params must not be counted): got {pc}"
+    );
+}
+
+#[test]
+fn metrics_return_count_no_lambda_inflation() {
+    // outerOneReturn has 1 outer return; lambda inside has another — must report 1 (BUG-05/NEW-01)
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'outerOneReturn'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "outerOneReturn");
+    let rc: usize = field(m, "return_count").parse().unwrap();
+    assert_eq!(
+        rc, 1,
+        "outerOneReturn has 1 outer return (lambda return must not inflate count): got {rc}"
+    );
+}
 #[test]
 fn metrics_return_count() {
     let (mut e, sid, _d) = engine_enrichment_only();

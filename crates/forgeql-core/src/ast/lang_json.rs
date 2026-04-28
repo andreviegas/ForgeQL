@@ -219,6 +219,17 @@ pub struct DefinitionsSection {
     /// Empty = all declaration kinds are block-scoped (default for C++, Rust, Python).
     #[serde(default)]
     pub block_scoped_declaration_kinds: Vec<String>,
+
+    /// Node kinds that act as nested function bodies (lambda, closure, etc.).
+    /// The metrics enricher stops DFS at these to avoid inflating counts.
+    /// For C++: `["lambda_expression"]`.
+    #[serde(default)]
+    pub nested_function_body_kinds: Vec<String>,
+
+    /// Parent node kinds indicating a named constant (suppress `is_magic`).
+    /// For C++: `["preproc_def", "enumerator", "init_declarator"]`.
+    #[serde(default)]
+    pub constant_def_parent_kinds: Vec<String>,
 }
 
 /// Control-flow node kinds.
@@ -685,6 +696,8 @@ impl LanguageConfigJson {
             macro_invocation_kind: self.macros.invocation_kind,
             macro_parameters_field: self.macros.parameters_field,
             macro_value_field: self.macros.value_field,
+            nested_function_body_raw_kinds: self.definitions.nested_function_body_kinds,
+            constant_def_parent_raw_kinds: self.definitions.constant_def_parent_kinds,
             kind_map: self.kind_map,
         }
     }

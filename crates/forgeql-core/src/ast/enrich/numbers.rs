@@ -76,10 +76,18 @@ impl NodeEnricher for NumberEnricher {
         };
         drop(fields.insert("num_sign".to_string(), sign.to_string()));
 
-        // Magic number detection: 0, 1, -1 are not magic
-        let is_magic = !(-1..=1).contains(&value);
+        // Magic number detection: 0, 1, -1 are universally non-magic.
+        // Additionally, numbers whose direct parent is a named-constant context
+        // (enum enumerator, const variable initialiser) are not magic.
+        // We only check the *direct* parent to avoid false suppression for
+        // sub-expressions such as `arr[64]` inside an `init_declarator`.
+        let in_named_constant_context = {
+            let parent_kind = ctx.node.parent().map_or("", |p| p.kind());
+            let kinds = config.constant_def_parent_kinds();
+            kinds.iter().any(|k| k == parent_kind)
+        };
+        let is_magic = !(-1..=1).contains(&value) && !in_named_constant_context;
         drop(fields.insert("is_magic".to_string(), is_magic.to_string()));
-
         vec![ExtraRow {
             name: raw,
             node_kind: ctx.node.kind().to_string(),

@@ -406,6 +406,19 @@ pub struct LanguageConfig {
     /// Grammar field name for the macro body/value.
     pub(crate) macro_value_field: String,
 
+    // -- nested function body kinds (metrics enricher) --
+    /// Node kinds that act as nested function-like bodies.
+    /// The metrics enricher stops DFS recursion at these nodes so that
+    /// return/goto/string/throw counts are not inflated by lambdas.
+    /// For C++: `["lambda_expression"]`.
+    pub(crate) nested_function_body_raw_kinds: Vec<String>,
+
+    // -- named constant parent kinds (numbers enricher) --
+    /// Parent node kinds that indicate a number literal is a named constant
+    /// and therefore should NOT be flagged as `is_magic`.
+    /// For C++: `["preproc_def", "enumerator", "init_declarator"]`.
+    pub(crate) constant_def_parent_raw_kinds: Vec<String>,
+
     /// Raw tree-sitter kind → FQL kind mapping used by the data-driven
     /// `map_kind` implementation. Built from the `kind_map` section of
     /// the language JSON config.
@@ -1154,6 +1167,21 @@ impl LanguageConfig {
     #[must_use]
     pub fn string_literal_kinds(&self) -> &[String] {
         &self.string_literal_raw_kinds
+    }
+
+    /// Node kinds that act as nested function-like bodies.
+    /// The metrics enricher stops DFS at these nodes so return/goto/string/throw
+    /// counts are not inflated by lambdas or other nested function bodies.
+    #[must_use]
+    pub fn nested_function_body_kinds(&self) -> &[String] {
+        &self.nested_function_body_raw_kinds
+    }
+
+    /// Parent node kinds that indicate a number literal is a named constant
+    /// (should NOT be flagged as `is_magic`).
+    #[must_use]
+    pub fn constant_def_parent_kinds(&self) -> &[String] {
+        &self.constant_def_parent_raw_kinds
     }
 
     // Capability / misc accessors.

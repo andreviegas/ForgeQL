@@ -716,4 +716,52 @@ int noAssignGteComplex(int a, int b) {
         return 1;
     }
     return 0;
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* BUG-05/NEW-01 — Lambda-inflation regression fixtures (metrics)     */
+/* ------------------------------------------------------------------ */
+
+/* outerNoParams: 0 outer params; lambda inside has 2 — must report 0 */
+void outerNoParams() {
+    auto f = [](int x, int y) { return x + y; };
+    (void)f;
+}
+
+/* outerTwoParams: 2 outer params; lambda inside has 3 — must report 2 */
+int outerTwoParams(int a, int b) {
+    auto f = [](int x, int y, int z) { return x + y + z; };
+    return a + b + f(1, 2, 3);
+}
+
+/* outerOneReturn: 1 outer return; lambda has another return — must report 1 */
+int outerOneReturn(void) {
+    auto f = [](int y) { return y * 2; };
+    (void)f;
+    return 42;
+}
+
+/* ------------------------------------------------------------------ */
+/* BUG-06 — is_magic false-positives in named constant contexts       */
+/* ------------------------------------------------------------------ */
+
+#define NAMED_BUF_SIZE 64
+#define NAMED_THRESHOLD 100
+
+enum NamedConstants {
+    K_FLAG_A = 8,
+    K_FLAG_B = 16,
+};
+
+/* File-scope const variable — NOT magic */
+const int kMaxRetries = 3;
+const int kBufCapacity = 256;
+
+/* Bare magic numbers in expressions — STILL magic */
+void useMagicInExpr(void) {
+    int arr[100];
+    int x = arr[64];
+    (void)x;
+    if (x == 42) { (void)x; }
 }
