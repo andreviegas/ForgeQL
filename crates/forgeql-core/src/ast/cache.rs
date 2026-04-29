@@ -57,7 +57,13 @@ use crate::ast::lang::MacroDef;
 ///       string pool is now serialised as the `strings` field of `CachedIndex`.
 ///   26. `UsageSite.path: PathBuf` replaced by `path_id: u32` (interned into `ColumnarTable.paths`).
 ///      Eliminates ~280 MB of duplicated `PathBuf` heap on zephyr-scale sessions.
-pub const CURRENT_VERSION: u32 = 26;
+///   27. BUG-05/BUG-NEW-01/BUG-NEW-03: `param_count`, `return_count`, `goto_count`,
+///       `string_count`, and `throw_count` are now bounded at C++ lambda boundaries —
+///       values are lower for functions containing lambdas. BUG-06: `is_magic` is now
+///       `false` for numbers whose direct parent is `enumerator` or `init_declarator`
+///       (C++ named-constant contexts). Driven by new `constant_def_parent_kinds` and
+///       `nested_function_body_kinds` config arrays in `cpp.json`.
+pub const CURRENT_VERSION: u32 = 27;
 
 // -----------------------------------------------------------------------
 // CachedIndex

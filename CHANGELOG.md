@@ -4,6 +4,50 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.43.0] — 2026-04-29
+
+### Fixed
+
+- **BUG-05 / BUG-NEW-01 / BUG-NEW-03: `param_count` and aggregate counts inflated by C++ lambdas.**
+  `count_params` previously performed a full DFS of the function subtree, counting every
+  `parameter_declaration` node — including those inside lambda bodies embedded in the
+  function body. Fixed with `find_param_list_shallow`, which locates the function's own
+  `parameter_list` by stopping DFS recursion at `compound_statement` (the body), and
+  bounded-DFS variants for `return_count`, `goto_count`, `string_count`, and `throw_count`
+  that stop at `lambda_expression` nodes. Regression tests added for `outerNoParams`
+  (0 params + lambda with 2), `outerTwoParams` (2 params + lambda with 3), and
+  `outerOneReturn` (1 outer return + lambda with 1).
+
+- **BUG-06: `is_magic = true` false-positives for numbers in named-constant contexts (C++).**
+  Enum enumerators (`enum E { A = 8 }`) and `const` variable initialisers
+  (`const int kBuf = 256`) were incorrectly flagged as magic. Fixed by checking the
+  direct parent node against a new config field `constant_def_parent_kinds`
+  (`["preproc_def", "enumerator", "init_declarator"]` for C++). Numbers in bare
+  expressions (`arr[64]`, `if (x == 42)`) remain magic. Tests added:
+  `number_is_magic_false_enumerator`, `number_is_magic_false_const_var`,
+  `number_is_magic_true_bare_expr_regression`.
+
+- **BUG-13: `SHOW members OF` fails for types with many reference-only index rows.**
+  `resolve_symbol` last-indexed-wins returned a bare identifier reference (no
+  `member_count`) for types appearing hundreds of times as pointer arguments. Replaced
+  with `resolve_type_symbol`: fast path checks whether the resolved row already has
+  `fql_kind = struct/class/enum` and `member_count > 0`; slow path scans all candidates
+  via `find_all_defs` and picks the last type definition with members.
+
+### Changed
+
+- **Cache version bump — `CURRENT_VERSION` advanced from 26 → 27.**
+  The BUG-05 and BUG-06 fixes alter enrichment field values for existing rows
+  (`param_count`, `return_count`, `goto_count`, `string_count`, `throw_count`,
+  `is_magic`). Existing `.forgeql-index` files are invalidated and rebuilt on next
+  session open.
+
+- **C++ language config: `nested_function_body_kinds` and `constant_def_parent_kinds`.**
+  Two new optional arrays in `cpp.json` (both `#[serde(default)]` — empty for Rust and
+  Python). `nested_function_body_kinds: ["lambda_expression"]` drives bounded-DFS in
+  the metrics enricher. `constant_def_parent_kinds: ["preproc_def", "enumerator",
+  "init_declarator"]` drives magic-number suppression in the numbers enricher.
+
 ## [0.42.0] — 2026-04-28
 
 ### Refactored
