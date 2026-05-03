@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
 use forgeql_core::engine::ForgeQLEngine;
-use forgeql_core::ir::{Clauses, ForgeQLIR};
+use forgeql_core::ir::{Backend, Clauses, ForgeQLIR};
 use forgeql_core::parser;
 use forgeql_core::result::{ForgeQLResult, ShowContent};
 use tempfile::tempdir;
@@ -425,6 +425,7 @@ fn find_symbols_without_session_fails() {
     let tmp = tempdir().unwrap();
     let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
     let op = ForgeQLIR::FindSymbols {
+        backend: Backend::default(),
         clauses: Clauses::default(),
     };
     assert!(engine.execute(None, &op).is_err());

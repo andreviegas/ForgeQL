@@ -1,7 +1,7 @@
 //! Parse `FIND SYMBOLS`, `FIND USAGES`, `FIND FILES`, `FIND GLOBALS`, `FIND CALLEES`.
 use super::Rule;
 use super::clauses::parse_clauses;
-use super::helpers::unquote;
+use super::helpers::{parse_using_clause, unquote};
 use crate::error::ForgeError;
 use crate::ir::{CompareOp, ForgeQLIR, Predicate, PredicateValue};
 pub(super) fn parse_find(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
@@ -10,7 +10,10 @@ pub(super) fn parse_find(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQ
         .next()
         .ok_or_else(|| ForgeError::DslParse("find: expected target".into()))?;
 
-    // Collect remaining pairs; the only one should be the `clauses` node.
+    // Optional USING clause sits between find_target and clauses in the grammar.
+    let backend = parse_using_clause(&mut inner)?;
+
+    // Remaining pairs form the `clauses` node.
     let clauses = parse_clauses(inner);
 
     let target_str = target_pair.as_str().trim();
@@ -22,7 +25,11 @@ pub(super) fn parse_find(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQ
             .next()
             .map(|p| unquote(p.as_str()))
             .unwrap_or_default();
-        return Ok(ForgeQLIR::FindUsages { of: name, clauses });
+        return Ok(ForgeQLIR::FindUsages {
+            of: name,
+            backend,
+            clauses,
+        });
     }
 
     // "callees OF 'func'" — routes to ShowCallees (calls graph query)
@@ -32,7 +39,11 @@ pub(super) fn parse_find(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQ
             .next()
             .map(|p| unquote(p.as_str()))
             .unwrap_or_default();
-        return Ok(ForgeQLIR::ShowCallees { symbol, clauses });
+        return Ok(ForgeQLIR::ShowCallees {
+            symbol,
+            backend,
+            clauses,
+        });
     }
 
     match target_str {
@@ -52,9 +63,9 @@ pub(super) fn parse_find(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQ
             let mut clauses = clauses;
             clauses.where_predicates.push(kind_pred);
             clauses.where_predicates.push(scope_pred);
-            Ok(ForgeQLIR::FindSymbols { clauses })
+            Ok(ForgeQLIR::FindSymbols { backend, clauses })
         }
-        "files" => Ok(ForgeQLIR::FindFiles { clauses }),
-        _ => Ok(ForgeQLIR::FindSymbols { clauses }),
+        "files" => Ok(ForgeQLIR::FindFiles { backend, clauses }),
+        _ => Ok(ForgeQLIR::FindSymbols { backend, clauses }),
     }
 }

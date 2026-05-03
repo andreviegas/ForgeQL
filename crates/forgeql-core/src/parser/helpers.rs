@@ -65,6 +65,37 @@ pub(super) fn extract_heredoc(pair: pest::iterators::Pair<Rule>) -> Result<Strin
     Ok(body.to_string())
 }
 // -----------------------------------------------------------------------
+// Backend (USING clause) extraction
+// -----------------------------------------------------------------------
+
+/// Peek at the next pair in `pairs`; if it is a `using_clause`, consume it
+/// and return the parsed [`crate::ir::Backend`].
+///
+/// When the next pair is anything other than `using_clause` (or there is no
+/// next pair), returns [`crate::ir::Backend::Default`] without consuming.
+///
+/// Callers must call this **after** extracting the primary target (symbol /
+/// file / etc.) and **before** calling `parse_clauses`.
+pub(super) fn parse_using_clause(
+    pairs: &mut pest::iterators::Pairs<'_, Rule>,
+) -> Result<crate::ir::Backend, crate::error::ForgeError> {
+    if pairs
+        .peek()
+        .is_some_and(|p| p.as_rule() == Rule::using_clause)
+    {
+        // SAFETY: peek returned Some, so next() cannot return None.
+        let clause_pair = pairs.next().unwrap_or_else(|| unreachable!());
+        // using_clause contains a single string_literal child
+        let name = clause_pair
+            .into_inner()
+            .next()
+            .map(|p| unquote(p.as_str()))
+            .unwrap_or_default();
+        crate::ir::Backend::from_clause(&name)
+    } else {
+        Ok(crate::ir::Backend::Default)
+    }
+}
 // Error enrichment
 // -----------------------------------------------------------------------
 

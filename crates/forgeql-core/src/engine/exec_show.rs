@@ -4,13 +4,31 @@ use anyhow::{Result, bail};
 
 use crate::{
     ast::{query, show},
-    ir::{Clauses, ForgeQLIR},
+    ir::{Backend, Clauses, ForgeQLIR},
     result::{FileEntry, ForgeQLResult, ShowContent},
     session::Session,
 };
 
 use super::ForgeQLEngine;
 use super::{DEFAULT_BODY_DEPTH, DEFAULT_CONTEXT_LINES, convert_show_json, reject_text_filter};
+
+/// Extract the `backend` selector from any supported SHOW / `FindFiles` op.
+///
+/// Returns `Backend::Default` for any op that does not carry a backend field
+/// (e.g. mutation ops, which should never be dispatched here).
+const fn backend_for_show_op(op: &ForgeQLIR) -> &Backend {
+    match op {
+        ForgeQLIR::ShowContext { backend, .. }
+        | ForgeQLIR::ShowSignature { backend, .. }
+        | ForgeQLIR::ShowOutline { backend, .. }
+        | ForgeQLIR::ShowMembers { backend, .. }
+        | ForgeQLIR::ShowBody { backend, .. }
+        | ForgeQLIR::ShowCallees { backend, .. }
+        | ForgeQLIR::ShowLines { backend, .. }
+        | ForgeQLIR::FindFiles { backend, .. } => backend,
+        _ => &Backend::Default,
+    }
+}
 
 impl ForgeQLEngine {
     #[allow(clippy::too_many_lines)]
@@ -19,11 +37,14 @@ impl ForgeQLEngine {
         session_id: Option<&str>,
         op: &ForgeQLIR,
     ) -> Result<ForgeQLResult> {
-        let (workspace, engine) = self.require_workspace_and_engine(session_id)?;
+        let backend = backend_for_show_op(op);
+        let (workspace, engine) = self.require_workspace_and_engine_for(session_id, backend)?;
         let root = workspace.root();
 
         let json = match op {
-            ForgeQLIR::ShowContext { symbol, clauses } => {
+            ForgeQLIR::ShowContext {
+                symbol, clauses, ..
+            } => {
                 let context_lines = clauses.depth.unwrap_or(DEFAULT_CONTEXT_LINES);
                 engine
                     .resolve_symbol(symbol, clauses, root)
@@ -41,7 +62,9 @@ impl ForgeQLEngine {
                     })
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
-            ForgeQLIR::ShowSignature { symbol, clauses } => engine
+            ForgeQLIR::ShowSignature {
+                symbol, clauses, ..
+            } => engine
                 .resolve_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
@@ -58,14 +81,18 @@ impl ForgeQLEngine {
             ForgeQLIR::ShowOutline { file, .. } => engine
                 .show_outline_for_file(&workspace, file)
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
-            ForgeQLIR::ShowMembers { symbol, clauses } => engine
+            ForgeQLIR::ShowMembers {
+                symbol, clauses, ..
+            } => engine
                 .resolve_type_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
                     show::show_members(&loc.path, &workspace, symbol, &self.lang_registry)
                 })
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
-            ForgeQLIR::ShowBody { symbol, clauses } => engine
+            ForgeQLIR::ShowBody {
+                symbol, clauses, ..
+            } => engine
                 .resolve_body_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
@@ -80,7 +107,9 @@ impl ForgeQLEngine {
                     )
                 })
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
-            ForgeQLIR::ShowCallees { symbol, clauses } => engine
+            ForgeQLIR::ShowCallees {
+                symbol, clauses, ..
+            } => engine
                 .resolve_body_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
@@ -101,7 +130,7 @@ impl ForgeQLEngine {
                 ..
             } => show::show_lines(&workspace, file, *start_line, *end_line)
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
-            ForgeQLIR::FindFiles { clauses } => {
+            ForgeQLIR::FindFiles { clauses, .. } => {
                 reject_text_filter(clauses)?;
                 let glob = clauses.in_glob.as_deref().unwrap_or("**");
                 // IN / EXCLUDE are applied by find_files(); build typed entries

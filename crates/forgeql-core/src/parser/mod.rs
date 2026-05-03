@@ -18,7 +18,7 @@ mod transaction;
 use change::{parse_change, parse_copy_or_move};
 use clauses::parse_clauses;
 use find::parse_find;
-use helpers::{enrich_parse_error, next_str, unquote};
+use helpers::{enrich_parse_error, next_str, parse_using_clause, unquote};
 use transaction::parse_transaction;
 /// The generated parser struct (`pest_derive` expands this at compile time).
 #[derive(Parser)]
@@ -124,43 +124,73 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         Rule::show_context_stmt => {
             let mut inner = pair.into_inner();
             let symbol = next_str(&mut inner, "show_context: expected symbol name")?;
+            let backend = parse_using_clause(&mut inner)?;
             let clauses = parse_clauses(inner);
-            Ok(ForgeQLIR::ShowContext { symbol, clauses })
+            Ok(ForgeQLIR::ShowContext {
+                symbol,
+                backend,
+                clauses,
+            })
         }
 
         Rule::show_signature_stmt => {
             let mut inner = pair.into_inner();
             let symbol = next_str(&mut inner, "show_signature: expected symbol name")?;
+            let backend = parse_using_clause(&mut inner)?;
             let clauses = parse_clauses(inner);
-            Ok(ForgeQLIR::ShowSignature { symbol, clauses })
+            Ok(ForgeQLIR::ShowSignature {
+                symbol,
+                backend,
+                clauses,
+            })
         }
 
         Rule::show_outline_stmt => {
             let mut inner = pair.into_inner();
             let file = next_str(&mut inner, "show_outline: expected file path")?;
+            let backend = parse_using_clause(&mut inner)?;
             let clauses = parse_clauses(inner);
-            Ok(ForgeQLIR::ShowOutline { file, clauses })
+            Ok(ForgeQLIR::ShowOutline {
+                file,
+                backend,
+                clauses,
+            })
         }
 
         Rule::show_members_stmt => {
             let mut inner = pair.into_inner();
             let symbol = next_str(&mut inner, "show_members: expected symbol name")?;
+            let backend = parse_using_clause(&mut inner)?;
             let clauses = parse_clauses(inner);
-            Ok(ForgeQLIR::ShowMembers { symbol, clauses })
+            Ok(ForgeQLIR::ShowMembers {
+                symbol,
+                backend,
+                clauses,
+            })
         }
 
         Rule::show_body_stmt => {
             let mut inner = pair.into_inner();
             let symbol = next_str(&mut inner, "show_body: expected symbol name")?;
+            let backend = parse_using_clause(&mut inner)?;
             let clauses = parse_clauses(inner);
-            Ok(ForgeQLIR::ShowBody { symbol, clauses })
+            Ok(ForgeQLIR::ShowBody {
+                symbol,
+                backend,
+                clauses,
+            })
         }
 
         Rule::show_callees_stmt => {
             let mut inner = pair.into_inner();
             let symbol = next_str(&mut inner, "show_callees: expected symbol name")?;
+            let backend = parse_using_clause(&mut inner)?;
             let clauses = parse_clauses(inner);
-            Ok(ForgeQLIR::ShowCallees { symbol, clauses })
+            Ok(ForgeQLIR::ShowCallees {
+                symbol,
+                backend,
+                clauses,
+            })
         }
 
         Rule::show_lines_stmt => {
@@ -178,11 +208,13 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
                 .parse()
                 .map_err(|e| ForgeError::DslParse(format!("show_lines end: {e}")))?;
             let file = next_str(&mut inner, "show_lines: expected file")?;
+            let backend = parse_using_clause(&mut inner)?;
             let clauses = parse_clauses(inner);
             Ok(ForgeQLIR::ShowLines {
                 file,
                 start_line,
                 end_line,
+                backend,
                 clauses,
             })
         }
@@ -250,7 +282,7 @@ mod tests {
     fn parse_find_symbols() {
         let ops = parse("FIND symbols WHERE name LIKE 'set%' IN 'src/**/*.cpp'").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 assert_eq!(clauses.where_predicates.len(), 1);
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.field, "name");
@@ -267,7 +299,7 @@ mod tests {
     fn parse_find_with_exclude() {
         let ops = parse("FIND symbols WHERE name LIKE 'set%' EXCLUDE 'tests/**'").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 assert_eq!(clauses.where_predicates.len(), 1);
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.field, "name");
@@ -284,7 +316,7 @@ mod tests {
     fn parse_find_usages_with_exclude() {
         let ops = parse("FIND usages OF 'showCode' EXCLUDE 'tests/**'").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindUsages { of, clauses } => {
+            ForgeQLIR::FindUsages { of, clauses, .. } => {
                 assert_eq!(of, "showCode");
                 assert_eq!(clauses.exclude_glob.as_deref(), Some("tests/**"));
             }
@@ -450,7 +482,9 @@ mod tests {
     fn parse_show_context_minimal() {
         let ops = parse("SHOW context OF 'setPeakLevel'").unwrap();
         match &ops[0] {
-            ForgeQLIR::ShowContext { symbol, clauses } => {
+            ForgeQLIR::ShowContext {
+                symbol, clauses, ..
+            } => {
                 assert_eq!(symbol, "setPeakLevel");
                 assert!(clauses.in_glob.is_none());
                 assert!(clauses.depth.is_none());
@@ -464,7 +498,9 @@ mod tests {
         // IN 'file' → clauses.in_glob; LINES 10 → clauses.depth
         let ops = parse("SHOW context OF 'setPeakLevel' IN 'src/signal.cpp' LINES 10").unwrap();
         match &ops[0] {
-            ForgeQLIR::ShowContext { symbol, clauses } => {
+            ForgeQLIR::ShowContext {
+                symbol, clauses, ..
+            } => {
                 assert_eq!(symbol, "setPeakLevel");
                 assert_eq!(clauses.in_glob.as_deref(), Some("src/signal.cpp"));
                 assert_eq!(clauses.depth, Some(10));
@@ -504,7 +540,9 @@ mod tests {
     fn parse_show_body_no_depth() {
         let ops = parse("SHOW body OF 'processSignal'").unwrap();
         match &ops[0] {
-            ForgeQLIR::ShowBody { symbol, clauses } => {
+            ForgeQLIR::ShowBody {
+                symbol, clauses, ..
+            } => {
                 assert_eq!(symbol, "processSignal");
                 assert!(clauses.depth.is_none());
             }
@@ -516,7 +554,9 @@ mod tests {
     fn parse_show_body_with_depth() {
         let ops = parse("SHOW body OF 'processSignal' DEPTH 2").unwrap();
         match &ops[0] {
-            ForgeQLIR::ShowBody { symbol, clauses } => {
+            ForgeQLIR::ShowBody {
+                symbol, clauses, ..
+            } => {
                 assert_eq!(symbol, "processSignal");
                 assert_eq!(clauses.depth, Some(2));
             }
@@ -539,7 +579,7 @@ mod tests {
     fn parse_find_symbols_usages_n() {
         let ops = parse("FIND symbols WHERE usages = 3").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 assert_eq!(clauses.where_predicates.len(), 1);
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.field, "usages");
@@ -555,7 +595,7 @@ mod tests {
         // LIKE predicate with a string value
         let ops = parse("FIND symbols WHERE name LIKE 'set%'").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.field, "name");
                 assert_eq!(p.op, CompareOp::Like);
@@ -569,7 +609,7 @@ mod tests {
     fn parse_find_symbols_where_name_not_like() {
         let ops = parse("FIND symbols WHERE name NOT LIKE 'test%'").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.op, CompareOp::NotLike);
                 assert_eq!(p.value, PredicateValue::String("test%".into()));
@@ -827,7 +867,7 @@ mod tests {
     fn parse_find_files() {
         let ops = parse("FIND files IN 'include/**'").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindFiles { clauses } => {
+            ForgeQLIR::FindFiles { clauses, .. } => {
                 assert_eq!(clauses.in_glob.as_deref(), Some("include/**"));
                 assert!(clauses.exclude_glob.is_none());
                 assert!(clauses.depth.is_none());
@@ -840,7 +880,7 @@ mod tests {
     fn parse_find_files_with_exclude() {
         let ops = parse("FIND files IN 'src/**' EXCLUDE 'src/legacy/**'").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindFiles { clauses } => {
+            ForgeQLIR::FindFiles { clauses, .. } => {
                 assert_eq!(clauses.in_glob.as_deref(), Some("src/**"));
                 assert_eq!(clauses.exclude_glob.as_deref(), Some("src/legacy/**"));
             }
@@ -852,7 +892,7 @@ mod tests {
     fn parse_find_files_with_depth() {
         let ops = parse("FIND files IN 'src/**' DEPTH 1").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindFiles { clauses } => {
+            ForgeQLIR::FindFiles { clauses, .. } => {
                 assert_eq!(clauses.in_glob.as_deref(), Some("src/**"));
                 assert_eq!(clauses.depth, Some(1));
             }
@@ -864,7 +904,7 @@ mod tests {
     fn parse_find_files_with_depth_and_exclude() {
         let ops = parse("FIND files IN 'src/**' EXCLUDE 'src/legacy/**' DEPTH 0").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindFiles { clauses } => {
+            ForgeQLIR::FindFiles { clauses, .. } => {
                 assert_eq!(clauses.in_glob.as_deref(), Some("src/**"));
                 assert_eq!(clauses.exclude_glob.as_deref(), Some("src/legacy/**"));
                 assert_eq!(clauses.depth, Some(0));
@@ -879,7 +919,7 @@ mod tests {
     fn parse_find_globals_sets_globals_only() {
         let ops = parse("FIND globals").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let kind_pred = clauses
                     .where_predicates
                     .iter()
@@ -906,7 +946,7 @@ mod tests {
     fn parse_find_globals_order_by_usages_desc_limit() {
         let ops = parse("FIND globals ORDER BY usages DESC LIMIT 20").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let kind_pred = clauses
                     .where_predicates
                     .iter()
@@ -930,7 +970,7 @@ mod tests {
     fn parse_find_globals_limit_and_offset() {
         let ops = parse("FIND globals ORDER BY name LIMIT 50 OFFSET 50").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let kind_pred = clauses
                     .where_predicates
                     .iter()
@@ -987,7 +1027,7 @@ mod tests {
     fn parse_find_symbols_where_usages_gte() {
         let ops = parse("FIND symbols WHERE usages >= 5 ORDER BY usages DESC LIMIT 10").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 assert_eq!(clauses.where_predicates.len(), 1);
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.field, "usages");
@@ -1006,7 +1046,7 @@ mod tests {
     fn parse_find_symbols_where_usages_not_eq() {
         let ops = parse("FIND symbols WHERE usages != 0").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 assert_eq!(clauses.where_predicates.len(), 1);
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.op, CompareOp::NotEq);
@@ -1020,7 +1060,7 @@ mod tests {
     fn parse_find_symbols_where_usages_lte() {
         let ops = parse("FIND symbols WHERE usages <= 10").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 assert_eq!(clauses.where_predicates.len(), 1);
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.op, CompareOp::Lte);
@@ -1034,7 +1074,7 @@ mod tests {
     fn parse_find_symbols_where_usages_gt() {
         let ops = parse("FIND symbols WHERE usages > 0 IN 'src/**'").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 assert_eq!(clauses.where_predicates.len(), 1);
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.op, CompareOp::Gt);
@@ -1051,7 +1091,7 @@ mod tests {
     fn parse_where_usages_eq_negative_one() {
         let ops = parse("FIND symbols WHERE usages = -1").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.field, "usages");
                 assert_eq!(p.op, CompareOp::Eq);
@@ -1065,7 +1105,7 @@ mod tests {
     fn parse_where_usages_gt_negative_one() {
         let ops = parse("FIND symbols WHERE usages > -1").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.op, CompareOp::Gt);
                 assert_eq!(p.value, PredicateValue::Number(-1));
@@ -1078,7 +1118,7 @@ mod tests {
     fn parse_where_line_gte_negative_number() {
         let ops = parse("FIND symbols WHERE line >= -100").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.field, "line");
                 assert_eq!(p.op, CompareOp::Gte);
@@ -1112,7 +1152,7 @@ mod tests {
         // WHERE field = bare_value (no quotes).
         let ops = parse("FIND symbols WHERE fql_kind = function").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.field, "fql_kind");
                 assert_eq!(p.value, PredicateValue::String("function".into()));
@@ -1126,7 +1166,7 @@ mod tests {
         // WHERE field = "value" (double quotes).
         let ops = parse(r#"FIND symbols WHERE fql_kind = "function""#).unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.field, "fql_kind");
                 assert_eq!(p.value, PredicateValue::String("function".into()));
@@ -1189,7 +1229,7 @@ mod tests {
     fn parse_where_usages_lt() {
         let ops = parse("FIND symbols WHERE usages < 3").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.op, CompareOp::Lt);
                 assert_eq!(p.value, PredicateValue::Number(3));
@@ -1202,7 +1242,7 @@ mod tests {
     fn parse_where_name_matches() {
         let ops = parse("FIND symbols WHERE name MATCHES '^get_'").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.op, CompareOp::Matches);
                 assert_eq!(p.value, PredicateValue::String("^get_".into()));
@@ -1215,7 +1255,7 @@ mod tests {
     fn parse_where_name_not_matches() {
         let ops = parse("FIND symbols WHERE name NOT MATCHES '^test_'").unwrap();
         match &ops[0] {
-            ForgeQLIR::FindSymbols { clauses } => {
+            ForgeQLIR::FindSymbols { clauses, .. } => {
                 let p = &clauses.where_predicates[0];
                 assert_eq!(p.op, CompareOp::NotMatches);
                 assert_eq!(p.value, PredicateValue::String("^test_".into()));

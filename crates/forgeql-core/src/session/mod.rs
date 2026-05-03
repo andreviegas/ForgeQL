@@ -86,10 +86,15 @@ pub struct Session {
     /// to identify the worktree in `worktree::remove`.  May differ from `id`
     /// when a custom branch name was supplied via `USE … AS`.
     pub worktree_name: String,
-    /// Active storage engine. Defaults to `LegacyMemoryStorage`; future
-    /// phases will swap this for a columnar backend without touching Session.
+    /// Active storage engine (legacy in-memory index).
     /// Populated with a live index after `build_index` or `resume_index`.
     engine: Box<dyn StorageEngine>,
+    /// Optional columnar storage backend — `None` until Phase 03 enables
+    /// shadow-write and promotes it to primary.
+    ///
+    /// When present, `engine_for(Backend::Columnar)` routes through this
+    /// field instead of `engine`.
+    columnar_engine: Option<Box<dyn StorageEngine>>,
     /// The commit hash the current `index` was built from.
     cached_commit: Option<String>,
     /// `true` when in-memory `index` has diverged from the on-disk
@@ -165,6 +170,7 @@ impl Session {
             custom_branch: None,
             worktree_name,
             engine: Box::new(LegacyMemoryStorage::new(Arc::clone(lang_registry))),
+            columnar_engine: None,
             cached_commit: None,
             index_dirty: false,
             last_active: std::time::Instant::now(),
@@ -288,6 +294,27 @@ impl Session {
         self.engine.as_mut()
     }
 
+    /// Return a reference to the storage engine to use for a given backend selector.
+    ///
+    /// - [`Backend::Default`] and [`Backend::Legacy`] → the legacy in-memory engine.
+    /// - [`Backend::Columnar`] → the columnar engine, if one is installed.
+    ///   Returns an error when `columnar_engine` is `None`.
+    ///
+    /// # Errors
+    /// Returns `Err` if `backend` is [`Backend::Columnar`] and no columnar engine
+    /// has been installed (Phase 03 will set one via `Session::set_columnar_engine`).
+    pub fn engine_for(&self, backend: &crate::ir::Backend) -> Result<&dyn StorageEngine> {
+        match backend {
+            crate::ir::Backend::Default | crate::ir::Backend::Legacy => Ok(self.engine.as_ref()),
+            crate::ir::Backend::Columnar => self.columnar_engine.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "columnar backend is not enabled for session '{}'; \
+                         Phase 03 shadow-write must be completed first",
+                    self.id
+                )
+            }),
+        }
+    }
     /// Incrementally re-index the given files after a mutation.
     ///
     /// Each path is purged (all stale entries removed) then re-parsed.

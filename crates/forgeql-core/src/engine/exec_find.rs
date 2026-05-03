@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::{
-    ir::{Clauses, GroupBy},
+    ir::{Backend, Clauses, GroupBy},
     result::{ForgeQLResult, QueryResult, ShowContent, ShowResult},
 };
 
@@ -14,6 +14,7 @@ impl ForgeQLEngine {
     pub(super) fn find_symbols(
         &self,
         session_id: Option<&str>,
+        backend: &Backend,
         clauses: &Clauses,
     ) -> Result<ForgeQLResult> {
         reject_text_filter(clauses)?;
@@ -24,7 +25,7 @@ impl ForgeQLEngine {
         // Delegate all filtering, fast-path GROUP BY, ORDER BY, explicit LIMIT
         // to the storage engine. The engine returns sorted/filtered results
         // WITHOUT the implicit DEFAULT_QUERY_LIMIT cap — that is applied below.
-        let mut results = session.engine().find_symbols(clauses, &root)?;
+        let mut results = session.engine_for(backend)?.find_symbols(clauses, &root)?;
 
         let total = results.len();
         if clauses.limit.is_none() {
@@ -51,6 +52,7 @@ impl ForgeQLEngine {
         &self,
         session_id: Option<&str>,
         of: &str,
+        backend: &Backend,
         clauses: &Clauses,
     ) -> Result<ForgeQLResult> {
         reject_text_filter(clauses)?;
@@ -58,7 +60,9 @@ impl ForgeQLEngine {
         let session = self.require_session(sid)?;
         let root = session.worktree_path.clone();
 
-        let mut results = session.engine().find_usages(of, clauses, &root)?;
+        let mut results = session
+            .engine_for(backend)?
+            .find_usages(of, clauses, &root)?;
 
         let total = results.len();
         if clauses.limit.is_none() {

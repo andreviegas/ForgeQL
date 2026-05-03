@@ -6,6 +6,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     git::worktree,
+    ir::Backend,
     session::{Session, read_last_active},
     storage::StorageEngine,
     workspace::Workspace,
@@ -158,6 +159,26 @@ impl ForgeQLEngine {
         anyhow::ensure!(session.has_index(), "session index not ready — retry USE");
         let workspace = Workspace::new(&session.worktree_path)?;
         Ok((workspace, session.engine()))
+    }
+
+    /// Backend-aware variant of `require_workspace_and_engine`.
+    ///
+    /// Routes through `Session::engine_for(backend)` instead of always using
+    /// the default legacy engine.
+    ///
+    /// # Errors
+    /// Returns `Err` if the session is not found, the index is not ready,
+    /// the workspace cannot be created, or the requested backend is not
+    /// installed (e.g. `Backend::Columnar` before Phase 03).
+    pub(super) fn require_workspace_and_engine_for(
+        &self,
+        session_id: Option<&str>,
+        backend: &Backend,
+    ) -> Result<(Workspace, &dyn StorageEngine)> {
+        let session = self.require_session(require_session_id(session_id)?)?;
+        anyhow::ensure!(session.has_index(), "session index not ready — retry USE");
+        let workspace = Workspace::new(&session.worktree_path)?;
+        Ok((workspace, session.engine_for(backend)?))
     }
     /// Look up a session by ID.
     ///

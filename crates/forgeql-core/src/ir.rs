@@ -10,9 +10,43 @@
 use serde::{Deserialize, Serialize};
 
 // -----------------------------------------------------------------------
-// Clause types — shared by all read-only query operations
+// Backend selector — produced by the optional USING clause
 // -----------------------------------------------------------------------
 
+/// Selects which storage backend serves a read-only query.
+///
+/// Produced by the optional `USING 'backend'` clause in FQL.
+/// Mutations (`CHANGE`, `COPY`, `MOVE`) always write through all enabled
+/// backends and do not accept a backend selector.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Backend {
+    /// No explicit `USING` clause — use the engine default (legacy for now).
+    #[default]
+    Default,
+    /// `USING 'legacy'` — explicitly route to the `LegacyMemoryStorage` backend.
+    Legacy,
+    /// `USING 'columnar'` — route to the columnar backend.
+    ///
+    /// Returns an "not enabled" error until Phase 03 enables `columnar.shadow_write`.
+    Columnar,
+}
+
+impl Backend {
+    /// Parse a backend name from a `USING 'name'` clause.
+    ///
+    /// # Errors
+    /// Returns `Err` if the name is not a known backend.
+    pub fn from_clause(s: &str) -> Result<Self, crate::error::ForgeError> {
+        match s {
+            "legacy" => Ok(Self::Legacy),
+            "columnar" => Ok(Self::Columnar),
+            other => Err(crate::error::ForgeError::DslParse(format!(
+                "unknown backend '{other}'; known backends: legacy, columnar"
+            ))),
+        }
+    }
+}
 /// Sort direction for `ORDER BY` clauses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -182,12 +216,16 @@ pub enum ForgeQLIR {
     // Queries (read-only)
     // ------------------------------------------------------------------
     FindSymbols {
+        #[serde(default, skip_serializing_if = "crate::ir::is_default_backend")]
+        backend: Backend,
         #[serde(flatten)]
         clauses: Clauses,
     },
 
     FindUsages {
         of: String,
+        #[serde(default, skip_serializing_if = "crate::ir::is_default_backend")]
+        backend: Backend,
         #[serde(flatten)]
         clauses: Clauses,
     },
@@ -199,6 +237,8 @@ pub enum ForgeQLIR {
     /// relative to the IN root are collapsed into summary entries
     /// showing only the folder name and file count.
     FindFiles {
+        #[serde(default, skip_serializing_if = "crate::ir::is_default_backend")]
+        backend: Backend,
         #[serde(flatten)]
         clauses: Clauses,
     },
@@ -212,6 +252,8 @@ pub enum ForgeQLIR {
     /// sets the context window size (default 5).
     ShowContext {
         symbol: String,
+        #[serde(default, skip_serializing_if = "crate::ir::is_default_backend")]
+        backend: Backend,
         #[serde(flatten)]
         clauses: Clauses,
     },
@@ -220,6 +262,8 @@ pub enum ForgeQLIR {
     /// Returns the function/type signature (up to `{` or `;`), all overloads.
     ShowSignature {
         symbol: String,
+        #[serde(default, skip_serializing_if = "crate::ir::is_default_backend")]
+        backend: Backend,
         #[serde(flatten)]
         clauses: Clauses,
     },
@@ -228,6 +272,8 @@ pub enum ForgeQLIR {
     /// Returns all top-level declarations in the file in source order.
     ShowOutline {
         file: String,
+        #[serde(default, skip_serializing_if = "crate::ir::is_default_backend")]
+        backend: Backend,
         #[serde(flatten)]
         clauses: Clauses,
     },
@@ -236,6 +282,8 @@ pub enum ForgeQLIR {
     /// Returns field names and method signatures for a struct/class.
     ShowMembers {
         symbol: String,
+        #[serde(default, skip_serializing_if = "crate::ir::is_default_backend")]
+        backend: Backend,
         #[serde(flatten)]
         clauses: Clauses,
     },
@@ -246,6 +294,8 @@ pub enum ForgeQLIR {
     /// `clauses.depth` carries the collapse level.
     ShowBody {
         symbol: String,
+        #[serde(default, skip_serializing_if = "crate::ir::is_default_backend")]
+        backend: Backend,
         #[serde(flatten)]
         clauses: Clauses,
     },
@@ -254,6 +304,8 @@ pub enum ForgeQLIR {
     /// Returns all function names called within the body of `func`.
     ShowCallees {
         symbol: String,
+        #[serde(default, skip_serializing_if = "crate::ir::is_default_backend")]
+        backend: Backend,
         #[serde(flatten)]
         clauses: Clauses,
     },
@@ -265,6 +317,8 @@ pub enum ForgeQLIR {
         file: String,
         start_line: usize,
         end_line: usize,
+        #[serde(default, skip_serializing_if = "crate::ir::is_default_backend")]
+        backend: Backend,
         #[serde(flatten)]
         clauses: Clauses,
     },
@@ -336,6 +390,15 @@ pub enum ForgeQLIR {
         /// Name of the verify step to run.
         step: String,
     },
+}
+
+/// Serde helper: skip-serializing `Backend` when it holds the `Default` variant.
+///
+/// Used in all read-only `ForgeQLIR` variants so that the JSON wire format
+/// is unchanged for queries without a `USING` clause.
+#[must_use]
+pub fn is_default_backend(b: &Backend) -> bool {
+    *b == Backend::Default
 }
 
 /// Targeting mode for the `CHANGE FILE[S]` command.

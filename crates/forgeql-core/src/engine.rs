@@ -282,8 +282,15 @@ impl ForgeQLEngine {
                 session_id: for_session,
             } => self.show_stats(for_session.as_deref()),
             // --- Read-only queries ---
-            ForgeQLIR::FindSymbols { clauses } => self.find_symbols(session_id, clauses),
-            ForgeQLIR::FindUsages { of, clauses } => self.find_usages(session_id, of, clauses),
+            ForgeQLIR::FindSymbols {
+                backend, clauses, ..
+            } => self.find_symbols(session_id, backend, clauses),
+            ForgeQLIR::FindUsages {
+                of,
+                backend,
+                clauses,
+                ..
+            } => self.find_usages(session_id, of, backend, clauses),
 
             // --- Code exposure (SHOW) ---
             ForgeQLIR::ShowContext { .. }
@@ -1529,7 +1536,7 @@ fn extract_source_lines(json: &serde_json::Value) -> Vec<SourceLine> {
 mod tests {
     use super::*;
     use crate::ast::lang::CppLanguageInline;
-    use crate::ir::Clauses;
+    use crate::ir::{Backend, Clauses};
 
     fn make_registry() -> Arc<LanguageRegistry> {
         Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
@@ -1628,6 +1635,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
         let op = ForgeQLIR::FindSymbols {
+            backend: Backend::default(),
             clauses: Clauses::default(),
         };
         let result = engine.execute(None, &op);

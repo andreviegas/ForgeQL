@@ -56,6 +56,15 @@ bare_value = @{ (ASCII_ALPHANUMERIC | "_" | ":" | "-" | "." | "/")+ }
 /// Any value: a quoted literal (single or double) or a bare (unquoted) token.
 /// Use this in contexts where quoting is optional (predicates, OF targets, IN/EXCLUDE paths).
 any_value = { string_literal | bare_value }
+
+// -----------------------------------------------------------------------
+// Optional backend selector — USING 'backend'
+// -----------------------------------------------------------------------
+
+/// `USING 'backend'` selects the storage engine for a read-only query.
+/// Recognised names: `legacy`, `columnar`.
+/// May appear between the command target and the `clauses` block.
+using_clause = { "USING" ~ string_literal }
 // -----------------------------------------------------------------------
 // Top-level program
 // -----------------------------------------------------------------------
@@ -106,31 +115,31 @@ show_stats_stmt    = { "SHOW" ~ "STATS" ~ ("FOR" ~ any_value)? }
 // -----------------------------------------------------------------------
 
 /// `SHOW body OF 'func' [DEPTH n]`
-show_body_stmt = { "SHOW" ~ "body" ~ "OF" ~ any_value ~ clauses }
+show_body_stmt = { "SHOW" ~ "body" ~ "OF" ~ any_value ~ using_clause? ~ clauses }
 
 /// `SHOW context OF 'symbol' [IN 'file'] [LINES n]`
-show_context_stmt = { "SHOW" ~ "context" ~ "OF" ~ any_value ~ clauses }
+show_context_stmt = { "SHOW" ~ "context" ~ "OF" ~ any_value ~ using_clause? ~ clauses }
 
 /// `SHOW signature OF 'symbol'`
-show_signature_stmt = { "SHOW" ~ "signature" ~ "OF" ~ any_value ~ clauses }
+show_signature_stmt = { "SHOW" ~ "signature" ~ "OF" ~ any_value ~ using_clause? ~ clauses }
 
 /// `SHOW outline OF 'file'`
-show_outline_stmt = { "SHOW" ~ "outline" ~ "OF" ~ any_value ~ clauses }
+show_outline_stmt = { "SHOW" ~ "outline" ~ "OF" ~ any_value ~ using_clause? ~ clauses }
 
 /// `SHOW members OF 'ClassName'`
-show_members_stmt = { "SHOW" ~ "members" ~ "OF" ~ any_value ~ clauses }
+show_members_stmt = { "SHOW" ~ "members" ~ "OF" ~ any_value ~ using_clause? ~ clauses }
 
 /// `SHOW callees OF 'func'`
-show_callees_stmt = { "SHOW" ~ "callees" ~ "OF" ~ any_value ~ clauses }
+show_callees_stmt = { "SHOW" ~ "callees" ~ "OF" ~ any_value ~ using_clause? ~ clauses }
 
 /// `SHOW LINES n-m OF 'file'`
-show_lines_stmt = { "SHOW" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ any_value ~ clauses }
+show_lines_stmt = { "SHOW" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ any_value ~ using_clause? ~ clauses }
 
 // -----------------------------------------------------------------------
 // Queries
 // -----------------------------------------------------------------------
 
-find_stmt   = { "FIND" ~ find_target ~ clauses }
+find_stmt   = { "FIND" ~ find_target ~ using_clause? ~ clauses }
 find_target = {
     (("usages" | "callees") ~ "OF" ~ any_value)
   | "files"
