@@ -43,6 +43,9 @@ git2        = { workspace = true }
 # index serialization
 bincode     = { workspace = true }
 
+# sha1 hashing
+sha1        = { workspace = true }
+
 # errors
 anyhow      = { workspace = true }
 thiserror   = { workspace = true }

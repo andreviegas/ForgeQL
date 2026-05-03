@@ -572,7 +572,7 @@ fn find_pred_string<'a>(
 }
 
 /// Return `false` if `path` is excluded by the `IN` or `EXCLUDE` glob of `clauses`.
-pub(super) fn passes_glob_filter(
+pub(crate) fn passes_glob_filter(
     path: &std::path::Path,
     clauses: &Clauses,
     root: &std::path::Path,

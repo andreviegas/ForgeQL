@@ -88,6 +88,9 @@ regex            = "1"
 # --- index serialization ---
 bincode          = "1"
 
+# --- sha1 hashing (for GitSha1Provider blob addressing) ---
+sha1             = { version = "0.10", features = ["oid"] }
+
 # --- error handling ---
 anyhow           = "1"
 thiserror        = "1"
