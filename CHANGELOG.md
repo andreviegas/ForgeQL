@@ -4,6 +4,41 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased — storage-engine-phase2]
+
+### Added
+
+- **`USING 'backend'` clause for all read-only commands.**
+  Optional `USING 'backend'` clause can appear between a command's primary target
+  and any `clauses` modifiers on every `FIND` and `SHOW` command.  Accepted
+  backend names:
+  - `'legacy'` — routes to the existing in-memory `LegacyMemoryStorage` (same
+    as omitting `USING`).
+  - `'columnar'` — routes to `Session::columnar_engine`; returns
+    `"columnar backend is not enabled for this session"` if the slot is `None`.
+  - (default, no clause) — equivalent to `'legacy'` in the current implementation.
+
+  `USING` is intentionally not accepted on mutations (`CHANGE`, `COPY`, `MOVE`,
+  `BEGIN TRANSACTION`, `COMMIT`, `ROLLBACK`, `VERIFY`) — the grammar rejects it
+  at parse time.
+
+- **`Backend` enum (`crates/forgeql-core/src/ir.rs`).**
+  Variants: `Default` (serde default), `Legacy`, `Columnar`.
+  `Backend::from_clause(s)` maps a string to the enum or returns a
+  `ForgeError::DslParse` for unknown names.
+  `is_default_backend` is the `serde(skip_serializing_if)` helper, so JSON
+  wire format is unchanged for queries that do not supply `USING`.
+
+- **`Session::columnar_engine` slot.**
+  `Session` now holds `columnar_engine: Option<Box<dyn StorageEngine>>`,
+  initialised to `None`.  `Session::engine_for(&Backend)` dispatches
+  `Default`/`Legacy` to the existing engine and `Columnar` to the slot.
+
+- **`require_workspace_and_engine_for` helper (`exec_session.rs`).**
+  Read-only `exec_show` and `exec_find` call this instead of
+  `require_workspace_and_engine` so that backend routing flows through a
+  single chokepoint.
+
 ## [0.44.0] — 2026-05-03
 
 ### Added

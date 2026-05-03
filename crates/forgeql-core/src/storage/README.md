@@ -118,4 +118,50 @@ The Phase 01 gate query:
 ```sql
 FIND usages OF 'SymbolTable' IN 'crates/forgeql-core/src/engine/**'
 -- must return 0 results
+
+---
+
+## Backend routing — `USING 'backend'` clause
+
+All read-only ForgeQL commands (`FIND symbols`, `FIND usages`, `FIND files`,
+`SHOW body`, `SHOW outline`, etc.) accept an optional `USING 'backend'` clause
+between the command target and any filtering `clauses`:
+
+```sql
+FIND symbols USING 'legacy'  WHERE name LIKE 'get%'
+SHOW body OF 'myFn' USING 'columnar'
+SHOW LINES 1-20 OF 'src/lib.rs' USING 'legacy'
 ```
+
+### `Backend` enum (`ir.rs`)
+
+| Variant | Wire name | Meaning |
+|---|---|---|
+| `Default` | *(omitted)* | Same routing as `Legacy` in the current release |
+| `Legacy` | `"legacy"` | Existing `LegacyMemoryStorage` in-memory index |
+| `Columnar` | `"columnar"` | `Session::columnar_engine` slot (Phase 03+) |
+
+`Backend::from_clause("unknown")` returns `ForgeError::DslParse` — unknown
+names are rejected at parse time, not at query execution time.
+
+### `Session::engine_for`
+
+```rust
+pub fn engine_for(&self, backend: &Backend) -> Result<&dyn StorageEngine> {
+    match backend {
+        Backend::Default | Backend::Legacy => Ok(self.engine.as_ref()),
+        Backend::Columnar => self.columnar_engine.as_deref()
+            .ok_or_else(|| anyhow::anyhow!("columnar backend is not enabled..."))
+    }
+}
+```
+
+`exec_find` and `exec_show` call `require_workspace_and_engine_for(session_id, backend)`
+which calls `session.engine_for(backend)` — all backend routing passes through
+this single chokepoint.
+
+### Restricting mutations
+
+Grammar rule `change_stmt` (and `copy_stmt`, `move_stmt`, transaction rules) do
+**not** include `using_clause?`.  Passing `USING` on a mutation is a parse
+error — storage backends are read-only selectors, not write destinations.
