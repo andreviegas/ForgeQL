@@ -235,7 +235,7 @@ impl ForgeQLEngine {
             wt_path,
             source_name,
             branch,
-            Arc::clone(&self.lang_registry),
+            &Arc::clone(&self.lang_registry),
         );
         session.custom_branch = Some(git_branch);
         session.worktree_name = wt_name;

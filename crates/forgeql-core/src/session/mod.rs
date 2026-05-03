@@ -1,8 +1,8 @@
 /// Per-session state — Phase B of the v2 architecture.
 ///
 /// A `Session` ties together exactly one git worktree, one user identity,
-/// and one `SymbolTable` (the index of the source tree checked out in that
-/// worktree). Sessions are created when a user issues `USE source.branch`
+/// and one `StorageEngine` (the index of the source tree checked out in
+/// that worktree). Sessions are created when a user issues `USE source.branch`
 /// and destroyed when the session ends.
 ///
 /// Index caching follows a two-phase strategy:
@@ -16,14 +16,12 @@ use std::sync::Arc;
 use anyhow::Result;
 use tracing::{debug, info};
 
-use crate::ast::cache::CachedIndex;
-use crate::ast::enrich::macro_table::MacroTable;
 use crate::ast::index::SymbolTable;
 use crate::ast::lang::LanguageRegistry;
 use crate::budget::{BudgetSnapshot, BudgetState};
 use crate::config::{LineBudgetConfig, VerifyStep};
+use crate::storage::{LegacyMemoryStorage, StorageEngine};
 use crate::workspace::Workspace;
-
 /// Sentinel file written inside each worktree directory on every `touch()`.
 ///
 /// Contains a single line: the Unix epoch timestamp (seconds) of the last
@@ -64,10 +62,9 @@ pub struct Checkpoint {
 
 /// State for one active user session.
 ///
-/// Each session owns a git worktree and the associated symbol index.
+/// Each session owns a git worktree and the associated `StorageEngine`.
 /// Sessions cannot be shared between users; the caller is responsible for
 /// managing concurrency at the registry level.
-#[derive(Debug)]
 pub struct Session {
     /// Session identifier — equals the alias supplied in `USE … AS 'alias'`.
     pub id: String,
@@ -89,11 +86,10 @@ pub struct Session {
     /// to identify the worktree in `worktree::remove`.  May differ from `id`
     /// when a custom branch name was supplied via `USE … AS`.
     pub worktree_name: String,
-    /// In-memory symbol index, populated by `build_index` or `resume_index`.
-    index: Option<SymbolTable>,
-    /// Macro definitions collected during the two-pass indexing pipeline.
-    /// `None` until `build_index` or `resume_index` completes.
-    macro_table: Option<MacroTable>,
+    /// Active storage engine. Defaults to `LegacyMemoryStorage`; future
+    /// phases will swap this for a columnar backend without touching Session.
+    /// Populated with a live index after `build_index` or `resume_index`.
+    engine: Box<dyn StorageEngine>,
     /// The commit hash the current `index` was built from.
     cached_commit: Option<String>,
     /// `true` when in-memory `index` has diverged from the on-disk
@@ -128,8 +124,6 @@ pub struct Session {
     /// Working directory captured alongside `frozen_verify_steps` — the
     /// directory that contained `.forgeql.yaml` when the session was opened.
     pub frozen_workdir: Option<PathBuf>,
-    /// Language support registry for tree-sitter parsing and enrichment.
-    lang_registry: Arc<LanguageRegistry>,
     /// Optional line-budget tracker.  `None` when the `.forgeql.yaml` does
     /// not contain a `line_budget` section.
     budget: Option<BudgetState>,
@@ -158,7 +152,7 @@ impl Session {
         worktree_path: PathBuf,
         source_name: impl Into<String>,
         branch: impl Into<String>,
-        lang_registry: Arc<LanguageRegistry>,
+        lang_registry: &Arc<LanguageRegistry>,
     ) -> Self {
         let id_str: String = id.into();
         let worktree_name = id_str.clone();
@@ -170,8 +164,7 @@ impl Session {
             branch: branch.into(),
             custom_branch: None,
             worktree_name,
-            index: None,
-            macro_table: None,
+            engine: Box::new(LegacyMemoryStorage::new(Arc::clone(lang_registry))),
             cached_commit: None,
             index_dirty: false,
             last_active: std::time::Instant::now(),
@@ -179,7 +172,6 @@ impl Session {
             last_clean_oid: None,
             frozen_verify_steps: None,
             frozen_workdir: None,
-            lang_registry,
             budget: None,
             budget_data_dir: None,
             budget_branch: None,
@@ -203,31 +195,18 @@ impl Session {
             "building symbol index"
         );
         let workspace = Workspace::new(&self.worktree_path)?;
-        let (table, macro_table) = SymbolTable::build(&workspace, &self.lang_registry)?;
+        self.engine.build(&workspace)?;
 
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        let cache_path = self.worktree_path.join(".forgeql-index");
-
-        // Persist to disk by borrowing the freshly-built table — this avoids
-        // the O(N) secondary-index rebuild that `into_table_and_macros` would
-        // require after consuming the table.
-        CachedIndex::save_from_parts(
-            &table,
-            &macro_table,
-            &commit_hash,
-            &self.source_name,
-            &cache_path,
-        )?;
+        self.engine
+            .persist_to_cache(&self.worktree_path, &commit_hash, &self.source_name)?;
 
         debug!(
             session = %self.id,
-            symbols = table.rows.len(),
             commit = %commit_hash,
             "index built and saved"
         );
 
-        self.index = Some(table);
-        self.macro_table = Some(macro_table);
         self.cached_commit = Some(commit_hash);
         self.index_dirty = false;
         Ok(())
@@ -241,85 +220,72 @@ impl Session {
     /// # Errors
     /// Propagates errors from `build_index` if a rebuild is needed.
     pub fn resume_index(&mut self) -> Result<()> {
-        let cache_path = self.worktree_path.join(".forgeql-index");
         let head_oid = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
 
-        match CachedIndex::load(&cache_path) {
-            Ok(cached)
-                if cached.commit_hash == head_oid
-                    && (cached.source_name.is_empty()
-                        || cached.source_name == self.source_name) =>
-            {
-                debug!(
-                    session = %self.id,
-                    commit = %head_oid,
-                    "cache hit — restoring index from disk"
-                );
-                self.cached_commit = Some(head_oid);
-                let (table, macro_table) = cached.into_table_and_macros();
-                self.index = Some(table);
-                self.macro_table = Some(macro_table);
-                self.index_dirty = false;
-            }
-            Ok(cached)
-                if !cached.source_name.is_empty() && cached.source_name != self.source_name =>
-            {
-                debug!(
-                    session = %self.id,
-                    cached_source = %cached.source_name,
-                    expected_source = %self.source_name,
-                    "cache source mismatch — rebuilding index"
-                );
-                self.build_index()?;
-            }
-            Ok(cached) => {
-                debug!(
-                    session = %self.id,
-                    cached = %cached.commit_hash,
-                    head = %head_oid,
-                    "cache stale — rebuilding index"
-                );
-                self.build_index()?;
-            }
-            Err(e) => {
-                debug!(
-                    session = %self.id,
-                    error = %e,
-                    "no usable cache — building fresh index"
-                );
-                self.build_index()?;
-            }
+        let loaded =
+            self.engine
+                .load_from_cache(&self.worktree_path, &head_oid, &self.source_name)?;
+
+        if loaded {
+            debug!(
+                session = %self.id,
+                commit = %head_oid,
+                "cache hit — restoring index from disk"
+            );
+            self.cached_commit = Some(head_oid);
+            self.index_dirty = false;
+        } else {
+            debug!(
+                session = %self.id,
+                "cache miss — building fresh index"
+            );
+            self.build_index()?;
         }
 
         Ok(())
     }
 
-    /// Return a reference to the symbol index, if built.
+    /// Return a reference to the legacy `SymbolTable`, if the engine holds one.
+    ///
+    /// Provided for SHOW / exec paths that still work directly with the table.
+    /// Returns `None` for non-legacy backends.
     #[must_use]
-    pub const fn index(&self) -> Option<&SymbolTable> {
-        self.index.as_ref()
+    pub fn index(&self) -> Option<&SymbolTable> {
+        self.engine.as_legacy_table()
     }
 
     /// `true` when an index has been built (or loaded from cache) for this
-    /// session.  Used by callers that need to distinguish ""no index yet""
-    /// from ""empty index"" — e.g. ROLLBACK's smart-rollback path.
+    /// session.  Used by callers that need to distinguish "no index yet"
+    /// from "empty index" — e.g. ROLLBACK's smart-rollback path.
     #[must_use]
-    pub const fn has_index(&self) -> bool {
-        self.index.is_some()
+    pub fn has_index(&self) -> bool {
+        self.engine.has_index()
     }
 
-    /// Return a mutable reference to the symbol index, if built.
+    /// Return a mutable reference to the legacy `SymbolTable`, if available.
     ///
     /// Used by incremental re-indexing after mutations.
     #[must_use]
-    pub const fn index_mut(&mut self) -> Option<&mut SymbolTable> {
-        self.index.as_mut()
+    pub fn index_mut(&mut self) -> Option<&mut SymbolTable> {
+        self.engine.as_legacy_table_mut()
     }
 
     /// The commit hash the current index was built from, if available.
     #[must_use]
     pub fn cached_commit(&self) -> Option<&str> {
         self.cached_commit.as_deref()
+    }
+
+    /// Return a reference to the storage engine.
+    #[must_use]
+    pub fn engine(&self) -> &dyn StorageEngine {
+        self.engine.as_ref()
+    }
+
+    /// Return a mutable reference to the storage engine.
+    #[must_use]
+    pub fn engine_mut(&mut self) -> &mut dyn StorageEngine {
+        self.engine.as_mut()
     }
 
     /// Incrementally re-index the given files after a mutation.
@@ -331,41 +297,20 @@ impl Session {
     /// Returns `Err` if the index has not been built yet, or if tree-sitter
     /// parsing fails.
     pub fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
-        let table = self
-            .index
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("cannot reindex: session {} has no index", self.id))?;
-        table.reindex_files(paths, &self.lang_registry)?;
-        // In-memory index has diverged from the on-disk cache.  The dirty
-        // flag is consulted by `BEGIN` / `COMMIT` / TTL eviction to decide
-        // whether to flush before relying on git as the source of truth.
+        self.engine.reindex_files(paths)?;
         self.index_dirty = true;
         Ok(())
     }
 
     /// Persist the current in-memory index to `.forgeql-index`.
     ///
-    /// This round-trips through `CachedIndex` (which takes ownership of the
-    /// table and gives it back via `into_table`), so the session keeps its
-    /// live index after the call.
-    ///
     /// # Errors
     /// Returns `Err` if no index has been built yet, or if serialisation /
     /// I/O fails.
     pub fn save_index(&mut self) -> Result<()> {
-        let table = self
-            .index
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("cannot save: session {} has no index", self.id))?;
-        let macro_table = self.macro_table.take().unwrap_or_default();
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        let cached =
-            CachedIndex::from_table_and_macros(table, macro_table, &commit_hash, &self.source_name);
-        let cache_path = self.worktree_path.join(".forgeql-index");
-        cached.save(&cache_path)?;
-        let (table, macro_table) = cached.into_table_and_macros();
-        self.index = Some(table);
-        self.macro_table = Some(macro_table);
+        self.engine
+            .persist_to_cache(&self.worktree_path, &commit_hash, &self.source_name)?;
         debug!(
             session = %self.id,
             commit = %commit_hash,
@@ -378,11 +323,7 @@ impl Session {
 
     /// Save the index to disk if it has been modified since the last save.
     ///
-    /// Cheap no-op when `index_dirty` is `false` — used by `BEGIN`,
-    /// `COMMIT`, and TTL eviction so the on-disk cache is always in sync
-    /// with in-memory state at the moments when git as the source of
-    /// truth must be authoritative (checkpoint commits, user-facing
-    /// commits, session shutdown).
+    /// Cheap no-op when `index_dirty` is `false`.
     ///
     /// # Errors
     /// Propagates `save_index` errors when a flush actually happens.
@@ -393,10 +334,7 @@ impl Session {
         Ok(())
     }
 
-    /// Mark the in-memory index as having diverged from the on-disk
-    /// cache.  Used by `COMMIT` (which moves HEAD without touching rows
-    /// but invalidates `commit_hash`) so the next `flush_if_dirty`
-    /// actually writes.
+    /// Mark the in-memory index as having diverged from the on-disk cache.
     pub const fn mark_index_dirty(&mut self) {
         self.index_dirty = true;
     }
@@ -405,8 +343,7 @@ impl Session {
     /// the next `resume_index` reads the freshly-restored
     /// `.forgeql-index` from disk instead of keeping a stale view.
     pub fn drop_index(&mut self) {
-        self.index = None;
-        self.macro_table = None;
+        self.engine.drop_stored_index();
         self.cached_commit = None;
         self.index_dirty = false;
     }
@@ -652,7 +589,7 @@ mod tests {
             PathBuf::from("/tmp"),
             "motor",
             "main",
-            make_registry(),
+            &make_registry(),
         );
         assert!(s.index().is_none());
     }
@@ -661,7 +598,7 @@ mod tests {
     fn build_index_populates_symbols() {
         let tmp = tempdir().unwrap();
         let repo_path = make_repo_with_cpp(tmp.path());
-        let mut session = Session::new("s2", "alice", repo_path, "motor", "main", make_registry());
+        let mut session = Session::new("s2", "alice", repo_path, "motor", "main", &make_registry());
 
         session.build_index().unwrap();
 
@@ -689,14 +626,14 @@ mod tests {
             repo_path.clone(),
             "motor",
             "main",
-            make_registry(),
+            &make_registry(),
         );
         s1.build_index().unwrap();
         let defs_count = s1.index().unwrap().rows.len();
         drop(s1); // drop to release any locks
 
         // Resume — should load from cache (cache hit).
-        let mut s2 = Session::new("s4", "alice", repo_path, "motor", "main", make_registry());
+        let mut s2 = Session::new("s4", "alice", repo_path, "motor", "main", &make_registry());
         s2.resume_index().unwrap();
         assert_eq!(
             s2.index().unwrap().rows.len(),
@@ -711,7 +648,7 @@ mod tests {
         let repo_path = make_repo_with_cpp(tmp.path());
 
         // No cache written — resume should fall back to full build.
-        let mut session = Session::new("s5", "alice", repo_path, "motor", "main", make_registry());
+        let mut session = Session::new("s5", "alice", repo_path, "motor", "main", &make_registry());
         session.resume_index().unwrap();
         assert!(session.index().is_some());
     }
@@ -720,7 +657,7 @@ mod tests {
     fn commit_hash_returns_a_string() {
         let tmp = tempdir().unwrap();
         let repo_path = make_repo_with_cpp(tmp.path());
-        let session = Session::new("s6", "alice", repo_path, "motor", "main", make_registry());
+        let session = Session::new("s6", "alice", repo_path, "motor", "main", &make_registry());
         let hash = session.commit_hash().unwrap();
         assert_eq!(hash.len(), 40, "OID must be a 40-character hex string");
     }

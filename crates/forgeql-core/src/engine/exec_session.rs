@@ -302,7 +302,7 @@ impl ForgeQLEngine {
             workspace_root.to_path_buf(),
             "local",       // synthetic source name
             "test-branch", // synthetic branch name (not main/master to allow budget tests)
-            Arc::clone(&self.lang_registry),
+            &Arc::clone(&self.lang_registry),
         );
         session.build_index()?;
 
