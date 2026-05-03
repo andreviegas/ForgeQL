@@ -23,8 +23,8 @@ impl ForgeQLEngine {
         let sid = require_session_id(session_id)?;
 
         let mut plan = {
-            let (workspace, index) = self.require_workspace_and_index(session_id)?;
-            plan_from_ir(op, &RequestContext::admin(), &workspace, index)?
+            let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
+            plan_from_ir(op, &RequestContext::admin(), &workspace)?
         };
 
         let op_name = mutation_op_name(op);
@@ -72,7 +72,7 @@ impl ForgeQLEngine {
         op: &ForgeQLIR,
     ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
-        let (workspace, _index) = self.require_workspace_and_index(session_id)?;
+        let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
 
         let (src, start, end, dst, at) = match op {
             ForgeQLIR::CopyLines {
@@ -102,7 +102,7 @@ impl ForgeQLEngine {
         op: &ForgeQLIR,
     ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
-        let (workspace, _index) = self.require_workspace_and_index(session_id)?;
+        let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
 
         let (src, start, end, dst, at) = match op {
             ForgeQLIR::MoveLines {

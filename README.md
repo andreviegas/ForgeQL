@@ -348,6 +348,7 @@ Early results suggest it can. If you find the idea useful, I'd love help from ex
 
 - [doc/syntax.md](doc/syntax.md) — complete command and clause reference.
 - [doc/architecture.md](doc/architecture.md) — internal design: index model, clause pipeline, MCP layer, agent guardrails.
+- [crates/forgeql-core/src/storage/README.md](crates/forgeql-core/src/storage/README.md) — `StorageEngine` and `SourceProvider` trait contracts: the abstraction layer between the query engine and all storage backends.
 - [doc/agents/](doc/agents/README.md) — AI agent integration: Custom Agent files for VS Code Copilot, Claude Code, and Cursor.
 
 ---

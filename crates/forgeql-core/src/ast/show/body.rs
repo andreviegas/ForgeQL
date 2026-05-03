@@ -1,15 +1,12 @@
 //! `SHOW body` implementation.
+use std::collections::HashMap;
+use std::path::Path;
+
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use super::{byte_to_line, emit_body_lines, find_function_node_for_symbol, parse_file};
-use crate::{
-    ast::{
-        index::{IndexRow, SymbolTable},
-        lang::LanguageRegistry,
-    },
-    workspace::Workspace,
-};
+use crate::{ast::lang::LanguageRegistry, workspace::Workspace};
 
 /// `SHOW body OF 'func' [DEPTH n]`
 ///
@@ -20,21 +17,21 @@ use crate::{
 /// # Errors
 /// Returns an error if the symbol is not indexed, the file cannot be parsed,
 /// or the AST node for the function is not found.
-pub fn show_body(
-    def: &IndexRow,
-    table: &SymbolTable,
+pub fn show_body<S: ::std::hash::BuildHasher>(
+    path: &Path,
+    byte_range_start: usize,
+    enrichment: &HashMap<String, String, S>,
     workspace: &Workspace,
     symbol: &str,
     depth: Option<usize>,
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
-    let def_path = table.path_of(def);
     let lang = lang_registry
-        .language_for_path(def_path)
-        .ok_or_else(|| anyhow!("no language for {}", def_path.display()))?;
+        .language_for_path(path)
+        .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(def_path, lang_registry)?;
-    let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start, config)
+    let (source, tree) = parse_file(path, lang_registry)?;
+    let fn_node = find_function_node_for_symbol(tree.root_node(), byte_range_start, config)
         .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 
     let fn_start = fn_node.start_byte();
@@ -79,13 +76,12 @@ pub fn show_body(
     };
 
     let fn_end_line = fn_node.end_position().row + 1;
-    let path_str = workspace.relative(table.path_of(def)).display().to_string();
+    let path_str = workspace.relative(path).display().to_string();
 
     // When DEPTH 0, include enrichment metadata so the agent can make
     // informed decisions (e.g. how many lines, params, branches) without
     // a separate FIND query.
-    let metadata: serde_json::Value = if depth == Some(0) && !def.fields.is_empty() {
-        // Resolve interned field IDs to strings and select the metrics subset.
+    let metadata: serde_json::Value = if depth == Some(0) && !enrichment.is_empty() {
         const SELECTED_KEYS: &[&str] = &[
             "lines",
             "param_count",
@@ -98,21 +94,10 @@ pub fn show_body(
             "has_unused_param",
             "enclosing_type",
         ];
-        let selected: serde_json::Map<String, serde_json::Value> = def
-            .fields
+        let selected: serde_json::Map<String, serde_json::Value> = enrichment
             .iter()
-            .filter_map(|(&k_id, &v_id)| {
-                let k_str = table.strings.field_keys.get(k_id);
-                if SELECTED_KEYS.contains(&k_str) {
-                    let v_str = table.strings.field_values.get(v_id);
-                    Some((
-                        k_str.to_owned(),
-                        serde_json::Value::String(v_str.to_owned()),
-                    ))
-                } else {
-                    None
-                }
-            })
+            .filter(|(k, _)| SELECTED_KEYS.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
             .collect();
         if selected.is_empty() {
             serde_json::Value::Null

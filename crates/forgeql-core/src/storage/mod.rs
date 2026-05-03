@@ -34,6 +34,7 @@ pub use legacy::LegacyMemoryStorage;
 pub use source_provider::SourceProvider;
 pub use stub::StubColumnarStorage;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -55,7 +56,6 @@ use crate::workspace::Workspace;
 ///
 /// The `exec_show` path obtains a `SymbolLocation`, reads the source bytes
 /// from disk, and feeds the row info into the tree-sitter re-parser.
-/// The `SymbolTable`-specific `IndexRow` is not needed at this level.
 #[derive(Debug, Clone)]
 pub struct SymbolLocation {
     /// Absolute path to the source file containing the symbol.
@@ -66,8 +66,15 @@ pub struct SymbolLocation {
     pub line: usize,
     /// Interned language ID (backend-specific).
     pub language_id: u32,
+    /// Raw tree-sitter node kind (e.g. `"function_definition"`).
+    /// Used by `show_signature` to determine whether to look for a body node.
+    pub node_kind: String,
+    /// Pre-resolved enrichment fields for this symbol.
+    /// Populated by `row_to_location`; empty for non-legacy backends.
+    pub enrichment: HashMap<String, String>,
 }
 
+// -----------------------------------------------------------------------
 // -----------------------------------------------------------------------
 // StorageEngine trait
 // -----------------------------------------------------------------------
@@ -182,17 +189,35 @@ pub trait StorageEngine: Send + Sync {
     fn drop_stored_index(&mut self);
 
     /// Return `true` when an index has been built or loaded from cache.
+    /// Return `true` when an index has been built or loaded from cache.
     fn has_index(&self) -> bool;
+
+    // -------- SHOW helpers ------------------------------------------------
+
+    /// Locate a symbol definition by name, returning its file path and line.
+    ///
+    /// Used by `show_callees` to annotate each callee with its definition
+    /// location. Returns `None` when the name is not found or the backend
+    /// does not support definition lookup.
+    fn locate_definition(&self, _name: &str) -> Option<(PathBuf, usize)> {
+        None
+    }
+
+    /// Render `SHOW outline OF 'file'` as a JSON value.
+    ///
+    /// Delegates to the backend's symbol rows so `exec_show` does not need to
+    /// hold a `&SymbolTable` reference for outline queries.
+    fn show_outline_for_file(&self, workspace: &Workspace, file: &str)
+    -> Result<serde_json::Value>;
 
     // -------- legacy escape hatch -----------------------------------------
 
     /// Return a reference to the concrete `SymbolTable` for code that
-    /// legitimately needs the legacy type (SHOW functions, `exec_change`, tests).
+    /// legitimately needs the legacy type (tests).
     ///
     /// Returns `None` for non-legacy backends.
     ///
-    /// **Phase 01 only.** Will be removed once the SHOW and transform paths
-    /// are refactored to work through this trait directly.
+    /// **Phase 01 only.** Will be removed once all paths go through this trait.
     fn as_legacy_table(&self) -> Option<&SymbolTable> {
         None
     }
@@ -217,6 +242,8 @@ pub(crate) fn row_to_location(row: &IndexRow, table: &SymbolTable) -> SymbolLoca
         byte_range: row.byte_range.clone(),
         line: row.line,
         language_id: row.language_id,
+        node_kind: table.node_kind_of(row).to_string(),
+        enrichment: table.strings.resolve_fields(&row.fields),
     }
 }
 

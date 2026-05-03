@@ -7,10 +7,7 @@ use serde_json::Value;
 
 use super::{byte_to_line, find_type_node_by_name, parse_file, path_matches};
 use crate::{
-    ast::{
-        index::{IndexRow, SymbolTable},
-        lang::LanguageRegistry,
-    },
+    ast::{index::SymbolTable, lang::LanguageRegistry},
     workspace::Workspace,
 };
 
@@ -74,22 +71,26 @@ pub fn show_outline(index: &SymbolTable, workspace: &Workspace, file: &str) -> R
 /// direct member declarations (fields, methods, enumerators) with their
 /// 1-based line numbers.
 ///
+/// `SHOW members OF 'ClassName'`
+///
+/// Re-parses the file containing the struct/class/enum and returns its
+/// direct member declarations (fields, methods, enumerators) with their
+/// 1-based line numbers.
+///
 /// # Errors
 /// Returns an error if the file cannot be read or the AST node for the
 /// type is not found.
 pub fn show_members(
-    def: &IndexRow,
-    table: &SymbolTable,
+    path: &Path,
     workspace: &Workspace,
     symbol: &str,
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
-    let def_path = table.path_of(def);
     let lang = lang_registry
-        .language_for_path(def_path)
-        .ok_or_else(|| anyhow!("no language for {}", def_path.display()))?;
+        .language_for_path(path)
+        .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(def_path, lang_registry)?;
+    let (source, tree) = parse_file(path, lang_registry)?;
     let root = tree.root_node();
 
     let type_node = find_type_node_by_name(root, &source, symbol, config)
@@ -118,7 +119,6 @@ pub fn show_members(
                         }));
                     }
                 } else if config.is_function_kind(ck) {
-                    // Inline method definition — show signature only.
                     let body_start = child
                         .child_by_field_name("body")
                         .map_or_else(|| child.end_byte(), |b| b.start_byte());
@@ -134,7 +134,6 @@ pub fn show_members(
                         }));
                     }
                 } else if config.is_declaration_kind(ck) {
-                    // Method declaration (forward declaration / pure virtual).
                     let text = std::str::from_utf8(&source[child.byte_range()])
                         .unwrap_or("")
                         .trim()
@@ -169,7 +168,7 @@ pub fn show_members(
     let byte_start = type_node.start_byte();
     let start_line = type_node.start_position().row + 1;
     let end_line = type_node.end_position().row + 1;
-    let path_str = workspace.relative(table.path_of(def)).display().to_string();
+    let path_str = workspace.relative(path).display().to_string();
     Ok(serde_json::json!({
         "op":         "show_members",
         "symbol":     symbol,

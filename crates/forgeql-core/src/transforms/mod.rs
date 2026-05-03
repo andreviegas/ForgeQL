@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::ast::index::SymbolTable;
 use crate::context::RequestContext;
 use crate::workspace::Workspace;
 
@@ -295,14 +294,13 @@ pub fn plan_from_ir(
     op: &crate::ir::ForgeQLIR,
     ctx: &RequestContext,
     ws: &Workspace,
-    idx: &SymbolTable,
 ) -> anyhow::Result<TransformPlan> {
     use crate::ir::ForgeQLIR;
     use change::ChangeFiles;
 
     match op {
         ForgeQLIR::ChangeContent { files, target, .. } => {
-            ChangeFiles::new(files.clone(), target.clone()).plan(ctx, ws, idx)
+            ChangeFiles::new(files.clone(), target.clone()).plan(ctx, ws)
         }
         other => anyhow::bail!("op {other:?} is not a mutation and cannot be planned"),
     }

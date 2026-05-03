@@ -14,10 +14,7 @@ use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use crate::{
-    ast::{
-        index::{IndexRow, SymbolTable},
-        lang::{LanguageConfig, LanguageRegistry},
-    },
+    ast::lang::{LanguageConfig, LanguageRegistry},
     workspace::Workspace,
 };
 
@@ -416,15 +413,14 @@ pub use members::{show_members, show_outline};
 /// # Errors
 /// Returns an error if the file cannot be read.
 pub fn show_context(
-    def: &IndexRow,
-    table: &SymbolTable,
+    path: &std::path::Path,
+    byte_range_start: usize,
     workspace: &Workspace,
     symbol: &str,
     context_lines: usize,
 ) -> Result<Value> {
-    let def_path = table.path_of(def);
-    let source = crate::workspace::file_io::read_bytes(def_path)?;
-    let center = byte_to_line(&source, def.byte_range.start);
+    let source = crate::workspace::file_io::read_bytes(path)?;
+    let center = byte_to_line(&source, byte_range_start);
 
     let text = String::from_utf8_lossy(&source);
     let all_lines: Vec<&str> = text.lines().collect();
@@ -440,7 +436,7 @@ pub fn show_context(
         })
         .collect();
 
-    let path_str = workspace.relative(def_path).display().to_string();
+    let path_str = workspace.relative(path).display().to_string();
     Ok(serde_json::json!({
         "op":          "show_context",
         "symbol":      symbol,
@@ -448,7 +444,7 @@ pub fn show_context(
         "start_line":  start + 1,
         "end_line":    end,
         "center_line": center + 1,
-        "byte_start":  def.byte_range.start,
+        "byte_start":  byte_range_start,
         "lines":       lines,
     }))
 }
@@ -462,28 +458,27 @@ pub fn show_context(
 /// # Errors
 /// Returns an error if the file cannot be read.
 pub fn show_signature(
-    def: &IndexRow,
-    table: &SymbolTable,
+    path: &std::path::Path,
+    byte_range_start: usize,
+    node_kind: &str,
     workspace: &Workspace,
     symbol: &str,
     lang_registry: &LanguageRegistry,
 ) -> Result<Value> {
-    let def_path = table.path_of(def);
     let lang = lang_registry
-        .language_for_path(def_path)
-        .ok_or_else(|| anyhow!("no language for {}", def_path.display()))?;
+        .language_for_path(path)
+        .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(def_path, lang_registry)?;
+    let (source, tree) = parse_file(path, lang_registry)?;
     let root = tree.root_node();
 
-    let start_line = byte_to_line(&source, def.byte_range.start) + 1;
-    let node_kind = table.node_kind_of(def);
+    let start_line = byte_to_line(&source, byte_range_start) + 1;
     let is_func_or_template =
         config.is_function_kind(node_kind) || config.is_template_declaration_kind(node_kind);
     let (signature, end_line) = if is_func_or_template {
-        find_function_node_for_symbol(root, def.byte_range.start, config).map_or_else(
+        find_function_node_for_symbol(root, byte_range_start, config).map_or_else(
             || {
-                let sig = extract_line_at(&source, def.byte_range.start);
+                let sig = extract_line_at(&source, byte_range_start);
                 (sig, start_line)
             },
             |fn_node| {
@@ -502,11 +497,11 @@ pub fn show_signature(
         )
     } else {
         // For types/variables: one line of context is sufficient.
-        let sig = extract_line_at(&source, def.byte_range.start);
+        let sig = extract_line_at(&source, byte_range_start);
         (sig, start_line)
     };
 
-    let path_str = workspace.relative(def_path).display().to_string();
+    let path_str = workspace.relative(path).display().to_string();
     Ok(serde_json::json!({
         "op":         "show_signature",
         "symbol":     symbol,
@@ -514,7 +509,7 @@ pub fn show_signature(
         "start_line": start_line,
         "end_line":   end_line,
         "line":       start_line,
-        "byte_start": def.byte_range.start,
+        "byte_start": byte_range_start,
         "signature":  signature,
     }))
 }

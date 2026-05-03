@@ -199,3 +199,117 @@ impl SourceProvider for GitSha1Provider {
         Ok(GitSha1Commit(bytes))
     }
 }
+
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::items_after_statements
+)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use super::*;
+
+    /// Canonical path to the workspace root (the git repo under test).
+    fn workspace_root() -> PathBuf {
+        // CARGO_MANIFEST_DIR = crates/forgeql-core
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..") // -> crates/
+            .join("..") // -> workspace root
+            .canonicalize()
+            .expect("canonicalize workspace root")
+    }
+
+    /// Run `git ls-tree -r HEAD` in the workspace root and return a map of
+    /// `path -> 40-char blob SHA`.  Skips non-blob entries (submodules).
+    fn ls_tree(root: &std::path::Path) -> HashMap<PathBuf, String> {
+        let output = Command::new("git")
+            .args(["ls-tree", "-r", "HEAD"])
+            .current_dir(root)
+            .output()
+            .expect("failed to run `git ls-tree -r HEAD`");
+        assert!(
+            output.status.success(),
+            "`git ls-tree` exited non-zero: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("non-utf8 ls-tree output");
+        stdout
+            .lines()
+            .filter(|l| l.contains(" blob "))
+            .map(|l| {
+                // format: "<mode> blob <sha40>\t<path>"
+                let (meta, path_str) = l.split_once('\t').expect("no tab in ls-tree line");
+                let sha = meta
+                    .split_ascii_whitespace()
+                    .nth(2)
+                    .expect("no sha field in ls-tree line")
+                    .to_string();
+                (PathBuf::from(path_str), sha)
+            })
+            .collect()
+    }
+
+    /// Task 4b gate test: `GitSha1Provider::walk_snapshot` matches `git ls-tree -r HEAD`.
+    ///
+    /// Opens the repo that contains this crate, resolves the current HEAD via
+    /// `current_snapshot`, walks the tree with `walk_snapshot`, and asserts that
+    /// every (path, blob-id) pair matches the output of `git ls-tree -r HEAD`.
+    #[test]
+    fn walk_snapshot_matches_git_ls_tree() {
+        let root = workspace_root();
+
+        let provider = GitSha1Provider::new(root.clone()).expect("failed to open fixture repo");
+
+        // Resolve HEAD.
+        let snap = provider
+            .current_snapshot(&root)
+            .expect("failed to resolve HEAD snapshot");
+
+        // Walk the tree via the provider.
+        let walked: HashMap<PathBuf, String> = provider
+            .walk_snapshot(&snap)
+            .expect("walk_snapshot failed")
+            .map(|r| {
+                let (path, id) = r.expect("tree entry error");
+                (path, id.hex())
+            })
+            .collect();
+
+        // Walk via `git ls-tree` (ground truth).
+        let expected = ls_tree(&root);
+
+        // Every entry in `expected` must appear in `walked` with the same SHA.
+        let mut mismatches: Vec<String> = Vec::new();
+        for (path, sha) in &expected {
+            match walked.get(path) {
+                None => mismatches.push(format!("missing: {}", path.display())),
+                Some(got) if got != sha => mismatches.push(format!(
+                    "sha mismatch for {}: walk={got} ls-tree={sha}",
+                    path.display()
+                )),
+                Some(_) => {}
+            }
+        }
+        // Entries in `walked` that are absent from `expected` are also a bug.
+        for path in walked.keys() {
+            if !expected.contains_key(path) {
+                mismatches.push(format!("extra entry not in ls-tree: {}", path.display()));
+            }
+        }
+
+        assert!(
+            mismatches.is_empty(),
+            "GitSha1Provider::walk_snapshot diverges from git ls-tree:\n{}",
+            mismatches.join("\n")
+        );
+    }
+}

@@ -1,14 +1,13 @@
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "test-helpers")]
 use std::sync::Arc;
-
-use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use crate::{
-    ast::index::SymbolTable,
     git::worktree,
     session::{Session, read_last_active},
+    storage::StorageEngine,
     workspace::Workspace,
 };
 
@@ -146,23 +145,20 @@ impl ForgeQLEngine {
     // Internal helpers
     // ===================================================================
 
-    /// Resolve `session_id` to a `Workspace` + `SymbolTable` pair.
+    /// Resolve `session_id` to a `Workspace` + `&dyn StorageEngine` pair.
     ///
     /// # Errors
     /// Returns `Err` if the session is not found, the index is not ready,
     /// or the workspace cannot be created.
-    pub(super) fn require_workspace_and_index(
+    pub(super) fn require_workspace_and_engine(
         &self,
         session_id: Option<&str>,
-    ) -> Result<(Workspace, &SymbolTable)> {
+    ) -> Result<(Workspace, &dyn StorageEngine)> {
         let session = self.require_session(require_session_id(session_id)?)?;
-        let index = session
-            .index()
-            .ok_or_else(|| anyhow::anyhow!("session index not ready — retry USE"))?;
+        anyhow::ensure!(session.has_index(), "session index not ready — retry USE");
         let workspace = Workspace::new(&session.worktree_path)?;
-        Ok((workspace, index))
+        Ok((workspace, session.engine()))
     }
-
     /// Look up a session by ID.
     ///
     /// # Errors

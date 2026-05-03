@@ -8,12 +8,10 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
 use forgeql_core::{
-    ast::index::SymbolTable, context::RequestContext, ir::ChangeTarget,
-    transforms::change::ChangeFiles, workspace::Workspace,
+    context::RequestContext, ir::ChangeTarget, transforms::change::ChangeFiles,
+    workspace::Workspace,
 };
 use tempfile::tempdir;
 
@@ -28,7 +26,7 @@ fn fixtures_dir() -> PathBuf {
 }
 
 /// Copy fixtures into a temp dir and return the workspace.
-fn setup_workspace() -> (tempfile::TempDir, Workspace, SymbolTable) {
+fn setup_workspace() -> (tempfile::TempDir, Workspace) {
     let dir = tempdir().expect("tempdir");
     let src = fixtures_dir();
 
@@ -44,9 +42,7 @@ fn setup_workspace() -> (tempfile::TempDir, Workspace, SymbolTable) {
     .expect("copy .cpp");
 
     let ws = Workspace::new(dir.path()).expect("new workspace");
-    let registry = LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]);
-    let (idx, _macro_table) = SymbolTable::build(&ws, &registry).expect("build index");
-    (dir, ws, idx)
+    (dir, ws)
 }
 
 fn ctx() -> RequestContext {
@@ -59,7 +55,7 @@ fn ctx() -> RequestContext {
 
 #[test]
 fn change_matching_replaces_unique_occurrence() {
-    let (_dir, ws, idx) = setup_workspace();
+    let (_dir, ws) = setup_workspace();
     let cpp_rel = "motor_control.h";
     let abs_path = ws.root().join(cpp_rel);
 
@@ -76,7 +72,7 @@ fn change_matching_replaces_unique_occurrence() {
             word_boundary: false,
         },
     );
-    let plan = c.plan(&ctx(), &ws, &idx).expect("plan");
+    let plan = c.plan(&ctx(), &ws).expect("plan");
     assert!(!plan.is_empty());
     plan.apply().expect("apply");
 
@@ -91,7 +87,7 @@ fn change_matching_replaces_unique_occurrence() {
 
 #[test]
 fn change_lines_replaces_range() {
-    let (_dir, ws, idx) = setup_workspace();
+    let (_dir, ws) = setup_workspace();
     let cpp_rel = "motor_control.h";
     let abs_path = ws.root().join(cpp_rel);
 
@@ -104,7 +100,7 @@ fn change_lines_replaces_range() {
             content: "// replaced by CHANGE LINES\n".to_string(),
         },
     );
-    let plan = c.plan(&ctx(), &ws, &idx).expect("plan");
+    let plan = c.plan(&ctx(), &ws).expect("plan");
     assert_eq!(plan.edit_count(), 1);
     plan.apply().expect("apply");
 
@@ -118,7 +114,7 @@ fn change_lines_replaces_range() {
 
 #[test]
 fn change_with_content_creates_new_file() {
-    let (_dir, ws, idx) = setup_workspace();
+    let (_dir, ws) = setup_workspace();
     let new_file = "brand_new.cpp";
     let abs_path = ws.root().join(new_file);
     assert!(!abs_path.exists());
@@ -129,7 +125,7 @@ fn change_with_content_creates_new_file() {
             content: "// new file\nint main() { return 0; }\n".to_string(),
         },
     );
-    let plan = c.plan(&ctx(), &ws, &idx).expect("plan");
+    let plan = c.plan(&ctx(), &ws).expect("plan");
     assert_eq!(plan.edit_count(), 1);
     plan.apply().expect("apply");
 
@@ -140,7 +136,7 @@ fn change_with_content_creates_new_file() {
 
 #[test]
 fn change_with_content_overwrites_existing_file() {
-    let (_dir, ws, idx) = setup_workspace();
+    let (_dir, ws) = setup_workspace();
     let cpp_rel = "motor_control.h";
     let abs_path = ws.root().join(cpp_rel);
 
@@ -150,7 +146,7 @@ fn change_with_content_overwrites_existing_file() {
             content: "// completely replaced\n".to_string(),
         },
     );
-    let plan = c.plan(&ctx(), &ws, &idx).expect("plan");
+    let plan = c.plan(&ctx(), &ws).expect("plan");
     plan.apply().expect("apply");
 
     let after = fs::read_to_string(&abs_path).expect("read");
@@ -163,13 +159,13 @@ fn change_with_content_overwrites_existing_file() {
 
 #[test]
 fn change_delete_empties_file() {
-    let (_dir, ws, idx) = setup_workspace();
+    let (_dir, ws) = setup_workspace();
     let cpp_rel = "motor_control.h";
     let abs_path = ws.root().join(cpp_rel);
     assert!(abs_path.exists());
 
     let c = ChangeFiles::new(vec![cpp_rel.to_string()], ChangeTarget::Delete);
-    let plan = c.plan(&ctx(), &ws, &idx).expect("plan");
+    let plan = c.plan(&ctx(), &ws).expect("plan");
     let result = plan.apply().expect("apply");
 
     // File is emptied (apply writes empty content).
@@ -188,14 +184,14 @@ fn change_delete_empties_file() {
 
 #[test]
 fn change_multi_file_with_content_rejected() {
-    let (_dir, ws, idx) = setup_workspace();
+    let (_dir, ws) = setup_workspace();
     let c = ChangeFiles::new(
         vec!["a.cpp".to_string(), "b.cpp".to_string()],
         ChangeTarget::WithContent {
             content: "x".to_string(),
         },
     );
-    assert!(c.plan(&ctx(), &ws, &idx).is_err());
+    assert!(c.plan(&ctx(), &ws).is_err());
 }
 
 // -----------------------------------------------------------------------
@@ -204,7 +200,7 @@ fn change_multi_file_with_content_rejected() {
 
 #[test]
 fn change_matching_with_glob_expands_to_matching_files() {
-    let (_dir, ws, idx) = setup_workspace();
+    let (_dir, ws) = setup_workspace();
 
     // Both fixture files contain "motor" somewhere in their content.
     let c = ChangeFiles::new(
@@ -215,7 +211,7 @@ fn change_matching_with_glob_expands_to_matching_files() {
             word_boundary: false,
         },
     );
-    let plan = c.plan(&ctx(), &ws, &idx).expect("glob plan");
+    let plan = c.plan(&ctx(), &ws).expect("glob plan");
     // Should have edits for both .h and .cpp files.
     assert!(
         plan.file_edits.len() >= 2,
@@ -241,7 +237,7 @@ fn change_matching_with_glob_expands_to_matching_files() {
 
 #[test]
 fn change_glob_no_match_returns_error() {
-    let (_dir, ws, idx) = setup_workspace();
+    let (_dir, ws) = setup_workspace();
     let c = ChangeFiles::new(
         vec!["*.nonexistent".to_string()],
         ChangeTarget::Matching {
@@ -250,7 +246,7 @@ fn change_glob_no_match_returns_error() {
             word_boundary: false,
         },
     );
-    let err = c.plan(&ctx(), &ws, &idx).unwrap_err();
+    let err = c.plan(&ctx(), &ws).unwrap_err();
     assert!(
         err.to_string().contains("matched no files"),
         "expected 'matched no files' error, got: {err}"

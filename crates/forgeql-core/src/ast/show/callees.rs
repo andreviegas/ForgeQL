@@ -6,10 +6,7 @@ use serde_json::Value;
 
 use super::{byte_to_line, collect_callees_walk, find_function_node_for_symbol, parse_file};
 use crate::{
-    ast::{
-        index::{IndexRow, SymbolTable},
-        lang::LanguageRegistry,
-    },
+    ast::{index::SymbolTable, lang::LanguageRegistry},
     workspace::Workspace,
 };
 
@@ -61,21 +58,20 @@ pub fn show_callers(index: &SymbolTable, workspace: &Workspace, symbol: &str) ->
 ///
 /// # Errors
 /// Returns an error if the file cannot be parsed or the AST node for the
-/// function is not found.
 pub fn show_callees(
-    def: &IndexRow,
-    index: &SymbolTable,
+    path: &std::path::Path,
+    byte_range_start: usize,
     workspace: &Workspace,
     symbol: &str,
     lang_registry: &LanguageRegistry,
+    callee_lookup: impl Fn(&str) -> Option<(std::path::PathBuf, usize)>,
 ) -> Result<Value> {
-    let def_path = index.path_of(def);
     let lang = lang_registry
-        .language_for_path(def_path)
-        .ok_or_else(|| anyhow!("no language for {}", def_path.display()))?;
+        .language_for_path(path)
+        .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(def_path, lang_registry)?;
-    let fn_node = find_function_node_for_symbol(tree.root_node(), def.byte_range.start, config)
+    let (source, tree) = parse_file(path, lang_registry)?;
+    let fn_node = find_function_node_for_symbol(tree.root_node(), byte_range_start, config)
         .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 
     let mut callees: Vec<String> = Vec::new();
@@ -88,22 +84,18 @@ pub fn show_callees(
     callees.sort();
     callees.dedup();
 
-    let def_path = index.path_of(def);
-    let path_str = workspace.relative(def_path).display().to_string();
+    let path_str = workspace.relative(path).display().to_string();
     let results: Vec<Value> = callees
         .iter()
         .map(|name| {
-            index.find_def(name).map_or_else(
+            callee_lookup(name).map_or_else(
                 || serde_json::json!({ "name": name }),
-                |callee_def| {
-                    let callee_path = workspace
-                        .relative(index.path_of(callee_def))
-                        .display()
-                        .to_string();
+                |(callee_path, callee_line)| {
+                    let callee_path_str = workspace.relative(&callee_path).display().to_string();
                     serde_json::json!({
                         "name": name,
-                        "path": callee_path,
-                        "line": callee_def.line,
+                        "path": callee_path_str,
+                        "line": callee_line,
                     })
                 },
             )
@@ -118,6 +110,7 @@ pub fn show_callees(
     }))
 }
 
+// -----------------------------------------------------------------------
 // -----------------------------------------------------------------------
 // Raw file views — no tree-sitter needed
 // -----------------------------------------------------------------------

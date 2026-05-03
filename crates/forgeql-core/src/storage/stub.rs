@@ -120,6 +120,14 @@ impl StorageEngine for StubColumnarStorage {
         false
     }
 
+    fn show_outline_for_file(
+        &self,
+        _workspace: &Workspace,
+        file: &str,
+    ) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({ "op": "show_outline", "file": file, "results": [] }))
+    }
+
     fn as_legacy_table(&self) -> Option<&SymbolTable> {
         None
     }

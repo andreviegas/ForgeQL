@@ -10,10 +10,7 @@ use crate::{
 };
 
 use super::ForgeQLEngine;
-use super::{
-    DEFAULT_BODY_DEPTH, DEFAULT_CONTEXT_LINES, convert_show_json, reject_text_filter,
-    resolve_body_symbol, resolve_symbol, resolve_type_symbol,
-};
+use super::{DEFAULT_BODY_DEPTH, DEFAULT_CONTEXT_LINES, convert_show_json, reject_text_filter};
 
 impl ForgeQLEngine {
     #[allow(clippy::too_many_lines)]
@@ -22,55 +19,81 @@ impl ForgeQLEngine {
         session_id: Option<&str>,
         op: &ForgeQLIR,
     ) -> Result<ForgeQLResult> {
-        let (workspace, index) = self.require_workspace_and_index(session_id)?;
+        let (workspace, engine) = self.require_workspace_and_engine(session_id)?;
         let root = workspace.root();
 
         let json = match op {
             ForgeQLIR::ShowContext { symbol, clauses } => {
                 let context_lines = clauses.depth.unwrap_or(DEFAULT_CONTEXT_LINES);
-                resolve_symbol(index, symbol, clauses, root)
-                    .and_then(|def| {
-                        show::show_context(def, index, &workspace, symbol, context_lines)
+                engine
+                    .resolve_symbol(symbol, clauses, root)
+                    .and_then(|opt| {
+                        opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found"))
                     })
-                    .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
-            }
-            ForgeQLIR::ShowSignature { symbol, clauses } => {
-                resolve_symbol(index, symbol, clauses, root)
-                    .and_then(|def| {
-                        show::show_signature(def, index, &workspace, symbol, &self.lang_registry)
-                    })
-                    .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
-            }
-            ForgeQLIR::ShowOutline { file, .. } => show::show_outline(index, &workspace, file)
-                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
-            ForgeQLIR::ShowMembers { symbol, clauses } => {
-                resolve_type_symbol(index, symbol, clauses, root)
-                    .and_then(|def| {
-                        show::show_members(def, index, &workspace, symbol, &self.lang_registry)
-                    })
-                    .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
-            }
-            ForgeQLIR::ShowBody { symbol, clauses } => {
-                resolve_body_symbol(index, symbol, clauses, root)
-                    .and_then(|def| {
-                        show::show_body(
-                            def,
-                            index,
+                    .and_then(|loc| {
+                        show::show_context(
+                            &loc.path,
+                            loc.byte_range.start,
                             &workspace,
                             symbol,
-                            Some(clauses.depth.unwrap_or(DEFAULT_BODY_DEPTH)),
-                            &self.lang_registry,
+                            context_lines,
                         )
                     })
                     .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
             }
-            ForgeQLIR::ShowCallees { symbol, clauses } => {
-                resolve_body_symbol(index, symbol, clauses, root)
-                    .and_then(|def| {
-                        show::show_callees(def, index, &workspace, symbol, &self.lang_registry)
-                    })
-                    .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
-            }
+            ForgeQLIR::ShowSignature { symbol, clauses } => engine
+                .resolve_symbol(symbol, clauses, root)
+                .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
+                .and_then(|loc| {
+                    show::show_signature(
+                        &loc.path,
+                        loc.byte_range.start,
+                        &loc.node_kind,
+                        &workspace,
+                        symbol,
+                        &self.lang_registry,
+                    )
+                })
+                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+            ForgeQLIR::ShowOutline { file, .. } => engine
+                .show_outline_for_file(&workspace, file)
+                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+            ForgeQLIR::ShowMembers { symbol, clauses } => engine
+                .resolve_type_symbol(symbol, clauses, root)
+                .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
+                .and_then(|loc| {
+                    show::show_members(&loc.path, &workspace, symbol, &self.lang_registry)
+                })
+                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+            ForgeQLIR::ShowBody { symbol, clauses } => engine
+                .resolve_body_symbol(symbol, clauses, root)
+                .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
+                .and_then(|loc| {
+                    show::show_body(
+                        &loc.path,
+                        loc.byte_range.start,
+                        &loc.enrichment,
+                        &workspace,
+                        symbol,
+                        Some(clauses.depth.unwrap_or(DEFAULT_BODY_DEPTH)),
+                        &self.lang_registry,
+                    )
+                })
+                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+            ForgeQLIR::ShowCallees { symbol, clauses } => engine
+                .resolve_body_symbol(symbol, clauses, root)
+                .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
+                .and_then(|loc| {
+                    show::show_callees(
+                        &loc.path,
+                        loc.byte_range.start,
+                        &workspace,
+                        symbol,
+                        &self.lang_registry,
+                        |name| engine.locate_definition(name),
+                    )
+                })
+                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
             ForgeQLIR::ShowLines {
                 file,
                 start_line,

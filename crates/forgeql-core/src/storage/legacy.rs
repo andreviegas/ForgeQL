@@ -234,9 +234,8 @@ impl StorageEngine for LegacyMemoryStorage {
             .table
             .as_ref()
             .ok_or_else(|| anyhow!("session index not ready — retry USE"))?;
-        Ok(crate::engine::resolve_symbol(index, name, clauses, root)
-            .ok()
-            .map(|row| row_to_location(row, index)))
+        crate::engine::resolve_symbol(index, name, clauses, root)
+            .map(|row| Some(row_to_location(row, index)))
     }
 
     fn resolve_type_symbol(
@@ -249,11 +248,8 @@ impl StorageEngine for LegacyMemoryStorage {
             .table
             .as_ref()
             .ok_or_else(|| anyhow!("session index not ready — retry USE"))?;
-        Ok(
-            crate::engine::resolve_type_symbol(index, name, clauses, root)
-                .ok()
-                .map(|row| row_to_location(row, index)),
-        )
+        crate::engine::resolve_type_symbol(index, name, clauses, root)
+            .map(|row| Some(row_to_location(row, index)))
     }
 
     fn resolve_body_symbol(
@@ -266,11 +262,8 @@ impl StorageEngine for LegacyMemoryStorage {
             .table
             .as_ref()
             .ok_or_else(|| anyhow!("session index not ready — retry USE"))?;
-        Ok(
-            crate::engine::resolve_body_symbol(index, name, clauses, root)
-                .ok()
-                .map(|row| row_to_location(row, index)),
-        )
+        crate::engine::resolve_body_symbol(index, name, clauses, root)
+            .map(|row| Some(row_to_location(row, index)))
     }
 
     // ---- aggregates ----------------------------------------------------
@@ -362,6 +355,27 @@ impl StorageEngine for LegacyMemoryStorage {
 
     fn has_index(&self) -> bool {
         self.table.is_some()
+    }
+
+    // ---- SHOW helpers --------------------------------------------------
+
+    fn locate_definition(&self, name: &str) -> Option<(std::path::PathBuf, usize)> {
+        let table = self.table.as_ref()?;
+        table
+            .find_def(name)
+            .map(|row| (table.path_of(row).to_path_buf(), row.line))
+    }
+
+    fn show_outline_for_file(
+        &self,
+        workspace: &crate::workspace::Workspace,
+        file: &str,
+    ) -> Result<serde_json::Value> {
+        let table = self
+            .table
+            .as_ref()
+            .ok_or_else(|| anyhow!("session index not ready — retry USE"))?;
+        crate::ast::show::show_outline(table, workspace, file)
     }
 
     // ---- legacy escape hatch -------------------------------------------
