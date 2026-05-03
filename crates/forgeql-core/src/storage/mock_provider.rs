@@ -109,6 +109,13 @@ impl MockProvider {
     pub fn set_current(&mut self, label: &str) {
         self.current = Some(MockSnapshot(label.to_string()));
     }
+
+    /// Construct a `MockSnapshot` from a label — useful in tests that call
+    /// `changed_paths` directly without going through `current_snapshot`.
+    #[must_use]
+    pub fn mock_snapshot(label: &str) -> MockSnapshot {
+        MockSnapshot(label.to_string())
+    }
 }
 
 impl SourceProvider for MockProvider {

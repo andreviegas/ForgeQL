@@ -219,3 +219,160 @@ pub(crate) fn row_to_location(row: &IndexRow, table: &SymbolTable) -> SymbolLoca
         language_id: row.language_id,
     }
 }
+
+// -----------------------------------------------------------------------
+// Phase 01 integration tests
+// -----------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{StorageEngine, SymbolLocation};
+    use crate::{
+        ir::Clauses,
+        storage::{
+            mock_provider::MockProvider,
+            source_provider::{ContentId, SourceProvider},
+            stub::StubColumnarStorage,
+        },
+    };
+
+    // --- StubColumnarStorage (trait shape) ---
+
+    #[test]
+    fn stub_backend_name() {
+        let s = StubColumnarStorage;
+        assert_eq!(s.backend_name(), "stub");
+    }
+
+    #[test]
+    fn stub_has_no_index() {
+        let s = StubColumnarStorage;
+        assert!(!s.has_index());
+    }
+
+    #[test]
+    fn stub_find_symbols_returns_empty() {
+        let s = StubColumnarStorage;
+        let clauses = Clauses::default();
+        let root = Path::new("/tmp");
+        let results = s.find_symbols(&clauses, root).expect("should not error");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn stub_find_usages_returns_empty() {
+        let s = StubColumnarStorage;
+        let clauses = Clauses::default();
+        let root = Path::new("/tmp");
+        let results = s
+            .find_usages("foo", &clauses, root)
+            .expect("should not error");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn stub_resolve_symbol_returns_none() {
+        let s = StubColumnarStorage;
+        let clauses = Clauses::default();
+        let root = Path::new("/tmp");
+        let loc: Option<SymbolLocation> = s
+            .resolve_symbol("foo", &clauses, root)
+            .expect("should not error");
+        assert!(loc.is_none());
+    }
+
+    #[test]
+    fn stub_persist_and_load_are_noops() {
+        let mut s = StubColumnarStorage;
+        s.persist_to_cache(Path::new("/tmp"), "abc123", "test")
+            .expect("persist noop");
+        let loaded = s
+            .load_from_cache(Path::new("/tmp"), "abc123", "test")
+            .expect("load noop");
+        assert!(!loaded, "stub always returns false for load");
+    }
+
+    #[test]
+    fn stub_as_legacy_table_returns_none() {
+        let s = StubColumnarStorage;
+        assert!(s.as_legacy_table().is_none());
+    }
+
+    // --- MockProvider (SourceProvider shape) ---
+
+    #[test]
+    fn mock_provider_insert_and_read() {
+        let mut p = MockProvider::default();
+        let id = p.insert(b"hello");
+        let bytes = p.read_content(&id).expect("blob must exist");
+        assert_eq!(bytes, b"hello");
+    }
+
+    #[test]
+    fn mock_provider_hash_is_deterministic() {
+        let p = MockProvider::default();
+        let id1 = p.hash_content(b"world");
+        let id2 = p.hash_content(b"world");
+        assert_eq!(id1.hex(), id2.hex(), "same bytes must produce same id");
+    }
+
+    #[test]
+    fn mock_provider_walk_snapshot() {
+        let mut p = MockProvider::default();
+        let id = p.insert(b"fn foo() {}");
+        p.add_snapshot("snap-a", vec![(PathBuf::from("src/foo.rs"), id.clone())]);
+        p.set_current("snap-a");
+
+        let snap = p
+            .current_snapshot(Path::new("/repo"))
+            .expect("current snap");
+        let entries: Vec<_> = p
+            .walk_snapshot(&snap)
+            .expect("walk ok")
+            .map(|r| r.expect("entry ok"))
+            .collect();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, PathBuf::from("src/foo.rs"));
+        assert_eq!(entries[0].1.hex(), id.hex());
+    }
+
+    #[test]
+    fn mock_provider_changed_paths() {
+        let mut p = MockProvider::default();
+        let id_a = p.insert(b"v1");
+        let id_b = p.insert(b"v2");
+        let id_c = p.insert(b"new");
+
+        p.add_snapshot(
+            "snap-1",
+            vec![
+                (PathBuf::from("a.rs"), id_a.clone()),
+                (PathBuf::from("b.rs"), id_b),
+            ],
+        );
+        p.add_snapshot(
+            "snap-2",
+            vec![
+                (PathBuf::from("a.rs"), id_a),
+                (PathBuf::from("b.rs"), id_c.clone()),
+                (PathBuf::from("c.rs"), id_c),
+            ],
+        );
+
+        let from = MockProvider::mock_snapshot("snap-1");
+        let to = MockProvider::mock_snapshot("snap-2");
+
+        let changed = p.changed_paths(&from, &to).expect("changed paths ok");
+        assert!(changed.contains(&PathBuf::from("b.rs")));
+        assert!(changed.contains(&PathBuf::from("c.rs")));
+        assert!(!changed.contains(&PathBuf::from("a.rs")));
+    }
+
+    #[test]
+    fn stub_satisfies_dyn_trait_bound() {
+        let _: Box<dyn StorageEngine> = Box::new(StubColumnarStorage);
+    }
+}
