@@ -4,6 +4,62 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.44.0] — 2026-05-03
+
+### Added
+
+- **`StorageEngine` trait (`forgeql-core::storage`).**
+  A new `StorageEngine: Send + Sync` trait abstracts all index read/write operations
+  (`find_symbols`, `find_usages`, `resolve_symbol`, `resolve_type_symbol`,
+  `resolve_body_symbol`, `stats`, `build`, `reindex_files`, `purge_file`,
+  `persist_to_cache`, `load_from_cache`). Every `exec_*` path now goes through the
+  trait instead of touching `SymbolTable` directly. Escape hatches `as_legacy_table`
+  / `as_legacy_table_mut` are provided for test helpers and debugging tools.
+
+- **`LegacyMemoryStorage` — existing `SymbolTable` behind the trait.**
+  The previous in-RAM index is wrapped in `LegacyMemoryStorage`, which implements
+  `StorageEngine` with identical behaviour. All query results are byte-for-byte
+  equivalent to pre-0.44.0 output. `Session` now owns `Box<dyn StorageEngine>`
+  instead of `Option<SymbolTable>` directly; `Session::index()` and
+  `Session::index_mut()` are kept as backwards-compatible helpers that downcast
+  through `as_legacy_table`.
+
+- **`SourceProvider` trait + `GitSha1Provider`.**
+  `SourceProvider` decouples storage from git internals — methods: `hash_content`,
+  `read_content`, `current_snapshot`, `walk_snapshot`, `changed_paths`. The
+  production implementation `GitSha1Provider` is `gix`-backed and uses git's blob
+  SHA-1 algorithm for content addressing. Validated by
+  `walk_snapshot_matches_git_ls_tree`, which cross-checks provider output against
+  `git ls-tree -r HEAD` on the live repo.
+
+- **`StubColumnarStorage` — trait-shape validation.**
+  A throwaway empty `StorageEngine` implementation confirms the trait is implementable
+  by a non-legacy backend. Removed once the real columnar engine lands in a future
+  phase.
+
+- **`MockProvider` — in-memory `SourceProvider` for unit tests.**
+  Supports `insert`, `add_snapshot`, `set_current`, and deterministic content-ID
+  hashing; used by all `SourceProvider` shape tests.
+
+- **`storage/README.md`** — documents the `StorageEngine` and `SourceProvider`
+  traits and their relationship to `LegacyMemoryStorage`.
+
+### Changed
+
+- **`Session` struct refactored.**
+  `index: Option<SymbolTable>` replaced by `engine: Box<dyn StorageEngine>`.
+  Public API (`Session::index`, `Session::index_mut`, `Session::engine`,
+  `Session::engine_mut`) is fully backwards-compatible.
+
+- **`exec_find`, `exec_show`, `exec_change` go through `StorageEngine`.**
+  All three `exec_*` modules now call trait methods instead of concrete
+  `SymbolTable` methods. Zero direct `SymbolTable` references remain in
+  `crates/forgeql-core/src/engine/**` (one surviving doc-comment in
+  `exec_session.rs` is intentional).
+
+- **Cache version unchanged** — storage layer is a pure structural refactor;
+  no enrichment field values changed; existing `.forgeql-index` files remain valid.
+
 ## [0.43.0] — 2026-04-29
 
 ### Fixed
