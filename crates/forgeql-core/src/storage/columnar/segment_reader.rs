@@ -84,6 +84,49 @@ impl StringPool {
             mmap_file(&dir.join("strings_offsets.bin")).context("opening strings_offsets.bin")?;
         let data = mmap_file(&dir.join("strings_data.bin")).context("opening strings_data.bin")?;
 
+        // Validate string pool at open time so corrupt data is detected early
+        // rather than causing a panic mid-query inside `get()`.
+        //
+        // Required invariants:
+        //  1. `strings_offsets.bin` has exactly `(string_count + 1) * 4` bytes.
+        //  2. Offsets are monotonically non-decreasing.
+        //  3. The last offset (`offsets[string_count]`) ≤ `strings_data.bin` length.
+        if string_count > 0 {
+            let expected_offset_bytes = (string_count as usize + 1) * 4;
+            let actual_offset_bytes = offsets.as_ref().map_or(0, |m| m.len());
+            ensure!(
+                actual_offset_bytes >= expected_offset_bytes,
+                "strings_offsets.bin in {} has {} bytes; expected ≥ {} for {} strings",
+                dir.display(),
+                actual_offset_bytes,
+                expected_offset_bytes,
+                string_count
+            );
+
+            #[allow(clippy::indexing_slicing)] // length validated by ensure! above
+            if let (Some(off_mmap), Some(dat_mmap)) = (&offsets, &data) {
+                let off_slice: &[u32] = cast_slice(off_mmap.as_ref());
+                // Monotonicity check.
+                for i in 0..string_count as usize {
+                    let lo = off_slice[i] as usize;
+                    let hi = off_slice[i + 1] as usize;
+                    ensure!(
+                        lo <= hi,
+                        "strings_offsets.bin in {} is not monotone at index {i}: {lo} > {hi}",
+                        dir.display()
+                    );
+                }
+                // Last offset must not exceed data length.
+                let last = off_slice[string_count as usize] as usize;
+                ensure!(
+                    last <= dat_mmap.len(),
+                    "strings_offsets.bin in {}: last offset {last} > strings_data.bin length {}",
+                    dir.display(),
+                    dat_mmap.len()
+                );
+            }
+        }
+
         let mut pool = Self {
             offsets,
             data,
@@ -192,6 +235,15 @@ impl SegmentReader {
             "invalid magic in {}; expected FQSG",
             dir.display()
         );
+
+        // Segments are encoded little-endian.  Refuse to open on a big-endian
+        // host rather than silently producing garbage.
+        if cfg!(target_endian = "big") {
+            anyhow::bail!(
+                "segment format is little-endian only; cannot open {} on a big-endian host",
+                dir.display()
+            );
+        }
 
         #[allow(clippy::indexing_slicing)] // bounds checked by ensure! above
         let schema_version = u32::from_le_bytes(
