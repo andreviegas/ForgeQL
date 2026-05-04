@@ -109,6 +109,21 @@ impl GitSha1Provider {
     }
 }
 
+/// Compute the git blob SHA-1 hash for raw file content.
+///
+/// Uses git's standard blob-object algorithm:
+/// `SHA1("blob {len}\0{content}")`.
+///
+/// This is the same hash `git hash-object <file>` would produce and is used
+/// to derive the per-segment content address for shadow-written segments.
+#[must_use]
+pub fn git_blob_sha1(content: &[u8]) -> [u8; 20] {
+    let mut hasher = Sha1::new();
+    hasher.update(format!("blob {}\0", content.len()).as_bytes());
+    hasher.update(content);
+    hasher.finalize().into()
+}
+
 impl SourceProvider for GitSha1Provider {
     type Content = GitSha1;
     type Snapshot = GitSha1Commit;

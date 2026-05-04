@@ -24,12 +24,14 @@
 //!   because the show functions need the concrete `SymbolTable` for ID resolution.
 //!   This will change once the columnar backend lands in Phase 05/06.
 
+pub mod columnar;
 pub mod git_sha1_provider;
 pub mod legacy;
 pub mod mock_provider;
 pub mod source_provider;
 pub mod stub;
 
+pub use columnar::ShadowWriter;
 pub use legacy::LegacyMemoryStorage;
 pub use source_provider::SourceProvider;
 pub use stub::StubColumnarStorage;
