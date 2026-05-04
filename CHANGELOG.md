@@ -62,11 +62,38 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   `SegmentReader` is re-exported from `crate::storage::columnar` and from
   `crate::storage`.
-
   > **Phase 04 scope**: `SegmentReader` is a standalone library component.
   > It does not wire into `FIND … USING 'columnar'` production queries.
   > Multi-segment overlay queries over a live session are Phase 05.
 
+### Fixed (Phase 04 post-review)
+
+- **`SegmentBuilder::emit_row` double-append bug.**
+  `emit_row` was incorrectly pre-appending `None` to every existing extra
+  column each time a new row was added.  When `set_field` was subsequently
+  called for that row it would push a second entry, causing each enrichment
+  column to grow at 2× the expected rate and making all enrichment values
+  after the first row appear at the wrong offset.  Removed the pre-append
+  loop; `flush` already pads columns to `row_count` via `resize(…, None)`.
+
+- **Big-endian guard in `SegmentReader::open`.**
+  Added `if cfg!(target_endian = "big")` bail to prevent silent garbage
+  on architectures where `u32::from_le_bytes` would produce wrong values.
+
+- **String pool validation in `SegmentReader::open`.**
+  Added monotonicity check on `strings_offsets.bin` (every `offset[i] ≤
+  offset[i+1]`) and final-offset-vs-data-length check so corrupt segments
+  are detected at open time rather than causing mid-query panics.
+
+- **Parity test harness (`crates/forgeql-core/tests/segment_parity.rs`).**
+  7 new integration tests verifying that `SegmentReader` produces byte-for-
+  byte identical results to the legacy `SymbolTable` path on the canonical
+  C++ and Rust fixtures (Issues 3 + 4 from the phase review):
+  `parity_cpp_canonical`, `parity_rust_canonical`,
+  `parity_filter_fql_kind_function_cpp`, `parity_order_by_line_asc_cpp`,
+  `parity_lookup_name_cpp`, `parity_enrichment_fields_cpp`,
+  `memory_budget_fql_kind_prefilter_cpp` (Linux-only; page-fault baseline
+  ≈ 310 faults for a cold mmap on the canonical.cpp fixture).
 ## [0.46.0] — 2026-05-04
 
 ### Added
