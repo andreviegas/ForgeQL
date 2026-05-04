@@ -69,7 +69,7 @@ fn index_canonical(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
     let enrichers = default_enrichers();
     let mut table = SymbolTable::default();
 
-    let count = index_file(&mut parser, &path, &mut table, &enrichers, lang, None)
+    let count = index_file(&mut parser, &path, &mut table, &enrichers, lang, None, None)
         .expect("index_file should succeed");
 
     assert!(count > 0, "expected at least one indexed row");
@@ -288,8 +288,16 @@ fn rust_cfg_attribute_guard_indexed() {
         .expect("set_language");
     let enrichers = default_enrichers();
     let mut table = SymbolTable::default();
-    let _count = index_file(&mut parser, &path, &mut table, &enrichers, &lang, None)
-        .expect("index_file should succeed");
+    let _count = index_file(
+        &mut parser,
+        &path,
+        &mut table,
+        &enrichers,
+        &lang,
+        None,
+        None,
+    )
+    .expect("index_file should succeed");
 
     // Find the guarded function
     // Find the guarded function

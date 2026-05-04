@@ -230,6 +230,13 @@ pub trait StorageEngine: Send + Sync {
     fn as_legacy_table_mut(&mut self) -> Option<&mut SymbolTable> {
         None
     }
+
+    /// Install an inline columnar build context before calling `build()`.
+    ///
+    /// `LegacyMemoryStorage` overrides this to store the context so that
+    /// `SymbolTable::build` can call the inline hook.  All other backends
+    /// ignore it (default no-op).
+    fn set_seg_ctx(&mut self, _ctx: crate::ast::index::SegmentBuildCtx) {}
 }
 
 // -----------------------------------------------------------------------

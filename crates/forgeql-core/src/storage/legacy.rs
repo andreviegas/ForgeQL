@@ -49,6 +49,10 @@ pub struct LegacyMemoryStorage {
     macro_table: Option<MacroTable>,
     /// Language support registry — used by `build` and `reindex_files`.
     lang_registry: Arc<LanguageRegistry>,
+    /// Optional inline columnar build context.  Set by `Session::build_index`
+    /// before calling `build()` when shadow-write is enabled.  Consumed
+    /// (taken) at the start of `build()` so it does not linger.
+    seg_ctx: Option<crate::ast::index::SegmentBuildCtx>,
 }
 
 impl LegacyMemoryStorage {
@@ -61,6 +65,7 @@ impl LegacyMemoryStorage {
             table: None,
             macro_table: None,
             lang_registry,
+            seg_ctx: None,
         }
     }
 }
@@ -275,7 +280,9 @@ impl StorageEngine for LegacyMemoryStorage {
     // ---- lifecycle -----------------------------------------------------
 
     fn build(&mut self, workspace: &Workspace) -> Result<()> {
-        let (table, macro_table) = SymbolTable::build(workspace, &self.lang_registry)?;
+        let ctx = self.seg_ctx.take();
+        let (table, macro_table) =
+            SymbolTable::build(workspace, &self.lang_registry, ctx.as_ref())?;
         debug!(
             symbols = table.rows.len(),
             "LegacyMemoryStorage: index built"
@@ -283,6 +290,10 @@ impl StorageEngine for LegacyMemoryStorage {
         self.table = Some(table);
         self.macro_table = Some(macro_table);
         Ok(())
+    }
+
+    fn set_seg_ctx(&mut self, ctx: crate::ast::index::SegmentBuildCtx) {
+        self.seg_ctx = Some(ctx);
     }
 
     fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {

@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Result;
 use rayon::prelude::*;
@@ -25,7 +26,42 @@ use crate::ast::lang::{LanguageRegistry, LanguageSupport};
 use crate::ast::trigram::TrigramIndex;
 use crate::error::ForgeError;
 use crate::workspace::Workspace;
+
 // -----------------------------------------------------------------------
+// SegmentBuildCtx — per-file columnar write context
+// -----------------------------------------------------------------------
+
+/// Type alias for the content-hash function used in [`SegmentBuildCtx`].
+pub type SegHashFn = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
+
+/// Type alias for the per-file emit callback in [`SegmentBuildCtx`].
+pub type SegEmitFn = Arc<dyn Fn(&[u8], &SymbolTable, usize) + Send + Sync>;
+
+/// Context threaded into [`index_file`] for per-file columnar shadow-write.
+///
+/// Defined here (alongside [`SymbolTable`]) to avoid a circular dependency
+/// between `ast/index.rs` and `storage/columnar/`.  All function pointers are
+/// type-erased so this module does not know about any concrete storage backend.
+///
+/// `SegmentBuildCtx` must be `Sync` so a single instance can be shared across
+/// rayon threads inside [`SymbolTable::build`].
+pub struct SegmentBuildCtx {
+    /// Provider identifier embedded in segment paths (e.g. `"git-sha1"`).
+    pub provider_id: &'static str,
+    /// Type-erased content-hash function.
+    ///
+    /// Maps raw file bytes to raw content-ID bytes.  For `GitSha1Provider`
+    /// this returns a 20-byte SHA-1 blob hash.
+    pub hash_fn: SegHashFn,
+    /// Callback invoked after each file's rows have been committed to the
+    /// per-file `SymbolTable`.
+    ///
+    /// Arguments: `(content_id: &[u8], table: &SymbolTable, rows_start: usize)`
+    ///
+    /// `rows_start` is always `0` for a fresh per-file table (the common path
+    /// in `build()`), but may be `> 0` for future incremental re-index paths.
+    pub emit_fn: SegEmitFn,
+}
 // IndexRow — the universal row type
 // -----------------------------------------------------------------------
 
@@ -344,6 +380,7 @@ impl SymbolTable {
     pub fn build(
         workspace: &Workspace,
         lang_registry: &LanguageRegistry,
+        seg_ctx: Option<&SegmentBuildCtx>,
     ) -> Result<(Self, MacroTable)> {
         // 1 — collect file paths that have a registered language.
         let paths: Vec<PathBuf> = workspace
@@ -405,6 +442,7 @@ impl SymbolTable {
                     &enrichers,
                     lang.as_ref(),
                     Some(&macro_table),
+                    seg_ctx,
                 ) {
                     Ok(count) => {
                         debug!(
@@ -876,7 +914,15 @@ impl SymbolTable {
                     parser
                         .set_language(&lang.tree_sitter_language())
                         .map_err(|e| ForgeError::TreeSitterLanguage(e.to_string()))?;
-                    match index_file(&mut parser, path, self, &enrichers, lang.as_ref(), None) {
+                    match index_file(
+                        &mut parser,
+                        path,
+                        self,
+                        &enrichers,
+                        lang.as_ref(),
+                        None,
+                        None,
+                    ) {
                         Ok(count) => {
                             debug!(path = %path.display(), rows = count, "reindexed");
                         }
@@ -973,6 +1019,7 @@ pub fn index_file(
     enrichers: &[Box<dyn NodeEnricher>],
     language: &dyn LanguageSupport,
     macro_table: Option<&MacroTable>,
+    seg_ctx: Option<&SegmentBuildCtx>,
 ) -> Result<usize> {
     let source = crate::workspace::file_io::read_bytes(path)?;
     let tree = parser
@@ -995,6 +1042,14 @@ pub fn index_file(
         enrichers,
         macro_table,
     );
+
+    // Per-file columnar shadow-write: hash the already-read source bytes and
+    // emit a SegmentBuilder for the rows added to this per-file table.
+    // Runs inline so files are only read once.
+    if let Some(ctx) = seg_ctx {
+        let content_id = (ctx.hash_fn)(&source);
+        (ctx.emit_fn)(&content_id, table, before);
+    }
 
     Ok(table.rows.len() - before)
 }
@@ -1498,6 +1553,7 @@ mod tests {
             &default_enrichers(),
             &CppLanguageInline,
             None,
+            None,
         )
         .unwrap();
         assert!(table.find_def("alpha").is_some());
@@ -1528,6 +1584,7 @@ mod tests {
             &mut table,
             &default_enrichers(),
             &CppLanguageInline,
+            None,
             None,
         )
         .unwrap();
