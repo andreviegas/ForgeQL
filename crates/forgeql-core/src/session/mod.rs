@@ -143,6 +143,11 @@ pub struct Session {
     /// overlapping/adjacent range reads on the same file and emit tips.
     /// Stored as `(file_path, start_line, end_line)`.
     recent_show_lines: Vec<(String, usize, usize)>,
+    /// When `Some`, write columnar segment files after each full index build.
+    ///
+    /// Set by `exec_source` before calling `resume_index` when
+    /// `columnar.shadow_write: true` is present in `.forgeql.yaml`.
+    columnar_segments_dir: Option<PathBuf>,
 }
 
 impl Session {
@@ -182,8 +187,19 @@ impl Session {
             budget_data_dir: None,
             budget_branch: None,
             recent_show_lines: Vec::new(),
+            columnar_segments_dir: None,
         }
     }
+
+    /// Configure columnar shadow-write.
+    ///
+    /// Must be called **before** `build_index` / `resume_index`.  When set,
+    /// a second pass after each full build writes one segment per source file
+    /// to `<dir>/git-sha1/<content-hex>/`.
+    pub fn set_columnar_segments_dir(&mut self, dir: PathBuf) {
+        self.columnar_segments_dir = Some(dir);
+    }
+
     /// Parse all source files in the worktree and build a fresh `SymbolTable`.
     ///
     /// The resulting index is persisted to `<worktree>/.forgeql-index` for
@@ -202,6 +218,28 @@ impl Session {
         );
         let workspace = Workspace::new(&self.worktree_path)?;
         self.engine.build(&workspace)?;
+
+        // Shadow-write columnar segments if enabled (best-effort, non-fatal).
+        if let Some(ref segments_dir) = self.columnar_segments_dir
+            && let Some(table) = self.engine.as_legacy_table()
+        {
+            let writer = crate::storage::columnar::ShadowWriter::new(
+                table,
+                &self.worktree_path,
+                segments_dir,
+            );
+            match writer.run() {
+                Ok(n) => debug!(
+                    session = %self.id,
+                    segments = n,
+                    "columnar shadow-write complete"
+                ),
+                Err(e) => tracing::warn!(
+                    session = %self.id,
+                    "columnar shadow-write failed: {e}"
+                ),
+            }
+        }
 
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
         self.engine

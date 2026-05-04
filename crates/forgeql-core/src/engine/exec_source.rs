@@ -240,15 +240,26 @@ impl ForgeQLEngine {
         session.custom_branch = Some(git_branch);
         session.worktree_name = wt_name;
 
+        // Load config once — before resume_index so shadow-write is configured
+        // before the first build.  The same config is then used to freeze the
+        // verify steps and initialise the budget below.
+        let maybe_config = load_verify_config(&repo_path, source_name, &session.worktree_path);
+
+        // Configure columnar shadow-write when enabled in `.forgeql.yaml`.
+        if let Some((_, ref cfg)) = maybe_config
+            && cfg.columnar.shadow_write
+        {
+            let segments_dir = repo_path.join("forgeql").join("segments");
+            session.set_columnar_segments_dir(segments_dir);
+        }
+
         // Use resume_index() so an existing disk cache at
         // <worktree>/.forgeql-index is reused when HEAD matches.
         session.resume_index()?;
 
         // Freeze verify config at session start — sidecar takes priority over in-repo file.
         // Any later CHANGE has no effect on VERIFY; steps are captured once here.
-        if let Some((workdir, config)) =
-            load_verify_config(&repo_path, source_name, &session.worktree_path)
-        {
+        if let Some((workdir, config)) = maybe_config {
             session.frozen_workdir = Some(workdir);
             if let Some(ref budget_cfg) = config.line_budget {
                 // Sweep expired budget files before initialising the budget
