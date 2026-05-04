@@ -95,14 +95,17 @@ impl<'a> ShadowWriter<'a> {
 
     /// Write one columnar segment per source file in the symbol table.
     ///
-    /// Returns the count of **newly written** segments (already-valid
-    /// segments are skipped and not counted).
+    /// Returns a [`ShadowWriteResult`] containing the count of newly-written
+    /// segments and a map from absolute source path to content-ID bytes for
+    /// every file that was processed (including previously-valid segments).
+    /// The segment map is used by the overlay builder to know which segments
+    /// exist without re-hashing every file.
     ///
     /// # Errors
     /// Returns `Err` only for fatal infrastructure failures (e.g. unable to
     /// create the provider directory).  Per-file errors are logged as
     /// warnings and skipped.
-    pub fn run(mut self) -> Result<usize> {
+    pub fn run(mut self) -> Result<ShadowWriteResult> {
         // Group row indices by path_id so each file is processed once.
         let mut by_path: HashMap<u32, Vec<usize>> = HashMap::new();
         for (idx, row) in self.table.rows.iter().enumerate() {
@@ -110,7 +113,10 @@ impl<'a> ShadowWriter<'a> {
         }
 
         if by_path.is_empty() {
-            return Ok(0);
+            return Ok(ShadowWriteResult {
+                count: 0,
+                segment_map: HashMap::new(),
+            });
         }
 
         // Ensure the provider-specific segment directory exists.
@@ -138,6 +144,10 @@ impl<'a> ShadowWriter<'a> {
         // Accumulate all enrichment column names to update the manifest.
         let mut all_columns: BTreeSet<String> = BTreeSet::new();
 
+        // Accumulate abs_path → content_id for ALL processed files (including
+        // already-valid segments) so the overlay builder has the full mapping.
+        let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
+
         for row_indices in by_path.values() {
             // row_indices is non-empty by construction.
             let first_row = &self.table.rows[row_indices[0]];
@@ -159,6 +169,9 @@ impl<'a> ShadowWriter<'a> {
                     }
                 }
             };
+
+            // Record in segment_map regardless of whether we write a new segment.
+            let _ = segment_map.insert(abs_path.clone(), content_id.clone());
 
             let hex = bytes_to_hex(&content_id);
             let target_dir = provider_dir.join(&hex);
@@ -222,8 +235,30 @@ impl<'a> ShadowWriter<'a> {
             }
         }
 
-        Ok(written)
+        Ok(ShadowWriteResult {
+            count: written,
+            segment_map,
+        })
     }
+}
+
+/// Result returned by [`ShadowWriter::run`].
+///
+/// Contains the count of newly-written segments and the full mapping from
+/// absolute source file path to content-ID bytes for every file processed
+/// (including files whose segments already existed on disk and were skipped).
+///
+/// The `segment_map` is consumed by [`OverlayBuilder`] immediately after
+/// the shadow write completes, while the mapping is still fresh in memory,
+/// to avoid re-hashing source files when building the workspace overlay.
+///
+/// [`OverlayBuilder`]: super::overlay_builder::OverlayBuilder
+pub struct ShadowWriteResult {
+    /// Number of new segments actually flushed to disk.
+    pub count: usize,
+    /// `abs_source_path → content_id_bytes` for every file in the symbol table
+    /// that was successfully processed (whether or not a new segment was written).
+    pub segment_map: HashMap<PathBuf, Vec<u8>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -295,8 +330,12 @@ mod tests {
             &identity_hash,
             HashMap::new(),
         );
-        let n = writer.run().expect("run");
-        assert_eq!(n, 0, "no segments for empty table");
+        let result = writer.run().expect("run");
+        assert_eq!(result.count, 0, "no segments for empty table");
+        assert!(
+            result.segment_map.is_empty(),
+            "no segment_map entries for empty table"
+        );
         assert!(
             !segments_base.exists(),
             "segments dir should not be created for empty table"
@@ -322,8 +361,9 @@ mod tests {
             &identity_hash,
             HashMap::new(),
         );
-        let n = writer.run().expect("run");
-        assert_eq!(n, 1, "one segment written");
+        let result = writer.run().expect("run");
+        assert_eq!(result.count, 1, "one segment written");
+        assert_eq!(result.segment_map.len(), 1, "segment_map has one entry");
 
         // Verify the provider directory and one segment sub-directory exist.
         let provider_dir = segments_base.join("test");
@@ -417,8 +457,12 @@ mod tests {
         let segments_base = tmp.path().join("segments");
         let writer =
             ShadowWriter::new(&table, &segments_base, "test", &identity_hash, pre_computed);
-        let n = writer.run().expect("run without re-reading file");
-        assert_eq!(n, 1, "segment written via pre-computed content ID");
+        let result = writer.run().expect("run without re-reading file");
+        assert_eq!(
+            result.count, 1,
+            "segment written via pre-computed content ID"
+        );
+        assert_eq!(result.segment_map.len(), 1, "segment_map has one entry");
     }
 
     #[test]

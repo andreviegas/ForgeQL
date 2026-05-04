@@ -255,12 +255,57 @@ impl ForgeQLEngine {
             // Wrap git_blob_sha1 behind HashFn so ShadowWriter stays decoupled
             // from the concrete provider type (Issue 1).
             let hash_fn: crate::storage::HashFn = Arc::new(|b: &[u8]| git_blob_sha1(b).to_vec());
+            let overlays_dir = repo_path.join("forgeql").join("overlays");
+            session.columnar_overlays_dir = Some(overlays_dir);
             session.set_columnar_segments_dir(segments_dir, "git-sha1", hash_fn);
         }
 
         // Use resume_index() so an existing disk cache at
         // <worktree>/.forgeql-index is reused when HEAD matches.
         session.resume_index()?;
+
+        // If the columnar backend is enabled and an overlay exists for this
+        // commit, open it and install a ColumnarStorage instance.
+        if let Some(ref overlays_dir) = session.columnar_overlays_dir.clone() {
+            let commit =
+                crate::session::Session::get_head_oid(&session.worktree_path).unwrap_or_default();
+            let overlay_path = overlays_dir.join("git-sha1").join(format!("{commit}.bin"));
+            if overlay_path.exists() {
+                use crate::storage::columnar::ColumnarStorage;
+                use crate::storage::columnar::overlay::Overlay;
+                match Overlay::open(&overlay_path) {
+                    Ok(overlay) => {
+                        let segments: Vec<std::sync::Arc<crate::storage::columnar::SegmentReader>> =
+                            overlay
+                                .segments()
+                                .iter()
+                                .filter_map(|meta| {
+                                    let seg_dir = overlays_dir
+                                        .parent()
+                                        .unwrap_or_else(|| std::path::Path::new("."))
+                                        .join("segments")
+                                        .join("git-sha1")
+                                        .join(&meta.hex_content_id);
+                                    crate::storage::columnar::SegmentReader::open(&seg_dir)
+                                        .ok()
+                                        .map(std::sync::Arc::new)
+                                })
+                                .collect();
+                        session.columnar_engine = Some(Box::new(ColumnarStorage::new(
+                            session.worktree_path.clone(),
+                            segments,
+                            overlay,
+                        )));
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            %commit,
+                            "columnar overlay open failed (non-fatal), will rebuild: {e}"
+                        );
+                    }
+                }
+            }
+        }
 
         // Freeze verify config at session start — sidecar takes priority over in-repo file.
         // Any later CHANGE has no effect on VERIFY; steps are captured once here.

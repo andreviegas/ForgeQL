@@ -131,8 +131,65 @@ pub struct ColumnarConfig {
     /// Disabled by default; safe to enable incrementally.
     #[serde(default)]
     pub shadow_write: bool,
+
+    /// Background segment + overlay warming after `CREATE SOURCE`.
+    ///
+    /// Defaults to disabled. When enabled, a background thread walks the
+    /// chosen snapshots and pre-builds segments/overlays so the first `USE`
+    /// is fast (overlay cache hit rather than full build).
+    #[serde(default)]
+    pub warm_on_create: WarmPolicy,
+
+    /// Background segment + overlay warming after `REFRESH SOURCE`.
+    ///
+    /// Only snapshots whose branch HEADs moved are re-warmed, preventing
+    /// unnecessary CPU drain on no-change polling refreshes.
+    ///
+    /// Defaults to disabled.
+    #[serde(default)]
+    pub warm_on_refresh: WarmPolicy,
 }
 
+/// Controls which snapshots are pre-warmed in the background.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WarmPolicy {
+    /// Whether background warming is enabled for this hook.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Which snapshots to warm.  Ignored when `enabled = false`.
+    #[serde(default)]
+    pub policy: WarmPolicyKind,
+
+    /// Snapshot refs to warm when `policy = "pinned"`.
+    #[serde(default)]
+    pub pinned: Vec<String>,
+
+    /// Maximum number of snapshots to warm concurrently.
+    ///
+    /// Defaults to 2. Set to 1 to serialize warming and reduce I/O pressure.
+    #[serde(default = "default_warm_concurrency")]
+    pub max_concurrent: usize,
+}
+
+/// Which snapshots a [`WarmPolicy`] should target.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WarmPolicyKind {
+    /// Do not warm any snapshots (even if `WarmPolicy::enabled` is true).
+    #[default]
+    Off,
+    /// Warm only the HEAD of the registered default branch.
+    DefaultBranch,
+    /// Warm the HEAD of every branch in the source.
+    AllBranches,
+    /// Warm exactly the refs listed in `WarmPolicy::pinned`.
+    Pinned,
+}
+
+const fn default_warm_concurrency() -> usize {
+    2
+}
 /// One named build or test step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyStep {

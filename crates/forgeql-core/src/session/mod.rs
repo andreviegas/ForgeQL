@@ -94,7 +94,7 @@ pub struct Session {
     ///
     /// When present, `engine_for(Backend::Columnar)` routes through this
     /// field instead of `engine`.
-    columnar_engine: Option<Box<dyn StorageEngine>>,
+    pub(crate) columnar_engine: Option<Box<dyn StorageEngine>>,
     /// The commit hash the current `index` was built from.
     cached_commit: Option<String>,
     /// `true` when in-memory `index` has diverged from the on-disk
@@ -155,6 +155,13 @@ pub struct Session {
     /// Wraps `SourceProvider::hash_content` so `ShadowWriter` remains
     /// decoupled from the concrete provider type.
     columnar_hash_fn: Option<crate::storage::HashFn>,
+    /// Directory for workspace overlay files (`<bare-repo>/forgeql/overlays`).
+    ///
+    /// Set by `exec_source` alongside `columnar_segments_dir` when
+    /// `columnar.shadow_write: true`.  Used by `build_index` to write the
+    /// overlay after shadow-write completes, and by `use_source` to open
+    /// an existing overlay and install the `ColumnarStorage` backend.
+    pub(crate) columnar_overlays_dir: Option<PathBuf>,
 }
 
 impl Session {
@@ -197,6 +204,7 @@ impl Session {
             columnar_segments_dir: None,
             columnar_provider_id: None,
             columnar_hash_fn: None,
+            columnar_overlays_dir: None,
         }
     }
 
@@ -289,11 +297,38 @@ impl Session {
                 pre_computed,
             );
             match writer.run() {
-                Ok(n) => debug!(
-                    session = %self.id,
-                    segments = n,
-                    "columnar shadow-write complete"
-                ),
+                Ok(result) => {
+                    debug!(
+                        session = %self.id,
+                        segments = result.count,
+                        "columnar shadow-write complete"
+                    );
+                    // Build / refresh the workspace overlay immediately after
+                    // shadow-write, while the segment_map is still fresh.
+                    // This avoids re-hashing files on subsequent USE calls.
+                    if let Some(ref overlays_dir) = self.columnar_overlays_dir {
+                        let commit = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
+                        let overlay_path =
+                            overlays_dir.join(provider_id).join(format!("{commit}.bin"));
+                        let builder = crate::storage::columnar::OverlayBuilder::new(
+                            provider_id,
+                            segments_dir.clone(),
+                            self.worktree_path.clone(),
+                            result.segment_map,
+                        );
+                        match builder.build_and_persist(&overlay_path) {
+                            Ok(()) => debug!(
+                                session = %self.id,
+                                %commit,
+                                "columnar overlay built"
+                            ),
+                            Err(e) => tracing::warn!(
+                                session = %self.id,
+                                "columnar overlay build failed (non-fatal): {e}"
+                            ),
+                        }
+                    }
+                }
                 Err(e) => tracing::warn!(
                     session = %self.id,
                     "columnar shadow-write failed: {e}"
@@ -503,7 +538,7 @@ impl Session {
     // -----------------------------------------------------------------------
 
     /// Read the OID of HEAD in the repository rooted at (or containing) `path`.
-    fn get_head_oid(path: &Path) -> Result<String> {
+    pub(crate) fn get_head_oid(path: &Path) -> Result<String> {
         let repo = git2::Repository::open(path).or_else(|_| git2::Repository::open_bare(path))?;
         let head = repo.head()?;
         let oid = head.peel_to_commit()?.id().to_string();

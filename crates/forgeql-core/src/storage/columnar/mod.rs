@@ -31,12 +31,17 @@
 //!
 //! [`SymbolTable`]: crate::ast::index::SymbolTable
 
+pub(crate) mod columnar_storage;
 pub mod manifest;
+pub(crate) mod overlay;
+pub(crate) mod overlay_builder;
 pub mod segment_builder;
 pub mod segment_reader;
 pub mod shadow_writer;
 
+pub(crate) use columnar_storage::ColumnarStorage;
 pub use manifest::Manifest;
+pub(crate) use overlay_builder::OverlayBuilder;
 pub use segment_builder::SegmentBuilder;
 pub use segment_reader::SegmentReader;
 pub use shadow_writer::ShadowWriter;

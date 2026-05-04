@@ -202,11 +202,11 @@ pub struct SegmentReader {
     extra_cols: HashMap<String, Mmap>,
     strings: StringPool,
     /// Per-fql_kind Roaring bitmaps loaded from `postings_fql_kind.bin`.
-    kind_postings: HashMap<u32, RoaringBitmap>,
+    pub(crate) kind_postings: HashMap<u32, RoaringBitmap>,
     /// FST map: symbol name bytes → packed `(count | byte_offset << 32)`.
-    name_fst: FstMap<Vec<u8>>,
+    pub(crate) name_fst: FstMap<Vec<u8>>,
     /// Flat `[u32 LE]` array of row IDs indexed by `name_fst`.
-    name_postings: Option<Mmap>,
+    pub(crate) name_postings: Option<Mmap>,
 }
 
 impl SegmentReader {
@@ -458,6 +458,15 @@ impl SegmentReader {
         self.strings.get(id)
     }
 
+    /// Look up a string-pool entry by ID.
+    ///
+    /// Used by `OverlayBuilder` to resolve per-segment `kind_id` values
+    /// (from `self.kind_postings` keys) back to their string representation
+    /// without exposing `StringPool` outside this module.
+    pub(crate) fn string_of_id(&self, id: u32) -> &str {
+        self.strings.get(id)
+    }
+
     /// Build the candidate row bitmap using Roaring postings.
     ///
     /// Handles only `WHERE fql_kind = 'X'` (exact equality) predicates;
@@ -490,7 +499,10 @@ impl SegmentReader {
     }
 
     /// Materialise `rows` into `Vec<SymbolMatch>`.
-    fn materialize_rows(
+    ///
+    /// Exposed as `pub(crate)` so [`ColumnarStorage`] can call it directly
+    /// for efficient batched row resolution without going through `find_symbols`.
+    pub(crate) fn materialize_rows(
         &self,
         rows: &RoaringBitmap,
         source_path: Option<&Path>,
