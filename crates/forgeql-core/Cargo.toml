@@ -46,6 +46,12 @@ bincode     = { workspace = true }
 # sha1 hashing
 sha1        = { workspace = true }
 
+# columnar storage engine (Phase 03+)
+memmap2  = { workspace = true }
+roaring  = { workspace = true }
+fst      = { workspace = true }
+bytemuck = { workspace = true }
+
 # errors
 anyhow      = { workspace = true }
 thiserror   = { workspace = true }

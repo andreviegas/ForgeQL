@@ -91,6 +91,12 @@ bincode          = "1"
 # --- sha1 hashing (for GitSha1Provider blob addressing) ---
 sha1             = { version = "0.10", features = ["oid"] }
 
+# --- columnar storage engine (Phase 03+) ---
+memmap2  = "0.9"
+roaring  = "0.10"
+fst      = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+
 # --- error handling ---
 anyhow           = "1"
 thiserror        = "1"
