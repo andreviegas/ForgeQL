@@ -35,6 +35,13 @@ pub struct ForgeConfig {
     /// rolling budget that limits how many source lines an agent may read.
     #[serde(default)]
     pub line_budget: Option<LineBudgetConfig>,
+
+    /// Columnar storage engine configuration (Phase 03+).
+    ///
+    /// Enables shadow-writing of columnar segment files alongside the legacy
+    /// in-memory index when `shadow_write: true`.  Off by default.
+    #[serde(default)]
+    pub columnar: ColumnarConfig,
 }
 
 /// Configuration for the line-budget system that limits how many source
@@ -107,6 +114,23 @@ impl Default for LineBudgetConfig {
             idle_reset_secs: default_idle_reset_secs(),
         }
     }
+}
+
+/// Configuration for the columnar storage engine (Phase 03+).
+///
+/// Enable shadow-write to have `ForgeQL` produce columnar segment directories
+/// alongside the standard in-memory index on each full build.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ColumnarConfig {
+    /// Write columnar segment files after each full index build.
+    ///
+    /// When `true`, a second pass after `USE <source>.<branch>` writes one
+    /// per-file segment directory to
+    /// `<bare-repo>/forgeql/segments/git-sha1/<content-hex>/`.
+    ///
+    /// Disabled by default; safe to enable incrementally.
+    #[serde(default)]
+    pub shadow_write: bool,
 }
 
 /// One named build or test step.
@@ -226,6 +250,12 @@ line_budget:
 #   - name: build
 #     command: \"cargo build --release\"
 #     timeout_secs: 300
+
+# ── Columnar Storage (Phase 03+) ──────────────────────────────────────────────
+# Enable to write columnar segment files after each full index build.
+# Set shadow_write: true once you are ready for the Phase 04 reader.
+# columnar:
+#   shadow_write: false
 "
         );
         std::fs::write(&path, template).ok()?;
