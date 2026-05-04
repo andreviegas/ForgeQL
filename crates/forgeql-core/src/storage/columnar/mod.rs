@@ -33,10 +33,12 @@
 
 pub mod manifest;
 pub mod segment_builder;
+pub mod segment_reader;
 pub mod shadow_writer;
 
 pub use manifest::Manifest;
 pub use segment_builder::SegmentBuilder;
+pub use segment_reader::SegmentReader;
 pub use shadow_writer::ShadowWriter;
 
 /// Type-erased, thread-safe hash function for content addressing.

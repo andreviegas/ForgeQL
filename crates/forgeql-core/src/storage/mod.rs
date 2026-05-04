@@ -31,7 +31,7 @@ pub mod mock_provider;
 pub mod source_provider;
 pub mod stub;
 
-pub use columnar::{HashFn, ShadowWriter};
+pub use columnar::{HashFn, SegmentReader, ShadowWriter};
 pub use legacy::LegacyMemoryStorage;
 pub use source_provider::SourceProvider;
 pub use stub::StubColumnarStorage;
