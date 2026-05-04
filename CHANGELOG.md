@@ -4,6 +4,69 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Phase 04: Per-Segment Reader
+
+### Added
+
+- **`SegmentReader` (`storage/columnar/segment_reader.rs`) — mmap-based read path.**
+  New `SegmentReader` opens a single columnar segment directory written by
+  `SegmentBuilder` and exposes a full `FIND symbols`-equivalent API against
+  its on-disk data without loading everything into RAM.
+
+  **Open and validation** (`SegmentReader::open`):
+  - Reads `header.bin`, validates the `FQSG` magic and schema version 1.
+  - Parses the variable-length column entry table to discover both core and
+    enrichment columns.
+  - Memory-maps all seven core `col_*.bin` files and any enrichment columns.
+  - Builds a `StringPool` with both forward (ID → `&str`) and reverse
+    (name → ID) lookups.
+  - Deserialises `postings_fql_kind.bin` into
+    `HashMap<kind_id, RoaringBitmap>` for O(n/64) prefilter queries.
+  - Loads `name.fst` bytes into a `fst::Map<Vec<u8>>` and mmaps
+    `name_postings.bin` for FST-backed name lookups.
+
+  **Query pipeline** (`find_symbols`):
+  1. *Roaring bitmap prefilter* — `WHERE fql_kind = 'X'` predicates (exact
+     equality only) are resolved against the in-memory posting list bitmaps
+     using bitwise AND, producing a compact candidate row set without
+     touching column data.
+  2. *Materialise* — surviving rows are read from the mmap'd column arrays
+     and assembled into `Vec<SymbolMatch>` (enrichment fields copied into
+     `SymbolMatch.fields`).  `node_kind` is set to `None` (segments do not
+     store tree-sitter grammar node kinds; that detail lives in the legacy
+     index only).
+  3. *`apply_clauses` residual pipeline* — the shared `crate::filter`
+     pipeline runs over the materialised results, handling residual WHERE
+     predicates, GROUP BY / HAVING, ORDER BY, LIMIT, and OFFSET exactly as
+     the legacy backend does — guaranteeing clause-pipeline parity.
+
+  **Row accessors** — `name_of`, `fql_kind_of`, `language_of`, `line_of`,
+  `byte_start_of`, `byte_end_of`, `usages_count_of`, `extra_field_str` give
+  direct per-row reads without materialising a full `SymbolMatch`.
+
+  **FST name lookup** (`lookup_name`) — O(log n) FST lookup decodes the
+  packed `(count | byte_offset << 32)` value from the FST and returns the
+  matching row IDs from `name_postings.bin`.
+
+  **9 unit tests** in `segment_reader::tests`:
+  `open_segment_written_by_builder`,
+  `find_functions_order_by_name`,
+  `find_by_enrichment_field`,
+  `group_by_kind_having_count`,
+  `order_by_line_desc`,
+  `limit_and_offset`,
+  `lookup_name_via_fst`,
+  `roaring_prefilter_returns_empty_for_unknown_kind`,
+  `source_path_propagated_to_symbol_match`,
+  `round_trip_row_content`.
+
+  `SegmentReader` is re-exported from `crate::storage::columnar` and from
+  `crate::storage`.
+
+  > **Phase 04 scope**: `SegmentReader` is a standalone library component.
+  > It does not wire into `FIND … USING 'columnar'` production queries.
+  > Multi-segment overlay queries over a live session are Phase 05.
+
 ## [0.46.0] — 2026-05-04
 
 ### Added
