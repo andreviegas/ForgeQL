@@ -45,24 +45,56 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `is_valid_segment(dir)` guard checks for the `FQSG` magic before any
     read attempt.
 
-- **`ShadowWriter` (`storage/columnar/shadow_writer.rs`).**
-  `ShadowWriter<'a>` accepts a `&SymbolTable`, the workspace path, and a
-  `segments_base` directory.  `run()` groups index rows by file path,
-  reads each file's bytes, computes `git_blob_sha1`, builds a
-  `SegmentBuilder`, and flushes it.  Individual-file errors are logged at
-  `WARN` and skipped (best-effort); the method returns the count of
-  successfully written segments.
+- **`ShadowWriter` (`storage/columnar/shadow_writer.rs`) — fully redesigned.**
+  All six Phase 03 issues closed in commit `488e972`:
 
-- **Shadow-write wired into `Session::build_index`.**
-  After every index build, if `Session::columnar_segments_dir` is set and
-  `as_legacy_table()` succeeds, `ShadowWriter::run()` is invoked.
-  Success is logged at `DEBUG`; failures at `WARN` (non-fatal).
+  - **Issue 1 — provider decoupling**: `ShadowWriter::new` now accepts
+    `provider_id: &str` and `hash_content: &(dyn Fn(&[u8]) -> Vec<u8> + Send + Sync)`.
+    The `git_blob_sha1` symbol is no longer referenced inside `ShadowWriter`;
+    the concrete hash function is injected by the caller (`exec_source.rs`).
 
-- **`exec_source.rs` reads `ColumnarConfig` before `resume_index`.**
-  When `columnar.shadow_write = true` is detected in `.forgeql.yaml`,
-  `Session::set_columnar_segments_dir` is called with
-  `<repo_path>/forgeql/segments` before the index is built, ensuring the
-  shadow-write fires on the first `USE` command.
+  - **Issue 2 — enrichment fields**: `ShadowWriter::run` calls
+    `table.resolve_fields(&row.fields)` for each `IndexRow` and forwards
+    every enrichment key/value to `SegmentBuilder::set_field`, so extra
+    per-enricher columns are written to every segment.
+
+  - **Issue 3 — double file read**: `ShadowWriter::new` accepts a
+    `pre_computed: HashMap<PathBuf, Vec<u8>>` map.  When a file's content ID
+    is already in the map (computed inline during `index_file` via
+    `SegmentBuildCtx::emit_fn`), the source file is not re-read.
+    `Session::build_index` populates this map via a `Mutex`-backed cache
+    written to by the `emit_fn` closure.
+
+  - **Issue 4 — background flush**: `run()` spawns a `std::thread` that
+    receives `(SegmentBuilder, target_dir)` pairs from a `sync_channel(64)`.
+    Flushing happens on the background thread while the main loop builds the
+    next segment, overlapping CPU and I/O.
+
+  - **Issue 5 — `Manifest`**: new `storage/columnar/manifest.rs` with
+    `Manifest { schema_version, provider_id, column_registry: BTreeSet<String>,
+    segment_count }`.  `Manifest::update(path, provider_id, columns, count)`
+    atomically merges and saves `<forgeql_dir>/manifest.json` after each run.
+
+  - **Issue 6 — unit tests**: five unit tests added to `shadow_writer.rs`:
+    `empty_table_writes_no_segments`, `writes_one_segment_per_file`,
+    `enrichment_fields_written_to_extra_columns`, `pre_computed_avoids_file_read`,
+    `manifest_written_after_run`.
+
+- **`Session::set_columnar_segments_dir` extended.**
+  Now accepts `(dir: PathBuf, provider_id: impl Into<String>, hash_fn: HashFn)`.
+  Two new fields added to `Session`: `columnar_provider_id: Option<String>`
+  and `columnar_hash_fn: Option<HashFn>`.
+
+- **`Session::build_index` wires `SegmentBuildCtx`.**
+  Before `engine.build()`, if shadow-write is configured, `build_index` creates
+  a `SegmentBuildCtx` whose `emit_fn` populates an in-memory content-ID cache.
+  After the build, the cache is extracted and passed to `ShadowWriter::new` as
+  `pre_computed`, avoiding all double file reads.
+
+- **`exec_source.rs` injects `HashFn`.**
+  The shadow-write config block now creates
+  `Arc::new(|b: &[u8]| git_blob_sha1(b).to_vec())` and passes it together
+  with `"git-sha1"` to the updated `set_columnar_segments_dir`.
 
 ## [0.45.0] — 2026-05-04
 
