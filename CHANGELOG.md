@@ -4,7 +4,7 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased — storage-engine-phase2]
+## [0.45.0] — 2026-05-04
 
 ### Added
 
