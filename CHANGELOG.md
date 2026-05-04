@@ -4,6 +4,66 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.46.0] — 2026-05-04
+
+### Added
+
+- **Per-segment columnar writer (`storage/columnar`).**
+  New `crates/forgeql-core/src/storage/columnar/` module delivers the
+  per-segment write path.  Three new dependencies added to the workspace:
+  `memmap2 = "0.9"`, `roaring = "0.10"`, `fst = "0.4"`, and
+  `bytemuck = { version = "1", features = ["derive"] }`.
+
+- **`git_blob_sha1` standalone function (`git_sha1_provider.rs`).**
+  `pub fn git_blob_sha1(content: &[u8]) -> [u8; 20]` hashes a byte slice
+  using git's canonical blob object format (`"blob {len}\0{content}"`),
+  enabling content-addressed segment filenames without going through the full
+  `gix` stack.
+
+- **`ColumnarConfig` in `.forgeql.yaml`.**
+  `ForgeConfig` gains a `columnar: ColumnarConfig` section (default-off).
+  Setting `columnar.shadow_write = true` enables dual-write mode.  The
+  sidecar template includes the commented-out section as documentation.
+
+- **`SegmentBuilder` (`storage/columnar/segment_builder.rs`).**
+  Builds one columnar segment from the rows of a single source file.
+  Writes an atomic snapshot into a content-addressed directory
+  `<segments_base>/git-sha1/<content_hex>/` via a tmp-dir + rename idiom.
+  The binary format consists of:
+  - `header.bin` — 80-byte preamble (magic `FQSG`, schema version,
+    provider-id, content-id, row count, string count, column count).
+  - One `col_<name>.bin` per column (`name_id`, `fql_kind_id`, `line`,
+    `byte_start`, `byte_end`, `usages_count`, `language_id`) — packed
+    `u32` arrays via `bytemuck`.
+  - `strings_offsets.bin` + `strings_data.bin` — per-segment string
+    intern table.
+  - `postings_fql_kind.bin` — `RoaringBitmap` per `fql_kind` string,
+    serialised with `roaring`'s portable format.
+  - `name.fst` + `name_postings.bin` — `fst` automaton mapping symbol
+    name to a `(count, byte_offset)` pair packed into `u64`; the byte
+    offset indexes into `name_postings.bin` for row-ID lists.
+  - `is_valid_segment(dir)` guard checks for the `FQSG` magic before any
+    read attempt.
+
+- **`ShadowWriter` (`storage/columnar/shadow_writer.rs`).**
+  `ShadowWriter<'a>` accepts a `&SymbolTable`, the workspace path, and a
+  `segments_base` directory.  `run()` groups index rows by file path,
+  reads each file's bytes, computes `git_blob_sha1`, builds a
+  `SegmentBuilder`, and flushes it.  Individual-file errors are logged at
+  `WARN` and skipped (best-effort); the method returns the count of
+  successfully written segments.
+
+- **Shadow-write wired into `Session::build_index`.**
+  After every index build, if `Session::columnar_segments_dir` is set and
+  `as_legacy_table()` succeeds, `ShadowWriter::run()` is invoked.
+  Success is logged at `DEBUG`; failures at `WARN` (non-fatal).
+
+- **`exec_source.rs` reads `ColumnarConfig` before `resume_index`.**
+  When `columnar.shadow_write = true` is detected in `.forgeql.yaml`,
+  `Session::set_columnar_segments_dir` is called with
+  `<repo_path>/forgeql/segments` before the index is built, ensuring the
+  shadow-write fires on the first `USE` command.
+
 ## [0.45.0] — 2026-05-04
 
 ### Added
