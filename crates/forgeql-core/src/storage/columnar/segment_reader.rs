@@ -956,5 +956,98 @@ mod tests {
             results[1].fields.get("member_count").map(String::as_str),
             Some("4")
         );
+
+        // ── Gap 4: byte_start_of / byte_end_of accessors ──────────────────
+        // r0 = row 0 ("alpha"), r1 = row 1 ("beta") — insertion order.
+        assert_eq!(reader.byte_start_of(0), 0, "alpha byte_start");
+        assert_eq!(reader.byte_end_of(0), 50, "alpha byte_end");
+        assert_eq!(reader.byte_start_of(1), 51, "beta byte_start");
+        assert_eq!(reader.byte_end_of(1), 200, "beta byte_end");
+    }
+
+    // ── Gap 5: empty segment ─────────────────────────────────────────────
+
+    /// A segment with zero rows must open successfully and return an empty
+    /// `find_symbols` result without hitting the row-materialisation code.
+    #[test]
+    fn find_symbols_on_empty_segment_returns_empty_vec() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let seg_dir = tmp.path().join("seg");
+        let b = SegmentBuilder::new("test", &[0xAAu8; 20]);
+        b.flush(&seg_dir).expect("flush");
+
+        let reader = SegmentReader::open(&seg_dir).expect("open");
+        assert_eq!(reader.row_count, 0);
+
+        let result = reader
+            .find_symbols(&Clauses::default(), None)
+            .expect("find on empty segment");
+        assert!(result.is_empty(), "expected empty vec for zero-row segment");
+    }
+
+    // ── Gap 3: error-path tests ──────────────────────────────────────────
+
+    /// Opening a path that does not exist must return `Err`.
+    #[test]
+    fn open_nonexistent_dir_returns_err() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let missing = tmp.path().join("does_not_exist");
+        assert!(
+            SegmentReader::open(&missing).is_err(),
+            "expected Err for missing directory"
+        );
+    }
+
+    /// A segment with a corrupted FQSG magic must return `Err` at `open`,
+    /// not produce garbage results.
+    #[test]
+    fn open_corrupt_magic_returns_err() {
+        let (_tmp, seg_dir) = make_segment(&[("foo", "function", 1)]);
+
+        // Overwrite the first 4 bytes of header.bin with garbage.
+        let header_path = seg_dir.join("header.bin");
+        let mut bytes = std::fs::read(&header_path).expect("read header");
+        bytes[0] = b'X';
+        bytes[1] = b'X';
+        bytes[2] = b'X';
+        bytes[3] = b'X';
+        std::fs::write(&header_path, &bytes).expect("write header");
+
+        assert!(
+            SegmentReader::open(&seg_dir).is_err(),
+            "expected Err for corrupt FQSG magic"
+        );
+    }
+
+    /// A segment with non-monotone string pool offsets must return `Err` at
+    /// `open` (not panic mid-query).
+    #[test]
+    fn open_nonmonotone_string_pool_returns_err() {
+        // Build a segment that has at least two strings in the pool so the
+        // monotonicity check fires.
+        let (_tmp, seg_dir) = make_segment(&[("alpha", "function", 1), ("beta", "struct", 2)]);
+
+        let offsets_path = seg_dir.join("strings_offsets.bin");
+        let mut bytes = std::fs::read(&offsets_path).expect("read offsets");
+
+        // strings_offsets.bin is a [u32] array (little-endian).  Make
+        // offset[1] less than offset[0] to break monotonicity.
+        // offset[0] is bytes 0..4; offset[1] is bytes 4..8.
+        if bytes.len() >= 8 {
+            // Write 0xFFFF_FFFF into offset[1] if offset[0] < 0xFFFF_FFFF,
+            // otherwise write 0 into offset[1].
+            let off0 = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+            let bad: u32 = if off0 > 0 { 0 } else { u32::MAX };
+            bytes[4..8].copy_from_slice(&bad.to_le_bytes());
+            std::fs::write(&offsets_path, &bytes).expect("write offsets");
+
+            assert!(
+                SegmentReader::open(&seg_dir).is_err(),
+                "expected Err for non-monotone string pool offsets"
+            );
+        }
+        // If the offsets file is too short to corrupt, the test passes vacuously
+        // (the segment has fewer than two offset entries, so monotonicity is
+        // trivially satisfied — not a realistic production case).
     }
 }

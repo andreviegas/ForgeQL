@@ -130,10 +130,16 @@ fn columnar_key_tuples(results: &[SymbolMatch]) -> Vec<(String, String, usize)> 
     v
 }
 
-/// Assert that every enrichment field present in the legacy `SymbolTable` row
-/// also appears in the corresponding columnar `SymbolMatch.fields` with the
-/// same value.  Only checks fields that the segment stores (string values —
-/// not binary/node-kind internals).
+/// Assert field parity between legacy and columnar for every row in `table`.
+///
+/// Checks:
+///  1. Every non-empty legacy field appears in the columnar result with the
+///     same value (forward check).
+///  2. No phantom fields exist in the columnar result that are absent from
+///     legacy (reverse check).
+///  3. `reader.extra_field_str(key, row_id)` agrees with `fields[key]` in the
+///     materialised `SymbolMatch`, catching divergence between the low-level
+///     accessor and the `find_symbols` pipeline (accessor cross-check).
 fn assert_fields_match(
     lang: &str,
     table: &SymbolTable,
@@ -158,26 +164,69 @@ fn assert_fields_match(
             })
             .collect();
 
-        // If there is exactly one match we can do a precise field comparison.
-        if matching.len() == 1 {
-            let col = &matching[0];
+        // Unexpected non-unique match (same name+fql_kind+line, multiple columnar
+        // rows) is valid: e.g. the literal `1` appears twice on the same line.
+        // The key-set parity test in `run_parity` already validates that the
+        // total count is correct. Skip per-field and accessor checks here to
+        // avoid false failures caused by ambiguity about which row owns which
+        // field value.
+        if matching.len() != 1 {
+            continue;
+        }
+        let col = &matching[0];
+
+        // ── forward check: every non-empty legacy field must appear in columnar ──
+        for (key, val) in &legacy_fields {
+            // The columnar reader does not store empty-string field values.
+            // An empty-string legacy value is equivalent to absent/None
+            // in the columnar path, so skip those entries.
+            if val.is_empty() {
+                continue;
+            }
+            let columnar_val = col.fields.get(key).map(String::as_str);
+            assert_eq!(
+                columnar_val,
+                Some(val.as_str()),
+                "[{lang}] '{name}' field '{key}': legacy='{val}', columnar={columnar_val:?}"
+            );
+        }
+
+        // ── reverse check: no phantom fields in columnar result ──
+        let legacy_non_empty: std::collections::HashSet<&str> = legacy_fields
+            .iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(k, _)| k.as_str())
+            .collect();
+        for key in col.fields.keys() {
+            assert!(
+                legacy_non_empty.contains(key.as_str()),
+                "[{lang}] '{name}' columnar result has phantom field '{key}' \
+                 not present in legacy row"
+            );
+        }
+
+        // ── accessor cross-check: extra_field_str must agree with fields map ──
+        let candidate_ids: Vec<u32> = reader
+            .lookup_name(name)
+            .into_iter()
+            .filter(|&id| {
+                reader.fql_kind_of(id) == fql_kind && reader.line_of(id) as usize == row.line
+            })
+            .collect();
+        if candidate_ids.len() == 1 {
+            let row_id = candidate_ids[0];
             for (key, val) in &legacy_fields {
-                // The columnar reader does not store empty-string field
-                // values (`find_symbols` filters them with `if !s.is_empty()`).
-                // An empty-string legacy value is equivalent to absent/None
-                // in the columnar path, so skip those entries.
                 if val.is_empty() {
                     continue;
                 }
-                let columnar_val = col.fields.get(key).map(String::as_str);
+                let accessor_val = reader.extra_field_str(key, row_id);
                 assert_eq!(
-                    columnar_val,
+                    accessor_val,
                     Some(val.as_str()),
-                    "[{lang}] '{name}' field '{key}': legacy='{val}', columnar={columnar_val:?}"
+                    "[{lang}] '{name}' field '{key}': extra_field_str={accessor_val:?} \
+                     but find_symbols returned '{val}'"
                 );
             }
-            // Also verify the reader's per-row accessor agrees.
-            let _ = reader; // reader is used in the memory test; suppress unused warn here
         }
     }
 }
@@ -290,6 +339,132 @@ fn parity_order_by_line_asc_cpp() {
     );
 }
 
+/// ORDER BY line DESC produces rows in strictly descending line order and is
+/// the exact reverse of the ASC result (Gap 8 fix).
+#[test]
+fn parity_order_by_line_desc_cpp() {
+    use forgeql_core::ir::{OrderBy, SortDirection};
+
+    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let (_tmp, seg_dir) = build_segment_from_table(&table);
+    let reader = SegmentReader::open(&seg_dir).expect("open");
+
+    let clauses_desc = Clauses {
+        order_by: Some(OrderBy {
+            field: "line".to_owned(),
+            direction: SortDirection::Desc,
+        }),
+        ..Clauses::default()
+    };
+    let desc = reader.find_symbols(&clauses_desc, None).expect("find desc");
+    let desc_lines: Vec<_> = desc.iter().map(|r| r.line.unwrap_or(0)).collect();
+    assert!(
+        desc_lines.windows(2).all(|w| w[0] >= w[1]),
+        "not sorted DESC by line: {desc_lines:?}"
+    );
+
+    // Must be the exact reverse of ASC.
+    let clauses_asc = Clauses {
+        order_by: Some(OrderBy {
+            field: "line".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        ..Clauses::default()
+    };
+    let asc = reader.find_symbols(&clauses_asc, None).expect("find asc");
+    let asc_lines: Vec<_> = asc.iter().map(|r| r.line.unwrap_or(0)).collect();
+    let reversed: Vec<_> = asc_lines.iter().copied().rev().collect();
+    assert_eq!(
+        desc_lines, reversed,
+        "DESC should be the exact reverse of ASC"
+    );
+}
+
+/// WHERE name LIKE 'f%' exercises the residual (non-Roaring) filter path and
+/// must return the same symbol set as filtering the legacy SymbolTable (Gap 7 fix).
+#[test]
+fn parity_like_name_cpp() {
+    use forgeql_core::ir::{CompareOp, Predicate, PredicateValue};
+
+    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let (_tmp, seg_dir) = build_segment_from_table(&table);
+    let reader = SegmentReader::open(&seg_dir).expect("open");
+
+    let clauses = Clauses {
+        where_predicates: vec![Predicate {
+            field: "name".to_owned(),
+            op: CompareOp::Like,
+            value: PredicateValue::String("f%".to_owned()),
+        }],
+        ..Clauses::default()
+    };
+    let columnar_results = reader.find_symbols(&clauses, None).expect("find");
+
+    // Build expected set from legacy table: names starting with 'f'.
+    let legacy_names: std::collections::BTreeSet<String> = table
+        .rows
+        .iter()
+        .map(|r| table.name_of(r).to_owned())
+        .filter(|n| n.to_ascii_lowercase().starts_with('f'))
+        .collect();
+    let columnar_names: std::collections::BTreeSet<String> =
+        columnar_results.iter().map(|r| r.name.clone()).collect();
+    assert_eq!(
+        columnar_names, legacy_names,
+        "LIKE 'f%' result mismatch (columnar vs legacy)"
+    );
+    assert!(
+        !columnar_names.is_empty(),
+        "expected at least one name starting with 'f'"
+    );
+}
+
+/// `byte_start_of` and `byte_end_of` accessors return the same byte range as
+/// the legacy `IndexRow.byte_range` for every row in the canonical fixture
+/// (Gap 4 fix).
+#[test]
+fn parity_byte_ranges_cpp() {
+    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let (_tmp, seg_dir) = build_segment_from_table(&table);
+    let reader = SegmentReader::open(&seg_dir).expect("open");
+
+    for row in &table.rows {
+        let name = table.name_of(row);
+        let fql_kind = table.fql_kind_of(row);
+
+        // Collect all row_ids that match (name, fql_kind, line).
+        let matching_ids: Vec<u32> = reader
+            .lookup_name(name)
+            .into_iter()
+            .filter(|&id| {
+                reader.fql_kind_of(id) == fql_kind && reader.line_of(id) as usize == row.line
+            })
+            .collect();
+
+        if matching_ids.is_empty() {
+            // Missing row is caught by parity_cpp_canonical — skip here.
+            continue;
+        }
+
+        // When multiple rows share (name, fql_kind, line) — e.g. the literal `1`
+        // appearing twice on the same line — assert that at least one of them
+        // carries the correct byte range so no range is silently dropped.
+        let has_correct_range = matching_ids.iter().any(|&id| {
+            reader.byte_start_of(id) as usize == row.byte_range.start
+                && reader.byte_end_of(id) as usize == row.byte_range.end
+        });
+        assert!(
+            has_correct_range,
+            "byte range ({}, {}) not found among {} row(s) for \
+             '{name}' ({fql_kind}) at line {}",
+            row.byte_range.start,
+            row.byte_range.end,
+            matching_ids.len(),
+            row.line
+        );
+    }
+}
+
 /// `SegmentReader::lookup_name` returns the correct row IDs for a known symbol.
 #[test]
 fn parity_lookup_name_cpp() {
@@ -388,23 +563,23 @@ fn memory_budget_fql_kind_prefilter_cpp() {
     // ── measure delta ──────────────────────────────────────────────────────
     let after_faults = read_minor_faults();
     let delta = after_faults.saturating_sub(baseline_faults);
-    // small number of pages — well under 1000 minor faults on a cold mmap.
+    // small number of pages — well under 600 minor faults on a cold mmap.
     //
-    // This bound is intentionally generous (1000 pages) to avoid flakiness
-    // across CI environments with different kernel page-reclaim policies.
+    // This bound is generous enough to avoid flakiness across CI environments
+    // with different kernel page-reclaim policies (baseline ≈ 232 × ~2.6 ≈ 600).
     // The actual measured delta is printed below and serves as the
     // Phase 08 benchmark starting point.
     //
     // BASELINE (documented 2026-05-04, storage-engine-phase4, x86_64 Linux):
-    //   delta ≈ 310 faults for canonical.cpp with all enrichment columns.
+    //   delta ≈ 232 faults for canonical.cpp with all enrichment columns.
     println!(
         "[memory_budget] minor page faults during find_symbols(fql_kind=function): {delta} \
          (baseline={baseline_faults}, after={after_faults})"
     );
     assert!(
-        delta < 1000,
+        delta < 600,
         "unexpected page-fault spike: {delta} faults for a small canonical.cpp segment; \
-         expected < 1000 (mmap should only touch accessed column pages)"
+         expected < 600 (mmap should only touch accessed column pages; baseline ≈ 232)"
     );
 }
 
