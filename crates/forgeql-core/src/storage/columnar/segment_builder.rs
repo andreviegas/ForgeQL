@@ -232,10 +232,11 @@ impl SegmentBuilder {
             .or_default()
             .push(row_id);
 
-        // Append `None` to all existing extra columns so they stay parallel.
-        for col in self.extra_cols.values_mut() {
-            col.push_none();
-        }
+        // NOTE: do NOT pre-append None to extra_cols here.
+        // `set_field` handles gap-filling, and `flush` pads all columns to
+        // `row_count` via `resize(row_count, None)`.  Pre-appending caused
+        // a double-append bug when `set_field` was called after `emit_row`
+        // for the same row.
 
         RowId(row_id)
     }
