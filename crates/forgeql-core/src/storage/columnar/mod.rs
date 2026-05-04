@@ -31,11 +31,20 @@
 //!
 //! [`SymbolTable`]: crate::ast::index::SymbolTable
 
+pub mod manifest;
 pub mod segment_builder;
 pub mod shadow_writer;
 
+pub use manifest::Manifest;
 pub use segment_builder::SegmentBuilder;
 pub use shadow_writer::ShadowWriter;
+
+/// Type-erased, thread-safe hash function for content addressing.
+///
+/// Wrap a `SourceProvider::hash_content` call behind this type to keep
+/// `ShadowWriter` decoupled from the concrete provider type.
+/// Example: `Arc::new(|b: &[u8]| git_blob_sha1(b).to_vec())`
+pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'static>;
 
 /// Encode a byte slice as a lowercase hex string.
 pub(crate) fn bytes_to_hex(bytes: &[u8]) -> String {

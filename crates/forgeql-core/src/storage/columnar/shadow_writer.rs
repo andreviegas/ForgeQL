@@ -1,55 +1,95 @@
 //! [`ShadowWriter`] — drives per-file shadow-write from a built [`SymbolTable`].
 //!
 //! After the legacy index build completes, `ShadowWriter::run` iterates
-//! every source file present in the symbol table, computes its git blob
-//! SHA-1 content hash, and writes the corresponding columnar segment to
-//! `<segments_base>/git-sha1/<hex>/`.
+//! every source file present in the symbol table, computes the content hash
+//! via a caller-supplied hash function (Issue 1: no more `git_blob_sha1`
+//! coupling), and writes the corresponding columnar segment to
+//! `<segments_base>/<provider_id>/<hex>/`.
 //!
-//! Shadow-write is **idempotent**: if a segment directory already exists and
-//! contains a valid `header.bin`, it is skipped.
+//! **Content-ID caching (Issue 3)**: callers may supply a pre-computed
+//! `HashMap<PathBuf, Vec<u8>>` populated inline during `index_file` via
+//! [`SegmentBuildCtx`].  When a pre-computed ID is available, the source
+//! file is **not** re-read; only the per-symbol enrichment fields and core
+//! columns are extracted from the already-built `SymbolTable`.
 //!
-//! Errors on individual files are logged as warnings and skipped — shadow-
-//! write must never abort the primary legacy-index build.
+//! **Enrichment fields (Issue 2)**: each [`IndexRow`]'s `fields` map
+//! (populated by enrichers during the AST build) is transferred to the
+//! segment via [`SegmentBuilder::set_field`].
 //!
+//! **Background flush (Issue 4)**: a background [`std::thread`] flushes
+//! segment directories to disk while the main loop builds the next one,
+//! overlapping CPU and I/O.  The flusher is joined before `run` returns.
+//!
+//! **Manifest (Issue 5)**: after a successful flush run, the manifest at
+//! `<segments_base>/../manifest.json` is updated with newly discovered
+//! enrichment column names and the cumulative segment count.
+//!
+//! Shadow-write is **idempotent**: existing valid segments are skipped.
+//! Per-file errors are logged as warnings and never abort the build.
+//!
+//! [`SegmentBuildCtx`]: crate::ast::index::SegmentBuildCtx
+//! [`IndexRow`]: crate::ast::index::IndexRow
 //! [`SymbolTable`]: crate::ast::index::SymbolTable
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 
 use anyhow::Result;
 use tracing::{debug, warn};
 
 use crate::ast::index::SymbolTable;
-use crate::storage::git_sha1_provider::git_blob_sha1;
 
 use super::bytes_to_hex;
+use super::manifest::Manifest;
 use super::segment_builder::{SegmentBuilder, is_valid_segment};
 
 /// Iterates a [`SymbolTable`] and writes one columnar segment per source file.
 pub struct ShadowWriter<'a> {
     table: &'a SymbolTable,
-    workspace_path: &'a Path,
     segments_base: &'a Path,
+    /// Provider identifier (e.g. `"git-sha1"`), used as the segment
+    /// sub-directory name and embedded in `header.bin`.
+    provider_id: &'a str,
+    /// Content-addressing hash function supplied by the caller.
+    ///
+    /// For `GitSha1Provider` this wraps `git_blob_sha1`.  The closure is
+    /// called only when `pre_computed` does not contain the file's path.
+    hash_content: &'a (dyn Fn(&[u8]) -> Vec<u8> + Send + Sync),
+    /// Pre-computed content IDs populated inline during `index_file` via
+    /// [`SegmentBuildCtx::emit_fn`].  Keys are the **absolute** source
+    /// file paths stored in the symbol table.
+    ///
+    /// When a path is found here the source file is not re-read, avoiding
+    /// the double-read overhead (Issue 3).
+    pre_computed: HashMap<PathBuf, Vec<u8>>,
 }
 
 impl<'a> ShadowWriter<'a> {
     /// Create a shadow writer.
     ///
     /// - `table`: fully-built symbol table.
-    /// - `workspace_path`: absolute path to the working directory (used to
-    ///   read source file bytes for hashing).
     /// - `segments_base`: path to `<bare-repo>/forgeql/segments/`.
-    ///   Segments are written under `<segments_base>/git-sha1/<hex>/`.
+    /// - `provider_id`: stable string identifying the hash algorithm
+    ///   (e.g. `"git-sha1"`).  Used as the sub-directory name.
+    /// - `hash_content`: closure that maps raw file bytes to the raw
+    ///   content-ID bytes.
+    /// - `pre_computed`: content IDs collected inline during the build
+    ///   (may be empty).
     #[must_use]
-    pub const fn new(
+    pub fn new(
         table: &'a SymbolTable,
-        workspace_path: &'a Path,
         segments_base: &'a Path,
+        provider_id: &'a str,
+        hash_content: &'a (dyn Fn(&[u8]) -> Vec<u8> + Send + Sync),
+        pre_computed: HashMap<PathBuf, Vec<u8>>,
     ) -> Self {
         Self {
             table,
-            workspace_path,
             segments_base,
+            provider_id,
+            hash_content,
+            pre_computed,
         }
     }
 
@@ -60,9 +100,9 @@ impl<'a> ShadowWriter<'a> {
     ///
     /// # Errors
     /// Returns `Err` only for fatal infrastructure failures (e.g. unable to
-    /// create the `segments/git-sha1/` directory).  Per-file errors are
-    /// logged as warnings and skipped.
-    pub fn run(&self) -> Result<usize> {
+    /// create the provider directory).  Per-file errors are logged as
+    /// warnings and skipped.
+    pub fn run(mut self) -> Result<usize> {
         // Group row indices by path_id so each file is processed once.
         let mut by_path: HashMap<u32, Vec<usize>> = HashMap::new();
         for (idx, row) in self.table.rows.iter().enumerate() {
@@ -73,50 +113,72 @@ impl<'a> ShadowWriter<'a> {
             return Ok(0);
         }
 
-        // Ensure the provider directory exists.
-        let provider_dir = self.segments_base.join("git-sha1");
+        // Ensure the provider-specific segment directory exists.
+        let provider_dir = self.segments_base.join(self.provider_id);
         std::fs::create_dir_all(&provider_dir)?;
 
-        let mut written: usize = 0;
+        // Background flush thread (Issue 4): receives (builder, target_dir)
+        // pairs and flushes them while the main loop builds the next segment.
+        // The channel bound (64) provides natural back-pressure.
+        let (tx, rx) = mpsc::sync_channel::<(SegmentBuilder, PathBuf)>(64);
+        let flusher = std::thread::spawn(move || {
+            let mut count: usize = 0;
+            for (builder, target_dir) in rx {
+                match builder.flush(&target_dir) {
+                    Ok(()) => count += 1,
+                    Err(e) => warn!(
+                        target = %target_dir.display(),
+                        "shadow-write: flush failed: {e}"
+                    ),
+                }
+            }
+            count
+        });
+
+        // Accumulate all enrichment column names to update the manifest.
+        let mut all_columns: BTreeSet<String> = BTreeSet::new();
 
         for row_indices in by_path.values() {
-            // `row_indices` is non-empty by construction.
+            // row_indices is non-empty by construction.
             let first_row = &self.table.rows[row_indices[0]];
-            let rel_path = self.table.path_of(first_row);
-            let abs_path = self.workspace_path.join(rel_path);
+            let abs_path = self.table.path_of(first_row).to_path_buf();
 
-            // Read source bytes for content hashing.
-            let bytes = match std::fs::read(&abs_path) {
-                Ok(b) => b,
-                Err(e) => {
-                    warn!(
-                        path = %abs_path.display(),
-                        "shadow-write: skipping unreadable source file: {e}"
-                    );
-                    continue;
+            // Content ID: use pre-computed value when available (Issue 3),
+            // otherwise read the file and hash it.
+            let content_id: Vec<u8> = if let Some(cid) = self.pre_computed.remove(&abs_path) {
+                cid
+            } else {
+                match std::fs::read(&abs_path) {
+                    Ok(bytes) => (self.hash_content)(&bytes),
+                    Err(e) => {
+                        warn!(
+                            path = %abs_path.display(),
+                            "shadow-write: skipping unreadable file: {e}"
+                        );
+                        continue;
+                    }
                 }
             };
 
-            let content_id = git_blob_sha1(&bytes);
             let hex = bytes_to_hex(&content_id);
             let target_dir = provider_dir.join(&hex);
 
             // Idempotent: skip already-valid segments.
             if is_valid_segment(&target_dir) {
                 debug!(
-                    path = %rel_path.display(),
+                    path = %abs_path.display(),
                     hex = %hex,
                     "shadow-write: segment already valid, skipping"
                 );
                 continue;
             }
 
-            // Build segment.
-            let mut builder = SegmentBuilder::new("git-sha1", &content_id);
+            // Build segment: core columns + enrichment fields (Issue 2).
+            let mut builder = SegmentBuilder::new(self.provider_id, &content_id);
             for &idx in row_indices {
                 let row = &self.table.rows[idx];
                 #[allow(clippy::cast_possible_truncation)]
-                builder.add_row(
+                let row_id = builder.emit_row(
                     self.table.name_of(row),
                     self.table.fql_kind_of(row),
                     self.table.language_of(row),
@@ -125,27 +187,277 @@ impl<'a> ShadowWriter<'a> {
                     row.byte_range.end as u32,
                     row.usages_count,
                 );
+                // Transfer enrichment fields from IndexRow.fields (Issue 2).
+                for (key, value) in self.table.resolve_fields(&row.fields) {
+                    let _ = all_columns.insert(key.clone());
+                    builder.set_field(row_id, &key, value);
+                }
             }
 
-            match builder.flush(&target_dir) {
-                Ok(()) => {
-                    debug!(
-                        path = %rel_path.display(),
-                        hex = %hex,
-                        "shadow-write: segment written"
-                    );
-                    written += 1;
-                }
-                Err(e) => {
-                    warn!(
-                        path = %rel_path.display(),
-                        hex = %hex,
-                        "shadow-write: flush failed: {e}"
-                    );
-                }
+            // Send to background flusher (blocking when channel is full).
+            if tx.send((builder, target_dir)).is_err() {
+                warn!("shadow-write: flusher thread terminated unexpectedly");
+                break;
+            }
+        }
+
+        // Signal the flusher to drain and join.
+        drop(tx);
+        let written = flusher.join().unwrap_or(0);
+
+        // Update the manifest with newly discovered column names (Issue 5).
+        if written > 0 {
+            let manifest_path = self
+                .segments_base
+                .parent()
+                .unwrap_or(self.segments_base)
+                .join("manifest.json");
+            if let Err(e) = Manifest::update(
+                &manifest_path,
+                self.provider_id,
+                &all_columns,
+                written as u64,
+            ) {
+                warn!("shadow-write: manifest update failed: {e}");
             }
         }
 
         Ok(written)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests (Issue 6)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::items_after_statements
+)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::ast::index::{IndexRow, SymbolTable};
+
+    /// Build a minimal `SymbolTable` with one row for `file_name` in `dir`.
+    fn make_table(
+        dir: &Path,
+        file_name: &str,
+        content: &[u8],
+        name: &str,
+        fql_kind: &str,
+        enrichment: HashMap<String, String>,
+    ) -> SymbolTable {
+        std::fs::write(dir.join(file_name), content).expect("write source file");
+        let mut table = SymbolTable::default();
+        let path = dir.join(file_name);
+        let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = table
+            .strings
+            .intern_row(name, fql_kind, fql_kind, "rust", &path);
+        let fields = table.strings.intern_fields(enrichment);
+        table.push_row(IndexRow {
+            byte_range: 0..content.len(),
+            line: 1,
+            usages_count: 0,
+            fields,
+            name_id,
+            node_kind_id,
+            fql_kind_id,
+            language_id,
+            path_id,
+        });
+        table
+    }
+
+    /// Simple identity hash: content bytes → content bytes (deterministic for tests).
+    fn identity_hash(b: &[u8]) -> Vec<u8> {
+        // Use a fixed short hash to keep directory names short.
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        b.hash(&mut h);
+        h.finish().to_le_bytes().to_vec()
+    }
+
+    #[test]
+    fn empty_table_writes_no_segments() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let table = SymbolTable::default();
+        let segments_base = tmp.path().join("segments");
+        let writer = ShadowWriter::new(
+            &table,
+            &segments_base,
+            "test",
+            &identity_hash,
+            HashMap::new(),
+        );
+        let n = writer.run().expect("run");
+        assert_eq!(n, 0, "no segments for empty table");
+        assert!(
+            !segments_base.exists(),
+            "segments dir should not be created for empty table"
+        );
+    }
+
+    #[test]
+    fn writes_one_segment_per_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let table = make_table(
+            tmp.path(),
+            "lib.rs",
+            b"fn hello() {}",
+            "hello",
+            "function",
+            HashMap::new(),
+        );
+        let segments_base = tmp.path().join("segments");
+        let writer = ShadowWriter::new(
+            &table,
+            &segments_base,
+            "test",
+            &identity_hash,
+            HashMap::new(),
+        );
+        let n = writer.run().expect("run");
+        assert_eq!(n, 1, "one segment written");
+
+        // Verify the provider directory and one segment sub-directory exist.
+        let provider_dir = segments_base.join("test");
+        let entries: Vec<_> = std::fs::read_dir(&provider_dir)
+            .expect("read provider_dir")
+            .collect();
+        assert_eq!(entries.len(), 1, "exactly one segment dir");
+
+        let seg_dir = entries[0].as_ref().expect("dir entry").path();
+        let header = std::fs::read(seg_dir.join("header.bin")).expect("header.bin");
+        assert!(header.starts_with(b"FQSG"), "header has FQSG magic");
+    }
+
+    #[test]
+    fn enrichment_fields_written_to_extra_columns() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut enrichment = HashMap::new();
+        enrichment.insert("is_const".to_owned(), "true".to_owned());
+        enrichment.insert("naming".to_owned(), "UPPER_SNAKE".to_owned());
+
+        let table = make_table(
+            tmp.path(),
+            "consts.rs",
+            b"const X: u32 = 42;",
+            "X",
+            "variable",
+            enrichment,
+        );
+        let segments_base = tmp.path().join("segments");
+        let writer = ShadowWriter::new(
+            &table,
+            &segments_base,
+            "test",
+            &identity_hash,
+            HashMap::new(),
+        );
+        writer.run().expect("run");
+
+        // Verify the segment directory has extra enrichment column files.
+        let provider_dir = segments_base.join("test");
+        let seg_dir = std::fs::read_dir(&provider_dir)
+            .expect("provider_dir")
+            .next()
+            .expect("one entry")
+            .expect("dir entry")
+            .path();
+
+        // The header must contain extra column metadata.
+        let header = std::fs::read(seg_dir.join("header.bin")).expect("header.bin");
+        assert!(header.starts_with(b"FQSG"), "FQSG magic");
+        // column_count is at offset 68, 4 bytes LE.  Should be > 7 (core columns).
+        let col_count = u32::from_le_bytes(header[68..72].try_into().unwrap());
+        assert!(
+            col_count > 7,
+            "enrichment columns present (got {col_count})"
+        );
+    }
+
+    #[test]
+    fn pre_computed_avoids_file_read() {
+        // Write a table but delete the source file before running the writer.
+        // With a pre-computed content ID, shadow-write should succeed anyway.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let content = b"fn gone() {}";
+        let file_path = tmp.path().join("gone.rs");
+        std::fs::write(&file_path, content).expect("write");
+
+        let mut table = SymbolTable::default();
+        let (name_id, node_kind_id, fql_kind_id, language_id, path_id) =
+            table
+                .strings
+                .intern_row("gone", "function_item", "function", "rust", &file_path);
+        table.push_row(IndexRow {
+            byte_range: 0..content.len(),
+            line: 1,
+            usages_count: 0,
+            fields: HashMap::new(),
+            name_id,
+            node_kind_id,
+            fql_kind_id,
+            language_id,
+            path_id,
+        });
+
+        // Delete the source file — the writer must use the pre-computed ID.
+        std::fs::remove_file(&file_path).expect("remove");
+
+        let mut pre_computed = HashMap::new();
+        pre_computed.insert(file_path.clone(), identity_hash(content));
+
+        let segments_base = tmp.path().join("segments");
+        let writer =
+            ShadowWriter::new(&table, &segments_base, "test", &identity_hash, pre_computed);
+        let n = writer.run().expect("run without re-reading file");
+        assert_eq!(n, 1, "segment written via pre-computed content ID");
+    }
+
+    #[test]
+    fn manifest_written_after_run() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let forgeql_dir = tmp.path().join("forgeql");
+        let segments_base = forgeql_dir.join("segments");
+
+        let mut enrichment = HashMap::new();
+        enrichment.insert("param_count".to_owned(), "2".to_owned());
+        let table = make_table(
+            tmp.path(),
+            "main.rs",
+            b"fn main() {}",
+            "main",
+            "function",
+            enrichment,
+        );
+
+        let writer = ShadowWriter::new(
+            &table,
+            &segments_base,
+            "test",
+            &identity_hash,
+            HashMap::new(),
+        );
+        writer.run().expect("run");
+
+        let manifest_path = forgeql_dir.join("manifest.json");
+        assert!(manifest_path.exists(), "manifest.json written");
+
+        let manifest: crate::storage::columnar::manifest::Manifest =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read"))
+                .expect("parse manifest");
+        assert_eq!(manifest.provider_id, "test");
+        assert_eq!(manifest.segment_count, 1);
+        assert!(
+            manifest.column_registry.contains("param_count"),
+            "enrichment column in registry"
+        );
     }
 }

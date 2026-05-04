@@ -3,6 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use tracing::info;
 
+use crate::storage::git_sha1_provider::git_blob_sha1;
+
 use crate::{
     git::{self as git, source::Source, worktree},
     result::{ForgeQLResult, QueryResult, SessionStats, ShowContent, SourceOpResult, SymbolMatch},
@@ -250,7 +252,10 @@ impl ForgeQLEngine {
             && cfg.columnar.shadow_write
         {
             let segments_dir = repo_path.join("forgeql").join("segments");
-            session.set_columnar_segments_dir(segments_dir);
+            // Wrap git_blob_sha1 behind HashFn so ShadowWriter stays decoupled
+            // from the concrete provider type (Issue 1).
+            let hash_fn: crate::storage::HashFn = Arc::new(|b: &[u8]| git_blob_sha1(b).to_vec());
+            session.set_columnar_segments_dir(segments_dir, "git-sha1", hash_fn);
         }
 
         // Use resume_index() so an existing disk cache at

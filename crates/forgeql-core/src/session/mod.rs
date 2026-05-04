@@ -148,6 +148,13 @@ pub struct Session {
     /// Set by `exec_source` before calling `resume_index` when
     /// `columnar.shadow_write: true` is present in `.forgeql.yaml`.
     columnar_segments_dir: Option<PathBuf>,
+    /// Provider ID string for columnar shadow-write (e.g. `"git-sha1"`).
+    columnar_provider_id: Option<String>,
+    /// Content-addressing hash function for columnar shadow-write.
+    ///
+    /// Wraps `SourceProvider::hash_content` so `ShadowWriter` remains
+    /// decoupled from the concrete provider type.
+    columnar_hash_fn: Option<crate::storage::HashFn>,
 }
 
 impl Session {
@@ -188,16 +195,25 @@ impl Session {
             budget_branch: None,
             recent_show_lines: Vec::new(),
             columnar_segments_dir: None,
+            columnar_provider_id: None,
+            columnar_hash_fn: None,
         }
     }
 
     /// Configure columnar shadow-write.
     ///
     /// Must be called **before** `build_index` / `resume_index`.  When set,
-    /// a second pass after each full build writes one segment per source file
-    /// to `<dir>/git-sha1/<content-hex>/`.
-    pub fn set_columnar_segments_dir(&mut self, dir: PathBuf) {
+    /// each full build writes one segment per source file to
+    /// `<dir>/<provider_id>/<content-hex>/`.
+    pub fn set_columnar_segments_dir(
+        &mut self,
+        dir: PathBuf,
+        provider_id: impl Into<String>,
+        hash_fn: crate::storage::HashFn,
+    ) {
         self.columnar_segments_dir = Some(dir);
+        self.columnar_provider_id = Some(provider_id.into());
+        self.columnar_hash_fn = Some(hash_fn);
     }
 
     /// Parse all source files in the worktree and build a fresh `SymbolTable`.
@@ -216,17 +232,61 @@ impl Session {
             path = %self.worktree_path.display(),
             "building symbol index"
         );
+
+        // Wire inline content-ID cache if shadow-write is enabled (Issue 3):
+        // SegmentBuildCtx.emit_fn fires inside index_file — after the file is
+        // already read — and stores (abs_path → content_id) so ShadowWriter
+        // does not have to re-read each file just for hashing.
+        let content_id_cache: std::sync::Arc<
+            std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, Vec<u8>>>,
+        > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+
+        if let (Some(provider_id), Some(hash_fn)) =
+            (&self.columnar_provider_id, &self.columnar_hash_fn)
+        {
+            let cache_emit = std::sync::Arc::clone(&content_id_cache);
+            let hash_fn_ctx = std::sync::Arc::clone(hash_fn);
+            // SegmentBuildCtx.provider_id is &'static str; map the known
+            // provider IDs to their static counterparts.
+            let pid_static: &'static str = match provider_id.as_str() {
+                "git-sha1" => "git-sha1",
+                _ => "unknown",
+            };
+            self.engine.set_seg_ctx(crate::ast::index::SegmentBuildCtx {
+                provider_id: pid_static,
+                hash_fn: hash_fn_ctx,
+                emit_fn: std::sync::Arc::new(move |content_id, table, _| {
+                    if let Some(row) = table.rows.first() {
+                        let abs_path = table.strings.paths.get(row.path_id).to_path_buf();
+                        if let Ok(mut c) = cache_emit.lock() {
+                            let _ = c.insert(abs_path, content_id.to_vec());
+                        }
+                    }
+                }),
+            });
+        }
+
         let workspace = Workspace::new(&self.worktree_path)?;
         self.engine.build(&workspace)?;
+
+        // Extract the pre-computed content-ID map (empty if shadow-write not set).
+        let pre_computed = std::sync::Arc::try_unwrap(content_id_cache)
+            .ok()
+            .and_then(|m| m.into_inner().ok())
+            .unwrap_or_default();
 
         // Shadow-write columnar segments if enabled (best-effort, non-fatal).
         if let Some(ref segments_dir) = self.columnar_segments_dir
             && let Some(table) = self.engine.as_legacy_table()
+            && let Some(ref provider_id) = self.columnar_provider_id
+            && let Some(ref hash_fn) = self.columnar_hash_fn
         {
             let writer = crate::storage::columnar::ShadowWriter::new(
                 table,
-                &self.worktree_path,
                 segments_dir,
+                provider_id,
+                hash_fn.as_ref(),
+                pre_computed,
             );
             match writer.run() {
                 Ok(n) => debug!(
