@@ -22,8 +22,94 @@ use super::bytes_to_hex;
 pub const MAGIC: [u8; 4] = *b"FQSG";
 /// Current on-disk schema version.  Bump when the format changes.
 const SCHEMA_VERSION: u32 = 1;
-/// Type-tag for `u32` columns.
+/// Type-tag for dense `u32` columns (core columns).
 const TYPE_TAG_U32: u8 = 3;
+/// Type-tag for optional string columns — dense `[u32]` array where
+/// `u32::MAX` encodes a missing value; IDs index into the segment string pool.
+const TYPE_TAG_STR_OPT: u8 = 5;
+
+// ---------------------------------------------------------------------------
+// RowId — opaque per-row handle
+// ---------------------------------------------------------------------------
+
+/// Opaque identifier for a row within a [`SegmentBuilder`].
+///
+/// Returned by [`SegmentBuilder::emit_row`] and passed to
+/// [`SegmentBuilder::set_field`] to attach enrichment fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowId(u32);
+
+// ---------------------------------------------------------------------------
+// FieldValue — polymorphic enrichment value
+// ---------------------------------------------------------------------------
+
+/// A value that can be stored in an optional enrichment column.
+///
+/// In Phase 03 only [`FieldValue::Str`] is used — all enrichment fields are
+/// strings.  The other variants are reserved for later phases when numeric
+/// and boolean columns land.
+#[derive(Debug, Clone)]
+pub enum FieldValue {
+    /// String-typed enrichment value (e.g. `"true"`, `"camelCase"`, `"42"`).
+    Str(String),
+    /// Boolean flag (stored as a `u32` column: `0` = false, `1` = true).
+    Bit(bool),
+    /// 32-bit unsigned integer enrichment value.
+    U32(u32),
+}
+
+impl From<bool> for FieldValue {
+    fn from(v: bool) -> Self {
+        Self::Bit(v)
+    }
+}
+impl From<u32> for FieldValue {
+    fn from(v: u32) -> Self {
+        Self::U32(v)
+    }
+}
+impl From<String> for FieldValue {
+    fn from(v: String) -> Self {
+        Self::Str(v)
+    }
+}
+impl<'a> From<&'a str> for FieldValue {
+    fn from(v: &'a str) -> Self {
+        Self::Str(v.to_owned())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ColumnDraft — per-optional-column row-parallel accumulator
+// ---------------------------------------------------------------------------
+
+enum ColumnDraft {
+    Str(Vec<Option<String>>),
+    Bit(Vec<Option<bool>>),
+    U32(Vec<Option<u32>>),
+}
+
+impl ColumnDraft {
+    /// Append a `None` slot to the column (called when a row does not have
+    /// this field).
+    fn push_none(&mut self) {
+        match self {
+            Self::Str(v) => v.push(None),
+            Self::Bit(v) => v.push(None),
+            Self::U32(v) => v.push(None),
+        }
+    }
+
+    /// Current length (number of entries, including `None` slots).
+    #[allow(clippy::missing_const_for_fn)] // match on &self enum is not const in stable Rust
+    fn len(&self) -> usize {
+        match self {
+            Self::Str(v) => v.len(),
+            Self::Bit(v) => v.len(),
+            Self::U32(v) => v.len(),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // SegmentBuilder
@@ -33,8 +119,10 @@ const TYPE_TAG_U32: u8 = 3;
 ///
 /// Usage:
 /// 1. Create with [`SegmentBuilder::new`].
-/// 2. Call [`SegmentBuilder::add_row`] once per `IndexRow` in the file.
-/// 3. Call [`SegmentBuilder::flush`] to atomically write the segment.
+/// 2. Call [`SegmentBuilder::emit_row`] once per `IndexRow` in the file;
+///    capture the returned [`RowId`] to attach enrichment fields.
+/// 3. Call [`SegmentBuilder::set_field`] to write per-row enrichment values.
+/// 4. Call [`SegmentBuilder::flush`] to atomically write the segment.
 pub struct SegmentBuilder {
     provider_id: [u8; 16],
     content_id: [u8; 32],
@@ -54,6 +142,9 @@ pub struct SegmentBuilder {
     kind_postings: HashMap<u32, RoaringBitmap>,
     // symbol name → list of row indices, sorted by key for FST insertion.
     name_to_rows: BTreeMap<String, Vec<u32>>,
+    /// Optional enrichment columns, keyed by field name.
+    /// Each column is a parallel array with one slot per row.
+    extra_cols: HashMap<String, ColumnDraft>,
 }
 
 impl SegmentBuilder {
@@ -90,6 +181,7 @@ impl SegmentBuilder {
             col_language_id: Vec::new(),
             kind_postings: HashMap::new(),
             name_to_rows: BTreeMap::new(),
+            extra_cols: HashMap::new(),
         }
     }
 
@@ -100,9 +192,13 @@ impl SegmentBuilder {
         self.col_name_id.len() as u32
     }
 
-    /// Add one symbol row to the segment.
+    /// Add one symbol row; returns an opaque [`RowId`] for use with
+    /// [`set_field`](Self::set_field).
+    ///
+    /// This is the canonical row-insertion method.  [`add_row`](Self::add_row)
+    /// is a convenience wrapper that discards the returned [`RowId`].
     #[allow(clippy::too_many_arguments)] // 7 physical columns is intentional
-    pub fn add_row(
+    pub fn emit_row(
         &mut self,
         name: &str,
         fql_kind: &str,
@@ -111,7 +207,7 @@ impl SegmentBuilder {
         byte_start: u32,
         byte_end: u32,
         usages_count: u32,
-    ) {
+    ) -> RowId {
         let row_id = self.row_count();
 
         let name_id = self.intern(name);
@@ -135,6 +231,74 @@ impl SegmentBuilder {
             .entry(name.to_owned())
             .or_default()
             .push(row_id);
+
+        // Append `None` to all existing extra columns so they stay parallel.
+        for col in self.extra_cols.values_mut() {
+            col.push_none();
+        }
+
+        RowId(row_id)
+    }
+
+    /// Convenience wrapper: add a row without returning the [`RowId`].
+    ///
+    /// Use [`emit_row`](Self::emit_row) when you need to attach enrichment
+    /// fields via [`set_field`](Self::set_field).
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_row(
+        &mut self,
+        name: &str,
+        fql_kind: &str,
+        language: &str,
+        line: u32,
+        byte_start: u32,
+        byte_end: u32,
+        usages_count: u32,
+    ) {
+        let _ = self.emit_row(
+            name,
+            fql_kind,
+            language,
+            line,
+            byte_start,
+            byte_end,
+            usages_count,
+        );
+    }
+
+    /// Attach an enrichment field value to the row identified by `row`.
+    ///
+    /// - If the column `field` does not yet exist it is created and all rows
+    ///   before `row` receive a `None` sentinel.
+    /// - If the row index is beyond the column's current length, the gap is
+    ///   filled with `None` sentinels.
+    /// - A type mismatch between an existing column and the new value is
+    ///   treated as absent (defensive; should not happen in practice).
+    pub fn set_field(&mut self, row: RowId, field: &str, value: impl Into<FieldValue>) {
+        let row_idx = row.0 as usize;
+        let value = value.into();
+
+        let col = self.extra_cols.entry(field.to_owned()).or_insert_with(|| {
+            // Back-fill all rows before `row` with None.
+            match &value {
+                FieldValue::Str(_) => ColumnDraft::Str(vec![None; row_idx]),
+                FieldValue::Bit(_) => ColumnDraft::Bit(vec![None; row_idx]),
+                FieldValue::U32(_) => ColumnDraft::U32(vec![None; row_idx]),
+            }
+        });
+
+        // Fill any gap up to `row_idx` with None.
+        while col.len() < row_idx {
+            col.push_none();
+        }
+
+        // Push the actual value (or None on type mismatch).
+        match (col, value) {
+            (ColumnDraft::Str(v), FieldValue::Str(s)) => v.push(Some(s)),
+            (ColumnDraft::Bit(v), FieldValue::Bit(b)) => v.push(Some(b)),
+            (ColumnDraft::U32(v), FieldValue::U32(u)) => v.push(Some(u)),
+            (col, _) => col.push_none(), // type mismatch → absent
+        }
     }
 
     /// Flush the segment to `target_dir` atomically.
@@ -145,10 +309,44 @@ impl SegmentBuilder {
     ///
     /// # Errors
     /// Propagates I/O errors from file creation / renaming.
-    pub fn flush(self, target_dir: &Path) -> Result<()> {
+    pub fn flush(mut self, target_dir: &Path) -> Result<()> {
         if is_valid_segment(target_dir) {
             return Ok(());
         }
+
+        let row_count = self.col_name_id.len();
+
+        // Pre-process extra enrichment columns: intern string values into the
+        // shared pool, then convert to dense `u32` arrays (u32::MAX = absent).
+        // This MUST run before `write_string_table` so all string values are
+        // included in the pool.
+        let extra_arrays: Vec<(String, Vec<u32>)> = {
+            let extra = std::mem::take(&mut self.extra_cols);
+            extra
+                .into_iter()
+                .map(|(name, draft)| {
+                    let ids: Vec<u32> = match draft {
+                        ColumnDraft::Str(mut vals) => {
+                            vals.resize(row_count, None);
+                            vals.into_iter()
+                                .map(|v| v.map_or(u32::MAX, |s| self.intern(&s)))
+                                .collect()
+                        }
+                        ColumnDraft::Bit(mut vals) => {
+                            vals.resize(row_count, None);
+                            vals.into_iter()
+                                .map(|v| v.map_or(u32::MAX, u32::from))
+                                .collect()
+                        }
+                        ColumnDraft::U32(mut vals) => {
+                            vals.resize(row_count, None);
+                            vals.into_iter().map(|v| v.unwrap_or(u32::MAX)).collect()
+                        }
+                    };
+                    (name, ids)
+                })
+                .collect()
+        };
 
         let parent = target_dir.parent().context("target_dir has no parent")?;
         std::fs::create_dir_all(parent)
@@ -166,7 +364,7 @@ impl SegmentBuilder {
         std::fs::create_dir_all(&tmp)
             .with_context(|| format!("creating tmp dir {}", tmp.display()))?;
 
-        // --- write columns ---
+        // --- write core columns ---
         write_u32_col(&tmp, "name_id", &self.col_name_id)?;
         write_u32_col(&tmp, "fql_kind_id", &self.col_fql_kind_id)?;
         write_u32_col(&tmp, "line", &self.col_line)?;
@@ -175,7 +373,7 @@ impl SegmentBuilder {
         write_u32_col(&tmp, "usages_count", &self.col_usages_count)?;
         write_u32_col(&tmp, "language_id", &self.col_language_id)?;
 
-        // --- write string table ---
+        // --- write string table (includes extra-column values) ---
         write_string_table(&tmp, &self.strings)?;
 
         // --- write kind postings ---
@@ -184,8 +382,13 @@ impl SegmentBuilder {
         // --- write FST + name postings ---
         write_name_fst(&tmp, &self.name_to_rows)?;
 
-        // --- write header LAST (signals a complete segment) ---
-        let col_meta: &[(&str, u8)] = &[
+        // --- write extra enrichment columns ---
+        for (name, ids) in &extra_arrays {
+            write_u32_col(&tmp, name, ids)?;
+        }
+
+        // --- build column metadata (dynamic to include extra cols) ---
+        let mut col_meta: Vec<(&str, u8)> = vec![
             ("name_id", TYPE_TAG_U32),
             ("fql_kind_id", TYPE_TAG_U32),
             ("line", TYPE_TAG_U32),
@@ -194,14 +397,19 @@ impl SegmentBuilder {
             ("usages_count", TYPE_TAG_U32),
             ("language_id", TYPE_TAG_U32),
         ];
+        for (name, _) in &extra_arrays {
+            col_meta.push((name.as_str(), TYPE_TAG_STR_OPT));
+        }
+
+        // --- write header LAST (signals a complete segment) ---
         write_header(
             &tmp,
             &self.provider_id,
             &self.content_id,
             self.content_id_len,
-            u32::try_from(self.col_name_id.len()).context("row count overflow")?,
+            u32::try_from(row_count).context("row count overflow")?,
             u32::try_from(self.strings.len()).context("string count overflow")?,
-            col_meta,
+            &col_meta,
         )?;
 
         // --- atomic rename ---
