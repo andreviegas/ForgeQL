@@ -31,7 +31,7 @@ use super::overlay::{HEADER_LEN, MAGIC, OverlayPayload, RowPtr, SCHEMA_VERSION, 
 use super::segment_reader::SegmentReader;
 
 /// Builds a workspace overlay from a set of per-file segments.
-pub(crate) struct OverlayBuilder {
+pub struct OverlayBuilder {
     provider_id: String,
     segments_dir: PathBuf,
     worktree_root: PathBuf,
@@ -49,7 +49,8 @@ impl OverlayBuilder {
     ///   [`ShadowWriteResult`].
     ///
     /// [`ShadowWriteResult`]: super::shadow_writer::ShadowWriteResult
-    pub(crate) fn new(
+    #[must_use]
+    pub fn new(
         provider_id: &str,
         segments_dir: PathBuf,
         worktree_root: PathBuf,
@@ -71,7 +72,7 @@ impl OverlayBuilder {
     /// # Errors
     /// Returns `Err` if writing or renaming the overlay file fails fatally.
     #[allow(clippy::too_many_lines)]
-    pub(crate) fn build_and_persist(&self, overlay_path: &Path) -> Result<()> {
+    pub fn build_and_persist(&self, overlay_path: &Path) -> Result<()> {
         // 1. Collect valid (relative_source_path, hex, SegmentReader) triples.
         let mut segs: Vec<(PathBuf, String, SegmentReader)> = Vec::new();
 

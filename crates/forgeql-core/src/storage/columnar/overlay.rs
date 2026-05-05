@@ -45,7 +45,7 @@ pub(crate) const HEADER_LEN: usize = 24;
 
 /// Pointer from a global row ID into a specific segment.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub(crate) struct RowPtr {
+pub struct RowPtr {
     /// Index into the overlay's segment list.
     pub segment_idx: u32,
     /// Row index within that segment.
@@ -54,7 +54,7 @@ pub(crate) struct RowPtr {
 
 /// Per-segment metadata stored in the overlay's segment table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct SegmentMeta {
+pub struct SegmentMeta {
     /// Hex-encoded content ID — directory name under
     /// `segments/<provider_id>/`.
     pub hex_content_id: String,
@@ -66,7 +66,7 @@ pub(crate) struct SegmentMeta {
 
 /// The bincode-serialised body written after the fixed header.
 #[derive(Serialize, Deserialize)]
-pub(crate) struct OverlayPayload {
+pub struct OverlayPayload {
     /// Segments in stable sort order (by `hex_content_id`).
     pub segments: Vec<SegmentMeta>,
     /// `global_row_id → (segment_idx, local_row_idx)`.
@@ -89,7 +89,7 @@ pub(crate) struct OverlayPayload {
 
 /// Workspace-level merged index shared across all [`ColumnarStorage`] instances
 /// on the same commit SHA.
-pub(crate) struct Overlay {
+pub struct Overlay {
     payload: OverlayPayload,
     /// Decoded bitmaps for O(1) `fql_kind` prefilter.
     kind_bitmaps: HashMap<String, RoaringBitmap>,
@@ -104,7 +104,7 @@ impl Overlay {
     /// # Errors
     /// Returns `Err` if the file cannot be read, the magic/version is wrong,
     /// the payload is truncated, or the bincode or FST data is corrupt.
-    pub(crate) fn open(path: &Path) -> Result<Arc<Self>> {
+    pub fn open(path: &Path) -> Result<Arc<Self>> {
         let data =
             std::fs::read(path).with_context(|| format!("reading overlay {}", path.display()))?;
 
@@ -166,17 +166,20 @@ impl Overlay {
     /// Monotonic generation counter — bumped by every reindex.
     /// Returns the overlay generation (reserved for Phase 07 staleness checks).
     #[allow(dead_code)]
-    pub(crate) const fn generation(&self) -> u64 {
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
         self.generation
     }
 
     /// Ordered list of segments in this overlay.
-    pub(crate) fn segments(&self) -> &[SegmentMeta] {
+    #[must_use]
+    pub fn segments(&self) -> &[SegmentMeta] {
         &self.payload.segments
     }
 
     /// Total number of rows across all segments.
-    pub(crate) const fn row_count(&self) -> u32 {
+    #[must_use]
+    pub const fn row_count(&self) -> u32 {
         #[allow(clippy::cast_possible_truncation)]
         let len = self.payload.global_row_table.len() as u32;
         len
@@ -185,12 +188,14 @@ impl Overlay {
     /// Get the precomputed global-row-id bitmap for a given `fql_kind`.
     ///
     /// Returns `None` if the kind is not present in any segment.
-    pub(crate) fn prefilter_kind(&self, kind: &str) -> Option<&RoaringBitmap> {
+    #[must_use]
+    pub fn prefilter_kind(&self, kind: &str) -> Option<&RoaringBitmap> {
         self.kind_bitmaps.get(kind)
     }
 
     /// Look up all global row IDs for a given symbol name (exact match).
-    pub(crate) fn lookup_name_bitmap(&self, name: &str) -> RoaringBitmap {
+    #[must_use]
+    pub fn lookup_name_bitmap(&self, name: &str) -> RoaringBitmap {
         let Some(encoded) = self.name_fst.get(name.as_bytes()) else {
             return RoaringBitmap::new();
         };
@@ -201,7 +206,8 @@ impl Overlay {
     ///
     /// Returns `None` if `global_id` is out of range (should not happen
     /// with a valid overlay, but is checked defensively).
-    pub(crate) fn resolve_global(&self, global_id: u32) -> Option<RowPtr> {
+    #[must_use]
+    pub fn resolve_global(&self, global_id: u32) -> Option<RowPtr> {
         self.payload
             .global_row_table
             .get(global_id as usize)

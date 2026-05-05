@@ -42,7 +42,7 @@ use crate::storage::{StorageEngine, SymbolLocation};
 /// and a workspace-level overlay index.
 ///
 /// Constructed by `exec_source::use_source` after the overlay is built/opened.
-pub(crate) struct ColumnarStorage {
+pub struct ColumnarStorage {
     /// Worktree root; used to compute absolute source paths for materialization.
     worktree_root: PathBuf,
     /// Per-segment readers in the same order as `overlay.segments()`.
@@ -55,7 +55,8 @@ impl ColumnarStorage {
     /// Create a new `ColumnarStorage` from an open overlay and its segments.
     ///
     /// `segments` **must** be in the same order as `overlay.segments()`.
-    pub(crate) const fn new(
+    #[must_use]
+    pub const fn new(
         worktree_root: PathBuf,
         segments: Vec<Arc<SegmentReader>>,
         overlay: Arc<Overlay>,
