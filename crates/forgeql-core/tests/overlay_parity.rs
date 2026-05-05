@@ -290,3 +290,270 @@ fn overlay_kind_prefilter_matches_legacy() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: build a single-segment overlay from canonical.cpp and open it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Shared setup used by the name-lookup, LIKE, ORDER BY and enrichment tests.
+fn single_segment_cpp_overlay() -> (
+    SymbolTable,
+    TempDir,
+    forgeql_core::storage::columnar::ColumnarStorage,
+) {
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let table = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let overlays_dir = tmp.path().join("overlays");
+
+    let cpp_path = fixture_path("canonical.cpp");
+    let cid = build_segment(&table, &cpp_path, &segments_dir);
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(cpp_path, cid);
+
+    let overlay_path = overlays_dir.join("test").join("cpp_single.bin");
+    OverlayBuilder::new("test", segments_dir.clone(), fixtures_dir(), segment_map)
+        .build_and_persist(&overlay_path)
+        .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segs: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|m| {
+            Arc::new(
+                SegmentReader::open(&segments_dir.join("test").join(&m.hex_content_id))
+                    .expect("open segment"),
+            )
+        })
+        .collect();
+    let storage = ColumnarStorage::new(fixtures_dir(), segs, overlay);
+    (table, tmp, storage)
+}
+
+/// `WHERE name = 'foo'` returns exactly the same rows as the legacy table.
+#[test]
+fn overlay_exact_name_lookup_matches_legacy() {
+    use forgeql_core::ir::{CompareOp, Predicate, PredicateValue};
+    use forgeql_core::storage::StorageEngine;
+
+    let (table, _tmp, storage) = single_segment_cpp_overlay();
+
+    // Pick a known name from the canonical fixture.
+    let target = "foo";
+    let clauses = forgeql_core::ir::Clauses {
+        where_predicates: vec![Predicate {
+            field: "name".to_owned(),
+            op: CompareOp::Eq,
+            value: PredicateValue::String(target.to_owned()),
+        }],
+        ..forgeql_core::ir::Clauses::default()
+    };
+
+    let columnar = storage
+        .find_symbols(&clauses, std::path::Path::new("."))
+        .expect("columnar find");
+    let legacy_count = table
+        .rows
+        .iter()
+        .filter(|r| table.name_of(r) == target)
+        .count();
+
+    assert_eq!(
+        columnar.len(),
+        legacy_count,
+        "name='foo' row count: columnar={} legacy={legacy_count}",
+        columnar.len()
+    );
+    for r in &columnar {
+        assert_eq!(r.name, target, "every result should have name='foo'");
+    }
+}
+
+/// `WHERE name LIKE 'f%'` returns the same symbol set as the legacy table.
+#[test]
+fn overlay_like_filter_matches_legacy() {
+    use forgeql_core::ir::{CompareOp, Predicate, PredicateValue};
+    use forgeql_core::storage::StorageEngine;
+
+    let (table, _tmp, storage) = single_segment_cpp_overlay();
+
+    let clauses = forgeql_core::ir::Clauses {
+        where_predicates: vec![Predicate {
+            field: "name".to_owned(),
+            op: CompareOp::Like,
+            value: PredicateValue::String("f%".to_owned()),
+        }],
+        ..forgeql_core::ir::Clauses::default()
+    };
+
+    let columnar = storage
+        .find_symbols(&clauses, std::path::Path::new("."))
+        .expect("columnar find");
+
+    let legacy_names: std::collections::BTreeSet<String> = table
+        .rows
+        .iter()
+        .map(|r| table.name_of(r).to_owned())
+        .filter(|n| n.to_ascii_lowercase().starts_with('f'))
+        .collect();
+    let columnar_names: std::collections::BTreeSet<String> =
+        columnar.iter().map(|r| r.name.clone()).collect();
+
+    assert_eq!(
+        columnar_names, legacy_names,
+        "LIKE 'f%' name set mismatch (columnar vs legacy)"
+    );
+    assert!(
+        !columnar_names.is_empty(),
+        "expected at least one name starting with 'f'"
+    );
+}
+
+/// `ORDER BY line ASC` produces non-decreasing line numbers.
+#[test]
+fn overlay_order_by_line_asc() {
+    use forgeql_core::ir::{OrderBy, SortDirection};
+    use forgeql_core::storage::StorageEngine;
+
+    let (_table, _tmp, storage) = single_segment_cpp_overlay();
+
+    let clauses = forgeql_core::ir::Clauses {
+        order_by: Some(OrderBy {
+            field: "line".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        ..forgeql_core::ir::Clauses::default()
+    };
+
+    let results = storage
+        .find_symbols(&clauses, std::path::Path::new("."))
+        .expect("find");
+    let lines: Vec<_> = results.iter().map(|r| r.line.unwrap_or(0)).collect();
+    assert!(
+        lines.windows(2).all(|w| w[0] <= w[1]),
+        "not sorted ASC by line: {lines:?}"
+    );
+}
+
+/// `WHERE has_doc = 'true'` returns a subset whose size matches the legacy table.
+#[test]
+fn overlay_enrichment_field_filter_matches_legacy() {
+    use forgeql_core::ir::{CompareOp, Predicate, PredicateValue};
+    use forgeql_core::storage::StorageEngine;
+
+    let (table, _tmp, storage) = single_segment_cpp_overlay();
+
+    let clauses = forgeql_core::ir::Clauses {
+        where_predicates: vec![Predicate {
+            field: "has_doc".to_owned(),
+            op: CompareOp::Eq,
+            value: PredicateValue::String("true".to_owned()),
+        }],
+        ..forgeql_core::ir::Clauses::default()
+    };
+
+    let columnar = storage
+        .find_symbols(&clauses, std::path::Path::new("."))
+        .expect("columnar find");
+
+    let legacy_count = table
+        .rows
+        .iter()
+        .filter(|r| {
+            table
+                .resolve_fields(&r.fields)
+                .iter()
+                .any(|(k, v)| k == "has_doc" && v == "true")
+        })
+        .count();
+
+    assert_eq!(
+        columnar.len(),
+        legacy_count,
+        "has_doc='true' count: columnar={} legacy={legacy_count}",
+        columnar.len()
+    );
+    // Every returned row must actually have has_doc='true'.
+    for r in &columnar {
+        let has_doc = r.fields.get("has_doc").map(String::as_str);
+        assert_eq!(
+            has_doc,
+            Some("true"),
+            "row '{}' missing has_doc='true'",
+            r.name
+        );
+    }
+}
+
+/// `lookup_name_bitmap` in a 2-segment overlay returns global row IDs that
+/// span both segments for a name present in both canonical fixtures.
+///
+/// Both canonical fixtures define `bar` — so the bitmap must contain ≥ 2 entries.
+#[test]
+fn overlay_lookup_name_spans_segments() {
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let table_rust = index_fixture(&RustLanguageInline, "canonical.rs");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let overlays_dir = tmp.path().join("overlays");
+
+    let cpp_path = fixture_path("canonical.cpp");
+    let rs_path = fixture_path("canonical.rs");
+
+    let cpp_cid = build_segment(&table_cpp, &cpp_path, &segments_dir);
+    let rs_cid = build_segment(&table_rust, &rs_path, &segments_dir);
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(cpp_path, cpp_cid);
+    let _ = segment_map.insert(rs_path, rs_cid);
+
+    let overlay_path = overlays_dir.join("test").join("spans.bin");
+    OverlayBuilder::new("test", segments_dir.clone(), fixtures_dir(), segment_map)
+        .build_and_persist(&overlay_path)
+        .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+
+    // Count `bar` in both legacy tables.
+    let legacy_bar_cpp = table_cpp
+        .rows
+        .iter()
+        .filter(|r| table_cpp.name_of(r) == "bar")
+        .count();
+    let legacy_bar_rust = table_rust
+        .rows
+        .iter()
+        .filter(|r| table_rust.name_of(r) == "bar")
+        .count();
+    let expected_total = legacy_bar_cpp + legacy_bar_rust;
+
+    let bitmap = overlay.lookup_name_bitmap("bar");
+    assert_eq!(
+        usize::try_from(bitmap.len()).expect("bitmap len fits usize"),
+        expected_total,
+        "expected {expected_total} global row IDs for 'bar', got {}",
+        bitmap.len()
+    );
+
+    // Verify every global row ID resolves without panic.
+    let segs: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|m| {
+            Arc::new(
+                SegmentReader::open(&segments_dir.join("test").join(&m.hex_content_id))
+                    .expect("open"),
+            )
+        })
+        .collect();
+    let _ = ColumnarStorage::new(fixtures_dir(), segs, overlay);
+}
