@@ -4,6 +4,60 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.0] — 2026-05-05 — Phase 05: Workspace Overlay (Cross-Segment Global Index)
+
+### Added
+
+- **`Overlay` reader (`storage/columnar/overlay.rs`).**
+  New `Overlay` struct reads a workspace-level merged index from a binary file
+  (format: 24-byte header `FQOV` + bincode-serialised `OverlayPayload`).
+  - `Overlay::open(path)` validates magic + schema version, deserialises the payload,
+    rebuilds `RoaringBitmap` per `fql_kind`, and re-hydrates the name FST.
+  - Query methods: `prefilter_kind`, `lookup_name_bitmap`, `resolve_global`.
+  - Exported types: `Overlay`, `RowPtr`, `SegmentMeta`, `OverlayPayload` (all `pub`).
+
+- **`OverlayBuilder` (`storage/columnar/overlay_builder.rs`).**
+  Merges N segments into a single `Overlay` file atomically.
+  - Takes `provider_id`, `segments_dir`, `worktree_root`, and `segment_map`
+    (`HashMap<PathBuf, Vec<u8>>`) from `ShadowWriteResult`.
+  - Sorts segments by `hex_content_id` for deterministic global row ordering.
+  - Builds merged name FST + name postings; merges `RoaringBitmap`s per `fql_kind`.
+  - Writes header + payload via tmp-file + `sync_all` + atomic rename.
+
+- **`ColumnarStorage` (`storage/columnar/columnar_storage.rs`).**
+  Implements `StorageEngine` over a set of `SegmentReader`s + an `Overlay`.
+  - `find_symbols`: prefilter global bitmap → group by segment → materialize → apply_clauses.
+  - `find_usages`: FST name lookup → group by segment → materialize.
+  - SHOW methods return a Phase 06 placeholder error.
+  - Installed in `Session.columnar_engine` after `USE` when overlay exists on disk.
+
+- **Session wiring (`session/mod.rs`, `engine/exec_source.rs`).**
+  After shadow-write, `use_source` sets `columnar_overlays_dir`, calls
+  `OverlayBuilder::build_and_persist`, opens the result with `Overlay::open`,
+  loads `SegmentReader`s, and installs a `ColumnarStorage` into the session.
+
+- **`WarmPolicy` + `WarmPolicyKind` in `ColumnarConfig` (`config.rs`).**
+  Groundwork for Phase 08 background warming.  Both knobs default to `enabled: false`.
+
+- **Parity integration tests (`tests/overlay_parity.rs`).**
+  `overlay_find_symbols_matches_legacy_merged` — builds 2-segment overlay from
+  `canonical.cpp` + `canonical.rs`, verifies `(name, fql_kind, line)` set
+  matches merged legacy output.
+  `overlay_kind_prefilter_matches_legacy` — verifies `WHERE fql_kind='function'`
+  returns only functions from the columnar path.
+
+- **Public re-exports** — `storage/mod.rs` re-exports `Overlay`, `OverlayBuilder`,
+  `ColumnarStorage`, `ShadowWriteResult`; `columnar/mod.rs` re-exports all sub-modules
+  and types as `pub`.
+
+### Deferred to later phases
+
+- Trigram index for `LIKE`/`MATCHES` prefilter (Phase 06/07).
+- Background warming spawn in `create_source`/`refresh_source` (Phase 08; config added).
+- File lock (`fd_lock`) on overlay build to prevent races (Phase 07).
+- Full offline parity corpus ≥ 200 queries against `zephyr-andre.main` (Phase 05 gate;
+  requires external fixture infrastructure).
+
 ## [0.47.0] — 2026-05-04 — Phase 04: Per-Segment Reader
 
 ### Added
