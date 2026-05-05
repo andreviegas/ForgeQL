@@ -264,12 +264,57 @@ impl ForgeQLEngine {
         // <worktree>/.forgeql-index is reused when HEAD matches.
         session.resume_index()?;
 
-        // If the columnar backend is enabled and an overlay exists for this
-        // commit, open it and install a ColumnarStorage instance.
+        // If the columnar backend is enabled, ensure the overlay exists for this
+        // commit — build it on-demand if missing (e.g. when the legacy index was
+        // loaded from cache, skipping `build_index` and its shadow-write path).
         if let Some(ref overlays_dir) = session.columnar_overlays_dir.clone() {
             let commit =
                 crate::session::Session::get_head_oid(&session.worktree_path).unwrap_or_default();
             let overlay_path = overlays_dir.join("git-sha1").join(format!("{commit}.bin"));
+
+            // Build overlay on-demand when it doesn't exist yet (e.g. on
+            // legacy-cache-hit where build_index was skipped).
+            // Build overlay on-demand when it doesn't exist yet (e.g. on
+            // legacy-cache-hit where build_index was skipped).
+            if !overlay_path.exists() {
+                let seg_dir_opt: Option<std::path::PathBuf> = session.columnar_segments_dir.clone();
+                let provider_opt: Option<String> = session.columnar_provider_id.clone();
+                let hash_fn_opt: Option<crate::storage::HashFn> = session.columnar_hash_fn.clone();
+                if let (Some(seg_dir), Some(pid), Some(hfn)) =
+                    (seg_dir_opt, provider_opt, hash_fn_opt)
+                    && let Some(table) = session.engine().as_legacy_table()
+                {
+                    let seg_dir2 = seg_dir.clone();
+                    let writer = crate::storage::columnar::ShadowWriter::new(
+                        table,
+                        seg_dir.as_path(),
+                        pid.as_str(),
+                        &*hfn,
+                        std::collections::HashMap::new(),
+                    );
+                    match writer.run() {
+                        Ok(result) => {
+                            let builder = crate::storage::columnar::OverlayBuilder::new(
+                                pid.as_str(),
+                                seg_dir2,
+                                session.worktree_path.clone(),
+                                result.segment_map,
+                            );
+                            if let Err(e) = builder.build_and_persist(&overlay_path) {
+                                tracing::warn!(
+                                    %commit,
+                                    "columnar overlay build failed (non-fatal): {e}"
+                                );
+                            }
+                        }
+                        Err(e) => tracing::warn!(
+                            %commit,
+                            "columnar shadow-write failed (non-fatal): {e}"
+                        ),
+                    }
+                }
+            }
+
             if overlay_path.exists() {
                 use crate::storage::columnar::ColumnarStorage;
                 use crate::storage::columnar::overlay::Overlay;
@@ -300,7 +345,7 @@ impl ForgeQLEngine {
                     Err(e) => {
                         tracing::debug!(
                             %commit,
-                            "columnar overlay open failed (non-fatal), will rebuild: {e}"
+                            "columnar overlay open failed (non-fatal): {e}"
                         );
                     }
                 }

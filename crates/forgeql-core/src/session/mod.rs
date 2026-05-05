@@ -147,14 +147,14 @@ pub struct Session {
     ///
     /// Set by `exec_source` before calling `resume_index` when
     /// `columnar.shadow_write: true` is present in `.forgeql.yaml`.
-    columnar_segments_dir: Option<PathBuf>,
+    pub(crate) columnar_segments_dir: Option<PathBuf>,
     /// Provider ID string for columnar shadow-write (e.g. `"git-sha1"`).
-    columnar_provider_id: Option<String>,
+    pub(crate) columnar_provider_id: Option<String>,
     /// Content-addressing hash function for columnar shadow-write.
     ///
     /// Wraps `SourceProvider::hash_content` so `ShadowWriter` remains
     /// decoupled from the concrete provider type.
-    columnar_hash_fn: Option<crate::storage::HashFn>,
+    pub(crate) columnar_hash_fn: Option<crate::storage::HashFn>,
     /// Directory for workspace overlay files (`<bare-repo>/forgeql/overlays`).
     ///
     /// Set by `exec_source` alongside `columnar_segments_dir` when
