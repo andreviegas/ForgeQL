@@ -4,73 +4,7 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — Phase 05 parity gate convergence
-
-### Fixed
-
-- **`SymbolRow.kind` no longer falls back to deprecated `node_kind`.** The
-  legacy backend used to populate `kind` from `fql_kind ?? node_kind` while
-  the columnar backend never stores `node_kind` — producing parity divergence
-  for AST nodes without an `fql_kind` mapping (`preproc_ifdef`, `enumerator`,
-  `compound_assignment`, `default_parameter`, `keyword_argument`, …). Both
-  backends now return an empty `kind` for such rows, aligning with the
-  upcoming removal of `node_kind` from the public surface.
-- **Deterministic ordering before `LIMIT`/`OFFSET` truncation.**
-  `filter::apply_clauses` now applies a stable `(name, line, path)`
-  tie-breaker after any user-supplied `ORDER BY`, and uses the same triple
-  as the default order when no `ORDER BY` is given. This guarantees that
-  `LIMIT N` returns the same rows from both storage backends instead of
-  picking different elements out of an iteration-order-dependent set
-  (previously affected `g01`, `g09`, `g13`, `g17`, `g20`, `g24`).
-
-### Added
-
-- **Background warming on `CREATE SOURCE` and `REFRESH SOURCE`** (Phase 05
-  task 9). New `engine::warm` module exposes `pick_warm_targets`,
-  `warm_snapshot`, and `spawn_warmer`. When `columnar.warm_on_create.enabled`
-  or `columnar.warm_on_refresh.enabled` is set in `.forgeql.yaml`, a detached
-  background thread builds segments and overlays for the chosen snapshots
-  immediately after the source op returns — so the first `USE` lands on a
-  warm cache and only pays the columnar load cost (~50–200 ms) instead of
-  the full build (~10–30 s on large repos). `WarmPolicyKind` selects which
-  snapshots: `off` (no-op), `default-branch` (HEAD only), `all-branches`,
-  or `pinned` (refs listed in `policy.pinned`). `REFRESH SOURCE` only
-  warms branches whose HEAD actually moved, preventing CPU drain on
-  no-change polling refreshes. Both knobs default to `enabled: false`;
-  Phase 08 will flip the defaults once benchmarks confirm the load is
-  benign on multi-source servers. Five unit tests cover the policy
-  selector for every variant.
-- **`Source::branch_heads()` and `Source::default_branch()`.** Public
-  helpers used by background warming to compute the moved-set across
-  `REFRESH SOURCE` and to resolve the default-branch policy target.
-- **Per-overlay advisory file lock** (Phase 05 task 7, R7).  Wraps the
-  on-demand overlay-build path in `exec_source.rs` with a new
-  `OverlayLock` (`fd-lock`-backed POSIX flock / Windows `LockFileEx`)
-  so two `USE` calls landing on the same `(source, branch, commit)` from
-  different processes or threads serialise on a sibling
-  `<commit>.lock` file instead of double-building / racing on the
-  atomic rename.  After acquiring the lock the build path re-checks
-  overlay existence, so a peer that finished while we waited is
-  observed and respected (no wasted build).  Two new unit tests in
-  `overlay_lock.rs`: lock-file lifecycle and serialised-acquire
-  ordering with timing assertions (POSIX-only).
-- **Trigram index in workspace overlay** (Phase 05 task 4). The overlay
-  now persists a `name → trigram → RoaringBitmap<global_row_id>` index
-  built from the merged name FST, mirroring the legacy `TrigramIndex`
-  semantics (ASCII-lowercased, deduplicated 3-byte windows). The columnar
-  prefilter consults it for `WHERE name LIKE '…'` and `WHERE name MATCHES
-  '…'` predicates, intersecting per-trigram bitmaps for every literal run
-  of ≥3 chars before materialising rows. Bumps `OverlayPayload`
-  `SCHEMA_VERSION` from `1` to `2`; existing v1 overlays are detected at
-  open time and rebuilt on the next `USE`. Confirmed on the parity short
-  gate: end-to-end runtime drops from 273 s → 220 s (~19 %).
-- **`PARITY_SHORT=1` fast mode for `parity_full_corpus`.** When set, the
-  parity gate keeps only the first 2 queries of each `gNN_` group
-  (≈50 queries instead of ≈250), running in ~4.5 minutes instead of ~16.
-  Useful during iterative development; nightly / pre-release runs leave
-  the variable unset to exercise the full corpus.
-
-## [0.48.0] — 2026-05-05 — Phase 05: Workspace Overlay (Cross-Segment Global Index)
+## [0.48.0] — 2026-05-06 — Phase 05: Workspace Overlay, Trigram Index, Background Warming
 
 ### Added
 
@@ -103,7 +37,8 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   loads `SegmentReader`s, and installs a `ColumnarStorage` into the session.
 
 - **`WarmPolicy` + `WarmPolicyKind` in `ColumnarConfig` (`config.rs`).**
-  Groundwork for Phase 08 background warming.  Both knobs default to `enabled: false`.
+  `warm_on_create` and `warm_on_refresh` knobs with `WarmPolicyKind` (`off`,
+  `default-branch`, `all-branches`, `pinned`).  Both default to `enabled: false`.
 
 - **Parity integration tests (`tests/overlay_parity.rs`).**  7 tests covering:
   - `overlay_find_symbols_matches_legacy_merged` — 2-segment overlay vs merged legacy `(name, fql_kind, line)` set.
@@ -118,13 +53,42 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ColumnarStorage`, `ShadowWriteResult`; `columnar/mod.rs` re-exports all sub-modules
   and types as `pub`.
 
-### Deferred to later phases
+- **Background warming on `CREATE SOURCE` and `REFRESH SOURCE`** (task 9).
+  New `engine::warm` module exposes `pick_warm_targets`, `warm_snapshot`, and
+  `spawn_warmer`.  When `columnar.warm_on_create.enabled` or
+  `columnar.warm_on_refresh.enabled` is set in `.forgeql.yaml`, a detached
+  background thread builds segments and overlays for the chosen snapshots
+  immediately after the source op returns — so the first `USE` pays only the
+  columnar load cost (~50–200 ms) instead of the full build (~10–30 s on large
+  repos).  `REFRESH SOURCE` only warms branches whose HEAD actually moved,
+  preventing CPU drain on no-change polling refreshes.  Both knobs default to
+  `enabled: false`.  Five unit tests cover the policy selector for every variant.
+- **`Source::branch_heads()` and `Source::default_branch()`.** Public helpers
+  used by background warming to compute the moved-set across `REFRESH SOURCE`
+  and to resolve the default-branch policy target.
+- **Per-overlay advisory file lock** (task 7, R7).  `OverlayLock`
+  (`fd-lock`-backed POSIX flock / Windows `LockFileEx`) serialises concurrent
+  `USE` calls that land on the same `(source, branch, commit)` on a sibling
+  `<commit>.lock` file instead of double-building or racing on the atomic
+  rename.  The build path re-checks overlay existence after acquiring the lock
+  so a peer that finished while waiting is respected without wasted work.  Two
+  unit tests: lock-file lifecycle and serialised-acquire ordering (POSIX-only).
+- **Trigram index in workspace overlay** (task 4).  The overlay now persists a
+  `name → trigram → RoaringBitmap<global_row_id>` index built from the merged
+  name FST, mirroring legacy `TrigramIndex` semantics (ASCII-lowercased,
+  deduplicated 3-byte windows).  The columnar prefilter consults it for
+  `WHERE name LIKE '…'` and `WHERE name MATCHES '…'`, intersecting per-trigram
+  bitmaps for every literal run of ≥3 chars before materialising rows.
+  Bumps `OverlayPayload` `SCHEMA_VERSION` from `1` → `2`; existing v1 overlays
+  are detected at open time and rebuilt on the next `USE`.
+  End-to-end parity runtime: 273 s → 220 s (~19 %).
+- **`PARITY_SHORT=1` fast mode for `parity_full_corpus`.**  When set, the
+  parity gate keeps only the first 2 queries of each `gNN_` group
+  (≈50 queries instead of ≈250), running in ~4.5 min instead of ~16.
+  Nightly / pre-release runs leave the variable unset to exercise the full
+  corpus.
 
-- Trigram index for `LIKE`/`MATCHES` prefilter (Phase 06/07).
-- Background warming spawn in `create_source`/`refresh_source` (Phase 08; config added).
-- File lock (`fd_lock`) on overlay build to prevent races (Phase 07).
-
-### Fixed (Phase 05 parity gate — completed this release)
+### Fixed
 
 - **Engine-level parity test (`tests/parity_find.rs`) rewritten.**
   The previous unit-level harness bypassed the parser and `USING 'columnar'`
@@ -157,7 +121,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   against the raw 246-row combined SymbolTable (which included 2 intra-file
   duplicates).
 
-### Added (Phase 05 parity gate)
+- **`SymbolRow.kind` no longer falls back to deprecated `node_kind`.**  The
+  legacy backend populated `kind` from `fql_kind ?? node_kind` while the
+  columnar backend never stores `node_kind` — producing parity divergence for
+  AST nodes without an `fql_kind` mapping (`preproc_ifdef`, `enumerator`,
+  `compound_assignment`, `default_parameter`, `keyword_argument`, …).  Both
+  backends now return an empty `kind` for such rows.
+- **Deterministic ordering before `LIMIT`/`OFFSET` truncation.**
+  `filter::apply_clauses` now applies a stable `(name, line, path)`
+  tie-breaker after any user-supplied `ORDER BY`, and uses the same triple as
+  the default order when no `ORDER BY` is given.  Eliminates backend-dependent
+  row selection that previously caused divergence on `g01`, `g09`, `g13`,
+  `g17`, `g20`, `g24`.
 
 - **`session_has_columnar` test-helper** (`engine/exec_session.rs`).
   Returns `true` if the named session has a columnar backend installed; used
