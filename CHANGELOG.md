@@ -25,6 +25,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Per-overlay advisory file lock** (Phase 05 task 7, R7).  Wraps the
+  on-demand overlay-build path in `exec_source.rs` with a new
+  `OverlayLock` (`fd-lock`-backed POSIX flock / Windows `LockFileEx`)
+  so two `USE` calls landing on the same `(source, branch, commit)` from
+  different processes or threads serialise on a sibling
+  `<commit>.lock` file instead of double-building / racing on the
+  atomic rename.  After acquiring the lock the build path re-checks
+  overlay existence, so a peer that finished while we waited is
+  observed and respected (no wasted build).  Two new unit tests in
+  `overlay_lock.rs`: lock-file lifecycle and serialised-acquire
+  ordering with timing assertions (POSIX-only).
 - **Trigram index in workspace overlay** (Phase 05 task 4). The overlay
   now persists a `name → trigram → RoaringBitmap<global_row_id>` index
   built from the merged name FST, mirroring the legacy `TrigramIndex`

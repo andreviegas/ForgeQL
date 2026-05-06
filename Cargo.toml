@@ -77,6 +77,9 @@ rayon            = "1.10"
 # --- file operations ---
 tempfile         = "3"
 ignore           = "0.4"
+# Cross-platform advisory file locking (flock / LockFileEx) used to
+# serialise overlay builds across processes (Phase 05 R7).
+fd-lock          = "4"
 
 # --- git ---
 # vendored-openssl compiles OpenSSL from source — required for cross-compilation

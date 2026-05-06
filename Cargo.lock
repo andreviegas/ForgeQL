@@ -513,6 +513,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "bytemuck",
+ "fd-lock",
  "forgeql-core",
  "fst",
  "git2",

@@ -36,6 +36,7 @@ rayon       = { workspace = true }
 # file ops
 tempfile    = { workspace = true }
 ignore      = { workspace = true }
+fd-lock     = { workspace = true }
 
 # git
 git2        = { workspace = true }

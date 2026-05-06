@@ -35,6 +35,7 @@ pub mod columnar_storage;
 pub mod manifest;
 pub mod overlay;
 pub mod overlay_builder;
+pub mod overlay_lock;
 pub mod segment_builder;
 pub mod segment_reader;
 pub mod shadow_writer;
