@@ -76,7 +76,9 @@ impl ColumnarStorage {
 
     /// Stage 1 — build a candidate global-row-id bitmap using indexed predicates.
     ///
-    /// Handles `WHERE fql_kind = 'X'` and `WHERE name = 'Y'` (exact match).
+    /// Handles `WHERE fql_kind = 'X'`, `WHERE name = 'Y'` (exact match), and
+    /// `WHERE name LIKE 'pattern'` / `WHERE name MATCHES 'regex'` via the
+    /// trigram index when the pattern contains a literal substring of \u22653 chars.
     /// Other predicates are handled later by `apply_clauses`.
     fn prefilter_global(&self, clauses: &Clauses) -> RoaringBitmap {
         let mut result: Option<RoaringBitmap> = None;
@@ -94,6 +96,12 @@ impl ColumnarStorage {
                         Some(bm)
                     }
                 }
+                ("name", CompareOp::Like, PredicateValue::String(val)) => {
+                    self.trigram_prefilter_for_pattern(val)
+                }
+                ("name", CompareOp::Matches, PredicateValue::String(val)) => {
+                    self.trigram_prefilter_for_regex(val)
+                }
                 _ => None,
             }) else {
                 continue;
@@ -105,6 +113,57 @@ impl ColumnarStorage {
         }
 
         result.unwrap_or_else(|| (0..self.overlay.row_count()).collect())
+    }
+
+    /// Compute a trigram-based candidate bitmap from a SQL `LIKE` pattern.
+    ///
+    /// Returns `None` when no usable literal trigram can be extracted
+    /// (caller should skip the prefilter for this predicate).
+    fn trigram_prefilter_for_pattern(&self, pattern: &str) -> Option<RoaringBitmap> {
+        let literals = crate::filter::like_pattern_literals(pattern);
+        self.intersect_literal_trigrams(&literals)
+    }
+
+    /// Compute a trigram-based candidate bitmap from a regex.
+    ///
+    /// Conservatively only uses literal-character runs that don't contain
+    /// any regex metacharacter.  Returns `None` when no run is \u2265 3 chars.
+    fn trigram_prefilter_for_regex(&self, pattern: &str) -> Option<RoaringBitmap> {
+        const META: &[char] = &[
+            '\\', '.', '+', '*', '?', '(', ')', '[', ']', '{', '}', '|', '^', '$',
+        ];
+        let mut literals: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        for ch in pattern.chars() {
+            if META.contains(&ch) {
+                if !cur.is_empty() {
+                    literals.push(std::mem::take(&mut cur));
+                }
+            } else {
+                cur.push(ch);
+            }
+        }
+        if !cur.is_empty() {
+            literals.push(cur);
+        }
+        self.intersect_literal_trigrams(&literals)
+    }
+
+    fn intersect_literal_trigrams(&self, literals: &[String]) -> Option<RoaringBitmap> {
+        let mut acc: Option<RoaringBitmap> = None;
+        for lit in literals {
+            if lit.len() < 3 {
+                continue;
+            }
+            let Some(bm) = self.overlay.name_substring_candidates(lit) else {
+                continue;
+            };
+            acc = Some(match acc {
+                Some(prev) => prev & bm,
+                None => bm,
+            });
+        }
+        acc
     }
 
     /// Stage 2 — partition global row IDs by segment index.

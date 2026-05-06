@@ -72,6 +72,34 @@ pub fn like_match(text: &str, pattern: &str) -> bool {
     dp[text_len][pat_len]
 }
 
+/// Extract literal substrings from a SQL `LIKE` pattern, suitable for
+/// trigram-based candidate prefiltering.
+///
+/// `%` and `_` are wildcards and act as literal-run separators.  Any
+/// returned string is a contiguous run of literal (non-wildcard) characters
+/// that must appear verbatim in any matching value.
+///
+/// Example: `"%foo_bar%baz%"` \u2192 `["foo", "bar", "baz"]` (the `_` splits
+/// the run because it represents a single arbitrary character).
+#[must_use]
+pub fn like_pattern_literals(pattern: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for ch in pattern.chars() {
+        if ch == '%' || ch == '_' {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+        } else {
+            cur.push(ch);
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
 /// Check whether a path matches a glob pattern.
 fn path_glob_matches(path: &Path, pattern: &str) -> bool {
     crate::ast::query::glob_matches(path, pattern)

@@ -35,7 +35,13 @@ use serde::{Deserialize, Serialize};
 /// Magic bytes at the start of every overlay file.
 pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 /// Current schema version.  Bump on any breaking format change.
-pub(crate) const SCHEMA_VERSION: u32 = 1;
+///
+/// History:
+/// - **1**: initial overlay format (segments, global_row_table,
+///   kind_postings, name_fst_bytes, name_postings_bytes).
+/// - **2**: adds `name_trigram_postings` for fast `name LIKE`/`MATCHES`
+///   prefiltering.  Old (v1) overlay files are rebuilt on next `USE`.
+pub(crate) const SCHEMA_VERSION: u32 = 2;
 /// Number of bytes occupied by the fixed header before the bincode payload.
 pub(crate) const HEADER_LEN: usize = 24;
 
@@ -81,6 +87,12 @@ pub struct OverlayPayload {
     /// Flat array of u32 global row IDs; indexed by `(offset, count)` pairs
     /// encoded in the name FST values.
     pub name_postings_bytes: Vec<u8>,
+    /// Trigram → serialised [`RoaringBitmap`] of global row IDs whose
+    /// **lower-cased** name contains that 3-byte window.  Used as a
+    /// candidate prefilter for `name LIKE 'pattern'` and `name MATCHES`
+    /// predicates — mirrors the legacy `TrigramIndex`.
+    #[serde(default)]
+    pub name_trigram_postings: HashMap<[u8; 3], Vec<u8>>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,6 +107,8 @@ pub struct Overlay {
     kind_bitmaps: HashMap<String, RoaringBitmap>,
     /// Decoded FST for name-to-global-row-id lookup.
     name_fst: FstMap<Vec<u8>>,
+    /// Decoded trigram → row-id bitmaps for `name LIKE`/`MATCHES` prefilter.
+    trigram_bitmaps: HashMap<[u8; 3], RoaringBitmap>,
     generation: u64,
 }
 
@@ -155,10 +169,19 @@ impl Overlay {
         let name_fst =
             FstMap::new(payload.name_fst_bytes.clone()).context("loading name FST from overlay")?;
 
+        // Decode trigram bitmaps (absent in v1 overlays — empty map is fine).
+        let mut trigram_bitmaps = HashMap::with_capacity(payload.name_trigram_postings.len());
+        for (trigram, bytes) in &payload.name_trigram_postings {
+            let bm = RoaringBitmap::deserialize_from(bytes.as_slice())
+                .with_context(|| format!("decoding trigram bitmap {trigram:?}"))?;
+            let _ = trigram_bitmaps.insert(*trigram, bm);
+        }
+
         Ok(Arc::new(Self {
             payload,
             kind_bitmaps,
             name_fst,
+            trigram_bitmaps,
             generation,
         }))
     }
@@ -200,6 +223,60 @@ impl Overlay {
             return RoaringBitmap::new();
         };
         self.decode_postings(encoded)
+    }
+
+    /// Trigram-based candidate prefilter for substring search over names.
+    ///
+    /// Returns the intersection of the per-trigram global-row-id bitmaps
+    /// for every consecutive 3-byte window of `substr` (ASCII-lowercased).
+    ///
+    /// Returns:
+    /// - `None` when `substr` is shorter than 3 bytes — caller must fall
+    ///   back to a full scan (no prefilter possible).
+    /// - `Some(empty)` when at least one trigram is absent from the index
+    ///   (no row can match) **or** the trigram index is empty (v1 overlay
+    ///   lacking the section — caller should fall back rather than treat
+    ///   the empty result as authoritative).
+    /// - `Some(bitmap)` of candidate global row IDs whose name contains
+    ///   every trigram of `substr`.  Caller must still evaluate the full
+    ///   `LIKE`/`MATCHES` predicate to reject false positives.
+    #[must_use]
+    pub fn name_substring_candidates(&self, substr: &str) -> Option<RoaringBitmap> {
+        let bytes = substr.as_bytes();
+        if bytes.len() < 3 {
+            return None;
+        }
+        if self.trigram_bitmaps.is_empty() {
+            // v1 overlay without trigram section — no prefilter possible.
+            return None;
+        }
+        let mut trigrams: Vec<[u8; 3]> = Vec::new();
+        for w in bytes.windows(3) {
+            let t = [
+                w[0].to_ascii_lowercase(),
+                w[1].to_ascii_lowercase(),
+                w[2].to_ascii_lowercase(),
+            ];
+            if !trigrams.contains(&t) {
+                trigrams.push(t);
+            }
+        }
+        let mut bitmaps: Vec<&RoaringBitmap> = Vec::with_capacity(trigrams.len());
+        for t in &trigrams {
+            match self.trigram_bitmaps.get(t) {
+                Some(bm) => bitmaps.push(bm),
+                None => return Some(RoaringBitmap::new()),
+            }
+        }
+        bitmaps.sort_unstable_by_key(|bm| bm.len());
+        let mut result = bitmaps[0].clone();
+        for bm in &bitmaps[1..] {
+            result &= *bm;
+            if result.is_empty() {
+                break;
+            }
+        }
+        Some(result)
     }
 
     /// Resolve a global row ID to a `RowPtr`.
@@ -267,5 +344,78 @@ mod tests {
                 assert!(msg.contains("magic"), "error should mention magic: {msg}");
             }
         }
+    }
+
+    /// `name_substring_candidates` returns `None` for sub-trigram queries.
+    #[test]
+    fn substring_candidates_none_for_short_input() {
+        let overlay = Overlay {
+            payload: OverlayPayload {
+                segments: Vec::new(),
+                global_row_table: Vec::new(),
+                kind_postings: HashMap::new(),
+                name_fst_bytes: FstMap::default().into_fst().into_inner(),
+                name_postings_bytes: Vec::new(),
+                name_trigram_postings: HashMap::new(),
+            },
+            kind_bitmaps: HashMap::new(),
+            name_fst: FstMap::default(),
+            trigram_bitmaps: {
+                // Non-empty so we exercise the length check, not the v1 fallback.
+                let mut m = HashMap::new();
+                let _ = m.insert(*b"abc", RoaringBitmap::new());
+                m
+            },
+            generation: 1,
+        };
+        assert!(overlay.name_substring_candidates("ab").is_none());
+        assert!(overlay.name_substring_candidates("").is_none());
+    }
+
+    /// `name_substring_candidates` intersects per-trigram bitmaps and
+    /// short-circuits to an empty bitmap when a trigram is missing.
+    #[test]
+    fn substring_candidates_intersects_and_misses() {
+        let mut bm_alp = RoaringBitmap::new();
+        let _ = bm_alp.insert(0); // alpha
+        let _ = bm_alp.insert(2); // alphabet
+        let mut bm_lph = RoaringBitmap::new();
+        let _ = bm_lph.insert(0);
+        let _ = bm_lph.insert(2);
+        let mut bm_pha = RoaringBitmap::new();
+        let _ = bm_pha.insert(0);
+        let _ = bm_pha.insert(2);
+        let mut trigram_bitmaps = HashMap::new();
+        let _ = trigram_bitmaps.insert(*b"alp", bm_alp);
+        let _ = trigram_bitmaps.insert(*b"lph", bm_lph);
+        let _ = trigram_bitmaps.insert(*b"pha", bm_pha);
+
+        let overlay = Overlay {
+            payload: OverlayPayload {
+                segments: Vec::new(),
+                global_row_table: Vec::new(),
+                kind_postings: HashMap::new(),
+                name_fst_bytes: FstMap::default().into_fst().into_inner(),
+                name_postings_bytes: Vec::new(),
+                name_trigram_postings: HashMap::new(),
+            },
+            kind_bitmaps: HashMap::new(),
+            name_fst: FstMap::default(),
+            trigram_bitmaps,
+            generation: 1,
+        };
+
+        // "alp" hits a single trigram with rows {0, 2}.
+        let got = overlay.name_substring_candidates("alp").expect("some");
+        assert_eq!(got.iter().collect::<Vec<_>>(), vec![0, 2]);
+        // "alpha" trigrams: alp, lph, pha — all present, intersection {0, 2}.
+        let got = overlay.name_substring_candidates("alpha").expect("some");
+        assert_eq!(got.iter().collect::<Vec<_>>(), vec![0, 2]);
+        // ASCII case-insensitivity.
+        let got = overlay.name_substring_candidates("ALP").expect("some");
+        assert_eq!(got.iter().collect::<Vec<_>>(), vec![0, 2]);
+        // Missing trigram \u2192 Some(empty).
+        let got = overlay.name_substring_candidates("zzz").expect("some");
+        assert!(got.is_empty());
     }
 }

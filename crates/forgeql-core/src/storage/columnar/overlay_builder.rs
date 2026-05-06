@@ -177,9 +177,31 @@ impl OverlayBuilder {
 
         let mut name_postings_bytes: Vec<u8> = Vec::new();
         let mut fst_builder = MapBuilder::memory();
+        // Build the trigram index as we walk the merged name list.
+        // Mirrors `ast::trigram::TrigramIndex` semantics: ASCII lower-case,
+        // dedup trigrams per name, ascending row IDs.
+        let mut trigram_merged: HashMap<[u8; 3], RoaringBitmap> = HashMap::new();
         for (name_bytes, mut rows) in merged_names {
             rows.sort_unstable();
             rows.dedup();
+            // Trigram inserts: every distinct 3-byte window of the lower-cased
+            // name maps to all global row IDs that share that name.
+            if name_bytes.len() >= 3 {
+                let mut seen: std::collections::HashSet<[u8; 3]> = std::collections::HashSet::new();
+                for w in name_bytes.windows(3) {
+                    let t = [
+                        w[0].to_ascii_lowercase(),
+                        w[1].to_ascii_lowercase(),
+                        w[2].to_ascii_lowercase(),
+                    ];
+                    if seen.insert(t) {
+                        let bm = trigram_merged.entry(t).or_default();
+                        for r in &rows {
+                            let _ = bm.insert(*r);
+                        }
+                    }
+                }
+            }
             let byte_offset = name_postings_bytes.len();
             let count = rows.len();
             for r in &rows {
@@ -192,6 +214,17 @@ impl OverlayBuilder {
                 .context("inserting name into overlay FST")?;
         }
         let name_fst_bytes = fst_builder.into_inner().context("finalising overlay FST")?;
+
+        // Serialise per-trigram bitmaps for storage in the payload.
+        let mut name_trigram_postings: HashMap<[u8; 3], Vec<u8>> =
+            HashMap::with_capacity(trigram_merged.len());
+        for (trigram, bitmap) in &trigram_merged {
+            let mut bytes = Vec::new();
+            bitmap
+                .serialize_into(&mut bytes)
+                .with_context(|| format!("serialising trigram bitmap {trigram:?}"))?;
+            let _ = name_trigram_postings.insert(*trigram, bytes);
+        }
 
         // 7. Build SegmentMeta list.
         let segment_metas: Vec<SegmentMeta> = segs
@@ -210,6 +243,7 @@ impl OverlayBuilder {
             kind_postings,
             name_fst_bytes,
             name_postings_bytes,
+            name_trigram_postings,
         };
         let payload_bytes = bincode::serialize(&payload).context("serialising overlay payload")?;
 

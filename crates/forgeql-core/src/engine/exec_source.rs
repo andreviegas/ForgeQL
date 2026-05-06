@@ -276,7 +276,25 @@ impl ForgeQLEngine {
             // legacy-cache-hit where build_index was skipped).
             // Build overlay on-demand when it doesn't exist yet (e.g. on
             // legacy-cache-hit where build_index was skipped).
-            if !overlay_path.exists() {
+            // Also rebuild when the file is present but unreadable
+            // (corrupt or schema-version mismatch from a previous release).
+            let needs_build = if overlay_path.exists() {
+                use crate::storage::columnar::overlay::Overlay as _Overlay;
+                match _Overlay::open(&overlay_path) {
+                    Ok(_) => false,
+                    Err(e) => {
+                        tracing::info!(
+                            %commit,
+                            "columnar overlay invalid, will rebuild: {e}"
+                        );
+                        let _ = std::fs::remove_file(&overlay_path);
+                        true
+                    }
+                }
+            } else {
+                true
+            };
+            if needs_build {
                 let seg_dir_opt: Option<std::path::PathBuf> = session.columnar_segments_dir.clone();
                 let provider_opt: Option<String> = session.columnar_provider_id.clone();
                 let hash_fn_opt: Option<crate::storage::HashFn> = session.columnar_hash_fn.clone();

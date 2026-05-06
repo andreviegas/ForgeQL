@@ -25,6 +25,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Trigram index in workspace overlay** (Phase 05 task 4). The overlay
+  now persists a `name → trigram → RoaringBitmap<global_row_id>` index
+  built from the merged name FST, mirroring the legacy `TrigramIndex`
+  semantics (ASCII-lowercased, deduplicated 3-byte windows). The columnar
+  prefilter consults it for `WHERE name LIKE '…'` and `WHERE name MATCHES
+  '…'` predicates, intersecting per-trigram bitmaps for every literal run
+  of ≥3 chars before materialising rows. Bumps `OverlayPayload`
+  `SCHEMA_VERSION` from `1` to `2`; existing v1 overlays are detected at
+  open time and rebuilt on the next `USE`. Confirmed on the parity short
+  gate: end-to-end runtime drops from 273 s → 220 s (~19 %).
 - **`PARITY_SHORT=1` fast mode for `parity_full_corpus`.** When set, the
   parity gate keeps only the first 2 queries of each `gNN_` group
   (≈50 queries instead of ≈250), running in ~4.5 minutes instead of ~16.
