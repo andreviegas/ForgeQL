@@ -4,6 +4,33 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Phase 05 parity gate convergence
+
+### Fixed
+
+- **`SymbolRow.kind` no longer falls back to deprecated `node_kind`.** The
+  legacy backend used to populate `kind` from `fql_kind ?? node_kind` while
+  the columnar backend never stores `node_kind` — producing parity divergence
+  for AST nodes without an `fql_kind` mapping (`preproc_ifdef`, `enumerator`,
+  `compound_assignment`, `default_parameter`, `keyword_argument`, …). Both
+  backends now return an empty `kind` for such rows, aligning with the
+  upcoming removal of `node_kind` from the public surface.
+- **Deterministic ordering before `LIMIT`/`OFFSET` truncation.**
+  `filter::apply_clauses` now applies a stable `(name, line, path)`
+  tie-breaker after any user-supplied `ORDER BY`, and uses the same triple
+  as the default order when no `ORDER BY` is given. This guarantees that
+  `LIMIT N` returns the same rows from both storage backends instead of
+  picking different elements out of an iteration-order-dependent set
+  (previously affected `g01`, `g09`, `g13`, `g17`, `g20`, `g24`).
+
+### Added
+
+- **`PARITY_SHORT=1` fast mode for `parity_full_corpus`.** When set, the
+  parity gate keeps only the first 2 queries of each `gNN_` group
+  (≈50 queries instead of ≈250), running in ~4.5 minutes instead of ~16.
+  Useful during iterative development; nightly / pre-release runs leave
+  the variable unset to exercise the full corpus.
+
 ## [0.48.0] — 2026-05-05 — Phase 05: Workspace Overlay (Cross-Segment Global Index)
 
 ### Added
@@ -39,12 +66,14 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`WarmPolicy` + `WarmPolicyKind` in `ColumnarConfig` (`config.rs`).**
   Groundwork for Phase 08 background warming.  Both knobs default to `enabled: false`.
 
-- **Parity integration tests (`tests/overlay_parity.rs`).**
-  `overlay_find_symbols_matches_legacy_merged` — builds 2-segment overlay from
-  `canonical.cpp` + `canonical.rs`, verifies `(name, fql_kind, line)` set
-  matches merged legacy output.
-  `overlay_kind_prefilter_matches_legacy` — verifies `WHERE fql_kind='function'`
-  returns only functions from the columnar path.
+- **Parity integration tests (`tests/overlay_parity.rs`).**  7 tests covering:
+  - `overlay_find_symbols_matches_legacy_merged` — 2-segment overlay vs merged legacy `(name, fql_kind, line)` set.
+  - `overlay_kind_prefilter_matches_legacy` — `WHERE fql_kind='function'` returns only functions.
+  - `overlay_exact_name_lookup_matches_legacy` — `WHERE name='foo'` row count + values match legacy.
+  - `overlay_like_filter_matches_legacy` — `WHERE name LIKE 'f%'` name set matches legacy.
+  - `overlay_order_by_line_asc` — `ORDER BY line ASC` produces non-decreasing lines.
+  - `overlay_enrichment_field_filter_matches_legacy` — `WHERE has_doc='true'` count + field presence match legacy.
+  - `overlay_lookup_name_spans_segments` — `lookup_name_bitmap('bar')` bitmap spans both canonical fixtures (≥ 2 global row IDs).
 
 - **Public re-exports** — `storage/mod.rs` re-exports `Overlay`, `OverlayBuilder`,
   `ColumnarStorage`, `ShadowWriteResult`; `columnar/mod.rs` re-exports all sub-modules
@@ -55,8 +84,46 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Trigram index for `LIKE`/`MATCHES` prefilter (Phase 06/07).
 - Background warming spawn in `create_source`/`refresh_source` (Phase 08; config added).
 - File lock (`fd_lock`) on overlay build to prevent races (Phase 07).
-- Full offline parity corpus ≥ 200 queries against `zephyr-andre.main` (Phase 05 gate;
-  requires external fixture infrastructure).
+
+### Fixed (Phase 05 parity gate — completed this release)
+
+- **Engine-level parity test (`tests/parity_find.rs`) rewritten.**
+  The previous unit-level harness bypassed the parser and `USING 'columnar'`
+  dispatch.  The new harness runs real FQL strings through
+  `ForgeQLEngine::execute()` including queries with `USING 'columnar'`, covering
+  a corpus of 287 distinct `FIND symbols` queries across 40 groups (`g01`–`g40`).
+  All 287 query pairs (legacy vs columnar) report zero divergence.
+
+- **`ColumnarStorage::find_symbols` deduplicates on `(name, fql_kind, path, line)`.**
+  The legacy backend deduplicates on `(name_id, path_id, node_kind_id, line)` in
+  `find_symbols_prefilter`.  Without the equivalent deduplication in
+  `ColumnarStorage`, 2 extra rows appeared in the columnar results for the
+  canonical fixtures, causing parity divergence.  Dedup is now applied before
+  `apply_clauses`.
+
+- **`register_local_session_with_columnar` test-helper path corrected.**
+  The overlay was opened at `overlays_dir/unknown/.bin`; the correct path is
+  `overlays_dir/test/.bin` (provider_id is `"test"`).  The segment directory is
+  likewise `segments_dir/test/{hex_content_id}/`.
+
+- **`LIMIT 1000` normalisation in `parity_full_corpus`.**
+  Corpus queries without an explicit `LIMIT` clause now get `LIMIT 1000`
+  appended before both legacy and columnar runs.  This prevents the default
+  `LIMIT 20` from causing spurious divergence due to different iteration orders
+  between the two backends.
+
+- **`overlay_find_symbols_matches_legacy_merged` updated for dedup.**
+  The legacy baseline is now built with a per-file `HashSet<(name, fql_kind, path,
+  line)>` dedup — matching `ColumnarStorage::find_symbols` — instead of comparing
+  against the raw 246-row combined SymbolTable (which included 2 intra-file
+  duplicates).
+
+### Added (Phase 05 parity gate)
+
+- **`session_has_columnar` test-helper** (`engine/exec_session.rs`).
+  Returns `true` if the named session has a columnar backend installed; used
+  by `parity_full_corpus` to assert the backend was wired up before running
+  any queries.
 
 ## [0.47.0] — 2026-05-04 — Phase 04: Per-Segment Reader
 
@@ -944,6 +1011,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`test-all-before-commit.sh` script**: Pre-commit gate that runs `cargo fmt --all` → fmt check → clippy → release build → tests → SMS regression (budget=5000 with CSV). Designed for `VERIFY build` with compact output (`tail -40` per step).
 
 ## [Unreleased]
+
+### Added
+
+- **Phase 05 — columnar storage parity gate** (`tests/parity_find.rs`):
+  - Opens a live session against a real registered source via `USE <source>.<branch> AS 'parity'` through `ForgeQLEngine::execute()` — the same parser → IR → `use_source` pipeline that the MCP `run_fql` tool uses.
+  - Runs a ≥200-query corpus against both the legacy and columnar backends, canonicalising results to `(name, fql_kind, line)` sorted tuples for SET-equality comparison.
+  - Configured via `FORGEQL_DATA_DIR` (required), `PARITY_SOURCE` (default: `zephyr-andre`), `PARITY_BRANCH` (default: `main`).
+  - Skips gracefully (prints a message and exits successfully) when `FORGEQL_DATA_DIR` is unset or the source is not registered — never fails due to missing external infrastructure.
+  - Gate command: `FORGEQL_DATA_DIR=~/.forgeql cargo test --package forgeql-core --test parity_find`
+- **`session_has_columnar` helper** (`engine/exec_session.rs`): `#[cfg(feature = "test-helpers")]` method that returns `true` when the named session has a columnar backend installed.
+- **Dedup in `ColumnarStorage::find_symbols`**: Removes duplicate `SymbolMatch` rows (same `name + fql_kind + path + line`) using a `HashSet<DedupeKey>`, matching legacy backend's index uniqueness guarantee.
+- **`PythonLanguageInline` in language registry** for the parity test, alongside the existing `CppLanguageInline` and `RustLanguageInline`.
+
+### Bug Fixes
+
+- **`overlay_parity` baseline dedup**: `overlay_find_symbols_matches_legacy_merged` now deduplicates the legacy baseline per-file using `HashSet<(name, fql_kind, path, line)>` — matching the columnar storage dedup — so the two baselines are comparable on large corpora.
 
 ### Changed
 

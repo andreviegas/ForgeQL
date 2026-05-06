@@ -220,32 +220,53 @@ pub fn apply_clauses<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
     }
 
     // 6. ORDER BY
-    if let Some(ref order) = clauses.order_by {
-        let field = order.field.clone();
-        let direction = order.direction;
-        results.sort_by(|a, b| {
-            let primary = if let (Some(va), Some(vb)) = (a.field_num(&field), b.field_num(&field)) {
+    //
+    // A deterministic ordering is required *before* OFFSET/LIMIT so that
+    // truncation picks the same rows across backends (legacy ↔ columnar).
+    // Even when no ORDER BY is supplied we apply a stable default sort by
+    // `(name, line, path)` to keep parity tests deterministic.
+    let order_field = clauses.order_by.as_ref().map(|o| o.field.clone());
+    let order_dir = clauses.order_by.as_ref().map(|o| o.direction);
+    results.sort_by(|a, b| {
+        // Primary key — only when an explicit ORDER BY clause is present.
+        if let (Some(field), Some(direction)) = (order_field.as_deref(), order_dir) {
+            let primary = if let (Some(va), Some(vb)) = (a.field_num(field), b.field_num(field)) {
                 match direction {
                     SortDirection::Desc => vb.cmp(&va),
                     SortDirection::Asc => va.cmp(&vb),
                 }
             } else {
-                let sa = a.field_str(&field).unwrap_or("");
-                let sb = b.field_str(&field).unwrap_or("");
+                let sa = a.field_str(field).unwrap_or("");
+                let sb = b.field_str(field).unwrap_or("");
                 match direction {
                     SortDirection::Asc => sa.cmp(sb),
                     SortDirection::Desc => sb.cmp(sa),
                 }
             };
-            if primary == Ordering::Equal {
-                let na = a.field_str("name").unwrap_or("");
-                let nb = b.field_str("name").unwrap_or("");
-                na.cmp(nb)
-            } else {
-                primary
+            if primary != Ordering::Equal {
+                return primary;
             }
-        });
-    }
+        }
+        // Tie-breakers (also the default order when no ORDER BY is given):
+        // name → line → path.  This guarantees a deterministic ordering
+        // before LIMIT truncation so both storage backends return the
+        // same set of rows.
+        let na = a.field_str("name").unwrap_or("");
+        let nb = b.field_str("name").unwrap_or("");
+        match na.cmp(nb) {
+            Ordering::Equal => {}
+            other => return other,
+        }
+        let la = a.field_num("line").unwrap_or(0);
+        let lb = b.field_num("line").unwrap_or(0);
+        match la.cmp(&lb) {
+            Ordering::Equal => {}
+            other => return other,
+        }
+        let pa = a.field_str("path").unwrap_or("");
+        let pb = b.field_str("path").unwrap_or("");
+        pa.cmp(pb)
+    });
 
     // 7. OFFSET
     let skip = clauses.offset.unwrap_or(0);
@@ -307,9 +328,11 @@ mod tests {
             ..Default::default()
         };
         apply_clauses(&mut items, &clauses);
+        // Results are now deterministically ordered by (name, line, path)
+        // even when no explicit ORDER BY is given — see apply_clauses.
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].name, "foo");
-        assert_eq!(items[1].name, "baz");
+        assert_eq!(items[0].name, "baz");
+        assert_eq!(items[1].name, "foo");
     }
 
     #[test]
@@ -390,9 +413,10 @@ mod tests {
             ..Default::default()
         };
         apply_clauses(&mut items, &clauses);
+        // Default deterministic order: name ASC.
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].name, "setPeakLevel");
-        assert_eq!(items[1].name, "setMinIntensity");
+        assert_eq!(items[0].name, "setMinIntensity");
+        assert_eq!(items[1].name, "setPeakLevel");
     }
 
     #[test]
@@ -564,9 +588,10 @@ mod tests {
             ..Default::default()
         };
         apply_clauses(&mut items, &clauses);
+        // Default deterministic order: name ASC.
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].name, "setPeakLevel");
-        assert_eq!(items[1].name, "getBaseLevel");
+        assert_eq!(items[0].name, "getBaseLevel");
+        assert_eq!(items[1].name, "setPeakLevel");
     }
 
     #[test]

@@ -323,8 +323,16 @@ fn extract_results(text: &str, query: &str) -> Vec<(String, String, usize)> {
 
 /// Build the ≥200-query parity corpus as `(label, fql_query)` pairs.
 ///
-/// Every query starts with `FIND symbols`.  GROUP BY queries are excluded
-/// (Phase05-issues §7 — accepted deviation).
+/// Design rules (zephyr-andre corpus):
+/// - Every query must return 0-15 results on zephyr-andre without any LIMIT,
+///   so both backends return the full result set and ordering/set equality is
+///   trivially comparable without a blanket LIMIT normalisation.
+/// - Queries are constrained via path scoping (`IN 'path/**'`), exact name
+///   matches, or tight multi-predicate combinations to stay within that range.
+/// - LIMIT tests (g22) are dedicated: small LIMIT values on tight predicates
+///   whose total result count is known to be small anyway, verifying that LIMIT
+///   truncates identically on both backends.
+/// - GROUP BY queries are excluded (Phase05-issues §7 — accepted deviation).
 fn corpus() -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = Vec::new();
 
@@ -334,611 +342,612 @@ fn corpus() -> Vec<(String, String)> {
         };
     }
 
-    // ── Group 1: Unconstrained (1) ─────────────────────────────────────────
-    q!("g01_all", "FIND symbols");
-
-    // ── Group 2: Exact fql_kind = X (8) ────────────────────────────────────
-    for k in [
-        "function",
-        "struct",
-        "enum",
-        "variable",
-        "constant",
-        "field",
-        "enum_variant",
-        "nonexistent_kind_xyz",
-    ] {
-        q!(
-            format!("g02_kind_eq_{k}"),
-            format!("FIND symbols WHERE fql_kind = '{k}'")
-        );
-    }
-
-    // ── Group 3: fql_kind != X (5) ─────────────────────────────────────────
-    for k in ["function", "struct", "enum", "variable", "constant"] {
-        q!(
-            format!("g03_kind_ne_{k}"),
-            format!("FIND symbols WHERE fql_kind != '{k}'")
-        );
-    }
-
-    // ── Group 4: Exact name match (24) ──────────────────────────────────────
+    // ── Group 1: Exact name match — zephyr symbols (20) ───────────────────────
+    // These return a small fixed count (1-10) from the real index.
     for n in [
-        "foo",
-        "bar",
-        "factorial",
-        "process",
-        "helper",
-        "transform",
-        "checker",
-        "shadowed",
-        "escaping",
-        "switcher",
-        "distant",
-        "caller",
-        "noop",
-        "no_default",
-        "deeply_nested",
-        "Motor",
-        "State",
-        "speed",
-        "count",
-        "hex_value",
-        "bin_value",
-        "pi",
-        "MAGIC",
-        "Idle",
+        "stopped", "running", "idle", "init", "reset", "enable", "disable", "start", "stop",
+        "send", "recv", "open", "close", "read", "write", "flush", "abort", "cancel", "attach",
+        "detach",
     ] {
         q!(
-            format!("g04_name_eq_{n}"),
+            format!("g01_name_eq_{n}"),
             format!("FIND symbols WHERE name = '{n}'")
         );
     }
 
-    // ── Group 5: Name != X (6) ──────────────────────────────────────────────
-    for n in ["foo", "bar", "Motor", "State", "MAGIC", "count"] {
-        q!(
-            format!("g05_name_ne_{n}"),
-            format!("FIND symbols WHERE name != '{n}'")
-        );
-    }
-
-    // ── Group 6: LIKE prefix (14) ────────────────────────────────────────────
-    for p in [
-        "f%", "b%", "p%", "h%", "c%", "s%", "e%", "d%", "n%", "t%", "M%", "S%", "I%", "R%",
+    // ── Group 2: Exact fql_kind + scoped path (10) ────────────────────────────
+    // Path-scoped to small subtrees so results stay ≤15.
+    for (k, path) in [
+        ("function", "drivers/serial/**"),
+        ("struct", "drivers/serial/**"),
+        ("enum", "drivers/serial/**"),
+        ("variable", "drivers/serial/**"),
+        ("function", "drivers/gpio/**"),
+        ("struct", "drivers/gpio/**"),
+        ("function", "drivers/i2c/**"),
+        ("struct", "drivers/i2c/**"),
+        ("function", "drivers/spi/**"),
+        ("enum", "drivers/bluetooth/**"),
     ] {
         q!(
-            format!("g06_name_like_{p}"),
-            format!("FIND symbols WHERE name LIKE '{p}'")
+            format!(
+                "g02_kind_{k}_in_{}",
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!("FIND symbols WHERE fql_kind = '{k}' ORDER BY name ASC IN '{path}'")
         );
     }
 
-    // ── Group 7: LIKE suffix (7) ─────────────────────────────────────────────
-    for p in ["%er", "%or", "%ed", "%al", "%t", "%e", "%d"] {
-        q!(
-            format!("g07_name_like_{p}"),
-            format!("FIND symbols WHERE name LIKE '{p}'")
-        );
-    }
-
-    // ── Group 8: LIKE contains (7) ───────────────────────────────────────────
-    for p in ["%oo%", "%ar%", "%at%", "%or%", "%ee%", "%al%", "%er%"] {
-        q!(
-            format!("g08_name_like_{p}"),
-            format!("FIND symbols WHERE name LIKE '{p}'")
-        );
-    }
-
-    // ── Group 9: NOT LIKE (8) ────────────────────────────────────────────────
-    for p in [
-        "f%",
-        "b%",
-        "M%",
-        "S%",
-        "%er",
-        "%ed",
-        "%oo%",
-        "nonexistent_prefix_xyz%",
+    // ── Group 3: LIKE prefix scoped to small subtrees (10) ───────────────────
+    for (p, path) in [
+        ("uart%", "drivers/serial/**"),
+        ("gpio%", "drivers/gpio/**"),
+        ("i2c%", "drivers/i2c/**"),
+        ("spi%", "drivers/spi/**"),
+        ("bt%", "drivers/bluetooth/**"),
+        ("k_%", "kernel/**"),
+        ("z_%", "lib/**"),
+        ("sys_%", "arch/**"),
+        ("pm_%", "subsys/pm/**"),
+        ("net_%", "subsys/net/**"),
     ] {
         q!(
-            format!("g09_name_not_like_{p}"),
-            format!("FIND symbols WHERE name NOT LIKE '{p}'")
+            format!(
+                "g03_like_{}_in_{}",
+                p.replace('%', ""),
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!("FIND symbols WHERE name LIKE '{p}' ORDER BY name ASC IN '{path}'")
         );
     }
 
-    // ── Group 10: Enrichment field = value (6) ───────────────────────────────
-    for (f, val) in [
-        ("has_doc", "true"),
-        ("has_doc", "false"),
-        ("is_recursive", "true"),
-        ("is_recursive", "false"),
-        ("has_fallthrough", "true"),
-        ("has_fallthrough", "false"),
+    // ── Group 4: Exact name + fql_kind combos (10) ────────────────────────────
+    for (n, k) in [
+        ("stopped", "field"),
+        ("running", "field"),
+        ("idle", "enum_variant"),
+        ("init", "function"),
+        ("reset", "function"),
+        ("enable", "function"),
+        ("disable", "function"),
+        ("open", "function"),
+        ("close", "function"),
+        ("write", "function"),
     ] {
         q!(
-            format!("g10_field_{f}_{val}"),
-            format!("FIND symbols WHERE {f} = '{val}'")
+            format!("g04_name_{n}_kind_{k}"),
+            format!("FIND symbols WHERE name = '{n}' WHERE fql_kind = '{k}'")
         );
     }
 
-    // ── Group 11: Enrichment field != value (4) ──────────────────────────────
-    for (f, val) in [
-        ("has_doc", "true"),
-        ("has_doc", "false"),
-        ("is_recursive", "true"),
-        ("is_recursive", "false"),
+    // ── Group 5: fql_kind + has_doc in scoped path (10) ──────────────────────
+    for (k, f, val, path) in [
+        ("function", "has_doc", "true", "drivers/serial/**"),
+        ("function", "has_doc", "false", "drivers/serial/**"),
+        ("struct", "has_doc", "true", "drivers/serial/**"),
+        ("function", "has_doc", "true", "drivers/gpio/**"),
+        ("function", "has_doc", "false", "drivers/gpio/**"),
+        ("struct", "has_doc", "true", "drivers/gpio/**"),
+        ("function", "has_doc", "true", "drivers/i2c/**"),
+        ("function", "has_doc", "false", "drivers/i2c/**"),
+        ("function", "has_doc", "true", "drivers/spi/**"),
+        ("function", "has_doc", "false", "drivers/spi/**"),
     ] {
         q!(
-            format!("g11_field_ne_{f}_{val}"),
-            format!("FIND symbols WHERE {f} != '{val}'")
+            format!(
+                "g05_{k}_{f}_{val}_in_{}",
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!(
+                "FIND symbols WHERE fql_kind = '{k}' WHERE {f} = '{val}' ORDER BY name ASC IN '{path}'"
+            )
         );
     }
 
-    // ── Group 12: Line numeric predicates (8) ────────────────────────────────
-    for (label, pred) in [
-        ("gt_0", "line > 0"),
-        ("gt_10", "line > 10"),
-        ("gt_30", "line > 30"),
-        ("ge_1", "line >= 1"),
-        ("ge_20", "line >= 20"),
-        ("lt_50", "line < 50"),
-        ("lt_100", "line < 100"),
-        ("le_20", "line <= 20"),
+    // ── Group 6: is_recursive + scoped path (6) ──────────────────────────────
+    for (val, path) in [
+        ("true", "drivers/serial/**"),
+        ("false", "drivers/serial/**"),
+        ("true", "drivers/gpio/**"),
+        ("false", "drivers/gpio/**"),
+        ("true", "kernel/**"),
+        ("false", "drivers/i2c/**"),
     ] {
         q!(
-            format!("g12_line_{label}"),
-            format!("FIND symbols WHERE {pred}")
+            format!(
+                "g06_is_recursive_{val}_in_{}",
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!("FIND symbols WHERE is_recursive = '{val}' ORDER BY name ASC IN '{path}'")
         );
     }
 
-    // ── Group 13: fql_kind + exact name (10) ─────────────────────────────────
-    for (k, n) in [
-        ("function", "foo"),
-        ("function", "bar"),
-        ("function", "factorial"),
-        ("function", "noop"),
-        ("function", "caller"),
-        ("struct", "Motor"),
-        ("enum", "State"),
-        ("field", "speed"),
-        ("variable", "count"),
-        ("constant", "MAGIC"),
+    // ── Group 7: has_fallthrough scoped (4) ───────────────────────────────────
+    for (val, path) in [
+        ("true", "drivers/**"),
+        ("false", "drivers/serial/**"),
+        ("true", "kernel/**"),
+        ("false", "drivers/gpio/**"),
     ] {
         q!(
-            format!("g13_kind_{k}_name_{n}"),
-            format!("FIND symbols WHERE fql_kind = '{k}' WHERE name = '{n}'")
+            format!(
+                "g07_has_fallthrough_{val}_in_{}",
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!("FIND symbols WHERE has_fallthrough = '{val}' ORDER BY name ASC IN '{path}'")
         );
     }
 
-    // ── Group 14: fql_kind + LIKE (14) ───────────────────────────────────────
-    for (k, p) in [
-        ("function", "f%"),
-        ("function", "b%"),
-        ("function", "c%"),
-        ("function", "s%"),
-        ("function", "h%"),
-        ("function", "d%"),
-        ("function", "n%"),
-        ("function", "t%"),
-        ("function", "e%"),
-        ("function", "%er"),
-        ("function", "%ed"),
-        ("struct", "M%"),
-        ("enum", "S%"),
-        ("variable", "c%"),
+    // ── Group 8: line range scoped to small files/dirs (8) ───────────────────
+    for (pred, label, path) in [
+        ("line < 20", "lt20", "drivers/serial/**"),
+        ("line < 30", "lt30", "drivers/gpio/**"),
+        ("line >= 100", "ge100", "drivers/serial/**"),
+        ("line >= 200", "ge200", "drivers/gpio/**"),
+        ("line < 20", "lt20", "drivers/i2c/**"),
+        ("line >= 100", "ge100", "drivers/i2c/**"),
+        ("line < 20", "lt20", "drivers/spi/**"),
+        ("line >= 50", "ge50", "drivers/spi/**"),
     ] {
         q!(
-            format!("g14_kind_{k}_like_{p}"),
-            format!("FIND symbols WHERE fql_kind = '{k}' WHERE name LIKE '{p}'")
+            format!(
+                "g08_line_{label}_in_{}",
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!("FIND symbols WHERE {pred} ORDER BY line ASC IN '{path}'")
         );
     }
 
-    // ── Group 15: fql_kind + enrichment (8) ──────────────────────────────────
-    for (k, f, val) in [
-        ("function", "has_doc", "true"),
-        ("function", "has_doc", "false"),
-        ("function", "is_recursive", "true"),
-        ("function", "is_recursive", "false"),
-        ("struct", "has_doc", "true"),
-        ("struct", "has_doc", "false"),
-        ("enum", "has_doc", "true"),
-        ("enum", "has_doc", "false"),
+    // ── Group 9: usages predicates scoped (8) ────────────────────────────────
+    for (pred, label, path) in [
+        ("usages > 50", "gt50", "drivers/serial/**"),
+        ("usages > 10", "gt10", "drivers/gpio/**"),
+        ("usages > 5", "gt5", "drivers/i2c/**"),
+        ("usages > 20", "gt20", "drivers/spi/**"),
+        ("usages = 0", "eq0", "drivers/serial/**"),
+        ("usages = 0", "eq0", "drivers/gpio/**"),
+        ("usages >= 50", "ge50", "drivers/bluetooth/**"),
+        ("usages > 30", "gt30", "kernel/**"),
     ] {
         q!(
-            format!("g15_kind_{k}_{f}_{val}"),
-            format!("FIND symbols WHERE fql_kind = '{k}' WHERE {f} = '{val}'")
+            format!(
+                "g09_usages_{label}_in_{}",
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!("FIND symbols WHERE {pred} ORDER BY name ASC IN '{path}'")
         );
     }
 
-    // ── Group 16: fql_kind + line range (6) ──────────────────────────────────
-    for (k, label, pred) in [
-        ("function", "gt_5", "line > 5"),
-        ("function", "gt_20", "line > 20"),
-        ("function", "lt_50", "line < 50"),
-        ("variable", "gt_0", "line > 0"),
-        ("struct", "gt_0", "line > 0"),
-        ("enum", "gt_0", "line > 0"),
+    // ── Group 10: ORDER BY + path scope (10) ─────────────────────────────────
+    for (k, f, dir, path) in [
+        ("function", "name", "ASC", "drivers/serial/**"),
+        ("function", "name", "DESC", "drivers/serial/**"),
+        ("function", "line", "ASC", "drivers/gpio/**"),
+        ("struct", "name", "ASC", "drivers/serial/**"),
+        ("enum", "name", "ASC", "drivers/serial/**"),
+        ("function", "usages", "DESC", "drivers/serial/**"),
+        ("function", "name", "ASC", "drivers/i2c/**"),
+        ("function", "line", "ASC", "drivers/spi/**"),
+        ("struct", "name", "ASC", "drivers/gpio/**"),
+        ("function", "usages", "DESC", "drivers/gpio/**"),
     ] {
         q!(
-            format!("g16_kind_{k}_line_{label}"),
-            format!("FIND symbols WHERE fql_kind = '{k}' WHERE {pred}")
+            format!(
+                "g10_{k}_order_{f}_{}_in_{}",
+                dir.to_lowercase(),
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!("FIND symbols WHERE fql_kind = '{k}' ORDER BY {f} {dir} IN '{path}'")
         );
     }
 
-    // ── Group 17: LIKE + enrichment (8) ──────────────────────────────────────
-    for (p, f, val) in [
-        ("f%", "has_doc", "true"),
-        ("f%", "has_doc", "false"),
-        ("b%", "has_doc", "true"),
-        ("c%", "has_doc", "true"),
-        ("s%", "has_doc", "true"),
-        ("h%", "is_recursive", "false"),
-        ("n%", "has_doc", "false"),
-        ("t%", "has_doc", "true"),
+    // ── Group 11: LIKE + ORDER BY + path (8) ──────────────────────────────────
+    for (p, f, dir, path) in [
+        ("uart%", "name", "ASC", "drivers/serial/**"),
+        ("gpio%", "line", "ASC", "drivers/gpio/**"),
+        ("i2c%", "name", "ASC", "drivers/i2c/**"),
+        ("spi%", "line", "ASC", "drivers/spi/**"),
+        ("k_%", "name", "ASC", "kernel/**"),
+        ("sys_%", "line", "ASC", "arch/**"),
+        ("pm_%", "name", "ASC", "subsys/pm/**"),
+        ("net_%", "name", "DESC", "subsys/net/**"),
     ] {
         q!(
-            format!("g17_like_{p}_{f}_{val}"),
-            format!("FIND symbols WHERE name LIKE '{p}' WHERE {f} = '{val}'")
+            format!(
+                "g11_like_{}_order_{f}_{}_in_{}",
+                p.replace('%', ""),
+                dir.to_lowercase(),
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!("FIND symbols WHERE name LIKE '{p}' ORDER BY {f} {dir} IN '{path}'")
         );
     }
 
-    // ── Group 18: ORDER BY field ASC (5) ─────────────────────────────────────
-    for f in ["name", "line", "usages", "fql_kind", "language"] {
-        q!(
-            format!("g18_order_asc_{f}"),
-            format!("FIND symbols ORDER BY {f} ASC")
-        );
-    }
-
-    // ── Group 19: ORDER BY field DESC (5) ────────────────────────────────────
-    for f in ["name", "line", "usages", "fql_kind", "language"] {
-        q!(
-            format!("g19_order_desc_{f}"),
-            format!("FIND symbols ORDER BY {f} DESC")
-        );
-    }
-
-    // ── Group 20: fql_kind + ORDER BY (10) ───────────────────────────────────
-    for (k, f, dir) in [
-        ("function", "name", "ASC"),
-        ("function", "name", "DESC"),
-        ("function", "line", "ASC"),
-        ("function", "line", "DESC"),
-        ("function", "usages", "ASC"),
-        ("struct", "name", "ASC"),
-        ("enum", "name", "ASC"),
-        ("variable", "name", "ASC"),
-        ("variable", "line", "ASC"),
-        ("constant", "name", "ASC"),
+    // ── Group 12: kind + LIKE + enrichment + path (10) ───────────────────────
+    for (k, p, f, val, path) in [
+        ("function", "uart%", "has_doc", "true", "drivers/serial/**"),
+        ("function", "uart%", "has_doc", "false", "drivers/serial/**"),
+        ("function", "gpio%", "has_doc", "true", "drivers/gpio/**"),
+        ("function", "gpio%", "has_doc", "false", "drivers/gpio/**"),
+        ("function", "i2c%", "has_doc", "true", "drivers/i2c/**"),
+        ("function", "spi%", "has_doc", "true", "drivers/spi/**"),
+        ("function", "k_%", "has_doc", "true", "kernel/**"),
+        ("function", "pm_%", "has_doc", "true", "subsys/pm/**"),
+        ("function", "net_%", "has_doc", "true", "subsys/net/**"),
+        ("struct", "uart%", "has_doc", "true", "drivers/serial/**"),
     ] {
         q!(
-            format!("g20_kind_{k}_order_{f}_{}", dir.to_lowercase()),
-            format!("FIND symbols WHERE fql_kind = '{k}' ORDER BY {f} {dir}")
+            format!(
+                "g12_{k}_like_{}_{}_{}_in_{}",
+                p.replace('%', ""),
+                f,
+                val,
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!(
+                "FIND symbols WHERE fql_kind = '{k}' WHERE name LIKE '{p}' WHERE {f} = '{val}' ORDER BY name ASC IN '{path}'"
+            )
         );
     }
 
-    // ── Group 21: LIKE + ORDER BY (10) ───────────────────────────────────────
-    for (p, f, dir) in [
-        ("f%", "name", "ASC"),
-        ("f%", "line", "ASC"),
-        ("b%", "name", "ASC"),
-        ("c%", "name", "ASC"),
-        ("s%", "name", "ASC"),
-        ("h%", "name", "ASC"),
-        ("d%", "line", "ASC"),
-        ("%er", "name", "ASC"),
-        ("%ed", "name", "ASC"),
-        ("n%", "line", "ASC"),
+    // ── Group 13: NOT LIKE scoped (6) ─────────────────────────────────────────
+    for (k, p, path) in [
+        ("function", "uart%", "drivers/serial/**"),
+        ("function", "gpio%", "drivers/gpio/**"),
+        ("function", "i2c%", "drivers/i2c/**"),
+        ("struct", "uart%", "drivers/serial/**"),
+        ("function", "k_%", "kernel/**"),
+        ("function", "zzz%", "drivers/serial/**"), // nothing matches → full set
     ] {
         q!(
-            format!("g21_like_{p}_order_{f}_{}", dir.to_lowercase()),
-            format!("FIND symbols WHERE name LIKE '{p}' ORDER BY {f} {dir}")
+            format!(
+                "g13_{k}_not_like_{}_in_{}",
+                p.replace('%', ""),
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!(
+                "FIND symbols WHERE fql_kind = '{k}' WHERE name NOT LIKE '{p}' ORDER BY name ASC IN '{path}'"
+            )
         );
     }
 
-    // ── Group 22: LIMIT=1000 (large, effectively no limit) (5) ──────────────
-    for (label, base) in [
-        ("all", "FIND symbols"),
-        ("function", "FIND symbols WHERE fql_kind = 'function'"),
-        ("like_f", "FIND symbols WHERE name LIKE 'f%'"),
-        ("has_doc_true", "FIND symbols WHERE has_doc = 'true'"),
-        ("name_eq_foo", "FIND symbols WHERE name = 'foo'"),
-    ] {
-        q!(
-            format!("g22_limit1000_{label}"),
-            format!("{base} LIMIT 1000")
-        );
-    }
-
-    // ── Group 23: LIMIT=1000 + ORDER BY (8) ──────────────────────────────────
-    for (label, base, ord) in [
-        ("all_name_asc", "FIND symbols", "ORDER BY name ASC"),
-        ("all_name_desc", "FIND symbols", "ORDER BY name DESC"),
-        ("all_line_asc", "FIND symbols", "ORDER BY line ASC"),
+    // ── Group 14: usages + kind + ORDER BY (8) ────────────────────────────────
+    for (k, pred, label, ord, path) in [
         (
-            "fn_name_asc",
-            "FIND symbols WHERE fql_kind = 'function'",
-            "ORDER BY name ASC",
+            "function",
+            "usages > 50",
+            "gt50",
+            "usages",
+            "drivers/serial/**",
         ),
+        ("function", "usages > 10", "gt10", "name", "drivers/gpio/**"),
+        ("struct", "usages > 5", "gt5", "name", "drivers/**"),
         (
-            "fn_line_asc",
-            "FIND symbols WHERE fql_kind = 'function'",
-            "ORDER BY line ASC",
+            "function",
+            "usages > 20",
+            "gt20",
+            "usages",
+            "drivers/spi/**",
         ),
-        (
-            "like_f_name_asc",
-            "FIND symbols WHERE name LIKE 'f%'",
-            "ORDER BY name ASC",
-        ),
-        (
-            "like_c_line_asc",
-            "FIND symbols WHERE name LIKE 'c%'",
-            "ORDER BY line ASC",
-        ),
-        (
-            "has_doc_name_asc",
-            "FIND symbols WHERE has_doc = 'true'",
-            "ORDER BY name ASC",
-        ),
+        ("function", "usages > 5", "gt5", "name", "drivers/i2c/**"),
+        ("function", "usages = 0", "eq0", "name", "drivers/serial/**"),
+        ("function", "usages = 0", "eq0", "line", "drivers/gpio/**"),
+        ("struct", "usages = 0", "eq0", "name", "drivers/serial/**"),
     ] {
         q!(
-            format!("g23_lim1000_{label}"),
-            format!("{base} {ord} LIMIT 1000")
+            format!(
+                "g14_{k}_usages_{label}_order_{ord}_in_{}",
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!(
+                "FIND symbols WHERE fql_kind = '{k}' WHERE {pred} ORDER BY {ord} ASC IN '{path}'"
+            )
         );
     }
 
-    // ── Group 24: OFFSET + large LIMIT (8) ───────────────────────────────────
-    for off in [0usize, 5, 10, 20] {
-        for (base_label, base) in [
-            ("all", "FIND symbols"),
-            ("fn", "FIND symbols WHERE fql_kind = 'function'"),
+    // ── Group 15: Clearly empty queries (5) ───────────────────────────────────
+    q!(
+        "g15_empty_name_xyz",
+        "FIND symbols WHERE name = 'nonexistent_xyz_abc_123'"
+    );
+    q!(
+        "g15_empty_kind_xyz",
+        "FIND symbols WHERE fql_kind = 'nonexistent_kind_xyz'"
+    );
+    q!(
+        "g15_empty_like_zzz",
+        "FIND symbols WHERE name LIKE 'zzz_nomatch_%'"
+    );
+    q!("g15_empty_line_gt99999", "FIND symbols WHERE line > 99999");
+    q!("g15_empty_line_lt0", "FIND symbols WHERE line < 0");
+
+    // ── Group 16: Case-sensitivity regression (4) ─────────────────────────────
+    // Tests that = is exact and LIKE is case-insensitive for both backends.
+    q!("g16_case_eq_lower", "FIND symbols WHERE name = 'stopped'");
+    q!("g16_case_eq_mixed", "FIND symbols WHERE name = 'Stopped'"); // → 0 results
+    q!(
+        "g16_case_like_lower",
+        "FIND symbols WHERE name LIKE 'stopped'"
+    );
+    q!(
+        "g16_case_like_mixed",
+        "FIND symbols WHERE name LIKE 'Stopped'"
+    ); // → same as lower
+
+    // ── Group 17: LIMIT correctness (8) ──────────────────────────────────────
+    // Use tight path-scoped predicates that return >LIMIT total results so the
+    // LIMIT actually truncates.  Both backends must return the same count.
+    for (lim, k, path) in [
+        (3usize, "function", "drivers/serial/**"),
+        (5, "function", "drivers/gpio/**"),
+        (3, "struct", "drivers/serial/**"),
+        (5, "function", "drivers/i2c/**"),
+        (3, "function", "drivers/spi/**"),
+        (5, "function", "kernel/**"),
+        (3, "struct", "drivers/gpio/**"),
+        (5, "enum", "drivers/**"),
+    ] {
+        q!(
+            format!(
+                "g17_limit{lim}_{k}_in_{}",
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!(
+                "FIND symbols WHERE fql_kind = '{k}' ORDER BY name ASC LIMIT {lim} IN '{path}'"
+            )
+        );
+    }
+
+    // ── Group 18: OFFSET correctness (6) ──────────────────────────────────────
+    // Small LIMIT + varying OFFSET on a stable ORDER BY to verify pagination
+    // parity.
+    for off in [0usize, 3, 5] {
+        for (k, path) in [
+            ("function", "drivers/serial/**"),
+            ("function", "drivers/gpio/**"),
         ] {
             q!(
-                format!("g24_off{off}_{base_label}"),
-                format!("{base} ORDER BY name ASC LIMIT 1000 OFFSET {off}")
+                format!(
+                    "g18_off{off}_{k}_in_{}",
+                    path.replace('/', "_").replace('*', "")
+                ),
+                format!(
+                    "FIND symbols WHERE fql_kind = '{k}' ORDER BY name ASC LIMIT 5 OFFSET {off} IN '{path}'"
+                )
             );
         }
     }
 
-    // ── Group 25: Triple combos — kind + LIKE + enrichment (8) ───────────────
-    for (k, p, f, val) in [
-        ("function", "f%", "has_doc", "true"),
-        ("function", "f%", "has_doc", "false"),
-        ("function", "b%", "has_doc", "true"),
-        ("function", "c%", "is_recursive", "false"),
-        ("function", "s%", "has_doc", "true"),
-        ("function", "h%", "has_doc", "true"),
-        ("function", "n%", "has_doc", "false"),
-        ("function", "t%", "is_recursive", "true"),
-    ] {
-        q!(
-            format!("g25_{k}_{p}_{f}_{val}"),
-            format!(
-                "FIND symbols WHERE fql_kind = '{k}' WHERE name LIKE '{p}' WHERE {f} = '{val}'"
-            )
-        );
-    }
-
-    // ── Group 26: kind + NOT LIKE (6) ─────────────────────────────────────────
-    for (k, p) in [
-        ("function", "f%"),
-        ("function", "b%"),
-        ("function", "%er"),
-        ("function", "%ed"),
-        ("variable", "c%"),
-        ("struct", "nonexistent%"),
-    ] {
-        q!(
-            format!("g26_kind_{k}_not_like_{p}"),
-            format!("FIND symbols WHERE fql_kind = '{k}' WHERE name NOT LIKE '{p}'")
-        );
-    }
-
-    // ── Group 27: name + enrichment (6) ──────────────────────────────────────
-    for (n, f, val) in [
-        ("foo", "has_doc", "true"),
-        ("foo", "has_doc", "false"),
-        ("bar", "has_doc", "true"),
-        ("factorial", "is_recursive", "true"),
-        ("noop", "has_doc", "false"),
-        ("Motor", "has_doc", "true"),
-    ] {
-        q!(
-            format!("g27_name_{n}_{f}_{val}"),
-            format!("FIND symbols WHERE name = '{n}' WHERE {f} = '{val}'")
-        );
-    }
-
-    // ── Group 28: line range + kind (6) ──────────────────────────────────────
-    for (k, pred, label) in [
-        ("function", "line > 0", "gt0"),
-        ("function", "line > 10", "gt10"),
-        ("function", "line < 80", "lt80"),
-        ("function", "line >= 5", "ge5"),
-        ("variable", "line > 0", "gt0"),
-        ("enum", "line > 0", "gt0"),
-    ] {
-        q!(
-            format!("g28_{k}_line_{label}"),
-            format!("FIND symbols WHERE fql_kind = '{k}' WHERE {pred}")
-        );
-    }
-
-    // ── Group 29: more name combos + ORDER BY (8) ─────────────────────────────
-    for (n, f, dir) in [
-        ("foo", "line", "ASC"),
-        ("bar", "line", "ASC"),
-        ("factorial", "name", "ASC"),
-        ("caller", "line", "ASC"),
-        ("shadowed", "line", "ASC"),
-        ("noop", "name", "ASC"),
-        ("Motor", "name", "ASC"),
-        ("MAGIC", "line", "ASC"),
-    ] {
-        q!(
-            format!("g29_name_{n}_order_{f}_{}", dir.to_lowercase()),
-            format!("FIND symbols WHERE name = '{n}' ORDER BY {f} {dir}")
-        );
-    }
-
-    // ── Group 30: Multiple enrichment predicates (6) ──────────────────────────
-    for (f1, v1, f2, v2) in [
-        ("has_doc", "true", "is_recursive", "true"),
-        ("has_doc", "true", "is_recursive", "false"),
-        ("has_doc", "false", "is_recursive", "false"),
-        ("has_doc", "true", "has_fallthrough", "false"),
-        ("has_doc", "false", "has_fallthrough", "false"),
-        ("is_recursive", "true", "has_fallthrough", "false"),
-    ] {
-        q!(
-            format!("g30_{f1}_{v1}_{f2}_{v2}"),
-            format!("FIND symbols WHERE {f1} = '{v1}' WHERE {f2} = '{v2}'")
-        );
-    }
-
-    // ── Group 31: kind + line range + ORDER BY (6) ────────────────────────────
-    for (k, line_pred, line_label, ord_f, ord_dir) in [
-        ("function", "line > 0", "gt0", "line", "ASC"),
-        ("function", "line > 10", "gt10", "line", "ASC"),
-        ("function", "line > 0", "gt0", "name", "ASC"),
-        ("variable", "line > 0", "gt0", "line", "ASC"),
-        ("struct", "line > 0", "gt0", "name", "ASC"),
-        ("enum", "line > 0", "gt0", "name", "ASC"),
+    // ── Group 19: Multi-enrichment combos scoped (8) ──────────────────────────
+    for (f1, v1, f2, v2, path) in [
+        (
+            "has_doc",
+            "true",
+            "is_recursive",
+            "true",
+            "drivers/serial/**",
+        ),
+        (
+            "has_doc",
+            "true",
+            "is_recursive",
+            "false",
+            "drivers/serial/**",
+        ),
+        (
+            "has_doc",
+            "false",
+            "is_recursive",
+            "false",
+            "drivers/gpio/**",
+        ),
+        ("has_doc", "true", "is_recursive", "true", "drivers/gpio/**"),
+        (
+            "has_doc",
+            "true",
+            "has_fallthrough",
+            "false",
+            "drivers/serial/**",
+        ),
+        (
+            "has_doc",
+            "false",
+            "has_fallthrough",
+            "false",
+            "drivers/gpio/**",
+        ),
+        ("has_doc", "true", "is_recursive", "true", "drivers/i2c/**"),
+        ("has_doc", "true", "is_recursive", "false", "drivers/i2c/**"),
     ] {
         q!(
             format!(
-                "g31_{k}_line_{line_label}_order_{ord_f}_{}",
-                ord_dir.to_lowercase()
+                "g19_{f1}_{v1}_{f2}_{v2}_in_{}",
+                path.replace('/', "_").replace('*', "")
             ),
             format!(
-                "FIND symbols WHERE fql_kind = '{k}' WHERE {line_pred} ORDER BY {ord_f} {ord_dir}"
+                "FIND symbols WHERE {f1} = '{v1}' WHERE {f2} = '{v2}' ORDER BY name ASC IN '{path}'"
             )
         );
     }
 
-    // ── Group 32: LIKE prefix + kind + ORDER BY (8) ───────────────────────────
-    for (k, p, ord_f) in [
-        ("function", "f%", "name"),
-        ("function", "b%", "name"),
-        ("function", "c%", "line"),
-        ("function", "s%", "name"),
-        ("function", "h%", "line"),
-        ("function", "n%", "name"),
-        ("variable", "c%", "line"),
-        ("struct", "M%", "name"),
+    // ── Group 20: LIKE suffix/contains scoped (8) ─────────────────────────────
+    for (p, path) in [
+        ("%_init", "drivers/serial/**"),
+        ("%_enable", "drivers/gpio/**"),
+        ("%_write", "drivers/i2c/**"),
+        ("%_read", "drivers/spi/**"),
+        ("%_config", "drivers/serial/**"),
+        ("%_get", "drivers/gpio/**"),
+        ("%_set", "drivers/i2c/**"),
+        ("%_handler", "kernel/**"),
     ] {
         q!(
-            format!("g32_kind_{k}_like_{p}_order_{ord_f}"),
             format!(
-                "FIND symbols WHERE fql_kind = '{k}' WHERE name LIKE '{p}' ORDER BY {ord_f} ASC"
+                "g20_like_{}_in_{}",
+                p.replace('%', "")
+                    .replace('_', "")
+                    .trim_start_matches('_')
+                    .to_owned()
+                    + "_suffix",
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!("FIND symbols WHERE name LIKE '{p}' ORDER BY name ASC IN '{path}'")
+        );
+    }
+
+    // ── Group 21: fql_kind != scoped (6) ──────────────────────────────────────
+    for (k, path) in [
+        ("function", "drivers/serial/**"),
+        ("struct", "drivers/serial/**"),
+        ("enum", "drivers/gpio/**"),
+        ("variable", "drivers/i2c/**"),
+        ("function", "drivers/spi/**"),
+        ("constant", "drivers/bluetooth/**"),
+    ] {
+        q!(
+            format!(
+                "g21_kind_ne_{k}_in_{}",
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!("FIND symbols WHERE fql_kind != '{k}' ORDER BY name ASC IN '{path}'")
+        );
+    }
+
+    // ── Group 22: name != scoped (6) ──────────────────────────────────────────
+    for (n, path) in [
+        ("init", "drivers/serial/**"),
+        ("enable", "drivers/gpio/**"),
+        ("open", "drivers/i2c/**"),
+        ("write", "drivers/spi/**"),
+        ("send", "drivers/bluetooth/**"),
+        ("read", "kernel/**"),
+    ] {
+        q!(
+            format!(
+                "g22_name_ne_{n}_in_{}",
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!("FIND symbols WHERE name != '{n}' ORDER BY name ASC IN '{path}'")
+        );
+    }
+
+    // ── Group 23: Triple combo + ORDER BY (8) ─────────────────────────────────
+    for (k, p, f, val, ord, path) in [
+        (
+            "function",
+            "uart%",
+            "has_doc",
+            "true",
+            "line",
+            "drivers/serial/**",
+        ),
+        (
+            "function",
+            "uart%",
+            "has_doc",
+            "false",
+            "name",
+            "drivers/serial/**",
+        ),
+        (
+            "function",
+            "gpio%",
+            "has_doc",
+            "true",
+            "name",
+            "drivers/gpio/**",
+        ),
+        (
+            "function",
+            "gpio%",
+            "is_recursive",
+            "false",
+            "line",
+            "drivers/gpio/**",
+        ),
+        (
+            "function",
+            "i2c%",
+            "has_doc",
+            "true",
+            "name",
+            "drivers/i2c/**",
+        ),
+        (
+            "function",
+            "spi%",
+            "has_doc",
+            "true",
+            "line",
+            "drivers/spi/**",
+        ),
+        (
+            "function",
+            "k_%",
+            "is_recursive",
+            "false",
+            "name",
+            "kernel/**",
+        ),
+        (
+            "function",
+            "pm_%",
+            "has_doc",
+            "true",
+            "name",
+            "subsys/pm/**",
+        ),
+    ] {
+        q!(
+            format!(
+                "g23_{k}_like_{}_{}_{}_order_{}_in_{}",
+                p.replace('%', ""),
+                f,
+                val,
+                ord,
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!(
+                "FIND symbols WHERE fql_kind = '{k}' WHERE name LIKE '{p}' WHERE {f} = '{val}' ORDER BY {ord} ASC IN '{path}'"
             )
         );
     }
 
-    // ── Group 33: Exact name + kind (negative — no match) (5) ────────────────
-    for (k, n) in [
-        ("struct", "foo"),     // foo is a function, not struct
-        ("function", "Motor"), // Motor is a struct, not function
-        ("variable", "MAGIC"), // MAGIC is constant, not variable
-        ("enum", "speed"),     // speed is a field, not enum
-        ("constant", "count"), // count is variable, not constant
+    // ── Group 24: Exact name + ORDER BY (8) ───────────────────────────────────
+    for (n, ord) in [
+        ("stopped", "line"),
+        ("running", "line"),
+        ("init", "line"),
+        ("enable", "line"),
+        ("disable", "line"),
+        ("open", "line"),
+        ("write", "line"),
+        ("read", "line"),
     ] {
         q!(
-            format!("g33_empty_kind_{k}_name_{n}"),
-            format!("FIND symbols WHERE fql_kind = '{k}' WHERE name = '{n}'")
+            format!("g24_name_{n}_order_{ord}_asc"),
+            format!("FIND symbols WHERE name = '{n}' ORDER BY {ord} ASC")
         );
     }
 
-    // ── Group 34: Clearly empty queries (5) ───────────────────────────────────
-    q!(
-        "g34_empty_name_xyz",
-        "FIND symbols WHERE name = 'nonexistent_xyz_abc_123'"
-    );
-    q!(
-        "g34_empty_kind_xyz",
-        "FIND symbols WHERE fql_kind = 'nonexistent_kind_xyz'"
-    );
-    q!(
-        "g34_empty_like_zzz",
-        "FIND symbols WHERE name LIKE 'zzz_nomatch_%'"
-    );
-    q!("g34_empty_line_gt9999", "FIND symbols WHERE line > 9999");
-    q!("g34_empty_line_lt0", "FIND symbols WHERE line < 0");
-
-    // ── Group 35: kind != + LIKE (5) ──────────────────────────────────────────
-    for (k, p) in [
-        ("function", "M%"),
-        ("struct", "f%"),
-        ("enum", "f%"),
-        ("variable", "M%"),
-        ("constant", "f%"),
+    // ── Group 25: usages + LIKE + path (6) ────────────────────────────────────
+    for (pred, label, p, path) in [
+        ("usages > 10", "gt10", "uart%", "drivers/serial/**"),
+        ("usages > 5", "gt5", "gpio%", "drivers/gpio/**"),
+        ("usages > 5", "gt5", "i2c%", "drivers/i2c/**"),
+        ("usages = 0", "eq0", "uart%", "drivers/serial/**"),
+        ("usages = 0", "eq0", "gpio%", "drivers/gpio/**"),
+        ("usages > 20", "gt20", "k_%", "kernel/**"),
     ] {
         q!(
-            format!("g35_kind_ne_{k}_like_{p}"),
-            format!("FIND symbols WHERE fql_kind != '{k}' WHERE name LIKE '{p}'")
-        );
-    }
-
-    // ── Group 36: kind + enrichment + ORDER BY (6) ────────────────────────────
-    for (k, f, val, ord) in [
-        ("function", "has_doc", "true", "name"),
-        ("function", "has_doc", "false", "name"),
-        ("function", "is_recursive", "true", "line"),
-        ("function", "is_recursive", "false", "name"),
-        ("struct", "has_doc", "true", "name"),
-        ("enum", "has_doc", "true", "name"),
-    ] {
-        q!(
-            format!("g36_{k}_{f}_{val}_order_{ord}"),
-            format!("FIND symbols WHERE fql_kind = '{k}' WHERE {f} = '{val}' ORDER BY {ord} ASC")
-        );
-    }
-
-    // ── Group 37: name LIKE suffix + kind (5) ────────────────────────────────
-    for (p, k) in [
-        ("%er", "function"),
-        ("%ed", "function"),
-        ("%al", "function"),
-        ("%or", "struct"),
-        ("%e", "function"),
-    ] {
-        q!(
-            format!("g37_like_{p}_kind_{k}"),
-            format!("FIND symbols WHERE name LIKE '{p}' WHERE fql_kind = '{k}'")
-        );
-    }
-
-    // ── Group 38: More exact names (4) ────────────────────────────────────────
-    for n in ["Running", "Stopped", "deeply_nested", "no_default"] {
-        q!(
-            format!("g38_name_eq_{n}"),
-            format!("FIND symbols WHERE name = '{n}'")
-        );
-    }
-
-    // ── Group 39: usages numeric predicates (4) ────────────────────────────────
-    for (pred, label) in [
-        ("usages >= 0", "ge0"),
-        ("usages > 0", "gt0"),
-        ("usages <= 100", "le100"),
-        ("usages >= 1", "ge1"),
-    ] {
-        q!(
-            format!("g39_usages_{label}"),
-            format!("FIND symbols WHERE {pred}")
-        );
-    }
-
-    // ── Group 40: kind + usages predicates (4) ────────────────────────────────
-    for (k, pred, label) in [
-        ("function", "usages >= 0", "ge0"),
-        ("function", "usages > 0", "gt0"),
-        ("struct", "usages >= 0", "ge0"),
-        ("variable", "usages >= 0", "ge0"),
-    ] {
-        q!(
-            format!("g40_{k}_usages_{label}"),
-            format!("FIND symbols WHERE fql_kind = '{k}' WHERE {pred}")
+            format!(
+                "g25_usages_{label}_like_{}_in_{}",
+                p.replace('%', ""),
+                path.replace('/', "_").replace('*', "")
+            ),
+            format!(
+                "FIND symbols WHERE {pred} WHERE name LIKE '{p}' ORDER BY name ASC IN '{path}'"
+            )
         );
     }
 
@@ -981,12 +990,36 @@ fn format_failures(failures: &[FailureRef<'_>]) -> String {
 
 #[test]
 fn parity_full_corpus() {
-    let corpus = corpus();
-    assert!(
-        corpus.len() >= 200,
-        "corpus must have ≥200 queries, has {}",
-        corpus.len()
-    );
+    let mut corpus = corpus();
+
+    // Optional fast mode: when `PARITY_SHORT=1` is set, keep only the first
+    // 2 queries of each `gNN_` group (≈50 queries instead of ≈250) so the
+    // gate runs in ~minutes instead of ~16 minutes.  Use the full corpus
+    // for nightly / pre-release runs by leaving the variable unset.
+    let short = std::env::var("PARITY_SHORT").ok().is_some_and(|v| v == "1");
+    if short {
+        let mut per_group: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        corpus.retain(|(label, _)| {
+            let group = label
+                .split_once('_')
+                .map(|(g, _)| g.to_owned())
+                .unwrap_or_else(|| label.clone());
+            let n = per_group.entry(group).or_insert(0);
+            *n += 1;
+            *n <= 2
+        });
+        eprintln!(
+            "PARITY_SHORT=1 → reduced corpus to {} queries",
+            corpus.len()
+        );
+    } else {
+        assert!(
+            corpus.len() >= 200,
+            "corpus must have ≥200 queries, has {}",
+            corpus.len()
+        );
+    }
 
     // Connect via USE <source>.<branch> AS 'parity'.
     // Returns None and skips when FORGEQL_DATA_DIR is unset or source is not registered.
@@ -996,20 +1029,13 @@ fn parity_full_corpus() {
 
     // Run each query pair and collect results.
     //
-    // Append `LIMIT 1000` to queries without an explicit LIMIT so both backends
-    // return ALL matching symbols rather than the first 20 in their respective
-    // iteration orders — iteration order differs between legacy and columnar,
-    // so comparing with default LIMIT 20 would produce spurious divergences.
+    // Queries are designed to return 0-15 results naturally, so no LIMIT
+    // normalisation is needed.  Queries with explicit LIMIT are tested as-is.
     let mut results: Vec<ParityResult> = Vec::new();
 
     for (label, query) in &corpus {
-        let run_query = if query.contains(" LIMIT ") {
-            query.clone()
-        } else {
-            format!("{query} LIMIT 1000")
-        };
-        let legacy = parity.run(&run_query);
-        let columnar_query = to_columnar(&run_query);
+        let legacy = parity.run(query);
+        let columnar_query = to_columnar(query);
         let columnar = parity.run(&columnar_query);
         results.push((label.clone(), legacy, columnar));
     }

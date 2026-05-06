@@ -43,7 +43,9 @@ use crate::storage::{StorageEngine, SymbolLocation};
 ///
 /// Constructed by `exec_source::use_source` after the overlay is built/opened.
 pub struct ColumnarStorage {
-    /// Worktree root; used to compute absolute source paths for materialization.
+    /// Worktree root; will be used by Phase 06 SHOW operations to resolve
+    /// absolute source file paths for context/body retrieval.
+    #[allow(dead_code)]
     worktree_root: PathBuf,
     /// Per-segment readers in the same order as `overlay.segments()`.
     segments: Vec<Arc<SegmentReader>>,
@@ -125,16 +127,34 @@ impl ColumnarStorage {
 
     /// Stage 3 — materialize rows from each segment.
     fn materialize_all(&self, by_segment: &HashMap<u32, RoaringBitmap>) -> Vec<SymbolMatch> {
+        // Sort segment indices by source_path so that rows from different files
+        // are emitted in a deterministic (alphabetical path, then line) order.
+        // This matches the legacy backend's iteration order (parsed file-by-file
+        // in path order), ensuring that ORDER BY tie-breaking on equal-name
+        // symbols produces the same first-N result across both backends.
+        let mut seg_order: Vec<u32> = by_segment.keys().copied().collect();
+        seg_order.sort_by_key(|&idx| {
+            self.overlay
+                .segments()
+                .get(idx as usize)
+                .map(|m| m.source_path.clone())
+        });
+
         let mut results = Vec::new();
-        for (&seg_idx, local_rows) in by_segment {
+        for seg_idx in seg_order {
+            let Some(local_rows) = by_segment.get(&seg_idx) else {
+                continue;
+            };
             let Some(seg) = self.segments.get(seg_idx as usize) else {
                 continue;
             };
             let Some(seg_meta) = self.overlay.segments().get(seg_idx as usize) else {
                 continue;
             };
-            let source_path = self.worktree_root.join(&seg_meta.source_path);
-            let mut seg_results = seg.materialize_rows(local_rows, Some(&source_path));
+            // Pass the relative source path so that IN/EXCLUDE glob matching in
+            // apply_clauses works against the same relative paths that the
+            // legacy backend stores.  Do NOT join with worktree_root here.
+            let mut seg_results = seg.materialize_rows(local_rows, Some(&seg_meta.source_path));
             results.append(&mut seg_results);
         }
         results

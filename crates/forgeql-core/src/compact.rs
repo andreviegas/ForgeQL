@@ -1070,8 +1070,8 @@ mod tests {
             results: vec![
                 SymbolMatch {
                     name: "Serial_Protocol".into(),
-                    node_kind: Some("class_specifier".into()),
-                    fql_kind: None,
+                    node_kind: None,
+                    fql_kind: Some("class".into()),
                     language: None,
                     path: Some(PathBuf::from("src/Serial_Protocol.h")),
                     line: Some(24),
@@ -1081,8 +1081,8 @@ mod tests {
                 },
                 SymbolMatch {
                     name: "MpptState".into(),
-                    node_kind: Some("struct_specifier".into()),
-                    fql_kind: None,
+                    node_kind: None,
+                    fql_kind: Some("struct".into()),
                     language: None,
                     path: Some(PathBuf::from("src/SolarCharger.h")),
                     line: Some(57),

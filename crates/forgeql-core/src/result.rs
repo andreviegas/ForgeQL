@@ -198,12 +198,11 @@ impl SymbolRow {
     pub(crate) fn from_match_with_ctx(row: &SymbolMatch, ctx: &QueryContext<'_>) -> Self {
         Self {
             name: compact_name(&row.name).into_owned(),
-            kind: row
-                .fql_kind
-                .as_deref()
-                .or(row.node_kind.as_deref())
-                .unwrap_or("")
-                .to_string(),
+            // `node_kind` is deprecated and intentionally NOT used as a
+            // fallback — only `fql_kind` is exposed.  Backends that lack a
+            // mapped `fql_kind` for a given AST node return an empty string,
+            // matching the columnar backend's behaviour for parity.
+            kind: row.fql_kind.clone().unwrap_or_default(),
             path: row
                 .path
                 .as_ref()
@@ -1067,8 +1066,8 @@ mod tests {
             op: "find_symbols".to_string(),
             results: vec![SymbolMatch {
                 name: "setPeakLevel".to_string(),
-                node_kind: Some("Function".to_string()),
-                fql_kind: None,
+                node_kind: None,
+                fql_kind: Some("function".to_string()),
                 language: None,
                 path: Some(PathBuf::from("src/signal.cpp")),
                 line: Some(42),
@@ -1082,7 +1081,7 @@ mod tests {
         };
         let output = format!("{result}");
         assert!(output.contains("setPeakLevel"));
-        assert!(output.contains("Function"));
+        assert!(output.contains("function"));
         assert!(output.contains("src/signal.cpp:42"));
         assert!(output.contains("usages: 3"));
     }

@@ -625,8 +625,7 @@ pub(crate) fn find_symbols_prefilter(
     // Fast path 2: `name MATCHES '^literal$'` with no regex metacharacters is
     // equivalent to an exact equality lookup in the name_index.
     // Both skip the per-row predicate engine entirely.
-    let name_eq: Option<&str> =
-        find_pred_string(&clauses.where_predicates, "name", CompareOp::Eq);
+    let name_eq: Option<&str> = find_pred_string(&clauses.where_predicates, "name", CompareOp::Eq);
     let name_literal: Option<&str> = name_eq.or_else(|| {
         find_pred_string(&clauses.where_predicates, "name", CompareOp::Matches)
             .and_then(extract_anchored_literal)
