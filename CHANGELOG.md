@@ -25,6 +25,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Background warming on `CREATE SOURCE` and `REFRESH SOURCE`** (Phase 05
+  task 9). New `engine::warm` module exposes `pick_warm_targets`,
+  `warm_snapshot`, and `spawn_warmer`. When `columnar.warm_on_create.enabled`
+  or `columnar.warm_on_refresh.enabled` is set in `.forgeql.yaml`, a detached
+  background thread builds segments and overlays for the chosen snapshots
+  immediately after the source op returns — so the first `USE` lands on a
+  warm cache and only pays the columnar load cost (~50–200 ms) instead of
+  the full build (~10–30 s on large repos). `WarmPolicyKind` selects which
+  snapshots: `off` (no-op), `default-branch` (HEAD only), `all-branches`,
+  or `pinned` (refs listed in `policy.pinned`). `REFRESH SOURCE` only
+  warms branches whose HEAD actually moved, preventing CPU drain on
+  no-change polling refreshes. Both knobs default to `enabled: false`;
+  Phase 08 will flip the defaults once benchmarks confirm the load is
+  benign on multi-source servers. Five unit tests cover the policy
+  selector for every variant.
+- **`Source::branch_heads()` and `Source::default_branch()`.** Public
+  helpers used by background warming to compute the moved-set across
+  `REFRESH SOURCE` and to resolve the default-branch policy target.
 - **Per-overlay advisory file lock** (Phase 05 task 7, R7).  Wraps the
   on-demand overlay-build path in `exec_source.rs` with a new
   `OverlayLock` (`fd-lock`-backed POSIX flock / Windows `LockFileEx`)

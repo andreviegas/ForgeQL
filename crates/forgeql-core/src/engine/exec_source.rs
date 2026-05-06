@@ -57,6 +57,30 @@ impl ForgeQLEngine {
                 )
             });
 
+        // Phase 05 Task 9: spawn background warmer when configured.
+        // Defaults are disabled, so this is a no-op out of the box.
+        if let Some((_, ref cfg)) =
+            load_verify_config(registered.path(), registered.name(), registered.path())
+        {
+            let policy = cfg.columnar.warm_on_create.clone();
+            if policy.enabled {
+                match super::warm::pick_warm_targets(registered, &policy) {
+                    Ok(targets) => super::warm::spawn_warmer(
+                        registered.path().to_path_buf(),
+                        registered.name().to_string(),
+                        targets,
+                        self.data_dir.clone(),
+                        Arc::clone(&self.lang_registry),
+                        cfg.columnar.clone(),
+                    ),
+                    Err(e) => tracing::warn!(
+                        %name,
+                        "warm_on_create: pick_warm_targets failed (non-fatal): {e}"
+                    ),
+                }
+            }
+        }
+
         Ok(ForgeQLResult::SourceOp(SourceOpResult {
             op: "create_source".to_string(),
             source_name: Some(registered.name().to_string()),
@@ -77,8 +101,39 @@ impl ForgeQLEngine {
         })?;
         let repo_path = source.path().to_path_buf();
 
-        let reopened = Source::open(name, repo_path)?;
+        let reopened = Source::open(name, repo_path.clone())?;
+
+        // Snapshot branch HEADs before fetch — used to compute the moved set
+        // for Phase 05 Task 9 selective warming.
+        let before = reopened.branch_heads().unwrap_or_default();
         let branches = reopened.fetch_all()?;
+        let after = reopened.branch_heads().unwrap_or_default();
+
+        // Phase 05 Task 9: warm only branches whose HEAD moved.  Empty diff
+        // = empty target list = no thread spawned.
+        if let Some((_, ref cfg)) = load_verify_config(&repo_path, name, &repo_path) {
+            let policy = cfg.columnar.warm_on_refresh.clone();
+            if policy.enabled {
+                let moved: Vec<super::warm::WarmTarget> = after
+                    .iter()
+                    .filter(|(b, sha)| before.get(*b) != Some(*sha))
+                    .map(|(b, sha)| super::warm::WarmTarget {
+                        branch: b.clone(),
+                        commit_sha: sha.clone(),
+                    })
+                    .collect();
+                if !moved.is_empty() {
+                    super::warm::spawn_warmer(
+                        repo_path.clone(),
+                        name.to_string(),
+                        moved,
+                        self.data_dir.clone(),
+                        Arc::clone(&self.lang_registry),
+                        cfg.columnar.clone(),
+                    );
+                }
+            }
+        }
 
         Ok(ForgeQLResult::SourceOp(SourceOpResult {
             op: "refresh_source".to_string(),

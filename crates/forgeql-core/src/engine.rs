@@ -116,6 +116,7 @@ mod exec_session;
 mod exec_show;
 mod exec_source;
 mod exec_transaction;
+pub mod warm;
 // -----------------------------------------------------------------------
 // SHOW helpers
 // -----------------------------------------------------------------------

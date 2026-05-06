@@ -269,6 +269,51 @@ impl Source {
 
         Ok(branches)
     }
+
+    /// Map of `branch_name -> commit_sha` for every local branch.
+    ///
+    /// Used by Phase 05 background warming to compare branch HEADs across
+    /// `REFRESH SOURCE` calls and only re-warm snapshots whose HEAD moved.
+    ///
+    /// # Errors
+    /// Returns `Err` if the repository cannot be opened or branch iteration
+    /// fails.
+    pub fn branch_heads(&self) -> Result<std::collections::HashMap<String, String>> {
+        let repo = Repository::open_bare(&self.path)?;
+        let mut out = std::collections::HashMap::new();
+        for b in repo.branches(Some(BranchType::Local))? {
+            let Ok((branch, _)) = b else { continue };
+            let Ok(Some(name)) = branch.name() else {
+                continue;
+            };
+            let Some(target) = branch.get().target() else {
+                continue;
+            };
+            let _ = out.insert(name.to_string(), target.to_string());
+        }
+        Ok(out)
+    }
+
+    /// The default branch name for this source.
+    ///
+    /// Resolves `HEAD` symbolically and returns the short branch name (e.g.
+    /// `"main"`).  Falls back to `"main"` if `HEAD` cannot be resolved.
+    ///
+    /// # Errors
+    /// Returns `Err` if the repository cannot be opened.
+    pub fn default_branch(&self) -> Result<String> {
+        let repo = Repository::open_bare(&self.path)?;
+        let head = repo.find_reference("HEAD").and_then(|r| {
+            r.symbolic_target()
+                .map(ToString::to_string)
+                .ok_or_else(|| git2::Error::from_str("HEAD not symbolic"))
+        });
+        let name = head
+            .ok()
+            .and_then(|t| t.strip_prefix("refs/heads/").map(ToString::to_string))
+            .unwrap_or_else(|| "main".to_string());
+        Ok(name)
+    }
 }
 
 // -----------------------------------------------------------------------
