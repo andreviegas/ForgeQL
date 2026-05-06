@@ -203,7 +203,14 @@ fn naming_pascal_case() {
 #[test]
 fn naming_snake_case() {
     let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'snake_case'");
+    // Explicit LIMIT — default sort by (name,line,path) lets comments (names
+    // beginning with `/`) crowd out real identifiers under the implicit
+    // DEFAULT_QUERY_LIMIT=20.
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE naming = 'snake_case' LIMIT 1000",
+    );
     let qr = as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
@@ -229,7 +236,12 @@ fn naming_upper_snake() {
 #[test]
 fn naming_flatcase() {
     let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'flatcase'");
+    // Explicit LIMIT — see naming_snake_case for rationale.
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE naming = 'flatcase' LIMIT 1000",
+    );
     let qr = as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
@@ -360,10 +372,12 @@ fn comment_has_doc_true() {
 #[test]
 fn comment_has_doc_false() {
     let (mut e, sid, _d) = engine_enrichment_only();
+    // Explicit LIMIT — `noDocFunction` sorts past the implicit
+    // DEFAULT_QUERY_LIMIT=20 under the default (name,line,path) order.
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' WHERE has_doc = 'false'",
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE has_doc = 'false' LIMIT 1000",
     );
     let qr = as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
@@ -385,10 +399,12 @@ fn comment_has_doc_false() {
 #[test]
 fn number_format_dec() {
     let (mut e, sid, _d) = engine_enrichment_only();
+    // Explicit LIMIT — number names sort lexically, so `-1,-2,...,0,...`
+    // fill the implicit DEFAULT_QUERY_LIMIT=20 before `42`.
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'dec'",
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'dec' LIMIT 1000",
     );
     let qr = as_query(&r);
     assert!(!qr.results.is_empty(), "expected decimal numbers");
