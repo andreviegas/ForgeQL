@@ -107,7 +107,7 @@ impl McpClient {
     fn handshake(&mut self) -> std::io::Result<()> {
         let init = self.request(
             "initialize",
-            json!({
+            &json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {"name": "parity_find", "version": "1.0"},
@@ -116,7 +116,7 @@ impl McpClient {
         if init.get("error").is_some() {
             return Err(std::io::Error::other(format!("initialize failed: {init}")));
         }
-        self.notify("notifications/initialized", json!({}))?;
+        self.notify("notifications/initialized", &json!({}))?;
         Ok(())
     }
 
@@ -143,7 +143,7 @@ impl McpClient {
         }
     }
 
-    fn request(&mut self, method: &str, params: Value) -> std::io::Result<Value> {
+    fn request(&mut self, method: &str, params: &Value) -> std::io::Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
         let req = json!({
@@ -162,7 +162,7 @@ impl McpClient {
         }
     }
 
-    fn notify(&mut self, method: &str, params: Value) -> std::io::Result<()> {
+    fn notify(&mut self, method: &str, params: &Value) -> std::io::Result<()> {
         let msg = json!({
             "jsonrpc": "2.0",
             "method": method,
@@ -180,7 +180,7 @@ impl McpClient {
         }
         let resp = self.request(
             "tools/call",
-            json!({
+            &json!({
                 "name": "run_fql",
                 "arguments": args,
             }),
@@ -784,11 +784,7 @@ fn corpus() -> Vec<(String, String)> {
         q!(
             format!(
                 "g20_like_{}_in_{}",
-                p.replace('%', "")
-                    .replace('_', "")
-                    .trim_start_matches('_')
-                    .to_owned()
-                    + "_suffix",
+                p.replace(['%', '_'], "").trim_start_matches('_').to_owned() + "_suffix",
                 path.replace('/', "_").replace('*', "")
             ),
             format!("FIND symbols WHERE name LIKE '{p}' ORDER BY name ASC IN '{path}'")
@@ -1003,8 +999,7 @@ fn parity_full_corpus() {
         corpus.retain(|(label, _)| {
             let group = label
                 .split_once('_')
-                .map(|(g, _)| g.to_owned())
-                .unwrap_or_else(|| label.clone());
+                .map_or_else(|| label.clone(), |(g, _)| g.to_owned());
             let n = per_group.entry(group).or_insert(0);
             *n += 1;
             *n <= 2
