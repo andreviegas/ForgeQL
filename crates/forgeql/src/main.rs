@@ -54,6 +54,9 @@ async fn main() -> Result<()> {
         _ => "trace",
     };
     tracing_subscriber::fmt()
+        // Always write logs to stderr — MCP mode multiplexes JSON-RPC over
+        // stdout and any tracing output there would corrupt the framing.
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| log_level.into()),

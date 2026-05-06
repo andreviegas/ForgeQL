@@ -621,12 +621,16 @@ pub(crate) fn find_symbols_prefilter(
     let name_like: Option<&str> =
         find_pred_string(&clauses.where_predicates, "name", CompareOp::Like);
 
-    // Fast path: `name MATCHES '^literal$'` with no regex metacharacters is
-    // equivalent to an exact equality lookup in the name_index.  Using the
-    // name_index directly skips the per-row regex engine entirely.
-    let name_literal: Option<&str> =
+    // Fast path 1: `name = 'literal'` — exact equality lookup in the name_index.
+    // Fast path 2: `name MATCHES '^literal$'` with no regex metacharacters is
+    // equivalent to an exact equality lookup in the name_index.
+    // Both skip the per-row predicate engine entirely.
+    let name_eq: Option<&str> =
+        find_pred_string(&clauses.where_predicates, "name", CompareOp::Eq);
+    let name_literal: Option<&str> = name_eq.or_else(|| {
         find_pred_string(&clauses.where_predicates, "name", CompareOp::Matches)
-            .and_then(extract_anchored_literal);
+            .and_then(extract_anchored_literal)
+    });
 
     let is_usages_pred = |p: &crate::ir::Predicate| p.field == "usages";
 
@@ -721,8 +725,12 @@ pub(crate) fn find_symbols_prefilter(
         .filter(|p| !(use_fql_kind_index && p.field == "fql_kind" && p.op == CompareOp::Eq))
         // Strip node_kind = X only when kind_index supplied the candidates.
         .filter(|p| !(use_kind_index && p.field == "node_kind" && p.op == CompareOp::Eq))
-        // Strip an anchored MATCHES predicate that was resolved via name_index.
-        .filter(|p| !(use_name_index && p.field == "name" && p.op == CompareOp::Matches))
+        // Strip an anchored MATCHES or exact = predicate that was resolved via name_index.
+        .filter(|p| {
+            !(use_name_index
+                && p.field == "name"
+                && (p.op == CompareOp::Matches || p.op == CompareOp::Eq))
+        })
         .collect();
 
     // Filter on raw IndexRow — no heap allocation per rejected row.

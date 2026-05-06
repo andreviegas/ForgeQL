@@ -127,14 +127,14 @@ pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicat
         CompareOp::Eq => match &predicate.value {
             PredicateValue::String(s) => item
                 .field_str(&predicate.field)
-                .is_some_and(|v| v.eq_ignore_ascii_case(s)),
+                .is_some_and(|v| v == s.as_str()),
             PredicateValue::Number(n) => item.field_num(&predicate.field).is_some_and(|v| v == *n),
             PredicateValue::Bool(_) => false,
         },
         CompareOp::NotEq => match &predicate.value {
             PredicateValue::String(s) => item
                 .field_str(&predicate.field)
-                .is_some_and(|v| !v.eq_ignore_ascii_case(s)),
+                .is_some_and(|v| v != s.as_str()),
             PredicateValue::Number(n) => item.field_num(&predicate.field).is_some_and(|v| v != *n),
             PredicateValue::Bool(_) => false,
         },
@@ -878,16 +878,24 @@ mod tests {
     }
 
     #[test]
-    fn eval_pred_eq_case_insensitive() {
+    fn eval_pred_eq_case_sensitive() {
         let sym = make_symbol("foo", "function", 0);
-        let pred = make_pred(
+        // Exact match: same case → true.
+        let pred_match = make_pred(
+            "fql_kind",
+            CompareOp::Eq,
+            PredicateValue::String("function".into()),
+        );
+        assert!(eval_predicate(&sym, &pred_match), "Eq same case must match");
+        // Different case → false.
+        let pred_no_match = make_pred(
             "fql_kind",
             CompareOp::Eq,
             PredicateValue::String("FUNCTION".into()),
         );
         assert!(
-            eval_predicate(&sym, &pred),
-            "Eq must compare case-insensitively"
+            !eval_predicate(&sym, &pred_no_match),
+            "Eq different case must not match"
         );
     }
 

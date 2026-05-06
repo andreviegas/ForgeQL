@@ -109,6 +109,7 @@ fn build_segment(
 }
 
 /// Flatten a legacy `SymbolTable` to canonical key tuples.
+#[allow(dead_code)]
 fn legacy_key_tuples(table: &SymbolTable) -> Vec<(String, String, usize)> {
     let mut v: Vec<_> = table
         .rows
@@ -198,9 +199,43 @@ fn overlay_find_symbols_matches_legacy_merged() {
         .find_symbols(&clauses, tmp.path())
         .expect("find_symbols");
 
-    // Build merged legacy baseline
-    let mut legacy_rows = legacy_key_tuples(&table_cpp);
-    legacy_rows.extend(legacy_key_tuples(&table_rust));
+    // Build merged legacy baseline deduped on (name, fql_kind, path, line) —
+    // the same key ColumnarStorage::find_symbols uses internally.  Raw
+    // index_file calls may produce duplicate rows; we mirror the dedup here
+    // so that the expected count matches what find_symbols returns.
+    use std::collections::HashSet;
+    let mut seen: HashSet<(String, String, std::path::PathBuf, usize)> = HashSet::new();
+    let mut legacy_rows: Vec<(String, String, usize)> = Vec::new();
+    for r in &table_cpp.rows {
+        let key = (
+            table_cpp.name_of(r).to_owned(),
+            table_cpp.fql_kind_of(r).to_owned(),
+            fixture_path("canonical.cpp"),
+            r.line,
+        );
+        if seen.insert(key) {
+            legacy_rows.push((
+                table_cpp.name_of(r).to_owned(),
+                table_cpp.fql_kind_of(r).to_owned(),
+                r.line,
+            ));
+        }
+    }
+    for r in &table_rust.rows {
+        let key = (
+            table_rust.name_of(r).to_owned(),
+            table_rust.fql_kind_of(r).to_owned(),
+            fixture_path("canonical.rs"),
+            r.line,
+        );
+        if seen.insert(key) {
+            legacy_rows.push((
+                table_rust.name_of(r).to_owned(),
+                table_rust.fql_kind_of(r).to_owned(),
+                r.line,
+            ));
+        }
+    }
     legacy_rows.sort_unstable();
 
     let columnar_rows = columnar_key_tuples(&results);

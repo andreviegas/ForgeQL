@@ -154,6 +154,23 @@ impl StorageEngine for ColumnarStorage {
         let candidates = self.prefilter_global(clauses);
         let by_segment = self.group_by_segment(&candidates);
         let mut results = self.materialize_all(&by_segment);
+        // Deduplicate on (name, fql_kind, path, line) to match legacy backend
+        // behaviour.  The legacy deduplicates on (name_id, path_id, node_kind_id,
+        // line); including fql_kind here is the closest approximation available
+        // in the columnar result, which does not store raw node_kind.
+        {
+            use std::collections::HashSet;
+            type DedupeKey = (
+                String,
+                Option<String>,
+                Option<std::path::PathBuf>,
+                Option<usize>,
+            );
+            let mut seen: HashSet<DedupeKey> = HashSet::new();
+            results.retain(|r| {
+                seen.insert((r.name.clone(), r.fql_kind.clone(), r.path.clone(), r.line))
+            });
+        }
         apply_clauses(&mut results, clauses);
         Ok(results)
     }
