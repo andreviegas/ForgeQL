@@ -310,10 +310,6 @@ impl StorageEngine for LegacyMemoryStorage {
         Ok(())
     }
 
-    fn set_seg_ctx(&mut self, ctx: crate::ast::index::SegmentBuildCtx) {
-        self.seg_ctx = Some(ctx);
-    }
-
     fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
         let table = self
             .table
@@ -405,15 +401,5 @@ impl StorageEngine for LegacyMemoryStorage {
             .as_ref()
             .ok_or_else(|| anyhow!("session index not ready — retry USE"))?;
         crate::ast::show::show_outline(table, workspace, file)
-    }
-
-    // ---- legacy escape hatch -------------------------------------------
-
-    fn as_legacy_table(&self) -> Option<&SymbolTable> {
-        self.table.as_ref()
-    }
-
-    fn as_legacy_table_mut(&mut self) -> Option<&mut SymbolTable> {
-        self.table.as_mut()
     }
 }

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use roaring::RoaringBitmap;
 
-use crate::ast::index::{IndexStats, SymbolTable};
+use crate::ast::index::IndexStats;
 use crate::filter::apply_clauses;
 use crate::ir::{Clauses, CompareOp, PredicateValue};
 use crate::result::SymbolMatch;
@@ -365,13 +365,5 @@ impl StorageEngine for ColumnarStorage {
             "results": [],
             "note": "columnar SHOW requires Phase 06"
         }))
-    }
-
-    fn as_legacy_table(&self) -> Option<&SymbolTable> {
-        None
-    }
-
-    fn as_legacy_table_mut(&mut self) -> Option<&mut SymbolTable> {
-        None
     }
 }

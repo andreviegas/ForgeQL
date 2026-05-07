@@ -13,16 +13,16 @@
 //! Also contains the [`SourceProvider`] trait (see [`source_provider`]) that
 //! decouples the storage engine from git internals.
 //!
-//! # Phase 01 scope
+//! # Phase 05.4 scope
 //!
 //! In this phase:
 //! - [`LegacyMemoryStorage`] wraps the existing `SymbolTable` and is the only
 //!   active backend. All live queries are served by it.
 //! - [`StubColumnarStorage`] is a throwaway empty implementation used to validate
 //!   the trait shape compiles for a non-legacy backend.
-//! - `SHOW` paths still use [`StorageEngine::as_legacy_table`] in `exec_show`
-//!   because the show functions need the concrete `SymbolTable` for ID resolution.
-//!   This will change once the columnar backend lands in Phase 05/06.
+//! - `SHOW` paths reach the legacy table via `Session::index()` which calls
+//!   `BackendSet::legacy_storage()`. The `StorageEngine` trait contains no
+//!   legacy-specific escape hatches as of Phase 05.4.
 
 pub mod backend_set;
 pub mod columnar;
@@ -217,32 +217,6 @@ pub trait StorageEngine: Send + Sync {
     /// hold a `&SymbolTable` reference for outline queries.
     fn show_outline_for_file(&self, workspace: &Workspace, file: &str)
     -> Result<serde_json::Value>;
-
-    // -------- legacy escape hatch -----------------------------------------
-
-    /// Return a reference to the concrete `SymbolTable` for code that
-    /// legitimately needs the legacy type (tests).
-    ///
-    /// Returns `None` for non-legacy backends.
-    ///
-    /// **Phase 01 only.** Will be removed once all paths go through this trait.
-    fn as_legacy_table(&self) -> Option<&SymbolTable> {
-        None
-    }
-
-    /// Return a mutable reference to the concrete `SymbolTable`.
-    ///
-    /// See [`as_legacy_table`](Self::as_legacy_table) for notes.
-    fn as_legacy_table_mut(&mut self) -> Option<&mut SymbolTable> {
-        None
-    }
-
-    /// Install an inline columnar build context before calling `build()`.
-    ///
-    /// `LegacyMemoryStorage` overrides this to store the context so that
-    /// `SymbolTable::build` can call the inline hook.  All other backends
-    /// ignore it (default no-op).
-    fn set_seg_ctx(&mut self, _ctx: crate::ast::index::SegmentBuildCtx) {}
 }
 
 // -----------------------------------------------------------------------
@@ -334,12 +308,6 @@ mod tests {
             .load_from_cache(Path::new("/tmp"), "abc123", "test")
             .expect("load noop");
         assert!(!loaded, "stub always returns false for load");
-    }
-
-    #[test]
-    fn stub_as_legacy_table_returns_none() {
-        let s = StubColumnarStorage;
-        assert!(s.as_legacy_table().is_none());
     }
 
     // --- MockProvider (SourceProvider shape) ---

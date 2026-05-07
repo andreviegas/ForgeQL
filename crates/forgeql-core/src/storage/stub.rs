@@ -20,12 +20,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::{
-    ast::index::{IndexStats, SymbolTable},
-    ir::Clauses,
-    result::SymbolMatch,
-    workspace::Workspace,
-};
+use crate::{ast::index::IndexStats, ir::Clauses, result::SymbolMatch, workspace::Workspace};
 
 use super::{StorageEngine, SymbolLocation};
 
@@ -126,13 +121,5 @@ impl StorageEngine for StubColumnarStorage {
         file: &str,
     ) -> Result<serde_json::Value> {
         Ok(serde_json::json!({ "op": "show_outline", "file": file, "results": [] }))
-    }
-
-    fn as_legacy_table(&self) -> Option<&SymbolTable> {
-        None
-    }
-
-    fn as_legacy_table_mut(&mut self) -> Option<&mut SymbolTable> {
-        None
     }
 }
