@@ -4,6 +4,44 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.3] — 2026-05-07 — Phase 05.3: Introduce `BackendSet`
+
+### Added
+
+- **`crates/forgeql-core/src/storage/backend_set.rs`** — new `BackendSet` struct
+  that owns all storage backends for a session:
+  - `new(legacy)` — creates a set with only the legacy backend.
+  - `with_columnar(columnar)` — builder-style columnar install.
+  - `set_columnar(&mut self, ...)` — post-construction install / replace.
+  - `has_columnar()` — `true` when a columnar backend is present.
+  - `default_engine()` / `default_engine_mut()` — access to the legacy backend.
+  - `engine_for(&Backend)` — routes `Default`/`Legacy` to the legacy backend,
+    `Columnar` to the optional columnar backend (errors when absent).
+  - Deprecated `legacy()` accessor as a Phase 05.4 removal marker.
+- `storage/mod.rs`: `pub mod backend_set; pub use backend_set::BackendSet;`
+- **`crates/forgeql-core/tests/backend_set.rs`** — 4 unit tests:
+  `new_yields_legacy_only`, `with_columnar_round_trip`,
+  `engine_for_default_equals_legacy`, `set_columnar_replaces`.
+
+### Changed
+
+- **`session/mod.rs`**: replaced two fields `engine: Box<dyn StorageEngine>` and
+  `columnar_engine: Option<Box<dyn StorageEngine>>` with a single
+  `backends: BackendSet`.
+- **`session/mod.rs`**: `engine()`, `engine_mut()`, `engine_for()` are now thin
+  forwarders to `BackendSet`. Added `has_columnar()` and `install_columnar()`
+  forwarding methods.
+- **`session/mod.rs`** internals (`build_index`, `resume_index`, `save_index`,
+  `reindex_files`, `drop_index`, `index`, `index_mut`, `has_index`): all
+  `self.engine.*` calls replaced with `self.backends.default_engine[_mut]().*`.
+- **`engine/exec_source.rs`**: `session.columnar_engine = Some(...)` →
+  `session.install_columnar(...)`.
+- **`engine/exec_session.rs`**: `session.columnar_engine = Some(...)` →
+  `session.install_columnar(...)`; `s.columnar_engine.is_some()` →
+  `Session::has_columnar` method reference.
+
+---
+
 ## [0.48.2] — 2026-05-07 — Phase 05.2: Introduce `ColumnarBuildContext`
 
 ### Added
