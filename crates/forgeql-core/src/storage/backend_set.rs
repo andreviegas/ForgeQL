@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::ir::Backend;
 
-use super::StorageEngine;
+use super::{LegacyMemoryStorage, StorageEngine};
 
 /// Owns one or more storage backends for a single session.
 ///
@@ -17,14 +17,14 @@ use super::StorageEngine;
 ///
 /// [`Session`]: crate::session::Session
 pub struct BackendSet {
-    legacy: Box<dyn StorageEngine>,
+    legacy: LegacyMemoryStorage,
     columnar: Option<Box<dyn StorageEngine>>,
 }
 
 impl BackendSet {
     /// Create a `BackendSet` with only the legacy backend installed.
     #[must_use]
-    pub fn new(legacy: Box<dyn StorageEngine>) -> Self {
+    pub fn new(legacy: LegacyMemoryStorage) -> Self {
         Self {
             legacy,
             columnar: None,
@@ -55,12 +55,12 @@ impl BackendSet {
     /// Phase 09: returns columnar when configured as the default.
     #[must_use]
     pub fn default_engine(&self) -> &dyn StorageEngine {
-        self.legacy.as_ref()
+        &self.legacy
     }
 
     /// Mutable access to the default backend (used for reindex / persist).
     pub fn default_engine_mut(&mut self) -> &mut dyn StorageEngine {
-        self.legacy.as_mut()
+        &mut self.legacy
     }
 
     /// Backend-aware lookup.
@@ -74,7 +74,7 @@ impl BackendSet {
     /// `.forgeql.yaml`).
     pub fn engine_for(&self, backend: &Backend) -> Result<&dyn StorageEngine> {
         match backend {
-            Backend::Default | Backend::Legacy => Ok(self.legacy.as_ref()),
+            Backend::Default | Backend::Legacy => Ok(&self.legacy),
             Backend::Columnar => self.columnar.as_deref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "columnar backend is not enabled for this session; \
@@ -84,12 +84,18 @@ impl BackendSet {
         }
     }
 
-    /// **Phase 05.3 only.** Direct access to the legacy backend for the few
-    /// shadow-write call sites that legitimately need `&SymbolTable`.
-    /// Phase 05.4 removes this together with `as_legacy_table`.
-    #[deprecated(note = "use engine_for(Backend::Legacy); removed in Phase 05.4")]
+    /// Return a reference to the legacy backend.
+    ///
+    /// Returns `None` in Phase 09+ when the default is no longer legacy.
     #[must_use]
-    pub fn legacy(&self) -> &dyn StorageEngine {
-        self.legacy.as_ref()
+    pub const fn legacy_storage(&self) -> Option<&LegacyMemoryStorage> {
+        Some(&self.legacy)
+    }
+
+    /// Return a mutable reference to the legacy backend.
+    ///
+    /// Returns `None` in Phase 09+ when the default is no longer legacy.
+    pub const fn legacy_storage_mut(&mut self) -> Option<&mut LegacyMemoryStorage> {
+        Some(&mut self.legacy)
     }
 }

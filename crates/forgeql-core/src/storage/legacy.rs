@@ -27,7 +27,7 @@ use crate::{
     ast::{
         cache::CachedIndex,
         enrich::macro_table::MacroTable,
-        index::{IndexStats, SymbolTable},
+        index::{IndexStats, SegmentBuildCtx, SymbolTable},
         lang::LanguageRegistry,
     },
     ir::{Clauses, GroupBy},
@@ -72,9 +72,27 @@ impl LegacyMemoryStorage {
             seg_ctx: None,
         }
     }
-}
 
-// -----------------------------------------------------------------------
+    /// Return a reference to the symbol table, if the index has been built.
+    #[must_use]
+    pub const fn table(&self) -> Option<&SymbolTable> {
+        self.table.as_ref()
+    }
+
+    /// Return a mutable reference to the symbol table, if the index has been built.
+    #[must_use]
+    pub const fn table_mut(&mut self) -> Option<&mut SymbolTable> {
+        self.table.as_mut()
+    }
+
+    /// Install a [`SegmentBuildCtx`] to be consumed at the start of `build()`.
+    ///
+    /// Called by `Session::build_index` when shadow-write is enabled so that
+    /// `SymbolTable::build` fires the inline columnar hook per file.
+    pub fn install_segment_build_ctx(&mut self, ctx: SegmentBuildCtx) {
+        self.seg_ctx = Some(ctx);
+    }
+}
 // Fast-path GROUP BY helper (moved from exec_find.rs)
 // -----------------------------------------------------------------------
 

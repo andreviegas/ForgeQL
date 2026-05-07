@@ -1,4 +1,4 @@
-//! Unit tests for [`BackendSet`] (Phase 05.3).
+//! Unit tests for [`BackendSet`] (Phase 05.3 / 05.4).
 //!
 //! Four cases exercise the core invariants without any real I/O:
 //! - `new_yields_legacy_only` — default engine works; `Columnar` request errors.
@@ -6,15 +6,19 @@
 //! - `engine_for_default_equals_legacy` — `Backend::Default` routes to legacy.
 //! - `set_columnar_replaces` — second `set_columnar` overwrites the first.
 
+use std::sync::Arc;
+
+use forgeql_core::ast::lang::LanguageRegistry;
 use forgeql_core::ir::Backend;
-use forgeql_core::storage::{BackendSet, StubColumnarStorage};
+use forgeql_core::storage::{BackendSet, LegacyMemoryStorage, StubColumnarStorage};
 
 // -----------------------------------------------------------------------
 // Helpers — tiny stub backends so we don't need a real LanguageRegistry.
 // -----------------------------------------------------------------------
 
 fn make_backend_set() -> BackendSet {
-    BackendSet::new(Box::new(StubColumnarStorage))
+    let registry = Arc::new(LanguageRegistry::new(vec![]));
+    BackendSet::new(LegacyMemoryStorage::new(registry))
 }
 
 // -----------------------------------------------------------------------

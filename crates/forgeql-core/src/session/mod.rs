@@ -174,9 +174,7 @@ impl Session {
             branch: branch.into(),
             custom_branch: None,
             worktree_name,
-            backends: BackendSet::new(Box::new(LegacyMemoryStorage::new(Arc::clone(
-                lang_registry,
-            )))),
+            backends: BackendSet::new(LegacyMemoryStorage::new(Arc::clone(lang_registry))),
             cached_commit: None,
             index_dirty: false,
             last_active: std::time::Instant::now(),
