@@ -24,6 +24,7 @@
 //!   because the show functions need the concrete `SymbolTable` for ID resolution.
 //!   This will change once the columnar backend lands in Phase 05/06.
 
+pub mod backend_set;
 pub mod columnar;
 pub mod git_sha1_provider;
 pub mod legacy;
@@ -31,6 +32,7 @@ pub mod mock_provider;
 pub mod source_provider;
 pub mod stub;
 
+pub use backend_set::BackendSet;
 pub use columnar::overlay::Overlay;
 pub use columnar::shadow_writer::ShadowWriteResult;
 pub use columnar::{

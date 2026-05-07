@@ -428,7 +428,7 @@ impl ForgeQLEngine {
                                         .map(std::sync::Arc::new)
                                 })
                                 .collect();
-                        session.columnar_engine = Some(Box::new(ColumnarStorage::new(
+                        session.install_columnar(Box::new(ColumnarStorage::new(
                             session.worktree_path.clone(),
                             segments,
                             overlay,

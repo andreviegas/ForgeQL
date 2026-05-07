@@ -20,7 +20,7 @@ use crate::ast::index::SymbolTable;
 use crate::ast::lang::LanguageRegistry;
 use crate::budget::{BudgetSnapshot, BudgetState};
 use crate::config::{LineBudgetConfig, VerifyStep};
-use crate::storage::{LegacyMemoryStorage, StorageEngine};
+use crate::storage::{BackendSet, LegacyMemoryStorage, StorageEngine};
 use crate::workspace::Workspace;
 /// Sentinel file written inside each worktree directory on every `touch()`.
 ///
@@ -86,15 +86,13 @@ pub struct Session {
     /// to identify the worktree in `worktree::remove`.  May differ from `id`
     /// when a custom branch name was supplied via `USE … AS`.
     pub worktree_name: String,
-    /// Active storage engine (legacy in-memory index).
-    /// Populated with a live index after `build_index` or `resume_index`.
-    engine: Box<dyn StorageEngine>,
-    /// Optional columnar storage backend — `None` until Phase 03 enables
-    /// shadow-write and promotes it to primary.
+    /// All storage backends for this session.
     ///
-    /// When present, `engine_for(Backend::Columnar)` routes through this
-    /// field instead of `engine`.
-    pub(crate) columnar_engine: Option<Box<dyn StorageEngine>>,
+    /// Encapsulates the legacy (always-present) and the optional columnar
+    /// backend. `engine_for(&Backend)` delegates to `backends.engine_for`.
+    /// Phase 09 will flip the default to columnar inside `BackendSet` without
+    /// touching this field or any caller of `engine()` / `engine_for()`.
+    backends: BackendSet,
     /// The commit hash the current `index` was built from.
     cached_commit: Option<String>,
     /// `true` when in-memory `index` has diverged from the on-disk
@@ -176,8 +174,9 @@ impl Session {
             branch: branch.into(),
             custom_branch: None,
             worktree_name,
-            engine: Box::new(LegacyMemoryStorage::new(Arc::clone(lang_registry))),
-            columnar_engine: None,
+            backends: BackendSet::new(Box::new(LegacyMemoryStorage::new(Arc::clone(
+                lang_registry,
+            )))),
             cached_commit: None,
             index_dirty: false,
             last_active: std::time::Instant::now(),
@@ -243,22 +242,24 @@ impl Session {
                 "git-sha1" => "git-sha1",
                 _ => "unknown",
             };
-            self.engine.set_seg_ctx(crate::ast::index::SegmentBuildCtx {
-                provider_id: pid_static,
-                hash_fn: hash_fn_ctx,
-                emit_fn: std::sync::Arc::new(move |content_id, table, _| {
-                    if let Some(row) = table.rows.first() {
-                        let abs_path = table.strings.paths.get(row.path_id).to_path_buf();
-                        if let Ok(mut c) = cache_emit.lock() {
-                            let _ = c.insert(abs_path, content_id.to_vec());
+            self.backends
+                .default_engine_mut()
+                .set_seg_ctx(crate::ast::index::SegmentBuildCtx {
+                    provider_id: pid_static,
+                    hash_fn: hash_fn_ctx,
+                    emit_fn: std::sync::Arc::new(move |content_id, table, _| {
+                        if let Some(row) = table.rows.first() {
+                            let abs_path = table.strings.paths.get(row.path_id).to_path_buf();
+                            if let Ok(mut c) = cache_emit.lock() {
+                                let _ = c.insert(abs_path, content_id.to_vec());
+                            }
                         }
-                    }
-                }),
-            });
+                    }),
+                });
         }
 
         let workspace = Workspace::new(&self.worktree_path)?;
-        self.engine.build(&workspace)?;
+        self.backends.default_engine_mut().build(&workspace)?;
 
         // Extract the pre-computed content-ID map (empty if shadow-write not set).
         let pre_computed = std::sync::Arc::try_unwrap(content_id_cache)
@@ -268,7 +269,7 @@ impl Session {
 
         // Shadow-write columnar segments if enabled (best-effort, non-fatal).
         if let Some(ctx) = self.columnar_build.as_ref()
-            && let Some(table) = self.engine.as_legacy_table()
+            && let Some(table) = self.backends.default_engine().as_legacy_table()
         {
             let writer = crate::storage::columnar::ShadowWriter::new(
                 table,
@@ -315,8 +316,11 @@ impl Session {
         }
 
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        self.engine
-            .persist_to_cache(&self.worktree_path, &commit_hash, &self.source_name)?;
+        self.backends.default_engine_mut().persist_to_cache(
+            &self.worktree_path,
+            &commit_hash,
+            &self.source_name,
+        )?;
 
         debug!(
             session = %self.id,
@@ -339,9 +343,11 @@ impl Session {
     pub fn resume_index(&mut self) -> Result<()> {
         let head_oid = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
 
-        let loaded =
-            self.engine
-                .load_from_cache(&self.worktree_path, &head_oid, &self.source_name)?;
+        let loaded = self.backends.default_engine_mut().load_from_cache(
+            &self.worktree_path,
+            &head_oid,
+            &self.source_name,
+        )?;
 
         if loaded {
             debug!(
@@ -368,7 +374,7 @@ impl Session {
     /// Returns `None` for non-legacy backends.
     #[must_use]
     pub fn index(&self) -> Option<&SymbolTable> {
-        self.engine.as_legacy_table()
+        self.backends.default_engine().as_legacy_table()
     }
 
     /// `true` when an index has been built (or loaded from cache) for this
@@ -376,7 +382,7 @@ impl Session {
     /// from "empty index" — e.g. ROLLBACK's smart-rollback path.
     #[must_use]
     pub fn has_index(&self) -> bool {
-        self.engine.has_index()
+        self.backends.default_engine().has_index()
     }
 
     /// Return a mutable reference to the legacy `SymbolTable`, if available.
@@ -384,7 +390,7 @@ impl Session {
     /// Used by incremental re-indexing after mutations.
     #[must_use]
     pub fn index_mut(&mut self) -> Option<&mut SymbolTable> {
-        self.engine.as_legacy_table_mut()
+        self.backends.default_engine_mut().as_legacy_table_mut()
     }
 
     /// The commit hash the current index was built from, if available.
@@ -393,38 +399,44 @@ impl Session {
         self.cached_commit.as_deref()
     }
 
-    /// Return a reference to the storage engine.
+    /// Return a reference to the default (legacy) storage engine.
     #[must_use]
     pub fn engine(&self) -> &dyn StorageEngine {
-        self.engine.as_ref()
+        self.backends.default_engine()
     }
 
-    /// Return a mutable reference to the storage engine.
+    /// Return a mutable reference to the default (legacy) storage engine.
     #[must_use]
     pub fn engine_mut(&mut self) -> &mut dyn StorageEngine {
-        self.engine.as_mut()
+        self.backends.default_engine_mut()
     }
 
     /// Return a reference to the storage engine to use for a given backend selector.
     ///
     /// - [`Backend::Default`] and [`Backend::Legacy`] → the legacy in-memory engine.
     /// - [`Backend::Columnar`] → the columnar engine, if one is installed.
-    ///   Returns an error when `columnar_engine` is `None`.
+    ///   Returns an error when no columnar engine has been installed.
     ///
     /// # Errors
     /// Returns `Err` if `backend` is [`Backend::Columnar`] and no columnar engine
-    /// has been installed (Phase 03 will set one via `Session::set_columnar_engine`).
+    /// has been installed (i.e. `columnar.shadow_write` is not set in `.forgeql.yaml`).
     pub fn engine_for(&self, backend: &crate::ir::Backend) -> Result<&dyn StorageEngine> {
-        match backend {
-            crate::ir::Backend::Default | crate::ir::Backend::Legacy => Ok(self.engine.as_ref()),
-            crate::ir::Backend::Columnar => self.columnar_engine.as_deref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "columnar backend is not enabled for session '{}'; \
-                         Phase 03 shadow-write must be completed first",
-                    self.id
-                )
-            }),
-        }
+        self.backends.engine_for(backend)
+    }
+
+    /// Returns `true` if a columnar backend is installed on this session.
+    #[must_use]
+    pub fn has_columnar(&self) -> bool {
+        self.backends.has_columnar()
+    }
+
+    /// Install (or replace) the columnar storage backend.
+    ///
+    /// In production this is called by `exec_source` when an overlay file is
+    /// found on disk. In tests it can be called directly via
+    /// [`ForgeQLEngine::install_columnar_for_session`].
+    pub fn install_columnar(&mut self, columnar: Box<dyn StorageEngine>) {
+        self.backends.set_columnar(columnar);
     }
     /// Incrementally re-index the given files after a mutation.
     ///
@@ -435,7 +447,7 @@ impl Session {
     /// Returns `Err` if the index has not been built yet, or if tree-sitter
     /// parsing fails.
     pub fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
-        self.engine.reindex_files(paths)?;
+        self.backends.default_engine_mut().reindex_files(paths)?;
         self.index_dirty = true;
         Ok(())
     }
@@ -447,8 +459,11 @@ impl Session {
     /// I/O fails.
     pub fn save_index(&mut self) -> Result<()> {
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        self.engine
-            .persist_to_cache(&self.worktree_path, &commit_hash, &self.source_name)?;
+        self.backends.default_engine_mut().persist_to_cache(
+            &self.worktree_path,
+            &commit_hash,
+            &self.source_name,
+        )?;
         debug!(
             session = %self.id,
             commit = %commit_hash,
@@ -481,7 +496,7 @@ impl Session {
     /// the next `resume_index` reads the freshly-restored
     /// `.forgeql-index` from disk instead of keeping a stale view.
     pub fn drop_index(&mut self) {
-        self.engine.drop_stored_index();
+        self.backends.default_engine_mut().drop_stored_index();
         self.cached_commit = None;
         self.index_dirty = false;
     }

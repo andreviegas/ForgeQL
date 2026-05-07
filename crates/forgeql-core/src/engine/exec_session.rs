@@ -355,7 +355,7 @@ impl ForgeQLEngine {
         storage: Box<dyn crate::storage::StorageEngine>,
     ) {
         if let Some(session) = self.sessions.get_mut(session_id) {
-            session.columnar_engine = Some(storage);
+            session.install_columnar(storage);
         }
     }
 
@@ -365,7 +365,7 @@ impl ForgeQLEngine {
     pub fn session_has_columnar(&self, session_id: &str) -> bool {
         self.sessions
             .get(session_id)
-            .is_some_and(|s| s.columnar_engine.is_some())
+            .is_some_and(Session::has_columnar)
     }
 
     /// Register a local session and build **both** backends from the same
@@ -441,7 +441,7 @@ impl ForgeQLEngine {
                 })
                 .collect();
             let columnar = ColumnarStorage::new(workspace_root.to_path_buf(), segs, overlay);
-            session.columnar_engine = Some(Box::new(columnar));
+            session.install_columnar(Box::new(columnar));
         }
 
         let sid = session_id.clone();
