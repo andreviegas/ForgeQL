@@ -4,6 +4,38 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.4] — 2026-05-07 — Phase 05.4: Remove escape hatches from `StorageEngine` trait
+
+### Changed
+
+- **`StorageEngine` trait** — deleted three legacy/columnar-specific methods:
+  `as_legacy_table()`, `as_legacy_table_mut()`, `set_seg_ctx()`.
+  The trait now contains zero backend-aware methods; all query paths go
+  through the generic interface.
+- **`BackendSet`** — stores the legacy backend as a concrete
+  `LegacyMemoryStorage` (not `Box<dyn StorageEngine>`).  New accessors:
+  `legacy_storage()` / `legacy_storage_mut()` (both `const fn`, returning
+  `Option<&LegacyMemoryStorage>` for Phase 09 forward-compatibility).
+  `default_engine()` / `default_engine_mut()` auto-coerce to
+  `&dyn StorageEngine`.  `BackendSet::new` now takes `LegacyMemoryStorage`
+  directly.  Deprecated `legacy()` accessor removed.
+- **`LegacyMemoryStorage`** — added three inherent `pub const fn` methods:
+  `table()`, `table_mut()`, `install_segment_build_ctx()`.  The trait
+  overrides for `as_legacy_table`, `as_legacy_table_mut`, `set_seg_ctx`
+  are removed.
+
+### Removed
+
+- `StorageEngine::as_legacy_table()` — use `Session::legacy_storage().and_then(|l| l.table())`
+- `StorageEngine::as_legacy_table_mut()` — use `Session::legacy_storage_mut().and_then(|l| l.table_mut())`
+- `StorageEngine::set_seg_ctx()` — use `LegacyMemoryStorage::install_segment_build_ctx()`
+- `Session::index_mut()` — dead code (zero external callers)
+
+### Added
+
+- `Session::legacy_storage(&self) -> Option<&LegacyMemoryStorage>` — typed
+  accessor for exec paths that legitimately need `&SymbolTable`.
+
 ## [0.48.3] — 2026-05-07 — Phase 05.3: Introduce `BackendSet`
 
 ### Added
