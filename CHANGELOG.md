@@ -4,6 +4,45 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.2] — 2026-05-07 — Phase 05.2: Introduce `ColumnarBuildContext`
+
+### Added
+
+- **`crates/forgeql-core/src/storage/columnar/build_context.rs`** — new
+  `ColumnarBuildContext` struct that groups the four previously-flat columnar
+  configuration fields on `Session` into a single typed value:
+  - `segments_dir: PathBuf`
+  - `overlays_dir: PathBuf`
+  - `provider_id: String`
+  - `hash_fn: HashFn`
+- Two path-derivation helpers on `ColumnarBuildContext`:
+  - `segment_dir_for(hex_content_id)` → `<segments_dir>/<provider_id>/<hex>/`
+  - `overlay_path_for(snapshot_hex)` → `<overlays_dir>/<provider_id>/<hex>.bin`
+- `ColumnarBuildContext` is re-exported from both `columnar/mod.rs` and
+  `storage/mod.rs`.
+
+### Changed
+
+- **`session/mod.rs`**: replaced four flat `columnar_*` fields
+  (`columnar_segments_dir`, `columnar_provider_id`, `columnar_hash_fn`,
+  `columnar_overlays_dir`) with a single `columnar_build: Option<ColumnarBuildContext>`.
+- **`session/mod.rs`**: replaced `set_columnar_segments_dir` with
+  `set_columnar_build(ctx: ColumnarBuildContext)` and added a `const`
+  `columnar_build()` accessor.
+- **`session/mod.rs`** `build_index()`: reads provider ID, hash fn, segment
+  dir, and overlay path from `ctx` instead of four separate `Option` fields;
+  eliminates the four-way `if let (Some(…), Some(…), …)` guard.
+- **`engine/exec_source.rs`**: writer block constructs a `ColumnarBuildContext`
+  and calls `set_columnar_build`; reader block calls `ctx.overlay_path_for` and
+  `ctx.segment_dir_for`; collapsed the `if needs_build { if let Some(table)`
+  nesting into `if needs_build && let Some(table)`.
+- **`engine/warm.rs`**: constructs a `ColumnarBuildContext` and calls
+  `set_columnar_build`.
+- **`engine/exec_session.rs`**: integration-test helper uses
+  `set_columnar_build`.
+
+---
+
 ## [0.48.1] — 2026-05-07 — Phase 05.1: Move Legacy Resolvers Out of `engine.rs`
 
 ### Changed
