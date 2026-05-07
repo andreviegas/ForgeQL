@@ -486,7 +486,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "forgeql"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-core"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-cpp"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-python"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -558,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-rust"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "forgeql-core",
  "tree-sitter",

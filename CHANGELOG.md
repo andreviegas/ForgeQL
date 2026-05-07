@@ -4,7 +4,7 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — Phase 05.1: Move Legacy Resolvers Out of `engine.rs`
+## [0.48.1] — 2026-05-07 — Phase 05.1: Move Legacy Resolvers Out of `engine.rs`
 
 ### Changed
 
@@ -22,12 +22,6 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `detect_metric_hint`, `reject_text_filter`, and `extract_source_lines`.
 - **Validate-order-by tests** moved to `storage/legacy/prefilter.rs` test module.
 - Removed now-unused imports from `engine.rs`: `HashSet`, `SymbolTable`, `SymbolMatch`.
-
-### Gate verified
-
-- `engine.rs` contains zero functions with `&SymbolTable` parameter. ✓
-- `cargo test --workspace` green (17 + 12 + 21 unit tests, 10 parity tests, SMS 5 000-cmd regression). ✓
-- `cargo clippy --workspace -D warnings` clean. ✓
 
 ## [0.48.0] — 2026-05-06 — Phase 05: Workspace Overlay, Trigram Index, Background Warming
 
