@@ -33,7 +33,9 @@ pub mod stub;
 
 pub use columnar::overlay::Overlay;
 pub use columnar::shadow_writer::ShadowWriteResult;
-pub use columnar::{ColumnarStorage, HashFn, OverlayBuilder, SegmentReader, ShadowWriter};
+pub use columnar::{
+    ColumnarBuildContext, ColumnarStorage, HashFn, OverlayBuilder, SegmentReader, ShadowWriter,
+};
 pub use legacy::LegacyMemoryStorage;
 pub use source_provider::SourceProvider;
 pub use stub::StubColumnarStorage;

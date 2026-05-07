@@ -225,8 +225,12 @@ pub fn warm_snapshot(
         let segments_dir = bare_repo.join("forgeql").join("segments");
         let overlays_dir = bare_repo.join("forgeql").join("overlays");
         let hash_fn: HashFn = Arc::new(|b: &[u8]| git_blob_sha1(b).to_vec());
-        session.columnar_overlays_dir = Some(overlays_dir);
-        session.set_columnar_segments_dir(segments_dir, "git-sha1", hash_fn);
+        session.set_columnar_build(crate::storage::ColumnarBuildContext::new(
+            segments_dir,
+            overlays_dir,
+            "git-sha1",
+            hash_fn,
+        ));
 
         // Take per-overlay file lock so we don't fight a concurrent USE
         // building the same commit (R7).  Re-check after acquiring.

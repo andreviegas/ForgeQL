@@ -410,9 +410,12 @@ impl ForgeQLEngine {
             std::hash::Hash::hash_slice(content, &mut h);
             h.finish().to_le_bytes().to_vec()
         });
-        session.set_columnar_segments_dir(segments_dir.to_path_buf(), "test", hash_fn);
-        // Enable overlay auto-build inside build_index.
-        session.columnar_overlays_dir = Some(overlays_dir.to_path_buf());
+        session.set_columnar_build(crate::storage::ColumnarBuildContext::new(
+            segments_dir.to_path_buf(),
+            overlays_dir.to_path_buf(),
+            "test",
+            hash_fn,
+        ));
 
         // Build the index.  This writes the legacy SymbolTable, segments, and
         // (because columnar_overlays_dir is set) the overlay file.

@@ -143,25 +143,13 @@ pub struct Session {
     /// overlapping/adjacent range reads on the same file and emit tips.
     /// Stored as `(file_path, start_line, end_line)`.
     recent_show_lines: Vec<(String, usize, usize)>,
-    /// When `Some`, write columnar segment files after each full index build.
+    /// Columnar build configuration — set when shadow-write is enabled.
     ///
-    /// Set by `exec_source` before calling `resume_index` when
+    /// Populated by `exec_source` / `warm.rs` before `resume_index` when
     /// `columnar.shadow_write: true` is present in `.forgeql.yaml`.
-    pub(crate) columnar_segments_dir: Option<PathBuf>,
-    /// Provider ID string for columnar shadow-write (e.g. `"git-sha1"`).
-    pub(crate) columnar_provider_id: Option<String>,
-    /// Content-addressing hash function for columnar shadow-write.
-    ///
-    /// Wraps `SourceProvider::hash_content` so `ShadowWriter` remains
-    /// decoupled from the concrete provider type.
-    pub(crate) columnar_hash_fn: Option<crate::storage::HashFn>,
-    /// Directory for workspace overlay files (`<bare-repo>/forgeql/overlays`).
-    ///
-    /// Set by `exec_source` alongside `columnar_segments_dir` when
-    /// `columnar.shadow_write: true`.  Used by `build_index` to write the
-    /// overlay after shadow-write completes, and by `use_source` to open
-    /// an existing overlay and install the `ColumnarStorage` backend.
-    pub(crate) columnar_overlays_dir: Option<PathBuf>,
+    /// Replaces the four flat `columnar_segments_dir`, `columnar_provider_id`,
+    /// `columnar_hash_fn`, and `columnar_overlays_dir` fields.
+    pub(crate) columnar_build: Option<crate::storage::ColumnarBuildContext>,
 }
 
 impl Session {
@@ -201,10 +189,7 @@ impl Session {
             budget_data_dir: None,
             budget_branch: None,
             recent_show_lines: Vec::new(),
-            columnar_segments_dir: None,
-            columnar_provider_id: None,
-            columnar_hash_fn: None,
-            columnar_overlays_dir: None,
+            columnar_build: None,
         }
     }
 
@@ -212,16 +197,16 @@ impl Session {
     ///
     /// Must be called **before** `build_index` / `resume_index`.  When set,
     /// each full build writes one segment per source file to
-    /// `<dir>/<provider_id>/<content-hex>/`.
-    pub fn set_columnar_segments_dir(
-        &mut self,
-        dir: PathBuf,
-        provider_id: impl Into<String>,
-        hash_fn: crate::storage::HashFn,
-    ) {
-        self.columnar_segments_dir = Some(dir);
-        self.columnar_provider_id = Some(provider_id.into());
-        self.columnar_hash_fn = Some(hash_fn);
+    /// `<segments_dir>/<provider_id>/<content-hex>/` and builds an overlay
+    /// at `<overlays_dir>/<provider_id>/<commit>.bin`.
+    pub fn set_columnar_build(&mut self, ctx: crate::storage::ColumnarBuildContext) {
+        self.columnar_build = Some(ctx);
+    }
+
+    /// Columnar build context, if shadow-write was enabled at session creation.
+    #[must_use]
+    pub const fn columnar_build(&self) -> Option<&crate::storage::ColumnarBuildContext> {
+        self.columnar_build.as_ref()
     }
 
     /// Parse all source files in the worktree and build a fresh `SymbolTable`.
@@ -249,14 +234,12 @@ impl Session {
             std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, Vec<u8>>>,
         > = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
-        if let (Some(provider_id), Some(hash_fn)) =
-            (&self.columnar_provider_id, &self.columnar_hash_fn)
-        {
+        if let Some(ctx) = &self.columnar_build {
             let cache_emit = std::sync::Arc::clone(&content_id_cache);
-            let hash_fn_ctx = std::sync::Arc::clone(hash_fn);
+            let hash_fn_ctx = std::sync::Arc::clone(&ctx.hash_fn);
             // SegmentBuildCtx.provider_id is &'static str; map the known
             // provider IDs to their static counterparts.
-            let pid_static: &'static str = match provider_id.as_str() {
+            let pid_static: &'static str = match ctx.provider_id.as_str() {
                 "git-sha1" => "git-sha1",
                 _ => "unknown",
             };
@@ -284,16 +267,14 @@ impl Session {
             .unwrap_or_default();
 
         // Shadow-write columnar segments if enabled (best-effort, non-fatal).
-        if let Some(ref segments_dir) = self.columnar_segments_dir
+        if let Some(ctx) = self.columnar_build.as_ref()
             && let Some(table) = self.engine.as_legacy_table()
-            && let Some(ref provider_id) = self.columnar_provider_id
-            && let Some(ref hash_fn) = self.columnar_hash_fn
         {
             let writer = crate::storage::columnar::ShadowWriter::new(
                 table,
-                segments_dir,
-                provider_id,
-                hash_fn.as_ref(),
+                &ctx.segments_dir,
+                &ctx.provider_id,
+                ctx.hash_fn.as_ref(),
                 pre_computed,
             );
             match writer.run() {
@@ -306,27 +287,24 @@ impl Session {
                     // Build / refresh the workspace overlay immediately after
                     // shadow-write, while the segment_map is still fresh.
                     // This avoids re-hashing files on subsequent USE calls.
-                    if let Some(ref overlays_dir) = self.columnar_overlays_dir {
-                        let commit = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-                        let overlay_path =
-                            overlays_dir.join(provider_id).join(format!("{commit}.bin"));
-                        let builder = crate::storage::columnar::OverlayBuilder::new(
-                            provider_id,
-                            segments_dir.clone(),
-                            self.worktree_path.clone(),
-                            result.segment_map,
-                        );
-                        match builder.build_and_persist(&overlay_path) {
-                            Ok(()) => debug!(
-                                session = %self.id,
-                                %commit,
-                                "columnar overlay built"
-                            ),
-                            Err(e) => tracing::warn!(
-                                session = %self.id,
-                                "columnar overlay build failed (non-fatal): {e}"
-                            ),
-                        }
+                    let commit = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
+                    let overlay_path = ctx.overlay_path_for(&commit);
+                    let builder = crate::storage::columnar::OverlayBuilder::new(
+                        &ctx.provider_id,
+                        ctx.segments_dir.clone(),
+                        self.worktree_path.clone(),
+                        result.segment_map,
+                    );
+                    match builder.build_and_persist(&overlay_path) {
+                        Ok(()) => debug!(
+                            session = %self.id,
+                            %commit,
+                            "columnar overlay built"
+                        ),
+                        Err(e) => tracing::warn!(
+                            session = %self.id,
+                            "columnar overlay build failed (non-fatal): {e}"
+                        ),
                     }
                 }
                 Err(e) => tracing::warn!(

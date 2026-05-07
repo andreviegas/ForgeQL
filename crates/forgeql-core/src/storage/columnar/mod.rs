@@ -31,6 +31,7 @@
 //!
 //! [`SymbolTable`]: crate::ast::index::SymbolTable
 
+pub mod build_context;
 pub mod columnar_storage;
 pub mod manifest;
 pub mod overlay;
@@ -40,6 +41,7 @@ pub mod segment_builder;
 pub mod segment_reader;
 pub mod shadow_writer;
 
+pub use build_context::ColumnarBuildContext;
 pub use columnar_storage::ColumnarStorage;
 pub use manifest::Manifest;
 pub use overlay_builder::OverlayBuilder;
