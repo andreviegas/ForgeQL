@@ -351,7 +351,10 @@ impl ForgeQLEngine {
             } else {
                 true
             };
-            if needs_build && let Some(table) = session.engine().as_legacy_table() {
+            if needs_build
+                && let Some(legacy) = session.legacy_storage()
+                && let Some(table) = legacy.table()
+            {
                 // Phase 05 R7: serialise concurrent overlay builds for
                 // the same commit across processes/threads.  We hold
                 // the lock for the entire build+rename critical section

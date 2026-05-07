@@ -240,9 +240,8 @@ impl Session {
                 "git-sha1" => "git-sha1",
                 _ => "unknown",
             };
-            self.backends
-                .default_engine_mut()
-                .set_seg_ctx(crate::ast::index::SegmentBuildCtx {
+            if let Some(legacy) = self.backends.legacy_storage_mut() {
+                legacy.install_segment_build_ctx(crate::ast::index::SegmentBuildCtx {
                     provider_id: pid_static,
                     hash_fn: hash_fn_ctx,
                     emit_fn: std::sync::Arc::new(move |content_id, table, _| {
@@ -254,6 +253,7 @@ impl Session {
                         }
                     }),
                 });
+            }
         }
 
         let workspace = Workspace::new(&self.worktree_path)?;
@@ -267,7 +267,8 @@ impl Session {
 
         // Shadow-write columnar segments if enabled (best-effort, non-fatal).
         if let Some(ctx) = self.columnar_build.as_ref()
-            && let Some(table) = self.backends.default_engine().as_legacy_table()
+            && let Some(legacy) = self.backends.legacy_storage()
+            && let Some(table) = legacy.table()
         {
             let writer = crate::storage::columnar::ShadowWriter::new(
                 table,
@@ -367,12 +368,11 @@ impl Session {
     }
 
     /// Return a reference to the legacy `SymbolTable`, if the engine holds one.
-    ///
     /// Provided for SHOW / exec paths that still work directly with the table.
-    /// Returns `None` for non-legacy backends.
+    /// Returns `None` for non-legacy backends, or before the index is built.
     #[must_use]
     pub fn index(&self) -> Option<&SymbolTable> {
-        self.backends.default_engine().as_legacy_table()
+        self.backends.legacy_storage().and_then(|l| l.table())
     }
 
     /// `true` when an index has been built (or loaded from cache) for this
@@ -383,12 +383,14 @@ impl Session {
         self.backends.default_engine().has_index()
     }
 
-    /// Return a mutable reference to the legacy `SymbolTable`, if available.
+    /// Return a reference to the legacy backend, if present.
     ///
-    /// Used by incremental re-indexing after mutations.
+    /// Used by call sites that need `&SymbolTable` directly (e.g. on-demand
+    /// overlay builds in `exec_source`).  Returns `None` in Phase 09+ when
+    /// the default backend is no longer legacy.
     #[must_use]
-    pub fn index_mut(&mut self) -> Option<&mut SymbolTable> {
-        self.backends.default_engine_mut().as_legacy_table_mut()
+    pub const fn legacy_storage(&self) -> Option<&crate::storage::LegacyMemoryStorage> {
+        self.backends.legacy_storage()
     }
 
     /// The commit hash the current index was built from, if available.
