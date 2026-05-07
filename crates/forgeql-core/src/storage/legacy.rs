@@ -12,6 +12,10 @@
 //! The implementation is intentionally a near-verbatim lift of the hot loops
 //! that previously lived in `exec_find.rs`. No algorithmic changes.
 
+mod helpers;
+mod prefilter;
+mod resolve;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -179,8 +183,8 @@ impl StorageEngine for LegacyMemoryStorage {
         }
 
         let (mut results, remaining) =
-            crate::engine::find_symbols_prefilter(index, clauses, root, &configs);
-        crate::engine::validate_order_by_field(&remaining, &results, &configs)?;
+            prefilter::find_symbols_prefilter(index, clauses, root, &configs);
+        prefilter::validate_order_by_field(&remaining, &results, &configs)?;
         crate::filter::apply_clauses(&mut results, &remaining);
         Ok(results)
     }
@@ -196,11 +200,7 @@ impl StorageEngine for LegacyMemoryStorage {
         let mut results: Vec<SymbolMatch> = sites
             .iter()
             .filter(|site| {
-                crate::engine::passes_glob_filter(
-                    index.strings.paths.get(site.path_id),
-                    clauses,
-                    root,
-                )
+                helpers::passes_glob_filter(index.strings.paths.get(site.path_id), clauses, root)
             })
             .map(|site| SymbolMatch {
                 name: name.to_string(),
@@ -222,7 +222,7 @@ impl StorageEngine for LegacyMemoryStorage {
             ..clauses.clone()
         };
 
-        crate::engine::validate_order_by_field(&remaining, &results, &configs)?;
+        prefilter::validate_order_by_field(&remaining, &results, &configs)?;
         crate::filter::apply_clauses(&mut results, &remaining);
         Ok(results)
     }
@@ -239,7 +239,7 @@ impl StorageEngine for LegacyMemoryStorage {
             .table
             .as_ref()
             .ok_or_else(|| anyhow!("session index not ready — retry USE"))?;
-        crate::engine::resolve_symbol(index, name, clauses, root)
+        resolve::resolve_symbol(index, name, clauses, root)
             .map(|row| Some(row_to_location(row, index)))
     }
 
@@ -253,7 +253,7 @@ impl StorageEngine for LegacyMemoryStorage {
             .table
             .as_ref()
             .ok_or_else(|| anyhow!("session index not ready — retry USE"))?;
-        crate::engine::resolve_type_symbol(index, name, clauses, root)
+        resolve::resolve_type_symbol(index, name, clauses, root)
             .map(|row| Some(row_to_location(row, index)))
     }
 
@@ -267,7 +267,7 @@ impl StorageEngine for LegacyMemoryStorage {
             .table
             .as_ref()
             .ok_or_else(|| anyhow!("session index not ready — retry USE"))?;
-        crate::engine::resolve_body_symbol(index, name, clauses, root)
+        resolve::resolve_body_symbol(index, name, clauses, root)
             .map(|row| Some(row_to_location(row, index)))
     }
 

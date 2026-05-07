@@ -9,11 +9,7 @@ use crate::ir::Clauses;
 
 /// Return `false` if `path` is excluded by the `IN` or `EXCLUDE` glob of
 /// `clauses`.
-pub(super) fn passes_glob_filter(
-    path: &Path,
-    clauses: &Clauses,
-    root: &Path,
-) -> bool {
+pub(super) fn passes_glob_filter(path: &Path, clauses: &Clauses, root: &Path) -> bool {
     if let Some(ref glob) = clauses.in_glob
         && !crate::ast::query::relative_glob_matches(path, glob, root)
     {

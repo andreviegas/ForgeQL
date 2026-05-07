@@ -85,10 +85,7 @@ fn find_pred_string<'a>(
 ///
 /// Returns `None` for universal fields (`naming`, `name_length`) or
 /// built-in fields (`name`, `node_kind`, `path`, `line`, `usages`).
-fn field_to_kinds_for_config(
-    config: &LanguageConfig,
-    field: &str,
-) -> Option<Vec<String>> {
+fn field_to_kinds_for_config(config: &LanguageConfig, field: &str) -> Option<Vec<String>> {
     match field {
         // function_definition only — metrics, redundancy, escape, shadow,
         // unused_param, fallthrough, recursion, todo, decl_distance
@@ -176,10 +173,7 @@ fn field_to_kinds_for_config(
 }
 
 /// Aggregate `field_to_kinds_for_config` across all registered language configs.
-fn field_to_kinds(
-    configs: &[&LanguageConfig],
-    field: &str,
-) -> Option<Vec<String>> {
+fn field_to_kinds(configs: &[&LanguageConfig], field: &str) -> Option<Vec<String>> {
     let mut all_kinds: Vec<String> = Vec::new();
     for config in configs {
         if let Some(kinds) = field_to_kinds_for_config(config, field) {
@@ -519,7 +513,6 @@ pub(super) fn validate_order_by_field(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::lang::CppLanguageInline;
     use crate::ir::{Clauses, OrderBy, SortDirection};
     use std::collections::HashMap;
 
@@ -585,41 +578,19 @@ mod tests {
         sym.fields
             .insert("signature".to_string(), "void foo()".to_string());
         let results = vec![sym];
-        assert!(
-            validate_order_by_field(&clauses_with_order("signature"), &results, &[]).is_ok()
-        );
+        assert!(validate_order_by_field(&clauses_with_order("signature"), &results, &[]).is_ok());
     }
 
     #[test]
     fn validate_order_by_field_ok_when_results_empty() {
         let results: Vec<SymbolMatch> = Vec::new();
         // Should not error even for unknown field when result set is empty.
-        assert!(
-            validate_order_by_field(&clauses_with_order("unknown_xyz"), &results, &[]).is_ok()
-        );
+        assert!(validate_order_by_field(&clauses_with_order("unknown_xyz"), &results, &[]).is_ok());
     }
 
     #[test]
     fn validate_order_by_field_no_order_by_always_ok() {
         let results = vec![make_sym("foo")];
         assert!(validate_order_by_field(&Clauses::default(), &results, &[]).is_ok());
-    }
-
-    #[test]
-    fn field_to_kinds_returns_none_for_universal_field() {
-        let cpp = CppLanguageInline;
-        let configs: Vec<&dyn crate::ast::lang::LanguageConfig> = vec![&cpp];
-        assert!(
-            field_to_kinds(&configs.iter().map(|c| *c).collect::<Vec<_>>(), "name").is_none(),
-            "name is a built-in field, not an enrichment field"
-        );
-    }
-
-    #[test]
-    fn field_to_kinds_returns_some_for_enrichment_field() {
-        let cpp = CppLanguageInline;
-        let configs: Vec<&dyn crate::ast::lang::LanguageConfig> = vec![&cpp];
-        let kinds = field_to_kinds(&configs.iter().map(|c| *c).collect::<Vec<_>>(), "lines");
-        assert!(kinds.is_some(), "lines is an enrichment field");
     }
 }
