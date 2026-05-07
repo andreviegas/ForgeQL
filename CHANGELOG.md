@@ -4,6 +4,31 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Phase 05.1: Move Legacy Resolvers Out of `engine.rs`
+
+### Changed
+
+- **Moved legacy backend internals from `engine.rs` into `storage/legacy/` submodules.**
+  - `storage/legacy/helpers.rs` — `passes_glob_filter` (glob path predicate utility).
+  - `storage/legacy/prefilter.rs` — `find_symbols_prefilter`, `validate_order_by_field`,
+    `field_to_kinds`, `field_to_kinds_for_config`, `infer_kinds_from_fields`,
+    `extract_anchored_literal`, `regex_trigram_literal`, `like_trigram_literal`, `find_pred_string`.
+  - `storage/legacy/resolve.rs` — `resolve_symbol`, `resolve_type_symbol`, `resolve_body_symbol`,
+    `split_qualified_name`.
+  - `storage/legacy.rs` now declares `mod helpers; mod prefilter; mod resolve;` and all
+    6 `crate::engine::*` call sites updated to `helpers::*` / `prefilter::*` / `resolve::*`.
+- **Cleaned up `engine.rs`**: removed ~576 lines of dead code (moved functions + their tests).
+  `engine.rs` now owns only `ForgeQLEngine`, session management, conversion helpers,
+  `detect_metric_hint`, `reject_text_filter`, and `extract_source_lines`.
+- **Validate-order-by tests** moved to `storage/legacy/prefilter.rs` test module.
+- Removed now-unused imports from `engine.rs`: `HashSet`, `SymbolTable`, `SymbolMatch`.
+
+### Gate verified
+
+- `engine.rs` contains zero functions with `&SymbolTable` parameter. ✓
+- `cargo test --workspace` green (17 + 12 + 21 unit tests, 10 parity tests, SMS 5 000-cmd regression). ✓
+- `cargo clippy --workspace -D warnings` clean. ✓
+
 ## [0.48.0] — 2026-05-06 — Phase 05: Workspace Overlay, Trigram Index, Background Warming
 
 ### Added
