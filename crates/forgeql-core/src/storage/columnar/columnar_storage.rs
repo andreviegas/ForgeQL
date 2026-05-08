@@ -284,6 +284,11 @@ impl ColumnarStorage {
         // acceptable for Phase 06a.
         let node_kind = seg.fql_kind_of(local_row).to_owned();
         let enrichment = seg.enrichment_for_row(local_row);
+        // Derive a blob SHA-1 hint from the segment's content_id.  Segments
+        // written by ShadowWriter use a 20-byte SHA-1 as their content ID;
+        // test helpers may use a shorter hash.  Cast only when the length is
+        // exactly 20 so callers receive `None` for non-SHA1 providers.
+        let blob_sha: Option<[u8; 20]> = seg.content_id[..].try_into().ok();
         SymbolLocation {
             path,
             byte_range: byte_start..byte_end,
@@ -293,6 +298,7 @@ impl ColumnarStorage {
             language_id: 0,
             node_kind,
             enrichment,
+            blob_sha,
         }
     }
 

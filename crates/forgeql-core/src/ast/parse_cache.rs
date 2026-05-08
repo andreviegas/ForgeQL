@@ -93,13 +93,55 @@ impl ParseCache {
         path: &Path,
         lang_registry: &LanguageRegistry,
     ) -> Result<Arc<CachedParse>> {
+        self.get_or_parse_with_hint(path, lang_registry, None)
+    }
+
+    /// Like [`get_or_parse`] but accepts a pre-computed SHA-1 hint.
+    ///
+    /// When `blob_sha` is `Some(sha)`:
+    /// - **Cache hit**: returns immediately — no file read, no SHA computation.
+    /// - **Cache miss**: reads the file and parses it, but uses `sha` directly
+    ///   as the cache key (skips `sha1_of_bytes`).
+    ///
+    /// When `blob_sha` is `None` the behaviour is identical to `get_or_parse`.
+    ///
+    /// # Errors
+    /// Returns `Err` if the file cannot be read, no language is registered
+    /// for the file extension, or tree-sitter fails to parse the content.
+    pub fn get_or_parse_with_hint(
+        &mut self,
+        path: &Path,
+        lang_registry: &LanguageRegistry,
+        blob_sha: Option<&[u8; 20]>,
+    ) -> Result<Arc<CachedParse>> {
+        if let Some(sha) = blob_sha {
+            // Fast path: hit check without touching disk.
+            if let Some(hit) = self.get(sha) {
+                return Ok(hit);
+            }
+            // Cache miss: read and parse, store under the provided key.
+            let bytes = crate::workspace::file_io::read_bytes(path)?;
+            return self.parse_and_insert(*sha, path, bytes, lang_registry);
+        }
+
+        // No hint: read the file and derive the key from its content.
         let bytes = crate::workspace::file_io::read_bytes(path)?;
         let hash = sha1_of_bytes(&bytes);
-
         if let Some(hit) = self.get(&hash) {
             return Ok(hit);
         }
+        self.parse_and_insert(hash, path, bytes, lang_registry)
+    }
 
+    /// Parse `bytes` with the language inferred from `path`, insert the result
+    /// under `hash`, and return it.
+    fn parse_and_insert(
+        &mut self,
+        hash: [u8; 20],
+        path: &Path,
+        bytes: Vec<u8>,
+        lang_registry: &LanguageRegistry,
+    ) -> Result<Arc<CachedParse>> {
         let lang = lang_registry
             .language_for_path(path)
             .ok_or_else(|| anyhow::anyhow!("no language registered for {}", path.display()))?;

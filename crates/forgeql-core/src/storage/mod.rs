@@ -80,6 +80,13 @@ pub struct SymbolLocation {
     /// Pre-resolved enrichment fields for this symbol.
     /// Populated by `row_to_location`; empty for non-legacy backends.
     pub enrichment: HashMap<String, String>,
+    /// Content SHA-1 of the source file at resolve time, when known.
+    ///
+    /// Populated by the columnar backend from `SegmentMeta::content_id`.
+    /// The legacy backend always leaves this as `None`.
+    /// When `Some`, `get_or_parse_for_show` can skip `read_bytes` on a cache
+    /// hit and skip `sha1_of_bytes` on a miss.
+    pub blob_sha: Option<[u8; 20]>,
 }
 
 // -----------------------------------------------------------------------
@@ -218,13 +225,6 @@ pub trait StorageEngine: Send + Sync {
     fn show_outline_for_file(&self, workspace: &Workspace, file: &str)
     -> Result<serde_json::Value>;
 }
-
-// -----------------------------------------------------------------------
-// Helper: IndexRow → SymbolLocation conversion
-// -----------------------------------------------------------------------
-
-/// Convert an `IndexRow` reference + its owning `SymbolTable` into a
-/// [`SymbolLocation`].  Used by legacy resolve methods.
 pub(crate) fn row_to_location(row: &IndexRow, table: &SymbolTable) -> SymbolLocation {
     SymbolLocation {
         path: table.path_of(row).to_path_buf(),
@@ -233,9 +233,9 @@ pub(crate) fn row_to_location(row: &IndexRow, table: &SymbolTable) -> SymbolLoca
         language_id: row.language_id,
         node_kind: table.node_kind_of(row).to_string(),
         enrichment: table.strings.resolve_fields(&row.fields),
+        blob_sha: None,
     }
 }
-
 // -----------------------------------------------------------------------
 // Phase 01 integration tests
 // -----------------------------------------------------------------------

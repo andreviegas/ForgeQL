@@ -71,7 +71,8 @@ impl ForgeQLEngine {
                 .resolve_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
-                    let cached = self.get_or_parse_for_show(session_id, &loc.path)?;
+                    let cached =
+                        self.get_or_parse_for_show(session_id, &loc.path, loc.blob_sha.as_ref())?;
                     show::show_signature(
                         &cached,
                         &loc.path,
@@ -92,7 +93,8 @@ impl ForgeQLEngine {
                 .resolve_type_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
-                    let cached = self.get_or_parse_for_show(session_id, &loc.path)?;
+                    let cached =
+                        self.get_or_parse_for_show(session_id, &loc.path, loc.blob_sha.as_ref())?;
                     show::show_members(&cached, &loc.path, &workspace, symbol, &self.lang_registry)
                 })
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
@@ -102,7 +104,8 @@ impl ForgeQLEngine {
                 .resolve_body_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
-                    let cached = self.get_or_parse_for_show(session_id, &loc.path)?;
+                    let cached =
+                        self.get_or_parse_for_show(session_id, &loc.path, loc.blob_sha.as_ref())?;
                     show::show_body(
                         &cached,
                         &loc.path,
@@ -121,7 +124,8 @@ impl ForgeQLEngine {
                 .resolve_body_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
-                    let cached = self.get_or_parse_for_show(session_id, &loc.path)?;
+                    let cached =
+                        self.get_or_parse_for_show(session_id, &loc.path, loc.blob_sha.as_ref())?;
                     show::show_callees(
                         &cached,
                         &loc.path,
@@ -288,10 +292,16 @@ impl ForgeQLEngine {
     ///
     /// Uses the session's `ParseCache` (capacity 32) when a session is active.
     /// Falls back to a one-shot parse when no session is available.
+    ///
+    /// `blob_sha` is the content SHA-1 known at resolve time (populated by
+    /// the columnar backend from `SegmentMeta::content_id`).  When `Some`:
+    /// - cache *hit* → returns immediately, no file read
+    /// - cache *miss* → reads file but skips `sha1_of_bytes`
     fn get_or_parse_for_show(
         &self,
         session_id: Option<&str>,
         path: &Path,
+        blob_sha: Option<&[u8; 20]>,
     ) -> Result<Arc<CachedParse>> {
         use crate::ast::parse_cache::ParseCache;
 
@@ -302,9 +312,9 @@ impl ForgeQLEngine {
                 .parse_cache
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            return guard.get_or_parse(path, &self.lang_registry);
+            return guard.get_or_parse_with_hint(path, &self.lang_registry, blob_sha);
         }
         // No active session — parse without cache.
-        ParseCache::with_capacity(1).get_or_parse(path, &self.lang_registry)
+        ParseCache::with_capacity(1).get_or_parse_with_hint(path, &self.lang_registry, blob_sha)
     }
 }
