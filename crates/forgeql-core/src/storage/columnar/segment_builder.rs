@@ -419,6 +419,8 @@ impl SegmentBuilder {
         // --- write FST + name postings ---
         write_name_fst(&tmp, &self.name_to_rows)?;
 
+        // --- write name prefix index (additive, optional) ---
+        write_name_prefix(&tmp, &self.name_to_rows)?;
         // --- write extra enrichment columns ---
         for (name, ids) in &extra_arrays {
             write_u32_col(&tmp, name, ids)?;
@@ -677,6 +679,87 @@ fn write_zone_maps(dir: &Path, core_cols: &[(&str, &[u32])]) -> Result<()> {
             .with_context(|| format!("writing zonemap_{col_name}.bin"))?;
     }
     Ok(())
+}
+
+/// Write `name_prefix.bin` — per-prefix Roaring bitmaps for fast 1-2 byte
+/// leading-prefix prefiltering of `WHERE name LIKE 'xy%'` queries.
+///
+/// For each distinct symbol name in `name_to_rows`:
+/// - Extract the UTF-8 bytes of the **lowercase** first character (1 or more
+///   bytes — up to 4 for non-ASCII).
+/// - If the name has ≥ 2 UTF-8 bytes: also extract the first 2 UTF-8 bytes
+///   of the lowercased name.
+/// - Accumulate a Roaring bitmap of local row IDs for each prefix key.
+///
+/// Wire format of `name_prefix.bin`:
+/// ```text
+/// [entry_count: u32 LE]
+/// ( [prefix_len: u8] [prefix_bytes: u8 × prefix_len]
+///   [bitmap_len: u32 LE] [bitmap_bytes: roaring] )*
+/// ```
+///
+/// Readers that don't find this file silently skip the optimisation.
+fn write_name_prefix(dir: &Path, name_to_rows: &BTreeMap<String, Vec<u32>>) -> Result<()> {
+    // Build prefix → bitmap map.
+    let mut prefix_map: HashMap<Vec<u8>, RoaringBitmap> = HashMap::new();
+
+    for (name, rows) in name_to_rows {
+        let lower = name.to_lowercase();
+        let lower_bytes = lower.as_bytes();
+        if lower_bytes.is_empty() {
+            continue;
+        }
+
+        // Determine UTF-8 char boundary for the first character.
+        let first_char_len = lower.chars().next().map_or(0, char::len_utf8);
+        let second_char_end = lower
+            .char_indices()
+            .nth(1)
+            .map_or(first_char_len, |(i, c)| i + c.len_utf8());
+
+        // 1-byte-unit prefix: first character's UTF-8 bytes.
+        if first_char_len > 0 {
+            let pfx1 = lower_bytes[..first_char_len].to_vec();
+            let bm = prefix_map.entry(pfx1).or_default();
+            for &row in rows {
+                let _ = bm.insert(row);
+            }
+        }
+
+        // 2-character prefix (only if the name has at least 2 characters).
+        if second_char_end > first_char_len {
+            let pfx2 = lower_bytes[..second_char_end].to_vec();
+            let bm = prefix_map.entry(pfx2).or_default();
+            for &row in rows {
+                let _ = bm.insert(row);
+            }
+        }
+    }
+
+    // Serialise.
+    let entry_count =
+        u32::try_from(prefix_map.len()).context("name_prefix entry count overflow")?;
+    let mut buf: Vec<u8> = Vec::new();
+    buf.extend_from_slice(&entry_count.to_le_bytes());
+
+    // Sort by prefix bytes for deterministic output.
+    let mut sorted: Vec<(&Vec<u8>, &RoaringBitmap)> = prefix_map.iter().collect();
+    sorted.sort_by_key(|(k, _)| *k);
+
+    for (prefix, bitmap) in sorted {
+        let prefix_len = u8::try_from(prefix.len()).context("prefix too long")?;
+        buf.push(prefix_len);
+        buf.extend_from_slice(prefix);
+        let mut bitmap_bytes: Vec<u8> = Vec::new();
+        bitmap
+            .serialize_into(&mut bitmap_bytes)
+            .context("serialising name_prefix bitmap")?;
+        let len = u32::try_from(bitmap_bytes.len()).context("bitmap too large")?;
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(&bitmap_bytes);
+    }
+
+    std::fs::write(dir.join("name_prefix.bin"), &buf).context("writing name_prefix.bin")
 }
 
 /// Write `name.fst` + `name_postings.bin`.

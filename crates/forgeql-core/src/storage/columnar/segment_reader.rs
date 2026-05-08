@@ -221,6 +221,14 @@ pub struct SegmentReader {
     /// when the column is empty.  Callers treat an absent entry as "no
     /// zone-map available → cannot prune".
     pub(crate) zone_maps: HashMap<String, (u32, u32)>,
+    /// Per-prefix Roaring bitmaps for fast name leading-prefix prefiltering.
+    ///
+    /// Loaded from `name_prefix.bin` written by the builder.  Keys are the
+    /// lowercase UTF-8 bytes of the first 1 or 2 characters of each name.
+    ///
+    /// Empty when the file is absent (old segment) — callers include all
+    /// rows of that segment in the candidate set rather than pruning.
+    pub(crate) name_prefix: HashMap<Vec<u8>, RoaringBitmap>,
     /// FST map: symbol name bytes → packed `(count | byte_offset << 32)`.
     pub(crate) name_fst: FstMap<Vec<u8>>,
     /// Flat `[u32 LE]` array of row IDs indexed by `name_fst`.
@@ -356,6 +364,9 @@ impl SegmentReader {
         let name_postings =
             mmap_file(&dir.join("name_postings.bin")).context("opening name_postings.bin")?;
 
+        // Name prefix index (optional — missing file = empty map).
+        let name_prefix = load_name_prefix(dir)?;
+
         Ok(Self {
             dir: dir.to_owned(),
             row_count,
@@ -373,6 +384,7 @@ impl SegmentReader {
             kind_postings,
             field_postings,
             zone_maps,
+            name_prefix,
             name_fst,
             name_postings,
         })
@@ -882,6 +894,72 @@ fn decode_name_postings(encoded: u64, name_postings: &[u8]) -> Vec<u32> {
     }
     #[allow(clippy::indexing_slicing)] // bounds checked above
     cast_slice::<u8, u32>(&name_postings[byte_offset..end]).to_vec()
+}
+
+/// Load the name prefix index from `name_prefix.bin` in `dir`.
+///
+/// Returns an empty map when the file is absent (old segment) — callers
+/// should treat a missing entry as "cannot prune, include all rows".
+///
+/// Wire format:
+/// ```text
+/// [entry_count: u32 LE]
+/// ( [prefix_len: u8] [prefix_bytes: u8 × prefix_len]
+///   [bitmap_len: u32 LE] [bitmap_bytes: roaring] )*
+/// ```
+fn load_name_prefix(dir: &Path) -> Result<HashMap<Vec<u8>, RoaringBitmap>> {
+    let path = dir.join("name_prefix.bin");
+    let data = match std::fs::read(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        Ok(d) => d,
+    };
+    if data.len() < 4 {
+        return Ok(HashMap::new());
+    }
+    #[allow(clippy::indexing_slicing)] // length checked above
+    let entry_count = u32::from_le_bytes(
+        data[..4]
+            .try_into()
+            .context("name_prefix entry_count bytes")?,
+    ) as usize;
+    let mut result: HashMap<Vec<u8>, RoaringBitmap> = HashMap::with_capacity(entry_count);
+    let mut pos = 4usize;
+
+    for entry in 0..entry_count {
+        ensure!(
+            pos < data.len(),
+            "name_prefix.bin truncated at entry {entry}"
+        );
+        #[allow(clippy::indexing_slicing)] // pos < data.len() by ensure!
+        let prefix_len = data[pos] as usize;
+        pos += 1;
+        ensure!(
+            pos + prefix_len + 4 <= data.len(),
+            "name_prefix.bin truncated at prefix bytes for entry {entry}"
+        );
+        #[allow(clippy::indexing_slicing)]
+        let prefix = data[pos..pos + prefix_len].to_vec();
+        pos += prefix_len;
+        #[allow(clippy::indexing_slicing)]
+        let bitmap_len = u32::from_le_bytes(
+            data[pos..pos + 4]
+                .try_into()
+                .context("name_prefix bitmap_len bytes")?,
+        ) as usize;
+        pos += 4;
+        ensure!(
+            pos + bitmap_len <= data.len(),
+            "name_prefix.bin bitmap truncated at entry {entry}"
+        );
+        #[allow(clippy::indexing_slicing)]
+        let bitmap = RoaringBitmap::deserialize_from(&data[pos..pos + bitmap_len])
+            .with_context(|| format!("deserialising name_prefix bitmap for entry {entry}"))?;
+        pos += bitmap_len;
+        let _ = result.insert(prefix, bitmap);
+    }
+
+    Ok(result)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

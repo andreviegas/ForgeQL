@@ -108,7 +108,13 @@ impl ColumnarStorage {
                     }
                 }
                 ("name", CompareOp::Like, PredicateValue::String(val)) => {
-                    self.trigram_prefilter_for_pattern(val)
+                    // For 1-2 char leading literals, use the per-segment name
+                    // prefix index (faster than trigrams for very short keys).
+                    // For 3+ char literals, fall through to the trigram index.
+                    pattern_as_prefix(val).map_or_else(
+                        || self.trigram_prefilter_for_pattern(val),
+                        |prefix| self.short_prefix_global_bitmap(&prefix),
+                    )
                 }
                 ("name", CompareOp::Matches, PredicateValue::String(val)) => {
                     self.trigram_prefilter_for_regex(val)
@@ -177,6 +183,43 @@ impl ColumnarStorage {
         acc
     }
 
+    /// Build a global candidate bitmap using per-segment name prefix indexes.
+    ///
+    /// For each segment:
+    /// - If the segment has a `name_prefix` index, look up `prefix` in it
+    ///   and map the resulting local row IDs to global row IDs.
+    /// - If the segment has no prefix index (old format), include ALL its
+    ///   rows as candidates (cannot prune).
+    ///
+    /// Returns `None` when NO segment has a prefix index (caller should
+    /// fall through to a different prefilter or full scan).
+    fn short_prefix_global_bitmap(&self, prefix: &[u8]) -> Option<RoaringBitmap> {
+        let mut result = RoaringBitmap::new();
+        let mut any_had_index = false;
+        let mut seg_base: u32 = 0;
+        for (seg_idx, seg) in self.segments.iter().enumerate() {
+            let row_count = self
+                .overlay
+                .segments()
+                .get(seg_idx)
+                .map_or(seg.row_count, |m| m.row_count);
+            if seg.name_prefix.is_empty() {
+                // No prefix index — include all rows from this segment.
+                for local_row in 0..row_count {
+                    let _ = result.insert(seg_base + local_row);
+                }
+            } else {
+                any_had_index = true;
+                if let Some(local_bm) = seg.name_prefix.get(prefix) {
+                    for local_row in local_bm {
+                        let _ = result.insert(seg_base + local_row);
+                    }
+                }
+            }
+            seg_base = seg_base.saturating_add(row_count);
+        }
+        if any_had_index { Some(result) } else { None }
+    }
     /// Return the set of segment indices whose `source_path` passes
     /// `clauses.in_glob` AND `clauses.exclude_glob`.
     ///
@@ -311,9 +354,47 @@ impl ColumnarStorage {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Resolve helpers — shared by the three StorageEngine::resolve_* methods
+// Module-level helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Extract a leading-literal prefix from a SQL `LIKE` pattern.
+///
+/// Returns `Some(prefix_bytes)` only when the pattern starts with exactly
+/// 1 or 2 literal UTF-8 characters before the first `%` or `_` wildcard.
+/// Longer literals are handled by the trigram index.  Zero-length prefixes
+/// (pattern starts with `%`) return `None` — nothing to prune.
+///
+/// The returned bytes are the lowercase UTF-8 encoding of the prefix
+/// characters, matching the encoding used by the builder.
+fn pattern_as_prefix(pattern: &str) -> Option<Vec<u8>> {
+    let mut prefix_bytes: Vec<u8> = Vec::new();
+    let mut char_count = 0usize;
+    for ch in pattern.chars() {
+        if ch == '%' || ch == '_' {
+            break;
+        }
+        let lower_ch = ch.to_lowercase();
+        for lc in lower_ch {
+            let mut buf = [0u8; 4];
+            let s = lc.encode_utf8(&mut buf);
+            prefix_bytes.extend_from_slice(s.as_bytes());
+        }
+        char_count += 1;
+        if char_count == 2 {
+            // Only index 1-2 char prefixes; stop accumulating.
+            break;
+        }
+    }
+    if char_count == 1 || char_count == 2 {
+        Some(prefix_bytes)
+    } else {
+        None
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resolve helpers — shared by the three StorageEngine::resolve_* methods
+// ─────────────────────────────────────────────────────────────────────────────
 /// Split a qualified name (`Owner::member` or `Owner.member`) into
 /// `(lookup_name, Some(owner))`.  Returns `(name, None)` for bare names.
 ///
