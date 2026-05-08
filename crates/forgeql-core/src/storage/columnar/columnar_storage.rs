@@ -16,13 +16,13 @@
 //!
 //! `SHOW` commands (`resolve_symbol`, etc.) are out of scope for Phase 05 and
 //! return a "Phase 06" error so callers can fall back to the legacy backend.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use roaring::RoaringBitmap;
+use tracing::debug;
 
 use crate::ast::index::IndexStats;
 use crate::filter::apply_clauses;
@@ -31,8 +31,9 @@ use crate::result::SymbolMatch;
 use crate::workspace::Workspace;
 
 use super::overlay::{Overlay, RowPtr};
+use super::overlay_lock::OverlayLock;
 use super::segment_reader::SegmentReader;
-use crate::storage::{StorageEngine, SymbolLocation};
+use crate::storage::{LegacyMemoryStorage, StorageEngine, SymbolLocation};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ColumnarStorage
@@ -365,5 +366,154 @@ impl StorageEngine for ColumnarStorage {
             "results": [],
             "note": "columnar SHOW requires Phase 06"
         }))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// High-level overlay orchestration
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl ColumnarStorage {
+    /// Open the overlay for `commit_sha`, building it via shadow-write if absent.
+    ///
+    /// # Steps
+    /// 1. Compute overlay path from `ctx`.
+    /// 2. If the overlay opens cleanly → fast path: return immediately.
+    /// 3. Otherwise acquire [`OverlayLock`], re-check inside the lock, and
+    ///    build via [`ShadowWriter`] + [`OverlayBuilder`].
+    /// 4. Construct and return a ready-to-query `ColumnarStorage`.
+    ///
+    /// `legacy` is read-only; only its [`SymbolTable`] is passed to
+    /// `ShadowWriter`. Both this method and the caller accept `None` for
+    /// `legacy` — if `None` the slow-path build is skipped (non-fatal).
+    ///
+    /// # Errors
+    /// Returns `Err` only for hard failures (lock file I/O, final
+    /// `Overlay::open` after a successful build). Shadow-write failures
+    /// are treated as non-fatal and logged.
+    pub fn warm_or_open(
+        ctx: &crate::storage::ColumnarBuildContext,
+        legacy: Option<&LegacyMemoryStorage>,
+        worktree_path: PathBuf,
+        commit_sha: &str,
+    ) -> Result<Self> {
+        let overlay_path = ctx.overlay_path_for(commit_sha);
+
+        // Fast path: overlay already on disk and readable.
+        if overlay_path.exists() {
+            if let Ok(overlay) = Overlay::open(&overlay_path) {
+                debug!(%commit_sha, "columnar warm_or_open: overlay found, fast-path load");
+                let segments = Self::open_segments_from_overlay(ctx, &overlay);
+                return Ok(Self::new(worktree_path, segments, overlay));
+            }
+            // Corrupt / schema mismatch — remove and rebuild below.
+            debug!(%commit_sha, "columnar warm_or_open: overlay unreadable, will rebuild");
+            let _ = std::fs::remove_file(&overlay_path);
+        }
+
+        // Slow path: build under lock.
+        match OverlayLock::acquire(&overlay_path) {
+            Err(e) => {
+                return Err(anyhow!("overlay lock acquire failed for {commit_sha}: {e}"));
+            }
+            Ok(_lock) => {
+                // Re-check: a peer may have built the overlay while we waited.
+                if overlay_path.exists() {
+                    if let Ok(overlay) = Overlay::open(&overlay_path) {
+                        debug!(%commit_sha, "columnar warm_or_open: peer built overlay under lock");
+                        let segments = Self::open_segments_from_overlay(ctx, &overlay);
+                        return Ok(Self::new(worktree_path, segments, overlay));
+                    }
+                    let _ = std::fs::remove_file(&overlay_path);
+                }
+
+                // Build segments via shadow-write then persist the overlay.
+                if let Some(legacy) = legacy
+                    && let Some(table) = legacy.table()
+                {
+                    let writer = super::shadow_writer::ShadowWriter::new(
+                        table,
+                        &ctx.segments_dir,
+                        &ctx.provider_id,
+                        ctx.hash_fn.as_ref(),
+                        HashMap::new(),
+                    );
+                    match writer.run() {
+                        Ok(result) => {
+                            debug!(
+                                %commit_sha,
+                                segments = result.count,
+                                "columnar warm_or_open: shadow-write complete"
+                            );
+                            let builder = super::overlay_builder::OverlayBuilder::new(
+                                &ctx.provider_id,
+                                ctx.segments_dir.clone(),
+                                worktree_path.clone(),
+                                result.segment_map,
+                            );
+                            if let Err(e) = builder.build_and_persist(&overlay_path) {
+                                tracing::warn!(
+                                    %commit_sha,
+                                    "columnar warm_or_open: overlay build failed: {e}"
+                                );
+                            } else {
+                                debug!(%commit_sha, "columnar warm_or_open: overlay built");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                %commit_sha,
+                                "columnar warm_or_open: shadow-write failed: {e}"
+                            );
+                        }
+                    }
+                }
+                // _lock dropped here — releases OS lock.
+            }
+        }
+
+        // Open whatever we built (or what was there before — best-effort).
+        let overlay = Overlay::open(&overlay_path)
+            .map_err(|e| anyhow!("overlay open failed for {commit_sha}: {e}"))?;
+        let segments = Self::open_segments_from_overlay(ctx, &overlay);
+        Ok(Self::new(worktree_path, segments, overlay))
+    }
+
+    /// Build segments + overlay for `commit_sha` without returning a
+    /// `ColumnarStorage`.
+    ///
+    /// Convenience wrapper around [`warm_or_open`] used by background
+    /// warming where the result is discarded immediately.
+    ///
+    /// [`warm_or_open`]: Self::warm_or_open
+    ///
+    /// # Errors
+    /// Propagates errors from `warm_or_open`.
+    pub fn warm(
+        ctx: &crate::storage::ColumnarBuildContext,
+        legacy: Option<&LegacyMemoryStorage>,
+        worktree_path: PathBuf,
+        commit_sha: &str,
+    ) -> Result<()> {
+        let _ = Self::warm_or_open(ctx, legacy, worktree_path, commit_sha)?;
+        Ok(())
+    }
+
+    /// Open all segment readers referenced by `overlay`.
+    ///
+    /// Segments that cannot be opened are silently skipped — the overlay
+    /// is still usable for queries that target other segments.
+    fn open_segments_from_overlay(
+        ctx: &crate::storage::ColumnarBuildContext,
+        overlay: &Arc<Overlay>,
+    ) -> Vec<Arc<SegmentReader>> {
+        overlay
+            .segments()
+            .iter()
+            .filter_map(|meta| {
+                let dir = ctx.segment_dir_for(&meta.hex_content_id);
+                SegmentReader::open(&dir).ok().map(Arc::new)
+            })
+            .collect()
     }
 }
