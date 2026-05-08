@@ -4,6 +4,35 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.5] — 2026-05-08 — Phase 05.5: Lift inline overlay-build into `ColumnarStorage`
+
+### Changed
+
+- **`ColumnarStorage`** — new inherent methods centralise all overlay
+  orchestration that was previously scattered across callers:
+  - `warm_or_open(ctx, legacy, worktree_path, commit_sha)` — opens an
+    existing overlay (fast path) or builds one via `ShadowWriter` +
+    `OverlayBuilder` under `OverlayLock` (slow path), then constructs and
+    returns a ready-to-query `ColumnarStorage`.
+  - `warm(ctx, legacy, worktree_path, commit_sha)` — thin wrapper around
+    `warm_or_open` for background warming where the result is discarded.
+  - `open_segments_from_overlay` (private) — opens `SegmentReader`s for
+    every segment listed in an `Overlay`; silently skips unreadable ones.
+
+- **`exec_source.rs`** — the 120-line inline overlay-build block replaced
+  by a single `ColumnarStorage::warm_or_open` call.  Zero references to
+  `ShadowWriter`, `OverlayBuilder`, `OverlayLock`, or `Overlay::open`.
+
+- **`session/mod.rs` (`build_index`)** — `SegmentBuildCtx` wiring,
+  inline content-ID cache (`Arc<Mutex<HashMap>>`), `ShadowWriter` run,
+  and `OverlayBuilder` call removed.  `build_index` is now legacy-only.
+  Zero references to `ShadowWriter`, `OverlayBuilder`, or `OverlayLock`.
+
+- **`warm.rs` (`warm_snapshot`)** — `OverlayLock` acquire + re-check
+  block removed (now inside `warm_or_open`).  After `build_index`, calls
+  `ColumnarStorage::warm` to delegate segment + overlay construction.
+  Zero references to `ShadowWriter`, `OverlayBuilder`, or `OverlayLock`.
+
 ## [0.48.4] — 2026-05-07 — Phase 05.4: Remove escape hatches from `StorageEngine` trait
 
 ### Changed
