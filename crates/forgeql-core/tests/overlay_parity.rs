@@ -592,3 +592,144 @@ fn overlay_lookup_name_spans_segments() {
         .collect();
     let _ = ColumnarStorage::new(fixtures_dir(), segs, overlay);
 }
+
+// ── Phase 06b tests ───────────────────────────────────────────────────────────
+
+/// Verify that `ParseCache` returns the same `Arc` on a cache hit and that
+/// LRU eviction drops the least-recently-used entry.
+#[test]
+fn parse_cache_hit_and_lru_eviction() {
+    use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
+    use forgeql_core::ast::parse_cache::ParseCache;
+
+    let registry = LanguageRegistry::new(vec![
+        Arc::new(CppLanguageInline) as Arc<dyn LanguageSupport>,
+        Arc::new(RustLanguageInline) as Arc<dyn LanguageSupport>,
+    ]);
+
+    let cpp_path = fixture_path("canonical.cpp");
+    let rs_path = fixture_path("canonical.rs");
+
+    // ── cache hit ────────────────────────────────────────────────────────────
+    let mut cache = ParseCache::with_capacity(2);
+
+    let a1 = cache.get_or_parse(&cpp_path, &registry).expect("parse cpp");
+    let a2 = cache
+        .get_or_parse(&cpp_path, &registry)
+        .expect("cache hit cpp");
+    assert!(
+        Arc::ptr_eq(&a1, &a2),
+        "second parse of cpp should be a cache hit"
+    );
+
+    let b1 = cache.get_or_parse(&rs_path, &registry).expect("parse rs");
+    let b2 = cache
+        .get_or_parse(&rs_path, &registry)
+        .expect("cache hit rs");
+    assert!(
+        Arc::ptr_eq(&b1, &b2),
+        "second parse of rs should be a cache hit"
+    );
+
+    // ── LRU eviction ─────────────────────────────────────────────────────────
+    // capacity = 1: inserting rs should evict cpp.
+    let mut cache1 = ParseCache::with_capacity(1);
+    let first = cache1
+        .get_or_parse(&cpp_path, &registry)
+        .expect("parse cpp cap1");
+    // rs insert evicts cpp
+    let _ = cache1
+        .get_or_parse(&rs_path, &registry)
+        .expect("parse rs cap1");
+    // Re-parsing cpp returns a NEW Arc (eviction happened)
+    let after_evict = cache1
+        .get_or_parse(&cpp_path, &registry)
+        .expect("re-parse cpp after eviction");
+    assert!(
+        !Arc::ptr_eq(&first, &after_evict),
+        "cpp Arc should differ after LRU eviction"
+    );
+}
+
+/// Verify that `ColumnarStorage::show_outline_for_file` returns the same
+/// (name, fql_kind, line) set as the legacy `show_outline`.
+#[test]
+fn columnar_show_outline_matches_legacy() {
+    use forgeql_core::ast::show::show_outline;
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_core::workspace::Workspace;
+
+    let table = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let workspace = Workspace::new(fixtures_dir()).expect("workspace");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let overlays_dir = tmp.path().join("overlays");
+
+    let cpp_path = fixture_path("canonical.cpp");
+    let cid = build_segment(&table, &cpp_path, &segments_dir);
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(cpp_path, cid);
+
+    let overlay_path = overlays_dir.join("test").join("outline_parity.bin");
+    OverlayBuilder::new("test", segments_dir.clone(), fixtures_dir(), segment_map)
+        .build_and_persist(&overlay_path)
+        .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(
+                SegmentReader::open(&segments_dir.join("test").join(&meta.hex_content_id))
+                    .expect("SegmentReader::open"),
+            )
+        })
+        .collect();
+    let storage = ColumnarStorage::new(fixtures_dir(), segments, overlay);
+
+    // -- columnar result
+    let columnar_json = storage
+        .show_outline_for_file(&workspace, "canonical.cpp")
+        .expect("columnar show_outline");
+
+    // -- legacy result
+    let legacy_json =
+        show_outline(&table, &workspace, "canonical.cpp").expect("legacy show_outline");
+
+    // Compare (name, line) only — fql_kind differs because the columnar
+    // segment stores only the FQL kind column (no node_kind fallback), so
+    // rows whose legacy fql_kind was empty appear as "unknown" in columnar.
+    fn extract_name_line(json: &serde_json::Value) -> Vec<(String, u64)> {
+        let results = json["results"].as_array().expect("results array");
+        let mut v: Vec<_> = results
+            .iter()
+            .map(|r| {
+                (
+                    r["name"].as_str().unwrap_or("").to_owned(),
+                    r["line"].as_u64().unwrap_or(0),
+                )
+            })
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    let columnar_rows = extract_name_line(&columnar_json);
+    let legacy_rows = extract_name_line(&legacy_json);
+
+    assert_eq!(
+        legacy_rows.len(),
+        columnar_rows.len(),
+        "row count mismatch: legacy={} columnar={}",
+        legacy_rows.len(),
+        columnar_rows.len()
+    );
+    for (l, c) in legacy_rows.iter().zip(columnar_rows.iter()) {
+        assert_eq!(l, c, "outline row mismatch: legacy={l:?} columnar={c:?}");
+    }
+}

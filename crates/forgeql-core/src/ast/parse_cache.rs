@@ -34,7 +34,7 @@ pub struct CachedParse {
 ///
 /// Stale-safety: when a file is changed its SHA-1 hash changes, so the old
 /// entry is bypassed on the next lookup without explicit invalidation.
-pub(crate) struct ParseCache {
+pub struct ParseCache {
     capacity: usize,
     /// LRU order: front = least-recently-used, back = most-recently-used.
     order: VecDeque<[u8; 20]>,
@@ -44,7 +44,7 @@ pub(crate) struct ParseCache {
 impl ParseCache {
     /// Create a new `ParseCache` with the given entry capacity (minimum 1).
     #[must_use]
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             capacity: capacity.max(1),
             order: VecDeque::new(),
@@ -55,7 +55,7 @@ impl ParseCache {
     /// Look up a cached parse by SHA-1 hash.
     ///
     /// Moves the entry to the MRU position on hit.
-    pub(crate) fn get(&mut self, hash: &[u8; 20]) -> Option<Arc<CachedParse>> {
+    pub fn get(&mut self, hash: &[u8; 20]) -> Option<Arc<CachedParse>> {
         let parse = self.map.get(hash).cloned()?;
         if let Some(pos) = self.order.iter().position(|h| h == hash) {
             let _ = self.order.remove(pos);
@@ -67,7 +67,7 @@ impl ParseCache {
     /// Insert a new cache entry, evicting the LRU entry when at capacity.
     ///
     /// No-op if the hash is already present.
-    pub(crate) fn insert(&mut self, hash: [u8; 20], parse: Arc<CachedParse>) {
+    pub fn insert(&mut self, hash: [u8; 20], parse: Arc<CachedParse>) {
         if self.map.contains_key(&hash) {
             return;
         }
@@ -88,7 +88,7 @@ impl ParseCache {
     /// # Errors
     /// Returns `Err` if the file cannot be read, no language is registered
     /// for the file extension, or tree-sitter fails to parse the content.
-    pub(crate) fn get_or_parse(
+    pub fn get_or_parse(
         &mut self,
         path: &Path,
         lang_registry: &LanguageRegistry,
@@ -120,21 +120,20 @@ impl ParseCache {
 
     /// Number of entries currently in the cache.
     #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.map.len()
     }
 
     /// Returns `true` if the cache holds no entries.
     #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 }
 
 /// Compute SHA-1 of the given byte slice.
-pub(crate) fn sha1_of_bytes(bytes: &[u8]) -> [u8; 20] {
+#[must_use]
+pub fn sha1_of_bytes(bytes: &[u8]) -> [u8; 20] {
     let mut h = Sha1::new();
     h.update(bytes);
     h.finalize().into()
