@@ -4,6 +4,37 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.6] — 2026-05-08 — Phase 05.6: Engine submodule split + Phase 06 prerequisites
+
+### Changed
+
+- **`crates/forgeql-core/src/engine/`** — `engine.rs` free functions, JSON
+  converters, and unit tests extracted into dedicated submodules (Task 1):
+  - `engine/helpers.rs` — `load_verify_config`, `generate_session_id` (cfg),
+    `require_session_id`, `mutation_op_name`, `detect_metric_hint`,
+    `reject_text_filter`
+  - `engine/convert.rs` — `convert_suggestions`, `convert_show_json` (+ private
+    `convert_show_content`, `extract_source_lines`)
+  - `engine/tests.rs` — all `#[cfg(test)]` functions
+  - `engine.rs` retains: constants, `ForgeQLEngine` struct + impl, module
+    declarations, and `pub(crate) use` re-exports so `exec_*.rs` imports are
+    unchanged.
+- **Visibility pattern** — `pub mod helpers/convert` (publicly routable module) +
+  `pub(crate) fn` items inside — the only combination satisfying both
+  `unreachable_pub` (`workspace.lints.rust`) and `redundant_pub_crate`
+  (clippy `pedantic`) simultaneously.
+
+### Verified (no-op tasks)
+
+- **Task 2** — Zero deprecated engine shims found; nothing to remove.
+- **Task 3** — Columnar code audit clean: no bare `.unwrap()` in production
+  paths; `.expect()` confined to test helpers only.
+- **Task 5** — Phase 06 gate checks all pass:
+  - `ShadowWriter` / `OverlayBuilder` absent from `engine/**` and `session/**`
+  - `warm_or_open` confirmed at `columnar_storage.rs:394` (usages=3)
+- **Task 4** — Phase 06 enrichment requirements documented in
+  `ForgeQL-StorageEngine-Plan/phases/Phase06.md`.
+
 ## [0.48.5] — 2026-05-08 — Phase 05.5: Lift inline overlay-build into `ColumnarStorage`
 
 ### Changed
