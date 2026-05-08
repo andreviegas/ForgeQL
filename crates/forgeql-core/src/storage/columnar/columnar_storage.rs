@@ -624,6 +624,21 @@ impl StorageEngine for ColumnarStorage {
     }
 
     fn find_symbols(&self, clauses: &Clauses, _root: &Path) -> Result<Vec<SymbolMatch>> {
+        // ── Query plan (Phase 06d) ────────────────────────────────────────────
+        // Stage 1  — prefilter_global: intersect indexed predicates
+        //             (fql_kind bitmap, exact name FST, trigram index for 3+
+        //             char LIKE patterns, short-prefix index for 1-2 char LIKE)
+        //             → candidate global row-ID bitmap.
+        // Stage 2a — group_by_segment: partition global IDs by segment index.
+        // Stage 2b — path prefilter: drop segments whose source_path doesn't
+        //             match IN / EXCLUDE globs.
+        // Stage 2c — zone-map prune: drop segments whose numeric column range
+        //             cannot satisfy a WHERE col OP val predicate.
+        // Stage 3  — materialize_all: for each surviving segment, narrow local
+        //             rows via enrichment-posting prefilter, then materialise.
+        // Stage 4  — deduplicate on (name, fql_kind, path, line).
+        // Stage 5  — apply_clauses: residual WHERE, ORDER BY, LIMIT, OFFSET.
+        // ─────────────────────────────────────────────────────────────────────
         let candidates = self.prefilter_global(clauses);
         let mut by_segment = self.group_by_segment(&candidates);
 

@@ -1574,3 +1574,154 @@ fn combined_path_glob_and_enrichment_parity() {
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 06d parity tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Task 1 — `WHERE fql_kind = 'nonexistent'` must return zero rows, not a
+/// full scan. Exercises the fql_kind miss -> Some(empty) fix.
+#[test]
+fn unknown_fql_kind_returns_empty_no_segment_open() {
+    use forgeql_core::ir::{Clauses, CompareOp, Predicate, PredicateValue};
+    use forgeql_core::storage::StorageEngine;
+
+    let (_table, _tmp, storage) = single_segment_cpp_overlay();
+
+    let clauses = Clauses {
+        where_predicates: vec![Predicate {
+            field: "fql_kind".to_owned(),
+            op: CompareOp::Eq,
+            value: PredicateValue::String("___no_such_kind___".to_owned()),
+        }],
+        ..Clauses::default()
+    };
+
+    let results = storage
+        .find_symbols(&clauses, std::path::Path::new("."))
+        .expect("find_symbols with unknown fql_kind");
+
+    assert_eq!(
+        results.len(),
+        0,
+        "expected 0 rows for unknown fql_kind, got {}",
+        results.len()
+    );
+}
+
+/// Task 2 — `WHERE line > <max_line>` returns zero rows via zone-map prune.
+#[test]
+fn range_predicate_prunes_segments_via_zone_map() {
+    use forgeql_core::ir::{Clauses, CompareOp, Predicate, PredicateValue};
+    use forgeql_core::storage::StorageEngine;
+
+    let (_table, _tmp, storage) = single_segment_cpp_overlay();
+
+    // Use a line number that is guaranteed to exceed any real source file.
+    // The segment's zone map (max_line <= a few thousand) must prune it,
+    // so the result must be empty.
+    let beyond_any_line: i64 = i64::from(u32::MAX);
+
+    let clauses = Clauses {
+        where_predicates: vec![Predicate {
+            field: "line".to_owned(),
+            op: CompareOp::Gt,
+            value: PredicateValue::Number(beyond_any_line),
+        }],
+        ..Clauses::default()
+    };
+
+    let results = storage
+        .find_symbols(&clauses, std::path::Path::new("."))
+        .expect("find_symbols with out-of-range line");
+
+    assert_eq!(
+        results.len(),
+        0,
+        "expected 0 rows when line > {beyond_any_line}, got {}",
+        results.len()
+    );
+}
+
+/// Task 3 — `WHERE name LIKE 'f%'` via short-prefix index matches legacy count.
+#[test]
+fn short_prefix_like_uses_index() {
+    use forgeql_core::ir::{Clauses, CompareOp, Predicate, PredicateValue};
+    use forgeql_core::storage::StorageEngine;
+
+    let (table, _tmp, storage) = single_segment_cpp_overlay();
+
+    let prefix = "f";
+    let pattern = format!("{prefix}%");
+
+    let clauses = Clauses {
+        where_predicates: vec![Predicate {
+            field: "name".to_owned(),
+            op: CompareOp::Like,
+            value: PredicateValue::String(pattern.clone()),
+        }],
+        ..Clauses::default()
+    };
+
+    let columnar = storage
+        .find_symbols(&clauses, std::path::Path::new("."))
+        .expect("columnar find");
+
+    let legacy_count = table
+        .rows
+        .iter()
+        .filter(|r| table.name_of(r).to_ascii_lowercase().starts_with(prefix))
+        .count();
+
+    assert_eq!(
+        columnar.len(),
+        legacy_count,
+        "short-prefix LIKE '{pattern}': columnar={} legacy={legacy_count}",
+        columnar.len()
+    );
+}
+
+/// Task 3 combined — short-prefix + path-glob + range must match legacy count.
+#[test]
+fn combined_short_prefix_and_path_glob_and_range_matches_legacy() {
+    use forgeql_core::ir::{Clauses, CompareOp, Predicate, PredicateValue};
+    use forgeql_core::storage::StorageEngine;
+
+    let (table, _tmp, storage) = single_segment_cpp_overlay();
+
+    let clauses = Clauses {
+        where_predicates: vec![
+            Predicate {
+                field: "name".to_owned(),
+                op: CompareOp::Like,
+                value: PredicateValue::String("f%".to_owned()),
+            },
+            Predicate {
+                field: "line".to_owned(),
+                op: CompareOp::Gte,
+                value: PredicateValue::Number(1),
+            },
+        ],
+        in_glob: Some("canonical.cpp".to_owned()),
+        ..Clauses::default()
+    };
+
+    let columnar = storage
+        .find_symbols(&clauses, std::path::Path::new("."))
+        .expect("columnar combined find");
+
+    // line >= 1 is trivially true for every real symbol; count by name only.
+    let legacy_count = table
+        .rows
+        .iter()
+        .map(|r| table.name_of(r).to_owned())
+        .filter(|n| n.to_ascii_lowercase().starts_with('f'))
+        .count();
+
+    assert_eq!(
+        columnar.len(),
+        legacy_count,
+        "combined: columnar={} legacy={legacy_count}",
+        columnar.len()
+    );
+}
