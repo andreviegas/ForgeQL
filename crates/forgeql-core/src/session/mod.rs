@@ -11,13 +11,14 @@
 ///      otherwise fall back to a full rebuild.
 ///      (True incremental re-index is deferred to Phase D.)
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use tracing::{debug, info};
 
 use crate::ast::index::SymbolTable;
 use crate::ast::lang::LanguageRegistry;
+use crate::ast::parse_cache::ParseCache;
 use crate::budget::{BudgetSnapshot, BudgetState};
 use crate::config::{LineBudgetConfig, VerifyStep};
 use crate::storage::{BackendSet, LegacyMemoryStorage, StorageEngine};
@@ -148,6 +149,12 @@ pub struct Session {
     /// Replaces the four flat `columnar_segments_dir`, `columnar_provider_id`,
     /// `columnar_hash_fn`, and `columnar_overlays_dir` fields.
     pub(crate) columnar_build: Option<crate::storage::ColumnarBuildContext>,
+    /// Per-session LRU parse cache for `SHOW` operations.
+    ///
+    /// Amortises repeated tree-sitter parses of the same source file within
+    /// a session. Keyed by SHA-1 content hash so stale entries are bypassed
+    /// automatically after `CHANGE FILE` commands. Capacity: 32 entries.
+    pub(crate) parse_cache: Mutex<ParseCache>,
 }
 
 impl Session {
@@ -187,6 +194,7 @@ impl Session {
             budget_branch: None,
             recent_show_lines: Vec::new(),
             columnar_build: None,
+            parse_cache: Mutex::new(ParseCache::with_capacity(32)),
         }
     }
 

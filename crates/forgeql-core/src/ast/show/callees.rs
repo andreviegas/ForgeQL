@@ -4,12 +4,11 @@ use std::collections::HashMap;
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
-use super::{byte_to_line, collect_callees_walk, find_function_node_for_symbol, parse_file};
+use super::{byte_to_line, collect_callees_walk, find_function_node_for_symbol};
 use crate::{
     ast::{index::SymbolTable, lang::LanguageRegistry},
     workspace::Workspace,
 };
-
 /// `SHOW callers OF 'func'`
 ///
 /// Returns all reference sites for `symbol` from the usage index, with their
@@ -59,6 +58,7 @@ pub fn show_callers(index: &SymbolTable, workspace: &Workspace, symbol: &str) ->
 /// # Errors
 /// Returns an error if the file cannot be parsed or the AST node for the
 pub fn show_callees(
+    cached: &crate::ast::parse_cache::CachedParse,
     path: &std::path::Path,
     byte_range_start: usize,
     workspace: &Workspace,
@@ -70,17 +70,12 @@ pub fn show_callees(
         .language_for_path(path)
         .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(path, lang_registry)?;
-    let fn_node = find_function_node_for_symbol(tree.root_node(), byte_range_start, config)
+    let source = &*cached.source;
+    let fn_node = find_function_node_for_symbol(cached.tree.root_node(), byte_range_start, config)
         .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 
     let mut callees: Vec<String> = Vec::new();
-    collect_callees_walk(
-        &source,
-        fn_node,
-        &mut callees,
-        config.call_expression_kind(),
-    );
+    collect_callees_walk(source, fn_node, &mut callees, config.call_expression_kind());
     callees.sort();
     callees.dedup();
 

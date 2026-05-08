@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
-use super::{byte_to_line, emit_body_lines, find_function_node_for_symbol, parse_file};
+use super::{byte_to_line, emit_body_lines, find_function_node_for_symbol};
 use crate::{ast::lang::LanguageRegistry, workspace::Workspace};
 
 /// `SHOW body OF 'func' [DEPTH n]`
@@ -17,7 +17,9 @@ use crate::{ast::lang::LanguageRegistry, workspace::Workspace};
 /// # Errors
 /// Returns an error if the symbol is not indexed, the file cannot be parsed,
 /// or the AST node for the function is not found.
+#[allow(clippy::too_many_arguments)]
 pub fn show_body<S: ::std::hash::BuildHasher>(
+    cached: &crate::ast::parse_cache::CachedParse,
     path: &Path,
     byte_range_start: usize,
     enrichment: &HashMap<String, String, S>,
@@ -30,12 +32,12 @@ pub fn show_body<S: ::std::hash::BuildHasher>(
         .language_for_path(path)
         .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(path, lang_registry)?;
-    let fn_node = find_function_node_for_symbol(tree.root_node(), byte_range_start, config)
+    let source = &*cached.source;
+    let fn_node = find_function_node_for_symbol(cached.tree.root_node(), byte_range_start, config)
         .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 
     let fn_start = fn_node.start_byte();
-    let fn_start_line = byte_to_line(&source, fn_start); // 0-based
+    let fn_start_line = byte_to_line(source, fn_start); // 0-based
 
     let lines: Vec<Value> = match depth {
         None => {
@@ -69,7 +71,7 @@ pub fn show_body<S: ::std::hash::BuildHasher>(
                 })
                 .collect()
         }
-        Some(n) => emit_body_lines(&source, fn_node, n, config)
+        Some(n) => emit_body_lines(source, fn_node, n, config)
             .into_iter()
             .map(|(ln, text)| serde_json::json!({ "line": ln, "text": text }))
             .collect(),

@@ -572,15 +572,49 @@ impl StorageEngine for ColumnarStorage {
 
     fn show_outline_for_file(
         &self,
-        _workspace: &Workspace,
+        workspace: &Workspace,
         file: &str,
     ) -> Result<serde_json::Value> {
-        // Phase 06.
+        let root = workspace.root();
+        let mut entries: Vec<(usize, serde_json::Value)> = Vec::new();
+
+        for (seg_idx, seg_meta) in self.overlay.segments().iter().enumerate() {
+            // Filter: does this segment's source file match the `file` pattern?
+            if !crate::ast::query::glob_matches(&seg_meta.source_path, file) {
+                continue;
+            }
+            let seg = &self.segments[seg_idx];
+            let abs_path = root.join(&seg_meta.source_path);
+            let rel_path = workspace.relative(&abs_path).display().to_string();
+
+            for row in 0..seg.row_count {
+                let name = seg.name_of(row).to_owned();
+                let fql_kind = seg.fql_kind_of(row).to_owned();
+                let line = seg.line_of(row) as usize;
+                let kind = if fql_kind.is_empty() {
+                    "unknown"
+                } else {
+                    &fql_kind
+                };
+                entries.push((
+                    line,
+                    serde_json::json!({
+                        "name": name,
+                        "fql_kind": kind,
+                        "path": rel_path,
+                        "line": line,
+                    }),
+                ));
+            }
+        }
+
+        entries.sort_by_key(|(line, _)| *line);
+        let results: Vec<serde_json::Value> = entries.into_iter().map(|(_, v)| v).collect();
+
         Ok(serde_json::json!({
-            "op": "show_outline",
-            "file": file,
-            "results": [],
-            "note": "columnar SHOW requires Phase 06"
+            "op":      "show_outline",
+            "file":    file,
+            "results": results,
         }))
     }
 }

@@ -31,33 +31,6 @@ pub(crate) fn byte_to_line(source: &[u8], byte_offset: usize) -> usize {
         .count()
 }
 
-/// Parse a source file with the appropriate tree-sitter grammar.
-///
-/// The language is determined by file extension via the `LanguageRegistry`.
-///
-/// Returns `(source_bytes, tree)`.
-///
-/// # Errors
-/// Returns an error if no language is registered for the extension, the file
-/// cannot be read, or the parser fails.
-pub(crate) fn parse_file(
-    path: &Path,
-    lang_registry: &LanguageRegistry,
-) -> Result<(Vec<u8>, tree_sitter::Tree)> {
-    let lang = lang_registry
-        .language_for_path(path)
-        .ok_or_else(|| anyhow!("no language registered for {}", path.display()))?;
-    let source = crate::workspace::file_io::read_bytes(path)?;
-    let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(&lang.tree_sitter_language())
-        .map_err(|e| anyhow!("tree-sitter language error: {e}"))?;
-    let tree = parser
-        .parse(&source, None)
-        .ok_or_else(|| anyhow!("failed to parse {}", path.display()))?;
-    Ok((source, tree))
-}
-
 /// Walk the tree recursively to find the nearest `function_definition` node
 /// whose byte range contains `def_start`.
 pub(crate) fn find_enclosing_function_def<'t>(
@@ -413,16 +386,16 @@ pub use members::{show_members, show_outline};
 /// # Errors
 /// Returns an error if the file cannot be read.
 pub fn show_context(
+    source: &[u8],
     path: &std::path::Path,
     byte_range_start: usize,
     workspace: &Workspace,
     symbol: &str,
     context_lines: usize,
 ) -> Result<Value> {
-    let source = crate::workspace::file_io::read_bytes(path)?;
-    let center = byte_to_line(&source, byte_range_start);
+    let center = byte_to_line(source, byte_range_start);
 
-    let text = String::from_utf8_lossy(&source);
+    let text = String::from_utf8_lossy(source);
     let all_lines: Vec<&str> = text.lines().collect();
     let start = center.saturating_sub(context_lines);
     let end = (center + context_lines + 1).min(all_lines.len());
@@ -457,7 +430,8 @@ pub fn show_context(
 ///
 /// # Errors
 /// Returns an error if the file cannot be read.
-pub fn show_signature(
+pub(crate) fn show_signature(
+    cached: &crate::ast::parse_cache::CachedParse,
     path: &std::path::Path,
     byte_range_start: usize,
     node_kind: &str,
@@ -469,16 +443,16 @@ pub fn show_signature(
         .language_for_path(path)
         .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(path, lang_registry)?;
-    let root = tree.root_node();
+    let source = &*cached.source;
+    let root = cached.tree.root_node();
 
-    let start_line = byte_to_line(&source, byte_range_start) + 1;
+    let start_line = byte_to_line(source, byte_range_start) + 1;
     let is_func_or_template =
         config.is_function_kind(node_kind) || config.is_template_declaration_kind(node_kind);
     let (signature, end_line) = if is_func_or_template {
         find_function_node_for_symbol(root, byte_range_start, config).map_or_else(
             || {
-                let sig = extract_line_at(&source, byte_range_start);
+                let sig = extract_line_at(source, byte_range_start);
                 (sig, start_line)
             },
             |fn_node| {
@@ -491,13 +465,13 @@ pub fn show_signature(
                     .trim_end()
                     .to_string();
                 // The signature ends on the line just before the opening `{`.
-                let sig_end_line = byte_to_line(&source, body_start.saturating_sub(1)) + 1;
+                let sig_end_line = byte_to_line(source, body_start.saturating_sub(1)) + 1;
                 (sig, sig_end_line)
             },
         )
     } else {
         // For types/variables: one line of context is sufficient.
-        let sig = extract_line_at(&source, byte_range_start);
+        let sig = extract_line_at(source, byte_range_start);
         (sig, start_line)
     };
 

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
-use super::{byte_to_line, find_type_node_by_name, parse_file, path_matches};
+use super::{byte_to_line, find_type_node_by_name, path_matches};
 use crate::{
     ast::{index::SymbolTable, lang::LanguageRegistry},
     workspace::Workspace,
@@ -81,6 +81,7 @@ pub fn show_outline(index: &SymbolTable, workspace: &Workspace, file: &str) -> R
 /// Returns an error if the file cannot be read or the AST node for the
 /// type is not found.
 pub fn show_members(
+    cached: &crate::ast::parse_cache::CachedParse,
     path: &Path,
     workspace: &Workspace,
     symbol: &str,
@@ -90,10 +91,10 @@ pub fn show_members(
         .language_for_path(path)
         .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
     let config = lang.config();
-    let (source, tree) = parse_file(path, lang_registry)?;
-    let root = tree.root_node();
+    let source = &*cached.source;
+    let root = cached.tree.root_node();
 
-    let type_node = find_type_node_by_name(root, &source, symbol, config)
+    let type_node = find_type_node_by_name(root, source, symbol, config)
         .ok_or_else(|| anyhow!("AST node for '{symbol}' not found in file"))?;
 
     let mut members: Vec<Value> = Vec::new();
@@ -103,7 +104,7 @@ pub fn show_members(
         if cursor.goto_first_child() {
             loop {
                 let child = cursor.node();
-                let ln = byte_to_line(&source, child.start_byte()) + 1;
+                let ln = byte_to_line(source, child.start_byte()) + 1;
                 let ck = child.kind();
                 if config.is_field_kind(ck) {
                     let text = std::str::from_utf8(&source[child.byte_range()])

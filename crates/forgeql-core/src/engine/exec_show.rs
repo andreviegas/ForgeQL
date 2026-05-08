@@ -1,9 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
 
 use crate::{
-    ast::{query, show},
+    ast::{parse_cache::CachedParse, query, show},
     ir::{Backend, Clauses, ForgeQLIR},
     result::{FileEntry, ForgeQLResult, ShowContent},
     session::Session,
@@ -52,7 +53,9 @@ impl ForgeQLEngine {
                         opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found"))
                     })
                     .and_then(|loc| {
+                        let bytes = crate::workspace::file_io::read_bytes(&loc.path)?;
                         show::show_context(
+                            &bytes,
                             &loc.path,
                             loc.byte_range.start,
                             &workspace,
@@ -68,7 +71,9 @@ impl ForgeQLEngine {
                 .resolve_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
+                    let cached = self.get_or_parse_for_show(session_id, &loc.path)?;
                     show::show_signature(
+                        &cached,
                         &loc.path,
                         loc.byte_range.start,
                         &loc.node_kind,
@@ -87,7 +92,8 @@ impl ForgeQLEngine {
                 .resolve_type_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
-                    show::show_members(&loc.path, &workspace, symbol, &self.lang_registry)
+                    let cached = self.get_or_parse_for_show(session_id, &loc.path)?;
+                    show::show_members(&cached, &loc.path, &workspace, symbol, &self.lang_registry)
                 })
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
             ForgeQLIR::ShowBody {
@@ -96,7 +102,9 @@ impl ForgeQLEngine {
                 .resolve_body_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
+                    let cached = self.get_or_parse_for_show(session_id, &loc.path)?;
                     show::show_body(
+                        &cached,
                         &loc.path,
                         loc.byte_range.start,
                         &loc.enrichment,
@@ -113,7 +121,9 @@ impl ForgeQLEngine {
                 .resolve_body_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
+                    let cached = self.get_or_parse_for_show(session_id, &loc.path)?;
                     show::show_callees(
+                        &cached,
                         &loc.path,
                         loc.byte_range.start,
                         &workspace,
@@ -272,5 +282,29 @@ impl ForgeQLEngine {
         );
 
         Ok(ForgeQLResult::Show(show_result))
+    }
+
+    /// Get a cached parse for the given path, or parse fresh on miss.
+    ///
+    /// Uses the session's `ParseCache` (capacity 32) when a session is active.
+    /// Falls back to a one-shot parse when no session is available.
+    fn get_or_parse_for_show(
+        &self,
+        session_id: Option<&str>,
+        path: &Path,
+    ) -> Result<Arc<CachedParse>> {
+        use crate::ast::parse_cache::ParseCache;
+
+        if let Some(sid) = session_id
+            && let Some(session) = self.sessions.get(sid)
+        {
+            let mut guard = session
+                .parse_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            return guard.get_or_parse(path, &self.lang_registry);
+        }
+        // No active session — parse without cache.
+        ParseCache::with_capacity(1).get_or_parse(path, &self.lang_registry)
     }
 }
