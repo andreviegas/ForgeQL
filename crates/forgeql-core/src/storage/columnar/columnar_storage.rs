@@ -370,6 +370,14 @@ impl ColumnarStorage {
                 .map(|m| m.source_path.clone())
         });
 
+        // Segment-level path prefilter — skip entire segments whose source_path
+        // does not match IN/EXCLUDE globs.  The per-row passes_resolve_glob call
+        // below is removed because every row inside a retained segment shares the
+        // same source_path and therefore passes trivially.
+        if let Some(allowed) = self.segments_passing_path_filter(clauses) {
+            seg_order.retain(|seg_idx| allowed.contains(seg_idx));
+        }
+
         // `all` — every candidate that passes all filters.
         // `preferred` — subset that also matches `prefer_kinds` (if given).
         let mut all: Vec<(u32, u32)> = Vec::new();
@@ -398,12 +406,7 @@ impl ColumnarStorage {
                     continue;
                 }
 
-                // 2. IN / EXCLUDE glob filter.
-                if !passes_resolve_glob(relative_path, clauses) {
-                    continue;
-                }
-
-                // 3. WHERE predicate filter — build a lightweight SymbolMatch for evaluation.
+                // 2. WHERE predicate filter — build a lightweight SymbolMatch for evaluation.
                 let fql_kind_str = seg.fql_kind_of(local_row);
                 let line_num = seg.line_of(local_row);
                 let sm = SymbolMatch {
