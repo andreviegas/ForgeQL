@@ -69,3 +69,8 @@ forgeql-core = { path = ".", features = ["test-helpers"] }
 name              = "columnar_filter"
 harness           = false
 required-features = ["test-helpers"]
+
+[[bench]]
+name              = "columnar_range"
+harness           = false
+required-features = ["test-helpers"]
