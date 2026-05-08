@@ -395,6 +395,13 @@ impl ColumnarStorage {
             };
             let relative_path = &seg_meta.source_path;
 
+            // 2. Enrichment-postings prefilter — bitmap intersection per allowlisted
+            //    field before any per-row work.  Mirrors the same step in materialize_all.
+            let local_rows = seg.prefilter_enrichment_postings(local_rows.clone(), clauses);
+            if local_rows.is_empty() {
+                continue;
+            }
+
             for local_row in local_rows {
                 // 1. Enclosing-type filter for qualified names.
                 if let Some(owner) = enclosing_owner
@@ -406,7 +413,7 @@ impl ColumnarStorage {
                     continue;
                 }
 
-                // 2. WHERE predicate filter — build a lightweight SymbolMatch for evaluation.
+                // 3. WHERE predicate filter — build a lightweight SymbolMatch for evaluation.
                 let fql_kind_str = seg.fql_kind_of(local_row);
                 let line_num = seg.line_of(local_row);
                 let sm = SymbolMatch {
