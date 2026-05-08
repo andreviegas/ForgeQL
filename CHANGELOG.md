@@ -4,6 +4,50 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.7] — 2026-05-08 — Phase 06a: Columnar resolve_* implementation
+
+### Changed
+
+- **`SegmentReader::enrichment_for_row`** (new) — collects all enrichment
+  column values for a single row into a `HashMap<String, String>`. Mirrors
+  the per-row loop inside `materialize_rows`, exposed as `pub(crate)` for
+  use by `ColumnarStorage::location_for_row`.
+
+- **`ColumnarStorage::location_for_row`** (new) — converts `(seg_idx,
+  local_row)` to a `SymbolLocation` using the `SegmentMeta.source_path`
+  already stored in the overlay. No PathMap / git-tree walk needed.
+  Uses `fql_kind` as proxy for `node_kind` (segments do not store raw
+  tree-sitter node kinds); `language_id` is 0 (no SHOW path reads this).
+
+- **`ColumnarStorage::resolve_impl`** (new) — shared core for all three
+  trait methods. Steps: qualified-name split (`::` / `.`), overlay FST name
+  lookup, enclosing-type enrichment filter, IN/EXCLUDE glob filter, WHERE
+  predicate filter via lightweight `SymbolMatch`, preferred-kind scoring,
+  last-write-wins disambiguation. Returns `Option<SymbolLocation>`.
+
+- **`ColumnarStorage::resolve_symbol`** — replaced `Err("requires Phase 06")`
+  stub; calls `resolve_impl` with no kind preference.
+
+- **`ColumnarStorage::resolve_type_symbol`** — replaced stub; calls
+  `resolve_impl` preferring class/struct/enum/union/type_alias/trait/interface.
+
+- **`ColumnarStorage::resolve_body_symbol`** — replaced stub; calls
+  `resolve_impl`, then follows any `body_symbol` enrichment redirect (C++
+  out-of-line member function definitions) with a second `resolve_impl` call
+  using empty clauses — matching legacy `index.find_def(target)` semantics.
+
+- Two free functions added in `columnar_storage.rs`:
+  - `split_qualified_name` — splits `Owner::member` / `Owner.member`.
+  - `passes_resolve_glob`  — IN/EXCLUDE glob check on relative paths.
+
+### Verified
+
+- Task 5 audit: zero `SymbolTable` usages in `engine/exec_show*` — all SHOW
+  paths remain backend-clean and route through trait methods only.
+- All 50 tests pass (unit, parity, SMS regression at budget=5000).
+
+---
+
 ## [0.48.6] — 2026-05-08 — Phase 05.6: Engine submodule split + Phase 06 prerequisites
 
 ### Changed
