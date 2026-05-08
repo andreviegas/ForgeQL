@@ -25,7 +25,8 @@ use roaring::RoaringBitmap;
 use tracing::debug;
 
 use crate::ast::index::IndexStats;
-use crate::filter::apply_clauses;
+use crate::ast::query::glob_matches;
+use crate::filter::{apply_clauses, eval_predicate};
 use crate::ir::{Clauses, CompareOp, PredicateValue};
 use crate::result::SymbolMatch;
 use crate::workspace::Workspace;
@@ -222,6 +223,203 @@ impl ColumnarStorage {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Resolve helpers — shared by the three StorageEngine::resolve_* methods
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Split a qualified name (`Owner::member` or `Owner.member`) into
+/// `(lookup_name, Some(owner))`.  Returns `(name, None)` for bare names.
+///
+/// Tries `::` first (Rust / C++) then `.` (Python / JS), mirroring the
+/// legacy resolver's `split_qualified_name`.
+fn split_qualified_name(name: &str) -> (&str, Option<&str>) {
+    if let Some(pos) = name.rfind("::") {
+        let (owner, member) = (&name[..pos], &name[pos + 2..]);
+        if !owner.is_empty() && !member.is_empty() {
+            return (member, Some(owner));
+        }
+    }
+    if let Some(pos) = name.rfind('.') {
+        let (owner, member) = (&name[..pos], &name[pos + 1..]);
+        if !owner.is_empty() && !member.is_empty() {
+            return (member, Some(owner));
+        }
+    }
+    (name, None)
+}
+
+/// Check whether a workspace-relative `path` passes the `IN` / `EXCLUDE`
+/// glob filters stored in `clauses`.
+///
+/// Operates on relative paths (as stored in [`SegmentMeta::source_path`]) —
+/// no worktree-root stripping is needed.
+fn passes_resolve_glob(relative_path: &Path, clauses: &Clauses) -> bool {
+    let in_ok = clauses
+        .in_glob
+        .as_deref()
+        .is_none_or(|glob| glob_matches(relative_path, glob));
+    let excl_ok = clauses
+        .exclude_glob
+        .as_deref()
+        .is_none_or(|glob| !glob_matches(relative_path, glob));
+    in_ok && excl_ok
+}
+
+impl ColumnarStorage {
+    /// Build a [`SymbolLocation`] from a single segment row.
+    ///
+    /// `seg_idx` indexes into both `self.segments` and
+    /// `self.overlay.segments()` (they are kept in the same order by
+    /// [`ColumnarStorage::new`]).
+    fn location_for_row(&self, seg_idx: u32, local_row: u32, root: &Path) -> SymbolLocation {
+        let seg = &self.segments[seg_idx as usize];
+        let seg_meta = &self.overlay.segments()[seg_idx as usize];
+        // Absolute path: join worktree root with the segment's workspace-relative path.
+        let path = root.join(&seg_meta.source_path);
+        let byte_start = seg.byte_start_of(local_row) as usize;
+        let byte_end = seg.byte_end_of(local_row) as usize;
+        let line = seg.line_of(local_row) as usize;
+        // Columnar segments do not store the raw tree-sitter `node_kind`.
+        // Use `fql_kind` as a proxy — `show_signature` falls back to single-line
+        // extraction when `is_function_kind(node_kind)` is false, which is
+        // acceptable for Phase 06a.
+        let node_kind = seg.fql_kind_of(local_row).to_owned();
+        let enrichment = seg.enrichment_for_row(local_row);
+        SymbolLocation {
+            path,
+            byte_range: byte_start..byte_end,
+            line,
+            // Columnar segments store language as a string, not an interned u32 ID.
+            // `language_id` is not used by any SHOW path, so 0 is safe here.
+            language_id: 0,
+            node_kind,
+            enrichment,
+        }
+    }
+
+    /// Core columnar resolve used by all three `StorageEngine::resolve_*` methods.
+    ///
+    /// Algorithm:
+    /// 1. Split qualified name (`Owner::member` / `Owner.member`).
+    /// 2. FST name lookup via the overlay bitmap.
+    /// 3. Filter candidates by enclosing-type, IN/EXCLUDE glob, and WHERE predicates.
+    /// 4. Collect two lists — `all` (every passing candidate) and `preferred`
+    ///    (candidates whose `fql_kind` is in `prefer_kinds`, if given).
+    /// 5. Pick: last preferred candidate → last definition candidate → last overall.
+    /// 6. Convert the chosen row to a [`SymbolLocation`].
+    fn resolve_impl(
+        &self,
+        name: &str,
+        clauses: &Clauses,
+        root: &Path,
+        prefer_kinds: Option<&[&str]>,
+    ) -> Option<SymbolLocation> {
+        let (lookup_name, enclosing_owner) = split_qualified_name(name);
+
+        let global_bm = self.overlay.lookup_name_bitmap(lookup_name);
+        if global_bm.is_empty() {
+            return None;
+        }
+        let by_segment = self.group_by_segment(&global_bm);
+
+        // Iterate segments in alphabetical source-path order for deterministic output.
+        let mut seg_order: Vec<u32> = by_segment.keys().copied().collect();
+        seg_order.sort_by_key(|&idx| {
+            self.overlay
+                .segments()
+                .get(idx as usize)
+                .map(|m| m.source_path.clone())
+        });
+
+        // `all` — every candidate that passes all filters.
+        // `preferred` — subset that also matches `prefer_kinds` (if given).
+        let mut all: Vec<(u32, u32)> = Vec::new();
+        let mut preferred: Vec<(u32, u32)> = Vec::new();
+
+        for seg_idx in seg_order {
+            let Some(local_rows) = by_segment.get(&seg_idx) else {
+                continue;
+            };
+            let Some(seg) = self.segments.get(seg_idx as usize) else {
+                continue;
+            };
+            let Some(seg_meta) = self.overlay.segments().get(seg_idx as usize) else {
+                continue;
+            };
+            let relative_path = &seg_meta.source_path;
+
+            for local_row in local_rows {
+                // 1. Enclosing-type filter for qualified names.
+                if let Some(owner) = enclosing_owner
+                    && seg
+                        .extra_field_str("enclosing_type", local_row)
+                        .unwrap_or("")
+                        != owner
+                {
+                    continue;
+                }
+
+                // 2. IN / EXCLUDE glob filter.
+                if !passes_resolve_glob(relative_path, clauses) {
+                    continue;
+                }
+
+                // 3. WHERE predicate filter — build a lightweight SymbolMatch for evaluation.
+                let fql_kind_str = seg.fql_kind_of(local_row);
+                let line_num = seg.line_of(local_row);
+                let sm = SymbolMatch {
+                    name: seg.name_of(local_row).to_owned(),
+                    node_kind: None,
+                    fql_kind: (!fql_kind_str.is_empty()).then(|| fql_kind_str.to_owned()),
+                    language: {
+                        let l = seg.language_of(local_row);
+                        (!l.is_empty()).then(|| l.to_owned())
+                    },
+                    path: Some(relative_path.clone()),
+                    line: (line_num != 0).then_some(line_num as usize),
+                    usages_count: Some(seg.usages_count_of(local_row) as usize),
+                    fields: seg.enrichment_for_row(local_row),
+                    count: None,
+                };
+                if clauses
+                    .where_predicates
+                    .iter()
+                    .any(|p| !eval_predicate(&sm, p))
+                {
+                    continue;
+                }
+
+                all.push((seg_idx, local_row));
+                if let Some(kinds) = prefer_kinds
+                    && kinds.contains(&fql_kind_str)
+                {
+                    preferred.push((seg_idx, local_row));
+                }
+            }
+        }
+
+        if all.is_empty() {
+            return None;
+        }
+
+        // Pick best candidate — mirrors the legacy "last-write-wins" strategy.
+        // Preference order: last preferred → last definition (non-empty fql_kind) → last overall.
+        let chosen = if preferred.is_empty() {
+            all.iter()
+                .rposition(|&(si, lr)| {
+                    self.segments
+                        .get(si as usize)
+                        .is_some_and(|s| !s.fql_kind_of(lr).is_empty())
+                })
+                .and_then(|i| all.get(i).copied())
+                .or_else(|| all.last().copied())
+        } else {
+            preferred.last().copied()
+        };
+
+        chosen.map(|(seg_idx, local_row)| self.location_for_row(seg_idx, local_row, root))
+    }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 // StorageEngine implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -266,37 +464,55 @@ impl StorageEngine for ColumnarStorage {
 
     fn resolve_symbol(
         &self,
-        _name: &str,
-        _clauses: &Clauses,
-        _root: &Path,
+        name: &str,
+        clauses: &Clauses,
+        root: &Path,
     ) -> Result<Option<SymbolLocation>> {
-        // Phase 06: SHOW commands on the columnar backend.
-        Err(anyhow::anyhow!(
-            "SHOW commands on the columnar backend are not available until Phase 06; \
-             use the default (legacy) backend for SHOW operations"
-        ))
+        Ok(self.resolve_impl(name, clauses, root, None))
     }
 
     fn resolve_type_symbol(
         &self,
-        _name: &str,
-        _clauses: &Clauses,
-        _root: &Path,
+        name: &str,
+        clauses: &Clauses,
+        root: &Path,
     ) -> Result<Option<SymbolLocation>> {
-        Err(anyhow::anyhow!(
-            "SHOW commands on the columnar backend require Phase 06"
-        ))
+        // Prefer struct / class / enum / union / type_alias / trait / interface rows
+        // that have members — mirrors the legacy resolver's type-preference scan.
+        const TYPE_KINDS: &[&str] = &[
+            "class",
+            "struct",
+            "enum",
+            "union",
+            "type_alias",
+            "trait",
+            "interface",
+        ];
+        Ok(self.resolve_impl(name, clauses, root, Some(TYPE_KINDS)))
     }
 
     fn resolve_body_symbol(
         &self,
-        _name: &str,
-        _clauses: &Clauses,
-        _root: &Path,
+        name: &str,
+        clauses: &Clauses,
+        root: &Path,
     ) -> Result<Option<SymbolLocation>> {
-        Err(anyhow::anyhow!(
-            "SHOW commands on the columnar backend require Phase 06"
-        ))
+        let Some(loc) = self.resolve_impl(name, clauses, root, None) else {
+            return Ok(None);
+        };
+        // Follow the `body_symbol` redirect for C++ out-of-line definitions.
+        // The redirect is resolved without user clauses — matches legacy behaviour
+        // (`index.find_def(target)` ignores clauses).
+        if let Some(target) = loc.enrichment.get("body_symbol").cloned() {
+            const BODY_KINDS: &[&str] =
+                &["function", "method", "constructor", "destructor", "macro"];
+            if let Some(redirected) =
+                self.resolve_impl(&target, &Clauses::default(), root, Some(BODY_KINDS))
+            {
+                return Ok(Some(redirected));
+            }
+        }
+        Ok(Some(loc))
     }
 
     fn index_stats(&self) -> Option<&IndexStats> {

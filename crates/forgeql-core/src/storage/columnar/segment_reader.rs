@@ -440,6 +440,26 @@ impl SegmentReader {
         }
     }
 
+    /// Collect all enrichment field values for `row` into a `HashMap`.
+    ///
+    /// Mirrors the field-collection loop in [`Self::materialize_rows`] but for a
+    /// single row.  Returns an empty map when no enrichment columns are present.
+    pub(crate) fn enrichment_for_row(&self, row: u32) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        for (col_name, mmap) in &self.extra_cols {
+            let slice: &[u32] = cast_slice(mmap.as_ref());
+            if let Some(&id) = slice.get(row as usize) {
+                if id != u32::MAX {
+                    let s = self.strings.get(id);
+                    if !s.is_empty() {
+                        let _ = map.insert(col_name.clone(), s.to_owned());
+                    }
+                }
+            }
+        }
+        map
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // Private helpers
     // ─────────────────────────────────────────────────────────────────────
