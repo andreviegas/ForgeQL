@@ -83,27 +83,29 @@ fn index_canonical(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
 /// Verify every universal definition for a single language.
 fn assert_universal_defs(lang_name: &str, table: &SymbolTable) {
     for expected in UNIVERSAL_DEFS {
-        let row = table.find_def(expected.name).unwrap_or_else(|| {
-            panic!(
-                "[{}] symbol '{}' not found in index",
-                lang_name, expected.name
-            )
-        });
+        // Use find_all_defs + filter by expected line so that fixtures with
+        // multiple same-named symbols (e.g. a struct and a free function both
+        // named "Motor") do not interfere with each other.
+        let all = table.find_all_defs(expected.name);
+        let row = all
+            .into_iter()
+            .find(|r| r.line == expected.line)
+            .unwrap_or_else(|| {
+                panic!(
+                    "[{}] symbol '{}' not found at line {}",
+                    lang_name, expected.name, expected.line
+                )
+            });
 
         assert_eq!(
             table.fql_kind_of(row),
             expected.fql_kind,
-            "[{}] symbol '{}': expected fql_kind='{}', got='{}'",
+            "[{}] symbol '{}' at line {}: expected fql_kind='{}', got='{}'",
             lang_name,
             expected.name,
+            expected.line,
             expected.fql_kind,
             table.fql_kind_of(row)
-        );
-
-        assert_eq!(
-            row.line, expected.line,
-            "[{}] symbol '{}': expected line={}, got={}",
-            lang_name, expected.name, expected.line, row.line
         );
     }
 }

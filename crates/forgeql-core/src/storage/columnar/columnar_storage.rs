@@ -278,10 +278,10 @@ impl ColumnarStorage {
         let byte_start = seg.byte_start_of(local_row) as usize;
         let byte_end = seg.byte_end_of(local_row) as usize;
         let line = seg.line_of(local_row) as usize;
-        // Columnar segments do not store the raw tree-sitter `node_kind`.
-        // Use `fql_kind` as a proxy — `show_signature` falls back to single-line
-        // extraction when `is_function_kind(node_kind)` is false, which is
-        // acceptable for Phase 06a.
+        // Columnar segments do not store the raw tree-sitter `node_kind`; use
+        // `fql_kind` as a proxy.  `show_signature` accepts the universal fql_kind
+        // names ("function", "method") and applies the body-stripping path, so
+        // signature output is identical to the legacy backend.
         let node_kind = seg.fql_kind_of(local_row).to_owned();
         let enrichment = seg.enrichment_for_row(local_row);
         // Derive a blob SHA-1 hint from the segment's content_id.  Segments

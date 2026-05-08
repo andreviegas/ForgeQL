@@ -133,4 +133,24 @@ int deeply_nested(int a) {
 
 int many_params(int a, int b, int c, int d, int e, int f) {
     return a + b + c + d + e + f;
+    return a + b + c + d + e + f;
 }
+
+// ── parity-test fixtures (do not remove) ─────────────────────────────────────
+
+// resolve_type_prefers_type_over_function: same bare name as 'Motor' struct (line 5).
+// C/C++ allows a struct tag and a free function to share the same identifier.
+int Motor(int rpm) { return rpm * 2; }
+
+// resolve_body_follows_body_symbol_redirect: C++ out-of-line member definition.
+// MemberEnricher stores body_symbol="Engine::start" on the in-class declaration.
+class Engine {
+public:
+    void start();
+};
+void Engine::start() { /* out-of-line */ }
+
+// resolve_symbol_deterministic_on_duplicates: forward-declare then define.
+// Both rows are indexed under name 'noop_dup'; last-write-wins must be stable.
+void noop_dup();
+void noop_dup() {}

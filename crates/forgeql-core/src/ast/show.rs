@@ -430,7 +430,7 @@ pub fn show_context(
 ///
 /// # Errors
 /// Returns an error if the file cannot be read.
-pub(crate) fn show_signature(
+pub fn show_signature(
     cached: &crate::ast::parse_cache::CachedParse,
     path: &std::path::Path,
     byte_range_start: usize,
@@ -447,8 +447,12 @@ pub(crate) fn show_signature(
     let root = cached.tree.root_node();
 
     let start_line = byte_to_line(source, byte_range_start) + 1;
-    let is_func_or_template =
-        config.is_function_kind(node_kind) || config.is_template_declaration_kind(node_kind);
+    // Also accept universal fql_kind names so the columnar backend (which stores
+    // fql_kind rather than the raw tree-sitter node kind) gets the body-stripping
+    // path rather than the single-line fallback.
+    let is_func_or_template = config.is_function_kind(node_kind)
+        || config.is_template_declaration_kind(node_kind)
+        || matches!(node_kind, "function" | "method");
     let (signature, end_line) = if is_func_or_template {
         find_function_node_for_symbol(root, byte_range_start, config).map_or_else(
             || {
