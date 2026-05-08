@@ -20,6 +20,26 @@ use super::bytes_to_hex;
 
 /// Magic bytes at the start of every `header.bin`.
 pub const MAGIC: [u8; 4] = *b"FQSG";
+
+/// Low-cardinality enrichment fields for which `SegmentBuilder` writes
+/// per-segment Roaring-bitmap posting files (`postings_<field>.bin`).
+///
+/// Criterion: boolean flags and small enums with ≤ 8 distinct values per
+/// segment.  The builder silently skips any field whose actual cardinality
+/// exceeds that cap at flush time.
+///
+/// `SegmentReader` discovers the files by checking this list so readers
+/// always know which fields to attempt to load.
+pub const POSTING_ENRICHMENT_FIELDS: &[&str] = &[
+    "has_doc",
+    "is_recursive",
+    "has_fallthrough",
+    "is_const",
+    "is_mutable",
+    "is_unsafe",
+    "is_async",
+    "is_generic",
+];
 /// Current on-disk schema version.  Bump when the format changes.
 const SCHEMA_VERSION: u32 = 1;
 /// Type-tag for dense `u32` columns (core columns).
@@ -388,6 +408,9 @@ impl SegmentBuilder {
             write_u32_col(&tmp, name, ids)?;
         }
 
+        // --- write per-field enrichment postings (additive, optional) ---
+        write_enrichment_postings(&tmp, &extra_arrays)?;
+
         // --- build column metadata (dynamic to include extra cols) ---
         let mut col_meta: Vec<(&str, u8)> = vec![
             ("name_id", TYPE_TAG_U32),
@@ -519,6 +542,74 @@ fn write_kind_postings(dir: &Path, kind_postings: &HashMap<u32, RoaringBitmap>) 
     }
 
     std::fs::write(dir.join("postings_fql_kind.bin"), &buf).context("writing postings_fql_kind.bin")
+}
+
+/// Write per-field Roaring-bitmap posting files for low-cardinality enrichment
+/// fields listed in [`POSTING_ENRICHMENT_FIELDS`].
+///
+/// For each field in the allowlist the builder checks whether the field is
+/// present in `extra_arrays` and whether its cardinality (distinct non-NULL
+/// values) does not exceed `MAX_CARDINALITY`.  If both conditions hold it
+/// writes a `postings_<field>.bin` file using the same wire format as
+/// `postings_fql_kind.bin`:
+///
+/// ```text
+/// [value_count: u32 LE]
+/// ( [value_id: u32 LE]
+///   [bitmap_len: u32 LE]
+///   [bitmap_bytes: roaring serialized] )*
+/// ```
+///
+/// Old readers that don't know about these files safely ignore them; new
+/// readers that find them use them to skip rows that don't match a WHERE
+/// predicate before materialisation.
+fn write_enrichment_postings(dir: &Path, extra_arrays: &[(String, Vec<u32>)]) -> Result<()> {
+    const MAX_CARDINALITY: usize = 8;
+
+    for field in POSTING_ENRICHMENT_FIELDS {
+        let Some((_, ids)) = extra_arrays.iter().find(|(n, _)| n == field) else {
+            continue;
+        };
+
+        // Build per-value bitmaps.
+        let mut by_value: HashMap<u32, RoaringBitmap> = HashMap::new();
+        for (row_id, &value_id) in ids.iter().enumerate() {
+            if value_id == u32::MAX {
+                continue; // NULL slot
+            }
+            if let Ok(row_u32) = u32::try_from(row_id) {
+                let _ = by_value.entry(value_id).or_default().insert(row_u32);
+            }
+        }
+
+        // Skip if empty or cardinality too high.
+        if by_value.is_empty() || by_value.len() > MAX_CARDINALITY {
+            continue;
+        }
+
+        // Serialise: same wire format as `write_kind_postings`.
+        let mut buf: Vec<u8> = Vec::new();
+        let value_count = u32::try_from(by_value.len()).context("too many enrichment values")?;
+        buf.extend_from_slice(&value_count.to_le_bytes());
+
+        let mut sorted: Vec<(&u32, &RoaringBitmap)> = by_value.iter().collect();
+        sorted.sort_by_key(|(k, _)| *k);
+
+        for (value_id, bitmap) in &sorted {
+            let mut bitmap_bytes: Vec<u8> = Vec::new();
+            bitmap
+                .serialize_into(&mut bitmap_bytes)
+                .context("serialising enrichment Roaring bitmap")?;
+            let len = u32::try_from(bitmap_bytes.len()).context("enrichment bitmap too large")?;
+            buf.extend_from_slice(&value_id.to_le_bytes());
+            buf.extend_from_slice(&len.to_le_bytes());
+            buf.extend_from_slice(&bitmap_bytes);
+        }
+
+        let filename = format!("postings_{field}.bin");
+        std::fs::write(dir.join(&filename), &buf).with_context(|| format!("writing {filename}"))?;
+    }
+    Ok(())
 }
 
 /// Write `name.fst` + `name_postings.bin`.
