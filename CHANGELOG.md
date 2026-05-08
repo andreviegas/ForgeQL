@@ -4,6 +4,58 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.8] — 2026-05-08 — Phase 06b: ParseCache + SHOW wiring
+
+### Added
+
+- **`ast/parse_cache.rs`** — New `ParseCache` struct: per-session LRU cache
+  for tree-sitter parses, keyed by SHA-1 hash of the source bytes. Capacity
+  defaults to 32 entries per session. Backed by `VecDeque<[u8; 20]>` (LRU
+  order) + `HashMap<[u8; 20], Arc<CachedParse>>`. On cache miss reads the
+  file, computes SHA-1, parses with tree-sitter, and inserts the result.
+  Repeat reads of the same (unchanged) file are served without disk I/O.
+
+- **`Session::parse_cache`** — New `Mutex<ParseCache>` field on `Session`.
+  Allows all SHOW operations in a session to share one parse cache.
+
+- **`ForgeQLEngine::get_or_parse_for_show`** — New helper that acquires the
+  session's parse cache on lock, delegates to `ParseCache::get_or_parse`,
+  and falls back to a single-use cache when no session is active.
+
+### Changed
+
+- **`show_body`, `show_callees`, `show_members`, `show_signature`** — Now
+  accept `&CachedParse` instead of a raw path; they no longer re-parse the
+  file themselves. Callers (`exec_show.rs`) call `get_or_parse_for_show`
+  once per SHOW invocation. Eliminates redundant file reads and tree-sitter
+  parses inside a session.
+
+- **`show_context`** — Now accepts `&[u8]` source bytes instead of a path
+  (reads bytes before calling, outside the signature).
+
+- **`ColumnarStorage::show_outline_for_file`** — Replaced the Phase-06 stub
+  with a real implementation that iterates segment rows, filters by glob
+  pattern, assembles (name, fql_kind, path, line) entries and returns them
+  sorted by line number.
+
+- **`ast/parse_cache` visibility**  — `ParseCache`, `CachedParse`,
+  `sha1_of_bytes`, and all methods are now `pub` so integration tests and
+  downstream crates can use them directly.
+
+### Internal
+
+- **`parse_file` helper removed** from `ast/show.rs` — no longer needed now
+  that all SHOW callers receive `CachedParse` from the session cache.
+
+### Tests
+
+- **`parse_cache_hit_and_lru_eviction`** — Verifies `Arc` pointer equality
+  on cache hit and that LRU eviction produces a distinct `Arc` after capacity
+  overflow (capacity=1 test with two fixture files).
+
+- **`columnar_show_outline_matches_legacy`** — Verifies that
+  `ColumnarStorage::show_outline_for_file` returns the same (name, line) set
+  as the legacy `show_outline` for `canonical.cpp`.
 ## [0.48.7] — 2026-05-08 — Phase 06a: Columnar resolve_* implementation
 
 ### Changed
