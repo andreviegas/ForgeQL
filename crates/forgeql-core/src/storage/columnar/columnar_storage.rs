@@ -88,7 +88,16 @@ impl ColumnarStorage {
         for pred in &clauses.where_predicates {
             let Some(kind_bm) = (match (pred.field.as_str(), &pred.op, &pred.value) {
                 ("fql_kind", CompareOp::Eq, PredicateValue::String(val)) => {
-                    self.overlay.prefilter_kind(val).cloned()
+                    // When the kind is absent in every segment, return an empty
+                    // bitmap immediately rather than None.  None would fall
+                    // through to the full-table scan, causing ~8 s regressions
+                    // for unknown-kind queries.  See Phase 06d, Root cause 1.
+                    Some(
+                        self.overlay
+                            .prefilter_kind(val)
+                            .cloned()
+                            .unwrap_or_default(),
+                    )
                 }
                 ("name", CompareOp::Eq, PredicateValue::String(val)) => {
                     let bm = self.overlay.lookup_name_bitmap(val);
