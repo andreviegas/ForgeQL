@@ -133,6 +133,29 @@ impl ParseCache {
         self.parse_and_insert(hash, path, bytes, lang_registry)
     }
 
+    /// Get a cached parse by `hash`, or parse `bytes` on miss.
+    ///
+    /// Unlike [`get_or_parse_with_hint`], the caller supplies **both** the
+    /// content hash and the raw bytes — no disk read is ever performed here.
+    /// This is the right entry point when the caller has already read the
+    /// bytes (e.g. via a bare-repo git fallback).
+    ///
+    /// # Errors
+    /// Returns `Err` if no language is registered for the path extension or
+    /// tree-sitter fails to parse the content.
+    pub fn get_or_parse_with_bytes(
+        &mut self,
+        hash: [u8; 20],
+        path: &Path,
+        bytes: Vec<u8>,
+        lang_registry: &LanguageRegistry,
+    ) -> Result<Arc<CachedParse>> {
+        if let Some(hit) = self.get(&hash) {
+            return Ok(hit);
+        }
+        self.parse_and_insert(hash, path, bytes, lang_registry)
+    }
+
     /// Parse `bytes` with the language inferred from `path`, insert the result
     /// under `hash`, and return it.
     fn parse_and_insert(

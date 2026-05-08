@@ -1,17 +1,49 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
 
 use crate::{
-    ast::{parse_cache::CachedParse, query, show},
+    ast::{
+        parse_cache::{CachedParse, sha1_of_bytes},
+        query, show,
+    },
     ir::{Backend, Clauses, ForgeQLIR},
     result::{FileEntry, ForgeQLResult, ShowContent},
     session::Session,
+    storage::SymbolLocation,
+    workspace::Workspace,
 };
 
 use super::ForgeQLEngine;
 use super::{DEFAULT_BODY_DEPTH, DEFAULT_CONTEXT_LINES, convert_show_json, reject_text_filter};
+
+/// Read the bytes for a symbol's source file, with a bare-repository fallback.
+///
+/// On normal working trees `file_io::read_bytes` succeeds.  On reconnected
+/// bare clones (or detached worktrees where checked-out files are absent),
+/// the regular read fails and we fall back to fetching the blob content
+/// directly from git using the SHA-1 stored in `SymbolLocation::blob_sha`.
+///
+/// # Errors
+/// - I/O error on a non-bare workspace.
+/// - Bare workspace with no `blob_sha` available.
+/// - Git object-store lookup failure.
+fn read_bytes_for_show(workspace: &Workspace, location: &SymbolLocation) -> Result<Vec<u8>> {
+    match crate::workspace::file_io::read_bytes(&location.path) {
+        Ok(b) => Ok(b),
+        Err(_) if workspace.is_bare() => {
+            let sha = location.blob_sha.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "file not on disk and no blob SHA available for '{}'",
+                    location.path.display()
+                )
+            })?;
+            workspace.read_blob_by_sha(&sha)
+        }
+        Err(e) => Err(e),
+    }
+}
 
 /// Extract the `backend` selector from any supported SHOW / `FindFiles` op.
 ///
@@ -53,7 +85,7 @@ impl ForgeQLEngine {
                         opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found"))
                     })
                     .and_then(|loc| {
-                        let bytes = crate::workspace::file_io::read_bytes(&loc.path)?;
+                        let bytes = read_bytes_for_show(&workspace, &loc)?;
                         show::show_context(
                             &bytes,
                             &loc.path,
@@ -71,8 +103,7 @@ impl ForgeQLEngine {
                 .resolve_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
-                    let cached =
-                        self.get_or_parse_for_show(session_id, &loc.path, loc.blob_sha.as_ref())?;
+                    let cached = self.get_or_parse_for_show(session_id, &workspace, &loc)?;
                     show::show_signature(
                         &cached,
                         &loc.path,
@@ -93,8 +124,7 @@ impl ForgeQLEngine {
                 .resolve_type_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
-                    let cached =
-                        self.get_or_parse_for_show(session_id, &loc.path, loc.blob_sha.as_ref())?;
+                    let cached = self.get_or_parse_for_show(session_id, &workspace, &loc)?;
                     show::show_members(&cached, &loc.path, &workspace, symbol, &self.lang_registry)
                 })
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
@@ -104,8 +134,7 @@ impl ForgeQLEngine {
                 .resolve_body_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
-                    let cached =
-                        self.get_or_parse_for_show(session_id, &loc.path, loc.blob_sha.as_ref())?;
+                    let cached = self.get_or_parse_for_show(session_id, &workspace, &loc)?;
                     show::show_body(
                         &cached,
                         &loc.path,
@@ -124,8 +153,7 @@ impl ForgeQLEngine {
                 .resolve_body_symbol(symbol, clauses, root)
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
-                    let cached =
-                        self.get_or_parse_for_show(session_id, &loc.path, loc.blob_sha.as_ref())?;
+                    let cached = self.get_or_parse_for_show(session_id, &workspace, &loc)?;
                     show::show_callees(
                         &cached,
                         &loc.path,
@@ -288,20 +316,23 @@ impl ForgeQLEngine {
         Ok(ForgeQLResult::Show(show_result))
     }
 
-    /// Get a cached parse for the given path, or parse fresh on miss.
+    /// Get a cached parse for a symbol location, with bare-repo fallback.
     ///
-    /// Uses the session's `ParseCache` (capacity 32) when a session is active.
-    /// Falls back to a one-shot parse when no session is available.
+    /// Uses the session's `ParseCache` (capacity 32) when a session is active;
+    /// falls back to a one-shot parse when no session is available.
     ///
-    /// `blob_sha` is the content SHA-1 known at resolve time (populated by
-    /// the columnar backend from `SegmentMeta::content_id`).  When `Some`:
-    /// - cache *hit* → returns immediately, no file read
-    /// - cache *miss* → reads file but skips `sha1_of_bytes`
+    /// Reading strategy:
+    /// - **Cache hit** (by `blob_sha`): returns immediately — no file or git read.
+    /// - **Cache miss**: calls `read_bytes_for_show` which transparently falls back
+    ///   to `Workspace::read_blob_by_sha` on bare repos where the file is absent.
+    ///
+    /// If `blob_sha` is `None`, bytes are read from disk and the SHA-1 is
+    /// computed from the content (legacy backend behaviour).
     fn get_or_parse_for_show(
         &self,
         session_id: Option<&str>,
-        path: &Path,
-        blob_sha: Option<&[u8; 20]>,
+        workspace: &Workspace,
+        loc: &SymbolLocation,
     ) -> Result<Arc<CachedParse>> {
         use crate::ast::parse_cache::ParseCache;
 
@@ -312,9 +343,28 @@ impl ForgeQLEngine {
                 .parse_cache
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            return guard.get_or_parse_with_hint(path, &self.lang_registry, blob_sha);
+
+            // Fast path: cache hit by blob SHA — no I/O of any kind.
+            if let Some(sha) = loc.blob_sha.as_ref()
+                && let Some(hit) = guard.get(sha)
+            {
+                return Ok(hit);
+            }
+
+            // Miss (or no SHA hint): read bytes with bare-repo fallback, then parse.
+            let bytes = read_bytes_for_show(workspace, loc)?;
+            let hash = loc.blob_sha.unwrap_or_else(|| sha1_of_bytes(&bytes));
+            return guard.get_or_parse_with_bytes(hash, &loc.path, bytes, &self.lang_registry);
         }
-        // No active session — parse without cache.
-        ParseCache::with_capacity(1).get_or_parse_with_hint(path, &self.lang_registry, blob_sha)
+
+        // No active session — one-shot parse with bare-repo fallback.
+        let bytes = read_bytes_for_show(workspace, loc)?;
+        let hash = loc.blob_sha.unwrap_or_else(|| sha1_of_bytes(&bytes));
+        ParseCache::with_capacity(1).get_or_parse_with_bytes(
+            hash,
+            &loc.path,
+            bytes,
+            &self.lang_registry,
+        )
     }
 }

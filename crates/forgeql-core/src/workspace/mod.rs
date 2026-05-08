@@ -2,7 +2,7 @@ pub mod file_io;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use tracing::debug;
 
@@ -125,6 +125,36 @@ impl Workspace {
             anyhow::bail!("path '{user_path}' escapes the worktree root");
         }
         Ok(normalised)
+    }
+
+    /// Return `true` when the workspace has no working directory — i.e. it is
+    /// a bare clone or a worktree whose checked-out files are not present on
+    /// disk.
+    ///
+    /// Detection: a normal working tree always has a `.git` entry (file or
+    /// directory) at its root; a bare repository has neither.
+    ///
+    /// Used by the SHOW path to decide whether a git blob fallback is needed
+    /// when `file_io::read_bytes` fails.
+    #[must_use]
+    pub fn is_bare(&self) -> bool {
+        !self.root.join(".git").exists() && !self.root.is_file()
+    }
+
+    /// Read the content of a git blob by its 20-byte SHA-1 object ID.
+    ///
+    /// Discovers the git repository via `git2::Repository::discover` starting
+    /// from `self.root`.  Works for both normal and bare repositories.
+    ///
+    /// # Errors
+    /// Returns `Err` if the repository cannot be opened, the OID is invalid,
+    /// or no blob with that SHA-1 exists in the object store.
+    pub fn read_blob_by_sha(&self, sha: &[u8; 20]) -> Result<Vec<u8>> {
+        let repo = git2::Repository::discover(&self.root)
+            .context("cannot open git repo for blob fallback")?;
+        let oid = git2::Oid::from_bytes(sha).context("invalid blob SHA")?;
+        let blob = repo.find_blob(oid).context("blob not found in git")?;
+        Ok(blob.content().to_vec())
     }
 }
 
