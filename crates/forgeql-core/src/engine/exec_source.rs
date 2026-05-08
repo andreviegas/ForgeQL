@@ -324,126 +324,23 @@ impl ForgeQLEngine {
         session.resume_index()?;
 
         // If the columnar backend is enabled, ensure the overlay exists for this
-        // commit — build it on-demand if missing (e.g. when the legacy index was
-        // loaded from cache, skipping `build_index` and its shadow-write path).
-        if let Some(ctx) = session.columnar_build().cloned() {
+        // commit and install a ready-to-query ColumnarStorage on the session.
+        if let Some(ctx) = session.columnar_build().cloned()
+            && let Some(legacy) = session.legacy_storage()
+        {
             let commit =
                 crate::session::Session::get_head_oid(&session.worktree_path).unwrap_or_default();
-            let overlay_path = ctx.overlay_path_for(&commit);
-
-            // Build overlay on-demand when it doesn't exist yet (e.g. on
-            // legacy-cache-hit where build_index was skipped).
-            // Also rebuild when the file is present but unreadable
-            // (corrupt or schema-version mismatch from a previous release).
-            let needs_build = if overlay_path.exists() {
-                use crate::storage::columnar::overlay::Overlay as _Overlay;
-                match _Overlay::open(&overlay_path) {
-                    Ok(_) => false,
-                    Err(e) => {
-                        tracing::info!(
-                            %commit,
-                            "columnar overlay invalid, will rebuild: {e}"
-                        );
-                        let _ = std::fs::remove_file(&overlay_path);
-                        true
-                    }
-                }
-            } else {
-                true
-            };
-            if needs_build
-                && let Some(legacy) = session.legacy_storage()
-                && let Some(table) = legacy.table()
-            {
-                // Phase 05 R7: serialise concurrent overlay builds for
-                // the same commit across processes/threads.  We hold
-                // the lock for the entire build+rename critical section
-                // and re-check overlay existence inside it so a peer
-                // that finished while we waited is observed.
-                use crate::storage::columnar::overlay::Overlay as _Overlay;
-                use crate::storage::columnar::overlay_lock::OverlayLock;
-                match OverlayLock::acquire(&overlay_path) {
-                    Ok(_lock) => {
-                        // Inside the lock — peer may have already built it.
-                        let still_needs_build = if overlay_path.exists() {
-                            _Overlay::open(&overlay_path).is_err()
-                        } else {
-                            true
-                        };
-                        if still_needs_build {
-                            let writer = crate::storage::columnar::ShadowWriter::new(
-                                table,
-                                ctx.segments_dir.as_path(),
-                                ctx.provider_id.as_str(),
-                                &*ctx.hash_fn,
-                                std::collections::HashMap::new(),
-                            );
-                            match writer.run() {
-                                Ok(result) => {
-                                    let builder = crate::storage::columnar::OverlayBuilder::new(
-                                        ctx.provider_id.as_str(),
-                                        ctx.segments_dir.clone(),
-                                        session.worktree_path.clone(),
-                                        result.segment_map,
-                                    );
-                                    if let Err(e) = builder.build_and_persist(&overlay_path) {
-                                        tracing::warn!(
-                                            %commit,
-                                            "columnar overlay build failed (non-fatal): {e}"
-                                        );
-                                    }
-                                }
-                                Err(e) => tracing::warn!(
-                                    %commit,
-                                    "columnar shadow-write failed (non-fatal): {e}"
-                                ),
-                            }
-                        } else {
-                            tracing::debug!(
-                                %commit,
-                                "columnar overlay already built by peer while waiting for lock"
-                            );
-                        }
-                        // _lock dropped here — releases flock.
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            %commit,
-                            "columnar overlay lock acquire failed (non-fatal): {e}"
-                        );
-                    }
-                }
-            }
-
-            if overlay_path.exists() {
-                use crate::storage::columnar::ColumnarStorage;
-                use crate::storage::columnar::overlay::Overlay;
-                match Overlay::open(&overlay_path) {
-                    Ok(overlay) => {
-                        let segments: Vec<std::sync::Arc<crate::storage::columnar::SegmentReader>> =
-                            overlay
-                                .segments()
-                                .iter()
-                                .filter_map(|meta| {
-                                    let seg_dir = ctx.segment_dir_for(&meta.hex_content_id);
-                                    crate::storage::columnar::SegmentReader::open(&seg_dir)
-                                        .ok()
-                                        .map(std::sync::Arc::new)
-                                })
-                                .collect();
-                        session.install_columnar(Box::new(ColumnarStorage::new(
-                            session.worktree_path.clone(),
-                            segments,
-                            overlay,
-                        )));
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            %commit,
-                            "columnar overlay open failed (non-fatal): {e}"
-                        );
-                    }
-                }
+            match crate::storage::columnar::ColumnarStorage::warm_or_open(
+                &ctx,
+                Some(legacy),
+                session.worktree_path.clone(),
+                &commit,
+            ) {
+                Ok(storage) => session.install_columnar(Box::new(storage)),
+                Err(e) => tracing::warn!(
+                    %commit,
+                    "columnar warm_or_open failed (non-fatal): {e}"
+                ),
             }
         }
 
