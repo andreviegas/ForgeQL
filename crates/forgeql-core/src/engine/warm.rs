@@ -28,7 +28,6 @@ use crate::git::{source::Source, worktree};
 use crate::session::Session;
 use crate::storage::HashFn;
 use crate::storage::columnar::overlay::Overlay;
-use crate::storage::columnar::overlay_lock::OverlayLock;
 use crate::storage::git_sha1_provider::git_blob_sha1;
 
 /// One snapshot to warm — a (`branch`, `commit_sha`) pair.
@@ -232,20 +231,17 @@ pub fn warm_snapshot(
             hash_fn,
         ));
 
-        // Take per-overlay file lock so we don't fight a concurrent USE
-        // building the same commit (R7).  Re-check after acquiring.
-        let _lock = OverlayLock::acquire(&overlay_path)?;
-        if overlay_path.exists() && Overlay::open(&overlay_path).is_ok() {
-            debug!(
-                source = %source_name,
-                commit = %target.commit_sha,
-                "warm_snapshot: peer built overlay while we waited for lock"
-            );
-            return Ok(());
-        }
-
-        // build_index emits segments and overlay inline when shadow-write is set.
+        // build_index rebuilds the legacy index; warm_or_open then builds
+        // the columnar segments and overlay (locking internally).
         session.build_index()?;
+        if let Some(ctx) = session.columnar_build().cloned() {
+            let _ = crate::storage::columnar::ColumnarStorage::warm(
+                &ctx,
+                session.legacy_storage(),
+                wt_path.clone(),
+                &target.commit_sha,
+            );
+        }
         Ok(())
     })();
 
