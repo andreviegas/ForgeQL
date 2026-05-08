@@ -16,7 +16,7 @@
 //!
 //! `SHOW` commands (`resolve_symbol`, etc.) are out of scope for Phase 05 and
 //! return a "Phase 06" error so callers can fall back to the legacy backend.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -166,6 +166,27 @@ impl ColumnarStorage {
             });
         }
         acc
+    }
+
+    /// Return the set of segment indices whose `source_path` passes
+    /// `clauses.in_glob` AND `clauses.exclude_glob`.
+    ///
+    /// Returns `None` when neither filter is set (caller should treat as
+    /// "all segments allowed").  Used to prune non-matching segments
+    /// *before* `group_by_segment` so they are never opened or materialised.
+    fn segments_passing_path_filter(&self, clauses: &Clauses) -> Option<HashSet<u32>> {
+        if clauses.in_glob.is_none() && clauses.exclude_glob.is_none() {
+            return None;
+        }
+        let mut allowed = HashSet::new();
+        for (idx, meta) in self.overlay.segments().iter().enumerate() {
+            if passes_resolve_glob(&meta.source_path, clauses)
+                && let Ok(seg_idx) = u32::try_from(idx)
+            {
+                let _ = allowed.insert(seg_idx);
+            }
+        }
+        Some(allowed)
     }
 
     /// Stage 2 — partition global row IDs by segment index.
@@ -436,14 +457,21 @@ impl StorageEngine for ColumnarStorage {
 
     fn find_symbols(&self, clauses: &Clauses, _root: &Path) -> Result<Vec<SymbolMatch>> {
         let candidates = self.prefilter_global(clauses);
-        let by_segment = self.group_by_segment(&candidates);
+        let mut by_segment = self.group_by_segment(&candidates);
+
+        // Stage 2b — drop segments whose source_path does not match the
+        // IN / EXCLUDE glob filters.  This avoids opening and materialising
+        // thousands of segments for narrow-path queries (e.g. IN 'drivers/**').
+        if let Some(allowed) = self.segments_passing_path_filter(clauses) {
+            by_segment.retain(|seg_idx, _| allowed.contains(seg_idx));
+        }
+
         let mut results = self.materialize_all(&by_segment);
         // Deduplicate on (name, fql_kind, path, line) to match legacy backend
         // behaviour.  The legacy deduplicates on (name_id, path_id, node_kind_id,
         // line); including fql_kind here is the closest approximation available
         // in the columnar result, which does not store raw node_kind.
         {
-            use std::collections::HashSet;
             type DedupeKey = (
                 String,
                 Option<String>,
