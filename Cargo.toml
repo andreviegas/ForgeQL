@@ -124,3 +124,4 @@ tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
 
 # --- testing ---
 insta            = "1"
+criterion        = { version = "0.5", features = ["html_reports"] }

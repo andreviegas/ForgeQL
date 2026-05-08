@@ -808,9 +808,20 @@ fn build_engine() -> (ForgeQLEngine, String, tempfile::TempDir) {
 
     let data_dir = dir.path().join("data");
     let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
-    let session_id = engine
-        .register_local_session(dir.path())
-        .expect("register session");
+
+    // When SMS_BACKEND=columnar the session uses the shadow-write columnar path so
+    // that run-regression.sh can compare columnar vs legacy timings from two runs.
+    let session_id = if std::env::var("SMS_BACKEND").as_deref() == Ok("columnar") {
+        let segments_dir = dir.path().join("segments");
+        let overlays_dir = dir.path().join("overlays");
+        engine
+            .register_local_session_with_columnar(dir.path(), &segments_dir, &overlays_dir)
+            .expect("register columnar session")
+    } else {
+        engine
+            .register_local_session(dir.path())
+            .expect("register session")
+    };
 
     (engine, session_id, dir)
 }

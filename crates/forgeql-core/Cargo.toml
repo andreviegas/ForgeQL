@@ -61,5 +61,11 @@ thiserror   = { workspace = true }
 tracing     = { workspace = true }
 
 [dev-dependencies]
-insta       = { workspace = true }
+insta        = { workspace = true }
+criterion    = { workspace = true }
 forgeql-core = { path = ".", features = ["test-helpers"] }
+
+[[bench]]
+name              = "columnar_filter"
+harness           = false
+required-features = ["test-helpers"]
