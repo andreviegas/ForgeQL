@@ -1252,3 +1252,127 @@ fn resolve_symbol_deterministic_on_duplicates() {
         "resolve_symbol byte_range differs between calls"
     );
 }
+
+// ── Phase 06b: bare-repo SHOW fallback test ───────────────────────────────────
+
+/// Verify that `SHOW *` still works when the source file is absent from disk
+/// and the workspace is identified as a bare-repo (Phase 06b, Gap 5 gate).
+///
+/// Mirrors the production path in `read_bytes_for_show` (engine/exec_show.rs):
+///
+/// ```text
+/// file_io::read_bytes  →  Err(_)  ──►  workspace.is_bare() true
+///                                       workspace.read_blob_by_sha(&sha)  →  Ok(bytes)
+/// ```
+///
+/// Steps
+/// -----
+/// 1. Init a **bare** git repository in a `TempDir`.
+/// 2. Store the `canonical.cpp` fixture as a loose blob via `repo.blob()`.
+/// 3. Build a `Workspace` over the bare-repo root and assert `is_bare()`.
+/// 4. Call `Workspace::read_blob_by_sha` and assert the returned bytes match.
+/// 5. Build a `CachedParse` from those bytes (using `ParseCache`) and a
+///    phantom path inside the workspace (the file does NOT exist on disk).
+/// 6. Locate `bar` in the legacy symbol table to obtain a valid byte-range.
+/// 7. Call `show_context` with the git-fetched bytes → assert success.
+/// 8. Call `show_body` with the git-fetched `CachedParse` → assert success.
+///
+/// Steps 7 and 8 prove that the bytes obtained via the git-blob fallback are
+/// transparently usable by downstream SHOW functions, closing the full path.
+#[test]
+fn bare_repo_show_reads_bytes_from_git() {
+    use std::collections::HashMap as StdHashMap;
+
+    use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
+    use forgeql_core::ast::parse_cache::{ParseCache, sha1_of_bytes};
+    use forgeql_core::ast::show::{show_body, show_context};
+    use forgeql_core::workspace::Workspace;
+
+    // ── 1. Init a bare git repository ────────────────────────────────────────
+    let tmp = TempDir::new().expect("TempDir");
+    let bare_root = tmp.path();
+
+    let repo = git2::Repository::init_bare(bare_root).expect("git init --bare");
+
+    // ── 2. Store canonical.cpp as a loose blob ────────────────────────────────
+    let cpp_bytes = std::fs::read(fixture_path("canonical.cpp")).expect("read canonical.cpp");
+    let oid = repo.blob(&cpp_bytes).expect("repo.blob");
+    let blob_sha: [u8; 20] = oid.as_bytes().try_into().expect("OID is 20 bytes");
+
+    // ── 3. Create Workspace — must report is_bare() == true ──────────────────
+    // A bare git repo has no `.git` subdirectory, so `is_bare()` returns true.
+    let workspace = Workspace::new(bare_root).expect("Workspace::new");
+    assert!(
+        workspace.is_bare(),
+        "workspace over a bare git repo must report is_bare() == true"
+    );
+
+    // ── 4. Fetch bytes from git — file is NOT on disk ─────────────────────────
+    // The phantom path lives inside the workspace root but is never written.
+    let phantom_path = bare_root.join("canonical.cpp");
+    assert!(
+        !phantom_path.exists(),
+        "phantom path must not exist on disk for this test to be meaningful"
+    );
+
+    let fetched = workspace
+        .read_blob_by_sha(&blob_sha)
+        .expect("read_blob_by_sha on bare repo");
+    assert_eq!(
+        fetched, cpp_bytes,
+        "bytes fetched from git must match original fixture"
+    );
+
+    // ── 5. Build CachedParse from the git-fetched bytes ──────────────────────
+    let registry =
+        LanguageRegistry::new(vec![Arc::new(CppLanguageInline) as Arc<dyn LanguageSupport>]);
+    let hash = sha1_of_bytes(&fetched);
+    let mut cache = ParseCache::with_capacity(4);
+    let cached = cache
+        .get_or_parse_with_bytes(hash, &phantom_path, fetched.clone(), &registry)
+        .expect("get_or_parse_with_bytes on git-fetched bytes");
+
+    // ── 6. Locate `bar` in the legacy table for a valid byte-range ───────────
+    let table = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let row = table.find_def("bar").expect("bar in legacy table");
+
+    // ── 7. show_context — takes raw &[u8] directly ───────────────────────────
+    let ctx = show_context(
+        &fetched,
+        &phantom_path,
+        row.byte_range.start,
+        &workspace,
+        "bar",
+        3,
+    )
+    .expect("show_context on git-fetched bytes");
+    assert_eq!(ctx["op"], "show_context", "show_context op field");
+    assert!(ctx["error"].is_null(), "show_context must not error");
+    assert!(
+        ctx["center_line"].as_u64().unwrap_or(0) > 0,
+        "show_context center_line must be > 0"
+    );
+
+    // ── 8. show_body — takes CachedParse built from git bytes ────────────────
+    // `show_body` accepts enrichment as a HashMap<String, String> for optional
+    // callee-redirect hints.  Empty map = no body_symbol redirect, which is
+    // fine for this test (we just need the SHOW path to complete without error).
+    let no_enrichment: StdHashMap<String, String> = StdHashMap::new();
+    let body = show_body(
+        &cached,
+        &phantom_path,
+        row.byte_range.start,
+        &no_enrichment,
+        &workspace,
+        "bar",
+        Some(0),
+        &registry,
+    )
+    .expect("show_body on git-fetched CachedParse");
+    assert_eq!(body["op"], "show_body", "show_body op field");
+    assert!(body["error"].is_null(), "show_body must not error");
+    assert!(
+        body["start_line"].as_u64().unwrap_or(0) > 0,
+        "show_body start_line must be > 0"
+    );
+}
