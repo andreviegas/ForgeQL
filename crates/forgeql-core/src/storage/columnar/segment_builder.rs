@@ -40,6 +40,22 @@ pub const POSTING_ENRICHMENT_FIELDS: &[&str] = &[
     "is_async",
     "is_generic",
 ];
+/// Numeric columns for which the builder writes `zonemap_<col>.bin`."
+///
+/// A zone map is an 8-byte file `[min: u32 LE][max: u32 LE]` that lets the
+/// query engine skip segments whose value range cannot satisfy a numeric
+/// predicate (e.g. `WHERE line > 500` skips segments with max_line ≤ 500).
+///
+/// Only columns that carry meaningful range semantics are listed here;
+/// columns that use `u32::MAX` as a sentinel for NULL are excluded from
+/// zone-map building (the sentinel would inflate the max artificially).
+pub const ZONEMAP_NUMERIC_FIELDS: &[(&str, bool)] = &[
+    // (column_name, has_null_sentinel)
+    ("line", false),
+    ("usages_count", false),
+    ("byte_start", false),
+    ("byte_end", false),
+];
 /// Current on-disk schema version.  Bump when the format changes.
 const SCHEMA_VERSION: u32 = 1;
 /// Type-tag for dense `u32` columns (core columns).
@@ -411,6 +427,15 @@ impl SegmentBuilder {
         // --- write per-field enrichment postings (additive, optional) ---
         write_enrichment_postings(&tmp, &extra_arrays)?;
 
+        // --- write zone maps for numeric columns (additive, optional) ---
+        let zone_cols: &[(&str, &[u32])] = &[
+            ("line", &self.col_line),
+            ("usages_count", &self.col_usages_count),
+            ("byte_start", &self.col_byte_start),
+            ("byte_end", &self.col_byte_end),
+        ];
+        write_zone_maps(&tmp, zone_cols)?;
+
         // --- build column metadata (dynamic to include extra cols) ---
         let mut col_meta: Vec<(&str, u8)> = vec![
             ("name_id", TYPE_TAG_U32),
@@ -608,6 +633,48 @@ fn write_enrichment_postings(dir: &Path, extra_arrays: &[(String, Vec<u32>)]) ->
 
         let filename = format!("postings_{field}.bin");
         std::fs::write(dir.join(&filename), &buf).with_context(|| format!("writing {filename}"))?;
+    }
+    Ok(())
+}
+
+/// Write `zonemap_<col>.bin` for each column in [`ZONEMAP_NUMERIC_FIELDS`].
+///
+/// Each file is exactly 8 bytes: `[min: u32 LE][max: u32 LE]`.  If all
+/// values in the column are absent (empty segment), the file is omitted so
+/// readers can silently skip missing zone-map files.
+///
+/// `core_cols` is a slice of `(col_name, values)` pairs for the numeric
+/// columns that should be considered.  Columns not found in `core_cols`
+/// are silently skipped.
+fn write_zone_maps(dir: &Path, core_cols: &[(&str, &[u32])]) -> Result<()> {
+    for (col_name, has_sentinel) in ZONEMAP_NUMERIC_FIELDS {
+        let Some((_, data)) = core_cols.iter().find(|(n, _)| n == col_name) else {
+            continue;
+        };
+        let mut min = u32::MAX;
+        let mut max = 0u32;
+        let mut found_any = false;
+        for &v in *data {
+            if *has_sentinel && v == u32::MAX {
+                continue;
+            }
+            if !found_any || v < min {
+                min = v;
+            }
+            if !found_any || v > max {
+                max = v;
+            }
+            found_any = true;
+        }
+        if !found_any {
+            // All values were sentinel or the column is empty — no zone map.
+            continue;
+        }
+        let mut buf = [0u8; 8];
+        buf[..4].copy_from_slice(&min.to_le_bytes());
+        buf[4..].copy_from_slice(&max.to_le_bytes());
+        std::fs::write(dir.join(format!("zonemap_{col_name}.bin")), buf)
+            .with_context(|| format!("writing zonemap_{col_name}.bin"))?;
     }
     Ok(())
 }

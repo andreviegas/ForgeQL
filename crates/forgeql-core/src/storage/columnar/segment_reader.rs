@@ -53,7 +53,7 @@ use crate::filter::apply_clauses;
 use crate::ir::{Clauses, CompareOp, PredicateValue};
 use crate::result::SymbolMatch;
 
-use super::segment_builder::{MAGIC, POSTING_ENRICHMENT_FIELDS};
+use super::segment_builder::{MAGIC, POSTING_ENRICHMENT_FIELDS, ZONEMAP_NUMERIC_FIELDS};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Format constants (must match segment_builder.rs)
@@ -212,6 +212,15 @@ pub struct SegmentReader {
     /// Absent when no posting file was found for the field (old segment or
     /// field not in the allowlist).  Callers fall back to the linear scan.
     pub(crate) field_postings: HashMap<String, HashMap<u32, RoaringBitmap>>,
+    /// Per-column zone maps loaded from `zonemap_<col>.bin` files.
+    ///
+    /// Key: column name (e.g. `"line"`, `"usages_count"`).
+    /// Value: `(min, max)` u32 range for all rows in this segment.
+    ///
+    /// Missing when the segment was written before zone maps were added or
+    /// when the column is empty.  Callers treat an absent entry as "no
+    /// zone-map available → cannot prune".
+    pub(crate) zone_maps: HashMap<String, (u32, u32)>,
     /// FST map: symbol name bytes → packed `(count | byte_offset << 32)`.
     pub(crate) name_fst: FstMap<Vec<u8>>,
     /// Flat `[u32 LE]` array of row IDs indexed by `name_fst`.
@@ -338,6 +347,9 @@ impl SegmentReader {
         // Per-field enrichment postings (optional — missing file = empty map).
         let field_postings = load_enrichment_postings(dir)?;
 
+        // Zone maps (optional — missing files are silently skipped).
+        let zone_maps = load_zone_maps(dir)?;
+
         // FST + name_postings (load FST bytes into a Vec<u8> for simplicity).
         let fst_bytes = std::fs::read(dir.join("name.fst")).context("reading name.fst")?;
         let name_fst = FstMap::new(fst_bytes).context("parsing name.fst")?;
@@ -360,6 +372,7 @@ impl SegmentReader {
             strings,
             kind_postings,
             field_postings,
+            zone_maps,
             name_fst,
             name_postings,
         })
@@ -817,6 +830,38 @@ fn load_enrichment_postings(dir: &Path) -> Result<HashMap<String, HashMap<u32, R
         let _ = result.insert(field.to_owned(), map);
     }
 
+    Ok(result)
+}
+
+/// Load zone maps from `zonemap_<col>.bin` files in `dir`.
+///
+/// For each column listed in [`ZONEMAP_NUMERIC_FIELDS`] the function
+/// attempts to read an 8-byte file `[min: u32 LE][max: u32 LE]`.
+/// Missing files are silently skipped — this is expected for segments
+/// written before zone maps were introduced (Phase 06d).
+///
+/// On success returns a map from column name to `(min, max)` pair.
+fn load_zone_maps(dir: &Path) -> Result<HashMap<String, (u32, u32)>> {
+    let mut result: HashMap<String, (u32, u32)> = HashMap::new();
+    for (col_name, _has_sentinel) in ZONEMAP_NUMERIC_FIELDS {
+        let path = dir.join(format!("zonemap_{col_name}.bin"));
+        let data = match std::fs::read(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(e).with_context(|| format!("reading {}", path.display()));
+            }
+            Ok(d) => d,
+        };
+        if data.len() < 8 {
+            // Corrupted or truncated file — skip rather than propagating.
+            continue;
+        }
+        #[allow(clippy::indexing_slicing)] // length checked above
+        let min = u32::from_le_bytes(data[..4].try_into().context("zonemap min bytes")?);
+        #[allow(clippy::indexing_slicing)]
+        let max = u32::from_le_bytes(data[4..8].try_into().context("zonemap max bytes")?);
+        let _ = result.insert((*col_name).to_owned(), (min, max));
+    }
     Ok(result)
 }
 

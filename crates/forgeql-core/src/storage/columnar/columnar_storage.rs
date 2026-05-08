@@ -198,6 +198,51 @@ impl ColumnarStorage {
         Some(allowed)
     }
 
+    /// Return the set of segment indices that *could* satisfy a numeric
+    /// range predicate (`WHERE col OP val`) based on their zone maps.
+    ///
+    /// A segment is pruned (excluded from the returned set) when its
+    /// `(min, max)` range provably cannot satisfy the predicate:
+    /// - `col > val`  → prune when `seg.max ≤ val`
+    /// - `col >= val` → prune when `seg.max < val`
+    /// - `col < val`  → prune when `seg.min ≥ val`
+    /// - `col <= val` → prune when `seg.min > val`
+    /// - `col = val`  → prune when `val < seg.min || val > seg.max`
+    ///
+    /// Returns `None` when no segment has a zone map for the column
+    /// (nothing can be pruned; caller should skip this optimisation).
+    fn segments_passing_zone_map(
+        &self,
+        col: &str,
+        op: CompareOp,
+        val: u32,
+    ) -> Option<HashSet<u32>> {
+        let mut any_zone_map = false;
+        let mut allowed: HashSet<u32> = HashSet::new();
+        for (idx, seg) in self.segments.iter().enumerate() {
+            let Some(&(min, max)) = seg.zone_maps.get(col) else {
+                // No zone map for this segment — cannot prune, include it.
+                if let Ok(seg_idx) = u32::try_from(idx) {
+                    let _ = allowed.insert(seg_idx);
+                }
+                continue;
+            };
+            any_zone_map = true;
+            let passes = match op {
+                CompareOp::Gt => max > val,
+                CompareOp::Gte => max >= val,
+                CompareOp::Lt => min < val,
+                CompareOp::Lte => min <= val,
+                CompareOp::Eq => val >= min && val <= max,
+                // Non-range operators — cannot prune.
+                _ => true,
+            };
+            if passes && let Ok(seg_idx) = u32::try_from(idx) {
+                let _ = allowed.insert(seg_idx);
+            }
+        }
+        if any_zone_map { Some(allowed) } else { None }
+    }
     /// Stage 2 — partition global row IDs by segment index.
     fn group_by_segment(&self, global_ids: &RoaringBitmap) -> HashMap<u32, RoaringBitmap> {
         let mut by_segment: HashMap<u32, RoaringBitmap> = HashMap::new();
@@ -387,6 +432,16 @@ impl ColumnarStorage {
             seg_order.retain(|seg_idx| allowed.contains(seg_idx));
         }
 
+        // Zone-map prune for numeric range predicates.
+        for pred in &clauses.where_predicates {
+            if let PredicateValue::Number(val) = &pred.value
+                && let Ok(val_u32) = u32::try_from(*val)
+                && let Some(allowed) = self.segments_passing_zone_map(&pred.field, pred.op, val_u32)
+            {
+                seg_order.retain(|seg_idx| allowed.contains(seg_idx));
+            }
+        }
+
         // `all` — every candidate that passes all filters.
         // `preferred` — subset that also matches `prefer_kinds` (if given).
         let mut all: Vec<(u32, u32)> = Vec::new();
@@ -498,6 +553,18 @@ impl StorageEngine for ColumnarStorage {
             by_segment.retain(|seg_idx, _| allowed.contains(seg_idx));
         }
 
+        // Stage 2c — drop segments that cannot satisfy numeric range predicates
+        // (WHERE line > N, WHERE usages_count >= N, etc.) using zone maps.
+        // This prune step is purely additive — segments that lack a zone map
+        // for the predicate column are always kept.
+        for pred in &clauses.where_predicates {
+            if let PredicateValue::Number(val) = &pred.value
+                && let Ok(val_u32) = u32::try_from(*val)
+                && let Some(allowed) = self.segments_passing_zone_map(&pred.field, pred.op, val_u32)
+            {
+                by_segment.retain(|seg_idx, _| allowed.contains(seg_idx));
+            }
+        }
         let mut results = self.materialize_all(&by_segment, clauses);
         // Deduplicate on (name, fql_kind, path, line) to match legacy backend
         // behaviour.  The legacy deduplicates on (name_id, path_id, node_kind_id,
