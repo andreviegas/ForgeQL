@@ -53,7 +53,7 @@ use crate::filter::apply_clauses;
 use crate::ir::{Clauses, CompareOp, PredicateValue};
 use crate::result::SymbolMatch;
 
-use super::segment_builder::MAGIC;
+use super::segment_builder::{MAGIC, POSTING_ENRICHMENT_FIELDS};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Format constants (must match segment_builder.rs)
@@ -203,6 +203,15 @@ pub struct SegmentReader {
     strings: StringPool,
     /// Per-fql_kind Roaring bitmaps loaded from `postings_fql_kind.bin`.
     pub(crate) kind_postings: HashMap<u32, RoaringBitmap>,
+    /// Per-field Roaring bitmaps loaded from `postings_<field>.bin` files.
+    ///
+    /// Outer key: enrichment field name (e.g. `"has_doc"`).
+    /// Inner key: per-segment string-pool ID for a value (e.g. ID of `"true"`).
+    /// Value: bitmap of local row IDs whose field == that value.
+    ///
+    /// Absent when no posting file was found for the field (old segment or
+    /// field not in the allowlist).  Callers fall back to the linear scan.
+    pub(crate) field_postings: HashMap<String, HashMap<u32, RoaringBitmap>>,
     /// FST map: symbol name bytes → packed `(count | byte_offset << 32)`.
     pub(crate) name_fst: FstMap<Vec<u8>>,
     /// Flat `[u32 LE]` array of row IDs indexed by `name_fst`.
@@ -326,6 +335,9 @@ impl SegmentReader {
         // Roaring postings.
         let kind_postings = load_kind_postings(dir)?;
 
+        // Per-field enrichment postings (optional — missing file = empty map).
+        let field_postings = load_enrichment_postings(dir)?;
+
         // FST + name_postings (load FST bytes into a Vec<u8> for simplicity).
         let fst_bytes = std::fs::read(dir.join("name.fst")).context("reading name.fst")?;
         let name_fst = FstMap::new(fst_bytes).context("parsing name.fst")?;
@@ -347,6 +359,7 @@ impl SegmentReader {
             extra_cols,
             strings,
             kind_postings,
+            field_postings,
             name_fst,
             name_postings,
         })
@@ -516,6 +529,46 @@ impl SegmentReader {
         }
 
         result.unwrap_or_else(|| (0..self.row_count).collect())
+    }
+
+    /// Narrow `local_rows` using per-segment enrichment posting bitmaps.
+    ///
+    /// For each `WHERE <field> = '<value>'` predicate where `<field>` has a
+    /// posting file loaded, intersects `local_rows` with the matching bitmap.
+    ///
+    /// Returns the narrowed bitmap.  When no enrichment posting is available
+    /// for a predicate the predicate is left to the residual `apply_clauses`
+    /// filter (safe — correctness is never compromised, only performance).
+    pub(crate) fn prefilter_enrichment_postings(
+        &self,
+        local_rows: RoaringBitmap,
+        clauses: &Clauses,
+    ) -> RoaringBitmap {
+        let mut rows = local_rows;
+        for pred in &clauses.where_predicates {
+            if pred.op != CompareOp::Eq {
+                continue;
+            }
+            let PredicateValue::String(ref val) = pred.value else {
+                continue;
+            };
+            let Some(field_map) = self.field_postings.get(&pred.field) else {
+                continue;
+            };
+            let Some(&value_id) = self.strings.reverse.get(val.as_str()) else {
+                // Value not in this segment's pool → no rows can match.
+                return RoaringBitmap::new();
+            };
+            let Some(bm) = field_map.get(&value_id) else {
+                // Value is in the pool but has no rows with this field value.
+                return RoaringBitmap::new();
+            };
+            rows &= bm;
+            if rows.is_empty() {
+                return rows;
+            }
+        }
+        rows
     }
 
     /// Materialise `rows` into `Vec<SymbolMatch>`.
@@ -694,6 +747,77 @@ fn load_kind_postings(dir: &Path) -> Result<HashMap<u32, RoaringBitmap>> {
     }
 
     Ok(map)
+}
+
+/// Load per-field enrichment posting files for fields in
+/// [`POSTING_ENRICHMENT_FIELDS`].
+///
+/// For each field, attempts to read `postings_<field>.bin` from `dir`.
+/// Missing files are silently skipped (returns an empty inner map for that
+/// field, which callers treat as "no posting available → linear scan").
+///
+/// The wire format is identical to `postings_fql_kind.bin`:
+/// ```text
+/// [value_count: u32 LE]
+/// ( [value_id: u32 LE]
+///   [bitmap_len: u32 LE]
+///   [bitmap_bytes: roaring serialized] )*
+/// ```
+fn load_enrichment_postings(dir: &Path) -> Result<HashMap<String, HashMap<u32, RoaringBitmap>>> {
+    let mut result: HashMap<String, HashMap<u32, RoaringBitmap>> = HashMap::new();
+
+    for &field in POSTING_ENRICHMENT_FIELDS {
+        let filename = format!("postings_{field}.bin");
+        let path = dir.join(&filename);
+        let data = match std::fs::read(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(e).with_context(|| format!("reading {}", path.display()));
+            }
+            Ok(d) => d,
+        };
+        if data.len() < 4 {
+            continue;
+        }
+
+        #[allow(clippy::indexing_slicing)] // length checked above
+        let value_count =
+            u32::from_le_bytes(data[..4].try_into().context("value_count bytes")?) as usize;
+        let mut map: HashMap<u32, RoaringBitmap> = HashMap::with_capacity(value_count);
+        let mut pos = 4usize;
+
+        for entry in 0..value_count {
+            ensure!(
+                pos + 8 <= data.len(),
+                "postings_{field}.bin truncated at entry {entry}"
+            );
+            #[allow(clippy::indexing_slicing)] // guarded by ensure! above
+            let value_id =
+                u32::from_le_bytes(data[pos..pos + 4].try_into().context("value_id bytes")?);
+            #[allow(clippy::indexing_slicing)]
+            let bitmap_len = u32::from_le_bytes(
+                data[pos + 4..pos + 8]
+                    .try_into()
+                    .context("bitmap_len bytes")?,
+            ) as usize;
+            pos += 8;
+            ensure!(
+                pos + bitmap_len <= data.len(),
+                "postings_{field}.bin bitmap truncated at entry {entry}"
+            );
+            #[allow(clippy::indexing_slicing)]
+            let bitmap = RoaringBitmap::deserialize_from(&data[pos..pos + bitmap_len])
+                .with_context(|| {
+                    format!("deserialising enrichment bitmap for {field} value_id {value_id}")
+                })?;
+            pos += bitmap_len;
+            let _ = map.insert(value_id, bitmap);
+        }
+
+        let _ = result.insert(field.to_owned(), map);
+    }
+
+    Ok(result)
 }
 
 /// Decode FST-encoded name posting.

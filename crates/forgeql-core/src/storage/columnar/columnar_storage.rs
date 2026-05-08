@@ -208,7 +208,11 @@ impl ColumnarStorage {
     }
 
     /// Stage 3 — materialize rows from each segment.
-    fn materialize_all(&self, by_segment: &HashMap<u32, RoaringBitmap>) -> Vec<SymbolMatch> {
+    fn materialize_all(
+        &self,
+        by_segment: &HashMap<u32, RoaringBitmap>,
+        clauses: &Clauses,
+    ) -> Vec<SymbolMatch> {
         // Sort segment indices by source_path so that rows from different files
         // are emitted in a deterministic (alphabetical path, then line) order.
         // This matches the legacy backend's iteration order (parsed file-by-file
@@ -233,10 +237,19 @@ impl ColumnarStorage {
             let Some(seg_meta) = self.overlay.segments().get(seg_idx as usize) else {
                 continue;
             };
+
+            // Stage 3a — narrow local row set using per-segment enrichment
+            // posting bitmaps before materialisation.  Falls back to the
+            // full local set when no posting file exists for a given predicate.
+            let narrowed = seg.prefilter_enrichment_postings(local_rows.clone(), clauses);
+            if narrowed.is_empty() {
+                continue;
+            }
+
             // Pass the relative source path so that IN/EXCLUDE glob matching in
             // apply_clauses works against the same relative paths that the
             // legacy backend stores.  Do NOT join with worktree_root here.
-            let mut seg_results = seg.materialize_rows(local_rows, Some(&seg_meta.source_path));
+            let mut seg_results = seg.materialize_rows(&narrowed, Some(&seg_meta.source_path));
             results.append(&mut seg_results);
         }
         results
@@ -466,7 +479,7 @@ impl StorageEngine for ColumnarStorage {
             by_segment.retain(|seg_idx, _| allowed.contains(seg_idx));
         }
 
-        let mut results = self.materialize_all(&by_segment);
+        let mut results = self.materialize_all(&by_segment, clauses);
         // Deduplicate on (name, fql_kind, path, line) to match legacy backend
         // behaviour.  The legacy deduplicates on (name_id, path_id, node_kind_id,
         // line); including fql_kind here is the closest approximation available
@@ -491,7 +504,7 @@ impl StorageEngine for ColumnarStorage {
         // Phase 05 scope: exact-name FST lookup.
         let candidates = self.overlay.lookup_name_bitmap(name);
         let by_segment = self.group_by_segment(&candidates);
-        let mut results = self.materialize_all(&by_segment);
+        let mut results = self.materialize_all(&by_segment, clauses);
         apply_clauses(&mut results, clauses);
         Ok(results)
     }
