@@ -33,6 +33,7 @@ use crate::workspace::Workspace;
 
 use super::overlay::{Overlay, RowPtr};
 use super::overlay_lock::OverlayLock;
+use super::segment_builder::ZONEMAP_NUMERIC_FIELDS;
 use super::segment_reader::SegmentReader;
 use crate::storage::{LegacyMemoryStorage, StorageEngine, SymbolLocation};
 
@@ -479,6 +480,22 @@ fn split_qualified_name(name: &str) -> (&str, Option<&str>) {
     (name, None)
 }
 
+/// Returns `true` when `clauses` contains at least one predicate that
+/// [`ColumnarStorage::prefilter_global`] can answer with a bitmap narrower
+/// than the full row-ID universe.  Used to decide whether the "fast path"
+/// in `find_symbols` can skip the global bitmap entirely.
+fn has_any_indexed_predicate(clauses: &Clauses) -> bool {
+    clauses.where_predicates.iter().any(|pred| {
+        matches!(
+            (pred.field.as_str(), &pred.op),
+            ("fql_kind", CompareOp::Eq)
+                | ("name", CompareOp::Eq)
+                | ("name", CompareOp::Like)
+                | ("name", CompareOp::Matches)
+        )
+    })
+}
+
 /// Check whether a workspace-relative `path` passes the `IN` / `EXCLUDE`
 /// glob filters stored in `clauses`.
 ///
@@ -577,12 +594,25 @@ impl ColumnarStorage {
         }
 
         // Zone-map prune for numeric range predicates.
-        for pred in &clauses.where_predicates {
-            if let PredicateValue::Number(val) = &pred.value
-                && let Ok(val_u32) = u32::try_from(*val)
-                && let Some(allowed) = self.segments_passing_zone_map(&pred.field, pred.op, val_u32)
-            {
-                seg_order.retain(|seg_idx| allowed.contains(seg_idx));
+        // Same field-alias and negative-value rules as in find_symbols.
+        'zone: for pred in &clauses.where_predicates {
+            if let PredicateValue::Number(val_i64) = &pred.value {
+                let col = match pred.field.as_str() {
+                    "usages" => "usages_count",
+                    other => other,
+                };
+                if *val_i64 < 0
+                    && matches!(pred.op, CompareOp::Lt | CompareOp::Lte)
+                    && ZONEMAP_NUMERIC_FIELDS.iter().any(|(f, _)| *f == col)
+                {
+                    seg_order.clear();
+                    break 'zone;
+                }
+                if let Ok(val_u32) = u32::try_from(*val_i64) {
+                    if let Some(allowed) = self.segments_passing_zone_map(col, pred.op, val_u32) {
+                        seg_order.retain(|seg_idx| allowed.contains(seg_idx));
+                    }
+                }
             }
         }
 
@@ -687,7 +717,7 @@ impl StorageEngine for ColumnarStorage {
     }
 
     fn find_symbols(&self, clauses: &Clauses, _root: &Path) -> Result<Vec<SymbolMatch>> {
-        // ── Query plan (Phase 06d) ────────────────────────────────────────────
+        // ── Query plan (Phase 06d + fast-path) ──────────────────────────────
         // Stage 1  — prefilter_global: intersect indexed predicates
         //             (fql_kind bitmap, exact name FST, trigram index for 3+
         //             char LIKE patterns, short-prefix index for 1-2 char LIKE)
@@ -695,6 +725,16 @@ impl StorageEngine for ColumnarStorage {
         // Stage 2a — group_by_segment: partition global IDs by segment index.
         // Stage 2b — path prefilter: drop segments whose source_path doesn't
         //             match IN / EXCLUDE globs.
+        //
+        // FAST PATH (2a+2b combined): when a path filter is present but no
+        // indexed predicate is available (fql_kind=, name=/LIKE/MATCHES),
+        // prefilter_global returns the full row-ID universe — building that
+        // 500k-row bitmap and distributing it across 5 000 segment buckets
+        // just to retain 25 of them is pure overhead.  Instead, iterate only
+        // the path-filtered segments and seed their local bitmaps directly.
+        // This is the common case for enrichment-only queries such as
+        // `WHERE is_recursive = 'true' IN 'drivers/**'`.
+        //
         // Stage 2c — zone-map prune: drop segments whose numeric column range
         //             cannot satisfy a WHERE col OP val predicate.
         // Stage 3  — materialize_all: for each surviving segment, narrow local
@@ -702,26 +742,65 @@ impl StorageEngine for ColumnarStorage {
         // Stage 4  — deduplicate on (name, fql_kind, path, line).
         // Stage 5  — apply_clauses: residual WHERE, ORDER BY, LIMIT, OFFSET.
         // ─────────────────────────────────────────────────────────────────────
-        let candidates = self.prefilter_global(clauses);
-        let mut by_segment = self.group_by_segment(&candidates);
+        let has_path_filter = clauses.in_glob.is_some() || clauses.exclude_glob.is_some();
 
-        // Stage 2b — drop segments whose source_path does not match the
-        // IN / EXCLUDE glob filters.  This avoids opening and materialising
-        // thousands of segments for narrow-path queries (e.g. IN 'drivers/**').
-        if let Some(allowed) = self.segments_passing_path_filter(clauses) {
-            by_segment.retain(|seg_idx, _| allowed.contains(seg_idx));
-        }
+        let mut by_segment: HashMap<u32, RoaringBitmap> = if has_path_filter
+            && !has_any_indexed_predicate(clauses)
+        {
+            // Fast path: skip Stage 1 + group_by_segment entirely.
+            // Directly seed by_segment with all local rows for every segment
+            // whose source_path passes the IN / EXCLUDE glob.
+            let mut map: HashMap<u32, RoaringBitmap> = HashMap::new();
+            for (idx, meta) in self.overlay.segments().iter().enumerate() {
+                if passes_resolve_glob(&meta.source_path, clauses) {
+                    if let (Some(seg), Ok(seg_idx)) = (self.segments.get(idx), u32::try_from(idx)) {
+                        let _ = map.insert(seg_idx, (0..seg.row_count).collect());
+                    }
+                }
+            }
+            map
+        } else {
+            // Normal path: global prefilter → group by segment → path prune.
+            let candidates = self.prefilter_global(clauses);
+            let mut map = self.group_by_segment(&candidates);
+            // Stage 2b — drop segments whose source_path does not match the
+            // IN / EXCLUDE glob filters.
+            if let Some(allowed) = self.segments_passing_path_filter(clauses) {
+                map.retain(|seg_idx, _| allowed.contains(seg_idx));
+            }
+            map
+        };
 
         // Stage 2c — drop segments that cannot satisfy numeric range predicates
-        // (WHERE line > N, WHERE usages_count >= N, etc.) using zone maps.
+        // (WHERE line > N, WHERE usages >= N, etc.) using zone maps.
         // This prune step is purely additive — segments that lack a zone map
         // for the predicate column are always kept.
-        for pred in &clauses.where_predicates {
-            if let PredicateValue::Number(val) = &pred.value
-                && let Ok(val_u32) = u32::try_from(*val)
-                && let Some(allowed) = self.segments_passing_zone_map(&pred.field, pred.op, val_u32)
-            {
-                by_segment.retain(|seg_idx, _| allowed.contains(seg_idx));
+        //
+        // Field aliases: the FQL parser emits "usages" but the zone-map file
+        // is written as "usages_count" by the segment builder.  Map here so
+        // zone-map pruning fires correctly for usages predicates.
+        //
+        // Negative-value short-circuit: u32 columns (line, usages_count, …)
+        // cannot satisfy col < 0 or col <= (negative).  Detect this without
+        // requiring zone-map files to exist and clear all candidates eagerly.
+        'zone: for pred in &clauses.where_predicates {
+            if let PredicateValue::Number(val_i64) = &pred.value {
+                let col = match pred.field.as_str() {
+                    "usages" => "usages_count",
+                    other => other,
+                };
+                if *val_i64 < 0
+                    && matches!(pred.op, CompareOp::Lt | CompareOp::Lte)
+                    && ZONEMAP_NUMERIC_FIELDS.iter().any(|(f, _)| *f == col)
+                {
+                    by_segment.clear();
+                    break 'zone;
+                }
+                if let Ok(val_u32) = u32::try_from(*val_i64) {
+                    if let Some(allowed) = self.segments_passing_zone_map(col, pred.op, val_u32) {
+                        by_segment.retain(|seg_idx, _| allowed.contains(seg_idx));
+                    }
+                }
             }
         }
         let mut results = self.materialize_all(&by_segment, clauses);

@@ -1725,3 +1725,98 @@ fn combined_short_prefix_and_path_glob_and_range_matches_legacy() {
         columnar.len()
     );
 }
+
+/// `WHERE enrichment_field = X IN glob` with no fql_kind/name predicate
+/// triggers the fast-path in find_symbols (skip global bitmap → iterate only
+/// path-filtered segments directly).  Result must be identical to the normal
+/// path and match the legacy backend count.
+#[test]
+fn enrichment_only_fast_path_parity() {
+    use forgeql_core::ir::{Clauses, CompareOp, Predicate, PredicateValue};
+    use forgeql_core::storage::StorageEngine;
+
+    let (table, _tmp, storage) = single_segment_cpp_overlay();
+
+    for value in &["true", "false"] {
+        // has_doc only, plus IN glob → triggers fast-path (no indexed predicate)
+        let clauses = Clauses {
+            where_predicates: vec![Predicate {
+                field: "has_doc".to_owned(),
+                op: CompareOp::Eq,
+                value: PredicateValue::String((*value).to_owned()),
+            }],
+            in_glob: Some("canonical.cpp".to_owned()),
+            ..Clauses::default()
+        };
+
+        let columnar = storage
+            .find_symbols(&clauses, std::path::Path::new("."))
+            .expect("fast-path find");
+
+        // Legacy count: rows with matching has_doc field.
+        let legacy_count = table
+            .rows
+            .iter()
+            .filter(|r| {
+                table
+                    .resolve_fields(&r.fields)
+                    .iter()
+                    .any(|(k, v): (&String, &String)| k == "has_doc" && v.as_str() == *value)
+            })
+            .count();
+
+        assert_eq!(
+            columnar.len(),
+            legacy_count,
+            "fast-path has_doc='{value}': columnar={} legacy={legacy_count}",
+            columnar.len()
+        );
+
+        for r in &columnar {
+            let has_doc = r.fields.get("has_doc").map(String::as_str);
+            assert_eq!(
+                has_doc,
+                Some(*value),
+                "fast-path row '{}' has wrong has_doc: expected '{value}', got {:?}",
+                r.name,
+                has_doc
+            );
+        }
+    }
+}
+
+/// `WHERE line < 0` must return empty immediately — no u32 line value can
+/// be negative.  The negative-value short-circuit in the zone-map wiring
+/// clears all candidates without opening any segment or reading zone-map files.
+#[test]
+fn negative_line_predicate_returns_empty() {
+    use forgeql_core::ir::{Clauses, CompareOp, Predicate, PredicateValue};
+    use forgeql_core::storage::StorageEngine;
+
+    let (_table, _tmp, storage) = single_segment_cpp_overlay();
+
+    for &(ref op, val) in &[
+        (CompareOp::Lt, -1_i64),
+        (CompareOp::Lte, -1_i64),
+        (CompareOp::Lt, 0_i64),
+    ] {
+        let clauses = Clauses {
+            where_predicates: vec![Predicate {
+                field: "line".to_owned(),
+                op: op.clone(),
+                value: PredicateValue::Number(val),
+            }],
+            ..Clauses::default()
+        };
+
+        let result = storage
+            .find_symbols(&clauses, std::path::Path::new("."))
+            .expect("find should not error");
+
+        assert!(
+            result.is_empty(),
+            "WHERE line {op:?} {val} should return empty, got {} rows",
+            result.len()
+        );
+    }
+}
