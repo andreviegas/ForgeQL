@@ -369,7 +369,8 @@ impl ColumnarStorage {
 fn pattern_as_prefix(pattern: &str) -> Option<Vec<u8>> {
     let mut prefix_bytes: Vec<u8> = Vec::new();
     let mut char_count = 0usize;
-    for ch in pattern.chars() {
+    let mut chars = pattern.char_indices().peekable();
+    while let Some((_, ch)) = chars.next() {
         if ch == '%' || ch == '_' {
             break;
         }
@@ -381,7 +382,15 @@ fn pattern_as_prefix(pattern: &str) -> Option<Vec<u8>> {
         }
         char_count += 1;
         if char_count == 2 {
-            // Only index 1-2 char prefixes; stop accumulating.
+            // Stop accumulating at 2 chars.  But if the literal continues
+            // (3rd character is not a wildcard and not end-of-string), the
+            // trigram index is a stronger prefilter — return None so the
+            // caller falls through to trigram_prefilter_for_pattern.
+            if let Some(&(_, next)) = chars.peek() {
+                if next != '%' && next != '_' {
+                    return None; // 3+ char literal — use trigrams
+                }
+            }
             break;
         }
     }
@@ -389,6 +398,60 @@ fn pattern_as_prefix(pattern: &str) -> Option<Vec<u8>> {
         Some(prefix_bytes)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pattern_as_prefix;
+
+    #[test]
+    fn prefix_one_char_wildcard() {
+        assert_eq!(pattern_as_prefix("k%"), Some(b"k".to_vec()));
+    }
+
+    #[test]
+    fn prefix_one_char_underscore_wildcard() {
+        // 'k' is the literal prefix; '_' is a single-char wildcard → stop
+        assert_eq!(pattern_as_prefix("k_%"), Some(b"k".to_vec()));
+    }
+
+    #[test]
+    fn prefix_two_chars_wildcard() {
+        assert_eq!(pattern_as_prefix("ab%"), Some(b"ab".to_vec()));
+    }
+
+    #[test]
+    fn prefix_three_char_literal_returns_none() {
+        // 3-char literal → None so trigrams handle it
+        assert_eq!(pattern_as_prefix("abc%"), None);
+    }
+
+    #[test]
+    fn prefix_two_char_literal_then_underscore() {
+        // 'k_a%' — 'k' literal, then '_' wildcard → 1-char prefix
+        assert_eq!(pattern_as_prefix("k_a%"), Some(b"k".to_vec()));
+    }
+
+    #[test]
+    fn prefix_starts_with_percent_returns_none() {
+        assert_eq!(pattern_as_prefix("%foo"), None);
+    }
+
+    #[test]
+    fn prefix_starts_with_underscore_returns_none() {
+        assert_eq!(pattern_as_prefix("_k%"), None);
+    }
+
+    #[test]
+    fn prefix_suffix_pattern_returns_none() {
+        assert_eq!(pattern_as_prefix("%k"), None);
+    }
+
+    #[test]
+    fn prefix_case_insensitive() {
+        // Builder lowercases names; pattern_as_prefix must lowercase too.
+        assert_eq!(pattern_as_prefix("AB%"), Some(b"ab".to_vec()));
     }
 }
 
