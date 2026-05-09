@@ -4,6 +4,58 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.11] — 2026-05-09 — PhaseFT3: Delta File Persistence
+
+### Added
+
+- **`DeltaFile` + `StagedEntry` (PhaseFT3)** — New module
+  `crates/forgeql-core/src/storage/columnar/delta_file.rs` serialises the
+  `DirtyOverlay` to `.forgeql-columnar-delta` using `bincode`. `DeltaFile::save`
+  performs an atomic write-then-rename; `DeltaFile::load` rebuilds the overlay
+  from staging segment directories; `DeltaFile::gc_orphaned_staging` removes
+  staging dirs not referenced by the current delta file; `DeltaFile::read_valid_hexes`
+  returns the hex IDs from a delta file non-fatally (empty on missing/corrupt).
+
+- **`ColumnarStorage::delta_path`** — New `PathBuf` field pointing to
+  `<worktree>/.forgeql-columnar-delta`. `save_delta`, `load_delta`, and
+  `reload_delta_after_rollback` methods added to `ColumnarStorage`.
+
+- **`Session::columnar_storage_mut()`** — New public method delegating to
+  `backends.columnar_engine_mut()`, providing safe external access to the
+  columnar backend without exposing the private `backends` field.
+
+- **`StorageEngine::flush_delta` / `reload_dirty_from_delta`** — Two new
+  default no-op trait methods, overridden by `ColumnarStorage` to save/restore
+  the delta file. Enables `exec_begin_transaction` and `exec_rollback` to drive
+  delta persistence through the trait interface.
+
+### Changed
+
+- **`warm_or_open`** — Calls `load_delta()` at all three return points so the
+  dirty overlay is restored on session reconnect.
+
+- **`reindex_files` + `purge_file`** — Both now call `save_delta()` after each
+  mutation so the delta file is always up to date.
+
+- **`exec_begin_transaction`** — Flushes the columnar delta before
+  `stage_and_commit` so the checkpoint commit captures the current overlay state.
+
+- **`exec_rollback`** — After `git reset --hard`, calls
+  `reload_delta_after_rollback()` which GCs orphaned staging dirs then reloads
+  the restored delta into RAM.
+
+- **`git/mod.rs`** — `.forgeql-columnar-delta` added to `CLEAN_COMMIT_EXCLUDED`
+  so it is never included in user-facing `COMMIT MESSAGE` history.
+
+### Tests
+
+- `delta_file_roundtrip` — bincode save/load round-trip for `DeltaFile`
+- `delta_survives_simulated_restart` — dirty state persists across session drop/reconnect
+- `rollback_gcs_orphaned_staging_segments` — orphaned staging dirs GC'd on rollback
+- `nested_rollback_restores_correct_delta` — nested BEGIN/ROLLBACK restores correct state
+
+---
+
 ## [0.48.10] — 2026-05-09 — PhaseFT1 + PhaseFT2: DirtyOverlay + reindex_files/purge_file
 
 ### Added
