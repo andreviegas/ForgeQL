@@ -33,6 +33,7 @@
 
 pub mod build_context;
 pub mod columnar_storage;
+pub mod dirty_overlay;
 pub mod manifest;
 pub mod overlay;
 pub mod overlay_builder;
@@ -43,6 +44,7 @@ pub mod shadow_writer;
 
 pub use build_context::ColumnarBuildContext;
 pub use columnar_storage::ColumnarStorage;
+pub use dirty_overlay::DirtyOverlay;
 pub use manifest::Manifest;
 pub use overlay_builder::OverlayBuilder;
 pub use segment_builder::SegmentBuilder;

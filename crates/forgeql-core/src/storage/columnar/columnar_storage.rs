@@ -31,6 +31,7 @@ use crate::ir::{Clauses, CompareOp, PredicateValue};
 use crate::result::SymbolMatch;
 use crate::workspace::Workspace;
 
+use super::dirty_overlay::DirtyOverlay;
 use super::overlay::{Overlay, RowPtr};
 use super::overlay_lock::OverlayLock;
 use super::segment_builder::ZONEMAP_NUMERIC_FIELDS;
@@ -44,7 +45,6 @@ use crate::storage::{LegacyMemoryStorage, StorageEngine, SymbolLocation};
 /// Disk-backed columnar [`StorageEngine`] backed by per-file segment readers
 /// and a workspace-level overlay index.
 ///
-/// Constructed by `exec_source::use_source` after the overlay is built/opened.
 pub struct ColumnarStorage {
     /// Worktree root; will be used by Phase 06 SHOW operations to resolve
     /// absolute source file paths for context/body retrieval.
@@ -54,6 +54,11 @@ pub struct ColumnarStorage {
     segments: Vec<Arc<SegmentReader>>,
     /// Workspace overlay shared across sessions on the same commit SHA.
     overlay: Arc<Overlay>,
+    /// Per-session in-RAM mutations on top of the persistent overlay.
+    ///
+    /// Always empty at session start. Populated by PhaseFT2 `reindex_files`.
+    /// Queried by `find_symbols` / `find_usages` to union persistent + dirty rows.
+    pub(crate) dirty: DirtyOverlay,
 }
 
 impl ColumnarStorage {
@@ -61,7 +66,7 @@ impl ColumnarStorage {
     ///
     /// `segments` **must** be in the same order as `overlay.segments()`.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         worktree_root: PathBuf,
         segments: Vec<Arc<SegmentReader>>,
         overlay: Arc<Overlay>,
@@ -70,6 +75,7 @@ impl ColumnarStorage {
             worktree_root,
             segments,
             overlay,
+            dirty: DirtyOverlay::new(),
         }
     }
 
@@ -723,6 +729,18 @@ impl StorageEngine for ColumnarStorage {
             map
         };
 
+        // Stage 2d — drop persistent segments shadowed by the dirty overlay.
+        // When a file has been changed or deleted in this session, its old
+        // persistent segment is filtered here so only the dirty version appears.
+        if !self.dirty.is_empty() {
+            by_segment.retain(|&seg_idx, _| {
+                self.overlay
+                    .segments()
+                    .get(seg_idx as usize)
+                    .is_none_or(|meta| !self.dirty.shadows(&meta.hex_content_id))
+            });
+        }
+
         // Stage 2c — drop segments that cannot satisfy numeric range predicates
         // (WHERE line > N, WHERE usages >= N, etc.) using zone maps.
         // This prune step is purely additive — segments that lack a zone map
@@ -762,6 +780,11 @@ impl StorageEngine for ColumnarStorage {
             }
         }
         let mut results = self.materialize_all(&by_segment, clauses);
+        // Stage 3b — union dirty overlay rows (empty when dirty overlay is empty).
+        if !self.dirty.is_empty() {
+            let mut dirty_results = self.dirty.materialize_all(clauses);
+            results.append(&mut dirty_results);
+        }
         // Deduplicate on (name, fql_kind, path, line) to match legacy backend
         // behaviour.  The legacy deduplicates on (name_id, path_id, node_kind_id,
         // line); including fql_kind here is the closest approximation available
@@ -783,10 +806,24 @@ impl StorageEngine for ColumnarStorage {
     }
 
     fn find_usages(&self, name: &str, clauses: &Clauses, _root: &Path) -> Result<Vec<SymbolMatch>> {
-        // Phase 05 scope: exact-name FST lookup.
+        // Phase 05 scope: exact-name FST lookup on persistent overlay.
         let candidates = self.overlay.lookup_name_bitmap(name);
-        let by_segment = self.group_by_segment(&candidates);
+        // Drop persistent segments shadowed by the dirty overlay.
+        let mut by_segment = self.group_by_segment(&candidates);
+        if !self.dirty.is_empty() {
+            by_segment.retain(|&seg_idx, _| {
+                self.overlay
+                    .segments()
+                    .get(seg_idx as usize)
+                    .is_none_or(|meta| !self.dirty.shadows(&meta.hex_content_id))
+            });
+        }
         let mut results = self.materialize_all(&by_segment, clauses);
+        // Union dirty overlay rows for this name.
+        if !self.dirty.is_empty() {
+            let mut dirty_results = self.dirty.lookup_name_results(name, clauses);
+            results.append(&mut dirty_results);
+        }
         apply_clauses(&mut results, clauses);
         Ok(results)
     }
@@ -1094,6 +1131,21 @@ impl ColumnarStorage {
                 SegmentReader::open(&dir).ok().map(Arc::new)
             })
             .collect()
+    }
+}
+
+impl ColumnarStorage {
+    /// Mutable access to the per-session dirty overlay.
+    ///
+    /// Used by PhaseFT2 `reindex_files` and PhaseFT3 delta-file loading.
+    pub const fn dirty_mut(&mut self) -> &mut DirtyOverlay {
+        &mut self.dirty
+    }
+
+    /// Read-only access to the per-session dirty overlay.
+    #[must_use]
+    pub const fn dirty(&self) -> &DirtyOverlay {
+        &self.dirty
     }
 }
 

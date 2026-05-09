@@ -1821,3 +1821,254 @@ fn negative_line_predicate_returns_empty() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PhaseFT1 gate tests — DirtyOverlay shadowing + union
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build a minimal segment from raw (name, fql_kind, line) tuples.
+/// Returns an opened `SegmentReader` stored at `dir`.
+fn build_dirty_segment(
+    rows: &[(&str, &str, u32)],
+    content_id_bytes: &[u8],
+    dir: &std::path::Path,
+) -> SegmentReader {
+    let mut builder = SegmentBuilder::new("test", content_id_bytes);
+    for &(name, kind, line) in rows {
+        let _ = builder.emit_row(name, kind, "rust", line, 0, 10, 0);
+    }
+    builder.flush(dir).expect("dirty segment flush");
+    SegmentReader::open(dir).expect("dirty SegmentReader::open")
+}
+
+/// PhaseFT1 gate: dirty overlay shadows persistent segment and unions dirty rows.
+///
+/// Setup:
+///   - 2-segment persistent overlay: `file1.cpp` (SymbolA, SymbolB) and
+///     `file2.rs` (SymbolC).
+///   - Dirty overlay: file1.cpp changed — new segment with SymbolD only.
+///
+/// Expected after dirty union:
+///   - SymbolA and SymbolB gone (shadowed).
+///   - SymbolD present (from dirty segment).
+///   - SymbolC still present (file2.rs not shadowed).
+///   - Total 2 rows.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn dirty_overlay_shadows_and_unions() {
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let seg_dir = tmp.path().join("segments").join("test");
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).unwrap();
+    std::fs::create_dir_all(&overlay_dir).unwrap();
+
+    // ── Persistent segment for file1.cpp: SymbolA + SymbolB ──
+    let file1_cid: Vec<u8> = vec![0x11u8; 8];
+    let file1_hex = file1_cid.iter().fold(String::new(), |mut acc, b| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
+    {
+        let mut builder = SegmentBuilder::new("test", &file1_cid);
+        let _ = builder.emit_row("SymbolA", "function", "cpp", 10, 0, 20, 0);
+        let _ = builder.emit_row("SymbolB", "function", "cpp", 20, 0, 40, 0);
+        builder
+            .flush(&seg_dir.join(&file1_hex))
+            .expect("file1 flush");
+    }
+
+    // ── Persistent segment for file2.rs: SymbolC ──
+    let file2_cid: Vec<u8> = vec![0x22u8; 8];
+    let file2_hex = file2_cid.iter().fold(String::new(), |mut acc, b| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
+    {
+        let mut builder = SegmentBuilder::new("test", &file2_cid);
+        let _ = builder.emit_row("SymbolC", "function", "rust", 5, 0, 10, 0);
+        builder
+            .flush(&seg_dir.join(&file2_hex))
+            .expect("file2 flush");
+    }
+
+    // ── Build 2-segment overlay ──
+    let root = tmp.path().to_path_buf();
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(root.join("file1.cpp"), file1_cid);
+    let _ = segment_map.insert(root.join("file2.rs"), file2_cid);
+
+    let overlay_path = overlay_dir.join("ft1_test.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        root.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    assert_eq!(
+        overlay.segments().len(),
+        2,
+        "expected 2 persistent segments"
+    );
+
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(
+                SegmentReader::open(&seg_dir.join(&meta.hex_content_id))
+                    .expect("open persistent segment"),
+            )
+        })
+        .collect();
+
+    let mut storage = ColumnarStorage::new(root.clone(), segments, overlay);
+
+    // ── Baseline: A, B, C all present ──
+    let clauses = Clauses::default();
+    let base = storage
+        .find_symbols(&clauses, &root)
+        .expect("baseline find_symbols");
+    let base_names: Vec<&str> = base.iter().map(|r| r.name.as_str()).collect();
+    assert!(
+        base_names.contains(&"SymbolA"),
+        "baseline: A missing from {base_names:?}"
+    );
+    assert!(
+        base_names.contains(&"SymbolB"),
+        "baseline: B missing from {base_names:?}"
+    );
+    assert!(
+        base_names.contains(&"SymbolC"),
+        "baseline: C missing from {base_names:?}"
+    );
+
+    // ── Build dirty segment for file1.cpp: SymbolD only ──
+    let dirty_cid: Vec<u8> = vec![0x33u8; 8];
+    let dirty_dir = tmp.path().join("staging").join("dirty_file1");
+    let dirty_reader = build_dirty_segment(&[("SymbolD", "function", 15)], &dirty_cid, &dirty_dir);
+
+    storage.dirty_mut().add_segment(
+        Arc::new(dirty_reader),
+        std::path::PathBuf::from("file1.cpp"), // workspace-relative
+        file1_hex,                             // replaces the persistent file1 segment
+    );
+
+    // ── After dirty: A and B gone, D present, C still there ──
+    let after = storage
+        .find_symbols(&clauses, &root)
+        .expect("dirty find_symbols");
+    let after_names: Vec<&str> = after.iter().map(|r| r.name.as_str()).collect();
+
+    assert!(
+        !after_names.contains(&"SymbolA"),
+        "SymbolA must be shadowed; got: {after_names:?}"
+    );
+    assert!(
+        !after_names.contains(&"SymbolB"),
+        "SymbolB must be shadowed; got: {after_names:?}"
+    );
+    assert!(
+        after_names.contains(&"SymbolD"),
+        "SymbolD must appear from dirty segment; got: {after_names:?}"
+    );
+    assert!(
+        after_names.contains(&"SymbolC"),
+        "SymbolC (file2.rs) must still be present; got: {after_names:?}"
+    );
+    assert_eq!(
+        after.len(),
+        2,
+        "expected exactly 2 rows (SymbolD + SymbolC); got: {after_names:?}"
+    );
+}
+
+/// PhaseFT1 gate: `find_usages` respects dirty overlay shadowing and union.
+#[test]
+fn dirty_overlay_find_usages_shadows_and_unions() {
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let seg_dir = tmp.path().join("segments").join("test");
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).unwrap();
+    std::fs::create_dir_all(&overlay_dir).unwrap();
+
+    // Persistent: file1.cpp with SymbolA.
+    let file1_cid: Vec<u8> = vec![0xAAu8; 8];
+    let file1_hex = file1_cid.iter().fold(String::new(), |mut acc, b| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
+    {
+        let mut builder = SegmentBuilder::new("test", &file1_cid);
+        let _ = builder.emit_row("SymbolA", "function", "cpp", 1, 0, 10, 0);
+        builder.flush(&seg_dir.join(&file1_hex)).expect("flush");
+    }
+
+    let root = tmp.path().to_path_buf();
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(root.join("file1.cpp"), file1_cid);
+
+    let overlay_path = overlay_dir.join("ft1_usages.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        root.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open"))
+        })
+        .collect();
+    let mut storage = ColumnarStorage::new(root.clone(), segments, overlay);
+
+    // Dirty: file1.cpp changed — SymbolA replaced by SymbolB.
+    let dirty_cid: Vec<u8> = vec![0xBBu8; 8];
+    let dirty_dir = tmp.path().join("staging").join("d1");
+    let dirty_reader = build_dirty_segment(&[("SymbolB", "function", 1)], &dirty_cid, &dirty_dir);
+    storage.dirty_mut().add_segment(
+        Arc::new(dirty_reader),
+        std::path::PathBuf::from("file1.cpp"),
+        file1_hex,
+    );
+
+    let clauses = Clauses::default();
+
+    // find_usages("SymbolA") must return empty — shadowed.
+    let usages_a = storage
+        .find_usages("SymbolA", &clauses, &root)
+        .expect("usages_a");
+    assert!(
+        usages_a.is_empty(),
+        "SymbolA must be shadowed after dirty overlay; got: {usages_a:?}"
+    );
+
+    // find_usages("SymbolB") must return 1 row from dirty segment.
+    let usages_b = storage
+        .find_usages("SymbolB", &clauses, &root)
+        .expect("usages_b");
+    assert_eq!(
+        usages_b.len(),
+        1,
+        "SymbolB must appear in dirty segment; got: {usages_b:?}"
+    );
+}

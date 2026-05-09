@@ -427,6 +427,19 @@ impl SegmentReader {
         decode_name_postings(encoded, postings)
     }
 
+    /// Return the hex-encoded content ID of this segment.
+    ///
+    /// Used by [`DirtyOverlay::staged_hex_ids`] to enumerate the hex IDs of
+    /// staged segments without storing a separate `String` field.
+    #[must_use]
+    pub fn content_id_hex(&self) -> String {
+        self.content_id.iter().fold(String::new(), |mut acc, b| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{b:02x}");
+            acc
+        })
+    }
+
     /// Read the symbol name for row `row`.
     pub fn name_of(&self, row: u32) -> &str {
         self.str_of_core(&self.col_name_id, row)
