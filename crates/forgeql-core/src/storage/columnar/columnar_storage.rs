@@ -522,6 +522,78 @@ impl ColumnarStorage {
     ) -> Option<SymbolLocation> {
         let (lookup_name, enclosing_owner) = split_qualified_name(name);
 
+        // Stage 1 — Dirty overlay: scan added segments before touching the persistent
+        // index.  This ensures names that are *new* in the dirty overlay (not yet in
+        // the persistent FST) are resolved, and dirty always wins over persistent.
+        if !self.dirty.is_empty() {
+            let mut dirty_all: Vec<SymbolLocation> = Vec::new();
+            let mut dirty_preferred: Vec<SymbolLocation> = Vec::new();
+            for ds in &self.dirty.added {
+                let row_ids = ds.reader.lookup_name(lookup_name);
+                if row_ids.is_empty() {
+                    continue;
+                }
+                let bm: RoaringBitmap = row_ids.into_iter().collect();
+                let bm = ds.reader.prefilter_enrichment_postings(bm, clauses);
+                for local_row in bm {
+                    if let Some(owner) = enclosing_owner
+                        && ds
+                            .reader
+                            .extra_field_str("enclosing_type", local_row)
+                            .unwrap_or("")
+                            != owner
+                    {
+                        continue;
+                    }
+                    let fql_kind_str = ds.reader.fql_kind_of(local_row);
+                    let line_num = ds.reader.line_of(local_row);
+                    let sm = SymbolMatch {
+                        name: ds.reader.name_of(local_row).to_owned(),
+                        node_kind: None,
+                        fql_kind: (!fql_kind_str.is_empty()).then(|| fql_kind_str.to_owned()),
+                        language: {
+                            let l = ds.reader.language_of(local_row);
+                            (!l.is_empty()).then(|| l.to_owned())
+                        },
+                        path: Some(ds.source_path.clone()),
+                        line: (line_num != 0).then_some(line_num as usize),
+                        usages_count: Some(ds.reader.usages_count_of(local_row) as usize),
+                        fields: ds.reader.enrichment_for_row(local_row),
+                        count: None,
+                    };
+                    if clauses
+                        .where_predicates
+                        .iter()
+                        .any(|p| !eval_predicate(&sm, p))
+                    {
+                        continue;
+                    }
+                    let blob_sha: Option<[u8; 20]> = ds.reader.content_id[..].try_into().ok();
+                    let enrichment = ds.reader.enrichment_for_row(local_row);
+                    let loc = SymbolLocation {
+                        path: root.join(&ds.source_path),
+                        byte_range: ds.reader.byte_start_of(local_row) as usize
+                            ..ds.reader.byte_end_of(local_row) as usize,
+                        line: line_num as usize,
+                        language_id: 0,
+                        node_kind: fql_kind_str.to_owned(),
+                        enrichment,
+                        blob_sha,
+                    };
+                    if prefer_kinds.is_some_and(|kinds| kinds.contains(&fql_kind_str)) {
+                        dirty_preferred.push(loc.clone());
+                    }
+                    dirty_all.push(loc);
+                }
+            }
+            if let Some(last) = dirty_preferred.pop() {
+                return Some(last);
+            }
+            if let Some(last) = dirty_all.pop() {
+                return Some(last);
+            }
+        }
+
         let global_bm = self.overlay.lookup_name_bitmap(lookup_name);
         if global_bm.is_empty() {
             return None;
@@ -536,6 +608,16 @@ impl ColumnarStorage {
                 .get(idx as usize)
                 .map(|m| m.source_path.clone())
         });
+
+        // Stage 2d — drop persistent segments shadowed by the dirty overlay.
+        if !self.dirty.is_empty() {
+            seg_order.retain(|&seg_idx| {
+                self.overlay
+                    .segments()
+                    .get(seg_idx as usize)
+                    .is_none_or(|meta| !self.dirty.shadows(&meta.hex_content_id))
+            });
+        }
 
         // Segment-level path prefilter — skip entire segments whose source_path
         // does not match IN/EXCLUDE globs.  The per-row passes_resolve_glob call

@@ -2072,3 +2072,89 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
         "SymbolB must appear in dirty segment; got: {usages_b:?}"
     );
 }
+
+/// Gate: resolve_symbol returns the dirty row (not the shadowed persistent one)
+/// and returns None for a name that no longer exists in the dirty overlay.
+#[test]
+fn dirty_overlay_resolve_symbol_shadows_and_unions() {
+    use forgeql_core::ir::Clauses;
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let seg_dir = tmp.path().join("segments").join("test");
+    let overlay_dir = tmp.path().join("overlays").join("test");
+    std::fs::create_dir_all(&seg_dir).unwrap();
+    std::fs::create_dir_all(&overlay_dir).unwrap();
+
+    // Persistent: file1.cpp has SymbolA (line 10) and SymbolB (line 20).
+    let file1_cid: Vec<u8> = vec![0x33u8; 8];
+    let file1_hex = file1_cid.iter().fold(String::new(), |mut acc, b| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
+    {
+        let mut builder = SegmentBuilder::new("test", &file1_cid);
+        let _ = builder.emit_row("SymbolA", "function", "cpp", 10, 0, 20, 0);
+        let _ = builder.emit_row("SymbolB", "function", "cpp", 20, 0, 40, 0);
+        builder
+            .flush(&seg_dir.join(&file1_hex))
+            .expect("file1 flush");
+    }
+
+    let root = tmp.path().to_path_buf();
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(root.join("file1.cpp"), file1_cid);
+
+    let overlay_path = overlay_dir.join("ft1_resolve.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        root.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open"))
+        })
+        .collect();
+    let mut storage = ColumnarStorage::new(root.clone(), segments, overlay);
+
+    // Dirty: file1.cpp changed — SymbolA gone, SymbolD added at line 5.
+    // replaces_hex must be file1_hex (the persistent segment's content ID).
+    let dirty_cid: Vec<u8> = vec![0xCCu8; 8];
+    let dirty_dir = tmp.path().join("staging").join("d2");
+    let dirty_reader = build_dirty_segment(&[("SymbolD", "function", 5)], &dirty_cid, &dirty_dir);
+    storage.dirty_mut().add_segment(
+        Arc::new(dirty_reader),
+        std::path::PathBuf::from("file1.cpp"),
+        file1_hex, // replaces the persistent file1 segment
+    );
+
+    let clauses = Clauses::default();
+
+    // resolve_symbol("SymbolA") must return None — shadowed and not in dirty.
+    let loc_a = storage.resolve_symbol("SymbolA", &clauses, &root).unwrap();
+    assert!(
+        loc_a.is_none(),
+        "SymbolA must be shadowed by dirty overlay; got: {loc_a:?}"
+    );
+
+    // resolve_symbol("SymbolD") must return the dirty row at line 5.
+    let loc_d = storage.resolve_symbol("SymbolD", &clauses, &root).unwrap();
+    assert!(loc_d.is_some(), "SymbolD must be found in dirty segment");
+    assert_eq!(
+        loc_d.as_ref().unwrap().line,
+        5,
+        "SymbolD must be at line 5; got: {loc_d:?}"
+    );
+}
