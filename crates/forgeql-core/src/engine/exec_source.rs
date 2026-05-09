@@ -335,6 +335,7 @@ impl ForgeQLEngine {
                 Some(legacy),
                 session.worktree_path.clone(),
                 &commit,
+                Arc::clone(&self.lang_registry),
             ) {
                 Ok(storage) => session.install_columnar(Box::new(storage)),
                 Err(e) => tracing::warn!(

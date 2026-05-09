@@ -29,7 +29,9 @@ use std::sync::Arc;
 
 use forgeql_core::ast::enrich::default_enrichers;
 use forgeql_core::ast::index::{SymbolTable, index_file};
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageSupport, RustLanguageInline};
+use forgeql_core::ast::lang::{
+    CppLanguageInline, LanguageRegistry, LanguageSupport, RustLanguageInline,
+};
 use forgeql_core::ir::Clauses;
 use forgeql_core::result::SymbolMatch;
 use forgeql_core::storage::columnar::{OverlayBuilder, SegmentBuilder, SegmentReader};
@@ -48,6 +50,19 @@ fn fixture_path(filename: &str) -> PathBuf {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+/// Index an arbitrary file by absolute path and return the `SymbolTable`.
+fn index_at_path(lang: &dyn LanguageSupport, path: &std::path::Path) -> SymbolTable {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&lang.tree_sitter_language())
+        .expect("set_language");
+    let enrichers = default_enrichers();
+    let mut table = SymbolTable::default();
+    let _ = index_file(&mut parser, path, &mut table, &enrichers, lang, None, None)
+        .expect("index_file should succeed");
+    table
+}
 
 /// Index a fixture file with the given language and return the `SymbolTable`.
 fn index_fixture(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
@@ -193,7 +208,12 @@ fn overlay_find_symbols_matches_legacy_merged() {
         })
         .collect();
 
-    let storage = ColumnarStorage::new(fixtures_dir(), segments, overlay);
+    let storage = ColumnarStorage::new(
+        fixtures_dir(),
+        segments,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
     let clauses = Clauses::default();
     let results = storage
         .find_symbols(&clauses, tmp.path())
@@ -290,7 +310,12 @@ fn overlay_kind_prefilter_matches_legacy() {
             )
         })
         .collect();
-    let storage = ColumnarStorage::new(fixtures_dir(), segs, overlay);
+    let storage = ColumnarStorage::new(
+        fixtures_dir(),
+        segs,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
 
     let clauses = Clauses {
         where_predicates: vec![Predicate {
@@ -366,7 +391,12 @@ fn single_segment_cpp_overlay() -> (
             )
         })
         .collect();
-    let storage = ColumnarStorage::new(fixtures_dir(), segs, overlay);
+    let storage = ColumnarStorage::new(
+        fixtures_dir(),
+        segs,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
     (table, tmp, storage)
 }
 
@@ -590,7 +620,12 @@ fn overlay_lookup_name_spans_segments() {
             )
         })
         .collect();
-    let _ = ColumnarStorage::new(fixtures_dir(), segs, overlay);
+    let _ = ColumnarStorage::new(
+        fixtures_dir(),
+        segs,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
 }
 
 // ── Phase 06b tests ───────────────────────────────────────────────────────────
@@ -787,7 +822,12 @@ fn columnar_show_outline_matches_legacy() {
             )
         })
         .collect();
-    let storage = ColumnarStorage::new(fixtures_dir(), segments, overlay);
+    let storage = ColumnarStorage::new(
+        fixtures_dir(),
+        segments,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
 
     // -- columnar result
     let columnar_json = storage
@@ -1519,7 +1559,12 @@ fn combined_path_glob_and_enrichment_parity() {
             )
         })
         .collect();
-    let storage = ColumnarStorage::new(fixtures_dir(), segments, overlay);
+    let storage = ColumnarStorage::new(
+        fixtures_dir(),
+        segments,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
 
     // Query: WHERE has_doc='true' IN 'canonical.cpp'
     let clauses = Clauses {
@@ -1931,7 +1976,12 @@ fn dirty_overlay_shadows_and_unions() {
         })
         .collect();
 
-    let mut storage = ColumnarStorage::new(root.clone(), segments, overlay);
+    let mut storage = ColumnarStorage::new(
+        root.clone(),
+        segments,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
 
     // ── Baseline: A, B, C all present ──
     let clauses = Clauses::default();
@@ -2039,7 +2089,12 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
             Arc::new(SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open"))
         })
         .collect();
-    let mut storage = ColumnarStorage::new(root.clone(), segments, overlay);
+    let mut storage = ColumnarStorage::new(
+        root.clone(),
+        segments,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
 
     // Dirty: file1.cpp changed — SymbolA replaced by SymbolB.
     let dirty_cid: Vec<u8> = vec![0xBBu8; 8];
@@ -2127,7 +2182,12 @@ fn dirty_overlay_resolve_symbol_shadows_and_unions() {
             Arc::new(SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open"))
         })
         .collect();
-    let mut storage = ColumnarStorage::new(root.clone(), segments, overlay);
+    let mut storage = ColumnarStorage::new(
+        root.clone(),
+        segments,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
 
     // Dirty: file1.cpp changed — SymbolA gone, SymbolD added at line 5.
     // replaces_hex must be file1_hex (the persistent segment's content ID).
@@ -2156,5 +2216,179 @@ fn dirty_overlay_resolve_symbol_shadows_and_unions() {
         loc_d.as_ref().unwrap().line,
         5,
         "SymbolD must be at line 5; got: {loc_d:?}"
+    );
+}
+
+// ── PhaseFT2 gate tests ────────────────────────────────────────────────────────
+
+/// `reindex_files` on `ColumnarStorage` must:
+/// 1. Shadow the persistent segment for the changed file.
+/// 2. Build and register a new dirty segment from the new content.
+/// 3. Leave unchanged files' symbols unaffected.
+#[test]
+fn reindex_updates_dirty_overlay() {
+    use forgeql_core::ast::lang::CppLanguageInline;
+    use forgeql_core::ir::Clauses;
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().to_path_buf();
+
+    // Write two fixture files to the worktree.
+    let file1 = worktree.join("file1.cpp");
+    let file2 = worktree.join("file2.cpp");
+    std::fs::write(&file1, "void SymbolA() {}\nvoid SymbolB() {}\n").expect("write file1");
+    std::fs::write(&file2, "void SymbolC() {}\n").expect("write file2");
+
+    // Build segments for the initial state.
+    let seg_dir = tmp.path().join("segments").join("test");
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).expect("seg_dir");
+    std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
+
+    let table1 = index_at_path(&CppLanguageInline, &file1);
+    let table2 = index_at_path(&CppLanguageInline, &file2);
+    let cid1 = build_segment(&table1, &file1, seg_dir.parent().unwrap());
+    let cid2 = build_segment(&table2, &file2, seg_dir.parent().unwrap());
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(file1.clone(), cid1);
+    let _ = segment_map.insert(file2, cid2);
+
+    let overlay_path = overlay_dir.join("ft2_reindex.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        worktree.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open seg"))
+        })
+        .collect();
+
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+
+    // Rewrite file1 with new symbols (SymbolD, SymbolE); SymbolA + SymbolB disappear.
+    std::fs::write(&file1, "void SymbolD() {}\nvoid SymbolE() {}\n").expect("rewrite file1");
+    storage
+        .reindex_files(std::slice::from_ref(&file1))
+        .expect("reindex_files");
+
+    let clauses = Clauses::default();
+    let results = storage
+        .find_symbols(&clauses, &worktree)
+        .expect("find_symbols");
+    let names: Vec<String> = results.iter().map(|m| m.name.clone()).collect();
+
+    // Old symbols from file1 must be gone.
+    assert!(
+        !names.contains(&"SymbolA".to_owned()),
+        "SymbolA must be shadowed after reindex; got: {names:?}"
+    );
+    assert!(
+        !names.contains(&"SymbolB".to_owned()),
+        "SymbolB must be shadowed after reindex; got: {names:?}"
+    );
+
+    // New symbols from file1 must be present.
+    assert!(
+        names.contains(&"SymbolD".to_owned()),
+        "SymbolD must appear after reindex; got: {names:?}"
+    );
+    assert!(
+        names.contains(&"SymbolE".to_owned()),
+        "SymbolE must appear after reindex; got: {names:?}"
+    );
+
+    // file2 symbols must be untouched.
+    assert!(
+        names.contains(&"SymbolC".to_owned()),
+        "SymbolC (file2) must still be present; got: {names:?}"
+    );
+}
+
+/// `purge_file` on `ColumnarStorage` must remove all symbols for the given
+/// file while leaving other files' symbols untouched.
+#[test]
+fn purge_removes_file_symbols() {
+    use forgeql_core::ast::lang::CppLanguageInline;
+    use forgeql_core::ir::Clauses;
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().to_path_buf();
+
+    let file1 = worktree.join("file1.cpp");
+    let file2 = worktree.join("file2.cpp");
+    std::fs::write(&file1, "void SymbolA() {}\n").expect("write file1");
+    std::fs::write(&file2, "void SymbolB() {}\n").expect("write file2");
+
+    let seg_dir = tmp.path().join("segments").join("test");
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).expect("seg_dir");
+    std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
+
+    let table1 = index_at_path(&CppLanguageInline, &file1);
+    let table2 = index_at_path(&CppLanguageInline, &file2);
+    let cid1 = build_segment(&table1, &file1, seg_dir.parent().unwrap());
+    let cid2 = build_segment(&table2, &file2, seg_dir.parent().unwrap());
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(file1.clone(), cid1);
+    let _ = segment_map.insert(file2, cid2);
+
+    let overlay_path = overlay_dir.join("ft2_purge.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        worktree.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open seg"))
+        })
+        .collect();
+
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+
+    // Purge file1 — its symbols should vanish.
+    storage.purge_file(&file1).expect("purge_file");
+
+    let clauses = Clauses::default();
+    let results = storage
+        .find_symbols(&clauses, &worktree)
+        .expect("find_symbols");
+    let names: Vec<String> = results.iter().map(|m| m.name.clone()).collect();
+
+    assert!(
+        !names.contains(&"SymbolA".to_owned()),
+        "SymbolA must be purged; got: {names:?}"
+    );
+    assert!(
+        names.contains(&"SymbolB".to_owned()),
+        "SymbolB (file2) must still be present; got: {names:?}"
     );
 }

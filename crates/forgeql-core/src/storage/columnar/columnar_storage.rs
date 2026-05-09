@@ -24,8 +24,11 @@ use anyhow::{Result, anyhow};
 use roaring::RoaringBitmap;
 use tracing::debug;
 
-use crate::ast::index::IndexStats;
+use crate::ast::enrich::default_enrichers;
+use crate::ast::index::{SymbolTable, index_file};
+use crate::ast::lang::LanguageRegistry;
 use crate::ast::query::glob_matches;
+use crate::ast::index::IndexStats;
 use crate::filter::{apply_clauses, eval_predicate};
 use crate::ir::{Clauses, CompareOp, PredicateValue};
 use crate::result::SymbolMatch;
@@ -34,9 +37,11 @@ use crate::workspace::Workspace;
 use super::dirty_overlay::DirtyOverlay;
 use super::overlay::{Overlay, RowPtr};
 use super::overlay_lock::OverlayLock;
-use super::segment_builder::ZONEMAP_NUMERIC_FIELDS;
+use super::segment_builder::{SegmentBuilder, ZONEMAP_NUMERIC_FIELDS, is_valid_segment};
 use super::segment_reader::SegmentReader;
 use crate::storage::{LegacyMemoryStorage, StorageEngine, SymbolLocation};
+use crate::storage::git_sha1_provider::git_blob_sha1;
+use super::bytes_to_hex;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ColumnarStorage
@@ -46,9 +51,8 @@ use crate::storage::{LegacyMemoryStorage, StorageEngine, SymbolLocation};
 /// and a workspace-level overlay index.
 ///
 pub struct ColumnarStorage {
-    /// Worktree root; will be used by Phase 06 SHOW operations to resolve
-    /// absolute source file paths for context/body retrieval.
-    #[allow(dead_code)]
+    /// Worktree root; used to resolve absolute source file paths and strip
+    /// prefixes when computing relative paths for `DirtyOverlay`.
     worktree_root: PathBuf,
     /// Per-segment readers in the same order as `overlay.segments()`.
     segments: Vec<Arc<SegmentReader>>,
@@ -59,6 +63,10 @@ pub struct ColumnarStorage {
     /// Always empty at session start. Populated by PhaseFT2 `reindex_files`.
     /// Queried by `find_symbols` / `find_usages` to union persistent + dirty rows.
     pub(crate) dirty: DirtyOverlay,
+    /// Staging directory for per-session reindexed segments (`.forgeql-staging/`).
+    staging_dir: PathBuf,
+    /// Language registry used by `reindex_files` to parse modified files.
+    lang_registry: Arc<LanguageRegistry>,
 }
 
 impl ColumnarStorage {
@@ -70,12 +78,16 @@ impl ColumnarStorage {
         worktree_root: PathBuf,
         segments: Vec<Arc<SegmentReader>>,
         overlay: Arc<Overlay>,
+        lang_registry: Arc<LanguageRegistry>,
     ) -> Self {
+        let staging_dir = worktree_root.join(".forgeql-staging");
         Self {
             worktree_root,
             segments,
             overlay,
             dirty: DirtyOverlay::new(),
+            staging_dir,
+            lang_registry,
         }
     }
 
@@ -976,18 +988,98 @@ impl StorageEngine for ColumnarStorage {
         ))
     }
 
-    fn reindex_files(&mut self, _paths: &[PathBuf]) -> Result<()> {
-        // Phase 07: incremental reindex.
-        Err(anyhow::anyhow!(
-            "ColumnarStorage incremental reindex is not available until Phase 07"
-        ))
+    #[allow(clippy::too_many_lines)]
+    fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
+        std::fs::create_dir_all(&self.staging_dir)?;
+        let mut parser = tree_sitter::Parser::new();
+        let enrichers = default_enrichers();
+
+        for path in paths {
+            // Strip worktree prefix to get the relative path stored in the overlay.
+            let rel_path = path
+                .strip_prefix(&self.worktree_root)
+                .unwrap_or(path)
+                .to_path_buf();
+
+            // Shadow the persistent segment for this path so it is excluded from
+            // queries while the new dirty segment takes precedence.
+            if let Some(old_hex) = self.path_to_hex_content_id(&rel_path) {
+                self.dirty.remove_hex(old_hex);
+            }
+            // Also evict any previously-staged dirty segment for this path (re-edit).
+            drop(self.dirty.remove_stale_for_path(&rel_path));
+
+            if !path.exists() {
+                // Purge-only — removal already applied above.
+                continue;
+            }
+
+            let Some(lang) = self.lang_registry.language_for_path(path) else {
+                // Unknown language — skip silently; persistent rows remain shadowed.
+                continue;
+            };
+
+            let bytes = std::fs::read(path)?;
+            let content_id_bytes = git_blob_sha1(&bytes);
+            let hex_content_id = bytes_to_hex(&content_id_bytes);
+
+            let seg_dir = self.staging_dir.join(&hex_content_id);
+
+            if !is_valid_segment(&seg_dir) {
+                parser
+                    .set_language(&lang.tree_sitter_language())
+                    .map_err(|e| anyhow::anyhow!("tree-sitter language error: {e}"))?;
+
+                let mut table = SymbolTable::default();
+                // index_file re-reads from disk; acceptable for the mutation path.
+                let _ = index_file(
+                    &mut parser,
+                    path,
+                    &mut table,
+                    &enrichers,
+                    lang.as_ref(),
+                    None,
+                    None,
+                );
+
+                let mut builder = SegmentBuilder::new("git-sha1", &content_id_bytes);
+                for row in &table.rows {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let row_id = builder.emit_row(
+                        table.name_of(row),
+                        table.fql_kind_of(row),
+                        table.language_of(row),
+                        row.line as u32,
+                        row.byte_range.start as u32,
+                        row.byte_range.end as u32,
+                        row.usages_count,
+                    );
+                    for (key, val) in table.resolve_fields(&row.fields) {
+                        builder.set_field(row_id, &key, val.as_str());
+                    }
+                }
+
+                std::fs::create_dir_all(&seg_dir)?;
+                builder.flush(&seg_dir)?;
+            }
+
+            let seg_reader = SegmentReader::open(&seg_dir)?;
+            self.dirty
+                .add_segment(Arc::new(seg_reader), rel_path, hex_content_id);
+        }
+        Ok(())
     }
 
-    fn purge_file(&mut self, _path: &Path) -> Result<()> {
-        // Phase 07.
-        Err(anyhow::anyhow!(
-            "ColumnarStorage::purge_file requires Phase 07"
-        ))
+    fn purge_file(&mut self, path: &Path) -> Result<()> {
+        let rel_path = path
+            .strip_prefix(&self.worktree_root)
+            .unwrap_or(path)
+            .to_path_buf();
+        if let Some(old_hex) = self.path_to_hex_content_id(&rel_path) {
+            self.dirty.remove_hex(old_hex);
+        }
+        drop(self.dirty.remove_stale_for_path(&rel_path));
+        Ok(())
     }
 
     fn persist_to_cache(
@@ -1094,6 +1186,7 @@ impl ColumnarStorage {
         legacy: Option<&LegacyMemoryStorage>,
         worktree_path: PathBuf,
         commit_sha: &str,
+        lang_registry: Arc<LanguageRegistry>,
     ) -> Result<Self> {
         let overlay_path = ctx.overlay_path_for(commit_sha);
 
@@ -1102,7 +1195,7 @@ impl ColumnarStorage {
             if let Ok(overlay) = Overlay::open(&overlay_path) {
                 debug!(%commit_sha, "columnar warm_or_open: overlay found, fast-path load");
                 let segments = Self::open_segments_from_overlay(ctx, &overlay);
-                return Ok(Self::new(worktree_path, segments, overlay));
+                return Ok(Self::new(worktree_path, segments, overlay, lang_registry));
             }
             // Corrupt / schema mismatch — remove and rebuild below.
             debug!(%commit_sha, "columnar warm_or_open: overlay unreadable, will rebuild");
@@ -1120,7 +1213,7 @@ impl ColumnarStorage {
                     if let Ok(overlay) = Overlay::open(&overlay_path) {
                         debug!(%commit_sha, "columnar warm_or_open: peer built overlay under lock");
                         let segments = Self::open_segments_from_overlay(ctx, &overlay);
-                        return Ok(Self::new(worktree_path, segments, overlay));
+                        return Ok(Self::new(worktree_path, segments, overlay, Arc::clone(&lang_registry)));
                     }
                     let _ = std::fs::remove_file(&overlay_path);
                 }
@@ -1174,7 +1267,7 @@ impl ColumnarStorage {
         let overlay = Overlay::open(&overlay_path)
             .map_err(|e| anyhow!("overlay open failed for {commit_sha}: {e}"))?;
         let segments = Self::open_segments_from_overlay(ctx, &overlay);
-        Ok(Self::new(worktree_path, segments, overlay))
+        Ok(Self::new(worktree_path, segments, overlay, lang_registry))
     }
 
     /// Build segments + overlay for `commit_sha` without returning a
@@ -1193,7 +1286,9 @@ impl ColumnarStorage {
         worktree_path: PathBuf,
         commit_sha: &str,
     ) -> Result<()> {
-        let _ = Self::warm_or_open(ctx, legacy, worktree_path, commit_sha)?;
+        // Background warming never calls reindex_files; use an empty registry.
+        let registry = Arc::new(LanguageRegistry::new(vec![]));
+        let _ = Self::warm_or_open(ctx, legacy, worktree_path, commit_sha, registry)?;
         Ok(())
     }
 
@@ -1228,6 +1323,16 @@ impl ColumnarStorage {
     #[must_use]
     pub const fn dirty(&self) -> &DirtyOverlay {
         &self.dirty
+    }
+
+    /// Look up the `hex_content_id` of the persistent overlay segment for a
+    /// given worktree-relative path, if one exists.
+    fn path_to_hex_content_id(&self, rel_path: &Path) -> Option<String> {
+        self.overlay
+            .segments()
+            .iter()
+            .find(|m| m.source_path == rel_path)
+            .map(|m| m.hex_content_id.clone())
     }
 }
 

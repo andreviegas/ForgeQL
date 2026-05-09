@@ -367,6 +367,11 @@ impl Session {
     /// parsing fails.
     pub fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
         self.backends.default_engine_mut().reindex_files(paths)?;
+        if let Some(columnar) = self.backends.columnar_engine_mut()
+            && let Err(e) = columnar.reindex_files(paths)
+        {
+            tracing::warn!("columnar reindex_files failed (non-fatal): {e}");
+        }
         self.index_dirty = true;
         Ok(())
     }

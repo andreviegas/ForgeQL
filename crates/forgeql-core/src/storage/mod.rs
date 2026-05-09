@@ -102,7 +102,7 @@ pub struct SymbolLocation {
 ///
 /// Implementors must be `Send + Sync` so sessions can be held in a
 /// `HashMap` inside `Arc<Mutex<ForgeQLEngine>>`.
-pub trait StorageEngine: Send + Sync {
+pub trait StorageEngine: Send + Sync + 'static {
     /// Short identifier for the backend, e.g. `"legacy"`, `"columnar"`.
     fn backend_name(&self) -> &'static str;
 

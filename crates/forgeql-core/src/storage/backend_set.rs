@@ -63,6 +63,11 @@ impl BackendSet {
         &mut self.legacy
     }
 
+    /// Mutable access to the columnar backend, if installed.
+    pub fn columnar_engine_mut(&mut self) -> Option<&mut dyn StorageEngine> {
+        self.columnar.as_deref_mut()
+    }
+
     /// Backend-aware lookup.
     ///
     /// - [`Backend::Default`] / [`Backend::Legacy`] → the legacy engine.

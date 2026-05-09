@@ -29,7 +29,9 @@ use std::sync::Arc;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use forgeql_core::ast::enrich::default_enrichers;
 use forgeql_core::ast::index::{SymbolTable, index_file};
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageSupport, RustLanguageInline};
+use forgeql_core::ast::lang::{
+    CppLanguageInline, LanguageRegistry, LanguageSupport, RustLanguageInline,
+};
 use forgeql_core::ir::{Clauses, CompareOp, Predicate, PredicateValue};
 use forgeql_core::storage::StorageEngine;
 use forgeql_core::storage::columnar::overlay::Overlay;
@@ -135,7 +137,8 @@ fn build_two_segment_overlay() -> (TempDir, ColumnarStorage) {
         })
         .collect();
 
-    let storage = ColumnarStorage::new(fixtures_dir(), segments, overlay);
+    let registry = Arc::new(LanguageRegistry::new(vec![]));
+    let storage = ColumnarStorage::new(fixtures_dir(), segments, overlay, registry);
     (tmp, storage)
 }
 
