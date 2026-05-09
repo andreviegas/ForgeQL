@@ -35,6 +35,7 @@ use forgeql_core::result::ForgeQLResult;
 /// allows sharing the engine with a background eviction task.
 pub(crate) struct ForgeQlMcp {
     engine: Arc<Mutex<ForgeQLEngine>>,
+    #[allow(dead_code)] // populated and read by the rmcp ToolRouter derive macro
     tool_router: ToolRouter<Self>,
     logger: Mutex<Option<QueryLogger>>,
 }

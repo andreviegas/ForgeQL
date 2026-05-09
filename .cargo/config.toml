@@ -37,9 +37,12 @@ fix     = "clippy --workspace --fix --allow-dirty --allow-staged"
 # Profile tweaks
 # -----------------------------------------------------------------------
 [profile.dev]
-# Faster incremental builds in dev. Keep debug info.
+# Faster incremental builds in dev.
+# debug = false: no DWARF symbols — rust-analyzer doesn't need them and they
+# account for most of the ~6 GB in /dev/shm/forgeql-target/debug.
+# incremental = true: keep incremental cache so RA stays fast per keystroke.
 opt-level     = 0
-debug         = true
+debug         = false
 incremental   = true
 
 [profile.release]

@@ -105,7 +105,10 @@ impl<'a> ShadowWriter<'a> {
     /// Returns `Err` only for fatal infrastructure failures (e.g. unable to
     /// create the provider directory).  Per-file errors are logged as
     /// warnings and skipped.
+    #[allow(clippy::too_many_lines)]
     pub fn run(self) -> Result<ShadowWriteResult> {
+        type WorkResult = (PathBuf, Vec<u8>, Option<BTreeSet<String>>);
+
         // Group row indices by path_id so each file is processed once.
         let mut by_path: HashMap<u32, Vec<usize>> = HashMap::new();
         for (idx, row) in self.table.rows.iter().enumerate() {
@@ -140,8 +143,6 @@ impl<'a> ShadowWriter<'a> {
         let hash_content = self.hash_content;
         let pre_computed = &self.pre_computed;
 
-        type WorkResult = (PathBuf, Vec<u8>, Option<BTreeSet<String>>);
-
         let results: Vec<WorkResult> = by_path
             .values()
             .collect::<Vec<_>>()
@@ -153,21 +154,20 @@ impl<'a> ShadowWriter<'a> {
 
                 // Content ID: use pre-computed value when available, otherwise
                 // read the file and hash it.
-                let content_id: Vec<u8> =
-                    if let Some(cid) = pre_computed.get(&abs_path) {
-                        cid.clone()
-                    } else {
-                        match std::fs::read(&abs_path) {
-                            Ok(bytes) => hash_content(&bytes),
-                            Err(e) => {
-                                warn!(
-                                    path = %abs_path.display(),
-                                    "shadow-write: skipping unreadable file: {e}"
-                                );
-                                return None;
-                            }
+                let content_id: Vec<u8> = if let Some(cid) = pre_computed.get(&abs_path) {
+                    cid.clone()
+                } else {
+                    match std::fs::read(&abs_path) {
+                        Ok(bytes) => hash_content(&bytes),
+                        Err(e) => {
+                            warn!(
+                                path = %abs_path.display(),
+                                "shadow-write: skipping unreadable file: {e}"
+                            );
+                            return None;
                         }
-                    };
+                    }
+                };
 
                 let hex = bytes_to_hex(&content_id);
                 let target_dir = provider_dir.join(&hex);

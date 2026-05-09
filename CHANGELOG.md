@@ -4,6 +4,68 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.9] — 2026-05-09 — Phase 06d: Zone-map pruning + parallel shadow-writer
+
+### Added
+
+- **Zone-map pruning in `find_symbols` and `resolve_impl`** — Before scanning
+  segments, numeric predicates on `line`, `usages_count`, `byte_start`, and
+  `byte_end` are evaluated against each segment's pre-computed zone-map
+  (`zonemap_<col>.bin`). Segments whose entire value range cannot satisfy the
+  predicate are pruned without being opened. `WHERE line < 0` and
+  `WHERE line > 99999` drop from ~8 500 ms to ~30 ms (all 14 078 segments
+  pruned instantly).
+
+- **`usages` → `usages_count` zone-map alias** — Predicates written as
+  `WHERE usages > N` now correctly map to the `usages_count` column when
+  consulting zone maps in both `find_symbols` and `resolve_impl`.
+
+- **Impossible-predicate short-circuit** — Before touching zone-map files,
+  the engine checks whether the predicate can ever be satisfied on the
+  unsigned `u32` storage domain (`Lt val≤0`, `Lte val<0`, `Eq val<0`). If
+  not, `by_segment` / `seg_order` is cleared immediately and scanning is
+  skipped entirely. The boundary condition `WHERE line < 0` (parsed as
+  `val=0, op=Lt`) is correctly detected as impossible.
+
+- **Fast path for enrichment-only + path-filter queries** — When a query
+  carries a path glob (`IN 'drivers/serial/**'`) but no indexed predicate
+  (`fql_kind=`, `name=`, `name LIKE`, `name MATCHES`), the global prefilter
+  bitmap (built from all 500k+ rows) is bypassed. `by_segment` is seeded
+  directly from path-filtered segments. Enrichment-only wide queries
+  (`WHERE is_recursive = 'true' IN drivers/serial/**`) improve ~2×
+  (264 ms → 132 ms). Wide glob queries (`WHERE has_fallthrough = 'true'
+  IN drivers/**`) improve ~1.7× (3 114 ms → 1 884 ms).
+
+- **Parallel `ShadowWriter` via rayon** — `ShadowWriter::run` rewrites the
+  former build-loop + flusher-thread approach as a `rayon::par_iter()` across
+  all files. Each worker independently computes the content-ID, checks
+  idempotency, builds a `SegmentBuilder`, and flushes to disk. All 20 cores
+  are used; the sequential merge phase (column aggregation, segment map
+  assembly) follows. Rebuilding 14 078 zephyr-andre segments after a full
+  segment wipe completes in the rayon burst visible in the CPU graph.
+
+### Changed
+
+- **`ShadowWriter::run` signature** — `run(mut self)` → `run(self)` (no
+  longer needs `mut` since `pre_computed` is accessed via shared `.get()`
+  inside the parallel closure).
+
+- **`.cargo/config.toml` dev profile** — `debug = true` → `debug = false`.
+  Strips DWARF symbols from debug builds (rust-analyzer doesn't need them).
+  Reduces `/dev/shm/forgeql-target/debug` from ~6 GB to ~400 MB while
+  keeping `incremental = true` so IDE responsiveness is unchanged.
+
+### Tests
+
+- **`enrichment_only_fast_path_parity`** (overlay_parity) — Verifies that
+  `WHERE has_doc=X IN 'canonical.cpp'` (no indexed predicate, path filter)
+  returns the same count via the fast path as the legacy backend.
+
+- **`negative_line_predicate_returns_empty`** (overlay_parity) — Verifies
+  that `WHERE line Lt -1`, `WHERE line Lte -1`, `WHERE line Eq -1`, and
+  `WHERE line Lt 0` all return zero results (impossible-predicate
+  short-circuit, including the `val=0` boundary case).
+
 ## [0.48.8] — 2026-05-08 — Phase 06b: ParseCache + SHOW wiring
 
 ### Added

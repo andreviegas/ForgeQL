@@ -387,10 +387,11 @@ fn pattern_as_prefix(pattern: &str) -> Option<Vec<u8>> {
             // (3rd character is not a wildcard and not end-of-string), the
             // trigram index is a stronger prefilter — return None so the
             // caller falls through to trigram_prefilter_for_pattern.
-            if let Some(&(_, next)) = chars.peek() {
-                if next != '%' && next != '_' {
-                    return None; // 3+ char literal — use trigrams
-                }
+            if let Some(&(_, next)) = chars.peek()
+                && next != '%'
+                && next != '_'
+            {
+                return None; // 3+ char literal — use trigrams
             }
             break;
         }
@@ -399,60 +400,6 @@ fn pattern_as_prefix(pattern: &str) -> Option<Vec<u8>> {
         Some(prefix_bytes)
     } else {
         None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::pattern_as_prefix;
-
-    #[test]
-    fn prefix_one_char_wildcard() {
-        assert_eq!(pattern_as_prefix("k%"), Some(b"k".to_vec()));
-    }
-
-    #[test]
-    fn prefix_one_char_underscore_wildcard() {
-        // 'k' is the literal prefix; '_' is a single-char wildcard → stop
-        assert_eq!(pattern_as_prefix("k_%"), Some(b"k".to_vec()));
-    }
-
-    #[test]
-    fn prefix_two_chars_wildcard() {
-        assert_eq!(pattern_as_prefix("ab%"), Some(b"ab".to_vec()));
-    }
-
-    #[test]
-    fn prefix_three_char_literal_returns_none() {
-        // 3-char literal → None so trigrams handle it
-        assert_eq!(pattern_as_prefix("abc%"), None);
-    }
-
-    #[test]
-    fn prefix_two_char_literal_then_underscore() {
-        // 'k_a%' — 'k' literal, then '_' wildcard → 1-char prefix
-        assert_eq!(pattern_as_prefix("k_a%"), Some(b"k".to_vec()));
-    }
-
-    #[test]
-    fn prefix_starts_with_percent_returns_none() {
-        assert_eq!(pattern_as_prefix("%foo"), None);
-    }
-
-    #[test]
-    fn prefix_starts_with_underscore_returns_none() {
-        assert_eq!(pattern_as_prefix("_k%"), None);
-    }
-
-    #[test]
-    fn prefix_suffix_pattern_returns_none() {
-        assert_eq!(pattern_as_prefix("%k"), None);
-    }
-
-    #[test]
-    fn prefix_case_insensitive() {
-        // Builder lowercases names; pattern_as_prefix must lowercase too.
-        assert_eq!(pattern_as_prefix("AB%"), Some(b"ab".to_vec()));
     }
 }
 
@@ -489,9 +436,7 @@ fn has_any_indexed_predicate(clauses: &Clauses) -> bool {
         matches!(
             (pred.field.as_str(), &pred.op),
             ("fql_kind", CompareOp::Eq)
-                | ("name", CompareOp::Eq)
-                | ("name", CompareOp::Like)
-                | ("name", CompareOp::Matches)
+                | ("name", CompareOp::Eq | CompareOp::Like | CompareOp::Matches)
         )
     })
 }
@@ -561,6 +506,7 @@ impl ColumnarStorage {
     ///    (candidates whose `fql_kind` is in `prefer_kinds`, if given).
     /// 5. Pick: last preferred candidate → last definition candidate → last overall.
     /// 6. Convert the chosen row to a [`SymbolLocation`].
+    #[allow(clippy::too_many_lines)]
     fn resolve_impl(
         &self,
         name: &str,
@@ -614,10 +560,10 @@ impl ColumnarStorage {
                     seg_order.clear();
                     break 'zone;
                 }
-                if let Ok(val_u32) = u32::try_from(*val_i64) {
-                    if let Some(allowed) = self.segments_passing_zone_map(col, pred.op, val_u32) {
-                        seg_order.retain(|seg_idx| allowed.contains(seg_idx));
-                    }
+                if let Ok(val_u32) = u32::try_from(*val_i64)
+                    && let Some(allowed) = self.segments_passing_zone_map(col, pred.op, val_u32)
+                {
+                    seg_order.retain(|seg_idx| allowed.contains(seg_idx));
                 }
             }
         }
@@ -758,10 +704,10 @@ impl StorageEngine for ColumnarStorage {
             // whose source_path passes the IN / EXCLUDE glob.
             let mut map: HashMap<u32, RoaringBitmap> = HashMap::new();
             for (idx, meta) in self.overlay.segments().iter().enumerate() {
-                if passes_resolve_glob(&meta.source_path, clauses) {
-                    if let (Some(seg), Ok(seg_idx)) = (self.segments.get(idx), u32::try_from(idx)) {
-                        let _ = map.insert(seg_idx, (0..seg.row_count).collect());
-                    }
+                if passes_resolve_glob(&meta.source_path, clauses)
+                    && let (Some(seg), Ok(seg_idx)) = (self.segments.get(idx), u32::try_from(idx))
+                {
+                    let _ = map.insert(seg_idx, (0..seg.row_count).collect());
                 }
             }
             map
@@ -808,10 +754,10 @@ impl StorageEngine for ColumnarStorage {
                     by_segment.clear();
                     break 'zone;
                 }
-                if let Ok(val_u32) = u32::try_from(*val_i64) {
-                    if let Some(allowed) = self.segments_passing_zone_map(col, pred.op, val_u32) {
-                        by_segment.retain(|seg_idx, _| allowed.contains(seg_idx));
-                    }
+                if let Ok(val_u32) = u32::try_from(*val_i64)
+                    && let Some(allowed) = self.segments_passing_zone_map(col, pred.op, val_u32)
+                {
+                    by_segment.retain(|seg_idx, _| allowed.contains(seg_idx));
                 }
             }
         }
@@ -1148,5 +1094,59 @@ impl ColumnarStorage {
                 SegmentReader::open(&dir).ok().map(Arc::new)
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pattern_as_prefix;
+
+    #[test]
+    fn prefix_one_char_wildcard() {
+        assert_eq!(pattern_as_prefix("k%"), Some(b"k".to_vec()));
+    }
+
+    #[test]
+    fn prefix_one_char_underscore_wildcard() {
+        // 'k' is the literal prefix; '_' is a single-char wildcard → stop
+        assert_eq!(pattern_as_prefix("k_%"), Some(b"k".to_vec()));
+    }
+
+    #[test]
+    fn prefix_two_chars_wildcard() {
+        assert_eq!(pattern_as_prefix("ab%"), Some(b"ab".to_vec()));
+    }
+
+    #[test]
+    fn prefix_three_char_literal_returns_none() {
+        // 3-char literal → None so trigrams handle it
+        assert_eq!(pattern_as_prefix("abc%"), None);
+    }
+
+    #[test]
+    fn prefix_two_char_literal_then_underscore() {
+        // 'k_a%' — 'k' literal, then '_' wildcard → 1-char prefix
+        assert_eq!(pattern_as_prefix("k_a%"), Some(b"k".to_vec()));
+    }
+
+    #[test]
+    fn prefix_starts_with_percent_returns_none() {
+        assert_eq!(pattern_as_prefix("%foo"), None);
+    }
+
+    #[test]
+    fn prefix_starts_with_underscore_returns_none() {
+        assert_eq!(pattern_as_prefix("_k%"), None);
+    }
+
+    #[test]
+    fn prefix_suffix_pattern_returns_none() {
+        assert_eq!(pattern_as_prefix("%k"), None);
+    }
+
+    #[test]
+    fn prefix_case_insensitive() {
+        // Builder lowercases names; pattern_as_prefix must lowercase too.
+        assert_eq!(pattern_as_prefix("AB%"), Some(b"ab".to_vec()));
     }
 }

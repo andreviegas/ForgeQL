@@ -1799,12 +1799,12 @@ fn negative_line_predicate_returns_empty() {
         (CompareOp::Lt, -1_i64),
         (CompareOp::Lte, -1_i64),
         (CompareOp::Eq, -1_i64),
-        (CompareOp::Lt, 0_i64),  // WHERE line < 0 — val=0, still impossible for u32
+        (CompareOp::Lt, 0_i64), // WHERE line < 0 — val=0, still impossible for u32
     ] {
         let clauses = Clauses {
             where_predicates: vec![Predicate {
                 field: "line".to_owned(),
-                op: op.clone(),
+                op: *op,
                 value: PredicateValue::Number(val),
             }],
             ..Clauses::default()
