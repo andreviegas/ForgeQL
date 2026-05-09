@@ -2392,3 +2392,523 @@ fn purge_removes_file_symbols() {
         "SymbolB (file2) must still be present; got: {names:?}"
     );
 }
+
+// ── PhaseFT3 gate tests ────────────────────────────────────────────────────────
+
+/// PhaseFT3 gate: `DeltaFile::save` + `DeltaFile::load` round-trip without loss.
+#[test]
+fn delta_file_roundtrip() {
+    use forgeql_core::storage::columnar::{DeltaFile, DirtyOverlay};
+
+    let tmp = TempDir::new().expect("tempdir");
+    let delta_path = tmp.path().join(".forgeql-columnar-delta");
+    let staging_dir = tmp.path().join(".forgeql-staging");
+    std::fs::create_dir_all(&staging_dir).expect("staging_dir");
+
+    // Build a dirty overlay with only removals (no staging segments needed).
+    let mut dirty = DirtyOverlay::new();
+    let _ = dirty.removed_hex_ids.insert("aabbccdd".to_owned());
+    let _ = dirty.removed_hex_ids.insert("11223344".to_owned());
+
+    DeltaFile::save(&dirty, &delta_path).expect("save delta");
+    assert!(delta_path.exists(), "delta file must exist after save");
+
+    // read_valid_hexes returns staged hex IDs (none here — only removals).
+    let hexes = DeltaFile::read_valid_hexes(&delta_path);
+    assert!(
+        hexes.is_empty(),
+        "no staged entries → read_valid_hexes must be empty"
+    );
+
+    // Full roundtrip: load back and compare removed_hex_ids.
+    let loaded = DeltaFile::load(&delta_path, &staging_dir).expect("load delta");
+    assert_eq!(loaded.added.len(), 0, "no staged entries expected");
+    let mut orig_removed: Vec<_> = dirty.removed_hex_ids.iter().cloned().collect();
+    let mut loaded_removed: Vec<_> = loaded.removed_hex_ids.iter().cloned().collect();
+    orig_removed.sort_unstable();
+    loaded_removed.sort_unstable();
+    assert_eq!(
+        orig_removed, loaded_removed,
+        "removed_hex_ids roundtrip mismatch"
+    );
+}
+
+/// PhaseFT3 gate: `reindex_files` must write `.forgeql-columnar-delta` with the
+/// correct staged metadata matching the dirty overlay state.
+#[test]
+fn reindex_writes_delta_file() {
+    use forgeql_core::ast::lang::CppLanguageInline;
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_core::storage::columnar::{ColumnarStorage, DeltaFile};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().to_path_buf();
+
+    let file1 = worktree.join("file1.cpp");
+    let file2 = worktree.join("file2.cpp");
+    std::fs::write(&file1, "void SymbolA() {}\n").expect("write file1");
+    std::fs::write(&file2, "void SymbolB() {}\n").expect("write file2");
+
+    let seg_dir = tmp.path().join("segments").join("test");
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).expect("seg_dir");
+    std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
+
+    let table1 = index_at_path(&CppLanguageInline, &file1);
+    let table2 = index_at_path(&CppLanguageInline, &file2);
+    let cid1 = build_segment(&table1, &file1, seg_dir.parent().unwrap());
+    let cid2 = build_segment(&table2, &file2, seg_dir.parent().unwrap());
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(file1.clone(), cid1);
+    let _ = segment_map.insert(file2, cid2);
+
+    let overlay_path = overlay_dir.join("ft3_reindex_delta.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        worktree.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open seg"))
+        })
+        .collect();
+
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+
+    let delta_path = worktree.join(".forgeql-columnar-delta");
+    assert!(!delta_path.exists(), "delta must not exist before reindex");
+
+    std::fs::write(&file1, "void SymbolC() {}\n").expect("rewrite file1");
+    storage
+        .reindex_files(std::slice::from_ref(&file1))
+        .expect("reindex_files");
+
+    assert!(delta_path.exists(), "delta must exist after reindex");
+
+    // read_valid_hexes gives us the staged hex IDs.
+    let hexes = DeltaFile::read_valid_hexes(&delta_path);
+    assert_eq!(hexes.len(), 1, "expected 1 staged hex; got {}", hexes.len());
+    assert!(
+        !hexes[0].is_empty(),
+        "staged hex_content_id must be non-empty"
+    );
+
+    // Full load: verify source_path and removed_hex_ids.
+    let staging_dir = worktree.join(".forgeql-staging");
+    let loaded_dirty = DeltaFile::load(&delta_path, &staging_dir).expect("load delta");
+    assert_eq!(
+        loaded_dirty.added.len(),
+        1,
+        "expected 1 staged entry in dirty overlay"
+    );
+    assert_eq!(
+        loaded_dirty.added[0].source_path,
+        std::path::PathBuf::from("file1.cpp"),
+        "staged source_path must be worktree-relative"
+    );
+    assert!(
+        !loaded_dirty.removed_hex_ids.is_empty(),
+        "removed_hex_ids must be non-empty after shadowing file1"
+    );
+}
+
+/// PhaseFT3 gate: after a simulated restart, loading the delta file from disk
+/// must restore the dirty overlay so query results match the original instance.
+#[test]
+fn delta_survives_simulated_restart() {
+    use forgeql_core::ast::lang::CppLanguageInline;
+    use forgeql_core::ir::Clauses;
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().to_path_buf();
+
+    let file1 = worktree.join("file1.cpp");
+    let file2 = worktree.join("file2.cpp");
+    std::fs::write(&file1, "void SymbolA() {}\nvoid SymbolB() {}\n").expect("write file1");
+    std::fs::write(&file2, "void SymbolC() {}\n").expect("write file2");
+
+    let seg_dir = tmp.path().join("segments").join("test");
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).expect("seg_dir");
+    std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
+
+    let table1 = index_at_path(&CppLanguageInline, &file1);
+    let table2 = index_at_path(&CppLanguageInline, &file2);
+    let cid1 = build_segment(&table1, &file1, seg_dir.parent().unwrap());
+    let cid2 = build_segment(&table2, &file2, seg_dir.parent().unwrap());
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(file1.clone(), cid1);
+    let _ = segment_map.insert(file2, cid2);
+
+    let overlay_path = overlay_dir.join("ft3_restart.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        worktree.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+
+    // Helper to open a fresh ColumnarStorage for this overlay.
+    let make_storage = || {
+        let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+        let segments: Vec<Arc<SegmentReader>> = overlay
+            .segments()
+            .iter()
+            .map(|meta| {
+                Arc::new(
+                    SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open seg"),
+                )
+            })
+            .collect();
+        ColumnarStorage::new(
+            worktree.clone(),
+            segments,
+            overlay,
+            Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)])),
+        )
+    };
+
+    // ── Step 1: reindex file1 in the original storage instance ──
+    let mut storage1 = make_storage();
+    std::fs::write(&file1, "void SymbolD() {}\nvoid SymbolE() {}\n").expect("rewrite file1");
+    storage1
+        .reindex_files(std::slice::from_ref(&file1))
+        .expect("reindex_files");
+
+    let clauses = Clauses::default();
+    let mut expected_names: Vec<String> = storage1
+        .find_symbols(&clauses, &worktree)
+        .expect("find_symbols on storage1")
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
+    expected_names.sort_unstable();
+
+    // ── Step 2: "restart" — open a fresh storage and reload delta from disk ──
+    let mut storage2 = make_storage();
+    storage2
+        .reload_dirty_from_delta()
+        .expect("reload_dirty_from_delta");
+
+    let mut actual_names: Vec<String> = storage2
+        .find_symbols(&clauses, &worktree)
+        .expect("find_symbols on storage2")
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
+    actual_names.sort_unstable();
+
+    assert_eq!(
+        expected_names, actual_names,
+        "reload must restore query results to match original dirty state"
+    );
+
+    // ── Step 3: removing the delta file must revert to the clean persistent state ──
+    std::fs::remove_file(worktree.join(".forgeql-columnar-delta")).expect("remove delta file");
+    storage2
+        .reload_dirty_from_delta()
+        .expect("reload after delta removal");
+
+    let all_names: Vec<String> = storage2
+        .find_symbols(&clauses, &worktree)
+        .expect("find_symbols after delta removal")
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
+
+    assert!(
+        all_names.contains(&"SymbolA".to_owned()),
+        "SymbolA must reappear when dirty overlay is cleared; got: {all_names:?}"
+    );
+    assert!(
+        !all_names.contains(&"SymbolD".to_owned()),
+        "SymbolD must be gone when dirty overlay is cleared; got: {all_names:?}"
+    );
+}
+
+/// PhaseFT3 gate: after a simulated rollback, `reload_dirty_from_delta` GCs
+/// orphaned staging segments (those not in the restored delta) and restores
+/// only the state from the checkpoint delta.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn rollback_gcs_orphaned_staging_segments() {
+    use forgeql_core::ast::lang::CppLanguageInline;
+    use forgeql_core::ir::Clauses;
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_core::storage::columnar::{ColumnarStorage, DeltaFile};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().to_path_buf();
+
+    let file1 = worktree.join("file1.cpp");
+    let file2 = worktree.join("file2.cpp");
+    std::fs::write(&file1, "void Base1() {}\n").expect("write file1");
+    std::fs::write(&file2, "void Base2() {}\n").expect("write file2");
+
+    let seg_dir = tmp.path().join("segments").join("test");
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).expect("seg_dir");
+    std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
+
+    let t1 = index_at_path(&CppLanguageInline, &file1);
+    let t2 = index_at_path(&CppLanguageInline, &file2);
+    let c1 = build_segment(&t1, &file1, seg_dir.parent().unwrap());
+    let c2 = build_segment(&t2, &file2, seg_dir.parent().unwrap());
+
+    let mut seg_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = seg_map.insert(file1.clone(), c1);
+    let _ = seg_map.insert(file2.clone(), c2);
+
+    let overlay_path = overlay_dir.join("ft3_gc.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        worktree.clone(),
+        seg_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+
+    let make_storage = || {
+        let ov = Overlay::open(&overlay_path).expect("Overlay::open");
+        let segs: Vec<Arc<SegmentReader>> = ov
+            .segments()
+            .iter()
+            .map(|m| Arc::new(SegmentReader::open(&seg_dir.join(&m.hex_content_id)).expect("seg")))
+            .collect();
+        ColumnarStorage::new(
+            worktree.clone(),
+            segs,
+            ov,
+            Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)])),
+        )
+    };
+
+    let mut storage = make_storage();
+
+    // ── Checkpoint: reindex file1 → staging hex A, delta saved ──
+    std::fs::write(&file1, "void AfterCheckpoint1() {}\n").expect("reindex file1");
+    storage
+        .reindex_files(std::slice::from_ref(&file1))
+        .expect("reindex file1");
+
+    let delta_path = worktree.join(".forgeql-columnar-delta");
+    let checkpoint_delta = std::fs::read(&delta_path).expect("read checkpoint delta");
+
+    let hex_a_vec = DeltaFile::read_valid_hexes(&delta_path);
+    assert_eq!(
+        hex_a_vec.len(),
+        1,
+        "checkpoint must have exactly 1 staged hex"
+    );
+    let hex_a = hex_a_vec[0].clone();
+
+    let staging_dir = worktree.join(".forgeql-staging");
+    assert!(
+        staging_dir.join(&hex_a).exists(),
+        "staging dir for hex_a must exist"
+    );
+
+    // ── Post-checkpoint: reindex file2 → staging hex B, delta updated ──
+    std::fs::write(&file2, "void AfterCheckpoint2() {}\n").expect("reindex file2");
+    storage
+        .reindex_files(std::slice::from_ref(&file2))
+        .expect("reindex file2");
+
+    let hexes_after = DeltaFile::read_valid_hexes(&delta_path);
+    assert_eq!(
+        hexes_after.len(),
+        2,
+        "after second reindex must have 2 staged hexes"
+    );
+    let hex_b = hexes_after
+        .iter()
+        .find(|h| *h != &hex_a)
+        .cloned()
+        .expect("hex_b");
+    assert!(
+        staging_dir.join(&hex_b).exists(),
+        "staging dir for hex_b must exist before rollback"
+    );
+
+    // ── Simulate git reset --hard: restore delta to checkpoint state ──
+    std::fs::write(&delta_path, &checkpoint_delta).expect("restore checkpoint delta");
+
+    // ── Rollback: GC orphaned staging + reload from restored delta ──
+    storage
+        .reload_dirty_from_delta()
+        .expect("reload_dirty_from_delta after rollback");
+
+    // hex_b staging dir must be GC'd (it's no longer in the restored delta).
+    assert!(
+        !staging_dir.join(&hex_b).exists(),
+        "staging dir for hex_b must be removed after rollback GC"
+    );
+    // hex_a staging dir must remain (still in the restored delta).
+    assert!(
+        staging_dir.join(&hex_a).exists(),
+        "staging dir for hex_a must survive rollback GC"
+    );
+
+    // Query results must reflect checkpoint state: file1 updated, file2 not.
+    let clauses = Clauses::default();
+    let names: Vec<String> = storage
+        .find_symbols(&clauses, &worktree)
+        .expect("find_symbols after rollback")
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
+
+    assert!(
+        names.contains(&"AfterCheckpoint1".to_owned()),
+        "AfterCheckpoint1 must be visible after rollback; got: {names:?}"
+    );
+    assert!(
+        !names.contains(&"AfterCheckpoint2".to_owned()),
+        "AfterCheckpoint2 must NOT be visible after rollback; got: {names:?}"
+    );
+}
+
+/// PhaseFT3 gate: nested rollback restores the correct (earlier) checkpoint
+/// delta when two checkpoints have been created.
+#[test]
+fn nested_rollback_restores_correct_delta() {
+    use forgeql_core::ast::lang::CppLanguageInline;
+    use forgeql_core::ir::Clauses;
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_core::storage::columnar::{ColumnarStorage, DeltaFile};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().to_path_buf();
+
+    let file1 = worktree.join("file1.cpp");
+    let file2 = worktree.join("file2.cpp");
+    std::fs::write(&file1, "void V1() {}\n").expect("write file1");
+    std::fs::write(&file2, "void V2() {}\n").expect("write file2");
+
+    let seg_dir = tmp.path().join("segments").join("test");
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).expect("seg_dir");
+    std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
+
+    let t1 = index_at_path(&CppLanguageInline, &file1);
+    let t2 = index_at_path(&CppLanguageInline, &file2);
+    let c1 = build_segment(&t1, &file1, seg_dir.parent().unwrap());
+    let c2 = build_segment(&t2, &file2, seg_dir.parent().unwrap());
+
+    let mut seg_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = seg_map.insert(file1.clone(), c1);
+    let _ = seg_map.insert(file2.clone(), c2);
+
+    let overlay_path = overlay_dir.join("ft3_nested.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        worktree.clone(),
+        seg_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+
+    let make_storage = || {
+        let ov = Overlay::open(&overlay_path).expect("Overlay::open");
+        let segs: Vec<Arc<SegmentReader>> = ov
+            .segments()
+            .iter()
+            .map(|m| Arc::new(SegmentReader::open(&seg_dir.join(&m.hex_content_id)).expect("seg")))
+            .collect();
+        ColumnarStorage::new(
+            worktree.clone(),
+            segs,
+            ov,
+            Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)])),
+        )
+    };
+
+    let mut storage = make_storage();
+    let delta_path = worktree.join(".forgeql-columnar-delta");
+
+    // ── Checkpoint 1: reindex file1 ──
+    std::fs::write(&file1, "void Phase1File1() {}\n").expect("ckpt1 file1");
+    storage
+        .reindex_files(std::slice::from_ref(&file1))
+        .expect("reindex ckpt1");
+    let ckpt1_delta = std::fs::read(&delta_path).expect("read ckpt1 delta");
+    let ckpt1_hexes = DeltaFile::read_valid_hexes(&delta_path);
+    assert_eq!(ckpt1_hexes.len(), 1, "checkpoint1 must have 1 staged hex");
+
+    // ── Checkpoint 2: also reindex file2 ──
+    std::fs::write(&file2, "void Phase2File2() {}\n").expect("ckpt2 file2");
+    storage
+        .reindex_files(std::slice::from_ref(&file2))
+        .expect("reindex ckpt2");
+    let ckpt2_hexes = DeltaFile::read_valid_hexes(&delta_path);
+    assert_eq!(ckpt2_hexes.len(), 2, "checkpoint2 must have 2 staged hexes");
+
+    // ── Rollback to checkpoint 1 (simulate git reset --hard to ckpt1) ──
+    std::fs::write(&delta_path, &ckpt1_delta).expect("restore ckpt1 delta");
+    storage
+        .reload_dirty_from_delta()
+        .expect("reload after rollback to ckpt1");
+
+    // Only ckpt1 hex should remain in staging.
+    let staging_dir = worktree.join(".forgeql-staging");
+    for hex in &ckpt2_hexes {
+        if !ckpt1_hexes.contains(hex) {
+            assert!(
+                !staging_dir.join(hex).exists(),
+                "ckpt2-only hex {hex} must be GC'd after rollback to ckpt1"
+            );
+        }
+    }
+    for hex in &ckpt1_hexes {
+        assert!(
+            staging_dir.join(hex).exists(),
+            "ckpt1 hex {hex} must survive rollback to ckpt1"
+        );
+    }
+
+    // Query results: file1 changes visible, file2 changes NOT visible.
+    let clauses = Clauses::default();
+    let names: Vec<String> = storage
+        .find_symbols(&clauses, &worktree)
+        .expect("find_symbols after rollback to ckpt1")
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
+
+    assert!(
+        names.contains(&"Phase1File1".to_owned()),
+        "Phase1File1 must be visible after rollback to ckpt1; got: {names:?}"
+    );
+    assert!(
+        !names.contains(&"Phase2File2".to_owned()),
+        "Phase2File2 must NOT be visible after rollback to ckpt1; got: {names:?}"
+    );
+}

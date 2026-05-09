@@ -33,6 +33,7 @@
 
 pub mod build_context;
 pub mod columnar_storage;
+pub mod delta_file;
 pub mod dirty_overlay;
 pub mod manifest;
 pub mod overlay;
@@ -44,6 +45,7 @@ pub mod shadow_writer;
 
 pub use build_context::ColumnarBuildContext;
 pub use columnar_storage::ColumnarStorage;
+pub use delta_file::{DeltaFile, StagedEntry};
 pub use dirty_overlay::DirtyOverlay;
 pub use manifest::Manifest;
 pub use overlay_builder::OverlayBuilder;

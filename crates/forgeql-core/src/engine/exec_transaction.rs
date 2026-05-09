@@ -34,6 +34,16 @@ impl ForgeQLEngine {
             warn!(error = %err, "BEGIN: flush_if_dirty failed; checkpoint cache may be stale");
         }
 
+        // Flush the columnar dirty overlay to disk so the checkpoint commit
+        // captures an up-to-date `.forgeql-columnar-delta` (mirrors what
+        // `flush_if_dirty` does for `.forgeql-index`).
+        if let Some(session) = self.sessions.get_mut(sid)
+            && let Some(columnar) = session.columnar_storage_mut()
+            && let Err(err) = columnar.flush_delta()
+        {
+            warn!(error = %err, "BEGIN: columnar flush_delta failed (non-fatal)");
+        }
+
         let repo = git::open(&worktree_path)?;
 
         // Record the HEAD *before* the checkpoint commit — this is the
@@ -216,6 +226,14 @@ impl ForgeQLEngine {
                 if let Err(err) = session.build_index() {
                     warn!(error = %err, "rollback: index rebuild failed");
                 }
+            }
+            // Restore the columnar dirty overlay from the just-restored delta file.
+            // `git reset --hard` already rewrote `.forgeql-columnar-delta` to the
+            // checkpoint state; GC orphaned staging dirs then reload into RAM.
+            if let Some(columnar) = session.columnar_storage_mut()
+                && let Err(e) = columnar.reload_dirty_from_delta()
+            {
+                warn!(error = %e, "rollback: columnar delta reload failed (non-fatal)");
             }
         }
 

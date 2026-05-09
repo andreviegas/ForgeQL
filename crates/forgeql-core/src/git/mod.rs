@@ -95,12 +95,18 @@ pub fn soft_reset(repo: &Repository, oid_hex: &str) -> Result<()> {
 
 /// Files excluded from **user-facing** commits (`COMMIT MESSAGE`, squash).
 /// The index cache is stripped so published history stays clean.
-const CLEAN_COMMIT_EXCLUDED: &[&str] = &[".forgeql-index", ".forgeql-session"];
+const CLEAN_COMMIT_EXCLUDED: &[&str] = &[
+    ".forgeql-index",
+    ".forgeql-session",
+    ".forgeql-columnar-delta",
+];
 
 /// Files excluded from **internal checkpoint** commits (`BEGIN TRANSACTION`).
 /// The index cache is intentionally *included* so that `git reset --hard`
 /// restores it automatically, giving instant rollback without re-indexing.
-const CHECKPOINT_EXCLUDED: &[&str] = &[".forgeql-session"];
+/// `.forgeql-staging/` holds binary segment data that is never committed —
+/// GC via `DeltaFile::gc_orphaned_staging` keeps it clean on rollback.
+const CHECKPOINT_EXCLUDED: &[&str] = &[".forgeql-session", ".forgeql-staging"];
 
 fn is_clean_commit_excluded(path: &std::path::Path) -> bool {
     path.file_name()
@@ -109,9 +115,13 @@ fn is_clean_commit_excluded(path: &std::path::Path) -> bool {
 }
 
 fn is_checkpoint_excluded(path: &std::path::Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|name| CHECKPOINT_EXCLUDED.contains(&name))
+    // Check every path component, not just the leaf name, so that files
+    // inside `.forgeql-staging/<hex>/` are excluded even though their
+    // own file_name() is something like `names.col`.
+    path.components().any(|c| {
+        matches!(c, std::path::Component::Normal(n)
+            if n.to_str().is_some_and(|s| CHECKPOINT_EXCLUDED.contains(&s)))
+    })
 }
 
 /// Stage all modified files and commit as an internal checkpoint.

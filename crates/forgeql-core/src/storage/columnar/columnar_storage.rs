@@ -35,6 +35,7 @@ use crate::result::SymbolMatch;
 use crate::workspace::Workspace;
 
 use super::bytes_to_hex;
+use super::delta_file::DeltaFile;
 use super::dirty_overlay::DirtyOverlay;
 use super::overlay::{Overlay, RowPtr};
 use super::overlay_lock::OverlayLock;
@@ -67,6 +68,13 @@ pub struct ColumnarStorage {
     staging_dir: PathBuf,
     /// Language registry used by `reindex_files` to parse modified files.
     lang_registry: Arc<LanguageRegistry>,
+    /// Path to the delta file that persists the dirty overlay across restarts.
+    ///
+    /// Written after every `reindex_files` / `purge_file` call.
+    /// Included in `BEGIN TRANSACTION` checkpoint commits (so `git reset --hard`
+    /// restores it automatically on `ROLLBACK`) but excluded from user-facing
+    /// `COMMIT MESSAGE` commits via `git::CLEAN_COMMIT_EXCLUDED`.
+    delta_path: PathBuf,
 }
 
 impl ColumnarStorage {
@@ -81,6 +89,7 @@ impl ColumnarStorage {
         lang_registry: Arc<LanguageRegistry>,
     ) -> Self {
         let staging_dir = worktree_root.join(".forgeql-staging");
+        let delta_path = worktree_root.join(".forgeql-columnar-delta");
         Self {
             worktree_root,
             segments,
@@ -88,6 +97,7 @@ impl ColumnarStorage {
             dirty: DirtyOverlay::new(),
             staging_dir,
             lang_registry,
+            delta_path,
         }
     }
 
@@ -1003,8 +1013,13 @@ impl StorageEngine for ColumnarStorage {
 
             // Shadow the persistent segment for this path so it is excluded from
             // queries while the new dirty segment takes precedence.
-            if let Some(old_hex) = self.path_to_hex_content_id(&rel_path) {
-                self.dirty.remove_hex(old_hex);
+            // Capture old_hex now — it is the `replaces_hex` stored in the dirty
+            // segment, so the delta file correctly records which persistent segment
+            // this new entry supersedes.  (Bug: passing `hex_content_id` here would
+            // store the *new* hash as `replaces_hex`, corrupting FT4 promotion.)
+            let old_hex = self.path_to_hex_content_id(&rel_path).unwrap_or_default();
+            if !old_hex.is_empty() {
+                self.dirty.remove_hex(old_hex.clone());
             }
             // Also evict any previously-staged dirty segment for this path (re-edit).
             drop(self.dirty.remove_stale_for_path(&rel_path));
@@ -1065,8 +1080,9 @@ impl StorageEngine for ColumnarStorage {
 
             let seg_reader = SegmentReader::open(&seg_dir)?;
             self.dirty
-                .add_segment(Arc::new(seg_reader), rel_path, hex_content_id);
+                .add_segment(Arc::new(seg_reader), rel_path, old_hex);
         }
+        self.save_delta()?;
         Ok(())
     }
 
@@ -1079,6 +1095,7 @@ impl StorageEngine for ColumnarStorage {
             self.dirty.remove_hex(old_hex);
         }
         drop(self.dirty.remove_stale_for_path(&rel_path));
+        self.save_delta()?;
         Ok(())
     }
 
@@ -1108,6 +1125,17 @@ impl StorageEngine for ColumnarStorage {
 
     fn has_index(&self) -> bool {
         true
+    }
+
+    fn flush_delta(&mut self) -> Result<()> {
+        self.save_delta()
+    }
+
+    fn reload_dirty_from_delta(&mut self) -> Result<()> {
+        // Always GC first — safe for both ROLLBACK (removes orphaned staging
+        // dirs from after the checkpoint) and reconnect (no-op when delta+staging
+        // are already in sync).
+        self.reload_delta_after_rollback()
     }
 
     fn show_outline_for_file(
@@ -1195,7 +1223,11 @@ impl ColumnarStorage {
             if let Ok(overlay) = Overlay::open(&overlay_path) {
                 debug!(%commit_sha, "columnar warm_or_open: overlay found, fast-path load");
                 let segments = Self::open_segments_from_overlay(ctx, &overlay);
-                return Ok(Self::new(worktree_path, segments, overlay, lang_registry));
+                let mut storage = Self::new(worktree_path, segments, overlay, lang_registry);
+                if let Err(e) = storage.load_delta() {
+                    tracing::warn!(%commit_sha, "columnar warm_or_open: delta load failed (non-fatal): {e}");
+                }
+                return Ok(storage);
             }
             // Corrupt / schema mismatch — remove and rebuild below.
             debug!(%commit_sha, "columnar warm_or_open: overlay unreadable, will rebuild");
@@ -1213,12 +1245,12 @@ impl ColumnarStorage {
                     if let Ok(overlay) = Overlay::open(&overlay_path) {
                         debug!(%commit_sha, "columnar warm_or_open: peer built overlay under lock");
                         let segments = Self::open_segments_from_overlay(ctx, &overlay);
-                        return Ok(Self::new(
-                            worktree_path,
-                            segments,
-                            overlay,
-                            Arc::clone(&lang_registry),
-                        ));
+                        let mut storage =
+                            Self::new(worktree_path, segments, overlay, Arc::clone(&lang_registry));
+                        if let Err(e) = storage.load_delta() {
+                            tracing::warn!(%commit_sha, "columnar warm_or_open: delta load failed (non-fatal): {e}");
+                        }
+                        return Ok(storage);
                     }
                     let _ = std::fs::remove_file(&overlay_path);
                 }
@@ -1272,7 +1304,11 @@ impl ColumnarStorage {
         let overlay = Overlay::open(&overlay_path)
             .map_err(|e| anyhow!("overlay open failed for {commit_sha}: {e}"))?;
         let segments = Self::open_segments_from_overlay(ctx, &overlay);
-        Ok(Self::new(worktree_path, segments, overlay, lang_registry))
+        let mut storage = Self::new(worktree_path, segments, overlay, lang_registry);
+        if let Err(e) = storage.load_delta() {
+            tracing::warn!(%commit_sha, "columnar warm_or_open: delta load failed (non-fatal): {e}");
+        }
+        Ok(storage)
     }
 
     /// Build segments + overlay for `commit_sha` without returning a
@@ -1338,6 +1374,52 @@ impl ColumnarStorage {
             .iter()
             .find(|m| m.source_path == rel_path)
             .map(|m| m.hex_content_id.clone())
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // PhaseFT3: delta file helpers
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Serialize the current dirty overlay to `.forgeql-columnar-delta`.
+    ///
+    /// Delegates to [`DeltaFile::save`].  Called at the end of every
+    /// `reindex_files` / `purge_file` and at the start of `BEGIN TRANSACTION`
+    /// so the overlay state survives server restarts and `ROLLBACK`.
+    fn save_delta(&self) -> Result<()> {
+        DeltaFile::save(&self.dirty, &self.delta_path)
+    }
+
+    /// Load the delta file and restore the dirty overlay.
+    ///
+    /// No-op when `.forgeql-columnar-delta` does not exist (empty session).
+    /// Called from `warm_or_open` (reconnect) and `reload_delta_after_rollback`.
+    pub fn load_delta(&mut self) -> Result<()> {
+        if self.delta_path.exists() {
+            match DeltaFile::load(&self.delta_path, &self.staging_dir) {
+                Ok(dirty) => self.dirty = dirty,
+                Err(e) => {
+                    tracing::warn!(
+                        path = %self.delta_path.display(),
+                        "columnar delta load failed, resetting dirty overlay: {e}"
+                    );
+                    self.dirty = DirtyOverlay::new();
+                    let valid: &[String] = &[];
+                    DeltaFile::gc_orphaned_staging(valid, &self.staging_dir);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Called by `ROLLBACK` after `git reset --hard` restores the worktree.
+    ///
+    /// Reads the valid hex IDs from the restored delta file, GCs any orphaned
+    /// staging directories, then reloads the dirty overlay from the delta.
+    pub fn reload_delta_after_rollback(&mut self) -> Result<()> {
+        let valid_hexes = DeltaFile::read_valid_hexes(&self.delta_path);
+        DeltaFile::gc_orphaned_staging(&valid_hexes, &self.staging_dir);
+        self.dirty = DirtyOverlay::new();
+        self.load_delta()
     }
 }
 

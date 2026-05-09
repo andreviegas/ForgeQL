@@ -207,6 +207,28 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// Return `true` when an index has been built or loaded from cache.
     fn has_index(&self) -> bool;
 
+    /// Flush the dirty overlay to the on-disk `.forgeql-columnar-delta` file.
+    ///
+    /// Called by `BEGIN TRANSACTION` before `git::stage_and_commit` so the
+    /// checkpoint snapshot includes an up-to-date delta file.
+    ///
+    /// The default no-op is correct for the legacy backend.  `ColumnarStorage`
+    /// overrides this to call `DeltaFile::save`.
+    fn flush_delta(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Reload the dirty overlay from the on-disk `.forgeql-columnar-delta` file.
+    ///
+    /// Called after `ROLLBACK` (the delta is restored by `git reset --hard`)
+    /// and on session reconnect (via `warm_or_open`).
+    ///
+    /// The default no-op is correct for the legacy backend.  `ColumnarStorage`
+    /// overrides this to call `DeltaFile::load`.
+    fn reload_dirty_from_delta(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     // -------- SHOW helpers ------------------------------------------------
 
     /// Locate a symbol definition by name, returning its file path and line.

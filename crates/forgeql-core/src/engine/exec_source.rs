@@ -337,7 +337,10 @@ impl ForgeQLEngine {
                 &commit,
                 Arc::clone(&self.lang_registry),
             ) {
-                Ok(storage) => session.install_columnar(Box::new(storage)),
+                Ok(storage) => {
+                    // Delta is loaded inside warm_or_open — just install.
+                    session.install_columnar(Box::new(storage));
+                }
                 Err(e) => tracing::warn!(
                     %commit,
                     "columnar warm_or_open failed (non-fatal): {e}"

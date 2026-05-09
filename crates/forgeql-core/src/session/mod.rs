@@ -425,6 +425,13 @@ impl Session {
         self.index_dirty = false;
     }
 
+    /// Mutable access to the columnar storage backend, if installed.
+    ///
+    /// Returns `None` when the columnar backend is not enabled for this session.
+    pub fn columnar_storage_mut(&mut self) -> Option<&mut dyn crate::storage::StorageEngine> {
+        self.backends.columnar_engine_mut()
+    }
+
     /// Update the last-active timestamp to now.
     ///
     /// Call this on every request that touches the session so that the TTL
