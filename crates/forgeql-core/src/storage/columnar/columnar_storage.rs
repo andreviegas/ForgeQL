@@ -601,10 +601,16 @@ impl ColumnarStorage {
                     "usages" => "usages_count",
                     other => other,
                 };
-                if *val_i64 < 0
-                    && matches!(pred.op, CompareOp::Lt | CompareOp::Lte)
-                    && ZONEMAP_NUMERIC_FIELDS.iter().any(|(f, _)| *f == col)
-                {
+                // Impossible-predicate short-circuit for u32 columns: no stored
+                // value can satisfy col < 0 (val <= 0 for Lt), col <= negative,
+                // or col = negative.  Clear all candidates without needing zone maps.
+                let impossible = ZONEMAP_NUMERIC_FIELDS.iter().any(|(f, _)| *f == col)
+                    && match pred.op {
+                        CompareOp::Lt => *val_i64 <= 0,
+                        CompareOp::Lte | CompareOp::Eq => *val_i64 < 0,
+                        _ => false,
+                    };
+                if impossible {
                     seg_order.clear();
                     break 'zone;
                 }
@@ -789,10 +795,16 @@ impl StorageEngine for ColumnarStorage {
                     "usages" => "usages_count",
                     other => other,
                 };
-                if *val_i64 < 0
-                    && matches!(pred.op, CompareOp::Lt | CompareOp::Lte)
-                    && ZONEMAP_NUMERIC_FIELDS.iter().any(|(f, _)| *f == col)
-                {
+                // Impossible-predicate short-circuit for u32 columns: no stored
+                // value can satisfy col < 0 (val <= 0 for Lt), col <= negative,
+                // or col = negative.  Clear all candidates without needing zone maps.
+                let impossible = ZONEMAP_NUMERIC_FIELDS.iter().any(|(f, _)| *f == col)
+                    && match pred.op {
+                        CompareOp::Lt => *val_i64 <= 0,
+                        CompareOp::Lte | CompareOp::Eq => *val_i64 < 0,
+                        _ => false,
+                    };
+                if impossible {
                     by_segment.clear();
                     break 'zone;
                 }

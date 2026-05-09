@@ -1798,7 +1798,8 @@ fn negative_line_predicate_returns_empty() {
     for &(ref op, val) in &[
         (CompareOp::Lt, -1_i64),
         (CompareOp::Lte, -1_i64),
-        (CompareOp::Lt, 0_i64),
+        (CompareOp::Eq, -1_i64),
+        (CompareOp::Lt, 0_i64),  // WHERE line < 0 — val=0, still impossible for u32
     ] {
         let clauses = Clauses {
             where_predicates: vec![Predicate {

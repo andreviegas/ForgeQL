@@ -33,9 +33,9 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 
 use anyhow::Result;
+use rayon::prelude::*;
 use tracing::{debug, warn};
 
 use crate::ast::index::SymbolTable;
@@ -105,7 +105,7 @@ impl<'a> ShadowWriter<'a> {
     /// Returns `Err` only for fatal infrastructure failures (e.g. unable to
     /// create the provider directory).  Per-file errors are logged as
     /// warnings and skipped.
-    pub fn run(mut self) -> Result<ShadowWriteResult> {
+    pub fn run(self) -> Result<ShadowWriteResult> {
         // Group row indices by path_id so each file is processed once.
         let mut by_path: HashMap<u32, Vec<usize>> = HashMap::new();
         for (idx, row) in self.table.rows.iter().enumerate() {
@@ -123,100 +123,112 @@ impl<'a> ShadowWriter<'a> {
         let provider_dir = self.segments_base.join(self.provider_id);
         std::fs::create_dir_all(&provider_dir)?;
 
-        // Background flush thread (Issue 4): receives (builder, target_dir)
-        // pairs and flushes them while the main loop builds the next segment.
-        // The channel bound (64) provides natural back-pressure.
-        let (tx, rx) = mpsc::sync_channel::<(SegmentBuilder, PathBuf)>(64);
-        let flusher = std::thread::spawn(move || {
-            let mut count: usize = 0;
-            for (builder, target_dir) in rx {
-                match builder.flush(&target_dir) {
-                    Ok(()) => count += 1,
-                    Err(e) => warn!(
-                        target = %target_dir.display(),
-                        "shadow-write: flush failed: {e}"
-                    ),
+        // ── Parallel build + flush (Issue 4 replacement) ──────────────────────
+        // Each file is fully independent: compute content-ID, check idempotency,
+        // build SegmentBuilder, flush to disk.  Rayon distributes across all
+        // available cores.  Results are collected and merged sequentially after.
+        //
+        // Each worker returns:
+        //   (abs_path, content_id, Option<BTreeSet<String>>, flushed: bool)
+        // where the Option is Some(columns) when a new segment was written.
+        //
+        // `pre_computed` lookup is via shared-ref `get` (no remove) so the
+        // HashMap can be shared immutably across workers.  The 20-byte clone
+        // overhead per file is negligible.
+        let table = self.table;
+        let provider_id = self.provider_id;
+        let hash_content = self.hash_content;
+        let pre_computed = &self.pre_computed;
+
+        type WorkResult = (PathBuf, Vec<u8>, Option<BTreeSet<String>>);
+
+        let results: Vec<WorkResult> = by_path
+            .values()
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .filter_map(|row_indices| {
+                // row_indices is non-empty by construction.
+                let first_row = &table.rows[row_indices[0]];
+                let abs_path = table.path_of(first_row).to_path_buf();
+
+                // Content ID: use pre-computed value when available, otherwise
+                // read the file and hash it.
+                let content_id: Vec<u8> =
+                    if let Some(cid) = pre_computed.get(&abs_path) {
+                        cid.clone()
+                    } else {
+                        match std::fs::read(&abs_path) {
+                            Ok(bytes) => hash_content(&bytes),
+                            Err(e) => {
+                                warn!(
+                                    path = %abs_path.display(),
+                                    "shadow-write: skipping unreadable file: {e}"
+                                );
+                                return None;
+                            }
+                        }
+                    };
+
+                let hex = bytes_to_hex(&content_id);
+                let target_dir = provider_dir.join(&hex);
+
+                // Idempotent: skip already-valid segments.
+                if is_valid_segment(&target_dir) {
+                    debug!(
+                        path = %abs_path.display(),
+                        hex = %hex,
+                        "shadow-write: segment already valid, skipping"
+                    );
+                    return Some((abs_path, content_id, None));
                 }
-            }
-            count
-        });
 
-        // Accumulate all enrichment column names to update the manifest.
-        let mut all_columns: BTreeSet<String> = BTreeSet::new();
-
-        // Accumulate abs_path → content_id for ALL processed files (including
-        // already-valid segments) so the overlay builder has the full mapping.
-        let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
-
-        for row_indices in by_path.values() {
-            // row_indices is non-empty by construction.
-            let first_row = &self.table.rows[row_indices[0]];
-            let abs_path = self.table.path_of(first_row).to_path_buf();
-
-            // Content ID: use pre-computed value when available (Issue 3),
-            // otherwise read the file and hash it.
-            let content_id: Vec<u8> = if let Some(cid) = self.pre_computed.remove(&abs_path) {
-                cid
-            } else {
-                match std::fs::read(&abs_path) {
-                    Ok(bytes) => (self.hash_content)(&bytes),
-                    Err(e) => {
-                        warn!(
-                            path = %abs_path.display(),
-                            "shadow-write: skipping unreadable file: {e}"
-                        );
-                        continue;
+                // Build segment: core columns + enrichment fields.
+                let mut builder = SegmentBuilder::new(provider_id, &content_id);
+                let mut local_columns: BTreeSet<String> = BTreeSet::new();
+                for &idx in row_indices {
+                    let row = &table.rows[idx];
+                    #[allow(clippy::cast_possible_truncation)]
+                    let row_id = builder.emit_row(
+                        table.name_of(row),
+                        table.fql_kind_of(row),
+                        table.language_of(row),
+                        row.line as u32,
+                        row.byte_range.start as u32,
+                        row.byte_range.end as u32,
+                        row.usages_count,
+                    );
+                    for (key, value) in table.resolve_fields(&row.fields) {
+                        let _ = local_columns.insert(key.clone());
+                        builder.set_field(row_id, &key, value);
                     }
                 }
-            };
 
-            // Record in segment_map regardless of whether we write a new segment.
-            let _ = segment_map.insert(abs_path.clone(), content_id.clone());
-
-            let hex = bytes_to_hex(&content_id);
-            let target_dir = provider_dir.join(&hex);
-
-            // Idempotent: skip already-valid segments.
-            if is_valid_segment(&target_dir) {
-                debug!(
-                    path = %abs_path.display(),
-                    hex = %hex,
-                    "shadow-write: segment already valid, skipping"
-                );
-                continue;
-            }
-
-            // Build segment: core columns + enrichment fields (Issue 2).
-            let mut builder = SegmentBuilder::new(self.provider_id, &content_id);
-            for &idx in row_indices {
-                let row = &self.table.rows[idx];
-                #[allow(clippy::cast_possible_truncation)]
-                let row_id = builder.emit_row(
-                    self.table.name_of(row),
-                    self.table.fql_kind_of(row),
-                    self.table.language_of(row),
-                    row.line as u32,
-                    row.byte_range.start as u32,
-                    row.byte_range.end as u32,
-                    row.usages_count,
-                );
-                // Transfer enrichment fields from IndexRow.fields (Issue 2).
-                for (key, value) in self.table.resolve_fields(&row.fields) {
-                    let _ = all_columns.insert(key.clone());
-                    builder.set_field(row_id, &key, value);
+                // Flush to disk inside the worker.
+                match builder.flush(&target_dir) {
+                    Ok(()) => Some((abs_path, content_id, Some(local_columns))),
+                    Err(e) => {
+                        warn!(
+                            target = %target_dir.display(),
+                            "shadow-write: flush failed: {e}"
+                        );
+                        Some((abs_path, content_id, None))
+                    }
                 }
-            }
+            })
+            .collect();
 
-            // Send to background flusher (blocking when channel is full).
-            if tx.send((builder, target_dir)).is_err() {
-                warn!("shadow-write: flusher thread terminated unexpectedly");
-                break;
+        // ── Merge results (sequential, fast) ─────────────────────────────────
+        let mut all_columns: BTreeSet<String> = BTreeSet::new();
+        let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::with_capacity(results.len());
+        let mut written: usize = 0;
+
+        for (abs_path, content_id, columns_opt) in results {
+            let _ = segment_map.insert(abs_path, content_id);
+            if let Some(cols) = columns_opt {
+                all_columns.extend(cols);
+                written += 1;
             }
         }
-
-        // Signal the flusher to drain and join.
-        drop(tx);
-        let written = flusher.join().unwrap_or(0);
 
         // Update the manifest with newly discovered column names (Issue 5).
         if written > 0 {
