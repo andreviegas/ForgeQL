@@ -4,6 +4,72 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.10] — 2026-05-09 — PhaseFT1 + PhaseFT2: DirtyOverlay + reindex_files/purge_file
+
+### Added
+
+- **`DirtyOverlay` (PhaseFT1)** — New per-session in-RAM mutation layer in
+  `crates/forgeql-core/src/storage/columnar/dirty_overlay.rs`. Tracks changed
+  and deleted files via `DirtySegment` entries (`added: Vec<DirtySegment>`) and
+  a `removed_hex_ids: HashSet<String>` that shadows persistent segments.
+  `find_symbols`, `find_usages`, and `resolve_symbol` on `ColumnarStorage` now
+  union persistent + dirty rows and filter out any persistent segment whose
+  `hex_content_id` appears in `removed_hex_ids`. When the overlay is empty the
+  new code paths are bypassed entirely (no per-query overhead).
+
+- **`ColumnarStorage::dirty_mut()`** — `pub(crate)` accessor exposing the
+  `DirtyOverlay` for direct manipulation in tests and by `reindex_files`.
+
+- **`reindex_files` + `purge_file` (PhaseFT2)** — Full implementation of the
+  `StorageEngine::reindex_files` and `StorageEngine::purge_file` trait methods
+  on `ColumnarStorage`. `reindex_files` reads modified files from disk, computes
+  the `git_blob_sha1` content-ID, builds a `SegmentBuilder`, validates with
+  `is_valid_segment` (content-addressed idempotency), flushes to
+  `.forgeql-staging/<hex>/`, and calls `dirty.add_segment`. `purge_file` looks
+  up the persistent hex via `path_to_hex_content_id`, shadows it in
+  `removed_hex_ids`, and evicts any stale dirty entry.
+
+- **`staging_dir` + `lang_registry` fields on `ColumnarStorage`** — `staging_dir`
+  is derived as `worktree_root.join(".forgeql-staging")` at construction time.
+  `lang_registry: Arc<LanguageRegistry>` is used by `reindex_files` to select
+  the correct parser per file extension; unknown extensions are skipped silently.
+
+- **`BackendSet::columnar_engine_mut()`** — New method returning
+  `Option<&mut dyn StorageEngine>` for the columnar backend, enabling
+  `Session::reindex_files` to call the columnar backend non-fatally alongside
+  the legacy backend.
+
+- **`StorageEngine: 'static` supertrait** — Added `+ 'static` to the trait
+  declaration in `storage/mod.rs` so `Box<dyn StorageEngine>` satisfies the
+  lifetime bound required by `columnar_engine_mut()`.
+
+- **`Session::reindex_files` columnar wiring** — Now calls
+  `columnar_engine_mut().reindex_files(paths)` after the legacy backend. Errors
+  are logged via `tracing::warn!` and are non-fatal; the legacy result is always
+  returned to the caller.
+
+### Tests
+
+- **`dirty_overlay_shadows_and_unions`** (overlay_parity) — PhaseFT1 gate:
+  `find_symbols` returns dirty rows and hides shadowed persistent rows.
+
+- **`dirty_overlay_find_usages_shadows_and_unions`** (overlay_parity) —
+  PhaseFT1 gate: `find_usages` respects dirty overlay shadowing and union.
+
+- **`dirty_overlay_resolve_symbol_shadows_and_unions`** (overlay_parity) —
+  PhaseFT1 gate: `resolve_symbol` returns the dirty row and `None` for a name
+  that no longer exists in the dirty overlay.
+
+- **`reindex_updates_dirty_overlay`** (overlay_parity) — PhaseFT2 gate:
+  `reindex_files` shadows the old persistent segment and surfaces new symbols
+  from the rewritten file while leaving other files' symbols untouched.
+
+- **`purge_removes_file_symbols`** (overlay_parity) — PhaseFT2 gate:
+  `purge_file` removes all symbols for the given file while leaving other
+  files' symbols untouched.
+
+---
+
 ## [0.48.9] — 2026-05-09 — Phase 06d: Zone-map pruning + parallel shadow-writer
 
 ### Added

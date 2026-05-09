@@ -440,7 +440,12 @@ impl ForgeQLEngine {
                     SegmentReader::open(&seg_dir).ok().map(Arc::new)
                 })
                 .collect();
-            let columnar = ColumnarStorage::new(workspace_root.to_path_buf(), segs, overlay, Arc::clone(&self.lang_registry));
+            let columnar = ColumnarStorage::new(
+                workspace_root.to_path_buf(),
+                segs,
+                overlay,
+                Arc::clone(&self.lang_registry),
+            );
             session.install_columnar(Box::new(columnar));
         }
 

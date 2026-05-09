@@ -25,23 +25,23 @@ use roaring::RoaringBitmap;
 use tracing::debug;
 
 use crate::ast::enrich::default_enrichers;
+use crate::ast::index::IndexStats;
 use crate::ast::index::{SymbolTable, index_file};
 use crate::ast::lang::LanguageRegistry;
 use crate::ast::query::glob_matches;
-use crate::ast::index::IndexStats;
 use crate::filter::{apply_clauses, eval_predicate};
 use crate::ir::{Clauses, CompareOp, PredicateValue};
 use crate::result::SymbolMatch;
 use crate::workspace::Workspace;
 
+use super::bytes_to_hex;
 use super::dirty_overlay::DirtyOverlay;
 use super::overlay::{Overlay, RowPtr};
 use super::overlay_lock::OverlayLock;
 use super::segment_builder::{SegmentBuilder, ZONEMAP_NUMERIC_FIELDS, is_valid_segment};
 use super::segment_reader::SegmentReader;
-use crate::storage::{LegacyMemoryStorage, StorageEngine, SymbolLocation};
 use crate::storage::git_sha1_provider::git_blob_sha1;
-use super::bytes_to_hex;
+use crate::storage::{LegacyMemoryStorage, StorageEngine, SymbolLocation};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ColumnarStorage
@@ -1213,7 +1213,12 @@ impl ColumnarStorage {
                     if let Ok(overlay) = Overlay::open(&overlay_path) {
                         debug!(%commit_sha, "columnar warm_or_open: peer built overlay under lock");
                         let segments = Self::open_segments_from_overlay(ctx, &overlay);
-                        return Ok(Self::new(worktree_path, segments, overlay, Arc::clone(&lang_registry)));
+                        return Ok(Self::new(
+                            worktree_path,
+                            segments,
+                            overlay,
+                            Arc::clone(&lang_registry),
+                        ));
                     }
                     let _ = std::fs::remove_file(&overlay_path);
                 }
