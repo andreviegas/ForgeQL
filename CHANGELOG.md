@@ -4,6 +4,73 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.13] — 2026-05-10 — PhaseFT5: Route Flip + Drop Legacy RAM
+
+### Changed
+
+- **`BackendSet::default_engine` / `default_engine_mut` (PhaseFT5)** — Route
+  flip: the default engine is now columnar when installed, falling back to
+  legacy. Queries issued without a `USING` clause are served by columnar on
+  sessions that have it.
+
+- **`BackendSet::engine_for`** — Split `Backend::Default | Backend::Legacy`
+  into two separate arms. `Backend::Legacy` remains an explicit escape-hatch
+  that always targets the legacy engine regardless of the default routing.
+
+### Added
+
+- **`IndexStats::rows: usize`** — New field on `IndexStats` (zero-cost
+  `Default::default()` for legacy) so columnar sessions can expose their row
+  count through the same `index_stats()` path as legacy.
+
+- **`ColumnarStorage::stats: IndexStats`** — Pre-computed stats field
+  populated in `ColumnarStorage::new()` from `overlay.row_count()`. Returned
+  by `index_stats()` (previously `None`).
+
+- **`ColumnarStorage::locate_definition`** — Implemented via `resolve_impl`
+  (previously inherited the default `None`).
+
+- **`Session::drop_legacy_index()`** — Frees the legacy `SymbolTable` from
+  memory. Called immediately after `install_columnar` in `exec_source.rs` so
+  the legacy RAM is released once columnar is the default engine.
+
+- **`ForgeQLEngine::session_index_stats_rows` (test-helper)** — Returns
+  `index_stats().rows` for the session's default engine. Used by FT5 gate
+  tests.
+
+### Fixed
+
+- **`Session::build_index` / `resume_index` / `save_index`** — Now target
+  `legacy_storage_mut()` explicitly. Previously called
+  `default_engine_mut().build/load/persist` which, after the route flip,
+  would have routed to the no-op columnar implementations.
+
+- **`Session::reindex_files`** — Legacy arm is non-fatal (`tracing::warn`)
+  when called after `drop_legacy_index()` (table is `None`). Columnar arm
+  remains a separate non-fatal warning.
+
+- **`Session::flush_if_dirty`** — Skips `save_index` for columnar sessions;
+  the delta file is managed at `BEGIN TRANSACTION` time and does not need an
+  explicit flush.
+
+- **`exec_source.rs` `show_stats`** — Two-arm `filter_map`: columnar sessions
+  now appear in `SHOW SOURCES` with `rows` populated from
+  `index_stats().rows`; legacy-specific memory fields are zeroed.
+
+- **`exec_source.rs` `symbols_indexed`** — Fixed at two call-sites to prefer
+  `engine().index_stats().rows` with legacy table fallback so columnar
+  sessions report a non-zero count in the `USE` response.
+
+### Tests
+
+- **`ft5_columnar_index_stats_rows_match_overlay`** — Gate test: verifies
+  `ColumnarStorage::index_stats()` returns `Some` and `rows ==
+  overlay.row_count()`.
+
+- **`ft5_session_has_columnar_after_install`** — Gate test: verifies
+  `session_has_columnar() == true` and `session_index_stats_rows() ==
+  overlay.row_count()` after `install_columnar_for_session`.
+
 ## [0.48.12] — 2026-05-10 — PhaseFT4: Overlay Manifest Merge at COMMIT
 
 ### Added
