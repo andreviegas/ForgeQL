@@ -232,13 +232,16 @@ impl Session {
         );
 
         let workspace = Workspace::new(&self.worktree_path)?;
-        self.backends.default_engine_mut().build(&workspace)?;
+        // PhaseFT5: build and persist always operate on the legacy backend
+        // explicitly; after the route-flip `default_engine_mut()` returns
+        // columnar (which has no `build` or `persist_to_cache` semantics).
+        let legacy = self
+            .backends
+            .legacy_storage_mut()
+            .ok_or_else(|| anyhow::anyhow!("no legacy backend"))?;
+        legacy.build(&workspace)?;
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        self.backends.default_engine_mut().persist_to_cache(
-            &self.worktree_path,
-            &commit_hash,
-            &self.source_name,
-        )?;
+        legacy.persist_to_cache(&self.worktree_path, &commit_hash, &self.source_name)?;
 
         debug!(
             session = %self.id,
@@ -261,11 +264,14 @@ impl Session {
     pub fn resume_index(&mut self) -> Result<()> {
         let head_oid = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
 
-        let loaded = self.backends.default_engine_mut().load_from_cache(
-            &self.worktree_path,
-            &head_oid,
-            &self.source_name,
-        )?;
+        // PhaseFT5: legacy must be loaded explicitly; `default_engine_mut()`
+        // now returns columnar once installed, which has no cache semantics.
+        let loaded = self
+            .backends
+            .legacy_storage_mut()
+            .map(|l| l.load_from_cache(&self.worktree_path, &head_oid, &self.source_name))
+            .transpose()?
+            .unwrap_or(false);
 
         if loaded {
             debug!(
@@ -357,6 +363,17 @@ impl Session {
     pub fn install_columnar(&mut self, columnar: Box<dyn StorageEngine>) {
         self.backends.set_columnar(columnar);
     }
+
+    /// Free the legacy `SymbolTable` from memory.
+    ///
+    /// Called immediately after `install_columnar` (`PhaseFT5`) so that the
+    /// legacy RAM is released once columnar is the default engine.
+    pub fn drop_legacy_index(&mut self) {
+        if let Some(legacy) = self.backends.legacy_storage_mut() {
+            legacy.drop_stored_index();
+        }
+    }
+
     /// Incrementally re-index the given files after a mutation.
     ///
     /// Each path is purged (all stale entries removed) then re-parsed.
@@ -366,7 +383,13 @@ impl Session {
     /// Returns `Err` if the index has not been built yet, or if tree-sitter
     /// parsing fails.
     pub fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
-        self.backends.default_engine_mut().reindex_files(paths)?;
+        // PhaseFT5: target both backends explicitly.
+        // Legacy may have no table after `drop_legacy_index()` — treat as non-fatal.
+        if let Some(legacy) = self.backends.legacy_storage_mut()
+            && let Err(e) = legacy.reindex_files(paths)
+        {
+            tracing::warn!("legacy reindex_files (non-fatal): {e}");
+        }
         if let Some(columnar) = self.backends.columnar_engine_mut()
             && let Err(e) = columnar.reindex_files(paths)
         {
@@ -383,11 +406,11 @@ impl Session {
     /// I/O fails.
     pub fn save_index(&mut self) -> Result<()> {
         let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        self.backends.default_engine_mut().persist_to_cache(
-            &self.worktree_path,
-            &commit_hash,
-            &self.source_name,
-        )?;
+        // PhaseFT5: persist explicitly via legacy; `default_engine_mut()` now
+        // returns columnar when installed.
+        if let Some(legacy) = self.backends.legacy_storage_mut() {
+            legacy.persist_to_cache(&self.worktree_path, &commit_hash, &self.source_name)?;
+        }
         debug!(
             session = %self.id,
             commit = %commit_hash,
@@ -406,7 +429,12 @@ impl Session {
     /// Propagates `save_index` errors when a flush actually happens.
     pub fn flush_if_dirty(&mut self) -> Result<()> {
         if self.index_dirty {
-            self.save_index()?;
+            if self.backends.has_columnar() {
+                // PhaseFT5: columnar sessions manage their delta file at
+                // BEGIN TRANSACTION time (git-tracked).  Nothing to flush here.
+            } else {
+                self.save_index()?;
+            }
         }
         Ok(())
     }

@@ -207,7 +207,11 @@ impl ForgeQLEngine {
                     );
                     Some((existing_id.clone(), None))
                 } else {
-                    let symbols_indexed = existing_session.index().map_or(0, |idx| idx.rows.len());
+                    // PhaseFT5: prefer columnar stats; fall back to legacy table.
+                    let symbols_indexed = existing_session.engine().index_stats().map_or_else(
+                        || existing_session.index().map_or(0, |idx| idx.rows.len()),
+                        |s| s.rows,
+                    );
                     info!(
                         session_id = %existing_id,
                         %source_name,
@@ -340,6 +344,8 @@ impl ForgeQLEngine {
                 Ok(storage) => {
                     // Delta is loaded inside warm_or_open — just install.
                     session.install_columnar(Box::new(storage));
+                    // PhaseFT5: free legacy RAM now that columnar is default.
+                    session.drop_legacy_index();
                 }
                 Err(e) => tracing::warn!(
                     %commit,
@@ -361,7 +367,11 @@ impl ForgeQLEngine {
             session.frozen_verify_steps = Some(config.verify_steps);
         }
 
-        let symbols_indexed = session.index().map_or(0, |idx| idx.rows.len());
+        // PhaseFT5: prefer columnar stats; fall back to legacy table.
+        let symbols_indexed = session.engine().index_stats().map_or_else(
+            || session.index().map_or(0, |idx| idx.rows.len()),
+            |s| s.rows,
+        );
         let sid = session_id.clone();
 
         // Write the initial timestamp so background pruners see this worktree as active.
@@ -457,6 +467,30 @@ impl ForgeQLEngine {
             .iter()
             .filter(|(id, _)| for_session.is_none_or(|s| *id == s))
             .filter_map(|(id, session)| {
+                // PhaseFT5: two-arm path — columnar sessions have no legacy table.
+                if session.has_columnar() {
+                    let rows = session.engine().index_stats().map_or(0, |s| s.rows);
+                    return Some(SessionStats {
+                        session_id: id.clone(),
+                        source: session.source_name.clone(),
+                        branch: session.branch.clone(),
+                        rows,
+                        distinct_names: 0,
+                        distinct_paths: 0,
+                        usage_symbols: 0,
+                        usage_sites: 0,
+                        trigram_distinct: 0,
+                        mem_total_bytes: 0,
+                        mem_rows_bytes: 0,
+                        mem_usages_bytes: 0,
+                        mem_indexes_bytes: 0,
+                        mem_trigram_bytes: 0,
+                        mem_strings_bytes: 0,
+                        by_language: std::collections::HashMap::new(),
+                        by_fql_kind: std::collections::HashMap::new(),
+                    });
+                }
+                // Legacy path.
                 let index = session.index()?;
                 let mem = index.mem_estimate();
                 Some(SessionStats {

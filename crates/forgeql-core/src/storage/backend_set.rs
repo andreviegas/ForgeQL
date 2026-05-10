@@ -51,16 +51,21 @@ impl BackendSet {
 
     /// The default backend used when no `USING` clause is present.
     ///
-    /// Phase 05.3: returns the legacy engine.
-    /// Phase 09: returns columnar when configured as the default.
+    /// PhaseFT5: returns columnar when installed; falls back to legacy.
     #[must_use]
     pub fn default_engine(&self) -> &dyn StorageEngine {
-        &self.legacy
+        self.columnar.as_deref().unwrap_or(&self.legacy)
     }
 
     /// Mutable access to the default backend (used for reindex / persist).
+    ///
+    /// PhaseFT5: returns columnar when installed; falls back to legacy.
     pub fn default_engine_mut(&mut self) -> &mut dyn StorageEngine {
-        &mut self.legacy
+        if let Some(ref mut c) = self.columnar {
+            c.as_mut()
+        } else {
+            &mut self.legacy
+        }
     }
 
     /// Mutable access to the columnar backend, if installed.
@@ -79,7 +84,12 @@ impl BackendSet {
     /// `.forgeql.yaml`).
     pub fn engine_for(&self, backend: &Backend) -> Result<&dyn StorageEngine> {
         match backend {
-            Backend::Default | Backend::Legacy => Ok(&self.legacy),
+            // PhaseFT5: `Default` routes through the flipped default_engine
+            // (columnar when installed, legacy otherwise).
+            Backend::Default => Ok(self.default_engine()),
+            // `Legacy` is an explicit escape-hatch that always targets the
+            // legacy backend regardless of the default routing.
+            Backend::Legacy => Ok(&self.legacy),
             Backend::Columnar => self.columnar.as_deref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "columnar backend is not enabled for this session; \

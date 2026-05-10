@@ -368,6 +368,20 @@ impl ForgeQLEngine {
             .is_some_and(Session::has_columnar)
     }
 
+    /// Return `index_stats().rows` for the session's default engine.
+    ///
+    /// Returns `None` if the session does not exist or `index_stats()` is `None`.
+    ///
+    /// Test-only helper for `PhaseFT5` gate tests.
+    #[cfg(feature = "test-helpers")]
+    #[must_use]
+    pub fn session_index_stats_rows(&self, session_id: &str) -> Option<usize> {
+        self.sessions
+            .get(session_id)
+            .and_then(|s| s.engine().index_stats())
+            .map(|st| st.rows)
+    }
+
     /// Register a local session and build **both** backends from the same
     /// `build_index` call via columnar shadow-write.
     ///

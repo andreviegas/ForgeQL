@@ -75,6 +75,11 @@ pub struct ColumnarStorage {
     /// restores it automatically on `ROLLBACK`) but excluded from user-facing
     /// `COMMIT MESSAGE` commits via `git::CLEAN_COMMIT_EXCLUDED`.
     delta_path: PathBuf,
+    /// Pre-computed index stats for `index_stats()`.
+    ///
+    /// Populated at construction from `overlay.row_count()` so that
+    /// columnar sessions appear in `SHOW SOURCES` without a full scan.
+    stats: IndexStats,
 }
 
 impl ColumnarStorage {
@@ -90,6 +95,10 @@ impl ColumnarStorage {
     ) -> Self {
         let staging_dir = worktree_root.join(".forgeql-staging");
         let delta_path = worktree_root.join(".forgeql-columnar-delta");
+        let stats = IndexStats {
+            rows: overlay.row_count() as usize,
+            ..IndexStats::default()
+        };
         Self {
             worktree_root,
             segments,
@@ -98,6 +107,7 @@ impl ColumnarStorage {
             staging_dir,
             lang_registry,
             delta_path,
+            stats,
         }
     }
 
@@ -986,7 +996,17 @@ impl StorageEngine for ColumnarStorage {
     }
 
     fn index_stats(&self) -> Option<&IndexStats> {
-        None
+        Some(&self.stats)
+    }
+
+    fn locate_definition(&self, name: &str) -> Option<(PathBuf, usize)> {
+        self.resolve_impl(
+            name,
+            &crate::ir::Clauses::default(),
+            &self.worktree_root,
+            None,
+        )
+        .map(|loc| (loc.path, loc.line))
     }
 
     fn build(&mut self, _workspace: &Workspace) -> Result<()> {
@@ -1477,6 +1497,7 @@ impl ColumnarStorage {
         let new_segments = Self::open_segments_from_overlay(ctx, &new_overlay);
         self.overlay = new_overlay;
         self.segments = new_segments;
+        self.stats.rows = self.overlay.row_count() as usize;
 
         // 4. Clear dirty state and staging directory.
         self.dirty = DirtyOverlay::new();

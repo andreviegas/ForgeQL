@@ -143,6 +143,9 @@ pub struct UsageSite {
 /// and [`IndexStats::resolved_by_language`].
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct IndexStats {
+    /// Total number of indexed rows.  Populated by `ColumnarStorage` from
+    /// `overlay.row_count()` so that columnar sessions appear in `SHOW SOURCES`.
+    pub rows: usize,
     /// Symbol count per `fql_kind` value (key = `fql_kind_id` from the intern pool).
     pub by_fql_kind: HashMap<u32, usize>,
     /// Symbol count per `language` value (key = `language_id` from the intern pool).

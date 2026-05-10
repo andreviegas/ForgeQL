@@ -3234,6 +3234,146 @@ fn new_session_hits_promoted_overlay_cache() {
     assert!(row_count_b > 0, "overlay row count must be positive");
 }
 
+// ── FT5 gate tests ───────────────────────────────────────────────────────────
+
+/// PhaseFT5 gate: `ColumnarStorage::index_stats()` returns `Some` and
+/// `stats.rows` equals the overlay row count.
+#[test]
+fn ft5_columnar_index_stats_rows_match_overlay() {
+    use forgeql_core::ast::lang::CppLanguageInline;
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_core::storage::columnar::{ColumnarStorage, OverlayBuilder};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let overlays_dir = tmp.path().join("overlays");
+
+    let cpp_path = fixture_path("canonical.cpp");
+    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let cpp_cid = build_segment(&table_cpp, &cpp_path, &segments_dir);
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(cpp_path, cpp_cid);
+
+    let overlay_path = overlays_dir.join("test").join("ft5gate00.bin");
+    std::fs::create_dir_all(overlay_path.parent().unwrap()).expect("overlay parent");
+    OverlayBuilder::new("test", segments_dir.clone(), fixtures_dir(), segment_map)
+        .build_and_persist(&overlay_path)
+        .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let expected_rows = overlay.row_count() as usize;
+    assert!(expected_rows > 0, "test requires a non-empty overlay");
+
+    let segments: Vec<Arc<forgeql_core::storage::columnar::SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            let seg_dir = segments_dir.join("test").join(&meta.hex_content_id);
+            Arc::new(
+                forgeql_core::storage::columnar::SegmentReader::open(&seg_dir)
+                    .expect("SegmentReader::open"),
+            )
+        })
+        .collect();
+
+    let registry = Arc::new(forgeql_core::ast::lang::LanguageRegistry::new(vec![]));
+    let storage = ColumnarStorage::new(tmp.path().to_path_buf(), segments, overlay, registry);
+
+    // FT5: index_stats() must return Some with rows == overlay.row_count()
+    let stats = storage
+        .index_stats()
+        .expect("index_stats must be Some for columnar (FT5)");
+    assert_eq!(
+        stats.rows, expected_rows,
+        "index_stats.rows must equal overlay.row_count()"
+    );
+}
+
+/// PhaseFT5 gate: after `install_columnar_for_session`, the session reports
+/// `has_columnar() == true` and `session_index_stats_rows() > 0`.
+///
+/// We build a one-segment overlay from `canonical.cpp` directly, then install
+/// it via the existing `install_columnar_for_session` test-helper on a plain
+/// legacy session so that the FT5 routing logic is exercised without relying on
+/// the `register_local_session_with_columnar` slow-path.
+#[test]
+#[cfg(feature = "test-helpers")]
+fn ft5_session_has_columnar_after_install() {
+    use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
+    use forgeql_core::engine::ForgeQLEngine;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_core::storage::columnar::{ColumnarStorage, OverlayBuilder};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let overlays_dir = tmp.path().join("overlays");
+
+    // Build a 1-segment overlay from canonical.cpp.
+    let cpp_path = fixture_path("canonical.cpp");
+    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let cpp_cid = build_segment(&table_cpp, &cpp_path, &segments_dir);
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(cpp_path, cpp_cid);
+    let overlay_path = overlays_dir.join("test").join("ft5s00.bin");
+    std::fs::create_dir_all(overlay_path.parent().unwrap()).expect("overlay parent");
+    OverlayBuilder::new("test", segments_dir.clone(), fixtures_dir(), segment_map)
+        .build_and_persist(&overlay_path)
+        .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let expected_rows = overlay.row_count() as usize;
+    assert!(expected_rows > 0, "test requires a non-empty overlay");
+
+    let segments: Vec<Arc<forgeql_core::storage::columnar::SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            let seg_dir = segments_dir.join("test").join(&meta.hex_content_id);
+            Arc::new(
+                forgeql_core::storage::columnar::SegmentReader::open(&seg_dir)
+                    .expect("SegmentReader::open"),
+            )
+        })
+        .collect();
+
+    // Build an engine + plain legacy session on fixtures_dir().
+    let data_dir = tmp.path().join("data");
+    let reg = Arc::new(LanguageRegistry::new(vec![]));
+    let mut engine = ForgeQLEngine::new(data_dir, reg).expect("engine");
+    let sid = engine
+        .register_local_session(&fixtures_dir())
+        .expect("register_local_session");
+
+    // Install the pre-built ColumnarStorage.
+    let storage = ColumnarStorage::new(
+        fixtures_dir(),
+        segments,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
+    engine.install_columnar_for_session(&sid, Box::new(storage));
+
+    // FT5 gate 1: session must report has_columnar after install.
+    assert!(
+        engine.session_has_columnar(&sid),
+        "session must report has_columnar() == true (FT5)"
+    );
+
+    // FT5 gate 2: index_stats().rows == overlay.row_count() via default (columnar) engine.
+    let rows = engine.session_index_stats_rows(&sid);
+    assert_eq!(
+        rows,
+        Some(expected_rows),
+        "session_index_stats_rows must equal overlay.row_count() (FT5), got {rows:?}"
+    );
+}
+
 // ── FT4 test helper ──────────────────────────────────────────────────────────
 
 fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
