@@ -12,5 +12,21 @@ target/
 Thumbs.db
 
 # ForgeQL runtime
+# .forgeql-staging/ and .forgeql-session are safe to ignore everywhere:
+# they are excluded from ALL commit types (CHECKPOINT_EXCLUDED + CLEAN_COMMIT_EXCLUDED).
+# Do NOT add .forgeql-index, .forgeql-columnar-delta, or .forgeql-checkpoints here:
+# stage_and_commit uses IndexAddOption::DEFAULT (respects .gitignore), so ignoring
+# them would silently break checkpoint commits and make ROLLBACK unable to restore state.
 .forgeql-cache/
+.forgeql-staging/
+.forgeql-session
 data/
+
+# Test fixture runtime state — safe to suppress here because integration tests
+# never issue BEGIN TRANSACTION on fixture directories, so checkpoint commits
+# (which need .forgeql-index / .forgeql-columnar-delta) never run against them.
+tests/fixtures/**/.forgeql-index
+tests/fixtures/**/.forgeql-session
+tests/fixtures/**/.forgeql-staging/
+tests/fixtures/**/.forgeql-columnar-delta
+tests/fixtures/**/.forgeql-checkpoints
