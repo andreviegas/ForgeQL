@@ -4,6 +4,40 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.15] — 2026-05-10 — PhaseFT7: Git-Diff Reindex on Reconnect
+
+### Added
+
+- **`git::diff_head_to_worktree` (PhaseFT7)** — New function that returns the
+  list of tracked files modified in the worktree relative to HEAD, as absolute
+  paths. Uses `git2::StatusOptions` with `include_untracked(false)` so only
+  committed-but-modified files are returned. Excludes all ForgeQL internal
+  control files (same set as `CLEAN_COMMIT_EXCLUDED`).
+
+- **Reconnect dirty reindex (`exec_source.rs`)** — After `resume_index` /
+  `load_delta` and FT6 checkpoint restore, `diff_head_to_worktree` is called
+  for existing worktrees (`wt_existed = true`). Any dirty files are reindexed
+  via `session.reindex_files()` before the session is handed back to the
+  caller. Non-fatal: git diff failures and reindex failures are logged as
+  warnings and the cached index is used as-is (graceful degradation).
+
+- **Gate tests — `tests/reconnect_dirty.rs`** — Three tests covering:
+  `reconnect_reindexes_dirty_files`, `reconnect_does_not_reindex_clean_files`,
+  `reconnect_after_begin_does_not_double_index`.
+
+- **Unit tests in `git/mod.rs`** — Four inline tests covering:
+  clean repo returns empty list, modified tracked file is detected, untracked
+  file is excluded, ForgeQL control file is excluded.
+
+### Fixed
+
+- **Stale index after server restart mid-session** — Previously, `CHANGE FILE`
+  edits made after the last checkpoint (or with no `BEGIN TRANSACTION`) were
+  lost on reconnect: `resume_index` restored the pre-change cache and the
+  in-memory delta was gone. FT7 detects and reindexes these files automatically.
+
+---
+
 ## [0.48.14] — 2026-05-10 — PhaseFT6: Checkpoint Stack Persistence
 
 ### Added
