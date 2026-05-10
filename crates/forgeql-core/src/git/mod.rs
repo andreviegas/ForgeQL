@@ -431,6 +431,38 @@ pub fn dirty_paths(repo: &Repository) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+/// Returns the list of tracked files in the worktree that differ from HEAD,
+/// as absolute paths under `worktree_path`.
+///
+/// This is the reconnect dirty-detection function (PhaseFT7): after
+/// `resume_index` or `load_delta` restores the cached index, call this to
+/// find files that were modified on disk but not captured in a checkpoint
+/// commit.  Non-fatal caller pattern — errors should be logged and ignored.
+///
+/// Excludes ForgeQL-internal control files (same set as `CLEAN_COMMIT_EXCLUDED`).
+/// Untracked files are out of scope and are NOT returned.
+///
+/// # Errors
+///
+/// Returns `Err` if the repository cannot be opened or the status query fails.
+pub fn diff_head_to_worktree(worktree_path: &Path) -> Result<Vec<PathBuf>> {
+    let repo = Repository::open(worktree_path)?;
+    let mut opts = git2::StatusOptions::new();
+    let _ = opts.include_untracked(false).include_ignored(false);
+    let statuses = repo.statuses(Some(&mut opts))?;
+    let mut out: Vec<PathBuf> = Vec::new();
+    for entry in statuses.iter() {
+        let Some(p) = entry.path() else { continue };
+        if is_clean_commit_excluded(Path::new(p)) {
+            continue;
+        }
+        out.push(worktree_path.join(p));
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -495,5 +527,80 @@ mod tests {
         let outside = std::path::PathBuf::from("/tmp/not-in-worktree.cpp");
         let result = stage_paths_and_commit(&repo, dir, &[outside], "oops");
         assert!(result.is_err(), "must fail when path is outside worktree");
+    }
+
+    #[test]
+    fn diff_head_to_worktree_empty_for_clean_repo() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path();
+        let _repo = make_normal_repo(dir);
+
+        let paths = diff_head_to_worktree(dir).unwrap();
+        assert!(paths.is_empty(), "clean repo must report no dirty files");
+    }
+
+    #[test]
+    fn diff_head_to_worktree_detects_modified_tracked_file() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path();
+        let _repo = make_normal_repo(dir);
+
+        // Modify the tracked file without staging or committing.
+        std::fs::write(dir.join("file.cpp"), b"int main() { return 42; }\n").unwrap();
+
+        let paths = diff_head_to_worktree(dir).unwrap();
+        assert!(
+            paths.contains(&dir.join("file.cpp")),
+            "modified tracked file must appear in the dirty list"
+        );
+    }
+
+    #[test]
+    fn diff_head_to_worktree_excludes_untracked_files() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path();
+        let _repo = make_normal_repo(dir);
+
+        // A brand-new file that has never been committed.
+        std::fs::write(dir.join("new_file.cpp"), b"// untracked\n").unwrap();
+
+        let paths = diff_head_to_worktree(dir).unwrap();
+        assert!(
+            !paths.contains(&dir.join("new_file.cpp")),
+            "untracked file must not appear in the dirty list"
+        );
+    }
+
+    #[test]
+    fn diff_head_to_worktree_excludes_control_files() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path();
+        let repo = make_normal_repo(dir);
+
+        // Commit a ForgeQL control file so it is tracked.
+        let ctrl = dir.join(".forgeql-checkpoints");
+        std::fs::write(&ctrl, b"{}").unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_path(std::path::Path::new(".forgeql-checkpoints"))
+            .unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        {
+            let tree = repo.find_tree(tree_id).unwrap();
+            let parent = repo.head().unwrap().peel_to_commit().unwrap();
+            let sig =
+                git2::Signature::new("test", "test@test.com", &git2::Time::new(1, 0)).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "add ctrl", &tree, &[&parent])
+                .unwrap();
+        }
+        // Modify the control file in the worktree.
+        std::fs::write(&ctrl, b"{updated}").unwrap();
+
+        let paths = diff_head_to_worktree(dir).unwrap();
+        assert!(
+            !paths.contains(&ctrl),
+            "ForgeQL control file must be excluded from the dirty list"
+        );
     }
 }

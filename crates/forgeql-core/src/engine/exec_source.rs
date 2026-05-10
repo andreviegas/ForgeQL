@@ -366,6 +366,25 @@ impl ForgeQLEngine {
             let current_head = crate::session::Session::get_head_oid(&worktree).unwrap_or_default();
             crate::session::checkpoint_file::try_restore(&mut session, &worktree, &current_head);
         }
+        // FT7: on reconnect, reindex any tracked files that were modified on
+        // disk but not captured in a checkpoint commit.  Skipped for fresh
+        // sessions (no dirty files possible).  Non-fatal — if the git diff
+        // fails (e.g. detached HEAD), log a warning and continue with the
+        // cached index (graceful degradation to pre-FT7 behaviour).
+        if wt_existed {
+            match git::diff_head_to_worktree(&session.worktree_path) {
+                Ok(paths) if paths.is_empty() => {}
+                Ok(paths) => {
+                    tracing::info!(count = paths.len(), "reconnect: reindexing dirty file(s)",);
+                    if let Err(e) = session.reindex_files(&paths) {
+                        tracing::warn!("reconnect: reindex_files failed (non-fatal): {e}",);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("reconnect: git diff HEAD failed (non-fatal): {e}");
+                }
+            }
+        }
         // Freeze verify config at session start — sidecar takes priority over in-repo file.
         // Any later CHANGE has no effect on VERIFY; steps are captured once here.
         if let Some((workdir, config)) = maybe_config {
