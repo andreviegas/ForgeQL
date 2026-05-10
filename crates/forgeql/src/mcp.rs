@@ -4,6 +4,7 @@
 /// operation is exposed as an MCP tool.  The primary tool is `run_fql` which
 /// accepts raw FQL and delegates to `ForgeQLEngine::execute()`.
 use std::sync::{Arc, Mutex};
+use tokio::sync::Mutex as TokioMutex;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -30,11 +31,14 @@ use forgeql_core::result::ForgeQLResult;
 
 /// MCP server handler wrapping a `ForgeQLEngine`.
 ///
-/// The engine is behind an `Arc<Mutex>` because `ServerHandler` requires
-/// `Sync` while `ForgeQLEngine::execute` takes `&mut self`.  The `Arc`
-/// allows sharing the engine with a background eviction task.
+/// The engine is behind an `Arc<TokioMutex>` because `ServerHandler` requires
+/// `Sync` while `ForgeQLEngine::execute` takes `&mut self`.  Using
+/// `tokio::sync::Mutex` ensures that a cancelled MCP request drops its
+/// `.lock().await` waiter without blocking a thread — preventing the
+/// all-threads-on-futex deadlock that occurs with `std::sync::Mutex` when
+/// a long-running `USE` is cancelled by the client.
 pub(crate) struct ForgeQlMcp {
-    engine: Arc<Mutex<ForgeQLEngine>>,
+    engine: Arc<TokioMutex<ForgeQLEngine>>,
     #[allow(dead_code)] // populated and read by the rmcp ToolRouter derive macro
     tool_router: ToolRouter<Self>,
     logger: Mutex<Option<QueryLogger>>,
@@ -42,7 +46,7 @@ pub(crate) struct ForgeQlMcp {
 
 impl ForgeQlMcp {
     /// Create a new MCP handler wrapping the given engine.
-    pub(crate) fn new(engine: Arc<Mutex<ForgeQLEngine>>, logger: Option<QueryLogger>) -> Self {
+    pub(crate) fn new(engine: Arc<TokioMutex<ForgeQLEngine>>, logger: Option<QueryLogger>) -> Self {
         Self {
             engine,
             tool_router: Self::tool_router(),
@@ -68,15 +72,15 @@ impl ForgeQlMcp {
     }
 
     /// Resolve the source name for a session from the engine.
-    fn resolve_source(&self, session_id: Option<&str>) -> String {
-        session_id
-            .and_then(|sid| {
-                self.engine
-                    .lock()
-                    .ok()
-                    .and_then(|g| g.source_name_for_session(sid).map(str::to_owned))
-            })
-            .unwrap_or_else(|| "unknown".to_string())
+    async fn resolve_source(&self, session_id: Option<&str>) -> String {
+        let Some(sid) = session_id else {
+            return "unknown".to_string();
+        };
+        self.engine
+            .lock()
+            .await
+            .source_name_for_session(sid)
+            .map_or_else(|| "unknown".to_string(), str::to_owned)
     }
 }
 
@@ -167,32 +171,29 @@ fn append_meta(output: &str, budget_line: Option<&str>) -> String {
 ///
 /// Callers are responsible for serializing to the desired output format.
 ///
+/// # Cancellation safety
+///
+/// The engine is held under a `tokio::sync::Mutex`.  Acquiring the lock via
+/// `.lock().await` is cancel-safe: if the MCP client drops the request while
+/// this future is awaiting the lock, the waiter is simply removed from the
+/// queue — no thread remains blocked.  A request that has already acquired
+/// the lock and is executing inside `execute()` will always run to completion
+/// (there is no mid-execution cancellation), but subsequent requests will not
+/// pile up on a futex.
+///
 /// # Panic safety
 ///
-/// The engine is held under a `std::sync::Mutex`.  Any panic inside
-/// `execute()` would normally poison the lock, making all subsequent requests
-/// fail with "engine lock poisoned".  This function prevents that in two ways:
-///
-/// 1. **Poison recovery**: if a previous call already poisoned the lock, the
-///    guard is recovered via `into_inner()` so new requests can proceed.
-/// 2. **`catch_unwind`**: the `execute()` call is wrapped in `catch_unwind`
-///    so that panics are caught and converted to error responses before the
-///    guard is dropped, keeping the mutex un-poisoned.
-fn exec_engine(
-    engine: &Mutex<ForgeQLEngine>,
+/// The `execute()` call is wrapped in `catch_unwind`.  `tokio::sync::Mutex`
+/// does not track poison state, so a panicking call simply releases the lock
+/// normally after the unwind — subsequent requests can proceed.
+async fn exec_engine(
+    engine: &TokioMutex<ForgeQLEngine>,
     session_id: Option<&str>,
     op: &ForgeQLIR,
 ) -> Result<(ForgeQLResult, Option<forgeql_core::budget::BudgetSnapshot>), ErrorData> {
-    // Acquire the lock, recovering from poison if a previous request panicked.
-    let mut guard = match engine.lock() {
-        Ok(g) => g,
-        Err(poisoned) => {
-            error!("engine mutex was poisoned — recovering guard; previous request panicked");
-            poisoned.into_inner()
-        }
-    };
+    let mut guard = engine.lock().await;
 
-    // Wrap execute() in catch_unwind to prevent future poisoning.
+    // Wrap execute() in catch_unwind to convert panics into error responses.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         guard.execute(session_id, op)
     }))
@@ -233,7 +234,7 @@ impl ForgeQlMcp {
         name = "run_fql",
         description = "Execute any ForgeQL statement. CONNECT FIRST: USE source.branch AS 'alias' — the alias you choose becomes the session_id for all subsequent calls. OUTPUT: format defaults to CSV (pass format=JSON only when parsing fields programmatically). LIMIT: FIND queries without LIMIT default to 20 rows; add LIMIT N to override; when total > results.len() more rows exist. WORKFLOW: start narrow (WHERE/IN/LIMIT), verify, then widen."
     )]
-    fn run_fql(
+    async fn run_fql(
         &self,
         Parameters(params): Parameters<RunFqlParams>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -259,13 +260,13 @@ impl ForgeQlMcp {
         // Execute each statement individually — one log row per command,
         // exactly as if each were sent in a separate run_fql call.
         let format = params.format.unwrap_or_default();
-        let mut log_source = self.resolve_source(params.session_id.as_deref());
+        let mut log_source = self.resolve_source(params.session_id.as_deref()).await;
         let mut session_hint: Option<String> = None;
         let mut outputs: Vec<String> = Vec::with_capacity(ops.len());
         for (source_text, op) in &ops {
             let t0 = std::time::Instant::now();
             let (result, budget_snap) =
-                exec_engine(&self.engine, params.session_id.as_deref(), op)?;
+                exec_engine(&self.engine, params.session_id.as_deref(), op).await?;
             let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
             if let ForgeQLIR::UseSource { source, .. } = op {
                 log_source.clone_from(source);
@@ -273,7 +274,7 @@ impl ForgeQlMcp {
             // After auto-reconnect the session now exists — re-resolve the
             // source name so the query lands in the right CSV log file.
             if log_source == "unknown" {
-                log_source = self.resolve_source(params.session_id.as_deref());
+                log_source = self.resolve_source(params.session_id.as_deref()).await;
             }
             // Extract session_id (alias) from USE responses and build a hint for the agent.
             if session_hint.is_none()
@@ -433,7 +434,7 @@ mod tests {
         let session_id = engine
             .register_local_session(dir.path())
             .expect("register session");
-        let mcp = ForgeQlMcp::new(Arc::new(Mutex::new(engine)), None);
+        let mcp = ForgeQlMcp::new(Arc::new(TokioMutex::new(engine)), None);
         (mcp, session_id, dir)
     }
 
@@ -445,33 +446,35 @@ mod tests {
             .as_str()
     }
 
-    #[test]
-    fn get_info_returns_tools_capability() {
+    #[tokio::test]
+    async fn get_info_returns_tools_capability() {
         let tmp = tempdir().unwrap();
         let engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-        let mcp = ForgeQlMcp::new(Arc::new(Mutex::new(engine)), None);
+        let mcp = ForgeQlMcp::new(Arc::new(TokioMutex::new(engine)), None);
         let info = mcp.get_info();
         assert!(info.capabilities.tools.is_some());
     }
 
-    #[test]
-    fn get_info_has_instructions() {
+    #[tokio::test]
+    async fn get_info_has_instructions() {
         let tmp = tempdir().unwrap();
         let engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-        let mcp = ForgeQlMcp::new(Arc::new(Mutex::new(engine)), None);
+        let mcp = ForgeQlMcp::new(Arc::new(TokioMutex::new(engine)), None);
         let info = mcp.get_info();
         let instructions = info.instructions.expect("should have instructions");
         assert!(instructions.contains("ForgeQL"));
     }
 
-    #[test]
-    fn run_fql_find_symbols() {
+    #[tokio::test]
+    async fn run_fql_find_symbols() {
         let (mcp, session_id, _dir) = mcp_with_session();
-        let result = mcp.run_fql(Parameters(RunFqlParams {
-            fql: "FIND symbols WHERE name LIKE 'encender%'".to_string(),
-            session_id: Some(session_id),
-            format: None,
-        }));
+        let result = mcp
+            .run_fql(Parameters(RunFqlParams {
+                fql: "FIND symbols WHERE name LIKE 'encender%'".to_string(),
+                session_id: Some(session_id),
+                format: None,
+            }))
+            .await;
         let call_result = result.expect("should succeed");
         let text = first_text(&call_result);
         assert!(
@@ -480,25 +483,29 @@ mod tests {
         );
     }
 
-    #[test]
-    fn run_fql_invalid_syntax_returns_error() {
+    #[tokio::test]
+    async fn run_fql_invalid_syntax_returns_error() {
         let (mcp, session_id, _dir) = mcp_with_session();
-        let result = mcp.run_fql(Parameters(RunFqlParams {
-            fql: "NOT VALID FQL".to_string(),
-            session_id: Some(session_id),
-            format: None,
-        }));
+        let result = mcp
+            .run_fql(Parameters(RunFqlParams {
+                fql: "NOT VALID FQL".to_string(),
+                session_id: Some(session_id),
+                format: None,
+            }))
+            .await;
         assert!(result.is_err(), "invalid FQL should return ErrorData");
     }
 
-    #[test]
-    fn run_fql_create_source_is_blocked() {
+    #[tokio::test]
+    async fn run_fql_create_source_is_blocked() {
         let (mcp, _session_id, _dir) = mcp_with_session();
-        let result = mcp.run_fql(Parameters(RunFqlParams {
-            fql: "CREATE SOURCE 'evil' FROM 'https://example.com/repo.git'".to_string(),
-            session_id: None,
-            format: None,
-        }));
+        let result = mcp
+            .run_fql(Parameters(RunFqlParams {
+                fql: "CREATE SOURCE 'evil' FROM 'https://example.com/repo.git'".to_string(),
+                session_id: None,
+                format: None,
+            }))
+            .await;
         assert!(result.is_err(), "CREATE SOURCE via MCP must be rejected");
         let err = result.unwrap_err();
         let msg = format!("{err:?}");
@@ -508,14 +515,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn run_fql_csv_format_returns_compact_output() {
+    #[tokio::test]
+    async fn run_fql_csv_format_returns_compact_output() {
         let (mcp, session_id, _dir) = mcp_with_session();
-        let result = mcp.run_fql(Parameters(RunFqlParams {
-            fql: "FIND symbols WHERE name LIKE 'encender%'".to_string(),
-            session_id: Some(session_id),
-            format: Some(OutputFormat::Csv),
-        }));
+        let result = mcp
+            .run_fql(Parameters(RunFqlParams {
+                fql: "FIND symbols WHERE name LIKE 'encender%'".to_string(),
+                session_id: Some(session_id),
+                format: Some(OutputFormat::Csv),
+            }))
+            .await;
         let call_result = result.expect("should succeed");
         let text = first_text(&call_result);
         // Compact CSV: header row with op and total, schema hint, grouped data.

@@ -21,12 +21,12 @@ pub(crate) async fn run_mcp_stdio(
 ) -> Result<()> {
     use forgeql_core::engine::SESSION_TTL_SECS;
     use rmcp::ServiceExt;
-    use std::sync::Mutex;
+    use tokio::sync::Mutex as TokioMutex;
 
     // Prune orphaned worktrees that were abandoned by previous MCP sessions.
     engine.prune_orphaned_worktrees();
 
-    let engine = Arc::new(Mutex::new(engine));
+    let engine = Arc::new(TokioMutex::new(engine));
 
     info!("starting MCP server over stdio");
     let handler = mcp::ForgeQlMcp::new(Arc::clone(&engine), logger);
@@ -37,9 +37,7 @@ pub(crate) async fn run_mcp_stdio(
         let interval = std::time::Duration::from_secs(SESSION_TTL_SECS.min(300));
         loop {
             tokio::time::sleep(interval).await;
-            if let Ok(mut eng) = eviction_handle.lock() {
-                eng.evict_idle_sessions();
-            }
+            eviction_handle.lock().await.evict_idle_sessions();
         }
     });
 
