@@ -2912,3 +2912,340 @@ fn nested_rollback_restores_correct_delta() {
         "Phase2File2 must NOT be visible after rollback to ckpt1; got: {names:?}"
     );
 }
+
+// =============================================================================
+// PhaseFT4 gate tests
+// =============================================================================
+
+/// PhaseFT4 gate: after `commit_dirty`, the bare-repo segment store contains the
+/// promoted segment, the staging directory is empty, and a new overlay file
+/// exists for the new commit OID with the correct segment list.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn commit_promotes_segments_and_builds_new_overlay() {
+    use forgeql_core::ast::lang::CppLanguageInline;
+    use forgeql_core::ir::Clauses;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_core::storage::columnar::{ColumnarStorage, OverlayBuilder};
+    use forgeql_core::storage::{ColumnarBuildContext, StorageEngine};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().join("worktree");
+    std::fs::create_dir_all(&worktree).expect("worktree dir");
+
+    // Bare-repo layout: segments + overlays live here (persistent store).
+    let bare = tmp.path().join("bare");
+    let segments_dir = bare.join("segments");
+    let overlays_dir = bare.join("overlays");
+    std::fs::create_dir_all(&segments_dir).expect("segments dir");
+    std::fs::create_dir_all(&overlays_dir).expect("overlays dir");
+
+    let file1 = worktree.join("file1.cpp");
+    let file2 = worktree.join("file2.cpp");
+    std::fs::write(&file1, "void BaseFunc1() {}\n").expect("write file1");
+    std::fs::write(&file2, "void BaseFunc2() {}\n").expect("write file2");
+
+    // Build initial segments via a staging area (same layout as FT3 tests).
+    let wt_seg_dir = tmp.path().join("segments");
+    std::fs::create_dir_all(wt_seg_dir.join("test")).expect("wt seg dir");
+
+    let table1 = index_at_path(&CppLanguageInline, &file1);
+    let table2 = index_at_path(&CppLanguageInline, &file2);
+    let cid1 = build_segment(&table1, &file1, &tmp.path().join("segments"));
+    let cid2 = build_segment(&table2, &file2, &tmp.path().join("segments"));
+
+    let hex1 = cid1.iter().fold(String::new(), |mut a, b| {
+        use std::fmt::Write as _;
+        let _ = write!(a, "{b:02x}");
+        a
+    });
+    let hex2 = cid2.iter().fold(String::new(), |mut a, b| {
+        use std::fmt::Write as _;
+        let _ = write!(a, "{b:02x}");
+        a
+    });
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(file1.clone(), cid1);
+    let _ = segment_map.insert(file2, cid2);
+
+    // Write the base overlay to overlays_dir (simulating what prior COMMIT wrote).
+    let base_overlay_path = overlays_dir.join("test").join("base_commit.bin");
+    std::fs::create_dir_all(base_overlay_path.parent().unwrap()).expect("overlay parent");
+    OverlayBuilder::new("test", wt_seg_dir.clone(), worktree.clone(), segment_map)
+        .build_and_persist(&base_overlay_path)
+        .expect("base overlay");
+
+    // Copy initial segments from staging area into bare-repo segment store.
+    let bare_hex1_dir = segments_dir.join("test").join(&hex1);
+    let bare_hex2_dir = segments_dir.join("test").join(&hex2);
+    copy_dir_recursive(&wt_seg_dir.join("test").join(&hex1), &bare_hex1_dir);
+    copy_dir_recursive(&wt_seg_dir.join("test").join(&hex2), &bare_hex2_dir);
+
+    // Build ColumnarBuildContext pointing at bare-repo stores.
+    let ctx = ColumnarBuildContext::new(
+        segments_dir.clone(),
+        overlays_dir,
+        "test",
+        Arc::new(|b: &[u8]| b.to_vec()),
+    );
+
+    // Open ColumnarStorage backed by the base overlay.
+    let lang_reg = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let overlay = Overlay::open(&base_overlay_path).expect("open base overlay");
+    let seg_root = segments_dir.join("test");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|m| {
+            Arc::new(SegmentReader::open(&seg_root.join(&m.hex_content_id)).expect("open seg"))
+        })
+        .collect();
+    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, lang_reg);
+
+    // Modify file1 and reindex into the staging dir.
+    std::fs::write(&file1, "void UpdatedFunc1() {}\nvoid NewFunc() {}\n").expect("update file1");
+    storage
+        .reindex_files(std::slice::from_ref(&file1))
+        .expect("reindex file1");
+
+    assert_eq!(storage.dirty().added.len(), 1, "must have 1 staged segment");
+    let staged_hex = storage.dirty().added[0].reader.content_id_hex();
+    let staging_dir = worktree.join(".forgeql-staging");
+    assert!(
+        staging_dir.join(&staged_hex).exists(),
+        "staged segment must be in staging dir before commit"
+    );
+
+    // Call commit_dirty — the main FT4 operation.
+    let new_oid = "aabbccddeeff001122334455667788990011223344556677aabbccddeeff0011";
+    storage.commit_dirty(new_oid, &ctx).expect("commit_dirty");
+
+    // ── Assert 1: staging dir is empty ──
+    let staging_entries: Vec<_> = std::fs::read_dir(&staging_dir)
+        .expect("read staging dir")
+        .filter_map(std::result::Result::ok)
+        .collect();
+    assert!(
+        staging_entries.is_empty(),
+        "staging dir must be empty after commit_dirty; contains: {:?}",
+        staging_entries
+            .iter()
+            .map(std::fs::DirEntry::path)
+            .collect::<Vec<_>>()
+    );
+
+    // ── Assert 2: bare-repo segment store has the promoted segment ──
+    let promoted_dir = segments_dir.join("test").join(&staged_hex);
+    assert!(
+        promoted_dir.exists(),
+        "promoted segment must exist in bare-repo store at {}",
+        promoted_dir.display()
+    );
+
+    // ── Assert 3: new overlay file exists ──
+    let new_overlay_path = ctx.overlay_path_for(new_oid);
+    assert!(
+        new_overlay_path.exists(),
+        "new overlay must exist at {}",
+        new_overlay_path.display()
+    );
+
+    // ── Assert 4: new overlay has correct segment set ──
+    let new_overlay = Overlay::open(&new_overlay_path).expect("open new overlay");
+    let new_hexes: Vec<String> = new_overlay
+        .segments()
+        .iter()
+        .map(|m| m.hex_content_id.clone())
+        .collect();
+    assert!(
+        new_hexes.contains(&staged_hex),
+        "new overlay must include promoted staged_hex; got: {new_hexes:?}"
+    );
+    assert!(
+        new_hexes.contains(&hex2),
+        "new overlay must include unchanged file2 hex; got: {new_hexes:?}"
+    );
+    assert!(
+        !new_hexes.contains(&hex1),
+        "new overlay must NOT include old file1 hex (shadowed); got: {new_hexes:?}"
+    );
+
+    // ── Assert 5: live query on updated storage returns new symbols ──
+    let clauses = Clauses::default();
+    let names: Vec<String> = storage
+        .find_symbols(&clauses, &worktree)
+        .expect("find_symbols after commit")
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
+    assert!(
+        names.contains(&"UpdatedFunc1".to_owned()),
+        "UpdatedFunc1 must be visible; got: {names:?}"
+    );
+    assert!(
+        names.contains(&"NewFunc".to_owned()),
+        "NewFunc must be visible; got: {names:?}"
+    );
+    assert!(
+        names.contains(&"BaseFunc2".to_owned()),
+        "BaseFunc2 (unchanged) must be visible; got: {names:?}"
+    );
+    assert!(
+        !names.contains(&"BaseFunc1".to_owned()),
+        "BaseFunc1 (old file1) must NOT be visible; got: {names:?}"
+    );
+}
+
+/// PhaseFT4 gate: a second session opened against the promoted overlay gets a
+/// cache hit (`Overlay::open` succeeds) and returns the committed symbols.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn new_session_hits_promoted_overlay_cache() {
+    use forgeql_core::ast::lang::CppLanguageInline;
+    use forgeql_core::ir::Clauses;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_core::storage::columnar::{ColumnarStorage, OverlayBuilder};
+    use forgeql_core::storage::{ColumnarBuildContext, StorageEngine};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().join("worktree");
+    std::fs::create_dir_all(&worktree).expect("worktree dir");
+
+    let bare = tmp.path().join("bare");
+    let segments_dir = bare.join("segments");
+    let overlays_dir = bare.join("overlays");
+    std::fs::create_dir_all(&segments_dir).expect("segments dir");
+    std::fs::create_dir_all(&overlays_dir).expect("overlays dir");
+
+    let file1 = worktree.join("file1.cpp");
+    std::fs::write(&file1, "void SessionAFunc() {}\n").expect("write file1");
+
+    let wt_seg_dir = tmp.path().join("segments");
+    std::fs::create_dir_all(wt_seg_dir.join("test")).expect("wt seg dir");
+
+    let table1 = index_at_path(&CppLanguageInline, &file1);
+    let cid1 = build_segment(&table1, &file1, &tmp.path().join("segments"));
+    let hex1 = cid1.iter().fold(String::new(), |mut a, b| {
+        use std::fmt::Write as _;
+        let _ = write!(a, "{b:02x}");
+        a
+    });
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(file1.clone(), cid1);
+
+    let base_overlay_path = overlays_dir.join("test").join("base_commit.bin");
+    std::fs::create_dir_all(base_overlay_path.parent().unwrap()).expect("overlay parent");
+    OverlayBuilder::new("test", wt_seg_dir.clone(), worktree.clone(), segment_map)
+        .build_and_persist(&base_overlay_path)
+        .expect("base overlay");
+
+    let bare_hex1_dir = segments_dir.join("test").join(&hex1);
+    copy_dir_recursive(&wt_seg_dir.join("test").join(&hex1), &bare_hex1_dir);
+
+    let ctx = ColumnarBuildContext::new(
+        segments_dir.clone(),
+        overlays_dir,
+        "test",
+        Arc::new(|b: &[u8]| b.to_vec()),
+    );
+    let lang_reg = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+
+    // Session A: change file1 and commit.
+    let seg_root = segments_dir.join("test");
+    let overlay_a = Overlay::open(&base_overlay_path).expect("open base overlay");
+    let segments_a: Vec<Arc<SegmentReader>> = overlay_a
+        .segments()
+        .iter()
+        .map(|m| {
+            Arc::new(SegmentReader::open(&seg_root.join(&m.hex_content_id)).expect("open seg"))
+        })
+        .collect();
+    let mut storage_a = ColumnarStorage::new(
+        worktree.clone(),
+        segments_a,
+        overlay_a,
+        Arc::clone(&lang_reg),
+    );
+
+    std::fs::write(&file1, "void SessionBFunc() {}\nvoid SharedFunc() {}\n").expect("update file1");
+    storage_a
+        .reindex_files(std::slice::from_ref(&file1))
+        .expect("reindex");
+
+    let new_oid = "cafebabe00112233445566778899aabbccddeeff00112233445566778899aabb";
+    storage_a
+        .commit_dirty(new_oid, &ctx)
+        .expect("commit_dirty session A");
+
+    // Assert: new overlay was written so Session B can open it (cache hit).
+    let new_overlay_path = ctx.overlay_path_for(new_oid);
+    assert!(
+        new_overlay_path.exists(),
+        "new overlay must exist for session B to open"
+    );
+
+    // Session B: open fresh storage using the promoted overlay.
+    let overlay_b =
+        Overlay::open(&new_overlay_path).expect("session B: Overlay::open succeeded (cache hit)");
+    let row_count_b = overlay_b.row_count();
+    let session_b_segs: Vec<Arc<SegmentReader>> = overlay_b
+        .segments()
+        .iter()
+        .map(|m| {
+            Arc::new(
+                SegmentReader::open(&seg_root.join(&m.hex_content_id))
+                    .expect("session B: open seg"),
+            )
+        })
+        .collect();
+    let storage_b = ColumnarStorage::new(
+        worktree.clone(),
+        session_b_segs,
+        overlay_b,
+        Arc::clone(&lang_reg),
+    );
+
+    // Assert: session B sees only the committed symbols.
+    let clauses = Clauses::default();
+    let names: Vec<String> = storage_b
+        .find_symbols(&clauses, &worktree)
+        .expect("session B: find_symbols")
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
+    assert!(
+        names.contains(&"SessionBFunc".to_owned()),
+        "session B must see SessionBFunc committed by A; got: {names:?}"
+    );
+    assert!(
+        names.contains(&"SharedFunc".to_owned()),
+        "session B must see SharedFunc committed by A; got: {names:?}"
+    );
+    assert!(
+        !names.contains(&"SessionAFunc".to_owned()),
+        "session B must NOT see old SessionAFunc (overwritten); got: {names:?}"
+    );
+    assert!(row_count_b > 0, "overlay row count must be positive");
+}
+
+// ── FT4 test helper ──────────────────────────────────────────────────────────
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
+    std::fs::create_dir_all(dst).expect("create dst dir");
+    for entry in std::fs::read_dir(src).expect("read src") {
+        let entry = entry.expect("dir entry");
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path);
+        } else {
+            let _: u64 = std::fs::copy(&src_path, &dst_path).expect("copy file");
+        }
+    }
+}

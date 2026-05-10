@@ -289,6 +289,59 @@ impl OverlayBuilder {
 
         Ok(())
     }
+
+    /// Build an `OverlayBuilder` for a post-commit merge of the persistent
+    /// overlay and the session's dirty overlay.
+    ///
+    /// After `promote_segment` moves all staging segments to the bare repo,
+    /// this method assembles the complete `segment_map` needed by
+    /// `build_and_persist`:
+    ///
+    /// - All persistent `SegmentMeta` entries whose `hex_content_id` is **not**
+    ///   shadowed by `dirty` (i.e. not in `dirty.removed_hex_ids`).
+    /// - All newly promoted dirty segments from `dirty.added`.
+    ///
+    /// Both sets are re-opened fresh from `ctx.segment_dir_for(hex)` (the
+    /// canonical bare-repo location after promotion).  The `source_path` on
+    /// each `SegmentMeta` / `DirtySegment` is already workspace-relative, so
+    /// we reconstruct the `abs_path` key as `worktree_root.join(rel_path)`,
+    /// which `build_and_persist` then strips back to a relative path.
+    ///
+    /// Returns `None` when no segments survive (empty repo or all removed).
+    #[must_use]
+    pub fn from_merge(
+        base_overlay: &super::overlay::Overlay,
+        dirty: &super::dirty_overlay::DirtyOverlay,
+        ctx: &super::build_context::ColumnarBuildContext,
+        worktree_root: &std::path::Path,
+    ) -> Self {
+        let mut segment_map = std::collections::HashMap::new();
+
+        // Base segments that are not shadowed by the dirty overlay.
+        for meta in base_overlay.segments() {
+            if dirty.shadows(&meta.hex_content_id) {
+                continue;
+            }
+            let abs_path = worktree_root.join(&meta.source_path);
+            let hex_bytes = hex_to_bytes(&meta.hex_content_id);
+            let _ = segment_map.insert(abs_path, hex_bytes);
+        }
+
+        // Newly promoted dirty segments.
+        for ds in &dirty.added {
+            let hex = ds.reader.content_id_hex();
+            let abs_path = worktree_root.join(&ds.source_path);
+            let hex_bytes = hex_to_bytes(&hex);
+            let _ = segment_map.insert(abs_path, hex_bytes);
+        }
+
+        Self {
+            provider_id: ctx.provider_id.clone(),
+            segments_dir: ctx.segments_dir.clone(),
+            worktree_root: worktree_root.to_path_buf(),
+            segment_map,
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -310,4 +363,15 @@ fn decode_name_postings_raw(encoded: u64, name_postings: &[u8]) -> Vec<u32> {
     }
     #[allow(clippy::indexing_slicing)] // bounds checked above
     cast_slice::<u8, u32>(&name_postings[byte_offset..end]).to_vec()
+}
+
+/// Decode a hex string (e.g. a `hex_content_id`) to raw bytes.
+///
+/// Used by `from_merge` to convert hex strings back to the raw content-ID
+/// bytes that `build_and_persist` expects in `segment_map`.
+fn hex_to_bytes(hex: &str) -> Vec<u8> {
+    (0..hex.len())
+        .step_by(2)
+        .filter_map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect()
 }

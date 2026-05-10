@@ -111,6 +111,17 @@ impl ForgeQLEngine {
             git::head_oid(&repo)?
         };
 
+        // Promote columnar staging segments and build the new overlay for the
+        // new commit OID.  Non-fatal: on failure the session retains its stale
+        // overlay; the next USE will rebuild from legacy (until PhaseFT5).
+        if let Some(session) = self.sessions.get_mut(sid)
+            && let Some(ctx) = session.columnar_build().cloned()
+            && let Some(columnar) = session.columnar_storage_mut()
+            && let Err(e) = columnar.commit_dirty(&commit_hash, &ctx)
+        {
+            warn!(error = %e, "COMMIT: columnar commit_dirty failed (non-fatal); stale overlay retained");
+        }
+
         // Update the clean base for the next commit cycle.
         if let Some(session) = self.sessions.get_mut(sid) {
             session.last_clean_oid = Some(commit_hash.clone());

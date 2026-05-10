@@ -229,6 +229,15 @@ pub trait StorageEngine: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Promote staging segments and build a new overlay for `new_commit_oid`.
+    ///
+    /// Called by `exec_commit` after the git commit succeeds.  The default
+    /// no-op is correct for the legacy backend.  `ColumnarStorage` overrides
+    /// this to promote staged segments to the bare-repo store and rebuild the
+    /// overlay via `OverlayBuilder::from_merge`.
+    fn commit_dirty(&mut self, _new_commit_oid: &str, _ctx: &ColumnarBuildContext) -> Result<()> {
+        Ok(())
+    }
     // -------- SHOW helpers ------------------------------------------------
 
     /// Locate a symbol definition by name, returning its file path and line.

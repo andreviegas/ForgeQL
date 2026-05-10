@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context as _, Result, anyhow};
 use roaring::RoaringBitmap;
 use tracing::debug;
 
@@ -1138,6 +1138,15 @@ impl StorageEngine for ColumnarStorage {
         self.reload_delta_after_rollback()
     }
 
+    fn commit_dirty(
+        &mut self,
+        new_commit_oid: &str,
+        ctx: &crate::storage::ColumnarBuildContext,
+    ) -> Result<()> {
+        // Delegate to the inherent method which has access to all private fields.
+        Self::commit_dirty_inner(self, new_commit_oid, ctx)
+    }
+
     fn show_outline_for_file(
         &self,
         workspace: &Workspace,
@@ -1421,6 +1430,131 @@ impl ColumnarStorage {
         self.dirty = DirtyOverlay::new();
         self.load_delta()
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // PhaseFT4: commit_dirty — promote staging segments + build new overlay
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Called from `exec_commit` after the git commit succeeds.
+    ///
+    /// Promotes all staging segments to the bare-repo segment store, builds a
+    /// new overlay for `new_commit_oid` by merging the persistent overlay with
+    /// the dirty overlay, then swaps the session to the new overlay and clears
+    /// all dirty state.
+    ///
+    /// # Errors
+    /// Returns `Err` when segment promotion, overlay build/open, or staging-dir
+    /// cleanup fails.  `exec_commit` treats this as non-fatal: the session falls
+    /// back to its stale overlay; the next `USE` will rebuild from legacy.
+    fn commit_dirty_inner(
+        &mut self,
+        new_commit_oid: &str,
+        ctx: &super::build_context::ColumnarBuildContext,
+    ) -> Result<()> {
+        // 1. Promote staging segments → bare-repo segment store.
+        //    Idempotent: skips any hex that is already there.
+        for ds in &self.dirty.added {
+            let hex = ds.reader.content_id_hex();
+            let src = self.staging_dir.join(&hex);
+            let dst = ctx.segment_dir_for(&hex);
+            promote_segment(&src, &dst)?;
+        }
+
+        // 2. Build new overlay = merge(persistent, dirty).
+        //    All segments are re-opened fresh from the bare repo after promotion.
+        let new_overlay_path = ctx.overlay_path_for(new_commit_oid);
+        let builder = super::overlay_builder::OverlayBuilder::from_merge(
+            &self.overlay,
+            &self.dirty,
+            ctx,
+            &self.worktree_root,
+        );
+        builder.build_and_persist(&new_overlay_path)?;
+
+        // 3. Swap to the new overlay (Overlay::open returns Arc<Overlay>).
+        let new_overlay = Overlay::open(&new_overlay_path)
+            .with_context(|| format!("open new overlay at {}", new_overlay_path.display()))?;
+        let new_segments = Self::open_segments_from_overlay(ctx, &new_overlay);
+        self.overlay = new_overlay;
+        self.segments = new_segments;
+
+        // 4. Clear dirty state and staging directory.
+        self.dirty = DirtyOverlay::new();
+        clear_staging_dir(&self.staging_dir)?;
+
+        // 5. Remove the delta file — no pending changes after commit.
+        let _ = std::fs::remove_file(&self.delta_path);
+
+        Ok(())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PhaseFT4: private filesystem helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Promote a staging segment directory to the bare-repo segment store.
+///
+/// Prefers `rename(2)` for an atomic, zero-copy move on the same filesystem.
+/// Falls back to a recursive copy when the rename fails (cross-device or lost
+/// race — another session already promoted the same content).
+///
+/// The `dst.exists()` guard makes promotion idempotent: two concurrent
+/// sessions promoting the same hex (identical file content) do not collide.
+fn promote_segment(src: &Path, dst: &Path) -> Result<()> {
+    if dst.exists() {
+        return Ok(()); // already promoted — idempotent
+    }
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create segment parent dir {}", parent.display()))?;
+    }
+    if std::fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
+    // Rename failed: either cross-device or a concurrent promotion won the race.
+    if dst.exists() {
+        return Ok(()); // lost race — peer already promoted; we're done
+    }
+    // True cross-device move: copy then let the staging dir linger (GC'd later).
+    copy_dir_all(src, dst)
+        .with_context(|| format!("copy segment {} → {}", src.display(), dst.display()))
+}
+
+/// Recursively copy a directory tree from `src` to `dst`.
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_all(&src_path, &dst_path)?;
+        } else {
+            let _ = std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Delete all entries inside the staging directory without removing the
+/// directory itself (avoids a `create_dir_all` on the next `reindex_files`).
+fn clear_staging_dir(staging_dir: &Path) -> Result<()> {
+    if !staging_dir.exists() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(staging_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+                .with_context(|| format!("remove staging subdir {}", path.display()))?;
+        } else {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("remove staging file {}", path.display()))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
