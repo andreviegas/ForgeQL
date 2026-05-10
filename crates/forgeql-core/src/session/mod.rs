@@ -23,6 +23,9 @@ use crate::budget::{BudgetSnapshot, BudgetState};
 use crate::config::{LineBudgetConfig, VerifyStep};
 use crate::storage::{BackendSet, LegacyMemoryStorage, StorageEngine};
 use crate::workspace::Workspace;
+
+pub mod checkpoint_file;
+
 /// Sentinel file written inside each worktree directory on every `touch()`.
 ///
 /// Contains a single line: the Unix epoch timestamp (seconds) of the last

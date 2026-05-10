@@ -99,6 +99,7 @@ const CLEAN_COMMIT_EXCLUDED: &[&str] = &[
     ".forgeql-index",
     ".forgeql-session",
     ".forgeql-columnar-delta",
+    ".forgeql-checkpoints", // FT6: never in user-facing history
 ];
 
 /// Files excluded from **internal checkpoint** commits (`BEGIN TRANSACTION`).

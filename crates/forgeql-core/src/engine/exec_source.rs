@@ -354,6 +354,18 @@ impl ForgeQLEngine {
             }
         }
 
+        // FT6: restore checkpoint stack from disk if the file is present and
+        // the stored HEAD matches the current worktree HEAD.  Both conditions
+        // must hold to guarantee the stack is consistent with git state.
+        // On mismatch or any error, the session starts with an empty stack
+        // (graceful degradation — same behaviour as before FT6).
+        {
+            // Clone the path first to avoid holding an immutable borrow on
+            // `session` while also passing `&mut session` to `try_restore`.
+            let worktree = session.worktree_path.clone();
+            let current_head = crate::session::Session::get_head_oid(&worktree).unwrap_or_default();
+            crate::session::checkpoint_file::try_restore(&mut session, &worktree, &current_head);
+        }
         // Freeze verify config at session start — sidecar takes priority over in-repo file.
         // Any later CHANGE has no effect on VERIFY; steps are captured once here.
         if let Some((workdir, config)) = maybe_config {

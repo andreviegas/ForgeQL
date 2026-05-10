@@ -68,6 +68,13 @@ impl ForgeQLEngine {
                 oid: oid.clone(),
                 pre_txn_oid,
             });
+            // FT6: save AFTER push so the file reflects the full new stack.
+            // The checkpoint commit tree captured the pre-push state (correct
+            // for git reset --hard on ROLLBACK); we now update disk to match
+            // the live in-memory state.
+            if let Err(e) = crate::session::checkpoint_file::save(session, &worktree_path) {
+                warn!(error = %e, "BEGIN: checkpoint file save failed (non-fatal)");
+            }
         }
 
         Ok(ForgeQLResult::BeginTransaction(BeginTransactionResult {
@@ -135,6 +142,10 @@ impl ForgeQLEngine {
             if let Err(err) = session.flush_if_dirty() {
                 warn!(error = %err, "COMMIT: post-commit flush failed; cache will rebuild on next USE");
             }
+            // FT6: clear checkpoint stack and remove the file — the clean
+            // commit supersedes all checkpoint history.
+            session.checkpoints.clear();
+            crate::session::checkpoint_file::remove(&worktree_path);
         }
 
         Ok(ForgeQLResult::Commit(CommitResult {
@@ -245,6 +256,14 @@ impl ForgeQLEngine {
                 && let Err(e) = columnar.reload_dirty_from_delta()
             {
                 warn!(error = %e, "rollback: columnar delta reload failed (non-fatal)");
+            }
+            // FT6: save the popped in-memory stack to disk.  This overwrites
+            // whatever `.forgeql-checkpoints` git reset --hard restored (which
+            // is the pre-push state from the checkpoint commit tree — one entry
+            // behind where in-memory is after the pop).  Saving here ensures
+            // file == in-memory stack invariant is restored.
+            if let Err(e) = crate::session::checkpoint_file::save(session, &worktree_path) {
+                warn!(error = %e, "rollback: checkpoint file save failed (non-fatal)");
             }
         }
 
