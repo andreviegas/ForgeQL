@@ -4,6 +4,50 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.12] — 2026-05-10 — PhaseFT4: Overlay Manifest Merge at COMMIT
+
+### Added
+
+- **`OverlayBuilder::from_merge` (PhaseFT4)** — New constructor that builds a
+  merged `segment_map` from a base overlay (excluding segments shadowed by
+  `dirty.removed_hex_ids`) and the dirty-added segments. All segment readers are
+  re-opened fresh from the bare-repo after promotion, avoiding mmap/inode issues
+  on cross-device or OS-specific paths.
+
+- **`ColumnarStorage::commit_dirty_inner`** — Core FT4 operation: promotes all
+  staging segments to the bare-repo segment store via `promote_segment`, builds a
+  new overlay with `OverlayBuilder::from_merge`, swaps the live `overlay` and
+  `segments` fields, resets `dirty` to a fresh `DirtyOverlay`, clears the staging
+  dir via `clear_staging_dir`, and removes the delta file.
+
+- **`promote_segment` (private)** — Idempotent segment promotion: `dst.exists()`
+  early-return guard; `rename`-first for same-device moves; lost-race re-check on
+  rename failure; `copy_dir_all` fallback for cross-device.
+
+- **`clear_staging_dir` (private)** — Deletes all entries inside the staging dir
+  while keeping the directory itself (avoids `create_dir_all` on next reindex).
+
+- **`StorageEngine::commit_dirty` (trait)** — Default no-op added to the
+  `StorageEngine` trait, overridden by `ColumnarStorage` to delegate to
+  `commit_dirty_inner`.
+
+- **`exec_commit` integration** — After a successful git commit, `exec_commit`
+  calls `columnar.commit_dirty(commit_hash, &ctx)` non-fatally: on error a
+  `warn!` is emitted and the stale overlay is retained until the next FT7
+  recovery path.
+
+### Tests
+
+- **`commit_promotes_segments_and_builds_new_overlay`** — Gate test: reindexes a
+  file into staging, calls `commit_dirty`, asserts staging dir is empty, promoted
+  segment is in the bare-repo store, the new overlay file exists, the overlay
+  segment list is correct (old hex gone, new hex and unchanged hex present), and
+  live queries return updated symbols.
+
+- **`new_session_hits_promoted_overlay_cache`** — Gate test: verifies that a
+  second session opening the promoted overlay via `Overlay::open` succeeds (cache
+  hit), and that the session sees only the committed symbols.
+
 ## [0.48.11] — 2026-05-09 — PhaseFT3: Delta File Persistence
 
 ### Added
