@@ -80,8 +80,7 @@ impl BackendSet {
     ///
     /// # Errors
     /// Returns `Err` when [`Backend::Columnar`] is requested but no columnar
-    /// engine has been installed (i.e. `columnar.shadow_write` is not set in
-    /// `.forgeql.yaml`).
+    /// engine has been installed for this session.
     pub fn engine_for(&self, backend: &Backend) -> Result<&dyn StorageEngine> {
         match backend {
             // PhaseFT5: `Default` routes through the flipped default_engine
@@ -93,7 +92,7 @@ impl BackendSet {
             Backend::Columnar => self.columnar.as_deref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "columnar backend is not enabled for this session; \
-                     enable columnar.shadow_write in .forgeql.yaml"
+                     ensure a .forgeql.yaml is present for this source"
                 )
             }),
         }

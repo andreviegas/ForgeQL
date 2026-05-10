@@ -23,7 +23,7 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 
 use crate::ast::lang::LanguageRegistry;
-use crate::config::{ColumnarConfig, WarmPolicy, WarmPolicyKind};
+use crate::config::{WarmPolicy, WarmPolicyKind};
 use crate::git::{source::Source, worktree};
 use crate::session::Session;
 use crate::storage::HashFn;
@@ -102,7 +102,6 @@ pub fn spawn_warmer(
     targets: Vec<WarmTarget>,
     data_dir: PathBuf,
     lang_registry: Arc<LanguageRegistry>,
-    columnar: ColumnarConfig,
 ) {
     if targets.is_empty() {
         return;
@@ -118,14 +117,7 @@ pub fn spawn_warmer(
                 "warmer thread started"
             );
             for target in &targets {
-                match warm_snapshot(
-                    &bare_repo,
-                    &source_name,
-                    target,
-                    &data_dir,
-                    &lang_registry,
-                    &columnar,
-                ) {
+                match warm_snapshot(&bare_repo, &source_name, target, &data_dir, &lang_registry) {
                     Ok(()) => debug!(
                         source = %source_name,
                         branch = %target.branch,
@@ -166,16 +158,7 @@ pub fn warm_snapshot(
     target: &WarmTarget,
     data_dir: &Path,
     lang_registry: &Arc<LanguageRegistry>,
-    columnar: &ColumnarConfig,
 ) -> Result<()> {
-    if !columnar.shadow_write {
-        debug!(
-            source = %source_name,
-            "warm_snapshot: shadow_write disabled, skipping"
-        );
-        return Ok(());
-    }
-
     // Fast path: overlay already exists and opens cleanly.
     let overlay_path = bare_repo
         .join("forgeql")

@@ -28,7 +28,7 @@ pub enum Backend {
     Legacy,
     /// `USING 'columnar'` — route to the columnar backend.
     ///
-    /// Returns an "not enabled" error until Phase 03 enables `columnar.shadow_write`.
+    /// Returns a "not enabled" error if no columnar backend is installed for the session.
     Columnar,
 }
 

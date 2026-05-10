@@ -1,7 +1,7 @@
 //! Columnar storage engine for `ForgeQL` — Phase 03+.
 //!
 //! This module implements the **write side** of the columnar storage format.
-//! It is opt-in; enable via `.forgeql.yaml` → `columnar.shadow_write: true`.
+//! It is enabled automatically when a `.forgeql.yaml` is present for the source.
 //!
 //! # Architecture
 //!

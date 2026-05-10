@@ -145,10 +145,8 @@ pub struct Session {
     /// overlapping/adjacent range reads on the same file and emit tips.
     /// Stored as `(file_path, start_line, end_line)`.
     recent_show_lines: Vec<(String, usize, usize)>,
-    /// Columnar build configuration — set when shadow-write is enabled.
-    ///
-    /// Populated by `exec_source` / `warm.rs` before `resume_index` when
-    /// `columnar.shadow_write: true` is present in `.forgeql.yaml`.
+    /// Columnar build configuration — populated by `exec_source` / `warm.rs`
+    /// when a `.forgeql.yaml` is present for this source.
     /// Replaces the four flat `columnar_segments_dir`, `columnar_provider_id`,
     /// `columnar_hash_fn`, and `columnar_overlays_dir` fields.
     pub(crate) columnar_build: Option<crate::storage::ColumnarBuildContext>,
@@ -347,7 +345,7 @@ impl Session {
     ///
     /// # Errors
     /// Returns `Err` if `backend` is [`Backend::Columnar`] and no columnar engine
-    /// has been installed (i.e. `columnar.shadow_write` is not set in `.forgeql.yaml`).
+    /// has been installed for this session.
     pub fn engine_for(&self, backend: &crate::ir::Backend) -> Result<&dyn StorageEngine> {
         self.backends.engine_for(backend)
     }

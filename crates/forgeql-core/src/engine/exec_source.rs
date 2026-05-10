@@ -71,7 +71,6 @@ impl ForgeQLEngine {
                         targets,
                         self.data_dir.clone(),
                         Arc::clone(&self.lang_registry),
-                        cfg.columnar.clone(),
                     ),
                     Err(e) => tracing::warn!(
                         %name,
@@ -129,7 +128,6 @@ impl ForgeQLEngine {
                         moved,
                         self.data_dir.clone(),
                         Arc::clone(&self.lang_registry),
-                        cfg.columnar.clone(),
                     );
                 }
             }
@@ -306,10 +304,8 @@ impl ForgeQLEngine {
         // verify steps and initialise the budget below.
         let maybe_config = load_verify_config(&repo_path, source_name, &session.worktree_path);
 
-        // Configure columnar shadow-write when enabled in `.forgeql.yaml`.
-        if let Some((_, ref cfg)) = maybe_config
-            && cfg.columnar.shadow_write
-        {
+        // Configure columnar when a `.forgeql.yaml` is present (always-on).
+        if maybe_config.is_some() {
             let segments_dir = repo_path.join("forgeql").join("segments");
             // Wrap git_blob_sha1 behind HashFn so ShadowWriter stays decoupled
             // from the concrete provider type (Issue 1).
@@ -323,20 +319,45 @@ impl ForgeQLEngine {
             ));
         }
 
-        // Use resume_index() so an existing disk cache at
-        // <worktree>/.forgeql-index is reused when HEAD matches.
-        session.resume_index()?;
+        // Warm-path optimisation: if the columnar overlay already exists for
+        // the current HEAD commit, skip resume_index() entirely — loading the
+        // 2-3 GB legacy SymbolTable only to immediately discard it wastes RAM
+        // and time.  We go straight to warm_or_open(ctx, None) which reads
+        // the overlay from disk in seconds.
+        //
+        // Cold path (no overlay yet): fall through to resume_index() so the
+        // legacy SymbolTable is available for the shadow-writer to build
+        // segments and create the overlay for the first time.
+        let columnar_warm = if let Some(ctx) = session.columnar_build() {
+            let commit =
+                crate::session::Session::get_head_oid(&session.worktree_path).unwrap_or_default();
+            ctx.overlay_path_for(&commit).exists()
+        } else {
+            false
+        };
+
+        if !columnar_warm {
+            // Cold path: load legacy index so shadow-writer can build the
+            // overlay.  Use resume_index() so an existing disk cache at
+            // <worktree>/.forgeql-index is reused when HEAD matches.
+            session.resume_index()?;
+        }
 
         // If the columnar backend is enabled, ensure the overlay exists for this
         // commit and install a ready-to-query ColumnarStorage on the session.
-        if let Some(ctx) = session.columnar_build().cloned()
-            && let Some(legacy) = session.legacy_storage()
-        {
+        if let Some(ctx) = session.columnar_build().cloned() {
             let commit =
                 crate::session::Session::get_head_oid(&session.worktree_path).unwrap_or_default();
+            // Warm path passes None for legacy — overlay is loaded from disk.
+            // Cold path passes the loaded legacy storage for shadow-write.
+            let legacy = if columnar_warm {
+                None
+            } else {
+                session.legacy_storage()
+            };
             match crate::storage::columnar::ColumnarStorage::warm_or_open(
                 &ctx,
-                Some(legacy),
+                legacy,
                 session.worktree_path.clone(),
                 &commit,
                 Arc::clone(&self.lang_registry),
@@ -347,11 +368,18 @@ impl ForgeQLEngine {
                     // PhaseFT5: free legacy RAM now that columnar is default.
                     session.drop_legacy_index();
                 }
-                Err(e) => tracing::warn!(
-                    %commit,
-                    "columnar warm_or_open failed (non-fatal): {e}"
-                ),
+                Err(e) => {
+                    tracing::warn!(%commit, "columnar warm_or_open failed (non-fatal): {e}");
+                    // warm_or_open failed; fall back to legacy if it wasn't
+                    // loaded (warm path skipped resume_index).
+                    if columnar_warm && let Err(re) = session.resume_index() {
+                        tracing::warn!("columnar fallback resume_index failed: {re}");
+                    }
+                }
             }
+        } else {
+            // Columnar not configured — legacy already loaded by resume_index()
+            // above (columnar_warm is always false when ctx is None).
         }
 
         // FT6: restore checkpoint stack from disk if the file is present and

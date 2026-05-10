@@ -39,7 +39,7 @@ pub struct ForgeConfig {
     /// Columnar storage engine configuration (Phase 03+).
     ///
     /// Enables shadow-writing of columnar segment files alongside the legacy
-    /// in-memory index when `shadow_write: true`.  Off by default.
+    /// Controls optional background warming policies.
     #[serde(default)]
     pub columnar: ColumnarConfig,
 }
@@ -116,22 +116,12 @@ impl Default for LineBudgetConfig {
     }
 }
 
-/// Configuration for the columnar storage engine (Phase 03+).
+/// Configuration for the columnar storage engine.
 ///
-/// Enable shadow-write to have `ForgeQL` produce columnar segment directories
-/// alongside the standard in-memory index on each full build.
+/// Columnar indexing is always enabled. This section controls optional
+/// background warming policies.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ColumnarConfig {
-    /// Write columnar segment files after each full index build.
-    ///
-    /// When `true`, a second pass after `USE <source>.<branch>` writes one
-    /// per-file segment directory to
-    /// `<bare-repo>/forgeql/segments/git-sha1/<content-hex>/`.
-    ///
-    /// Disabled by default; safe to enable incrementally.
-    #[serde(default)]
-    pub shadow_write: bool,
-
     /// Background segment + overlay warming after `CREATE SOURCE`.
     ///
     /// Defaults to disabled. When enabled, a background thread walks the
@@ -308,11 +298,12 @@ line_budget:
 #     command: \"cargo build --release\"
 #     timeout_secs: 300
 
-# ── Columnar Storage (Phase 03+) ──────────────────────────────────────────────
-# Enable to write columnar segment files after each full index build.
-# Set shadow_write: true once you are ready for the Phase 04 reader.
+# ── Columnar Storage ──────────────────────────────────────────────────────────
+# Columnar indexing is always on. The section below controls optional
+# background warming — pre-builds overlays so the first USE is instant.
 # columnar:
-#   shadow_write: false
+#   warm_on_create:
+#     enabled: false
 "
         );
         std::fs::write(&path, template).ok()?;

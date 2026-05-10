@@ -4,6 +4,30 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.49.0] — 2026-05-10 — Warm-Path Columnar Reconnect
+
+### Changed
+
+- **Warm-path optimisation (`exec_source.rs`)** — When the columnar overlay
+  already exists on disk for the current HEAD commit, `USE source.branch` now
+  skips `resume_index()` entirely and calls
+  `ColumnarStorage::warm_or_open(ctx, None)` directly.  Previously every
+  reconnect loaded the full legacy `SymbolTable` (~2–3 GB for Zephyr) only to
+  discard it immediately after the overlay was opened.
+
+  Measured improvement on `zephyr-andre.main` (2.7 M symbols):
+  - Cold path (no overlay): ~236 s (unchanged — shadow-write still runs)
+  - Warm path (overlay exists): ~15 s (≈15× faster)
+
+  The cold path is preserved exactly: if no overlay exists, `resume_index()`
+  runs first so the legacy `SymbolTable` is available for `ShadowWriter` to
+  build segments and create the overlay.
+
+  Fallback safety: if `warm_or_open` fails on the warm path, `resume_index()`
+  is called as recovery so the session always has a usable index.
+
+---
+
 ## [0.48.15] — 2026-05-10 — PhaseFT7: Git-Diff Reindex on Reconnect
 
 ### Added
