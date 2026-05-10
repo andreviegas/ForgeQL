@@ -4,6 +4,60 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.48.14] — 2026-05-10 — PhaseFT6: Checkpoint Stack Persistence
+
+### Added
+
+- **`session::checkpoint_file` (PhaseFT6)** — New module that persists the
+  in-memory checkpoint stack to `.forgeql-checkpoints` in the worktree using
+  `bincode` serialization. The file is written atomically after every
+  `BEGIN TRANSACTION`, updated on `ROLLBACK`, and deleted on `COMMIT`.
+
+- **`CheckpointFile` / `PersistedCheckpoint`** — Serializable counterparts to
+  `Session::checkpoints`. Version-stamped (`FILE_VERSION = 1`) so future
+  format changes can gracefully discard stale files.
+
+- **`checkpoint_file::try_restore`** — Validates the stored HEAD against the
+  current worktree HEAD before restoring. Uses `checkpoints.last().oid` when
+  the stack is non-empty, falling back to `last_clean_oid` for sessions with
+  no open transaction. Silently discards stale or corrupt files.
+
+- **`Session::get_head_oid` (public-crate)** — Extracted as a standalone
+  `pub(crate)` method so `exec_source.rs` can obtain the current HEAD without
+  going through a full `git2::Repository` open.
+
+- **`exec_source.rs` reconnect restore** — After `load_delta` / `resume_index`
+  in the `USE` path, `try_restore` is called to re-hydrate the checkpoint stack
+  into a reconnecting session. Graceful on missing file (empty stack = same
+  behaviour as pre-FT6).
+
+- **Gate tests — `tests/checkpoint_persist.rs`** — Four tests covering:
+  `checkpoint_survives_restart`, `stale_checkpoint_file_is_discarded`,
+  `commit_clears_checkpoint_file`, `nested_checkpoints_rollback`.
+
+### Changed
+
+- **`git::CLEAN_COMMIT_EXCLUDED`** — Added `.forgeql-checkpoints`. The file
+  is never included in user-facing commits (squashed away at `COMMIT`).
+  It is intentionally **not** in `CHECKPOINT_EXCLUDED` so that `git reset
+  --hard` on `ROLLBACK` restores the pre-transaction snapshot including the
+  checkpoint file.
+
+- **`session/mod.rs`** — `checkpoint_file` declared as a `pub mod` so the
+  module is reachable from engine layers and gate tests.
+
+### Fixed
+
+- **`exec_transaction.rs` `BEGIN`** — `checkpoint_file::save` is called
+  *after* `session.checkpoints.push(...)` so the file always reflects the
+  full live stack (including the newly-pushed entry).
+
+- **`exec_transaction.rs` `ROLLBACK`** — `checkpoint_file::save` is called
+  *after* `git reset --hard`, not before. This overwrites whatever the git
+  restore left on disk with the correct in-memory state (post-pop stack).
+
+---
+
 ## [0.48.13] — 2026-05-10 — PhaseFT5: Route Flip + Drop Legacy RAM
 
 ### Changed
