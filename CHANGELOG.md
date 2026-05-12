@@ -4,6 +4,19 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.49.2] — 2026-05-12 — Fix session alias cross-source collision
+
+### Fixed
+
+- **Session alias not scoped to source (`exec_source.rs`)** — `USE vlc.master AS 'bench'`
+  would resume an existing in-memory session named `'bench'` even if it belonged to a
+  different source (e.g. `forgeql-pub`), returning wrong symbol counts and stale data.
+  The eviction guard now checks both `source_name` and `user_id` against the requesting
+  call before deciding to resume.  The `user_id` guard uses `"anonymous"` today and is
+  wired for the future user system via a single `TODO(users)` change point.
+
+---
+
 ## [0.49.1] — 2026-05-11 — Fix `condition_tests` clause counting
 
 ### Fixed

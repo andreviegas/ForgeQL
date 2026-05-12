@@ -174,6 +174,11 @@ impl ForgeQLEngine {
 
         info!(%source_name, %branch, ?as_branch, %budget_branch, "starting session");
 
+        // TODO(users): replace "anonymous" with the real authenticated user identity
+        // once the user system is implemented.  All callers will pass a user_id
+        // parameter; `use_source` will forward it here and store it on the session.
+        let requesting_user = "anonymous";
+
         // Session resume: if an in-memory session already exists for this
         // source + branch + as_branch combination, reuse it — unless the
         // branch HEAD in the bare repo has moved (e.g. after REFRESH SOURCE),
@@ -185,38 +190,55 @@ impl ForgeQLEngine {
         // Because the alias is the session key (see below), an O(1) lookup suffices.
         let resume_outcome: Option<(String, Option<usize>)> = {
             if let Some((existing_id, existing_session)) = self.sessions.get_key_value(as_branch) {
-                // Compare the bare repo's current branch tip to what we
-                // indexed.  If `branch_head` returns None (repo unavailable
-                // or branch missing) we treat the session as fresh to avoid
-                // spurious evictions.
-                let is_stale = self
-                    .registry
-                    .get(source_name)
-                    .and_then(|src| git::branch_head(src.path(), branch))
-                    .is_some_and(|head| {
-                        existing_session.cached_commit().is_some_and(|c| c != head)
-                    });
-                if is_stale {
+                // Guard: if the alias was previously bound to a *different* source
+                // or a different user, evict it rather than returning the wrong
+                // repo's data or leaking one user's session to another.
+                if existing_session.source_name != source_name
+                    || existing_session.user_id != requesting_user
+                {
                     info!(
                         session_id = %existing_id,
-                        %source_name,
-                        %branch,
-                        "branch HEAD moved after REFRESH — evicting stale session"
+                        existing_source = %existing_session.source_name,
+                        requested_source = %source_name,
+                        existing_user = %existing_session.user_id,
+                        alias = %as_branch,
+                        "alias reused across sources or users — evicting stale session"
                     );
                     Some((existing_id.clone(), None))
                 } else {
-                    // PhaseFT5: prefer columnar stats; fall back to legacy table.
-                    let symbols_indexed = existing_session.engine().index_stats().map_or_else(
-                        || existing_session.index().map_or(0, |idx| idx.rows.len()),
-                        |s| s.rows,
-                    );
-                    info!(
-                        session_id = %existing_id,
-                        %source_name,
-                        %branch,
-                        "session resume — reusing existing in-memory session"
-                    );
-                    Some((existing_id.clone(), Some(symbols_indexed)))
+                    // Compare the bare repo's current branch tip to what we
+                    // indexed.  If `branch_head` returns None (repo unavailable
+                    // or branch missing) we treat the session as fresh to avoid
+                    // spurious evictions.
+                    let is_stale = self
+                        .registry
+                        .get(source_name)
+                        .and_then(|src| git::branch_head(src.path(), branch))
+                        .is_some_and(|head| {
+                            existing_session.cached_commit().is_some_and(|c| c != head)
+                        });
+                    if is_stale {
+                        info!(
+                            session_id = %existing_id,
+                            %source_name,
+                            %branch,
+                            "branch HEAD moved after REFRESH — evicting stale session"
+                        );
+                        Some((existing_id.clone(), None))
+                    } else {
+                        // PhaseFT5: prefer columnar stats; fall back to legacy table.
+                        let symbols_indexed = existing_session.engine().index_stats().map_or_else(
+                            || existing_session.index().map_or(0, |idx| idx.rows.len()),
+                            |s| s.rows,
+                        );
+                        info!(
+                            session_id = %existing_id,
+                            %source_name,
+                            %branch,
+                            "session resume — reusing existing in-memory session"
+                        );
+                        Some((existing_id.clone(), Some(symbols_indexed)))
+                    }
                 }
             } else {
                 None
