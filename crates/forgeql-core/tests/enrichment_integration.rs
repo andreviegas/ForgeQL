@@ -907,15 +907,12 @@ fn control_flow_while_statement() {
     );
     let qr = as_query(&r);
     assert!(!qr.results.is_empty(), "expected while_statement");
-    // while (a > 0 && b != 0) has 3 condition tests: >, !=, &&
-    let with_three = qr
+    // while (a > 0 && b != 0) has 2 condition tests: one && joining two clauses
+    let with_two = qr
         .results
         .iter()
-        .any(|m| field(m, "condition_tests") == "3");
-    assert!(
-        with_three,
-        "expected while_statement with condition_tests=3"
-    );
+        .any(|m| field(m, "condition_tests") == "2");
+    assert!(with_two, "expected while_statement with condition_tests=2");
 }
 
 #[test]
@@ -1036,12 +1033,12 @@ fn skeleton_overflow_uses_uppercase() {
     let r = exec(
         &mut e,
         &sid,
-        "FIND symbols WHERE node_kind = 'if_statement' WHERE condition_tests > 20",
+        "FIND symbols WHERE node_kind = 'if_statement' WHERE condition_tests > 13",
     );
     let qr = as_query(&r);
     assert!(
         !qr.results.is_empty(),
-        "expected if_statement with >20 condition tests (28-term condition)"
+        "expected if_statement with >13 condition tests (28-term condition)"
     );
     let skeleton = field(&qr.results[0], "condition_text");
     // Must contain uppercase letters (overflow beyond a-z)

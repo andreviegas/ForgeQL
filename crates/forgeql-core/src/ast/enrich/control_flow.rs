@@ -227,13 +227,23 @@ impl NodeEnricher for ControlFlowEnricher {
     }
 }
 
-/// Count comparison and logical operators in a condition subtree.
+/// Count the number of atomic clauses in a condition subtree.
+///
+/// Returns the number of independent sub-expressions joined by `&&` / `||`
+/// (or their word equivalents `and` / `or`).  This equals the number of
+/// logical operators at any depth + 1, regardless of tree shape.
+///
+/// Examples:
+///   `a > 0`                       → 1  (no logical ops)
+///   `a > 0 && b != 0`             → 2  (one `&&`)
+///   `a > 0 && b < 10 || c == 5`   → 3  (one `&&` + one `||`)
+///   `id==X1 || id==X2 || … || id==X14` → 14  (thirteen `||`)
 fn count_condition_tests(
     node: tree_sitter::Node<'_>,
     source: &[u8],
     config: &crate::ast::lang::LanguageConfig,
 ) -> usize {
-    let mut count = 0;
+    let mut logical_ops = 0usize;
     let mut cursor = node.walk();
     let mut visit = true;
 
@@ -249,11 +259,8 @@ fn count_condition_tests(
                     .or_else(|| current.child_by_field_name("operators"));
                 if let Some(op_node) = op_node {
                     let op = node_text(source, op_node);
-                    if matches!(
-                        op.as_str(),
-                        "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||" | "and" | "or" // Python and other word-operator languages
-                    ) {
-                        count += 1;
+                    if matches!(op.as_str(), "&&" | "||" | "and" | "or") {
+                        logical_ops += 1;
                     }
                 }
             }
@@ -271,7 +278,7 @@ fn count_condition_tests(
         // Backtrack
         loop {
             if !cursor.goto_parent() {
-                return count;
+                return logical_ops + 1;
             }
             if cursor.goto_next_sibling() {
                 visit = true;

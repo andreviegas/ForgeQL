@@ -4,6 +4,25 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.49.1] — 2026-05-11 — Fix `condition_tests` clause counting
+
+### Fixed
+
+- **`condition_tests` over-count (`control_flow.rs`)** — The enricher previously
+  counted every comparison *and* logical operator in the AST (`>`, `!=`, `&&`,
+  `||`, …), producing `2N − 1` for a flat N-term `||` chain.  It now counts only
+  `&&` / `||` / `and` / `or` operators and adds 1, giving the number of
+  independent clauses the condition tests.
+
+  | Example | Before | After |
+  |---|---|---|
+  | `a > 0` | 1 | **1** |
+  | `a > 0 && b != 0` | 3 | **2** |
+  | `a > 0 && b < 10 \|\| c == 5` | 5 | **3** |
+  | 14-clause `\|\|` chain (VLC `input.c:2718`) | 15 | **8** |
+
+---
+
 ## [0.49.0] — 2026-05-10 — Warm-Path Columnar Reconnect
 
 ### Changed
