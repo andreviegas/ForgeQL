@@ -34,7 +34,8 @@
       "case_statement",
       "labeled_statement",
       "try_statement",
-      "declaration"
+      "declaration",
+      "attributed_statement"
     ]
   },
 

@@ -3479,6 +3479,42 @@ fn fallthrough_where_filter() {
     );
 }
 
+#[test]
+fn fallthrough_annotated_zephyr_style() {
+    // Bug 5: __fallthrough; must suppress has_fallthrough.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'fallthroughAnnotated' WHERE fql_kind = 'function'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "fallthroughAnnotated");
+    assert!(
+        m.fields.get("has_fallthrough").is_none(),
+        "__fallthrough; annotation must suppress has_fallthrough, fields: {:?}",
+        m.fields,
+    );
+}
+
+#[test]
+fn fallthrough_annotated_cpp17_attr() {
+    // Bug 5: [[fallthrough]] must suppress has_fallthrough.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'fallthroughAttr' WHERE fql_kind = 'function'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "fallthroughAttr");
+    assert!(
+        m.fields.get("has_fallthrough").is_none(),
+        "[[fallthrough]] annotation must suppress has_fallthrough, fields: {:?}",
+        m.fields,
+    );
+}
+
 // ── §18 — RecursionEnricher ──────────────────────────────────────────
 
 #[test]

@@ -625,6 +625,34 @@ void fallthroughNoSwitch(int x) {
     if (x > 0) x++;
 }
 
+/* Explicit __fallthrough; annotation — must NOT be flagged (Bug 5) */
+void fallthroughAnnotated(int x) {
+    switch (x) {
+        case 1:
+            x++;
+            __fallthrough;
+        case 2:
+            x--;
+            break;
+        default:
+            break;
+    }
+}
+
+/* Explicit [[fallthrough]] C++17 annotation — must NOT be flagged */
+void fallthroughAttr(int x) {
+    switch (x) {
+        case 1:
+            x++;
+            [[fallthrough]];
+        case 2:
+            x--;
+            break;
+        default:
+            break;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* RecursionEnricher patterns                                           */
 /* ------------------------------------------------------------------ */

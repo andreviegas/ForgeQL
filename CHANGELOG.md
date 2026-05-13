@@ -4,6 +4,28 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.49.3] — 2026-05-12 — Fix `has_fallthrough` ignores explicit annotations
+
+### Fixed
+
+- **`has_fallthrough` false-positive for annotated fallthroughs (`fallthrough.rs`)** —
+  `__fallthrough;` (Zephyr/GCC/Clang), `[[fallthrough]]` (C++17), and
+  `/* FALLTHROUGH */`-style comments were not recognised, causing every annotated
+  intentional fallthrough to be incorrectly flagged.
+  - New `is_fallthrough_statement()` helper matches known annotation keywords by node
+    text (case-insensitive, semicolon-stripped).
+  - New `is_fallthrough_comment()` helper matches standalone FALLTHROUGH comments
+    (exact content match to avoid false-positives on descriptive comments).
+  - `check_switch_cases()` now also scans siblings in the switch body between cases,
+    because tree-sitter may place trailing comments there rather than inside the
+    `case_statement` node.
+  - Added `attributed_statement` to `statement_boundary_kinds` in `cpp.json` so that
+    `[[fallthrough]];` is correctly classified as a statement.
+  - Three new enrichment integration tests: `fallthrough_annotated_zephyr_style`,
+    `fallthrough_annotated_cpp17_attr`, `fallthrough_annotated_comment`.
+
+---
+
 ## [0.49.2] — 2026-05-12 — Fix session alias cross-source collision
 
 ### Fixed
