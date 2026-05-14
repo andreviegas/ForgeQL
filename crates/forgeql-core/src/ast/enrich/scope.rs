@@ -38,11 +38,7 @@ impl NodeEnricher for ScopeEnricher {
 
         // For declarations: full scope/storage/binding_kind enrichment.
         if is_decl {
-            let scope = if ctx
-                .node
-                .parent()
-                .is_some_and(|p| ctx.language_config.is_root_kind(p.kind()))
-            {
+            let scope = if ctx.language_config.is_root_kind(ctx.parent_kind) {
                 "file"
             } else {
                 "local"

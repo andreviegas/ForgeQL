@@ -4,6 +4,26 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.49.8] — 2026-05-14 — Eliminate remaining node.parent() calls; guard extra_rows() hot path
+
+### Performance
+
+- **`ScopeEnricher` O(sibling_count) → O(1)**: `enrich_row()` called
+  `ctx.node.parent().is_some_and(|p| is_root_kind(p.kind()))` to distinguish
+  file-scope from local-scope declarations. Replaced with
+  `ctx.language_config.is_root_kind(ctx.parent_kind)` — a direct read from the
+  cursor-walk stack added in 0.49.7. Semantics are identical (`parent_kind` is
+  `""` when there is no parent, and `is_root_kind("")` returns false).
+
+### Docs / internal
+
+- Added a **performance contract** doc comment to the `NodeEnricher::extra_rows`
+  default method explicitly prohibiting `ctx.node.parent()` calls inside that
+  hot path and pointing implementors to `ctx.parent_kind` as the safe alternative.
+- Audited all 18 enrichers for O(n²) exposure: the only remaining `.parent()`
+  calls are in `enrich_row()` (not `extra_rows()`), bounded to named/recognized
+  nodes that do not appear as 150k-wide siblings in real code.
+
 ## [0.49.7] — 2026-05-14 — Eliminate sequential SymbolTable merge, ShadowWriter double-read, and O(n²) NumberEnricher
 
 ### Performance

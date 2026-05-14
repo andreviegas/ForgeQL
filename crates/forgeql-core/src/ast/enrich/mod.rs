@@ -127,6 +127,17 @@ pub trait NodeEnricher: Send + Sync {
     ///
     /// Called for *every* AST node during the walk (even unnamed ones).
     /// The default implementation returns an empty vec.
+    ///
+    /// # Performance contract
+    ///
+    /// This method is in the **innermost hot loop** — it is invoked for every
+    /// node in the AST, including leaf nodes that appear tens of thousands of
+    /// times (e.g. `number_literal` inside a large `initializer_list`).
+    ///
+    /// **Do NOT call `ctx.node.parent()` here.** In tree-sitter 0.25,
+    /// `ts_node_parent` is `O(sibling_count)` — for a 150 000-element array it
+    /// turns a linear pass into O(n²).  Use `ctx.parent_kind` instead; it is
+    /// maintained O(1) by the cursor-walk stack in `collect_nodes`.
     #[allow(unused_variables)]
     fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<ExtraRow> {
         vec![]
