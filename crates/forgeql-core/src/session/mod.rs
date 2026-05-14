@@ -240,7 +240,32 @@ impl Session {
             .backends
             .legacy_storage_mut()
             .ok_or_else(|| anyhow::anyhow!("no legacy backend"))?;
+
+        // Columnar inline fast-path: install a SegmentBuildCtx so that
+        // SymbolTable::build writes segments inline per-file (with per-file
+        // post_pass) and skips the 2-minute sequential merge entirely.
+        let inline_state = self.columnar_build.as_ref().map(|ctx| {
+            let (seg_ctx, state) = ctx.make_inline_ctx();
+            legacy.install_segment_build_ctx(seg_ctx);
+            state
+        });
+
         legacy.build(&workspace)?;
+
+        // After build (all rayon threads done), extract the inline segment_map
+        // and store it on legacy for warm_or_open to consume.
+        if let Some(state) = inline_state {
+            let map = std::sync::Arc::try_unwrap(state).map_or_else(
+                |arc| {
+                    arc.segment_map
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone()
+                },
+                |s| s.segment_map.into_inner().unwrap_or_default(),
+            );
+            legacy.prebuilt_segment_map = Some(map);
+        }
 
         // When columnar is configured, the legacy SymbolTable is a transient
         // build artefact used only to shadow-write segments and build the

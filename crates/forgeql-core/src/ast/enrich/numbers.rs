@@ -81,10 +81,14 @@ impl NodeEnricher for NumberEnricher {
         // (enum enumerator, const variable initialiser) are not magic.
         // We only check the *direct* parent to avoid false suppression for
         // sub-expressions such as `arr[64]` inside an `init_declarator`.
+        //
+        // NOTE: Use ctx.parent_kind (O(1) from cursor walk) — never call
+        // ctx.node.parent() here.  ts_node_parent iterates all preceding
+        // siblings, making it O(sibling_count) and O(n²) for wide nodes
+        // like a large initializer_list.
         let in_named_constant_context = {
-            let parent_kind = ctx.node.parent().map_or("", |p| p.kind());
             let kinds = config.constant_def_parent_kinds();
-            kinds.iter().any(|k| k == parent_kind)
+            kinds.iter().any(|k| k == ctx.parent_kind)
         };
         let is_magic = !(-1..=1).contains(&value) && !in_named_constant_context;
         drop(fields.insert("is_magic".to_string(), is_magic.to_string()));

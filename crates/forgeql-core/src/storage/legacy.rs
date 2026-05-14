@@ -57,6 +57,12 @@ pub struct LegacyMemoryStorage {
     /// before calling `build()` when shadow-write is enabled.  Consumed
     /// (taken) at the start of `build()` so it does not linger.
     seg_ctx: Option<crate::ast::index::SegmentBuildCtx>,
+    /// Segment map produced by the inline-emit fast-path (`make_inline_ctx`).
+    ///
+    /// Populated by `Session::build_index` after `build()` completes when the
+    /// columnar inline path is used.  Read by `warm_or_open` to skip
+    /// `ShadowWriter` entirely (no second file read).
+    pub prebuilt_segment_map: Option<std::collections::HashMap<std::path::PathBuf, Vec<u8>>>,
 }
 
 impl LegacyMemoryStorage {
@@ -70,6 +76,7 @@ impl LegacyMemoryStorage {
             macro_table: None,
             lang_registry,
             seg_ctx: None,
+            prebuilt_segment_map: None,
         }
     }
 

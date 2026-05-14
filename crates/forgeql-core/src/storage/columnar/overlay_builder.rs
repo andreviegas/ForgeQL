@@ -23,8 +23,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use bytemuck::cast_slice;
 use fst::{MapBuilder, Streamer as _};
+use rayon::prelude::*;
 use roaring::RoaringBitmap;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use super::bytes_to_hex;
 use super::overlay::{HEADER_LEN, MAGIC, OverlayPayload, RowPtr, SCHEMA_VERSION, SegmentMeta};
@@ -73,37 +74,54 @@ impl OverlayBuilder {
     /// Returns `Err` if writing or renaming the overlay file fails fatally.
     #[allow(clippy::too_many_lines)]
     pub fn build_and_persist(&self, overlay_path: &Path) -> Result<()> {
+        let t_total = std::time::Instant::now();
+
         // 1. Collect valid (relative_source_path, hex, SegmentReader) triples.
-        let mut segs: Vec<(PathBuf, String, SegmentReader)> = Vec::new();
+        //    Opening each segment is independent mmap I/O — run in parallel.
+        let t_step = std::time::Instant::now();
+        let provider_ver_dir =
+            self.segments_dir
+                .join(format!("{}-v{}", &self.provider_id, super::ENRICH_VER));
+        let mut segs: Vec<(PathBuf, String, SegmentReader)> = self
+            .segment_map
+            .par_iter()
+            .filter_map(|(abs_path, content_id)| {
+                let hex = bytes_to_hex(content_id);
+                let seg_dir = provider_ver_dir.join(&hex[..2]).join(&hex[2..]);
 
-        for (abs_path, content_id) in &self.segment_map {
-            let hex = bytes_to_hex(content_id);
-            let seg_dir = self
-                .segments_dir
-                .join(format!("{}-v{}", &self.provider_id, super::ENRICH_VER))
-                .join(&hex[..2])
-                .join(&hex[2..]);
-
-            if !seg_dir.exists() {
-                continue;
-            }
-
-            match SegmentReader::open(&seg_dir) {
-                Ok(reader) => {
-                    let rel_path = abs_path
-                        .strip_prefix(&self.worktree_root)
-                        .unwrap_or(abs_path)
-                        .to_path_buf();
-                    segs.push((rel_path, hex, reader));
+                if !seg_dir.exists() {
+                    return None;
                 }
-                Err(e) => {
-                    warn!(path = %seg_dir.display(), "overlay: skipping unreadable segment: {e:#}");
+
+                match SegmentReader::open(&seg_dir) {
+                    Ok(reader) => {
+                        let rel_path = abs_path
+                            .strip_prefix(&self.worktree_root)
+                            .unwrap_or(abs_path)
+                            .to_path_buf();
+                        Some((rel_path, hex, reader))
+                    }
+                    Err(e) => {
+                        warn!(path = %seg_dir.display(), "overlay: skipping unreadable segment: {e:#}");
+                        None
+                    }
                 }
-            }
-        }
+            })
+            .collect();
+
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            n = segs.len(),
+            "TIMING step1: open segments (parallel)"
+        );
 
         // 2. Sort by hex_content_id for deterministic global row IDs.
+        let t_step = std::time::Instant::now();
         segs.sort_by(|a, b| a.1.cmp(&b.1));
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            "TIMING step2: sort segments"
+        );
 
         if segs.is_empty() {
             debug!("overlay: no segments found — skipping overlay build");
@@ -111,6 +129,7 @@ impl OverlayBuilder {
         }
 
         // 3. Compute cumulative row offsets.
+        let t_step = std::time::Instant::now();
         let mut row_offsets: Vec<u32> = Vec::with_capacity(segs.len());
         let mut total_rows: u32 = 0;
         for (_, _, reader) in &segs {
@@ -131,10 +150,16 @@ impl OverlayBuilder {
                 });
             }
         }
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            rows = total_rows,
+            "TIMING step3-4: row offsets + global_row_table"
+        );
 
         // 5. Build kind postings by merging per-segment kind bitmaps.
         //    Each segment uses its own string-pool IDs; resolve to strings
         //    via `segment_reader.string_of_id`.
+        let t_step = std::time::Instant::now();
         let mut kind_merged: HashMap<String, RoaringBitmap> = HashMap::new();
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
             let row_offset = row_offsets[seg_idx];
@@ -159,10 +184,16 @@ impl OverlayBuilder {
                 .with_context(|| format!("serialising kind bitmap for '{kind_str}'"))?;
             let _ = kind_postings.insert(kind_str.clone(), bytes);
         }
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            kinds = kind_postings.len(),
+            "TIMING step5: kind postings merge"
+        );
 
         // 6. Build merged name FST + postings.
         //    Accumulate (name_bytes → Vec<global_row_id>) in a BTreeMap so
         //    we can insert into the FST in sorted order (FST requires it).
+        let t_step = std::time::Instant::now();
         let mut merged_names: BTreeMap<Vec<u8>, Vec<u32>> = BTreeMap::new();
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
             let row_offset = row_offsets[seg_idx];
@@ -179,6 +210,7 @@ impl OverlayBuilder {
             }
         }
 
+        let merged_names_len = merged_names.len();
         let mut name_postings_bytes: Vec<u8> = Vec::new();
         let mut fst_builder = MapBuilder::memory();
         // Build the trigram index as we walk the merged name list.
@@ -229,6 +261,13 @@ impl OverlayBuilder {
                 .with_context(|| format!("serialising trigram bitmap {trigram:?}"))?;
             let _ = name_trigram_postings.insert(*trigram, bytes);
         }
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            unique_names = merged_names_len,
+            trigrams = name_trigram_postings.len(),
+            fst_bytes = name_fst_bytes.len(),
+            "TIMING step6: name FST + trigrams"
+        );
 
         // 7. Build SegmentMeta list.
         let segment_metas: Vec<SegmentMeta> = segs
@@ -241,6 +280,7 @@ impl OverlayBuilder {
             .collect();
 
         // 8. Serialise payload.
+        let t_step = std::time::Instant::now();
         let payload = OverlayPayload {
             segments: segment_metas,
             global_row_table,
@@ -250,6 +290,11 @@ impl OverlayBuilder {
             name_trigram_postings,
         };
         let payload_bytes = bincode::serialize(&payload).context("serialising overlay payload")?;
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            bytes = payload_bytes.len(),
+            "TIMING step7-8: build metas + serialize payload"
+        );
 
         // 9. Build fixed 24-byte header.
         let mut header = Vec::with_capacity(HEADER_LEN);
@@ -262,6 +307,7 @@ impl OverlayBuilder {
         debug_assert_eq!(header.len(), HEADER_LEN, "header length invariant");
 
         // 10. Atomic write: temp file → fsync → rename.
+        let t_step = std::time::Instant::now();
         if let Some(parent) = overlay_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating overlay dir {}", parent.display()))?;
@@ -283,12 +329,17 @@ impl OverlayBuilder {
         let _ = tmp
             .persist(overlay_path)
             .with_context(|| format!("persisting overlay to {}", overlay_path.display()))?;
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            "TIMING step10: atomic write (fsync + rename)"
+        );
 
-        debug!(
+        info!(
+            ms = t_total.elapsed().as_millis(),
             path = %overlay_path.display(),
             segments = segs.len(),
             rows = total_rows,
-            "overlay written"
+            "TIMING total: build_and_persist"
         );
 
         Ok(())

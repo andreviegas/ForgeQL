@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 use roaring::RoaringBitmap;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::ast::enrich::default_enrichers;
 use crate::ast::index::IndexStats;
@@ -1238,6 +1238,7 @@ impl ColumnarStorage {
     /// Returns `Err` only for hard failures (lock file I/O, final
     /// `Overlay::open` after a successful build). Shadow-write failures
     /// are treated as non-fatal and logged.
+    #[allow(clippy::too_many_lines)]
     pub fn warm_or_open(
         ctx: &crate::storage::ColumnarBuildContext,
         legacy: Option<&LegacyMemoryStorage>,
@@ -1284,10 +1285,37 @@ impl ColumnarStorage {
                     let _ = std::fs::remove_file(&overlay_path);
                 }
 
-                // Build segments via shadow-write then persist the overlay.
-                if let Some(legacy) = legacy
+                // Build segments + overlay. Prefer the inline fast-path when
+                // segments were already written per-file during build_index.
+                let segment_map_opt = legacy.and_then(|l| l.prebuilt_segment_map.clone());
+
+                if let Some(segment_map) = segment_map_opt {
+                    // Fast-path: segments written inline — skip ShadowWriter.
+                    let t_sw = std::time::Instant::now();
+                    info!(
+                        ms = t_sw.elapsed().as_millis(),
+                        %commit_sha,
+                        segments = segment_map.len(),
+                        "TIMING warm_or_open: inline segments (no shadow-write)"
+                    );
+                    let builder = super::overlay_builder::OverlayBuilder::new(
+                        &ctx.provider_id,
+                        ctx.segments_dir.clone(),
+                        worktree_path.clone(),
+                        segment_map,
+                    );
+                    if let Err(e) = builder.build_and_persist(&overlay_path) {
+                        tracing::warn!(
+                            %commit_sha,
+                            "columnar warm_or_open: overlay build failed: {e}"
+                        );
+                    } else {
+                        debug!(%commit_sha, "columnar warm_or_open: overlay built (inline path)");
+                    }
+                } else if let Some(legacy) = legacy
                     && let Some(table) = legacy.table()
                 {
+                    // Legacy path: shadow-write from the merged SymbolTable.
                     let writer = super::shadow_writer::ShadowWriter::new(
                         table,
                         &ctx.segments_dir,
@@ -1295,12 +1323,14 @@ impl ColumnarStorage {
                         ctx.hash_fn.as_ref(),
                         HashMap::new(),
                     );
+                    let t_sw = std::time::Instant::now();
                     match writer.run() {
                         Ok(result) => {
-                            debug!(
+                            info!(
+                                ms = t_sw.elapsed().as_millis(),
                                 %commit_sha,
                                 segments = result.count,
-                                "columnar warm_or_open: shadow-write complete"
+                                "TIMING warm_or_open: shadow-write"
                             );
                             let builder = super::overlay_builder::OverlayBuilder::new(
                                 &ctx.provider_id,

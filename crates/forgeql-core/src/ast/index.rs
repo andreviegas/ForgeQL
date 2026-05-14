@@ -13,7 +13,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::ast::enrich::guard_utils::{
     GuardFrame, build_env_guard_frame, build_guard_frame, collect_attribute_guard_frames,
@@ -47,7 +47,7 @@ pub type SegEmitFn = Arc<dyn Fn(&[u8], &SymbolTable, usize) + Send + Sync>;
 /// rayon threads inside [`SymbolTable::build`].
 pub struct SegmentBuildCtx {
     /// Provider identifier embedded in segment paths (e.g. `"git-sha1"`).
-    pub provider_id: &'static str,
+    pub provider_id: String,
     /// Type-erased content-hash function.
     ///
     /// Maps raw file bytes to raw content-ID bytes.  For `GitSha1Provider`
@@ -380,6 +380,7 @@ impl SymbolTable {
     ///
     /// # Errors
     /// Returns `Err` if the tree-sitter language cannot be set.
+    #[allow(clippy::too_many_lines)]
     pub fn build(
         workspace: &Workspace,
         lang_registry: &LanguageRegistry,
@@ -394,6 +395,8 @@ impl SymbolTable {
         debug!(files = paths.len(), "indexing files in parallel");
 
         // Pass 1 — collect macro definitions (parallel, per-file, then merged).
+        let t_build = std::time::Instant::now();
+        let t_step = std::time::Instant::now();
         let macro_table: MacroTable = paths
             .par_iter()
             .filter_map(|path| {
@@ -419,13 +422,58 @@ impl SymbolTable {
                 acc
             });
 
-        debug!(
+        info!(
+            ms = t_step.elapsed().as_millis(),
             macro_defs = macro_table.def_count(),
-            "first-pass macro collection complete"
+            "TIMING build pass1: macro collection"
         );
+
+        // ── Columnar fast-path ─────────────────────────────────────────────
+        // When a SegmentBuildCtx is provided, segments are written inline
+        // per-file during index_file() (including per-file post_pass).
+        // No merge, full-table post_pass, or populate_usage_counts is needed —
+        // the columnar engine never queries the SymbolTable after build.
+        // This eliminates the ~2-minute sequential bottleneck on large repos.
+        if seg_ctx.is_some() {
+            let t_fast = std::time::Instant::now();
+            paths.par_iter().for_each(|path| {
+                let Some(lang) = lang_registry.language_for_path(path) else {
+                    return;
+                };
+                let mut parser = tree_sitter::Parser::new();
+                if parser.set_language(&lang.tree_sitter_language()).is_err() {
+                    warn!(path = %path.display(), "columnar fast-path: failed to set language");
+                    return;
+                }
+                let enrichers = default_enrichers();
+                let mut file_table = Self::default();
+                match index_file(
+                    &mut parser,
+                    path,
+                    &mut file_table,
+                    &enrichers,
+                    lang.as_ref(),
+                    Some(&macro_table),
+                    seg_ctx,
+                ) {
+                    Ok(count) => {
+                        debug!(path = %path.display(), rows = count, "indexed (columnar fast-path)");
+                    }
+                    Err(e) => warn!(path = %path.display(), "skipping file: {e}"),
+                }
+                // file_table dropped here — no merge needed for columnar.
+            });
+            info!(
+                ms = t_fast.elapsed().as_millis(),
+                files = paths.len(),
+                "TIMING build total: SymbolTable::build (columnar fast-path, no merge)"
+            );
+            return Ok((Self::default(), macro_table));
+        }
 
         // Pass 2 — parse + enrich each file in parallel, merging via tree
         // reduction so merges also happen across multiple cores.
+        let t_step = std::time::Instant::now();
         let mut table: Self = paths
             .par_iter()
             .filter_map(|path| {
@@ -466,24 +514,35 @@ impl SymbolTable {
                 acc
             });
 
-        debug!(
+        info!(
+            ms = t_step.elapsed().as_millis(),
             rows = table.rows.len(),
-            usages = table.usages.values().map(Vec::len).sum::<usize>(),
-            names = table.name_index.len(),
-            kinds = table.kind_index.len(),
-            "index built"
+            "TIMING build pass2: parse + reduce"
         );
 
         // Post-pass — run post_pass for each enricher (aggregation, cross-row metrics).
         // `None` scope = process the entire table (full build).
+        let t_step = std::time::Instant::now();
         let enrichers = default_enrichers();
         for enricher in &enrichers {
             enricher.post_pass(&mut table, None);
         }
+        info!(ms = t_step.elapsed().as_millis(), "TIMING build post_pass");
 
         // Precompute per-row usages_count from the completed usages map.
+        let t_step = std::time::Instant::now();
         table.populate_usage_counts();
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            rows = table.rows.len(),
+            usages = table.usages.values().map(Vec::len).sum::<usize>(),
+            "TIMING build populate_usage_counts"
+        );
 
+        info!(
+            ms = t_build.elapsed().as_millis(),
+            "TIMING build total: SymbolTable::build"
+        );
         Ok((table, macro_table))
     }
 
@@ -1025,6 +1084,7 @@ pub fn index_file(
     seg_ctx: Option<&SegmentBuildCtx>,
 ) -> Result<usize> {
     let source = crate::workspace::file_io::read_bytes(path)?;
+
     let tree = parser
         .parse(&source, None)
         .ok_or_else(|| ForgeError::AstParse {
@@ -1049,7 +1109,15 @@ pub fn index_file(
     // Per-file columnar shadow-write: hash the already-read source bytes and
     // emit a SegmentBuilder for the rows added to this per-file table.
     // Runs inline so files are only read once.
+    //
+    // Run enricher post_pass on the per-file table BEFORE emitting.
+    // ControlFlowEnricher and RedundancyEnricher both group rows by file path
+    // and work entirely intra-file, so per-file post_pass produces identical
+    // enrichment results to full-table post_pass — without the sequential merge.
     if let Some(ctx) = seg_ctx {
+        for enricher in enrichers {
+            enricher.post_pass(table, None);
+        }
         let content_id = (ctx.hash_fn)(&source);
         (ctx.emit_fn)(&content_id, table, before);
     }
@@ -1088,6 +1156,10 @@ fn collect_nodes(
     let config = language.config();
     let lang_name = language.name();
     let mut guard_stack: Vec<GuardFrame> = Vec::new();
+    // Tracks the kind of the parent node at each level of the DFS, updated
+    // O(1) by the cursor navigation below.  Avoids calling node.parent()
+    // inside enrichers (which is O(sibling_count) in tree-sitter 0.25).
+    let mut parent_kind_stack: Vec<&'static str> = Vec::new();
     // Pre-compile env_guard_patterns once per file.
     let env_guard_regex: Option<regex::RegexSet> = if config.env_guard_patterns().is_empty() {
         None
@@ -1140,6 +1212,7 @@ fn collect_nodes(
                 language_support: language,
                 guard_stack: &guard_stack,
                 macro_table,
+                parent_kind: parent_kind_stack.last().copied().unwrap_or(""),
             };
 
             // Every named node becomes a row.
@@ -1268,6 +1341,8 @@ fn collect_nodes(
 
             // Descend into children.
             if cursor.goto_first_child() {
+                // Record this node as the parent for the child level.
+                parent_kind_stack.push(node.kind());
                 continue;
             }
         }
@@ -1280,6 +1355,7 @@ fn collect_nodes(
         }
         let mut found_sibling = false;
         while cursor.goto_parent() {
+            let _ = parent_kind_stack.pop();
             if cursor.goto_next_sibling() {
                 found_sibling = true;
                 break;

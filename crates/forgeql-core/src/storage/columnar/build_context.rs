@@ -1,4 +1,8 @@
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use tracing::warn;
 
 use super::HashFn;
 
@@ -88,4 +92,122 @@ impl ColumnarBuildContext {
             super::ENRICH_VER
         ))
     }
+
+    /// Create a [`SegmentBuildCtx`] that writes segments **inline** per-file
+    /// during the parallel parse, and an [`InlineCtxState`] for extracting the
+    /// results after [`SymbolTable::build`] completes.
+    ///
+    /// The returned `emit_fn` closure:
+    /// 1. Hashes source bytes → content-ID (already done by caller, passed in).
+    /// 2. Writes the per-file segment to `segments_dir` (idempotent).
+    /// 3. Accumulates `(abs_path, content_id)` in `InlineCtxState::segment_map`.
+    /// 4. Accumulates enrichment column names in `InlineCtxState::all_columns`.
+    ///
+    /// [`SymbolTable::build`]: crate::ast::index::SymbolTable::build
+    #[must_use]
+    pub fn make_inline_ctx(&self) -> (crate::ast::index::SegmentBuildCtx, Arc<InlineCtxState>) {
+        use super::bytes_to_hex;
+        use super::segment_builder::{SegmentBuilder, is_valid_segment};
+        use crate::ast::index::{SegEmitFn, SegmentBuildCtx};
+
+        let state = Arc::new(InlineCtxState {
+            segment_map: Mutex::new(HashMap::new()),
+            all_columns: Mutex::new(BTreeSet::new()),
+        });
+
+        let segments_dir = self.segments_dir.clone();
+        let provider_id = self.provider_id.clone();
+        let enrich_ver = super::ENRICH_VER;
+        let state_ref = Arc::clone(&state);
+
+        let emit_fn: SegEmitFn = Arc::new(
+            move |content_id: &[u8], table: &crate::ast::index::SymbolTable, rows_start: usize| {
+                let Some(first_row) = table.rows.get(rows_start) else {
+                    return;
+                };
+                let abs_path = table.path_of(first_row).to_path_buf();
+
+                let hex = bytes_to_hex(content_id);
+                let provider_ver_dir = segments_dir.join(format!("{provider_id}-v{enrich_ver}"));
+                let target_dir = provider_ver_dir.join(&hex[..2]).join(&hex[2..]);
+
+                // Always register in segment_map, even for already-written segments.
+                {
+                    let mut map = state_ref
+                        .segment_map
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let _ = map.insert(abs_path, content_id.to_vec());
+                }
+
+                if is_valid_segment(&target_dir) {
+                    return; // Idempotent: segment already written on a prior run.
+                }
+
+                if let Err(e) = std::fs::create_dir_all(&provider_ver_dir) {
+                    warn!(path = %provider_ver_dir.display(), "inline emit: failed to create provider dir: {e}");
+                    return;
+                }
+
+                let mut builder = SegmentBuilder::new(&provider_id, content_id);
+                let mut local_cols: BTreeSet<String> = BTreeSet::new();
+
+                for row in &table.rows[rows_start..] {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let row_id = builder.emit_row(
+                        table.name_of(row),
+                        table.fql_kind_of(row),
+                        table.language_of(row),
+                        row.line as u32,
+                        row.byte_range.start as u32,
+                        row.byte_range.end as u32,
+                        row.usages_count,
+                    );
+                    for (key, value) in table.resolve_fields(&row.fields) {
+                        let _ = local_cols.insert(key.clone());
+                        builder.set_field(row_id, &key, value);
+                    }
+                }
+
+                match builder.flush(&target_dir) {
+                    Ok(()) => {
+                        let mut cols = state_ref
+                            .all_columns
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        cols.extend(local_cols);
+                    }
+                    Err(e) => {
+                        warn!(target = %target_dir.display(), "inline emit: flush failed: {e}");
+                    }
+                }
+            },
+        );
+
+        let ctx = SegmentBuildCtx {
+            provider_id: self.provider_id.clone(),
+            hash_fn: Arc::clone(&self.hash_fn),
+            emit_fn,
+        };
+
+        (ctx, state)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// InlineCtxState — shared mutable state for make_inline_ctx
+// ---------------------------------------------------------------------------
+
+/// Shared state populated by the inline-emit closure during
+/// [`ColumnarBuildContext::make_inline_ctx`].
+///
+/// After [`SymbolTable::build`] returns (all rayon threads finished), the
+/// caller can extract the final results via [`InlineCtxState::take`].
+///
+/// [`SymbolTable::build`]: crate::ast::index::SymbolTable::build
+pub struct InlineCtxState {
+    /// Absolute source path → raw content-ID bytes, one entry per processed file.
+    pub segment_map: Mutex<HashMap<PathBuf, Vec<u8>>>,
+    /// Enrichment column names seen across all files.
+    pub all_columns: Mutex<BTreeSet<String>>,
 }

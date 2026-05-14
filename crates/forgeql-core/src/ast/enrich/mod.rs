@@ -63,6 +63,15 @@ pub struct EnrichContext<'a> {
     /// `None` for languages without macro-expansion support, or during
     /// the first pass itself.
     pub macro_table: Option<&'a macro_table::MacroTable>,
+    /// The kind string of the direct parent node in the AST, or `""`
+    /// if this node is the tree root.
+    ///
+    /// Computed O(1) by the cursor-walk in `collect_nodes` — **do not
+    /// call `ctx.node.parent()`** inside enrichers; tree-sitter's
+    /// `ts_node_parent` iterates all preceding siblings, making it
+    /// `O(sibling_count)` and O(n²) for wide nodes like large
+    /// `initializer_list` arrays.
+    pub parent_kind: &'static str,
 }
 
 // -----------------------------------------------------------------------

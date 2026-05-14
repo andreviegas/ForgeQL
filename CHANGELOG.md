@@ -4,6 +4,54 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.49.7] — 2026-05-14 — Eliminate sequential SymbolTable merge, ShadowWriter double-read, and O(n²) NumberEnricher
+
+### Performance
+
+- **O(n²) → O(n) `NumberEnricher` fix — 6× cold-build speedup on Zephyr RTOS**:
+  `NumberEnricher.extra_rows()` called `ctx.node.parent()` for every
+  `number_literal` node to check whether the literal lived inside a named-constant
+  context. In tree-sitter 0.25 `ts_node_parent` scans all preceding siblings by
+  byte position — O(sibling_count) per call. A single `initializer_list` in
+  `model.h` has ~150 000 children; summing 0…150 000 yields ~11 billion sibling
+  scans → 213 seconds blocked in that one file. Fix: a `parent_kind_stack:
+  Vec<&'static str>` maintained inside `collect_nodes()` tracks the cursor-walk
+  parent kind O(1) (push on `goto_first_child`, pop on `goto_parent`). The stack
+  head is exposed as `EnrichContext::parent_kind`, and `NumberEnricher` now reads
+  `ctx.parent_kind` instead of calling `ctx.node.parent()`. Result on Zephyr RTOS
+  (14 234 C files): **cold build 4 m 07 s → 0 m 41 s (6× faster)**; `model.h`
+  alone 213 447 ms → 1 083 ms (197× faster).
+
+- **Columnar inline fast-path** eliminates two sequential CPU/I/O bottlenecks
+  that were visible on the CPU/disk monitor as a long flat single-core period
+  followed by a second disk read burst:
+  - **Sequential `SymbolTable` merge** — previously `SymbolTable::build` merged
+    14 000+ per-file tables into one via `.reduce()`, running `reassign_intern_ids`
+    and rebuilding all secondary indexes sequentially (~2 min wall time on Zephyr
+    RTOS). The columnar fast-path now takes a `par_iter().for_each()` branch that
+    runs per-file `post_pass` enrichment inline (control-flow, redundancy — both
+    intra-file, so quality is identical) and writes the segment to disk via the
+    `SegmentBuildCtx` emit-fn, then drops the per-file table without merging.
+  - **ShadowWriter double-read** — `warm_or_open` previously called
+    `ShadowWriter::new(table, …)` which re-read all 14 000+ source files from
+    disk to compute content-IDs and write segments, duplicating the I/O already
+    done during `SymbolTable::build`. With the inline fast-path the
+    `prebuilt_segment_map` is propagated from `LegacyMemoryStorage` directly to
+    `OverlayBuilder`, skipping `ShadowWriter` entirely (no second disk burst).
+  - **Measured on Zephyr RTOS (14 234 C files, ~2.7 M rows)**: cold rebuild
+    real time 3 m 28 s vs 3 m 45 s before (−17 s), CPU user time 6 m 3 s vs
+    7 m 10 s before (−67 s). CPU graph shows ONE multi-core burst instead of
+    burst → single-core flat → second burst.
+
+### Internal
+
+- `SegmentBuildCtx.provider_id` widened from `&'static str` to `String`.
+- `InlineCtxState` struct added to `columnar/build_context.rs` (holds shared
+  `Mutex<HashMap<PathBuf, Vec<u8>>>` segment map and `Mutex<BTreeSet<String>>`
+  column set, both populated by the rayon parallel loop).
+- `LegacyMemoryStorage.prebuilt_segment_map` field added for passing the inline
+  segment map from `build_index` to `warm_or_open`.
+
 ## [0.49.6] — 2026-05-14 — Fix stale segments, stale worktree metadata, and skip legacy index write
 
 ### Fixed
