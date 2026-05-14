@@ -15,7 +15,7 @@
 /// - `__attribute__((fallthrough))` (GCC attribute syntax)
 ///
 /// Comments like `/* FALLTHROUGH */` are intentionally **not** suppressed —
-/// they are author intent, not a language construct, and ForgeQL reports
+/// they are author intent, not a language construct, and `ForgeQL` reports
 /// structural facts only. Agents can filter annotated cases downstream.
 ///
 /// **Language-agnostic:** uses `function_raw_kinds`, `switch_raw_kinds`,
