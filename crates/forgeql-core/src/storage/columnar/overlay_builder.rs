@@ -78,7 +78,11 @@ impl OverlayBuilder {
 
         for (abs_path, content_id) in &self.segment_map {
             let hex = bytes_to_hex(content_id);
-            let seg_dir = self.segments_dir.join(&self.provider_id).join(&hex);
+            let seg_dir = self
+                .segments_dir
+                .join(format!("{}-v{}", &self.provider_id, super::ENRICH_VER))
+                .join(&hex[..2])
+                .join(&hex[2..]);
 
             if !seg_dir.exists() {
                 continue;

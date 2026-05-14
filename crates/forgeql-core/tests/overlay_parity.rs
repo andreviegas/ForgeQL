@@ -79,6 +79,16 @@ fn index_fixture(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
     table
 }
 
+/// Returns the versioned test provider directory name (e.g. `"test-v3"`).
+fn vp() -> String {
+    format!("test-v{}", forgeql_core::storage::columnar::ENRICH_VER)
+}
+
+/// Path to a specific segment dir: `<segments_base>/<vp()>/<hex[..2]>/<hex[2..]>`.
+fn seg_path(segments_base: &std::path::Path, hex: &str) -> std::path::PathBuf {
+    segments_base.join(vp()).join(&hex[..2]).join(&hex[2..])
+}
+
 /// Build a segment for `table`, store it under `segments_dir/<provider>/<hex>/`,
 /// and return `(abs_source_path, content_id_bytes)`.
 fn build_segment(
@@ -100,7 +110,7 @@ fn build_segment(
         acc
     });
 
-    let seg_dir = segments_dir.join("test").join(&hex);
+    let seg_dir = seg_path(segments_dir, &hex);
 
     let mut builder = SegmentBuilder::new("test", &content_id);
     for row in &table.rows {
@@ -203,7 +213,7 @@ fn overlay_find_symbols_matches_legacy_merged() {
         .segments()
         .iter()
         .map(|meta| {
-            let seg_dir = segments_dir.join("test").join(&meta.hex_content_id);
+            let seg_dir = seg_path(&segments_dir, &meta.hex_content_id);
             Arc::new(SegmentReader::open(&seg_dir).expect("SegmentReader::open"))
         })
         .collect();
@@ -305,8 +315,7 @@ fn overlay_kind_prefilter_matches_legacy() {
         .iter()
         .map(|m| {
             Arc::new(
-                SegmentReader::open(&segments_dir.join("test").join(&m.hex_content_id))
-                    .expect("open"),
+                SegmentReader::open(&seg_path(&segments_dir, &m.hex_content_id)).expect("open"),
             )
         })
         .collect();
@@ -386,7 +395,7 @@ fn single_segment_cpp_overlay() -> (
         .iter()
         .map(|m| {
             Arc::new(
-                SegmentReader::open(&segments_dir.join("test").join(&m.hex_content_id))
+                SegmentReader::open(&seg_path(&segments_dir, &m.hex_content_id))
                     .expect("open segment"),
             )
         })
@@ -615,8 +624,7 @@ fn overlay_lookup_name_spans_segments() {
         .iter()
         .map(|m| {
             Arc::new(
-                SegmentReader::open(&segments_dir.join("test").join(&m.hex_content_id))
-                    .expect("open"),
+                SegmentReader::open(&seg_path(&segments_dir, &m.hex_content_id)).expect("open"),
             )
         })
         .collect();
@@ -817,7 +825,7 @@ fn columnar_show_outline_matches_legacy() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(&segments_dir.join("test").join(&meta.hex_content_id))
+                SegmentReader::open(&seg_path(&segments_dir, &meta.hex_content_id))
                     .expect("SegmentReader::open"),
             )
         })
@@ -1554,7 +1562,7 @@ fn combined_path_glob_and_enrichment_parity() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(&segments_dir.join("test").join(&meta.hex_content_id))
+                SegmentReader::open(&seg_path(&segments_dir, &meta.hex_content_id))
                     .expect("SegmentReader::open"),
             )
         })
@@ -1906,7 +1914,7 @@ fn dirty_overlay_shadows_and_unions() {
     use forgeql_core::storage::columnar::overlay::Overlay;
 
     let tmp = TempDir::new().expect("tempdir");
-    let seg_dir = tmp.path().join("segments").join("test");
+    let seg_dir = tmp.path().join("segments").join(vp());
     let overlay_dir = tmp.path().join("overlays");
     std::fs::create_dir_all(&seg_dir).unwrap();
     std::fs::create_dir_all(&overlay_dir).unwrap();
@@ -1923,7 +1931,7 @@ fn dirty_overlay_shadows_and_unions() {
         let _ = builder.emit_row("SymbolA", "function", "cpp", 10, 0, 20, 0);
         let _ = builder.emit_row("SymbolB", "function", "cpp", 20, 0, 40, 0);
         builder
-            .flush(&seg_dir.join(&file1_hex))
+            .flush(&seg_dir.join(&file1_hex[..2]).join(&file1_hex[2..]))
             .expect("file1 flush");
     }
 
@@ -1938,7 +1946,7 @@ fn dirty_overlay_shadows_and_unions() {
         let mut builder = SegmentBuilder::new("test", &file2_cid);
         let _ = builder.emit_row("SymbolC", "function", "rust", 5, 0, 10, 0);
         builder
-            .flush(&seg_dir.join(&file2_hex))
+            .flush(&seg_dir.join(&file2_hex[..2]).join(&file2_hex[2..]))
             .expect("file2 flush");
     }
 
@@ -1970,8 +1978,12 @@ fn dirty_overlay_shadows_and_unions() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(&seg_dir.join(&meta.hex_content_id))
-                    .expect("open persistent segment"),
+                SegmentReader::open(
+                    &seg_dir
+                        .join(&meta.hex_content_id[..2])
+                        .join(&meta.hex_content_id[2..]),
+                )
+                .expect("open persistent segment"),
             )
         })
         .collect();
@@ -2050,7 +2062,7 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
     use forgeql_core::storage::columnar::overlay::Overlay;
 
     let tmp = TempDir::new().expect("tempdir");
-    let seg_dir = tmp.path().join("segments").join("test");
+    let seg_dir = tmp.path().join("segments").join(vp());
     let overlay_dir = tmp.path().join("overlays");
     std::fs::create_dir_all(&seg_dir).unwrap();
     std::fs::create_dir_all(&overlay_dir).unwrap();
@@ -2065,7 +2077,9 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
     {
         let mut builder = SegmentBuilder::new("test", &file1_cid);
         let _ = builder.emit_row("SymbolA", "function", "cpp", 1, 0, 10, 0);
-        builder.flush(&seg_dir.join(&file1_hex)).expect("flush");
+        builder
+            .flush(&seg_dir.join(&file1_hex[..2]).join(&file1_hex[2..]))
+            .expect("flush");
     }
 
     let root = tmp.path().to_path_buf();
@@ -2086,7 +2100,14 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
         .segments()
         .iter()
         .map(|meta| {
-            Arc::new(SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open"))
+            Arc::new(
+                SegmentReader::open(
+                    &seg_dir
+                        .join(&meta.hex_content_id[..2])
+                        .join(&meta.hex_content_id[2..]),
+                )
+                .expect("open"),
+            )
         })
         .collect();
     let mut storage = ColumnarStorage::new(
@@ -2140,7 +2161,7 @@ fn dirty_overlay_resolve_symbol_shadows_and_unions() {
     use std::sync::Arc;
 
     let tmp = TempDir::new().expect("tempdir");
-    let seg_dir = tmp.path().join("segments").join("test");
+    let seg_dir = tmp.path().join("segments").join(vp());
     let overlay_dir = tmp.path().join("overlays").join("test");
     std::fs::create_dir_all(&seg_dir).unwrap();
     std::fs::create_dir_all(&overlay_dir).unwrap();
@@ -2157,7 +2178,7 @@ fn dirty_overlay_resolve_symbol_shadows_and_unions() {
         let _ = builder.emit_row("SymbolA", "function", "cpp", 10, 0, 20, 0);
         let _ = builder.emit_row("SymbolB", "function", "cpp", 20, 0, 40, 0);
         builder
-            .flush(&seg_dir.join(&file1_hex))
+            .flush(&seg_dir.join(&file1_hex[..2]).join(&file1_hex[2..]))
             .expect("file1 flush");
     }
 
@@ -2179,7 +2200,14 @@ fn dirty_overlay_resolve_symbol_shadows_and_unions() {
         .segments()
         .iter()
         .map(|meta| {
-            Arc::new(SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open"))
+            Arc::new(
+                SegmentReader::open(
+                    &seg_dir
+                        .join(&meta.hex_content_id[..2])
+                        .join(&meta.hex_content_id[2..]),
+                )
+                .expect("open"),
+            )
         })
         .collect();
     let mut storage = ColumnarStorage::new(
@@ -2245,7 +2273,7 @@ fn reindex_updates_dirty_overlay() {
     std::fs::write(&file2, "void SymbolC() {}\n").expect("write file2");
 
     // Build segments for the initial state.
-    let seg_dir = tmp.path().join("segments").join("test");
+    let seg_dir = tmp.path().join("segments").join(vp());
     let overlay_dir = tmp.path().join("overlays");
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
@@ -2273,7 +2301,14 @@ fn reindex_updates_dirty_overlay() {
         .segments()
         .iter()
         .map(|meta| {
-            Arc::new(SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open seg"))
+            Arc::new(
+                SegmentReader::open(
+                    &seg_dir
+                        .join(&meta.hex_content_id[..2])
+                        .join(&meta.hex_content_id[2..]),
+                )
+                .expect("open seg"),
+            )
         })
         .collect();
 
@@ -2339,7 +2374,7 @@ fn purge_removes_file_symbols() {
     std::fs::write(&file1, "void SymbolA() {}\n").expect("write file1");
     std::fs::write(&file2, "void SymbolB() {}\n").expect("write file2");
 
-    let seg_dir = tmp.path().join("segments").join("test");
+    let seg_dir = tmp.path().join("segments").join(vp());
     let overlay_dir = tmp.path().join("overlays");
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
@@ -2367,7 +2402,14 @@ fn purge_removes_file_symbols() {
         .segments()
         .iter()
         .map(|meta| {
-            Arc::new(SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open seg"))
+            Arc::new(
+                SegmentReader::open(
+                    &seg_dir
+                        .join(&meta.hex_content_id[..2])
+                        .join(&meta.hex_content_id[2..]),
+                )
+                .expect("open seg"),
+            )
         })
         .collect();
 
@@ -2452,7 +2494,7 @@ fn reindex_writes_delta_file() {
     std::fs::write(&file1, "void SymbolA() {}\n").expect("write file1");
     std::fs::write(&file2, "void SymbolB() {}\n").expect("write file2");
 
-    let seg_dir = tmp.path().join("segments").join("test");
+    let seg_dir = tmp.path().join("segments").join(vp());
     let overlay_dir = tmp.path().join("overlays");
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
@@ -2480,7 +2522,14 @@ fn reindex_writes_delta_file() {
         .segments()
         .iter()
         .map(|meta| {
-            Arc::new(SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open seg"))
+            Arc::new(
+                SegmentReader::open(
+                    &seg_dir
+                        .join(&meta.hex_content_id[..2])
+                        .join(&meta.hex_content_id[2..]),
+                )
+                .expect("open seg"),
+            )
         })
         .collect();
 
@@ -2527,6 +2576,7 @@ fn reindex_writes_delta_file() {
 /// PhaseFT3 gate: after a simulated restart, loading the delta file from disk
 /// must restore the dirty overlay so query results match the original instance.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn delta_survives_simulated_restart() {
     use forgeql_core::ast::lang::CppLanguageInline;
     use forgeql_core::ir::Clauses;
@@ -2544,7 +2594,7 @@ fn delta_survives_simulated_restart() {
     std::fs::write(&file1, "void SymbolA() {}\nvoid SymbolB() {}\n").expect("write file1");
     std::fs::write(&file2, "void SymbolC() {}\n").expect("write file2");
 
-    let seg_dir = tmp.path().join("segments").join("test");
+    let seg_dir = tmp.path().join("segments").join(vp());
     let overlay_dir = tmp.path().join("overlays");
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
@@ -2576,7 +2626,12 @@ fn delta_survives_simulated_restart() {
             .iter()
             .map(|meta| {
                 Arc::new(
-                    SegmentReader::open(&seg_dir.join(&meta.hex_content_id)).expect("open seg"),
+                    SegmentReader::open(
+                        &seg_dir
+                            .join(&meta.hex_content_id[..2])
+                            .join(&meta.hex_content_id[2..]),
+                    )
+                    .expect("open seg"),
                 )
             })
             .collect();
@@ -2668,7 +2723,7 @@ fn rollback_gcs_orphaned_staging_segments() {
     std::fs::write(&file1, "void Base1() {}\n").expect("write file1");
     std::fs::write(&file2, "void Base2() {}\n").expect("write file2");
 
-    let seg_dir = tmp.path().join("segments").join("test");
+    let seg_dir = tmp.path().join("segments").join(vp());
     let overlay_dir = tmp.path().join("overlays");
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
@@ -2697,7 +2752,16 @@ fn rollback_gcs_orphaned_staging_segments() {
         let segs: Vec<Arc<SegmentReader>> = ov
             .segments()
             .iter()
-            .map(|m| Arc::new(SegmentReader::open(&seg_dir.join(&m.hex_content_id)).expect("seg")))
+            .map(|m| {
+                Arc::new(
+                    SegmentReader::open(
+                        &seg_dir
+                            .join(&m.hex_content_id[..2])
+                            .join(&m.hex_content_id[2..]),
+                    )
+                    .expect("seg"),
+                )
+            })
             .collect();
         ColumnarStorage::new(
             worktree.clone(),
@@ -2795,6 +2859,7 @@ fn rollback_gcs_orphaned_staging_segments() {
 /// PhaseFT3 gate: nested rollback restores the correct (earlier) checkpoint
 /// delta when two checkpoints have been created.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn nested_rollback_restores_correct_delta() {
     use forgeql_core::ast::lang::CppLanguageInline;
     use forgeql_core::ir::Clauses;
@@ -2812,7 +2877,7 @@ fn nested_rollback_restores_correct_delta() {
     std::fs::write(&file1, "void V1() {}\n").expect("write file1");
     std::fs::write(&file2, "void V2() {}\n").expect("write file2");
 
-    let seg_dir = tmp.path().join("segments").join("test");
+    let seg_dir = tmp.path().join("segments").join(vp());
     let overlay_dir = tmp.path().join("overlays");
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
@@ -2841,7 +2906,16 @@ fn nested_rollback_restores_correct_delta() {
         let segs: Vec<Arc<SegmentReader>> = ov
             .segments()
             .iter()
-            .map(|m| Arc::new(SegmentReader::open(&seg_dir.join(&m.hex_content_id)).expect("seg")))
+            .map(|m| {
+                Arc::new(
+                    SegmentReader::open(
+                        &seg_dir
+                            .join(&m.hex_content_id[..2])
+                            .join(&m.hex_content_id[2..]),
+                    )
+                    .expect("seg"),
+                )
+            })
             .collect();
         ColumnarStorage::new(
             worktree.clone(),
@@ -2979,10 +3053,10 @@ fn commit_promotes_segments_and_builds_new_overlay() {
         .expect("base overlay");
 
     // Copy initial segments from staging area into bare-repo segment store.
-    let bare_hex1_dir = segments_dir.join("test").join(&hex1);
-    let bare_hex2_dir = segments_dir.join("test").join(&hex2);
-    copy_dir_recursive(&wt_seg_dir.join("test").join(&hex1), &bare_hex1_dir);
-    copy_dir_recursive(&wt_seg_dir.join("test").join(&hex2), &bare_hex2_dir);
+    let bare_hex1_dir = seg_path(&segments_dir, &hex1);
+    let bare_hex2_dir = seg_path(&segments_dir, &hex2);
+    copy_dir_recursive(&seg_path(&wt_seg_dir, &hex1), &bare_hex1_dir);
+    copy_dir_recursive(&seg_path(&wt_seg_dir, &hex2), &bare_hex2_dir);
 
     // Build ColumnarBuildContext pointing at bare-repo stores.
     let ctx = ColumnarBuildContext::new(
@@ -2995,12 +3069,19 @@ fn commit_promotes_segments_and_builds_new_overlay() {
     // Open ColumnarStorage backed by the base overlay.
     let lang_reg = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
     let overlay = Overlay::open(&base_overlay_path).expect("open base overlay");
-    let seg_root = segments_dir.join("test");
+    let seg_root = segments_dir.join(vp());
     let segments: Vec<Arc<SegmentReader>> = overlay
         .segments()
         .iter()
         .map(|m| {
-            Arc::new(SegmentReader::open(&seg_root.join(&m.hex_content_id)).expect("open seg"))
+            Arc::new(
+                SegmentReader::open(
+                    &seg_root
+                        .join(&m.hex_content_id[..2])
+                        .join(&m.hex_content_id[2..]),
+                )
+                .expect("open seg"),
+            )
         })
         .collect();
     let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, lang_reg);
@@ -3038,7 +3119,7 @@ fn commit_promotes_segments_and_builds_new_overlay() {
     );
 
     // ── Assert 2: bare-repo segment store has the promoted segment ──
-    let promoted_dir = segments_dir.join("test").join(&staged_hex);
+    let promoted_dir = seg_path(&segments_dir, &staged_hex);
     assert!(
         promoted_dir.exists(),
         "promoted segment must exist in bare-repo store at {}",
@@ -3145,8 +3226,8 @@ fn new_session_hits_promoted_overlay_cache() {
         .build_and_persist(&base_overlay_path)
         .expect("base overlay");
 
-    let bare_hex1_dir = segments_dir.join("test").join(&hex1);
-    copy_dir_recursive(&wt_seg_dir.join("test").join(&hex1), &bare_hex1_dir);
+    let bare_hex1_dir = seg_path(&segments_dir, &hex1);
+    copy_dir_recursive(&seg_path(&wt_seg_dir, &hex1), &bare_hex1_dir);
 
     let ctx = ColumnarBuildContext::new(
         segments_dir.clone(),
@@ -3157,13 +3238,20 @@ fn new_session_hits_promoted_overlay_cache() {
     let lang_reg = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
 
     // Session A: change file1 and commit.
-    let seg_root = segments_dir.join("test");
+    let seg_root = segments_dir.join(vp());
     let overlay_a = Overlay::open(&base_overlay_path).expect("open base overlay");
     let segments_a: Vec<Arc<SegmentReader>> = overlay_a
         .segments()
         .iter()
         .map(|m| {
-            Arc::new(SegmentReader::open(&seg_root.join(&m.hex_content_id)).expect("open seg"))
+            Arc::new(
+                SegmentReader::open(
+                    &seg_root
+                        .join(&m.hex_content_id[..2])
+                        .join(&m.hex_content_id[2..]),
+                )
+                .expect("open seg"),
+            )
         })
         .collect();
     let mut storage_a = ColumnarStorage::new(
@@ -3199,8 +3287,12 @@ fn new_session_hits_promoted_overlay_cache() {
         .iter()
         .map(|m| {
             Arc::new(
-                SegmentReader::open(&seg_root.join(&m.hex_content_id))
-                    .expect("session B: open seg"),
+                SegmentReader::open(
+                    &seg_root
+                        .join(&m.hex_content_id[..2])
+                        .join(&m.hex_content_id[2..]),
+                )
+                .expect("session B: open seg"),
             )
         })
         .collect();
@@ -3272,7 +3364,7 @@ fn ft5_columnar_index_stats_rows_match_overlay() {
         .segments()
         .iter()
         .map(|meta| {
-            let seg_dir = segments_dir.join("test").join(&meta.hex_content_id);
+            let seg_dir = seg_path(&segments_dir, &meta.hex_content_id);
             Arc::new(
                 forgeql_core::storage::columnar::SegmentReader::open(&seg_dir)
                     .expect("SegmentReader::open"),
@@ -3334,7 +3426,7 @@ fn ft5_session_has_columnar_after_install() {
         .segments()
         .iter()
         .map(|meta| {
-            let seg_dir = segments_dir.join("test").join(&meta.hex_content_id);
+            let seg_dir = seg_path(&segments_dir, &meta.hex_content_id);
             Arc::new(
                 forgeql_core::storage::columnar::SegmentReader::open(&seg_dir)
                     .expect("SegmentReader::open"),

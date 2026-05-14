@@ -40,23 +40,52 @@ impl ColumnarBuildContext {
         }
     }
 
+    /// Versioned provider directory name: `"<provider_id>-v<ENRICH_VER>"`.
+    ///
+    /// Used as the first path component under both `segments/` and `overlays/`.
+    /// Bumping `ENRICH_VER` produces a new namespace; old dirs are orphaned.
+    #[must_use]
+    pub fn versioned_provider(&self) -> String {
+        format!("{}-v{}", self.provider_id, super::ENRICH_VER)
+    }
+
     /// Path to the segment directory for a given hex content ID.
     ///
-    /// Returns `<segments_dir>/<provider_id>/<hex_content_id>`.
+    /// Returns `<segments_dir>/<provider_id>-v<N>/<hex[0..2]>/<hex[2..]>`
+    /// (git-style 2-char fan-out to avoid flat directories on large repos).
     #[must_use]
     pub fn segment_dir_for(&self, hex_content_id: &str) -> PathBuf {
         self.segments_dir
-            .join(&self.provider_id)
-            .join(hex_content_id)
+            .join(self.versioned_provider())
+            .join(&hex_content_id[..2])
+            .join(&hex_content_id[2..])
     }
 
     /// Path to the overlay file for a given snapshot hex (e.g. commit SHA).
     ///
-    /// Returns `<overlays_dir>/<provider_id>/<snapshot_hex>.bin`.
+    /// Returns `<overlays_dir>/<provider_id>-v<N>/<hex[0..2]>/<hex[2..]>.bin`.
     #[must_use]
     pub fn overlay_path_for(&self, snapshot_hex: &str) -> PathBuf {
         self.overlays_dir
-            .join(&self.provider_id)
-            .join(format!("{snapshot_hex}.bin"))
+            .join(self.versioned_provider())
+            .join(&snapshot_hex[..2])
+            .join(format!("{}.bin", &snapshot_hex[2..]))
+    }
+
+    /// Path to the versioned manifest file.
+    ///
+    /// Returns `<forgeql_dir>/manifest-<provider_id>-v<ENRICH_VER>.json`
+    /// where `<forgeql_dir>` is the parent of `segments_dir`.
+    #[must_use]
+    pub fn manifest_path(&self) -> PathBuf {
+        let forgeql_dir = self
+            .segments_dir
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        forgeql_dir.join(format!(
+            "manifest-{}-v{}.json",
+            self.provider_id,
+            super::ENRICH_VER
+        ))
     }
 }

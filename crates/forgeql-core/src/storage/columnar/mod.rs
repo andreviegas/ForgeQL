@@ -60,6 +60,19 @@ pub use shadow_writer::ShadowWriter;
 /// Example: `Arc::new(|b: &[u8]| git_blob_sha1(b).to_vec())`
 pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'static>;
 
+/// Enrichment logic version — embedded in the segment, overlay, and manifest
+/// storage paths.
+///
+/// **Bump this constant on every enrichment logic change** (new enricher, bug
+/// fix, field rename).  The new version namespace is created automatically on
+/// the next `USE`; the old one is orphaned and will be removed by the GC sprint.
+///
+/// History:
+///   1 — initial columnar engine (v0.49.0)
+///   2 — `condition_tests` clause counting fix (v0.49.1)
+///   3 — `has_fallthrough` annotation suppression (v0.49.3)
+pub const ENRICH_VER: u32 = 3;
+
 /// Encode a byte slice as a lowercase hex string.
 pub(crate) fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;

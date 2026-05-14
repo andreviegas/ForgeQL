@@ -4,6 +4,29 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.49.4] — 2026-05-14 — Path-based enrichment versioning (`ENRICH_VER`)
+
+### Added
+
+- **`ENRICH_VER` constant (`mod.rs`)** — single compile-time `u32` that tracks the
+  enrichment logic revision.  Bumping it automatically orphans all stale columnar
+  cache dirs on the next `USE`; no manual cache deletion is ever required.
+  - History: 1 = initial (v0.49.0), 2 = `condition_tests` fix (v0.49.1),
+    3 = `has_fallthrough` annotation fix (v0.49.3).  Current value: **3**.
+- **Versioned + sharded storage paths** (`build_context.rs`) — segments, overlays,
+  and manifests are now stored under `<provider>-v<N>/` namespaces with git-style
+  2-char SHA fan-out:
+  - Segments: `segments/git-sha1-v3/<hex[0..2]>/<hex[2..]>/`
+  - Overlays: `overlays/git-sha1-v3/<hex[0..2]>/<hex[2..]>.bin`
+  - Manifest: `manifest-git-sha1-v3.json` (fresh column registry per version;
+    fixes stale field accumulation from the additive-only `extend` in `manifest.rs`)
+- **`ColumnarBuildContext::versioned_provider()`** and **`manifest_path()`** helpers.
+
+### Changed
+
+- `overlay_builder.rs`, `warm.rs`, `shadow_writer.rs` updated to use the new
+  versioned + sharded paths (no header bytes changed).
+
 ## [0.49.3] — 2026-05-12 — Fix `has_fallthrough` ignores explicit annotations
 
 ### Fixed

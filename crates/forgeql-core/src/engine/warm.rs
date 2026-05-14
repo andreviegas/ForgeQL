@@ -160,11 +160,16 @@ pub fn warm_snapshot(
     lang_registry: &Arc<LanguageRegistry>,
 ) -> Result<()> {
     // Fast path: overlay already exists and opens cleanly.
+    let sha = &target.commit_sha;
     let overlay_path = bare_repo
         .join("forgeql")
         .join("overlays")
-        .join("git-sha1")
-        .join(format!("{}.bin", target.commit_sha));
+        .join(format!(
+            "git-sha1-v{}",
+            crate::storage::columnar::ENRICH_VER
+        ))
+        .join(&sha[..2])
+        .join(format!("{}.bin", &sha[2..]));
     if overlay_path.exists() && Overlay::open(&overlay_path).is_ok() {
         debug!(
             source = %source_name,

@@ -236,7 +236,11 @@ impl<'a> ShadowWriter<'a> {
                 .segments_base
                 .parent()
                 .unwrap_or(self.segments_base)
-                .join("manifest.json");
+                .join(format!(
+                    "manifest-{}-v{}.json",
+                    self.provider_id,
+                    super::ENRICH_VER
+                ));
             if let Err(e) = Manifest::update(
                 &manifest_path,
                 self.provider_id,
@@ -503,8 +507,11 @@ mod tests {
         );
         writer.run().expect("run");
 
-        let manifest_path = forgeql_dir.join("manifest.json");
-        assert!(manifest_path.exists(), "manifest.json written");
+        let manifest_path = forgeql_dir.join(format!(
+            "manifest-test-v{}.json",
+            crate::storage::columnar::ENRICH_VER
+        ));
+        assert!(manifest_path.exists(), "versioned manifest written");
 
         let manifest: crate::storage::columnar::manifest::Manifest =
             serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read"))
