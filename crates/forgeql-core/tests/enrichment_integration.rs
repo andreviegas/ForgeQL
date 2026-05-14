@@ -3576,6 +3576,32 @@ fn recursion_not_recursive() {
 }
 
 #[test]
+fn recursion_called_by_many() {
+    // Bug 4 regression: a function that is called by several other functions
+    // in the same file must NOT be flagged as is_recursive.
+    // The name `calledByMany` appears 4 times in the fixture file (3 callers
+    // + the definition), mirroring the real-world spi_max32_transceive case.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'calledByMany' WHERE fql_kind = 'function'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "calledByMany");
+    assert!(
+        !m.fields.contains_key("is_recursive"),
+        "function called by others should not have is_recursive; fields: {:?}",
+        m.fields,
+    );
+    assert!(
+        !m.fields.contains_key("recursion_count"),
+        "function called by others should not have recursion_count; fields: {:?}",
+        m.fields,
+    );
+}
+
+#[test]
 fn recursion_calls_other() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(

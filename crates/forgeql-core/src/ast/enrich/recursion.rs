@@ -56,6 +56,14 @@ impl NodeEnricher for RecursionEnricher {
 }
 
 /// Walk a subtree counting call expressions whose callee matches `func_name`.
+///
+/// Stops at nested `function_definition` (or equivalent) nodes — calls made
+/// *from inside* a nested function to the outer function are mutual recursion,
+/// not direct self-recursion.  This also guards against tree-sitter misparsing
+/// a function body as spanning several sibling functions (e.g. when a
+/// `#if`/`#elif`/`#else`/`#endif` block with a `goto` label inside one branch
+/// confuses the C grammar), which would otherwise count callers of the function
+/// as false self-calls.
 fn count_self_calls(
     node: tree_sitter::Node<'_>,
     func_name: &str,
@@ -63,6 +71,13 @@ fn count_self_calls(
     config: &LanguageConfig,
     count: &mut u32,
 ) {
+    // Don't descend into nested function definitions.  This covers both
+    // genuine nested functions (GNU C, Python, JS) and tree-sitter misparsed
+    // bodies that incorrectly contain sibling function nodes.
+    if config.is_function_kind(node.kind()) {
+        return;
+    }
+
     if config.is_call_expression_kind(node.kind()) {
         // In tree-sitter, call_expression typically has a `function` field
         // pointing to the callee.  We extract its text and compare.

@@ -4,7 +4,30 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.49.8] — 2026-05-14 — Eliminate remaining node.parent() calls; guard extra_rows() hot path
+## [0.49.9] — 2026-05-14 — Fix RecursionEnricher false positives for non-recursive functions
+
+### Bug Fixes
+
+- **`RecursionEnricher` false positives — Bug 4**: `count_self_calls` now stops
+  at nested `function_definition` nodes instead of recursing into them.  This
+  fixes two overlapping scenarios:
+  1. **Genuine nested functions** (GNU C, Python, closures): a call from an
+     inner function back to the outer one is mutual recursion, not direct
+     self-recursion, and was incorrectly counted as a self-call.
+  2. **tree-sitter misparse**: certain C files with a `#if`/`#elif`/`#else`
+     block containing a `goto` label cause tree-sitter-c to extend a
+     `function_definition` body beyond its real closing `}`.  The inflated body
+     contained several sibling function definitions (which are themselves correct
+     separate nodes), each calling the outer function — all were wrongly counted
+     as self-calls.  Confirmed in `drivers/spi/spi_max32.c` from Zephyr RTOS:
+     `spi_max32_transceive` (200 lines, not recursive) was reported as
+     `is_recursive = true` with `recursion_count = 4`.
+
+  Added regression test `recursion_called_by_many` with a fixture function
+  (`calledByMany`) that is called by three other functions in the same file and
+  must not be flagged as recursive.
+
+
 
 ### Performance
 

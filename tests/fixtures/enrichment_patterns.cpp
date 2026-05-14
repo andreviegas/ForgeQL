@@ -679,6 +679,16 @@ int callsOther(int n) {
     return notRecursive(n) + 1;
 }
 
+/* Bug 4 regression: a function called by several others must not be flagged
+ * as is_recursive even though its name appears many times in the same file. */
+int calledByMany(int n) {
+    return n + 1;
+}
+
+int callerA(int n) { return calledByMany(n); }
+int callerB(int n) { return calledByMany(n) * 2; }
+int callerC(int n) { return calledByMany(n) + calledByMany(n - 1); }
+
 // ── TodoEnricher fixtures ────────────────────────────────────────────
 
 /* Function with a single TODO */
