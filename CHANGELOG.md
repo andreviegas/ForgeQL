@@ -4,6 +4,23 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.49.5] — 2026-05-14 — Fix `shadow_writer` writing segments to unversioned unsharded path
+
+### Fixed
+
+- **`ShadowWriter::run` was writing segments to `segments/<provider_id>/<hex>/`** —
+  the versioned provider dir (`{provider_id}-v{ENRICH_VER}`) and 2-char SHA prefix
+  sharding were applied in `build_context.rs` / `overlay_builder.rs` / `warm.rs`
+  but not in `shadow_writer.rs`, which is the main cold-build path.  Segments were
+  therefore landing in the old flat layout, the overlay builder then looked in the
+  versioned sharded layout and found nothing, and rebuilt from scratch on every USE.
+  - `provider_dir` changed from `segments_base.join(provider_id)` to
+    `segments_base.join(format!("{}-v{}", provider_id, ENRICH_VER))`.
+  - `target_dir` changed from `provider_dir.join(&hex)` to
+    `provider_dir.join(&hex[..2]).join(&hex[2..])`.
+  - Unit tests `writes_one_segment_per_file` and `enrichment_fields_written_to_extra_columns`
+    updated to expect the versioned + sharded layout.
+
 ## [0.49.4] — 2026-05-14 — Path-based enrichment versioning (`ENRICH_VER`)
 
 ### Added

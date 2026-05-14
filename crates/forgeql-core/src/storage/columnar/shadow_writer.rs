@@ -122,8 +122,10 @@ impl<'a> ShadowWriter<'a> {
             });
         }
 
-        // Ensure the provider-specific segment directory exists.
-        let provider_dir = self.segments_base.join(self.provider_id);
+        // Ensure the versioned provider-specific segment directory exists.
+        let provider_dir =
+            self.segments_base
+                .join(format!("{}-v{}", self.provider_id, super::ENRICH_VER));
         std::fs::create_dir_all(&provider_dir)?;
 
         // ── Parallel build + flush (Issue 4 replacement) ──────────────────────
@@ -170,7 +172,8 @@ impl<'a> ShadowWriter<'a> {
                 };
 
                 let hex = bytes_to_hex(&content_id);
-                let target_dir = provider_dir.join(&hex);
+                // 2-char git-style prefix sharding to avoid flat directories.
+                let target_dir = provider_dir.join(&hex[..2]).join(&hex[2..]);
 
                 // Idempotent: skip already-valid segments.
                 if is_valid_segment(&target_dir) {
@@ -382,13 +385,20 @@ mod tests {
         assert_eq!(result.segment_map.len(), 1, "segment_map has one entry");
 
         // Verify the provider directory and one segment sub-directory exist.
-        let provider_dir = segments_base.join("test");
+        let provider_dir =
+            segments_base.join(format!("test-v{}", crate::storage::columnar::ENRICH_VER));
         let entries: Vec<_> = std::fs::read_dir(&provider_dir)
             .expect("read provider_dir")
             .collect();
-        assert_eq!(entries.len(), 1, "exactly one segment dir");
+        assert_eq!(entries.len(), 1, "exactly one prefix shard dir");
 
-        let seg_dir = entries[0].as_ref().expect("dir entry").path();
+        // The 2-char prefix dir contains the actual segment dir.
+        let prefix_dir = entries[0].as_ref().expect("prefix dir entry").path();
+        let seg_entries: Vec<_> = std::fs::read_dir(&prefix_dir)
+            .expect("read prefix_dir")
+            .collect();
+        assert_eq!(seg_entries.len(), 1, "exactly one segment dir");
+        let seg_dir = seg_entries[0].as_ref().expect("dir entry").path();
         let header = std::fs::read(seg_dir.join("header.bin")).expect("header.bin");
         assert!(header.starts_with(b"FQSG"), "header has FQSG magic");
     }
@@ -419,9 +429,16 @@ mod tests {
         writer.run().expect("run");
 
         // Verify the segment directory has extra enrichment column files.
-        let provider_dir = segments_base.join("test");
-        let seg_dir = std::fs::read_dir(&provider_dir)
+        let provider_dir =
+            segments_base.join(format!("test-v{}", crate::storage::columnar::ENRICH_VER));
+        let prefix_dir = std::fs::read_dir(&provider_dir)
             .expect("provider_dir")
+            .next()
+            .expect("one prefix entry")
+            .expect("dir entry")
+            .path();
+        let seg_dir = std::fs::read_dir(&prefix_dir)
+            .expect("prefix_dir")
             .next()
             .expect("one entry")
             .expect("dir entry")
