@@ -1621,6 +1621,22 @@ fn metrics_lines_on_struct() {
     );
 }
 
+#[test]
+fn metrics_lines_not_clipped_for_clean_function() {
+    // Regression for the tree-sitter misparse lines-inflation fix: a correctly-parsed
+    // function with no absorbed top-level declarations in any compound_statement
+    // must retain its original line count (first_absorbed_toplevel_in_compound returns None).
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'multiReturn'");
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "multiReturn");
+    let lines: usize = field(m, "lines").parse().unwrap();
+    assert_eq!(
+        lines, 5,
+        "multiReturn spans exactly 5 lines and must not be clipped: got {lines}"
+    );
+}
+
 // =======================================================================
 // §7 — CastEnricher
 // =======================================================================

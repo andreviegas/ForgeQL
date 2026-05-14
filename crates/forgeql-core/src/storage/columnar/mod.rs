@@ -71,7 +71,9 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///   1 — initial columnar engine (v0.49.0)
 ///   2 — `condition_tests` clause counting fix (v0.49.1)
 ///   3 — `has_fallthrough` annotation suppression (v0.49.3)
-pub const ENRICH_VER: u32 = 3;
+///   4 — `lines` clipping for absorbed function_definition (v0.49.10, partial)
+///   5 — `lines` clipping extended: preproc_ifdef + ERROR/DEVICE_API (v0.49.10)
+pub const ENRICH_VER: u32 = 5;
 
 /// Encode a byte slice as a lowercase hex string.
 pub(crate) fn bytes_to_hex(bytes: &[u8]) -> String {

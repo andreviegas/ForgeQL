@@ -32,9 +32,18 @@ impl NodeEnricher for MetricsEnricher {
         let kind = ctx.node.kind();
         let config = ctx.language_config;
 
-        // Lines: body span for definitions
+        // Lines: body span for definitions.
+        // For functions, clip at the first function_definition that is a direct
+        // child of any compound_statement in the body — the diagnostic signal for
+        // tree-sitter-c/C++ misparsed bodies caused by #if/#elif brace imbalances.
         if config.is_definition_kind(kind) {
-            let lines = ctx.node.end_position().row - ctx.node.start_position().row + 1;
+            let end_row = if config.is_function_kind(kind) {
+                first_absorbed_toplevel_in_compound(ctx.node)
+                    .unwrap_or_else(|| ctx.node.end_position().row)
+            } else {
+                ctx.node.end_position().row
+            };
+            let lines = end_row - ctx.node.start_position().row + 1;
             drop(fields.insert("lines".to_string(), lines.to_string()));
         }
 
@@ -101,6 +110,132 @@ impl NodeEnricher for MetricsEnricher {
         // return_count, goto_count, string_count are now computed in
         // enrich_row() during the tree walk, so no post_pass needed.
     }
+}
+
+/// Find the start row of the earliest **absorbed top-level declaration** within
+/// `node`'s subtree — either a `function_definition` or a multi-line
+/// `declaration` containing a struct/array `initializer_list`.
+///
+/// ## Why this detects misparsed bodies
+///
+/// When tree-sitter-c/C++ encounters a brace imbalance caused by a preprocessor
+/// `#if`/`#elif`/`#else` spanning a brace boundary, a `function_definition`
+/// body absorbs subsequent file-scope declarations.  Those absorbed declarations
+/// appear as **direct children of a `compound_statement`** — a structure
+/// impossible in correctly-parsed C/C++.  Two patterns are detected:
+///
+/// - **Absorbed sibling functions**: appear as `function_definition` direct
+///   children.  Struct/class inline methods are immune because they reside in
+///   `field_declaration_list`, not `compound_statement`.
+///
+/// - **Absorbed struct initializers** (e.g. `DEVICE_API(...)` driver-API
+///   tables, `static const struct foo_driver_api = { .fn = bar, ... };`):
+///   appear as `declaration` direct children that contain an `initializer_list`
+///   and span more than one line.  Single-line local variable declarations
+///   (`int arr[] = {1, 2};`) are excluded by the multi-line guard.
+/// - `ERROR` nodes whose first named child is `storage_class_specifier` — tree-sitter-cpp
+///   0.23.x cannot parse macro-as-type declarations such as
+///   `static DEVICE_API(gpio, name) = { … }` and emits an `ERROR` node instead of a
+///   `declaration`.  The reliable signal is: the node spans multiple lines and its first
+///   named child is `storage_class_specifier` (`static`, `extern`, etc.).
+///
+/// Recursion descends into all child nodes, including `preproc_ifdef` blocks, but
+/// does NOT enter `function_definition` descendants (their bodies are their own scope).
+/// When a `function_definition` or matching `ERROR` is encountered anywhere in the
+/// subtree it is recorded as an absorbed sibling (its row contributed to the minimum)
+/// without further descent.
+///
+/// Returns `None` when the function body is correctly parsed.
+fn first_absorbed_toplevel_in_compound(node: tree_sitter::Node<'_>) -> Option<usize> {
+    let mut min_row: Option<usize> = None;
+
+    if node.kind() == "compound_statement" {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            let is_absorbed = match child.kind() {
+                "function_definition" => true,
+                // Multi-line declaration with struct/array initializer — the
+                // canonical shape of absorbed file-scope driver tables.
+                // Single-line local declarations (`int x = 5;`) are excluded.
+                "declaration" => {
+                    child.start_position().row != child.end_position().row
+                        && declaration_has_initializer_list(child)
+                }
+                // tree-sitter-cpp 0.23.x fails on `static DEVICE_API(gpio, name) = {…}`
+                // (macro in type position) and emits ERROR instead of `declaration`.
+                // Guard: multi-line AND first named child is storage_class_specifier.
+                "ERROR" => {
+                    child.start_position().row != child.end_position().row
+                        && child
+                            .named_child(0)
+                            .is_some_and(|c| c.kind() == "storage_class_specifier")
+                }
+                _ => false,
+            };
+            if is_absorbed {
+                let row = child.start_position().row;
+                min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
+            }
+        }
+    }
+
+    // Recurse into children to find nested compound_statements (inside for/while/if
+    // bodies and preprocessor blocks such as preproc_ifdef).
+    //
+    // - `function_definition` children: an absorbed sibling found inside a preprocessor
+    //   block or nested control-flow body — record its start row and skip its body to
+    //   avoid false positives from the sibling's own content.
+    // - matching `ERROR` children: same treatment as above.
+    // - everything else: recurse normally.
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "function_definition" {
+            // Absorbed sibling inside a preproc_ifdef / for / if body — record row,
+            // do NOT descend into its compound_statement body.
+            let row = child.start_position().row;
+            min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
+            continue;
+        }
+        if child.kind() == "ERROR"
+            && child.start_position().row != child.end_position().row
+            && child
+                .named_child(0)
+                .is_some_and(|c| c.kind() == "storage_class_specifier")
+        {
+            let row = child.start_position().row;
+            min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
+            continue;
+        }
+        if let Some(row) = first_absorbed_toplevel_in_compound(child) {
+            min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
+        }
+    }
+
+    min_row
+}
+
+/// Returns `true` if `node` (kind `"declaration"`) contains an
+/// `initializer_list` — i.e. it is a struct or array initializer such as
+/// `static const struct foo api = { .poll_in = bar, ... };`.
+///
+/// Checks both a direct `initializer_list` child and the idiomatic two-level
+/// path `init_declarator → initializer_list`.
+fn declaration_has_initializer_list(node: tree_sitter::Node<'_>) -> bool {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "initializer_list" {
+            return true;
+        }
+        if child.kind() == "init_declarator" {
+            let mut c2 = child.walk();
+            for gc in child.children(&mut c2) {
+                if gc.kind() == "initializer_list" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// DFS walk counting all descendant nodes (excluding `node` itself)

@@ -4,6 +4,97 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.49.10] — 2026-05-14 — Fix inflated `lines`, `return_count`, `goto_count`, `string_count`, `throw_count` for misparsed C/C++ functions
+
+### Bug Fixes
+
+- **Inflated metrics for tree-sitter-c misparsed function bodies**: the same
+  tree-sitter-c brace-imbalance misparse documented in 0.49.9 (Bug 4) also
+  inflated several numeric enrichment fields for the affected functions.
+  Twelve driver functions in Zephyr RTOS were confirmed across two absorption
+  patterns:
+
+  | Function | File | Old `lines` | New `lines` | Factor |
+  |---|---|---|---|---|
+  | `uart_ns16550_init` | `drivers/serial/uart_ns16550.c` | 1084 | 102 | ×11 |
+  | `process_events` | (various) | 982 | ~97 | ×10 |
+  | `gpio_pca_series_debug_dump` | `drivers/gpio/gpio_pca_series.c` | 1032 | 108 | ×10 |
+  | `i2c_mchp_isr` | `drivers/i2c/i2c_mchp_sercom_g1.c` | 921 | 40 | ×23 |
+  | `spi_max32_transceive` | `drivers/spi/spi_max32.c` | 884 | 203 | ×4 |
+  | `flash_stm32_check_status` | `drivers/flash/flash_stm32h7x.c` | 590 | 86 | ×7 |
+  | `dma_esp32_config_descriptor` | `drivers/dma/dma_esp32_gdma.c` | 515 | ~91 | ×6 |
+  | `adc_max32_start_channel` | `drivers/adc/adc_max32.c` | 475 | 30 | ×16 |
+  | `tcan4x5x_reset` | `drivers/can/can_tcan4x5x.c` | 342 | 46 | ×7 |
+  | `virtconsole_poll_in` | `drivers/serial/uart_virtio_console.c` | 247 | 46 | ×5 |
+
+  **Root cause**: tree-sitter-c/C++ evaluates all branches of `#if`/`#elif`/`#else`
+  simultaneously; a brace imbalance in one branch causes a function body to absorb
+  sibling function definitions and/or file-scope driver-table declarations that
+  follow in the same translation unit.
+
+  **Fix — `return_count`, `goto_count`, `string_count`, `throw_count`**
+  (`crates/forgeql-lang-cpp/config/cpp.json`):
+  Added `"function_definition"` to `nested_function_body_kinds`. The bounded DFS
+  (`count_descendants_by_kind_bounded`) already stops at every entry in this list;
+  adding `function_definition` makes it stop at absorbed siblings exactly as it
+  stops at lambdas. No Rust code change required for these fields.
+
+  **Fix — `lines`** (`crates/forgeql-core/src/ast/enrich/metrics.rs`):
+  Added `first_absorbed_toplevel_in_compound()`. For each `function_definition`,
+  the helper DFS-walks the AST subtree and clips `end_row` at the first absorbed
+  file-scope node. Three node kinds are detected as absorbed:
+
+  1. **`function_definition`** direct child of a `compound_statement`, or found
+     inside a `preproc_ifdef` / preprocessor block anywhere in the subtree —
+     the "swallowed sibling function" pattern.  This covers both the simple case
+     (sibling functions directly in the outer `compound_statement`) and the
+     common Zephyr pattern where sibling functions live inside an
+     `#ifdef CONFIG_…` block that itself became a child of the misparsed body.
+     When a `function_definition` is encountered in the recursion it is recorded
+     (its start row contributes to the minimum clip point) but its body is not
+     descended, preventing false positives from the sibling's own content.
+
+  2. **`declaration`** direct child of a `compound_statement` that spans multiple
+     lines and contains an `initializer_list` — the "swallowed struct initializer"
+     pattern for correctly-parsed declarations (`static const struct foo_driver_api
+     api = { .poll_in = bar, … };`). Single-line local declarations are excluded
+     by the multi-line guard.
+
+  3. **`ERROR`** node with `storage_class_specifier` as its first named child —
+     tree-sitter-cpp 0.23.x fails to parse macro-as-type declarations such as
+     `static DEVICE_API(gpio, name) = { … }` and emits `ERROR` instead of
+     `declaration` (the macro call in type position confuses the grammar).
+     Guard: the ERROR must span multiple lines and its first named child must be
+     `storage_class_specifier` (`static`, `extern`, etc.), which uniquely
+     identifies this pattern in practice within a function body.
+
+  Regression test `metrics_lines_not_clipped_for_clean_function` verifies that
+  a correctly-parsed function (`multiReturn`, 5 lines) retains its exact line
+  count (i.e. `first_absorbed_toplevel_in_compound` returns `None`).
+
+  **`branch_count` is unaffected**: the `ControlFlowEnricher` binary-search
+  post-pass correctly attributes control-flow nodes to their real enclosing
+  function even for misparsed bodies.
+
+- **`SHOW body` `end_line` now uses enriched `lines` as single source of truth**
+  (`crates/forgeql-core/src/ast/show/body.rs`):
+  Previously `show_body()` derived `end_line` from `fn_node.end_position().row + 1`
+  (the raw tree-sitter span) independently of the enrichment pipeline, so even
+  after the `lines` fix above, `SHOW body OF 'gpio_pca_series_debug_dump' DEPTH 0`
+  still reported the header `798-1829` while `metadata.lines=108`.
+  `show_body()` now reads `enrichment["lines"]` and computes
+  `end_line = fn_start_line + lines_count`, falling back to the raw span only
+  when no enrichment is available. The emitted lines array is also clipped to
+  this boundary. For clean functions `fn_start_line + enriched_lines ==
+  fn_node.end_position().row + 1` exactly, so all existing tests are unaffected.
+
+- **Cache invalidation**: `ENRICH_VER` bumped 3 → 5 (via intermediate 4 during
+  development). The columnar segment namespace changes to `*-v5/`, forcing all
+  segments to be rebuilt on the next `USE` command. Old `*-v3/` and `*-v4/`
+  directories are orphaned and can be removed manually. (`CURRENT_VERSION` for
+  the legacy `.forgeql-index` is left unchanged — that file is no longer written
+  when a columnar build context is active.)
+
 ## [0.49.9] — 2026-05-14 — Fix RecursionEnricher false positives for non-recursive functions
 
 ### Bug Fixes

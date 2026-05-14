@@ -77,7 +77,30 @@ pub fn show_body<S: ::std::hash::BuildHasher>(
             .collect(),
     };
 
-    let fn_end_line = fn_node.end_position().row + 1;
+    let fn_end_line_raw = fn_node.end_position().row + 1;
+
+    // Prefer the enriched `lines` count as the single source of truth for the
+    // end-line boundary.  For misparsed functions (tree-sitter #if/#endif brace
+    // imbalance) the raw AST span absorbs sibling definitions; the enrichment
+    // pipeline clips it via first_absorbed_toplevel_in_compound().
+    // For clean functions fn_start_line + enriched_count == fn_end_line_raw, so
+    // the filter below is a no-op and all existing tests continue to pass.
+    let fn_end_line = enrichment
+        .get("lines")
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&count| count > 0)
+        .map_or(fn_end_line_raw, |count| fn_start_line + count);
+
+    // Clip emitted lines to the true boundary (no-op for clean functions).
+    let lines: Vec<Value> = lines
+        .into_iter()
+        .filter(|l| {
+            l["line"]
+                .as_u64()
+                .is_none_or(|n| usize::try_from(n).is_ok_and(|n| n <= fn_end_line))
+        })
+        .collect();
+
     let path_str = workspace.relative(path).display().to_string();
 
     // When DEPTH 0, include enrichment metadata so the agent can make

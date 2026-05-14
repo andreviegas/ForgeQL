@@ -63,6 +63,19 @@ use crate::ast::lang::MacroDef;
 ///       `false` for numbers whose direct parent is `enumerator` or `init_declarator`
 ///       (C++ named-constant contexts). Driven by new `constant_def_parent_kinds` and
 ///       `nested_function_body_kinds` config arrays in `cpp.json`.
+///
+/// # ⚠ DEAD CODE — NOT IN USE (as of 0.49.10)
+///
+/// `Session::build_index` no longer writes `.forgeql-index` when a columnar
+/// build context is active (which is always the case for current sessions).
+/// `resume_index()` / `persist_to_cache()` still reference this constant, but
+/// those paths are unreachable in practice: the warm path skips `resume_index`
+/// when an overlay exists, and `persist_to_cache` is guarded by
+/// `columnar_build.is_none()`, which is never true today.
+///
+/// TODO: remove `CachedIndex`, `CURRENT_VERSION`, `persist_to_cache`, and the
+/// entire `.forgeql-index` on-disk format once the legacy `SymbolTable` build
+/// path is fully retired.
 pub const CURRENT_VERSION: u32 = 27;
 
 // -----------------------------------------------------------------------
