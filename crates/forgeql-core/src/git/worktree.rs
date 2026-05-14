@@ -128,6 +128,21 @@ pub fn create(
     let mut opts = git2::WorktreeAddOptions::new();
     let _ = opts.reference(Some(&reference));
 
+    // If stale git-internal worktree metadata exists (the checkout path was
+    // removed but `git worktree remove` was never called), libgit2 will fail
+    // with "directory exists" when trying to create the new gitdir entry.
+    // Prune the orphaned metadata first so the add can proceed cleanly.
+    if let Ok(stale) = repo.find_worktree(name) {
+        let mut prune_opts = git2::WorktreePruneOptions::new();
+        // Default flags prune worktrees whose checkout path no longer exists,
+        // which is exactly the case here (worktree_path.exists() was false).
+        if let Err(e) = stale.prune(Some(&mut prune_opts)) {
+            debug!(name, error = %e, "could not prune stale worktree metadata (continuing)");
+        } else {
+            debug!(name, "pruned stale worktree metadata before re-adding");
+        }
+    }
+
     info!(name, branch, session_branch = %session_branch_name,
           path = %worktree_path.display(), "creating worktree");
     drop(repo.worktree(name, worktree_path, Some(&opts))?);

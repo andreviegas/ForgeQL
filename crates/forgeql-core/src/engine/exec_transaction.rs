@@ -225,17 +225,19 @@ impl ForgeQLEngine {
 
         // Git-as-source-of-truth ROLLBACK.
         //
-        // The checkpoint commit captured by `BEGIN` deliberately includes
-        // `.forgeql-index` (see `git::CHECKPOINT_EXCLUDED`).  After
+        // For legacy-only sessions: the checkpoint commit includes
+        // `.forgeql-index` (see `git::CHECKPOINT_EXCLUDED`). After
         // `git reset --hard <checkpoint_oid>` the worktree contains both
         // the file state AND the matching cache file from that point in
-        // time, so `resume_index` is guaranteed to cache-hit and restore
-        // a provably-correct index in O(deserialize) instead of O(rebuild).
+        // time, so `resume_index` cache-hits and restores a provably-correct
+        // index in O(deserialize) instead of O(rebuild).
         //
-        // This is intentionally simpler (and more trustworthy) than
-        // computing a diff and incrementally reindexing — git is the
-        // authoritative source of all worktree state, including the
-        // index cache.
+        // For columnar sessions: `.forgeql-index` is never written (the legacy
+        // table is a transient build artefact freed after `warm_or_open`).
+        // The overlay for the checkpoint commit is untouched by git reset, and
+        // the dirty delta is restored by `reload_dirty_from_delta` below.
+        // Calling `resume_index` here would trigger an expensive full rebuild
+        // of a legacy table that is immediately unused — skip it.
         let repo = git::open(&worktree_path)?;
         git::reset_hard(&repo, &oid)?;
 
@@ -243,7 +245,9 @@ impl ForgeQLEngine {
             // Drop the in-memory index so resume_index reads the freshly
             // restored cache from disk rather than keeping a stale view.
             session.drop_index();
-            if let Err(err) = session.resume_index() {
+            if !session.has_columnar()
+                && let Err(err) = session.resume_index()
+            {
                 warn!(error = %err, "rollback: resume_index failed; falling back to build_index");
                 if let Err(err) = session.build_index() {
                     warn!(error = %err, "rollback: index rebuild failed");

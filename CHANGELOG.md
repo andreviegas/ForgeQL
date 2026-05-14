@@ -4,6 +4,39 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.49.6] — 2026-05-14 — Fix stale segments, stale worktree metadata, and skip legacy index write
+
+### Fixed
+
+- **`is_valid_segment`** previously only checked the FQSG magic bytes, allowing
+  stale segments from older builds (same `ENRICH_VER` path, different column
+  layout) to pass the guard. `ShadowWriter` kept them intact; `OverlayBuilder`
+  then failed to open them with "mmapping col_fql_kind_id.bin". The check now
+  also validates `SCHEMA_VERSION` and verifies that every core column file is
+  exactly `row_count × 4` bytes, so mismatched segments are always overwritten.
+- **`worktree::create`** failed with `"failed to make directory '…/worktrees/<name>': directory exists"`
+  when a previous session's git-internal worktree metadata directory was left
+  behind after the checkout path was deleted (e.g. via `git worktree remove
+  --force` without pruning, or a Ctrl-C during teardown). `create()` now calls
+  `repo.find_worktree(name)?.prune()` before the `repo.worktree()` add call,
+  clearing orphaned metadata so the worktree can be recreated cleanly.
+- **`overlay_builder` warning** now uses `{e:#}` (full anyhow error chain)
+  instead of `{e}` when logging skipped unreadable segments.
+
+### Changed
+
+- **`Session::build_index`** no longer writes `.forgeql-index` when a columnar
+  build context is configured. The legacy `SymbolTable` was already a transient
+  artefact freed by `drop_legacy_index()` immediately after `warm_or_open`
+  completes; persisting it to disk wasted I/O and produced a cache file that is
+  never read on subsequent sessions (the warm path skips `resume_index()` when
+  an overlay exists).
+- **`exec_rollback`** no longer calls `resume_index()` for columnar sessions.
+  The columnar state is fully restored by `reload_dirty_from_delta()` alone;
+  the previous `resume_index()` call triggered an expensive and unused full
+  rebuild of the legacy `SymbolTable` because `.forgeql-index` is no longer
+  present on disk. Legacy-only sessions are unchanged.
+
 ## [0.49.5] — 2026-05-14 — Fix `shadow_writer` writing segments to unversioned unsharded path
 
 ### Fixed

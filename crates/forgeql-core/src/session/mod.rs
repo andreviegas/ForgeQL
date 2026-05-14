@@ -241,16 +241,29 @@ impl Session {
             .legacy_storage_mut()
             .ok_or_else(|| anyhow::anyhow!("no legacy backend"))?;
         legacy.build(&workspace)?;
-        let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
-        legacy.persist_to_cache(&self.worktree_path, &commit_hash, &self.source_name)?;
 
-        debug!(
-            session = %self.id,
-            commit = %commit_hash,
-            "index built and saved"
-        );
+        // When columnar is configured, the legacy SymbolTable is a transient
+        // build artefact used only to shadow-write segments and build the
+        // overlay. It is freed by `drop_legacy_index()` immediately after
+        // `warm_or_open` completes, so writing it to `.forgeql-index` wastes
+        // I/O and produces a file that is never read on future sessions
+        // (the warm path skips `resume_index()` when an overlay exists).
+        if self.columnar_build.is_none() {
+            let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
+            legacy.persist_to_cache(&self.worktree_path, &commit_hash, &self.source_name)?;
+            debug!(
+                session = %self.id,
+                commit = %commit_hash,
+                "index built and saved"
+            );
+            self.cached_commit = Some(commit_hash);
+        } else {
+            debug!(
+                session = %self.id,
+                "index built in-memory (columnar configured — skipping .forgeql-index write)"
+            );
+        }
 
-        self.cached_commit = Some(commit_hash);
         self.index_dirty = false;
         Ok(())
     }

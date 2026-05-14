@@ -504,9 +504,45 @@ impl SegmentBuilder {
 
 /// Returns `true` if `dir` contains a `header.bin` with the `FQSG` magic.
 pub(crate) fn is_valid_segment(dir: &Path) -> bool {
-    std::fs::read(dir.join("header.bin"))
-        .ok()
-        .is_some_and(|b| b.starts_with(&MAGIC))
+    // Read the fixed-size preamble only (80 bytes).
+    use std::io::Read as _;
+    let Ok(mut f) = std::fs::File::open(dir.join("header.bin")) else {
+        return false;
+    };
+    let mut preamble = [0u8; 80];
+    if f.read_exact(&mut preamble).is_err() {
+        return false;
+    }
+    // Magic + schema version must match exactly.
+    if !preamble.starts_with(&MAGIC) {
+        return false;
+    }
+    #[allow(clippy::indexing_slicing)] // length guaranteed by read_exact above
+    let schema_ver = u32::from_le_bytes(preamble[4..8].try_into().unwrap_or([0; 4]));
+    if schema_ver != SCHEMA_VERSION {
+        return false;
+    }
+    // row_count is at offset 60; every core column must be exactly row_count×4 bytes.
+    #[allow(clippy::indexing_slicing)]
+    let row_count = u32::from_le_bytes(preamble[60..64].try_into().unwrap_or([0; 4]));
+    let expected_bytes = u64::from(row_count) * 4;
+    for col in [
+        "name_id",
+        "fql_kind_id",
+        "line",
+        "byte_start",
+        "byte_end",
+        "usages_count",
+        "language_id",
+    ] {
+        let Ok(meta) = std::fs::metadata(dir.join(format!("col_{col}.bin"))) else {
+            return false;
+        };
+        if meta.len() != expected_bytes {
+            return false;
+        }
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------

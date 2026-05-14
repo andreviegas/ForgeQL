@@ -97,7 +97,7 @@ impl OverlayBuilder {
                     segs.push((rel_path, hex, reader));
                 }
                 Err(e) => {
-                    warn!(path = %seg_dir.display(), "overlay: skipping unreadable segment: {e}");
+                    warn!(path = %seg_dir.display(), "overlay: skipping unreadable segment: {e:#}");
                 }
             }
         }
