@@ -82,9 +82,14 @@ pub(crate) fn find_enclosing_function_def<'t>(
 /// byte offset than `def_start`.  This function handles that case by looking
 /// for a `template_declaration` whose start byte equals `def_start` and
 /// returning its inner `function_definition` child.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn find_function_node_for_symbol<'t>(
     root: tree_sitter::Node<'t>,
     def_start: usize,
+    // 1-based line number from the index. Used to validate the AST result and
+    // recover from tree-sitter brace-imbalance misparses where a preceding
+    // function's node absorbs subsequent definitions.
+    hint_line: Option<usize>,
     config: &LanguageConfig,
 ) -> Option<tree_sitter::Node<'t>> {
     // Inner helper: walk looking for template_declaration at def_start.
@@ -123,18 +128,61 @@ pub(crate) fn find_function_node_for_symbol<'t>(
         None
     }
 
+    /// Fallback: find any `function_definition` node that STARTS at the given
+    /// 0-based line. Used when the bitmask-enclosing search returns the wrong
+    /// function due to a tree-sitter brace-imbalance misparse.
+    fn find_by_start_line<'n>(
+        cursor: &mut tree_sitter::TreeCursor<'n>,
+        line_0based: usize,
+        func_kinds: &[String],
+    ) -> Option<tree_sitter::Node<'n>> {
+        let node = cursor.node();
+        // Prune: this subtree starts after the target line — skip entirely.
+        if node.start_position().row > line_0based {
+            return None;
+        }
+        if func_kinds.iter().any(|s| s == node.kind()) && node.start_position().row == line_0based {
+            return Some(node);
+        }
+        if cursor.goto_first_child() {
+            loop {
+                if let Some(found) = find_by_start_line(cursor, line_0based, func_kinds) {
+                    while cursor.goto_parent() {}
+                    return Some(found);
+                }
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+            let _ = cursor.goto_parent();
+        }
+        None
+    }
+
     // First try: standard enclosing-function search.
-    if let Some(node) = find_enclosing_function_def(root, def_start, config) {
+    if let Some(node) = find_enclosing_function_def(root, def_start, config)
+        && hint_line.is_none_or(|ln| node.start_position().row + 1 == ln)
+    {
         return Some(node);
     }
 
     // Second try: template_declaration at def_start → inner function_definition.
-    walk_template(
+    if let Some(node) = walk_template(
         root,
         def_start,
         config.template_declaration_kind(),
         config.function_kinds(),
-    )
+    ) && hint_line.is_none_or(|ln| node.start_position().row + 1 == ln)
+    {
+        return Some(node);
+    }
+
+    // Third try (misparsed-AST fallback): search for a function node that
+    // starts on the exact line stored in the index.
+    hint_line.and_then(|ln| {
+        let mut cursor = root.walk();
+        find_by_start_line(&mut cursor, ln - 1, config.function_kinds())
+    })
 }
 
 /// Find a type node (struct/class/enum) whose `name` field text equals `name`.
@@ -454,7 +502,7 @@ pub fn show_signature(
         || config.is_template_declaration_kind(node_kind)
         || matches!(node_kind, "function" | "method");
     let (signature, end_line) = if is_func_or_template {
-        find_function_node_for_symbol(root, byte_range_start, config).map_or_else(
+        find_function_node_for_symbol(root, byte_range_start, Some(start_line), config).map_or_else(
             || {
                 let sig = extract_line_at(source, byte_range_start);
                 (sig, start_line)

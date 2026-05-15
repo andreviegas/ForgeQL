@@ -84,9 +84,12 @@ fn vp() -> String {
     format!("test-v{}", forgeql_core::storage::columnar::ENRICH_VER)
 }
 
-/// Path to a specific segment dir: `<segments_base>/<vp()>/<hex[..2]>/<hex[2..]>`.
+/// Path to a specific segment file: `<segments_base>/<vp()>/<hex[..2]>/<hex[2..]>.fqsf`.
 fn seg_path(segments_base: &std::path::Path, hex: &str) -> std::path::PathBuf {
-    segments_base.join(vp()).join(&hex[..2]).join(&hex[2..])
+    segments_base
+        .join(vp())
+        .join(&hex[..2])
+        .join(format!("{}.fqsf", &hex[2..]))
 }
 
 /// Build a segment for `table`, store it under `segments_dir/<provider>/<hex>/`,
@@ -110,7 +113,7 @@ fn build_segment(
         acc
     });
 
-    let seg_dir = seg_path(segments_dir, &hex);
+    let seg_path = seg_path(segments_dir, &hex);
 
     let mut builder = SegmentBuilder::new("test", &content_id);
     for row in &table.rows {
@@ -128,7 +131,7 @@ fn build_segment(
             builder.set_field(row_id, &key, val.as_str());
         }
     }
-    builder.flush(&seg_dir).expect("segment flush");
+    builder.flush(&seg_path).expect("segment flush");
 
     content_id
 }
@@ -923,6 +926,7 @@ fn columnar_show_body_matches_legacy() {
         &cached,
         &col_loc.path,
         col_loc.byte_range.start,
+        None,
         &col_loc.enrichment,
         &workspace,
         "process",
@@ -940,6 +944,7 @@ fn columnar_show_body_matches_legacy() {
         &cached,
         &cpp_path,
         leg_row.byte_range.start,
+        None,
         &leg_enrichment,
         &workspace,
         "process",
@@ -1160,6 +1165,7 @@ fn columnar_show_callees_matches_legacy() {
         &cached,
         &col_loc.path,
         col_loc.byte_range.start,
+        None,
         &workspace,
         "caller",
         &registry,
@@ -1173,6 +1179,7 @@ fn columnar_show_callees_matches_legacy() {
         &cached,
         &cpp_path,
         leg_row.byte_range.start,
+        None,
         &workspace,
         "caller",
         &registry,
@@ -1410,6 +1417,7 @@ fn bare_repo_show_reads_bytes_from_git() {
         &cached,
         &phantom_path,
         row.byte_range.start,
+        None,
         &no_enrichment,
         &workspace,
         "bar",
@@ -1931,7 +1939,11 @@ fn dirty_overlay_shadows_and_unions() {
         let _ = builder.emit_row("SymbolA", "function", "cpp", 10, 0, 20, 0);
         let _ = builder.emit_row("SymbolB", "function", "cpp", 20, 0, 40, 0);
         builder
-            .flush(&seg_dir.join(&file1_hex[..2]).join(&file1_hex[2..]))
+            .flush(
+                &seg_dir
+                    .join(&file1_hex[..2])
+                    .join(format!("{}.fqsf", &file1_hex[2..])),
+            )
             .expect("file1 flush");
     }
 
@@ -1946,7 +1958,11 @@ fn dirty_overlay_shadows_and_unions() {
         let mut builder = SegmentBuilder::new("test", &file2_cid);
         let _ = builder.emit_row("SymbolC", "function", "rust", 5, 0, 10, 0);
         builder
-            .flush(&seg_dir.join(&file2_hex[..2]).join(&file2_hex[2..]))
+            .flush(
+                &seg_dir
+                    .join(&file2_hex[..2])
+                    .join(format!("{}.fqsf", &file2_hex[2..])),
+            )
             .expect("file2 flush");
     }
 
@@ -1981,7 +1997,7 @@ fn dirty_overlay_shadows_and_unions() {
                 SegmentReader::open(
                     &seg_dir
                         .join(&meta.hex_content_id[..2])
-                        .join(&meta.hex_content_id[2..]),
+                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
                 )
                 .expect("open persistent segment"),
             )
@@ -2078,7 +2094,11 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
         let mut builder = SegmentBuilder::new("test", &file1_cid);
         let _ = builder.emit_row("SymbolA", "function", "cpp", 1, 0, 10, 0);
         builder
-            .flush(&seg_dir.join(&file1_hex[..2]).join(&file1_hex[2..]))
+            .flush(
+                &seg_dir
+                    .join(&file1_hex[..2])
+                    .join(format!("{}.fqsf", &file1_hex[2..])),
+            )
             .expect("flush");
     }
 
@@ -2104,7 +2124,7 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
                 SegmentReader::open(
                     &seg_dir
                         .join(&meta.hex_content_id[..2])
-                        .join(&meta.hex_content_id[2..]),
+                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
                 )
                 .expect("open"),
             )
@@ -2178,7 +2198,11 @@ fn dirty_overlay_resolve_symbol_shadows_and_unions() {
         let _ = builder.emit_row("SymbolA", "function", "cpp", 10, 0, 20, 0);
         let _ = builder.emit_row("SymbolB", "function", "cpp", 20, 0, 40, 0);
         builder
-            .flush(&seg_dir.join(&file1_hex[..2]).join(&file1_hex[2..]))
+            .flush(
+                &seg_dir
+                    .join(&file1_hex[..2])
+                    .join(format!("{}.fqsf", &file1_hex[2..])),
+            )
             .expect("file1 flush");
     }
 
@@ -2204,7 +2228,7 @@ fn dirty_overlay_resolve_symbol_shadows_and_unions() {
                 SegmentReader::open(
                     &seg_dir
                         .join(&meta.hex_content_id[..2])
-                        .join(&meta.hex_content_id[2..]),
+                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
                 )
                 .expect("open"),
             )
@@ -2305,7 +2329,7 @@ fn reindex_updates_dirty_overlay() {
                 SegmentReader::open(
                     &seg_dir
                         .join(&meta.hex_content_id[..2])
-                        .join(&meta.hex_content_id[2..]),
+                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
                 )
                 .expect("open seg"),
             )
@@ -2406,7 +2430,7 @@ fn purge_removes_file_symbols() {
                 SegmentReader::open(
                     &seg_dir
                         .join(&meta.hex_content_id[..2])
-                        .join(&meta.hex_content_id[2..]),
+                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
                 )
                 .expect("open seg"),
             )
@@ -2526,7 +2550,7 @@ fn reindex_writes_delta_file() {
                 SegmentReader::open(
                     &seg_dir
                         .join(&meta.hex_content_id[..2])
-                        .join(&meta.hex_content_id[2..]),
+                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
                 )
                 .expect("open seg"),
             )
@@ -2629,7 +2653,7 @@ fn delta_survives_simulated_restart() {
                     SegmentReader::open(
                         &seg_dir
                             .join(&meta.hex_content_id[..2])
-                            .join(&meta.hex_content_id[2..]),
+                            .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
                     )
                     .expect("open seg"),
                 )
@@ -2757,7 +2781,7 @@ fn rollback_gcs_orphaned_staging_segments() {
                     SegmentReader::open(
                         &seg_dir
                             .join(&m.hex_content_id[..2])
-                            .join(&m.hex_content_id[2..]),
+                            .join(format!("{}.fqsf", &m.hex_content_id[2..])),
                     )
                     .expect("seg"),
                 )
@@ -2792,7 +2816,7 @@ fn rollback_gcs_orphaned_staging_segments() {
 
     let staging_dir = worktree.join(".forgeql-staging");
     assert!(
-        staging_dir.join(&hex_a).exists(),
+        staging_dir.join(format!("{hex_a}.fqsf")).exists(),
         "staging dir for hex_a must exist"
     );
 
@@ -2814,7 +2838,7 @@ fn rollback_gcs_orphaned_staging_segments() {
         .cloned()
         .expect("hex_b");
     assert!(
-        staging_dir.join(&hex_b).exists(),
+        staging_dir.join(format!("{hex_b}.fqsf")).exists(),
         "staging dir for hex_b must exist before rollback"
     );
 
@@ -2828,12 +2852,12 @@ fn rollback_gcs_orphaned_staging_segments() {
 
     // hex_b staging dir must be GC'd (it's no longer in the restored delta).
     assert!(
-        !staging_dir.join(&hex_b).exists(),
+        !staging_dir.join(format!("{hex_b}.fqsf")).exists(),
         "staging dir for hex_b must be removed after rollback GC"
     );
     // hex_a staging dir must remain (still in the restored delta).
     assert!(
-        staging_dir.join(&hex_a).exists(),
+        staging_dir.join(format!("{hex_a}.fqsf")).exists(),
         "staging dir for hex_a must survive rollback GC"
     );
 
@@ -2911,7 +2935,7 @@ fn nested_rollback_restores_correct_delta() {
                     SegmentReader::open(
                         &seg_dir
                             .join(&m.hex_content_id[..2])
-                            .join(&m.hex_content_id[2..]),
+                            .join(format!("{}.fqsf", &m.hex_content_id[2..])),
                     )
                     .expect("seg"),
                 )
@@ -2956,14 +2980,14 @@ fn nested_rollback_restores_correct_delta() {
     for hex in &ckpt2_hexes {
         if !ckpt1_hexes.contains(hex) {
             assert!(
-                !staging_dir.join(hex).exists(),
+                !staging_dir.join(format!("{hex}.fqsf")).exists(),
                 "ckpt2-only hex {hex} must be GC'd after rollback to ckpt1"
             );
         }
     }
     for hex in &ckpt1_hexes {
         assert!(
-            staging_dir.join(hex).exists(),
+            staging_dir.join(format!("{hex}.fqsf")).exists(),
             "ckpt1 hex {hex} must survive rollback to ckpt1"
         );
     }
@@ -3052,11 +3076,13 @@ fn commit_promotes_segments_and_builds_new_overlay() {
         .build_and_persist(&base_overlay_path)
         .expect("base overlay");
 
-    // Copy initial segments from staging area into bare-repo segment store.
+    // Copy initial .fqsf segments from staging area into bare-repo segment store.
     let bare_hex1_dir = seg_path(&segments_dir, &hex1);
     let bare_hex2_dir = seg_path(&segments_dir, &hex2);
-    copy_dir_recursive(&seg_path(&wt_seg_dir, &hex1), &bare_hex1_dir);
-    copy_dir_recursive(&seg_path(&wt_seg_dir, &hex2), &bare_hex2_dir);
+    std::fs::create_dir_all(bare_hex1_dir.parent().unwrap()).expect("bare hex1 parent");
+    std::fs::create_dir_all(bare_hex2_dir.parent().unwrap()).expect("bare hex2 parent");
+    let _ = std::fs::copy(seg_path(&wt_seg_dir, &hex1), &bare_hex1_dir).expect("copy hex1");
+    let _ = std::fs::copy(seg_path(&wt_seg_dir, &hex2), &bare_hex2_dir).expect("copy hex2");
 
     // Build ColumnarBuildContext pointing at bare-repo stores.
     let ctx = ColumnarBuildContext::new(
@@ -3078,7 +3104,7 @@ fn commit_promotes_segments_and_builds_new_overlay() {
                 SegmentReader::open(
                     &seg_root
                         .join(&m.hex_content_id[..2])
-                        .join(&m.hex_content_id[2..]),
+                        .join(format!("{}.fqsf", &m.hex_content_id[2..])),
                 )
                 .expect("open seg"),
             )
@@ -3096,7 +3122,7 @@ fn commit_promotes_segments_and_builds_new_overlay() {
     let staged_hex = storage.dirty().added[0].reader.content_id_hex();
     let staging_dir = worktree.join(".forgeql-staging");
     assert!(
-        staging_dir.join(&staged_hex).exists(),
+        staging_dir.join(format!("{staged_hex}.fqsf")).exists(),
         "staged segment must be in staging dir before commit"
     );
 
@@ -3227,7 +3253,8 @@ fn new_session_hits_promoted_overlay_cache() {
         .expect("base overlay");
 
     let bare_hex1_dir = seg_path(&segments_dir, &hex1);
-    copy_dir_recursive(&seg_path(&wt_seg_dir, &hex1), &bare_hex1_dir);
+    std::fs::create_dir_all(bare_hex1_dir.parent().unwrap()).expect("bare hex1 parent");
+    let _ = std::fs::copy(seg_path(&wt_seg_dir, &hex1), &bare_hex1_dir).expect("copy hex1");
 
     let ctx = ColumnarBuildContext::new(
         segments_dir.clone(),
@@ -3248,7 +3275,7 @@ fn new_session_hits_promoted_overlay_cache() {
                 SegmentReader::open(
                     &seg_root
                         .join(&m.hex_content_id[..2])
-                        .join(&m.hex_content_id[2..]),
+                        .join(format!("{}.fqsf", &m.hex_content_id[2..])),
                 )
                 .expect("open seg"),
             )
@@ -3290,7 +3317,7 @@ fn new_session_hits_promoted_overlay_cache() {
                 SegmentReader::open(
                     &seg_root
                         .join(&m.hex_content_id[..2])
-                        .join(&m.hex_content_id[2..]),
+                        .join(format!("{}.fqsf", &m.hex_content_id[2..])),
                 )
                 .expect("session B: open seg"),
             )
@@ -3467,17 +3494,3 @@ fn ft5_session_has_columnar_after_install() {
 }
 
 // ── FT4 test helper ──────────────────────────────────────────────────────────
-
-fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
-    std::fs::create_dir_all(dst).expect("create dst dir");
-    for entry in std::fs::read_dir(src).expect("read src") {
-        let entry = entry.expect("dir entry");
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path);
-        } else {
-            let _: u64 = std::fs::copy(&src_path, &dst_path).expect("copy file");
-        }
-    }
-}

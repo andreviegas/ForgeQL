@@ -450,8 +450,10 @@ impl ForgeQLEngine {
                 .segments()
                 .iter()
                 .filter_map(|meta| {
-                    let seg_dir = segments_dir.join(provider_id).join(&meta.hex_content_id);
-                    SegmentReader::open(&seg_dir).ok().map(Arc::new)
+                    let seg_path = segments_dir
+                        .join(provider_id)
+                        .join(format!("{}.fqsf", &meta.hex_content_id));
+                    SegmentReader::open(&seg_path).ok().map(Arc::new)
                 })
                 .collect();
             let columnar = ColumnarStorage::new(

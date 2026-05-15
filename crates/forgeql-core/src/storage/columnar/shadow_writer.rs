@@ -173,10 +173,12 @@ impl<'a> ShadowWriter<'a> {
 
                 let hex = bytes_to_hex(&content_id);
                 // 2-char git-style prefix sharding to avoid flat directories.
-                let target_dir = provider_dir.join(&hex[..2]).join(&hex[2..]);
+                let target_path = provider_dir
+                    .join(&hex[..2])
+                    .join(format!("{}.fqsf", &hex[2..]));
 
                 // Idempotent: skip already-valid segments.
-                if is_valid_segment(&target_dir) {
+                if is_valid_segment(&target_path) {
                     debug!(
                         path = %abs_path.display(),
                         hex = %hex,
@@ -207,11 +209,11 @@ impl<'a> ShadowWriter<'a> {
                 }
 
                 // Flush to disk inside the worker.
-                match builder.flush(&target_dir) {
+                match builder.flush(&target_path) {
                     Ok(()) => Some((abs_path, content_id, Some(local_columns))),
                     Err(e) => {
                         warn!(
-                            target = %target_dir.display(),
+                            target = %target_path.display(),
                             "shadow-write: flush failed: {e}"
                         );
                         Some((abs_path, content_id, None))
@@ -384,7 +386,7 @@ mod tests {
         assert_eq!(result.count, 1, "one segment written");
         assert_eq!(result.segment_map.len(), 1, "segment_map has one entry");
 
-        // Verify the provider directory and one segment sub-directory exist.
+        // Verify the provider directory and one .fqsf segment file exist.
         let provider_dir =
             segments_base.join(format!("test-v{}", crate::storage::columnar::ENRICH_VER));
         let entries: Vec<_> = std::fs::read_dir(&provider_dir)
@@ -392,15 +394,19 @@ mod tests {
             .collect();
         assert_eq!(entries.len(), 1, "exactly one prefix shard dir");
 
-        // The 2-char prefix dir contains the actual segment dir.
+        // The 2-char prefix dir contains the actual .fqsf segment file.
         let prefix_dir = entries[0].as_ref().expect("prefix dir entry").path();
         let seg_entries: Vec<_> = std::fs::read_dir(&prefix_dir)
             .expect("read prefix_dir")
             .collect();
-        assert_eq!(seg_entries.len(), 1, "exactly one segment dir");
-        let seg_dir = seg_entries[0].as_ref().expect("dir entry").path();
-        let header = std::fs::read(seg_dir.join("header.bin")).expect("header.bin");
-        assert!(header.starts_with(b"FQSG"), "header has FQSG magic");
+        assert_eq!(seg_entries.len(), 1, "exactly one segment file");
+        let seg_path = seg_entries[0].as_ref().expect("file entry").path();
+        assert!(
+            seg_path.extension().is_some_and(|e| e == "fqsf"),
+            "segment has .fqsf extension"
+        );
+        let header_magic = &std::fs::read(&seg_path).expect("read .fqsf")[..4];
+        assert_eq!(header_magic, b"FQSF", "file has FQSF magic");
     }
 
     #[test]
@@ -437,21 +443,21 @@ mod tests {
             .expect("one prefix entry")
             .expect("dir entry")
             .path();
-        let seg_dir = std::fs::read_dir(&prefix_dir)
+        let seg_path = std::fs::read_dir(&prefix_dir)
             .expect("prefix_dir")
             .next()
             .expect("one entry")
-            .expect("dir entry")
+            .expect("file entry")
             .path();
 
-        // The header must contain extra column metadata.
-        let header = std::fs::read(seg_dir.join("header.bin")).expect("header.bin");
-        assert!(header.starts_with(b"FQSG"), "FQSG magic");
-        // column_count is at offset 68, 4 bytes LE.  Should be > 7 (core columns).
-        let col_count = u32::from_le_bytes(header[68..72].try_into().unwrap());
+        // Open the .fqsf and verify extra column count via SegmentReader.
+        let reader =
+            crate::storage::columnar::SegmentReader::open(&seg_path).expect("open .fqsf segment");
+        // extra_col_names() should have at least 2 enrichment fields.
         assert!(
-            col_count > 7,
-            "enrichment columns present (got {col_count})"
+            reader.extra_col_count() >= 2,
+            "enrichment columns present (got {})",
+            reader.extra_col_count()
         );
     }
 

@@ -977,20 +977,42 @@ impl StorageEngine for ColumnarStorage {
         clauses: &Clauses,
         root: &Path,
     ) -> Result<Option<SymbolLocation>> {
-        let Some(loc) = self.resolve_impl(name, clauses, root, None) else {
+        // Only consider function-like kinds for SHOW body.  Using the preference
+        // list still allows the fallback to any row when the function-kind rows
+        // are filtered out by clauses, but we check the returned kind below so
+        // that non-function symbols produce an actionable error instead of
+        // silently resolving to whatever enclosing function happens to contain
+        // the last type reference.
+        const BODY_KINDS: &[&str] = &["function", "method", "constructor", "destructor"]; // macros excluded: C preprocessor macros have no function_definition in the AST
+
+        let Some(loc) = self.resolve_impl(name, clauses, root, Some(BODY_KINDS)) else {
             return Ok(None);
         };
+
+        // `resolve_impl` uses BODY_KINDS as a *preference*, not a hard filter:
+        // if no function-kind rows exist it falls back to the last row with any
+        // non-empty fql_kind.  Guard against that by checking the resolved kind.
+        // Exception: allow member declarations (fql_kind outside BODY_KINDS)
+        // that carry a `body_symbol` redirect — they are C++ method stubs
+        // created by MemberEnricher and should follow the redirect below.
+        if !BODY_KINDS.contains(&loc.node_kind.as_str())
+            && !loc.enrichment.contains_key("body_symbol")
+        {
+            anyhow::bail!(
+                "'{name}' is not a function (found fql_kind: [{}]). \
+                 Use FIND symbols WHERE name = '{name}' to locate the definition, \
+                 then SHOW LINES n-m OF 'file' to read it.",
+                loc.node_kind
+            );
+        }
+
         // Follow the `body_symbol` redirect for C++ out-of-line definitions.
-        // The redirect is resolved without user clauses — matches legacy behaviour
-        // (`index.find_def(target)` ignores clauses).
-        if let Some(target) = loc.enrichment.get("body_symbol").cloned() {
-            const BODY_KINDS: &[&str] =
-                &["function", "method", "constructor", "destructor", "macro"];
-            if let Some(redirected) =
+        // The redirect is resolved without user clauses — matches legacy behaviour.
+        if let Some(target) = loc.enrichment.get("body_symbol").cloned()
+            && let Some(redirected) =
                 self.resolve_impl(&target, &Clauses::default(), root, Some(BODY_KINDS))
-            {
-                return Ok(Some(redirected));
-            }
+        {
+            return Ok(Some(redirected));
         }
         Ok(Some(loc))
     }
@@ -1058,9 +1080,9 @@ impl StorageEngine for ColumnarStorage {
             let content_id_bytes = git_blob_sha1(&bytes);
             let hex_content_id = bytes_to_hex(&content_id_bytes);
 
-            let seg_dir = self.staging_dir.join(&hex_content_id);
+            let seg_path = self.staging_dir.join(format!("{hex_content_id}.fqsf"));
 
-            if !is_valid_segment(&seg_dir) {
+            if !is_valid_segment(&seg_path) {
                 parser
                     .set_language(&lang.tree_sitter_language())
                     .map_err(|e| anyhow::anyhow!("tree-sitter language error: {e}"))?;
@@ -1094,11 +1116,10 @@ impl StorageEngine for ColumnarStorage {
                     }
                 }
 
-                std::fs::create_dir_all(&seg_dir)?;
-                builder.flush(&seg_dir)?;
+                builder.flush(&seg_path)?;
             }
 
-            let seg_reader = SegmentReader::open(&seg_dir)?;
+            let seg_reader = SegmentReader::open(&seg_path)?;
             self.dirty
                 .add_segment(Arc::new(seg_reader), rel_path, old_hex);
         }
@@ -1404,7 +1425,7 @@ impl ColumnarStorage {
             .segments()
             .iter()
             .filter_map(|meta| {
-                let dir = ctx.segment_dir_for(&meta.hex_content_id);
+                let dir = ctx.segment_path_for(&meta.hex_content_id);
                 SegmentReader::open(&dir).ok().map(Arc::new)
             })
             .collect()
@@ -1505,8 +1526,8 @@ impl ColumnarStorage {
         //    Idempotent: skips any hex that is already there.
         for ds in &self.dirty.added {
             let hex = ds.reader.content_id_hex();
-            let src = self.staging_dir.join(&hex);
-            let dst = ctx.segment_dir_for(&hex);
+            let src = self.staging_dir.join(format!("{hex}.fqsf"));
+            let dst = ctx.segment_path_for(&hex);
             promote_segment(&src, &dst)?;
         }
 
@@ -1544,14 +1565,11 @@ impl ColumnarStorage {
 // PhaseFT4: private filesystem helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Promote a staging segment directory to the bare-repo segment store.
+/// Promote a staging `.fqsf` segment file to the bare-repo segment store.
 ///
 /// Prefers `rename(2)` for an atomic, zero-copy move on the same filesystem.
-/// Falls back to a recursive copy when the rename fails (cross-device or lost
-/// race — another session already promoted the same content).
-///
-/// The `dst.exists()` guard makes promotion idempotent: two concurrent
-/// sessions promoting the same hex (identical file content) do not collide.
+/// Falls back to `fs::copy` when the rename fails (cross-device or lost race).
+/// The `dst.exists()` guard makes promotion idempotent.
 fn promote_segment(src: &Path, dst: &Path) -> Result<()> {
     if dst.exists() {
         return Ok(()); // already promoted — idempotent
@@ -1563,29 +1581,14 @@ fn promote_segment(src: &Path, dst: &Path) -> Result<()> {
     if std::fs::rename(src, dst).is_ok() {
         return Ok(());
     }
-    // Rename failed: either cross-device or a concurrent promotion won the race.
+    // Rename failed: cross-device or concurrent promotion won the race.
     if dst.exists() {
-        return Ok(()); // lost race — peer already promoted; we're done
+        return Ok(()); // lost race — peer already promoted
     }
-    // True cross-device move: copy then let the staging dir linger (GC'd later).
-    copy_dir_all(src, dst)
+    // True cross-device: copy the single .fqsf file.
+    std::fs::copy(src, dst)
         .with_context(|| format!("copy segment {} → {}", src.display(), dst.display()))
-}
-
-/// Recursively copy a directory tree from `src` to `dst`.
-fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_all(&src_path, &dst_path)?;
-        } else {
-            let _ = std::fs::copy(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
+        .map(|_| ())
 }
 
 /// Delete all entries inside the staging directory without removing the

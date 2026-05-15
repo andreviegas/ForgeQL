@@ -112,8 +112,8 @@ impl DeltaFile {
         dirty.removed_hex_ids = file.removed_hex_ids.into_iter().collect();
 
         for entry in &file.staged {
-            let seg_dir = staging_dir.join(&entry.hex_content_id);
-            match SegmentReader::open(&seg_dir) {
+            let seg_path = staging_dir.join(format!("{}.fqsf", &entry.hex_content_id));
+            match SegmentReader::open(&seg_path) {
                 Ok(reader) => {
                     dirty.added.push(DirtySegment {
                         reader: Arc::new(reader),
@@ -160,8 +160,10 @@ impl DeltaFile {
         };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !valid_hexes.contains(&name) {
-                let _ = std::fs::remove_dir_all(entry.path());
+            // Staging files are now `<hex>.fqsf`; strip extension to get hex.
+            let hex = name.strip_suffix(".fqsf").unwrap_or(&name);
+            if !valid_hexes.contains(&hex.to_owned()) {
+                let _ = std::fs::remove_file(entry.path());
             }
         }
     }

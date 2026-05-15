@@ -87,13 +87,13 @@ impl OverlayBuilder {
             .par_iter()
             .filter_map(|(abs_path, content_id)| {
                 let hex = bytes_to_hex(content_id);
-                let seg_dir = provider_ver_dir.join(&hex[..2]).join(&hex[2..]);
+                let seg_path = provider_ver_dir.join(&hex[..2]).join(format!("{}.fqsf", &hex[2..]));
 
-                if !seg_dir.exists() {
+                if !seg_path.exists() {
                     return None;
                 }
 
-                match SegmentReader::open(&seg_dir) {
+                match SegmentReader::open(&seg_path) {
                     Ok(reader) => {
                         let rel_path = abs_path
                             .strip_prefix(&self.worktree_root)
@@ -102,7 +102,7 @@ impl OverlayBuilder {
                         Some((rel_path, hex, reader))
                     }
                     Err(e) => {
-                        warn!(path = %seg_dir.display(), "overlay: skipping unreadable segment: {e:#}");
+                        warn!(path = %seg_path.display(), "overlay: skipping unreadable segment: {e:#}");
                         None
                     }
                 }
@@ -197,7 +197,7 @@ impl OverlayBuilder {
         let mut merged_names: BTreeMap<Vec<u8>, Vec<u32>> = BTreeMap::new();
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
             let row_offset = row_offsets[seg_idx];
-            let name_postings_raw = reader.name_postings.as_deref().unwrap_or(&[]);
+            let name_postings_raw = reader.name_postings_bytes();
             let mut stream = reader.name_fst.stream();
             while let Some((name_bytes, encoded)) = stream.next() {
                 let local_rows = decode_name_postings_raw(encoded, name_postings_raw);
@@ -356,7 +356,7 @@ impl OverlayBuilder {
     ///   shadowed by `dirty` (i.e. not in `dirty.removed_hex_ids`).
     /// - All newly promoted dirty segments from `dirty.added`.
     ///
-    /// Both sets are re-opened fresh from `ctx.segment_dir_for(hex)` (the
+    /// Both sets are re-opened fresh from `ctx.segment_path_for(hex)` (the
     /// canonical bare-repo location after promotion).  The `source_path` on
     /// each `SegmentMeta` / `DirtySegment` is already workspace-relative, so
     /// we reconstruct the `abs_path` key as `worktree_root.join(rel_path)`,

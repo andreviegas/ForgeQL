@@ -1,19 +1,20 @@
 //! Symbol resolution logic for [`super::LegacyMemoryStorage`].
 //!
-//! Lifted from `engine.rs` — no algorithmic changes.
+//! Originally lifted from `engine.rs`; `resolve_body_symbol` has since been
+//! extended with function-kind filtering (see [`resolve_body_symbol`]).
 //!
 //! Three public entry points are used by the [`StorageEngine`] trait
 //! implementations in [`super`]:
-//! - [`resolve_symbol`]   — general-purpose name→location lookup
+//! - [`resolve_symbol`]      — general-purpose name→location lookup
 //! - [`resolve_type_symbol`] — prefers type definitions with members
-//! - [`resolve_body_symbol`] — follows `body_symbol` out-of-line redirects
+//! - [`resolve_body_symbol`] — filters to function/method kinds, then follows `body_symbol` redirects
 
 use std::path::Path;
 
 use anyhow::{Result, bail};
 
 use crate::{
-    ast::index::{IndexRow, SymbolTable},
+    ast::index::{IndexRow, RowRef, SymbolTable},
     filter::eval_predicate,
     ir::Clauses,
 };
@@ -69,8 +70,6 @@ pub(super) fn resolve_symbol<'a>(
     clauses: &Clauses,
     root: &Path,
 ) -> Result<&'a IndexRow> {
-    use crate::ast::index::RowRef;
-
     // Qualified name resolution: split on `::` or `.` separators.
     // If the name contains a separator, look up the member name and filter
     // by the `enclosing_type` enrichment field set by MemberEnricher.
@@ -230,16 +229,111 @@ pub(super) fn resolve_type_symbol<'a>(
 
 /// Like [`resolve_symbol`] but follows the `body_symbol` redirect.
 ///
-/// If the resolved row carries a `body_symbol` field (set by the
-/// `MemberEnricher` for out-of-line member function definitions), follow
-/// the redirect to find the actual function body.
+/// Only considers rows whose `fql_kind` is function-like ("function" or
+/// "method").  This prevents `SHOW body OF 'SomeStruct'` from silently
+/// resolving to whichever function happens to contain the last type-reference
+/// of `SomeStruct` in the index — a common source of wrong-body results.
+///
+/// If no function-kind rows exist for `name`, returns an error telling the
+/// user the actual kinds that were found.
 pub(super) fn resolve_body_symbol<'a>(
     index: &'a SymbolTable,
     name: &str,
     clauses: &Clauses,
     root: &Path,
 ) -> Result<&'a IndexRow> {
-    let def = resolve_symbol(index, name, clauses, root)?;
+    const FUNCTION_KINDS: &[&str] = &["function", "method"];
+
+    // Collect all candidates for this name, then narrow to function-like kinds.
+    // Also allow member declarations (fql_kind="field") that carry a `body_symbol`
+    // redirect set by MemberEnricher for C++ out-of-line definitions.
+    let all_candidates = index.find_all_defs(name);
+    if all_candidates.is_empty() {
+        // Let resolve_symbol produce the standard "not found / did you mean"
+        // error for consistency.
+        return resolve_symbol(index, name, clauses, root);
+    }
+
+    let fn_candidates: Vec<&IndexRow> = all_candidates
+        .iter()
+        .copied()
+        .filter(|row| {
+            let kind = index.fql_kind_of(row);
+            FUNCTION_KINDS.contains(&kind)
+                || (kind == "field"
+                    && index
+                        .strings
+                        .field_str(&row.fields, "body_symbol")
+                        .is_some())
+        })
+        .collect();
+
+    if fn_candidates.is_empty() {
+        // Collect the unique non-empty kinds actually present so the error is
+        // actionable.
+        let mut kinds: Vec<&str> = all_candidates
+            .iter()
+            .map(|r| index.fql_kind_of(r))
+            .filter(|k| !k.is_empty())
+            .collect();
+        kinds.sort_unstable();
+        kinds.dedup();
+        let kinds_str = if kinds.is_empty() {
+            "unknown".to_owned()
+        } else {
+            kinds.join(", ")
+        };
+        bail!(
+            "'{name}' is not a function (found fql_kind: [{kinds_str}]). \
+             Use FIND symbols WHERE name = '{name}' to locate the definition, \
+             then SHOW LINES n-m OF 'file' to read it."
+        );
+    }
+
+    // Apply IN/EXCLUDE/WHERE filters, then fall back to resolve_symbol's logic
+    // if everything is filtered out (produces a friendly error message).
+    let filtered: Vec<&IndexRow> = fn_candidates
+        .into_iter()
+        .filter(|row| {
+            if !passes_glob_filter(index.path_of(row), clauses, root) {
+                return false;
+            }
+            clauses
+                .where_predicates
+                .iter()
+                .all(|p| eval_predicate(&RowRef { row, table: index }, p))
+        })
+        .collect();
+
+    if filtered.is_empty() {
+        // All function candidates were filtered out — delegate to resolve_symbol
+        // for the standard "eliminated by filters" error.
+        return resolve_symbol(index, name, clauses, root);
+    }
+
+    // Cross-language ambiguity check — mirrors the same check in resolve_symbol.
+    let mut languages: Vec<&str> = filtered
+        .iter()
+        .filter_map(|r| {
+            let lang = index.language_of(r);
+            if lang.is_empty() { None } else { Some(lang) }
+        })
+        .collect();
+    languages.sort_unstable();
+    languages.dedup();
+    if languages.len() > 1 {
+        bail!(
+            "symbol '{name}' exists in multiple languages: [{}]. \
+             Use WHERE language = '...' or IN '*.ext' to disambiguate",
+            languages.join(", ")
+        );
+    }
+
+    // Last match — preserves v1 last-write-wins within a single language.
+    #[allow(clippy::expect_used)]
+    let def = filtered.last().expect("filtered is non-empty");
+
+    // Follow body_symbol redirect (C++ out-of-line member definitions).
     if let Some(target) = index.strings.field_str(&def.fields, "body_symbol")
         && let Some(redirected) = index.find_def(target)
     {

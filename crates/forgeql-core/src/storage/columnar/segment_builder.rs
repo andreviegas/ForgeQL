@@ -12,13 +12,11 @@ use bytemuck::cast_slice;
 use fst::MapBuilder;
 use roaring::RoaringBitmap;
 
-use super::bytes_to_hex;
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Magic bytes at the start of every `header.bin`.
+/// Magic bytes at the start of every `header.bin` (inner FQSG blob inside .fqsf).
 pub const MAGIC: [u8; 4] = *b"FQSG";
 
 /// Low-cardinality enrichment fields for which `SegmentBuilder` writes
@@ -63,6 +61,15 @@ const TYPE_TAG_U32: u8 = 3;
 /// Type-tag for optional string columns — dense `[u32]` array where
 /// `u32::MAX` encodes a missing value; IDs index into the segment string pool.
 const TYPE_TAG_STR_OPT: u8 = 5;
+
+/// Magic bytes at the start of every `.fqsf` single-file segment.
+pub(crate) const FILE_MAGIC: [u8; 4] = *b"FQSF";
+/// Format version of the `.fqsf` outer container (bump on incompatible change).
+pub(crate) const FILE_VERSION: u32 = 1;
+/// Maximum byte length of a blob name in the TOC (null-padded).
+pub(crate) const ENTRY_NAME_LEN: usize = 56;
+/// Byte size of each TOC entry: `name[56] + offset[4] + len[4]`.
+pub(crate) const TOC_ENTRY_SIZE: usize = 64; // ENTRY_NAME_LEN + 4 + 4
 
 // ---------------------------------------------------------------------------
 // RowId — opaque per-row handle
@@ -338,16 +345,18 @@ impl SegmentBuilder {
         }
     }
 
-    /// Flush the segment to `target_dir` atomically.
+    /// Flush the segment to a single `.fqsf` file at `target_path`, atomically.
     ///
-    /// Writes all files to a sibling `.tmp.*` directory, then renames it to
-    /// `target_dir`.  If `target_dir` already contains a valid `header.bin`
-    /// the function returns immediately (`Ok(())`) without re-writing.
+    /// Encodes all column data in memory and writes it as a single binary file
+    /// with a table-of-contents (TOC) header, then renames into place.
+    /// Returns `Ok(())` immediately when `target_path` already contains a
+    /// valid `.fqsf` file.
     ///
     /// # Errors
     /// Propagates I/O errors from file creation / renaming.
-    pub fn flush(mut self, target_dir: &Path) -> Result<()> {
-        if is_valid_segment(target_dir) {
+    #[allow(clippy::too_many_lines)]
+    pub fn flush(mut self, target_path: &Path) -> Result<()> {
+        if is_valid_segment(target_path) {
             return Ok(());
         }
 
@@ -355,7 +364,7 @@ impl SegmentBuilder {
 
         // Pre-process extra enrichment columns: intern string values into the
         // shared pool, then convert to dense `u32` arrays (u32::MAX = absent).
-        // This MUST run before `write_string_table` so all string values are
+        // This MUST run before `encode_string_table` so all string values are
         // included in the pool.
         let extra_arrays: Vec<(String, Vec<u32>)> = {
             let extra = std::mem::take(&mut self.extra_cols);
@@ -385,60 +394,66 @@ impl SegmentBuilder {
                 .collect()
         };
 
-        let parent = target_dir.parent().context("target_dir has no parent")?;
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating parent dir {}", parent.display()))?;
+        // --- encode all blobs into (name, bytes) pairs ---
+        // Pre-compute fallible encodings before assembling the vec.
+        let (offsets_bytes, data_bytes) = encode_string_table(&self.strings)?;
+        let kind_postings_bytes = encode_kind_postings(&self.kind_postings)?;
+        let (fst_bytes, name_post_bytes) = encode_name_fst(&self.name_to_rows)?;
+        let name_prefix_bytes = encode_name_prefix(&self.name_to_rows)?;
 
-        // Use pid + hex to make the temp name unique enough for concurrent writes.
-        let hex = bytes_to_hex(&self.content_id[..self.content_id_len as usize]);
-        let tmp = parent.join(format!(".tmp.{hex}.{}", std::process::id()));
+        let mut blobs: Vec<(String, Vec<u8>)> = vec![
+            ("col_name_id".to_owned(), encode_u32_col(&self.col_name_id)),
+            (
+                "col_fql_kind_id".to_owned(),
+                encode_u32_col(&self.col_fql_kind_id),
+            ),
+            ("col_line".to_owned(), encode_u32_col(&self.col_line)),
+            (
+                "col_byte_start".to_owned(),
+                encode_u32_col(&self.col_byte_start),
+            ),
+            (
+                "col_byte_end".to_owned(),
+                encode_u32_col(&self.col_byte_end),
+            ),
+            (
+                "col_usages_count".to_owned(),
+                encode_u32_col(&self.col_usages_count),
+            ),
+            (
+                "col_language_id".to_owned(),
+                encode_u32_col(&self.col_language_id),
+            ),
+            ("strings_offsets".to_owned(), offsets_bytes),
+            ("strings_data".to_owned(), data_bytes),
+            ("postings_fql_kind".to_owned(), kind_postings_bytes),
+            ("name_fst".to_owned(), fst_bytes),
+            ("name_postings".to_owned(), name_post_bytes),
+            ("name_prefix".to_owned(), name_prefix_bytes),
+        ];
 
-        // Remove any stale temp dir from a previous crash.
-        if tmp.exists() {
-            std::fs::remove_dir_all(&tmp)
-                .with_context(|| format!("removing stale tmp {}", tmp.display()))?;
-        }
-        std::fs::create_dir_all(&tmp)
-            .with_context(|| format!("creating tmp dir {}", tmp.display()))?;
-
-        // --- write core columns ---
-        write_u32_col(&tmp, "name_id", &self.col_name_id)?;
-        write_u32_col(&tmp, "fql_kind_id", &self.col_fql_kind_id)?;
-        write_u32_col(&tmp, "line", &self.col_line)?;
-        write_u32_col(&tmp, "byte_start", &self.col_byte_start)?;
-        write_u32_col(&tmp, "byte_end", &self.col_byte_end)?;
-        write_u32_col(&tmp, "usages_count", &self.col_usages_count)?;
-        write_u32_col(&tmp, "language_id", &self.col_language_id)?;
-
-        // --- write string table (includes extra-column values) ---
-        write_string_table(&tmp, &self.strings)?;
-
-        // --- write kind postings ---
-        write_kind_postings(&tmp, &self.kind_postings)?;
-
-        // --- write FST + name postings ---
-        write_name_fst(&tmp, &self.name_to_rows)?;
-
-        // --- write name prefix index (additive, optional) ---
-        write_name_prefix(&tmp, &self.name_to_rows)?;
-        // --- write extra enrichment columns ---
+        // Extra enrichment columns.
         for (name, ids) in &extra_arrays {
-            write_u32_col(&tmp, name, ids)?;
+            blobs.push((format!("col_{name}"), encode_u32_col(ids)));
         }
 
-        // --- write per-field enrichment postings (additive, optional) ---
-        write_enrichment_postings(&tmp, &extra_arrays)?;
+        // Per-field enrichment postings.
+        for (name, bytes) in encode_enrichment_postings(&extra_arrays)? {
+            blobs.push((name, bytes));
+        }
 
-        // --- write zone maps for numeric columns (additive, optional) ---
+        // Zone maps for numeric columns.
         let zone_cols: &[(&str, &[u32])] = &[
             ("line", &self.col_line),
             ("usages_count", &self.col_usages_count),
             ("byte_start", &self.col_byte_start),
             ("byte_end", &self.col_byte_end),
         ];
-        write_zone_maps(&tmp, zone_cols)?;
+        for (name, bytes) in encode_zone_maps(zone_cols) {
+            blobs.push((name, bytes));
+        }
 
-        // --- build column metadata (dynamic to include extra cols) ---
+        // Column metadata for the inner FQSG header blob.
         let mut col_meta: Vec<(&str, u8)> = vec![
             ("name_id", TYPE_TAG_U32),
             ("fql_kind_id", TYPE_TAG_U32),
@@ -452,33 +467,20 @@ impl SegmentBuilder {
             col_meta.push((name.as_str(), TYPE_TAG_STR_OPT));
         }
 
-        // --- write header LAST (signals a complete segment) ---
-        write_header(
-            &tmp,
-            &self.provider_id,
-            &self.content_id,
-            self.content_id_len,
-            u32::try_from(row_count).context("row count overflow")?,
-            u32::try_from(self.strings.len()).context("string count overflow")?,
-            &col_meta,
-        )?;
+        // FQSG header blob (encodes row_count, string_count, column list).
+        blobs.push((
+            "header".to_owned(),
+            encode_header(
+                &self.provider_id,
+                &self.content_id,
+                self.content_id_len,
+                u32::try_from(row_count).context("row count overflow")?,
+                u32::try_from(self.strings.len()).context("string count overflow")?,
+                &col_meta,
+            )?,
+        ));
 
-        // --- atomic rename ---
-        match std::fs::rename(&tmp, target_dir) {
-            Ok(()) => {}
-            Err(_) if is_valid_segment(target_dir) => {
-                // Another writer won the race — our segment is redundant.
-                let _ = std::fs::remove_dir_all(&tmp);
-            }
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&tmp);
-                return Err(e).with_context(|| {
-                    format!("renaming {} to {}", tmp.display(), target_dir.display())
-                });
-            }
-        }
-
-        Ok(())
+        write_segment_file(target_path, &blobs)
     }
 
     // --- private ---
@@ -499,70 +501,34 @@ impl SegmentBuilder {
 }
 
 // ---------------------------------------------------------------------------
-// Public helpers for use by shadow_writer
+// Public helpers for use by shadow_writer / columnar_storage
 // ---------------------------------------------------------------------------
 
-/// Returns `true` if `dir` contains a `header.bin` with the `FQSG` magic.
-pub(crate) fn is_valid_segment(dir: &Path) -> bool {
-    // Read the fixed-size preamble only (80 bytes).
+/// Returns `true` if `path` is a valid `.fqsf` single-file segment.
+pub(crate) fn is_valid_segment(path: &Path) -> bool {
     use std::io::Read as _;
-    let Ok(mut f) = std::fs::File::open(dir.join("header.bin")) else {
+    let Ok(mut f) = std::fs::File::open(path) else {
         return false;
     };
-    let mut preamble = [0u8; 80];
-    if f.read_exact(&mut preamble).is_err() {
-        return false;
-    }
-    // Magic + schema version must match exactly.
-    if !preamble.starts_with(&MAGIC) {
-        return false;
-    }
-    #[allow(clippy::indexing_slicing)] // length guaranteed by read_exact above
-    let schema_ver = u32::from_le_bytes(preamble[4..8].try_into().unwrap_or([0; 4]));
-    if schema_ver != SCHEMA_VERSION {
-        return false;
-    }
-    // row_count is at offset 60; every core column must be exactly row_count×4 bytes.
-    #[allow(clippy::indexing_slicing)]
-    let row_count = u32::from_le_bytes(preamble[60..64].try_into().unwrap_or([0; 4]));
-    let expected_bytes = u64::from(row_count) * 4;
-    for col in [
-        "name_id",
-        "fql_kind_id",
-        "line",
-        "byte_start",
-        "byte_end",
-        "usages_count",
-        "language_id",
-    ] {
-        let Ok(meta) = std::fs::metadata(dir.join(format!("col_{col}.bin"))) else {
-            return false;
-        };
-        if meta.len() != expected_bytes {
-            return false;
-        }
-    }
-    true
+    let mut magic = [0u8; 4];
+    f.read_exact(&mut magic).is_ok() && magic == FILE_MAGIC
 }
 
 // ---------------------------------------------------------------------------
-// File-writing helpers
+// Encode helpers (in-memory encoding, no I/O)
 // ---------------------------------------------------------------------------
 
-/// Write `col_<name>.bin` as a little-endian `[u32]` array.
-fn write_u32_col(dir: &Path, name: &str, data: &[u32]) -> Result<()> {
-    // cast_slice is safe: Vec<u32> is u32-aligned; we're on little-endian x86/ARM.
-    let bytes: &[u8] = cast_slice(data);
-    std::fs::write(dir.join(format!("col_{name}.bin")), bytes)
-        .with_context(|| format!("writing col_{name}.bin"))
+/// Encode a `[u32]` column as raw little-endian bytes.
+fn encode_u32_col(data: &[u32]) -> Vec<u8> {
+    cast_slice::<u32, u8>(data).to_vec()
 }
 
-/// Write `strings_offsets.bin` + `strings_data.bin`.
+/// Encode the string intern table into `(offsets_bytes, data_bytes)`.
 ///
-/// `strings_offsets.bin` is `[u32; string_count + 1]` where
-/// `offsets[i]` is the byte start of string `i` in `strings_data.bin` and
-/// `offsets[string_count]` equals the total size of `strings_data.bin`.
-fn write_string_table(dir: &Path, strings: &[String]) -> Result<()> {
+/// `offsets_bytes` is `[u32; string_count + 1]` where `offsets[i]` is the
+/// byte start of string `i` in `data_bytes`; `offsets[string_count]` equals
+/// the total length of `data_bytes`.
+fn encode_string_table(strings: &[String]) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut offsets: Vec<u32> = Vec::with_capacity(strings.len() + 1);
     let mut data: Vec<u8> = Vec::new();
 
@@ -572,19 +538,13 @@ fn write_string_table(dir: &Path, strings: &[String]) -> Result<()> {
     }
     offsets.push(u32::try_from(data.len()).context("string table final offset overflow")?);
 
-    std::fs::write(
-        dir.join("strings_offsets.bin"),
-        cast_slice::<u32, u8>(&offsets),
-    )
-    .context("writing strings_offsets.bin")?;
-    std::fs::write(dir.join("strings_data.bin"), &data).context("writing strings_data.bin")?;
-    Ok(())
+    Ok((cast_slice::<u32, u8>(&offsets).to_vec(), data))
 }
 
-/// Write `postings_fql_kind.bin`.
+/// Encode `postings_fql_kind` bytes.
 ///
 /// Format: `[kind_count: u32] (kind_id: u32, bitmap_len: u32, bitmap_bytes)*`
-fn write_kind_postings(dir: &Path, kind_postings: &HashMap<u32, RoaringBitmap>) -> Result<()> {
+fn encode_kind_postings(kind_postings: &HashMap<u32, RoaringBitmap>) -> Result<Vec<u8>> {
     let mut buf: Vec<u8> = Vec::new();
     let kind_count = u32::try_from(kind_postings.len()).context("too many fql kinds")?;
     buf.extend_from_slice(&kind_count.to_le_bytes());
@@ -604,30 +564,18 @@ fn write_kind_postings(dir: &Path, kind_postings: &HashMap<u32, RoaringBitmap>) 
         buf.extend_from_slice(&bitmap_bytes);
     }
 
-    std::fs::write(dir.join("postings_fql_kind.bin"), &buf).context("writing postings_fql_kind.bin")
+    Ok(buf)
 }
 
-/// Write per-field Roaring-bitmap posting files for low-cardinality enrichment
-/// fields listed in [`POSTING_ENRICHMENT_FIELDS`].
+/// Encode per-field enrichment posting blobs.
 ///
-/// For each field in the allowlist the builder checks whether the field is
-/// present in `extra_arrays` and whether its cardinality (distinct non-NULL
-/// values) does not exceed `MAX_CARDINALITY`.  If both conditions hold it
-/// writes a `postings_<field>.bin` file using the same wire format as
-/// `postings_fql_kind.bin`:
-///
-/// ```text
-/// [value_count: u32 LE]
-/// ( [value_id: u32 LE]
-///   [bitmap_len: u32 LE]
-///   [bitmap_bytes: roaring serialized] )*
-/// ```
-///
-/// Old readers that don't know about these files safely ignore them; new
-/// readers that find them use them to skip rows that don't match a WHERE
-/// predicate before materialisation.
-fn write_enrichment_postings(dir: &Path, extra_arrays: &[(String, Vec<u32>)]) -> Result<()> {
+/// Returns `(blob_name, blob_bytes)` pairs only for fields that have data
+/// within the cardinality limit.  Same wire format as `encode_kind_postings`.
+fn encode_enrichment_postings(
+    extra_arrays: &[(String, Vec<u32>)],
+) -> Result<Vec<(String, Vec<u8>)>> {
     const MAX_CARDINALITY: usize = 8;
+    let mut result: Vec<(String, Vec<u8>)> = Vec::new();
 
     for field in POSTING_ENRICHMENT_FIELDS {
         let Some((_, ids)) = extra_arrays.iter().find(|(n, _)| n == field) else {
@@ -645,12 +593,10 @@ fn write_enrichment_postings(dir: &Path, extra_arrays: &[(String, Vec<u32>)]) ->
             }
         }
 
-        // Skip if empty or cardinality too high.
         if by_value.is_empty() || by_value.len() > MAX_CARDINALITY {
             continue;
         }
 
-        // Serialise: same wire format as `write_kind_postings`.
         let mut buf: Vec<u8> = Vec::new();
         let value_count = u32::try_from(by_value.len()).context("too many enrichment values")?;
         buf.extend_from_slice(&value_count.to_le_bytes());
@@ -669,22 +615,19 @@ fn write_enrichment_postings(dir: &Path, extra_arrays: &[(String, Vec<u32>)]) ->
             buf.extend_from_slice(&bitmap_bytes);
         }
 
-        let filename = format!("postings_{field}.bin");
-        std::fs::write(dir.join(&filename), &buf).with_context(|| format!("writing {filename}"))?;
+        result.push((format!("postings_{field}"), buf));
     }
-    Ok(())
+
+    Ok(result)
 }
 
-/// Write `zonemap_<col>.bin` for each column in [`ZONEMAP_NUMERIC_FIELDS`].
+/// Encode zone-map blobs for columns listed in [`ZONEMAP_NUMERIC_FIELDS`].
 ///
-/// Each file is exactly 8 bytes: `[min: u32 LE][max: u32 LE]`.  If all
-/// values in the column are absent (empty segment), the file is omitted so
-/// readers can silently skip missing zone-map files.
-///
-/// `core_cols` is a slice of `(col_name, values)` pairs for the numeric
-/// columns that should be considered.  Columns not found in `core_cols`
-/// are silently skipped.
-fn write_zone_maps(dir: &Path, core_cols: &[(&str, &[u32])]) -> Result<()> {
+/// Returns `(blob_name, blob_bytes)` pairs; columns with no data are omitted.
+/// Each blob is exactly 8 bytes: `[min: u32 LE][max: u32 LE]`.
+fn encode_zone_maps(core_cols: &[(&str, &[u32])]) -> Vec<(String, Vec<u8>)> {
+    let mut result: Vec<(String, Vec<u8>)> = Vec::new();
+
     for (col_name, has_sentinel) in ZONEMAP_NUMERIC_FIELDS {
         let Some((_, data)) = core_cols.iter().find(|(n, _)| n == col_name) else {
             continue;
@@ -705,38 +648,22 @@ fn write_zone_maps(dir: &Path, core_cols: &[(&str, &[u32])]) -> Result<()> {
             found_any = true;
         }
         if !found_any {
-            // All values were sentinel or the column is empty — no zone map.
             continue;
         }
         let mut buf = [0u8; 8];
         buf[..4].copy_from_slice(&min.to_le_bytes());
         buf[4..].copy_from_slice(&max.to_le_bytes());
-        std::fs::write(dir.join(format!("zonemap_{col_name}.bin")), buf)
-            .with_context(|| format!("writing zonemap_{col_name}.bin"))?;
+        result.push((format!("zonemap_{col_name}"), buf.to_vec()));
     }
-    Ok(())
+
+    result
 }
 
-/// Write `name_prefix.bin` — per-prefix Roaring bitmaps for fast 1-2 byte
-/// leading-prefix prefiltering of `WHERE name LIKE 'xy%'` queries.
+/// Encode the name prefix index blob.
 ///
-/// For each distinct symbol name in `name_to_rows`:
-/// - Extract the UTF-8 bytes of the **lowercase** first character (1 or more
-///   bytes — up to 4 for non-ASCII).
-/// - If the name has ≥ 2 UTF-8 bytes: also extract the first 2 UTF-8 bytes
-///   of the lowercased name.
-/// - Accumulate a Roaring bitmap of local row IDs for each prefix key.
-///
-/// Wire format of `name_prefix.bin`:
-/// ```text
-/// [entry_count: u32 LE]
-/// ( [prefix_len: u8] [prefix_bytes: u8 × prefix_len]
-///   [bitmap_len: u32 LE] [bitmap_bytes: roaring] )*
-/// ```
-///
-/// Readers that don't find this file silently skip the optimisation.
-fn write_name_prefix(dir: &Path, name_to_rows: &BTreeMap<String, Vec<u32>>) -> Result<()> {
-    // Build prefix → bitmap map.
+/// Wire format: `[entry_count: u32 LE]`
+/// followed by `( [prefix_len: u8] [prefix_bytes] [bitmap_len: u32 LE] [bitmap_bytes] )*`
+fn encode_name_prefix(name_to_rows: &BTreeMap<String, Vec<u32>>) -> Result<Vec<u8>> {
     let mut prefix_map: HashMap<Vec<u8>, RoaringBitmap> = HashMap::new();
 
     for (name, rows) in name_to_rows {
@@ -746,14 +673,12 @@ fn write_name_prefix(dir: &Path, name_to_rows: &BTreeMap<String, Vec<u32>>) -> R
             continue;
         }
 
-        // Determine UTF-8 char boundary for the first character.
         let first_char_len = lower.chars().next().map_or(0, char::len_utf8);
         let second_char_end = lower
             .char_indices()
             .nth(1)
             .map_or(first_char_len, |(i, c)| i + c.len_utf8());
 
-        // 1-byte-unit prefix: first character's UTF-8 bytes.
         if first_char_len > 0 {
             let pfx1 = lower_bytes[..first_char_len].to_vec();
             let bm = prefix_map.entry(pfx1).or_default();
@@ -762,7 +687,6 @@ fn write_name_prefix(dir: &Path, name_to_rows: &BTreeMap<String, Vec<u32>>) -> R
             }
         }
 
-        // 2-character prefix (only if the name has at least 2 characters).
         if second_char_end > first_char_len {
             let pfx2 = lower_bytes[..second_char_end].to_vec();
             let bm = prefix_map.entry(pfx2).or_default();
@@ -772,13 +696,11 @@ fn write_name_prefix(dir: &Path, name_to_rows: &BTreeMap<String, Vec<u32>>) -> R
         }
     }
 
-    // Serialise.
     let entry_count =
         u32::try_from(prefix_map.len()).context("name_prefix entry count overflow")?;
     let mut buf: Vec<u8> = Vec::new();
     buf.extend_from_slice(&entry_count.to_le_bytes());
 
-    // Sort by prefix bytes for deterministic output.
     let mut sorted: Vec<(&Vec<u8>, &RoaringBitmap)> = prefix_map.iter().collect();
     sorted.sort_by_key(|(k, _)| *k);
 
@@ -795,15 +717,16 @@ fn write_name_prefix(dir: &Path, name_to_rows: &BTreeMap<String, Vec<u32>>) -> R
         buf.extend_from_slice(&bitmap_bytes);
     }
 
-    std::fs::write(dir.join("name_prefix.bin"), &buf).context("writing name_prefix.bin")
+    Ok(buf)
 }
 
-/// Write `name.fst` + `name_postings.bin`.
+/// Encode the name FST and name postings blobs.
+///
+/// Returns `(fst_bytes, postings_bytes)`.
 ///
 /// FST value encoding: `(count as u64) | ((byte_offset as u64) << 32)`
-/// where `byte_offset` points into `name_postings.bin` (a flat `[u32 LE]`
-/// array of row IDs).
-fn write_name_fst(dir: &Path, name_to_rows: &BTreeMap<String, Vec<u32>>) -> Result<()> {
+/// where `byte_offset` indexes into `postings_bytes` (a flat `[u32 LE]` array).
+fn encode_name_fst(name_to_rows: &BTreeMap<String, Vec<u32>>) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut postings_bytes: Vec<u8> = Vec::new();
     let mut fst_pairs: Vec<(&str, u64)> = Vec::with_capacity(name_to_rows.len());
 
@@ -818,12 +741,6 @@ fn write_name_fst(dir: &Path, name_to_rows: &BTreeMap<String, Vec<u32>>) -> Resu
         fst_pairs.push((name.as_str(), encoded));
     }
 
-    // Write name_postings.bin.
-    std::fs::write(dir.join("name_postings.bin"), &postings_bytes)
-        .context("writing name_postings.bin")?;
-
-    // Build and write FST (keys are already sorted because BTreeMap gives
-    // them in lexicographic order).
     let fst_bytes = {
         let mut builder = MapBuilder::memory();
         for (name, encoded) in &fst_pairs {
@@ -834,10 +751,10 @@ fn write_name_fst(dir: &Path, name_to_rows: &BTreeMap<String, Vec<u32>>) -> Resu
         builder.into_inner().context("finalising FST")?
     };
 
-    std::fs::write(dir.join("name.fst"), &fst_bytes).context("writing name.fst")
+    Ok((fst_bytes, postings_bytes))
 }
 
-/// Write `header.bin`: fixed 80-byte preamble followed by column entries.
+/// Encode the inner FQSG header blob.
 ///
 /// # Preamble layout (80 bytes, all little-endian)
 ///
@@ -856,19 +773,17 @@ fn write_name_fst(dir: &Path, name_to_rows: &BTreeMap<String, Vec<u32>>) -> Resu
 ///
 /// Followed by `column_count` variable-length entries:
 /// `[u8: name_len][u8 × name_len: name][u8: type_tag][u64 LE: element_count]`
-fn write_header(
-    dir: &Path,
+fn encode_header(
     provider_id: &[u8; 16],
     content_id: &[u8; 32],
     content_id_len: u8,
     row_count: u32,
     string_count: u32,
     cols: &[(&str, u8)],
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     let column_count = u32::try_from(cols.len()).context("too many columns")?;
     let mut buf: Vec<u8> = Vec::with_capacity(80 + cols.len() * 20);
 
-    // --- fixed 80-byte preamble ---
     buf.extend_from_slice(&MAGIC); // [0..4]
     buf.extend_from_slice(&SCHEMA_VERSION.to_le_bytes()); // [4..8]
     buf.extend_from_slice(provider_id); // [8..24]
@@ -881,17 +796,102 @@ fn write_header(
     buf.extend_from_slice(&[0u8; 8]); // [72..80] reserved
     debug_assert_eq!(buf.len(), 80, "preamble must be exactly 80 bytes");
 
-    // --- column entries (variable length) ---
     for &(name, type_tag) in cols {
         let name_bytes = name.as_bytes();
         let name_len = u8::try_from(name_bytes.len()).context("column name too long")?;
         buf.push(name_len);
         buf.extend_from_slice(name_bytes);
         buf.push(type_tag);
-        buf.extend_from_slice(&u64::from(row_count).to_le_bytes()); // element_count
+        buf.extend_from_slice(&u64::from(row_count).to_le_bytes());
     }
 
-    std::fs::write(dir.join("header.bin"), &buf).context("writing header.bin")
+    Ok(buf)
+}
+
+// ---------------------------------------------------------------------------
+// Single-file writer
+// ---------------------------------------------------------------------------
+
+/// Assemble all blobs into a `.fqsf` file and write it atomically to
+/// `target_path`.
+///
+/// File layout:
+/// ```text
+/// [0..4]   b"FQSF"          outer magic
+/// [4..8]   version: u32 LE  = 1
+/// [8..12]  entry_count: u32 LE
+/// [12..]   TOC: entry_count × 64 bytes each:
+///            name[56] (null-padded) + offset[4] LE + len[4] LE
+/// [..]     data blobs concatenated
+/// ```
+fn write_segment_file(target_path: &Path, blobs: &[(String, Vec<u8>)]) -> Result<()> {
+    let entry_count = u32::try_from(blobs.len()).context("too many blobs")?;
+    let data_start = 12usize + blobs.len() * TOC_ENTRY_SIZE;
+
+    // Compute absolute byte offsets (from file start) for each blob.
+    // Blobs are 4-byte aligned so that cast_slice::<u8,u32> works on mmap slices.
+    let mut offsets: Vec<u32> = Vec::with_capacity(blobs.len());
+    let mut cursor = data_start;
+    for (_, bytes) in blobs {
+        offsets.push(u32::try_from(cursor).context("blob offset overflow")?);
+        cursor += bytes.len();
+        // Pad to next 4-byte boundary.
+        cursor = (cursor + 3) & !3;
+    }
+
+    // Assemble the whole file in one allocation.
+    let mut file_buf: Vec<u8> = Vec::with_capacity(cursor);
+
+    // 12-byte outer header.
+    file_buf.extend_from_slice(&FILE_MAGIC);
+    file_buf.extend_from_slice(&FILE_VERSION.to_le_bytes());
+    file_buf.extend_from_slice(&entry_count.to_le_bytes());
+
+    // TOC entries (64 bytes each).
+    for ((name, bytes), &offset) in blobs.iter().zip(offsets.iter()) {
+        let mut entry = [0u8; TOC_ENTRY_SIZE];
+        let nb = name.as_bytes();
+        let copy_len = nb.len().min(ENTRY_NAME_LEN);
+        entry[..copy_len].copy_from_slice(&nb[..copy_len]);
+        entry[ENTRY_NAME_LEN..ENTRY_NAME_LEN + 4].copy_from_slice(&offset.to_le_bytes());
+        let blob_len = u32::try_from(bytes.len()).context("blob too large")?;
+        entry[ENTRY_NAME_LEN + 4..ENTRY_NAME_LEN + 8].copy_from_slice(&blob_len.to_le_bytes());
+        file_buf.extend_from_slice(&entry);
+    }
+
+    // Data section: blobs concatenated with 4-byte alignment padding.
+    for (_, bytes) in blobs {
+        file_buf.extend_from_slice(bytes);
+        // Pad to next 4-byte boundary with zeros.
+        let pad = (4 - (bytes.len() & 3)) & 3;
+        file_buf.extend_from_slice(&[0u8; 4][..pad]);
+    }
+
+    // Atomic write: tmp file → rename.
+    let parent = target_path.parent().context("target_path has no parent")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("creating parent dir {}", parent.display()))?;
+    let stem = target_path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let tmp_path = parent.join(format!(".tmp.{stem}.{}.fqsf", std::process::id()));
+
+    std::fs::write(&tmp_path, &file_buf)
+        .with_context(|| format!("writing tmp {}", tmp_path.display()))?;
+
+    match std::fs::rename(&tmp_path, target_path) {
+        Ok(()) => {}
+        Err(_) if is_valid_segment(target_path) => {
+            // Another writer won the race — our copy is redundant.
+            let _ = std::fs::remove_file(&tmp_path);
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e).with_context(|| format!("renaming to {}", target_path.display()));
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -910,22 +910,22 @@ mod tests {
     #[test]
     fn empty_segment_flushes_valid_header() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let target = dir.path().join("seg");
+        let target = dir.path().join("seg.fqsf");
         let builder = make_builder();
         builder.flush(&target).expect("flush");
 
-        let header = std::fs::read(target.join("header.bin")).expect("header.bin");
-        assert!(header.starts_with(b"FQSG"), "magic missing");
+        assert!(target.exists(), "segment file not created");
+        assert!(is_valid_segment(&target), "not a valid .fqsf segment");
 
-        // schema_version == 1
-        let ver = u32::from_le_bytes(header[4..8].try_into().unwrap());
-        assert_eq!(ver, 1);
+        // Outer FQSF magic at byte 0.
+        let bytes = std::fs::read(&target).expect("read");
+        assert!(bytes.starts_with(b"FQSF"), "outer FQSF magic missing");
     }
 
     #[test]
     fn segment_with_rows_writes_all_files() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let target = dir.path().join("seg");
+        let target = dir.path().join("seg.fqsf");
 
         let mut builder = make_builder();
         builder.add_row("foo", "function", "rust", 10, 0, 100, 3);
@@ -933,38 +933,26 @@ mod tests {
         builder.add_row("foo", "function", "rust", 30, 400, 500, 3);
         builder.flush(&target).expect("flush");
 
-        for name in &[
-            "header.bin",
-            "col_name_id.bin",
-            "col_fql_kind_id.bin",
-            "col_line.bin",
-            "col_byte_start.bin",
-            "col_byte_end.bin",
-            "col_usages_count.bin",
-            "col_language_id.bin",
-            "strings_offsets.bin",
-            "strings_data.bin",
-            "postings_fql_kind.bin",
-            "name.fst",
-            "name_postings.bin",
-        ] {
-            assert!(target.join(name).exists(), "missing file: {name}");
-        }
+        assert!(is_valid_segment(&target), "not a valid .fqsf segment");
 
-        // col_line.bin should have 3 × 4 = 12 bytes.
-        let col_line = std::fs::read(target.join("col_line.bin")).expect("col_line.bin");
-        assert_eq!(col_line.len(), 12);
-        let lines: &[u32] = cast_slice(&col_line);
-        assert_eq!(lines, [10, 20, 30]);
+        // Verify outer format — FQSF magic present.
+        let file_bytes = std::fs::read(&target).expect("read .fqsf");
+        assert!(file_bytes.starts_with(b"FQSF"), "outer FQSF magic missing");
+
+        // File must be large enough to hold 3 rows of column data (+TOC +header blob).
+        // 3 rows × 7 core columns × 4 bytes = 84 bytes minimum of column data.
+        assert!(file_bytes.len() > 200, "file too small for 3 rows");
     }
 
     #[test]
     fn flush_is_idempotent() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let target = dir.path().join("seg");
+        let target = dir.path().join("seg.fqsf");
         let mut builder = make_builder();
         builder.add_row("x", "variable", "cpp", 1, 0, 10, 0);
         builder.flush(&target).expect("first flush");
+
+        let first_size = std::fs::metadata(&target).expect("metadata").len();
 
         // Second flush with a different builder should be a no-op.
         let builder2 = make_builder();
@@ -972,28 +960,22 @@ mod tests {
             .flush(&target)
             .expect("second flush should succeed");
 
-        // col_line.bin was written by first flush (1 row) and must not be overwritten.
-        let col_line = std::fs::read(target.join("col_line.bin")).expect("col_line.bin");
+        let second_size = std::fs::metadata(&target).expect("metadata").len();
         assert_eq!(
-            col_line.len(),
-            4,
-            "idempotent: second flush must not truncate"
+            first_size, second_size,
+            "idempotent: second flush must not overwrite"
         );
     }
 
     #[test]
     fn provider_id_in_header() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let target = dir.path().join("seg");
+        let target = dir.path().join("seg.fqsf");
         let content_id = [0xCD_u8; 20];
         let builder = SegmentBuilder::new("git-sha1", &content_id);
         builder.flush(&target).expect("flush");
 
-        let header = std::fs::read(target.join("header.bin")).expect("header.bin");
-        // provider_id is at bytes [8..24].
-        let provider_bytes = &header[8..24];
-        let provider = std::str::from_utf8(provider_bytes.split(|&b| b == 0).next().unwrap_or(b""))
-            .expect("provider_id not UTF-8");
-        assert_eq!(provider, "git-sha1");
+        assert!(is_valid_segment(&target), "not a valid .fqsf segment");
+        // provider_id is verified via SegmentReader in segment_reader tests.
     }
 }

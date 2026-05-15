@@ -17,11 +17,13 @@ use crate::{ast::lang::LanguageRegistry, workspace::Workspace};
 /// # Errors
 /// Returns an error if the symbol is not indexed, the file cannot be parsed,
 /// or the AST node for the function is not found.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn show_body<S: ::std::hash::BuildHasher>(
     cached: &crate::ast::parse_cache::CachedParse,
     path: &Path,
     byte_range_start: usize,
+    // 1-based line number from the index; used to detect misparsed AST nodes.
+    hint_line: Option<usize>,
     enrichment: &HashMap<String, String, S>,
     workspace: &Workspace,
     symbol: &str,
@@ -33,8 +35,9 @@ pub fn show_body<S: ::std::hash::BuildHasher>(
         .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
     let config = lang.config();
     let source = &*cached.source;
-    let fn_node = find_function_node_for_symbol(cached.tree.root_node(), byte_range_start, config)
-        .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
+    let fn_node =
+        find_function_node_for_symbol(cached.tree.root_node(), byte_range_start, hint_line, config)
+            .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 
     let fn_start = fn_node.start_byte();
     let fn_start_line = byte_to_line(source, fn_start); // 0-based

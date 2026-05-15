@@ -1,29 +1,11 @@
-//! [`SegmentReader`] — mmap-based reader for Phase 03 columnar segments.
+//! [`SegmentReader`] — mmap-based reader for `.fqsf` single-file columnar segments.
 //!
-//! Opens a segment directory written by [`SegmentBuilder`], validates the
-//! `header.bin` magic and schema version, mmaps all column files, and
-//! deserialises the Roaring bitmap posting lists and the FST.
+//! Opens a segment file written by [`SegmentBuilder`], validates the outer
+//! `FQSF` magic and the inner `FQSG` header blob, mmaps the whole file with
+//! a single `Mmap`, parses the TOC to locate every named blob, and
+//! deserialises Roaring bitmap posting lists and the FST from their blobs.
 //!
-//! # Query pipeline
-//!
-//! 1. **Roaring prefilter** — for `WHERE fql_kind = 'X'` predicates the
-//!    per-segment `postings_fql_kind.bin` bitmap narrows the candidate row
-//!    set in O(n/64) time without touching any column data.
-//! 2. **Materialise** — surviving row IDs are materialised into
-//!    [`SymbolMatch`] values by reading the mmap'd column arrays.
-//! 3. **`apply_clauses`** — the full shared pipeline (residual WHERE,
-//!    GROUP BY, ORDER BY, LIMIT, OFFSET, HAVING) runs over the materialised
-//!    results.  This guarantees clause-pipeline parity with the legacy
-//!    backend.
-//!
-//! # Phase 04 scope
-//!
-//! This reader operates on a single segment directory in isolation — no
-//! overlay, no cross-segment merging, and no session integration.
-//! Production queries via `FIND … USING 'columnar'` are wired in Phase 05.
-//!
-//! [`SegmentBuilder`]: super::segment_builder::SegmentBuilder
-//! [`SymbolMatch`]: crate::result::SymbolMatch
+//! One `Mmap` per segment → 1 VMA instead of 25.
 
 // Suppress pedantic/nursery lints that are legitimate in this low-level
 // mmap I/O module.
@@ -42,6 +24,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use bytemuck::cast_slice;
@@ -53,7 +36,10 @@ use crate::filter::apply_clauses;
 use crate::ir::{Clauses, CompareOp, PredicateValue};
 use crate::result::SymbolMatch;
 
-use super::segment_builder::{MAGIC, POSTING_ENRICHMENT_FIELDS, ZONEMAP_NUMERIC_FIELDS};
+use super::segment_builder::{
+    ENTRY_NAME_LEN, FILE_MAGIC, FILE_VERSION, MAGIC, POSTING_ENRICHMENT_FIELDS, TOC_ENTRY_SIZE,
+    ZONEMAP_NUMERIC_FIELDS,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Format constants (must match segment_builder.rs)
@@ -61,75 +47,88 @@ use super::segment_builder::{MAGIC, POSTING_ENRICHMENT_FIELDS, ZONEMAP_NUMERIC_F
 
 const SEGMENT_SCHEMA_VERSION: u32 = 1;
 const TYPE_TAG_STR_OPT: u8 = 5;
-/// Byte length of the fixed-size `header.bin` preamble.
+const CORE_COLUMN_NAMES: &[&str] = &[
+    "name_id",
+    "fql_kind_id",
+    "line",
+    "byte_start",
+    "byte_end",
+    "usages_count",
+    "language_id",
+];
+/// Byte length of the fixed-size FQSG header blob preamble.
 const HEADER_PREAMBLE_LEN: usize = 80;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // StringPool — mmap-backed per-segment string intern table
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Mmap-backed string intern table matching what `SegmentBuilder` writes to
-/// `strings_offsets.bin` and `strings_data.bin`.
+/// Slice-backed string intern table backed by the parent segment's `Arc<Mmap>`.
+///
+/// Reads `strings_offsets` and `strings_data` blobs from the single `.fqsf`
+/// mmap rather than maintaining separate per-file mmaps.
 struct StringPool {
-    offsets: Option<Mmap>, // [u32; string_count + 1]
-    data: Option<Mmap>,    // UTF-8 bytes
+    mmap: Arc<Mmap>,
+    /// Byte range of the `strings_offsets` blob within `mmap`.
+    off_start: usize,
+    off_end: usize,
+    /// Byte range of the `strings_data` blob within `mmap`.
+    dat_start: usize,
+    dat_end: usize,
     string_count: u32,
     /// Pre-built reverse map for O(1) kind-prefilter lookups.
     reverse: HashMap<String, u32>,
 }
 
 impl StringPool {
-    fn build(dir: &Path, string_count: u32) -> Result<Self> {
-        let offsets =
-            mmap_file(&dir.join("strings_offsets.bin")).context("opening strings_offsets.bin")?;
-        let data = mmap_file(&dir.join("strings_data.bin")).context("opening strings_data.bin")?;
+    fn from_blobs(
+        mmap: Arc<Mmap>,
+        off_range: (usize, usize),
+        dat_range: (usize, usize),
+        string_count: u32,
+    ) -> Result<Self> {
+        let (off_start, off_end) = off_range;
+        let (dat_start, dat_end) = dat_range;
 
         // Validate string pool at open time so corrupt data is detected early
         // rather than causing a panic mid-query inside `get()`.
         //
         // Required invariants:
-        //  1. `strings_offsets.bin` has exactly `(string_count + 1) * 4` bytes.
+        //  1. `strings_offsets` blob has ≥ (string_count + 1) * 4 bytes.
         //  2. Offsets are monotonically non-decreasing.
-        //  3. The last offset (`offsets[string_count]`) ≤ `strings_data.bin` length.
+        //  3. Last offset ≤ `strings_data` blob length.
         if string_count > 0 {
             let expected_offset_bytes = (string_count as usize + 1) * 4;
-            let actual_offset_bytes = offsets.as_ref().map_or(0, |m| m.len());
+            let actual_offset_bytes = off_end - off_start;
             ensure!(
                 actual_offset_bytes >= expected_offset_bytes,
-                "strings_offsets.bin in {} has {} bytes; expected ≥ {} for {} strings",
-                dir.display(),
-                actual_offset_bytes,
-                expected_offset_bytes,
-                string_count
+                "strings_offsets blob has {actual_offset_bytes} bytes; \
+                 expected ≥ {expected_offset_bytes} for {string_count} strings"
             );
 
-            #[allow(clippy::indexing_slicing)] // length validated by ensure! above
-            if let (Some(off_mmap), Some(dat_mmap)) = (&offsets, &data) {
-                let off_slice: &[u32] = cast_slice(off_mmap.as_ref());
-                // Monotonicity check.
-                for i in 0..string_count as usize {
-                    let lo = off_slice[i] as usize;
-                    let hi = off_slice[i + 1] as usize;
-                    ensure!(
-                        lo <= hi,
-                        "strings_offsets.bin in {} is not monotone at index {i}: {lo} > {hi}",
-                        dir.display()
-                    );
-                }
-                // Last offset must not exceed data length.
-                let last = off_slice[string_count as usize] as usize;
+            let off_slice: &[u32] = cast_slice(&mmap[off_start..off_end]);
+            let dat_len = dat_end - dat_start;
+            for i in 0..string_count as usize {
+                let lo = off_slice[i] as usize;
+                let hi = off_slice[i + 1] as usize;
                 ensure!(
-                    last <= dat_mmap.len(),
-                    "strings_offsets.bin in {}: last offset {last} > strings_data.bin length {}",
-                    dir.display(),
-                    dat_mmap.len()
+                    lo <= hi,
+                    "strings_offsets blob is not monotone at index {i}: {lo} > {hi}"
                 );
             }
+            let last = off_slice[string_count as usize] as usize;
+            ensure!(
+                last <= dat_len,
+                "strings_offsets: last offset {last} > strings_data length {dat_len}"
+            );
         }
 
         let mut pool = Self {
-            offsets,
-            data,
+            mmap,
+            off_start,
+            off_end,
+            dat_start,
+            dat_end,
             string_count,
             reverse: HashMap::new(),
         };
@@ -144,31 +143,24 @@ impl StringPool {
     }
 
     /// Look up string ID `id`; returns `""` for absent / out-of-range IDs.
-    ///
-    /// The returned `&str` borrows from the mmap, so its lifetime is `'_`
-    /// (tied to `&self`).
     fn get(&self, id: u32) -> &str {
         if id == u32::MAX || id >= self.string_count {
             return "";
         }
-        let (Some(off_mmap), Some(dat_mmap)) = (&self.offsets, &self.data) else {
-            return "";
-        };
-        // SAFETY: cast_slice requires the slice to be u32-aligned.
-        // Mmap is always page-aligned (≥ 4 bytes), so this is safe.
-        // The file is written as a `[u32]` array so the length is always a
-        // multiple of 4; cast_slice panics otherwise — treated as corrupt data.
-        let offsets: &[u32] = cast_slice(off_mmap);
-        let id_usize = id as usize;
-        let (Some(&start_u32), Some(&end_u32)) = (offsets.get(id_usize), offsets.get(id_usize + 1))
+        let off_slice: &[u32] = cast_slice(&self.mmap[self.off_start..self.off_end]);
+        let (Some(&start_u32), Some(&end_u32)) =
+            (off_slice.get(id as usize), off_slice.get(id as usize + 1))
         else {
             return "";
         };
-        let (start, end) = (start_u32 as usize, end_u32 as usize);
-        if end > dat_mmap.len() || start > end {
+        let (start, end) = (
+            start_u32 as usize + self.dat_start,
+            end_u32 as usize + self.dat_start,
+        );
+        if end > self.dat_end || start > end {
             return "";
         }
-        std::str::from_utf8(&dat_mmap[start..end]).unwrap_or("")
+        std::str::from_utf8(&self.mmap[start..end]).unwrap_or("")
     }
 }
 
@@ -176,102 +168,137 @@ impl StringPool {
 // SegmentReader
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Mmap-based read-only view of a single columnar segment directory.
+/// Mmap-based read-only view of a single `.fqsf` columnar segment file.
 ///
-/// Open with [`SegmentReader::open`].  The reader holds all mmaps for its
-/// lifetime — drop it to release OS resources.
+/// Open with [`SegmentReader::open`].  The reader holds one `Arc<Mmap>` for
+/// the whole file; individual blobs are accessed as subslices.
 pub struct SegmentReader {
-    /// Absolute path of the opened segment directory (for diagnostics).
-    pub dir: PathBuf,
+    /// Whole-file mmap shared with the string pool.
+    mmap: Arc<Mmap>,
+    /// TOC: blob name → `(start, end)` byte offsets within `mmap`.
+    blobs: HashMap<String, (usize, usize)>,
+    /// Absolute path of the opened `.fqsf` file (for diagnostics).
+    pub path: PathBuf,
     /// Number of rows stored in this segment.
     pub row_count: u32,
-    /// Provider ID decoded from the header, e.g. `"git-sha1"`.
+    /// Provider ID decoded from the header blob.
     pub provider_id: String,
     /// Raw content ID bytes (length matches the provider's hash width).
     pub content_id: Vec<u8>,
-    // Core u32 columns — all present when `row_count > 0`.
-    col_name_id: Option<Mmap>,
-    col_fql_kind_id: Option<Mmap>,
-    col_line: Option<Mmap>,
-    col_byte_start: Option<Mmap>,
-    col_byte_end: Option<Mmap>,
-    col_usages_count: Option<Mmap>,
-    col_language_id: Option<Mmap>,
-    /// Extra enrichment columns stored as nullable u32 ID arrays
-    /// (u32::MAX = absent).  Key is the enrichment field name.
-    extra_cols: HashMap<String, Mmap>,
+    /// Enrichment column names discovered from the header blob.
+    extra_col_names: Vec<String>,
     strings: StringPool,
-    /// Per-fql_kind Roaring bitmaps loaded from `postings_fql_kind.bin`.
     pub(crate) kind_postings: HashMap<u32, RoaringBitmap>,
-    /// Per-field Roaring bitmaps loaded from `postings_<field>.bin` files.
-    ///
-    /// Outer key: enrichment field name (e.g. `"has_doc"`).
-    /// Inner key: per-segment string-pool ID for a value (e.g. ID of `"true"`).
-    /// Value: bitmap of local row IDs whose field == that value.
-    ///
-    /// Absent when no posting file was found for the field (old segment or
-    /// field not in the allowlist).  Callers fall back to the linear scan.
     pub(crate) field_postings: HashMap<String, HashMap<u32, RoaringBitmap>>,
-    /// Per-column zone maps loaded from `zonemap_<col>.bin` files.
-    ///
-    /// Key: column name (e.g. `"line"`, `"usages_count"`).
-    /// Value: `(min, max)` u32 range for all rows in this segment.
-    ///
-    /// Missing when the segment was written before zone maps were added or
-    /// when the column is empty.  Callers treat an absent entry as "no
-    /// zone-map available → cannot prune".
     pub(crate) zone_maps: HashMap<String, (u32, u32)>,
-    /// Per-prefix Roaring bitmaps for fast name leading-prefix prefiltering.
-    ///
-    /// Loaded from `name_prefix.bin` written by the builder.  Keys are the
-    /// lowercase UTF-8 bytes of the first 1 or 2 characters of each name.
-    ///
-    /// Empty when the file is absent (old segment) — callers include all
-    /// rows of that segment in the candidate set rather than pruning.
     pub(crate) name_prefix: HashMap<Vec<u8>, RoaringBitmap>,
-    /// FST map: symbol name bytes → packed `(count | byte_offset << 32)`.
     pub(crate) name_fst: FstMap<Vec<u8>>,
-    /// Flat `[u32 LE]` array of row IDs indexed by `name_fst`.
-    pub(crate) name_postings: Option<Mmap>,
 }
 
 impl SegmentReader {
-    /// Open and validate a segment directory.
+    /// Open and validate a `.fqsf` segment file.
     ///
-    /// Reads `header.bin`, validates the `FQSG` magic and schema version,
-    /// mmaps all column files, deserialises Roaring bitmap postings, and
-    /// loads the FST into memory.
+    /// Mmaps the whole file, parses the outer FQSF TOC, validates the inner
+    /// `FQSG` header blob, builds the string pool, and deserialises Roaring
+    /// bitmap postings and the FST.
     ///
     /// # Errors
-    /// Returns `Err` on I/O failure, missing `header.bin`, format mismatch,
-    /// or schema version mismatch.
-    pub fn open(dir: &Path) -> Result<Self> {
-        let header_bytes = std::fs::read(dir.join("header.bin"))
-            .with_context(|| format!("reading header.bin in {}", dir.display()))?;
+    /// Returns `Err` on I/O failure, missing file, format mismatch, schema
+    /// version mismatch, or corrupt string pool.
+    pub fn open(path: &Path) -> Result<Self> {
+        // ── 1. Mmap the whole file ────────────────────────────────────────
+        let file = std::fs::File::open(path)
+            .with_context(|| format!("opening segment {}", path.display()))?;
+        let file_len = file.metadata()?.len() as usize;
+        ensure!(
+            file_len >= 12,
+            "segment {} is only {file_len} bytes (need ≥ 12 for FQSF header)",
+            path.display()
+        );
+        #[allow(unsafe_code)] // single mmap of immutable segment file
+        let mmap = Arc::new(
+            unsafe { MmapOptions::new().map(&file) }
+                .with_context(|| format!("mmap {}", path.display()))?,
+        );
+        drop(file);
+
+        // ── 2. Validate outer FQSF magic ─────────────────────────────────
+        ensure!(
+            mmap[..4] == FILE_MAGIC,
+            "invalid FQSF magic in {}",
+            path.display()
+        );
+        let file_version = u32::from_le_bytes(mmap[4..8].try_into().context("FQSF version bytes")?);
+        ensure!(
+            file_version == FILE_VERSION,
+            "FQSF version mismatch in {}: expected {FILE_VERSION}, got {file_version}",
+            path.display()
+        );
+
+        if cfg!(target_endian = "big") {
+            anyhow::bail!(
+                "segment format is little-endian only; cannot open {} on a big-endian host",
+                path.display()
+            );
+        }
+
+        // ── 3. Parse TOC ──────────────────────────────────────────────────
+        let entry_count =
+            u32::from_le_bytes(mmap[8..12].try_into().context("FQSF entry_count bytes")?) as usize;
+        let toc_end = 12 + entry_count * TOC_ENTRY_SIZE;
+        ensure!(
+            file_len >= toc_end,
+            "segment {} too short for TOC (need {toc_end} bytes, have {file_len})",
+            path.display()
+        );
+
+        let mut blobs: HashMap<String, (usize, usize)> = HashMap::with_capacity(entry_count);
+        for i in 0..entry_count {
+            let es = 12 + i * TOC_ENTRY_SIZE;
+            let entry = &mmap[es..es + TOC_ENTRY_SIZE];
+            let name_end = entry[..ENTRY_NAME_LEN]
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(ENTRY_NAME_LEN);
+            let name = std::str::from_utf8(&entry[..name_end])
+                .with_context(|| format!("blob name at TOC index {i}"))?
+                .to_owned();
+            let offset = u32::from_le_bytes(
+                entry[ENTRY_NAME_LEN..ENTRY_NAME_LEN + 4]
+                    .try_into()
+                    .context("blob offset")?,
+            ) as usize;
+            let len = u32::from_le_bytes(
+                entry[ENTRY_NAME_LEN + 4..ENTRY_NAME_LEN + 8]
+                    .try_into()
+                    .context("blob length")?,
+            ) as usize;
+            ensure!(
+                offset + len <= file_len,
+                "blob '{name}' extends beyond file end ({offset} + {len} > {file_len})"
+            );
+            let _ = blobs.insert(name, (offset, offset + len));
+        }
+
+        // ── 4. Parse inner FQSG header blob ──────────────────────────────
+        let &(hs, he) = blobs
+            .get("header")
+            .context("missing 'header' blob in FQSF")?;
+        let header_bytes = &mmap[hs..he];
 
         ensure!(
             header_bytes.len() >= HEADER_PREAMBLE_LEN,
-            "header.bin in {} is only {} bytes (need ≥ {})",
-            dir.display(),
+            "'header' blob in {} is only {} bytes (need ≥ {})",
+            path.display(),
             header_bytes.len(),
             HEADER_PREAMBLE_LEN,
         );
         ensure!(
             header_bytes[..4] == MAGIC,
-            "invalid magic in {}; expected FQSG",
-            dir.display()
+            "invalid FQSG magic in 'header' blob of {}",
+            path.display()
         );
 
-        // Segments are encoded little-endian.  Refuse to open on a big-endian
-        // host rather than silently producing garbage.
-        if cfg!(target_endian = "big") {
-            anyhow::bail!(
-                "segment format is little-endian only; cannot open {} on a big-endian host",
-                dir.display()
-            );
-        }
-
-        #[allow(clippy::indexing_slicing)] // bounds checked by ensure! above
         let schema_version = u32::from_le_bytes(
             header_bytes[4..8]
                 .try_into()
@@ -279,114 +306,82 @@ impl SegmentReader {
         );
         ensure!(
             schema_version == SEGMENT_SCHEMA_VERSION,
-            "schema version mismatch in {}: expected {}, got {}",
-            dir.display(),
-            SEGMENT_SCHEMA_VERSION,
-            schema_version
+            "schema version mismatch in {}: expected {SEGMENT_SCHEMA_VERSION}, got {schema_version}",
+            path.display()
         );
 
-        #[allow(clippy::indexing_slicing)]
         let provider_id = {
             let pid_bytes = &header_bytes[8..24];
             let end = pid_bytes.iter().position(|&b| b == 0).unwrap_or(16);
             String::from_utf8_lossy(&pid_bytes[..end]).into_owned()
         };
 
-        #[allow(clippy::indexing_slicing)]
         let content_id_len = header_bytes[24] as usize;
         ensure!(content_id_len <= 32, "content_id_len {content_id_len} > 32");
 
-        #[allow(clippy::indexing_slicing)]
         let content_id = header_bytes[28..28 + content_id_len].to_vec();
 
-        #[allow(clippy::indexing_slicing)]
         let row_count =
             u32::from_le_bytes(header_bytes[60..64].try_into().context("row_count bytes")?);
-        #[allow(clippy::indexing_slicing)]
         let string_count = u32::from_le_bytes(
             header_bytes[64..68]
                 .try_into()
                 .context("string_count bytes")?,
         );
-        #[allow(clippy::indexing_slicing)]
         let column_count = u32::from_le_bytes(
             header_bytes[68..72]
                 .try_into()
                 .context("column_count bytes")?,
         );
 
-        // Parse variable-length column entries from the header.
-        let columns = parse_column_entries(&header_bytes, HEADER_PREAMBLE_LEN, column_count)?;
+        // Parse variable-length column entries from the header blob.
+        let columns = parse_column_entries(header_bytes, HEADER_PREAMBLE_LEN, column_count)?;
 
-        // Mmap the seven core u32 columns.
-        let col_name_id = mmap_col(dir, "name_id")?;
-        let col_fql_kind_id = mmap_col(dir, "fql_kind_id")?;
-        let col_line = mmap_col(dir, "line")?;
-        let col_byte_start = mmap_col(dir, "byte_start")?;
-        let col_byte_end = mmap_col(dir, "byte_end")?;
-        let col_usages_count = mmap_col(dir, "usages_count")?;
-        let col_language_id = mmap_col(dir, "language_id")?;
+        // ── 5. Collect extra enrichment column names ───────────────────────
+        let extra_col_names: Vec<String> = columns
+            .iter()
+            .filter(|(name, tag)| {
+                !CORE_COLUMN_NAMES.contains(&name.as_str()) && *tag == TYPE_TAG_STR_OPT
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
 
-        // Mmap optional enrichment columns (TYPE_TAG_STR_OPT).
-        let core = [
-            "name_id",
-            "fql_kind_id",
-            "line",
-            "byte_start",
-            "byte_end",
-            "usages_count",
-            "language_id",
-        ];
-        let mut extra_cols = HashMap::new();
-        for (col_name, type_tag) in &columns {
-            if !core.contains(&col_name.as_str()) && *type_tag == TYPE_TAG_STR_OPT {
-                if let Some(mmap) = mmap_col(dir, col_name)? {
-                    let _ = extra_cols.insert(col_name.clone(), mmap);
-                }
-            }
-        }
+        // ── 6. String pool ────────────────────────────────────────────────
+        let off_range = blobs.get("strings_offsets").copied().unwrap_or((0, 0));
+        let dat_range = blobs.get("strings_data").copied().unwrap_or((0, 0));
+        let strings =
+            StringPool::from_blobs(Arc::clone(&mmap), off_range, dat_range, string_count)?;
 
-        // String pool.
-        let strings = StringPool::build(dir, string_count)?;
+        // ── 7. Roaring postings ───────────────────────────────────────────
+        let kind_postings = {
+            let data = blob_slice(&blobs, &mmap, "postings_fql_kind");
+            load_kind_postings(data)?
+        };
+        let field_postings = load_enrichment_postings(&blobs, &mmap)?;
+        let zone_maps = load_zone_maps(&blobs, &mmap)?;
 
-        // Roaring postings.
-        let kind_postings = load_kind_postings(dir)?;
-
-        // Per-field enrichment postings (optional — missing file = empty map).
-        let field_postings = load_enrichment_postings(dir)?;
-
-        // Zone maps (optional — missing files are silently skipped).
-        let zone_maps = load_zone_maps(dir)?;
-
-        // FST + name_postings (load FST bytes into a Vec<u8> for simplicity).
-        let fst_bytes = std::fs::read(dir.join("name.fst")).context("reading name.fst")?;
-        let name_fst = FstMap::new(fst_bytes).context("parsing name.fst")?;
-        let name_postings =
-            mmap_file(&dir.join("name_postings.bin")).context("opening name_postings.bin")?;
-
-        // Name prefix index (optional — missing file = empty map).
-        let name_prefix = load_name_prefix(dir)?;
+        // ── 8. FST + name prefix ──────────────────────────────────────────
+        let fst_data = blob_slice(&blobs, &mmap, "name_fst").to_vec();
+        let name_fst = FstMap::new(fst_data).context("parsing name_fst blob")?;
+        let name_prefix = {
+            let data = blob_slice(&blobs, &mmap, "name_prefix");
+            load_name_prefix(data)?
+        };
 
         Ok(Self {
-            dir: dir.to_owned(),
+            mmap,
+            blobs,
+            path: path.to_owned(),
             row_count,
             provider_id,
             content_id,
-            col_name_id,
-            col_fql_kind_id,
-            col_line,
-            col_byte_start,
-            col_byte_end,
-            col_usages_count,
-            col_language_id,
-            extra_cols,
+            extra_col_names,
             strings,
             kind_postings,
             field_postings,
             zone_maps,
             name_prefix,
             name_fst,
-            name_postings,
         })
     }
 
@@ -423,8 +418,18 @@ impl SegmentReader {
         let Some(encoded) = self.name_fst.get(name.as_bytes()) else {
             return Vec::new();
         };
-        let postings = self.name_postings.as_deref().unwrap_or(&[]);
-        decode_name_postings(encoded, postings)
+        decode_name_postings(encoded, self.name_postings_bytes())
+    }
+
+    /// Return the raw bytes of the `name_postings` blob (used by overlay builder).
+    pub fn name_postings_bytes(&self) -> &[u8] {
+        self.blob_bytes("name_postings")
+    }
+
+    /// Return the number of enrichment (extra) column names stored in this segment.
+    #[must_use]
+    pub const fn extra_col_count(&self) -> usize {
+        self.extra_col_names.len()
     }
 
     /// Return the hex-encoded content ID of this segment.
@@ -442,37 +447,37 @@ impl SegmentReader {
 
     /// Read the symbol name for row `row`.
     pub fn name_of(&self, row: u32) -> &str {
-        self.str_of_core(&self.col_name_id, row)
+        self.str_of("name_id", row)
     }
 
     /// Read the FQL kind string for row `row`.
     pub fn fql_kind_of(&self, row: u32) -> &str {
-        self.str_of_core(&self.col_fql_kind_id, row)
+        self.str_of("fql_kind_id", row)
     }
 
     /// Read the language string for row `row`.
     pub fn language_of(&self, row: u32) -> &str {
-        self.str_of_core(&self.col_language_id, row)
+        self.str_of("language_id", row)
     }
 
     /// Read the 1-based source line for row `row`.
     pub fn line_of(&self, row: u32) -> u32 {
-        self.u32_of(&self.col_line, row)
+        self.u32_at("line", row)
     }
 
     /// Read the byte-range start for row `row`.
     pub fn byte_start_of(&self, row: u32) -> u32 {
-        self.u32_of(&self.col_byte_start, row)
+        self.u32_at("byte_start", row)
     }
 
     /// Read the byte-range end for row `row`.
     pub fn byte_end_of(&self, row: u32) -> u32 {
-        self.u32_of(&self.col_byte_end, row)
+        self.u32_at("byte_end", row)
     }
 
     /// Read the usages count for row `row`.
     pub fn usages_count_of(&self, row: u32) -> u32 {
-        self.u32_of(&self.col_usages_count, row)
+        self.u32_at("usages_count", row)
     }
 
     /// Read an enrichment field value for row `row`.
@@ -480,8 +485,11 @@ impl SegmentReader {
     /// Returns `None` when the column is absent or the row's slot is `NULL`
     /// (encoded as `u32::MAX` in the segment).
     pub fn extra_field_str(&self, col: &str, row: u32) -> Option<&str> {
-        let mmap = self.extra_cols.get(col)?;
-        let slice: &[u32] = cast_slice(mmap.as_ref());
+        let blob = self.blob_bytes(&format!("col_{col}"));
+        if blob.is_empty() {
+            return None;
+        }
+        let slice: &[u32] = cast_slice(blob);
         let id = slice.get(row as usize).copied()?;
         if id == u32::MAX {
             None
@@ -497,8 +505,12 @@ impl SegmentReader {
     /// single row.  Returns an empty map when no enrichment columns are present.
     pub(crate) fn enrichment_for_row(&self, row: u32) -> HashMap<String, String> {
         let mut map = HashMap::new();
-        for (col_name, mmap) in &self.extra_cols {
-            let slice: &[u32] = cast_slice(mmap.as_ref());
+        for col_name in &self.extra_col_names {
+            let blob = self.blob_bytes(&format!("col_{col_name}"));
+            if blob.is_empty() {
+                continue;
+            }
+            let slice: &[u32] = cast_slice(blob);
             if let Some(&id) = slice.get(row as usize) {
                 if id != u32::MAX {
                     let s = self.strings.get(id);
@@ -515,17 +527,29 @@ impl SegmentReader {
     // Private helpers
     // ─────────────────────────────────────────────────────────────────────
 
-    /// Read a u32 from `col` at `row`; returns 0 if absent/out-of-range.
-    fn u32_of(&self, col: &Option<Mmap>, row: u32) -> u32 {
-        let Some(mmap) = col else { return 0 };
-        let slice: &[u32] = cast_slice(mmap.as_ref());
+    /// Return the byte range for a named blob as a `&[u8]` slice.
+    /// Returns `&[]` when the blob is absent.
+    fn blob_bytes(&self, name: &str) -> &[u8] {
+        let Some(&(start, end)) = self.blobs.get(name) else {
+            return &[];
+        };
+        &self.mmap[start..end]
+    }
+
+    /// Return a u32 column value at `row`.
+    /// `col` is the short column name (without the `col_` prefix).
+    fn u32_at(&self, col: &str, row: u32) -> u32 {
+        let blob = self.blob_bytes(&format!("col_{col}"));
+        if blob.is_empty() {
+            return 0;
+        }
+        let slice: &[u32] = cast_slice(blob);
         slice.get(row as usize).copied().unwrap_or(0)
     }
 
-    /// Read a string-intern ID from `col` at `row`, then resolve via the
-    /// segment's string pool.  Returns `""` when absent.
-    fn str_of_core(&self, col: &Option<Mmap>, row: u32) -> &str {
-        let id = self.u32_of(col, row);
+    /// Resolve a string-id column to its pool string at `row`.
+    fn str_of(&self, col: &str, row: u32) -> &str {
+        let id = self.u32_at(col, row);
         self.strings.get(id)
     }
 
@@ -620,15 +644,19 @@ impl SegmentReader {
     ) -> Vec<SymbolMatch> {
         rows.iter()
             .map(|row| {
-                let name = self.str_of_core(&self.col_name_id, row).to_owned();
-                let fql_kind = self.str_of_core(&self.col_fql_kind_id, row).to_owned();
-                let language = self.str_of_core(&self.col_language_id, row).to_owned();
-                let line = self.u32_of(&self.col_line, row);
-                let usages = self.u32_of(&self.col_usages_count, row);
+                let name = self.str_of("name_id", row).to_owned();
+                let fql_kind = self.str_of("fql_kind_id", row).to_owned();
+                let language = self.str_of("language_id", row).to_owned();
+                let line = self.u32_at("line", row);
+                let usages = self.u32_at("usages_count", row);
 
                 let mut fields: HashMap<String, String> = HashMap::new();
-                for (col_name, mmap) in &self.extra_cols {
-                    let slice: &[u32] = cast_slice(mmap.as_ref());
+                for col_name in &self.extra_col_names {
+                    let blob = self.blob_bytes(&format!("col_{col_name}"));
+                    if blob.is_empty() {
+                        continue;
+                    }
+                    let slice: &[u32] = cast_slice(blob);
                     if let Some(&id) = slice.get(row as usize) {
                         if id != u32::MAX {
                             let s = self.strings.get(id);
@@ -664,45 +692,15 @@ impl SegmentReader {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Private file-system helpers
+// Private blob helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Open a file for read-only mmap.
-///
-/// Returns `Ok(None)` for missing or empty files (absent enrichment columns
-/// and zero-byte postings are both valid).
-///
-/// # Safety
-/// The caller must ensure the file is not modified while the returned `Mmap`
-/// is live.  All segment files are immutable once written (content-addressed,
-/// never updated in-place).
-#[allow(unsafe_code)]
-fn mmap_file(path: &Path) -> Result<Option<Mmap>> {
-    let file = match std::fs::File::open(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => {
-            return Err(e).with_context(|| format!("opening {}", path.display()));
-        }
-        Ok(f) => f,
+/// Return a blob byte slice from the blobs map; `&[]` when absent.
+fn blob_slice<'m>(blobs: &HashMap<String, (usize, usize)>, mmap: &'m Mmap, name: &str) -> &'m [u8] {
+    let Some(&(start, end)) = blobs.get(name) else {
+        return &[];
     };
-    let len = file
-        .metadata()
-        .with_context(|| format!("stat {}", path.display()))?
-        .len();
-    if len == 0 {
-        return Ok(None);
-    }
-    // SAFETY: the segment directory is immutable once written.  No other
-    // thread or process mutates these files while a reader is open.
-    let mmap = unsafe { MmapOptions::new().map(&file) }
-        .with_context(|| format!("mmap {}", path.display()))?;
-    Ok(Some(mmap))
-}
-
-/// Convenience wrapper: mmap `col_<name>.bin`.
-fn mmap_col(dir: &Path, col_name: &str) -> Result<Option<Mmap>> {
-    mmap_file(&dir.join(format!("col_{col_name}.bin")))
-        .with_context(|| format!("mmapping col_{col_name}.bin"))
+    &mmap[start..end]
 }
 
 /// Parse column metadata entries from the header byte slice.
@@ -740,21 +738,14 @@ fn parse_column_entries(
     Ok(cols)
 }
 
-/// Deserialise `postings_fql_kind.bin` into `HashMap<kind_id, RoaringBitmap>`.
+/// Deserialise the `postings_fql_kind` blob into `HashMap<kind_id, RoaringBitmap>`.
 ///
 /// Format: `[kind_count: u32] (kind_id: u32, bitmap_len: u32, bitmap_bytes)*`
-fn load_kind_postings(dir: &Path) -> Result<HashMap<u32, RoaringBitmap>> {
-    let path = dir.join("postings_fql_kind.bin");
-    let data = match std::fs::read(&path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-        Ok(d) => d,
-    };
+fn load_kind_postings(data: &[u8]) -> Result<HashMap<u32, RoaringBitmap>> {
     if data.len() < 4 {
         return Ok(HashMap::new());
     }
 
-    #[allow(clippy::indexing_slicing)] // length checked above
     let kind_count = u32::from_le_bytes(data[..4].try_into().context("kind_count bytes")?) as usize;
     let mut map = HashMap::with_capacity(kind_count);
     let mut pos = 4usize;
@@ -762,11 +753,9 @@ fn load_kind_postings(dir: &Path) -> Result<HashMap<u32, RoaringBitmap>> {
     for entry in 0..kind_count {
         ensure!(
             pos + 8 <= data.len(),
-            "postings_fql_kind.bin truncated at entry {entry}"
+            "postings_fql_kind blob truncated at entry {entry}"
         );
-        #[allow(clippy::indexing_slicing)] // guarded by ensure! above
         let kind_id = u32::from_le_bytes(data[pos..pos + 4].try_into().context("kind_id bytes")?);
-        #[allow(clippy::indexing_slicing)]
         let bitmap_len = u32::from_le_bytes(
             data[pos + 4..pos + 8]
                 .try_into()
@@ -775,9 +764,8 @@ fn load_kind_postings(dir: &Path) -> Result<HashMap<u32, RoaringBitmap>> {
         pos += 8;
         ensure!(
             pos + bitmap_len <= data.len(),
-            "bitmap bytes truncated at entry {entry}"
+            "postings_fql_kind bitmap truncated at entry {entry}"
         );
-        #[allow(clippy::indexing_slicing)]
         let bitmap = RoaringBitmap::deserialize_from(&data[pos..pos + bitmap_len])
             .with_context(|| format!("deserialising bitmap for kind_id {kind_id}"))?;
         pos += bitmap_len;
@@ -787,52 +775,35 @@ fn load_kind_postings(dir: &Path) -> Result<HashMap<u32, RoaringBitmap>> {
     Ok(map)
 }
 
-/// Load per-field enrichment posting files for fields in
-/// [`POSTING_ENRICHMENT_FIELDS`].
+/// Load per-field enrichment posting blobs for fields in [`POSTING_ENRICHMENT_FIELDS`].
 ///
-/// For each field, attempts to read `postings_<field>.bin` from `dir`.
-/// Missing files are silently skipped (returns an empty inner map for that
-/// field, which callers treat as "no posting available → linear scan").
-///
-/// The wire format is identical to `postings_fql_kind.bin`:
-/// ```text
-/// [value_count: u32 LE]
-/// ( [value_id: u32 LE]
-///   [bitmap_len: u32 LE]
-///   [bitmap_bytes: roaring serialized] )*
-/// ```
-fn load_enrichment_postings(dir: &Path) -> Result<HashMap<String, HashMap<u32, RoaringBitmap>>> {
+/// For each field, looks up blob `postings_<field>` in `blobs`.
+/// Missing blobs are silently skipped (callers fall back to linear scan).
+fn load_enrichment_postings(
+    blobs: &HashMap<String, (usize, usize)>,
+    mmap: &Mmap,
+) -> Result<HashMap<String, HashMap<u32, RoaringBitmap>>> {
     let mut result: HashMap<String, HashMap<u32, RoaringBitmap>> = HashMap::new();
 
     for &field in POSTING_ENRICHMENT_FIELDS {
-        let filename = format!("postings_{field}.bin");
-        let path = dir.join(&filename);
-        let data = match std::fs::read(&path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => {
-                return Err(e).with_context(|| format!("reading {}", path.display()));
-            }
-            Ok(d) => d,
-        };
+        let blob_name = format!("postings_{field}");
+        let data = blob_slice(blobs, mmap, &blob_name);
         if data.len() < 4 {
             continue;
         }
 
-        #[allow(clippy::indexing_slicing)] // length checked above
         let value_count =
             u32::from_le_bytes(data[..4].try_into().context("value_count bytes")?) as usize;
-        let mut map: HashMap<u32, RoaringBitmap> = HashMap::with_capacity(value_count);
+        let mut bitmap_map: HashMap<u32, RoaringBitmap> = HashMap::with_capacity(value_count);
         let mut pos = 4usize;
 
         for entry in 0..value_count {
             ensure!(
                 pos + 8 <= data.len(),
-                "postings_{field}.bin truncated at entry {entry}"
+                "postings_{field} blob truncated at entry {entry}"
             );
-            #[allow(clippy::indexing_slicing)] // guarded by ensure! above
             let value_id =
                 u32::from_le_bytes(data[pos..pos + 4].try_into().context("value_id bytes")?);
-            #[allow(clippy::indexing_slicing)]
             let bitmap_len = u32::from_le_bytes(
                 data[pos + 4..pos + 8]
                     .try_into()
@@ -841,49 +812,35 @@ fn load_enrichment_postings(dir: &Path) -> Result<HashMap<String, HashMap<u32, R
             pos += 8;
             ensure!(
                 pos + bitmap_len <= data.len(),
-                "postings_{field}.bin bitmap truncated at entry {entry}"
+                "postings_{field} bitmap truncated at entry {entry}"
             );
-            #[allow(clippy::indexing_slicing)]
             let bitmap = RoaringBitmap::deserialize_from(&data[pos..pos + bitmap_len])
                 .with_context(|| {
                     format!("deserialising enrichment bitmap for {field} value_id {value_id}")
                 })?;
             pos += bitmap_len;
-            let _ = map.insert(value_id, bitmap);
+            let _ = bitmap_map.insert(value_id, bitmap);
         }
 
-        let _ = result.insert(field.to_owned(), map);
+        let _ = result.insert(field.to_owned(), bitmap_map);
     }
 
     Ok(result)
 }
 
-/// Load zone maps from `zonemap_<col>.bin` files in `dir`.
-///
-/// For each column listed in [`ZONEMAP_NUMERIC_FIELDS`] the function
-/// attempts to read an 8-byte file `[min: u32 LE][max: u32 LE]`.
-/// Missing files are silently skipped — this is expected for segments
-/// written before zone maps were introduced (Phase 06d).
-///
-/// On success returns a map from column name to `(min, max)` pair.
-fn load_zone_maps(dir: &Path) -> Result<HashMap<String, (u32, u32)>> {
+/// Load zone maps from `zonemap_<col>` blobs.
+fn load_zone_maps(
+    blobs: &HashMap<String, (usize, usize)>,
+    mmap: &Mmap,
+) -> Result<HashMap<String, (u32, u32)>> {
     let mut result: HashMap<String, (u32, u32)> = HashMap::new();
     for (col_name, _has_sentinel) in ZONEMAP_NUMERIC_FIELDS {
-        let path = dir.join(format!("zonemap_{col_name}.bin"));
-        let data = match std::fs::read(&path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => {
-                return Err(e).with_context(|| format!("reading {}", path.display()));
-            }
-            Ok(d) => d,
-        };
+        let blob_name = format!("zonemap_{col_name}");
+        let data = blob_slice(blobs, mmap, &blob_name);
         if data.len() < 8 {
-            // Corrupted or truncated file — skip rather than propagating.
             continue;
         }
-        #[allow(clippy::indexing_slicing)] // length checked above
         let min = u32::from_le_bytes(data[..4].try_into().context("zonemap min bytes")?);
-        #[allow(clippy::indexing_slicing)]
         let max = u32::from_le_bytes(data[4..8].try_into().context("zonemap max bytes")?);
         let _ = result.insert((*col_name).to_owned(), (min, max));
     }
@@ -909,10 +866,9 @@ fn decode_name_postings(encoded: u64, name_postings: &[u8]) -> Vec<u32> {
     cast_slice::<u8, u32>(&name_postings[byte_offset..end]).to_vec()
 }
 
-/// Load the name prefix index from `name_prefix.bin` in `dir`.
+/// Load the name prefix index from the `name_prefix` blob.
 ///
-/// Returns an empty map when the file is absent (old segment) — callers
-/// should treat a missing entry as "cannot prune, include all rows".
+/// Returns an empty map when the blob is absent or empty.
 ///
 /// Wire format:
 /// ```text
@@ -920,17 +876,10 @@ fn decode_name_postings(encoded: u64, name_postings: &[u8]) -> Vec<u32> {
 /// ( [prefix_len: u8] [prefix_bytes: u8 × prefix_len]
 ///   [bitmap_len: u32 LE] [bitmap_bytes: roaring] )*
 /// ```
-fn load_name_prefix(dir: &Path) -> Result<HashMap<Vec<u8>, RoaringBitmap>> {
-    let path = dir.join("name_prefix.bin");
-    let data = match std::fs::read(&path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-        Ok(d) => d,
-    };
+fn load_name_prefix(data: &[u8]) -> Result<HashMap<Vec<u8>, RoaringBitmap>> {
     if data.len() < 4 {
         return Ok(HashMap::new());
     }
-    #[allow(clippy::indexing_slicing)] // length checked above
     let entry_count = u32::from_le_bytes(
         data[..4]
             .try_into()
@@ -942,19 +891,16 @@ fn load_name_prefix(dir: &Path) -> Result<HashMap<Vec<u8>, RoaringBitmap>> {
     for entry in 0..entry_count {
         ensure!(
             pos < data.len(),
-            "name_prefix.bin truncated at entry {entry}"
+            "name_prefix blob truncated at entry {entry}"
         );
-        #[allow(clippy::indexing_slicing)] // pos < data.len() by ensure!
         let prefix_len = data[pos] as usize;
         pos += 1;
         ensure!(
             pos + prefix_len + 4 <= data.len(),
-            "name_prefix.bin truncated at prefix bytes for entry {entry}"
+            "name_prefix blob truncated at prefix bytes for entry {entry}"
         );
-        #[allow(clippy::indexing_slicing)]
         let prefix = data[pos..pos + prefix_len].to_vec();
         pos += prefix_len;
-        #[allow(clippy::indexing_slicing)]
         let bitmap_len = u32::from_le_bytes(
             data[pos..pos + 4]
                 .try_into()
@@ -963,9 +909,8 @@ fn load_name_prefix(dir: &Path) -> Result<HashMap<Vec<u8>, RoaringBitmap>> {
         pos += 4;
         ensure!(
             pos + bitmap_len <= data.len(),
-            "name_prefix.bin bitmap truncated at entry {entry}"
+            "name_prefix blob bitmap truncated at entry {entry}"
         );
-        #[allow(clippy::indexing_slicing)]
         let bitmap = RoaringBitmap::deserialize_from(&data[pos..pos + bitmap_len])
             .with_context(|| format!("deserialising name_prefix bitmap for entry {entry}"))?;
         pos += bitmap_len;
@@ -1002,14 +947,14 @@ mod tests {
     /// (tempdir, segment path) pair.
     fn make_segment(rows: &[(&str, &str, u32)]) -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let seg_dir = tmp.path().join("seg");
+        let seg = tmp.path().join("seg.fqsf");
         let content_id = [0xAB_u8; 20];
         let mut b = SegmentBuilder::new("test", &content_id);
         for &(name, kind, line) in rows {
             b.add_row(name, kind, "rust", line, 0, 10, 0);
         }
-        b.flush(&seg_dir).expect("flush");
-        (tmp, seg_dir)
+        b.flush(&seg).expect("flush");
+        (tmp, seg)
     }
 
     fn clauses_where_kind(kind: &str) -> Clauses {
@@ -1066,16 +1011,16 @@ mod tests {
     #[test]
     fn find_by_enrichment_field() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let seg_dir = tmp.path().join("seg");
+        let seg = tmp.path().join("seg.fqsf");
         let content_id = [0x11_u8; 20];
         let mut b = SegmentBuilder::new("test", &content_id);
         let row = b.emit_row("foo", "function", "rust", 1, 0, 50, 0);
         b.set_field(row, "param_count", "2");
         let row2 = b.emit_row("bar", "function", "rust", 5, 51, 100, 0);
         b.set_field(row2, "param_count", "0");
-        b.flush(&seg_dir).expect("flush");
+        b.flush(&seg).expect("flush");
 
-        let reader = SegmentReader::open(&seg_dir).expect("open");
+        let reader = SegmentReader::open(&seg).expect("open");
 
         // WHERE param_count = '2' should return only "foo"
         let clauses = Clauses {
@@ -1211,15 +1156,15 @@ mod tests {
     #[test]
     fn round_trip_row_content() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let seg_dir = tmp.path().join("seg");
+        let seg = tmp.path().join("seg.fqsf");
         let mut b = SegmentBuilder::new("test", &[0xFFu8; 20]);
         let r0 = b.emit_row("alpha", "function", "rust", 1, 0, 50, 3);
         b.set_field(r0, "is_const", "false");
         let r1 = b.emit_row("beta", "struct", "rust", 10, 51, 200, 0);
         b.set_field(r1, "member_count", "4");
-        b.flush(&seg_dir).expect("flush");
+        b.flush(&seg).expect("flush");
 
-        let reader = SegmentReader::open(&seg_dir).expect("open");
+        let reader = SegmentReader::open(&seg).expect("open");
 
         // Find all, sorted by name.
         let clauses = Clauses {
@@ -1264,11 +1209,11 @@ mod tests {
     #[test]
     fn find_symbols_on_empty_segment_returns_empty_vec() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let seg_dir = tmp.path().join("seg");
+        let seg = tmp.path().join("seg.fqsf");
         let b = SegmentBuilder::new("test", &[0xAAu8; 20]);
-        b.flush(&seg_dir).expect("flush");
+        b.flush(&seg).expect("flush");
 
-        let reader = SegmentReader::open(&seg_dir).expect("open");
+        let reader = SegmentReader::open(&seg).expect("open");
         assert_eq!(reader.row_count, 0);
 
         let result = reader
@@ -1281,65 +1226,78 @@ mod tests {
 
     /// Opening a path that does not exist must return `Err`.
     #[test]
-    fn open_nonexistent_dir_returns_err() {
+    fn open_nonexistent_path_returns_err() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let missing = tmp.path().join("does_not_exist");
+        let missing = tmp.path().join("does_not_exist.fqsf");
         assert!(
             SegmentReader::open(&missing).is_err(),
-            "expected Err for missing directory"
+            "expected Err for missing file"
         );
     }
 
-    /// A segment with a corrupted FQSG magic must return `Err` at `open`,
-    /// not produce garbage results.
+    /// A segment with a corrupted FQSF outer magic must return `Err` at `open`.
     #[test]
     fn open_corrupt_magic_returns_err() {
-        let (_tmp, seg_dir) = make_segment(&[("foo", "function", 1)]);
+        let (_tmp, seg) = make_segment(&[("foo", "function", 1)]);
 
-        // Overwrite the first 4 bytes of header.bin with garbage.
-        let header_path = seg_dir.join("header.bin");
-        let mut bytes = std::fs::read(&header_path).expect("read header");
+        // Overwrite the first 4 bytes of the .fqsf file with garbage.
+        let mut bytes = std::fs::read(&seg).expect("read segment");
         bytes[0] = b'X';
         bytes[1] = b'X';
         bytes[2] = b'X';
         bytes[3] = b'X';
-        std::fs::write(&header_path, &bytes).expect("write header");
+        std::fs::write(&seg, &bytes).expect("write segment");
 
         assert!(
-            SegmentReader::open(&seg_dir).is_err(),
-            "expected Err for corrupt FQSG magic"
+            SegmentReader::open(&seg).is_err(),
+            "expected Err for corrupt FQSF magic"
         );
     }
 
-    /// A segment with non-monotone string pool offsets must return `Err` at
-    /// `open` (not panic mid-query).
+    /// A segment with non-monotone string pool offsets must return `Err` at `open`.
     #[test]
     fn open_nonmonotone_string_pool_returns_err() {
-        // Build a segment that has at least two strings in the pool so the
-        // monotonicity check fires.
-        let (_tmp, seg_dir) = make_segment(&[("alpha", "function", 1), ("beta", "struct", 2)]);
+        // Build a segment with at least two strings so the monotonicity check fires.
+        let (_tmp, seg) = make_segment(&[("alpha", "function", 1), ("beta", "struct", 2)]);
 
-        let offsets_path = seg_dir.join("strings_offsets.bin");
-        let mut bytes = std::fs::read(&offsets_path).expect("read offsets");
+        let mut bytes = std::fs::read(&seg).expect("read segment");
 
-        // strings_offsets.bin is a [u32] array (little-endian).  Make
-        // offset[1] less than offset[0] to break monotonicity.
-        // offset[0] is bytes 0..4; offset[1] is bytes 4..8.
-        if bytes.len() >= 8 {
-            // Write 0xFFFF_FFFF into offset[1] if offset[0] < 0xFFFF_FFFF,
-            // otherwise write 0 into offset[1].
-            let off0 = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-            let bad: u32 = if off0 > 0 { 0 } else { u32::MAX };
-            bytes[4..8].copy_from_slice(&bad.to_le_bytes());
-            std::fs::write(&offsets_path, &bytes).expect("write offsets");
-
-            assert!(
-                SegmentReader::open(&seg_dir).is_err(),
-                "expected Err for non-monotone string pool offsets"
-            );
+        // Find the "strings_offsets" blob in the TOC and corrupt its first two offsets.
+        // TOC starts at byte 12; each entry is TOC_ENTRY_SIZE (64) bytes.
+        // Entry layout: [name: ENTRY_NAME_LEN bytes][offset: u32 LE][len: u32 LE]
+        let entry_count = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+        let toc_start = 12;
+        for i in 0..entry_count {
+            let es = toc_start + i * TOC_ENTRY_SIZE;
+            let name_end = bytes[es..es + ENTRY_NAME_LEN]
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(ENTRY_NAME_LEN);
+            if &bytes[es..es + name_end] == b"strings_offsets" {
+                let offset = u32::from_le_bytes(
+                    bytes[es + ENTRY_NAME_LEN..es + ENTRY_NAME_LEN + 4]
+                        .try_into()
+                        .unwrap(),
+                ) as usize;
+                let len = u32::from_le_bytes(
+                    bytes[es + ENTRY_NAME_LEN + 4..es + ENTRY_NAME_LEN + 8]
+                        .try_into()
+                        .unwrap(),
+                ) as usize;
+                // Corrupt: make offset[1] < offset[0] to break monotonicity.
+                if len >= 8 {
+                    let off0 = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                    let bad: u32 = if off0 > 0 { 0 } else { u32::MAX };
+                    bytes[offset + 4..offset + 8].copy_from_slice(&bad.to_le_bytes());
+                    std::fs::write(&seg, &bytes).expect("write segment");
+                    assert!(
+                        SegmentReader::open(&seg).is_err(),
+                        "expected Err for non-monotone string pool offsets"
+                    );
+                }
+                return;
+            }
         }
-        // If the offsets file is too short to corrupt, the test passes vacuously
-        // (the segment has fewer than two offset entries, so monotonicity is
-        // trivially satisfied — not a realistic production case).
+        // blob not found — test passes vacuously (shouldn't happen with real segments)
     }
 }

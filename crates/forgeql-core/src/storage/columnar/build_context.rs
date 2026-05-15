@@ -55,14 +55,14 @@ impl ColumnarBuildContext {
 
     /// Path to the segment directory for a given hex content ID.
     ///
-    /// Returns `<segments_dir>/<provider_id>-v<N>/<hex[0..2]>/<hex[2..]>`
+    /// Returns `<segments_dir>/<provider_id>-v<N>/<hex[0..2]>/<hex[2..]>.fqsf`
     /// (git-style 2-char fan-out to avoid flat directories on large repos).
     #[must_use]
-    pub fn segment_dir_for(&self, hex_content_id: &str) -> PathBuf {
+    pub fn segment_path_for(&self, hex_content_id: &str) -> PathBuf {
         self.segments_dir
             .join(self.versioned_provider())
             .join(&hex_content_id[..2])
-            .join(&hex_content_id[2..])
+            .join(format!("{}.fqsf", &hex_content_id[2..]))
     }
 
     /// Path to the overlay file for a given snapshot hex (e.g. commit SHA).
@@ -129,7 +129,9 @@ impl ColumnarBuildContext {
 
                 let hex = bytes_to_hex(content_id);
                 let provider_ver_dir = segments_dir.join(format!("{provider_id}-v{enrich_ver}"));
-                let target_dir = provider_ver_dir.join(&hex[..2]).join(&hex[2..]);
+                let target_path = provider_ver_dir
+                    .join(&hex[..2])
+                    .join(format!("{}.fqsf", &hex[2..]));
 
                 // Always register in segment_map, even for already-written segments.
                 {
@@ -140,7 +142,7 @@ impl ColumnarBuildContext {
                     let _ = map.insert(abs_path, content_id.to_vec());
                 }
 
-                if is_valid_segment(&target_dir) {
+                if is_valid_segment(&target_path) {
                     return; // Idempotent: segment already written on a prior run.
                 }
 
@@ -169,7 +171,7 @@ impl ColumnarBuildContext {
                     }
                 }
 
-                match builder.flush(&target_dir) {
+                match builder.flush(&target_path) {
                     Ok(()) => {
                         let mut cols = state_ref
                             .all_columns
@@ -178,7 +180,7 @@ impl ColumnarBuildContext {
                         cols.extend(local_cols);
                     }
                     Err(e) => {
-                        warn!(target = %target_dir.display(), "inline emit: flush failed: {e}");
+                        warn!(target = %target_path.display(), "inline emit: flush failed: {e}");
                     }
                 }
             },

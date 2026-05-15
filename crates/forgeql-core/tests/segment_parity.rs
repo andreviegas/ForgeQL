@@ -72,7 +72,7 @@ fn index_canonical(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
 /// checking that flush + open is a round-trip identity.
 fn build_segment_from_table(table: &SymbolTable) -> (TempDir, PathBuf) {
     let tmp = TempDir::new().expect("tempdir");
-    let seg_dir = tmp.path().join("seg");
+    let seg_dir = tmp.path().join("seg.fqsf");
 
     let content_id = [0xCC_u8; 20]; // stable dummy content ID for tests
     let mut builder = SegmentBuilder::new("test", &content_id);

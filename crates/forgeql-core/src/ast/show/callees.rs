@@ -57,10 +57,12 @@ pub fn show_callers(index: &SymbolTable, workspace: &Workspace, symbol: &str) ->
 ///
 /// # Errors
 /// Returns an error if the file cannot be parsed or the AST node for the
+#[allow(clippy::too_many_arguments)]
 pub fn show_callees(
     cached: &crate::ast::parse_cache::CachedParse,
     path: &std::path::Path,
     byte_range_start: usize,
+    hint_line: Option<usize>,
     workspace: &Workspace,
     symbol: &str,
     lang_registry: &LanguageRegistry,
@@ -71,8 +73,9 @@ pub fn show_callees(
         .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
     let config = lang.config();
     let source = &*cached.source;
-    let fn_node = find_function_node_for_symbol(cached.tree.root_node(), byte_range_start, config)
-        .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
+    let fn_node =
+        find_function_node_for_symbol(cached.tree.root_node(), byte_range_start, hint_line, config)
+            .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 
     let mut callees: Vec<String> = Vec::new();
     collect_callees_walk(source, fn_node, &mut callees, config.call_expression_kind());

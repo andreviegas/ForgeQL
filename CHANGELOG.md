@@ -4,6 +4,40 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.0] — 2026-05-15 — Single-file `.fqsf` segment format (65× fewer files, 25× fewer VMAs)
+
+### Breaking Changes
+
+- **Segment storage format v6**: Columnar segments are now stored as single `.fqsf`
+  binary files (`<segments>/<provider>-v6/<2c>/<hex[2:]>.fqsf`) instead of per-file
+  directories containing ~65 individual `.bin` files. `ENRICH_VER` bumped from 5 to 6;
+  existing v5 segment caches are automatically invalidated and rebuilt on first use.
+
+### Performance
+
+- **65× fewer files**: replaces ~4.5 M per-segment directories (≈65 `.bin` files each)
+  with ~70 K `.fqsf` files on a Zephyr RTOS repository index
+- **25× fewer VMAs**: one `Arc<Mmap>` per segment file instead of ~25 separate mmaps
+  per segment, substantially reducing `/proc/<pid>/maps` pressure
+- **Atomic writes**: segments are written to a `.tmp.<stem>.<pid>.fqsf` file and then
+  renamed into place; concurrent writers safely race without corruption
+- **4-byte blob alignment**: all blobs within `.fqsf` files are padded to 4-byte
+  boundaries, enabling zero-copy `bytemuck::cast_slice` on mmap data
+
+### Implementation Notes
+
+- New format wire layout: `FQSF` magic (4 bytes), version `u32`, entry_count `u32`,
+  TOC (entry_count × 64 bytes: 56-byte name + `u32` offset + `u32` length), then
+  4-byte-aligned blob data sections
+- `promote_segment` simplified from recursive `copy_dir_all` to `std::fs::copy`
+- Staging GC (`gc_orphaned_staging`) updated to match `.fqsf`-suffixed filenames
+- `encode_zone_maps` simplified to return `Vec` directly (was `Result<Vec, _>`)
+
+### Bug Fixes
+
+- **`SHOW body` now rejects non-function symbols in both legacy and columnar backends**: previously, `SHOW body OF 'some_struct'` could silently return a random enclosing function instead of an error. Both `resolve_body_symbol` paths now filter candidates to function-like kinds (`function`, `method`, `constructor`, `destructor`, `macro`). Member declarations (`fql_kind="field"`) that carry a `body_symbol` redirect (C++ out-of-line definitions set by `MemberEnricher`) continue to work. Non-function names now produce an actionable error: `'X' is not a function (found fql_kind: [struct]). Use FIND symbols WHERE name = 'X' to locate the definition, then SHOW LINES n-m OF 'file' to read it.`
+- **Cross-language ambiguity check extended to `SHOW body`**: `resolve_body_symbol` in the legacy backend now applies the same cross-language guard that `resolve_symbol` has — if a name exists in multiple languages, an explicit `WHERE language = '...'` or `IN '*.ext'` clause is required.
+
 ## [0.49.10] — 2026-05-14 — Fix inflated `lines`, `return_count`, `goto_count`, `string_count`, `throw_count` for misparsed C/C++ functions
 
 ### Bug Fixes
