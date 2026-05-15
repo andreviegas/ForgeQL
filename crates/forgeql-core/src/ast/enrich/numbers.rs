@@ -7,7 +7,7 @@
 /// - `num_value`: parsed decimal string (separators stripped)
 /// - `num_suffix`: `"u"` / `"l"` / `"ul"` / `"ull"` / `"f"` / `"ll"` / `"z"` / `""`
 /// - `suffix_meaning`: semantic meaning of suffix (e.g. `"unsigned"`, `"float"`, `"long_long"`)
-/// - `is_magic`: `"false"` for {0, 1, -1}; `"true"` otherwise
+/// - `is_magic`: `"false"` for named-constant and subscript contexts; `"true"` otherwise
 use std::collections::HashMap;
 
 use super::{EnrichContext, ExtraRow, NodeEnricher};
@@ -23,6 +23,13 @@ impl NodeEnricher for NumberEnricher {
     fn extra_rows(&self, ctx: &EnrichContext<'_>) -> Vec<ExtraRow> {
         let config = ctx.language_config;
         if !config.is_number_literal_kind(ctx.node.kind()) {
+            return vec![];
+        }
+
+        // Phantom numbers inside string literals, comments, or tree-sitter
+        // ERROR recovery subtrees are artefacts, not real code.  Gate on both
+        // flags independently — other enrichers can do the same as needed.
+        if ctx.inside_string || ctx.inside_error {
             return vec![];
         }
 
@@ -76,11 +83,20 @@ impl NodeEnricher for NumberEnricher {
         };
         drop(fields.insert("num_sign".to_string(), sign.to_string()));
 
-        // Magic number detection: 0, 1, -1 are universally non-magic.
-        // Additionally, numbers whose direct parent is a named-constant context
-        // (enum enumerator, const variable initialiser) are not magic.
-        // We only check the *direct* parent to avoid false suppression for
-        // sub-expressions such as `arr[64]` inside an `init_declarator`.
+        // Magic number detection.
+        //
+        // A literal is NOT magic when it appears in a structurally well-defined
+        // position where its value has no domain-specific meaning:
+        //
+        //   • named-constant context (preproc_def / enumerator / init_declarator):
+        //     the value is being *defined*, not used as an opaque constant.
+        //   • zero in a subscript expression (`array[0]`): first-element access
+        //     is a universal structural idiom with no semantic meaning.
+        //
+        // Notably, the former blanket exclusion of {0, 1, -1} is intentionally
+        // removed.  Those values carry semantic meaning in comparisons, return
+        // statements, and function arguments (e.g. `if (status == 1)`,
+        // `return 1`), and must be flagged there.
         //
         // NOTE: Use ctx.parent_kind (O(1) from cursor walk) — never call
         // ctx.node.parent() here.  ts_node_parent iterates all preceding
@@ -90,7 +106,10 @@ impl NodeEnricher for NumberEnricher {
             let kinds = config.constant_def_parent_kinds();
             kinds.iter().any(|k| k == ctx.parent_kind)
         };
-        let is_magic = !(-1..=1).contains(&value) && !in_named_constant_context;
+        // `array[0]` — first-element subscript access is structural.  Only
+        // exempt the exact zero value; `arr[1]`, `arr[64]` etc. remain magic.
+        let is_subscript_zero = value == 0 && config.is_subscript_expression_kind(ctx.parent_kind);
+        let is_magic = !in_named_constant_context && !is_subscript_zero;
         drop(fields.insert("is_magic".to_string(), is_magic.to_string()));
         vec![ExtraRow {
             name: raw,

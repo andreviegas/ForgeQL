@@ -72,6 +72,38 @@ pub struct EnrichContext<'a> {
     /// `O(sibling_count)` and O(n²) for wide nodes like large
     /// `initializer_list` arrays.
     pub parent_kind: &'static str,
+    /// `true` when this node is a descendant of an opaque string literal
+    /// (e.g. C/C++/Rust `string_literal`, `char_literal`) or a comment node.
+    ///
+    /// In these contexts any child nodes emitted by tree-sitter are phantom
+    /// artefacts of tokenisation error-recovery, not real code constructs.
+    /// For example, tree-sitter-cpp can emit `number_literal` nodes for digit
+    /// sequences inside string content (e.g. `"3+4"` → phantom `+3`, `+4`).
+    ///
+    /// These two flags are intentionally separate so enrichers can gate on
+    /// either condition independently:
+    ///
+    /// * `inside_string` — the current node is a descendant of an opaque
+    ///   string literal or comment.  Languages whose string literals can embed
+    ///   real expressions (Python f-strings) do not set
+    ///   `string_content_raw_kind`, so `is_opaque_string_kind` returns `false`
+    ///   for them and this flag is never raised inside their string nodes.
+    ///
+    /// * `inside_error` — the current node is a descendant of a tree-sitter
+    ///   `ERROR` recovery node.  The error-recovery tokeniser re-lexes raw
+    ///   source text and can emit `number_literal` etc. as direct children of
+    ///   `ERROR` (e.g. digits inside string arguments of file-scope macros
+    ///   that couldn't be parsed).  These phantom nodes are indistinguishable
+    ///   from real code nodes without the `ERROR` ancestry check.
+    ///
+    /// Both are maintained O(1) by `collect_nodes` via independent `usize`
+    /// depth counters incremented on descent and decremented on ascent.
+    /// The `usize` (rather than `bool`) is required for correct nesting: a
+    /// `string_literal` can appear *inside* an `ERROR` subtree, so each
+    /// counter must track its own depth independently.
+    pub inside_string: bool,
+    /// See [`EnrichContext::inside_string`] for the full explanation.
+    pub inside_error: bool,
 }
 
 // -----------------------------------------------------------------------

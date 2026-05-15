@@ -807,3 +807,27 @@ void useMagicInExpr(void) {
     (void)x;
     if (x == 42) { (void)x; }
 }
+
+/* Bug 2a regression — 0/1 in semantic comparison contexts must be magic */
+int semanticZeroOne(int status) {
+    if (status == 1) return 1;  /* 1 = STATUS_OK, semantic magic */
+    if (status == 0) return 0;  /* 0 = ERROR, semantic magic */
+    return -1;
+}
+
+/* Bug 2a — 0 in subscript (array[0]) must NOT be magic */
+void firstElementAccess(int *buf) {
+    int v = buf[0];  /* structural first-element read — 0 not magic */
+    (void)v;
+}
+
+/* Bug 2b regression — numbers appearing ONLY inside string literals must NOT
+   be indexed as number_literal nodes.
+   Test A: plain string inside a function (string_content is a leaf in
+           tree-sitter-cpp; 9999 never generates a phantom node). */
+void stringLiteralNumbers(void) {
+    const char *msg = "limit is 9999 per second";
+    (void)msg;
+}
+
+

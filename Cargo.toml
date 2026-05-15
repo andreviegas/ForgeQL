@@ -6,10 +6,21 @@ members = [
     "crates/forgeql-lang-python",
     "crates/forgeql-lang-rust",
     "crates/forgeql",
+    "tools/ts-debug",
+]
+# tools/ crates are workspace members (for Cargo.lock version parity) but are
+# excluded from default builds so they don't slow down `cargo build / test`.
+# Build the debug tool explicitly with: cargo build -p forgeql-ts-debug
+default-members = [
+    "crates/forgeql-core",
+    "crates/forgeql-lang-cpp",
+    "crates/forgeql-lang-python",
+    "crates/forgeql-lang-rust",
+    "crates/forgeql",
 ]
 
 [workspace.package]
-version   = "0.50.1"
+version   = "0.50.2"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"

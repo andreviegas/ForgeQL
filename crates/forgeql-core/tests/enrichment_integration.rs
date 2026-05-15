@@ -112,6 +112,29 @@ fn engine_enrichment_only() -> (ForgeQLEngine, String, tempfile::TempDir) {
     (engine, session_id, dir)
 }
 
+/// Engine that indexes only `enrichment_bug2b.c` — the Bug-2b regression
+/// fixture containing `module_param` / `MODULE_PARM_DESC` calls that trigger
+/// tree-sitter ERROR-recovery phantom `number_literal` nodes.
+fn engine_bug2b_only() -> (ForgeQLEngine, String, tempfile::TempDir) {
+    let dir = tempdir().expect("tempdir");
+    let src = fixtures_dir();
+
+    fs::copy(
+        src.join("enrichment_bug2b.c"),
+        dir.path().join("enrichment_bug2b.c"),
+    )
+    .expect("copy enrichment_bug2b.c");
+
+    let data_dir = dir.path().join("data");
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let mut engine = ForgeQLEngine::new(data_dir, registry).expect("engine");
+    let session_id = engine
+        .register_local_session(dir.path())
+        .expect("register session");
+
+    (engine, session_id, dir)
+}
+
 fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).unwrap_or_else(|e| panic!("parse failed for: {fql}: {e}"));
     let op = ops.first().expect("at least one op");
@@ -574,12 +597,14 @@ fn number_is_magic_false() {
         "FIND symbols WHERE node_kind = 'number_literal' WHERE is_magic = 'false'",
     );
     let qr = as_query(&r);
-    assert!(!qr.results.is_empty(), "expected non-magic numbers (0, 1)");
-    // 0 and 1 are not magic
+    assert!(!qr.results.is_empty(), "expected non-magic numbers");
+    // Values in named-constant contexts (init_declarator, enumerator, preproc_def)
+    // are not magic regardless of their value.  zeroVal=0 and oneVal=1 (both in
+    // init_declarator) must appear in the non-magic set.
     let values: HashSet<&str> = qr.results.iter().map(|m| field(m, "num_value")).collect();
     assert!(
         values.contains("0") || values.contains("1"),
-        "expected 0 or 1 among non-magic values: {values:?}"
+        "expected 0 or 1 among non-magic values (from init_declarator context): {values:?}"
     );
 }
 
@@ -632,6 +657,106 @@ fn number_is_magic_true_bare_expr_regression() {
         !qr.results.is_empty(),
         "42 in bare expression must still be magic after BUG-06 fix"
     );
+}
+
+// Bug 2a — 0/1 in semantic comparison contexts must be flagged is_magic='true'
+
+#[test]
+fn number_is_magic_true_one_in_comparison() {
+    // `if (status == 1)` — the 1 carries semantic meaning (STATUS_OK) and must be magic.
+    // Regression: previously blanket-excluded because value was in {0, 1, -1}.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '1' \
+         WHERE is_magic = 'true' LIMIT 100",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "1 in `if (status == 1)` must be is_magic='true' (Bug 2a regression)"
+    );
+}
+
+#[test]
+fn number_is_magic_true_zero_in_comparison() {
+    // `if (status == 0)` — the 0 carries semantic meaning (ERROR) and must be magic.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '0' \
+         WHERE is_magic = 'true' LIMIT 100",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "0 in `if (status == 0)` must be is_magic='true' (Bug 2a regression)"
+    );
+}
+
+#[test]
+fn number_is_magic_false_subscript_zero() {
+    // `buf[0]` — first-element subscript access is a structural idiom.
+    // 0 as a subscript index must NOT be magic.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '0' \
+         WHERE is_magic = 'false' LIMIT 100",
+    );
+    let qr = as_query(&r);
+    // At least one '0' must be non-magic (the one in buf[0] subscript context,
+    // plus any zeros in init_declarator contexts).
+    assert!(
+        !qr.results.is_empty(),
+        "0 in array subscript `buf[0]` must be is_magic='false' (Bug 2a subscript exemption)"
+    );
+}
+
+// Bug 2b — numbers inside string literals must NOT be indexed
+
+#[test]
+fn number_not_indexed_inside_string_literal() {
+    // 9999 appears ONLY inside the string `"limit is 9999 per second"` inside
+    // a function body.  string_content is always a leaf in tree-sitter-cpp so
+    // no phantom node is emitted — this test guards against regressions where
+    // the enricher would accidentally index string content.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '9999'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        qr.results.is_empty(),
+        "9999 inside a string literal must NOT be indexed as a number (Bug 2b-A regression)"
+    );
+}
+
+#[test]
+fn number_not_indexed_inside_error_recovery_node() {
+    // 8881 and 8882 appear ONLY inside MODULE_PARM_DESC string arguments
+    // that tree-sitter-cpp parses inside ERROR recovery subtrees (triggered by
+    // using the `int` type keyword as a macro argument, which causes the parser
+    // to misread the argument list as a parameter declaration).
+    //
+    // Without the inside_error guard in NumberEnricher, these phantom
+    // number_literal nodes would be indexed as real magic numbers.
+    let (mut e, sid, _d) = engine_bug2b_only();
+    for sentinel in ["8881", "8882"] {
+        let q =
+            format!("FIND symbols WHERE node_kind = 'number_literal' WHERE name = '{sentinel}'");
+        let r = exec(&mut e, &sid, &q);
+        let qr = as_query(&r);
+        assert!(
+            qr.results.is_empty(),
+            "{sentinel} inside a tree-sitter ERROR-recovery string must NOT be indexed (Bug 2b-B regression)"
+        );
+    }
 }
 
 #[test]

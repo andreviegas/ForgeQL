@@ -4,6 +4,44 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.2] — 2026-05-15 — Fix `is_magic` false positives: blanket 0/1/-1 exclusion removed; numbers in string literals excluded
+
+### Bug Fixes
+
+- **`is_magic` no longer blanket-excludes `0`, `1`, and `-1`**
+  (`crates/forgeql-core/src/ast/enrich/numbers.rs`):
+  The previous implementation unconditionally suppressed `is_magic` for values in
+  `{-1, 0, 1}`, even in fully semantic comparison contexts such as
+  `if (status == 1)` or `return -1`. These are classic magic numbers and must be
+  flagged. The blanket exclusion is removed. The only remaining exemptions are:
+  - **Named-constant context** (`init_declarator`, `enumerator`, `preproc_def`):
+    the literal is defining a constant, not using an opaque value.
+  - **Zero in a subscript expression** (`array[0]`): first-element access is a
+    universal structural idiom with no domain-specific meaning.
+
+- **Numbers inside string literals are no longer indexed**
+  (`crates/forgeql-core/src/ast/index.rs`, `crates/forgeql-core/src/ast/enrich/mod.rs`,
+  `crates/forgeql-core/src/ast/enrich/numbers.rs`, `crates/forgeql-core/src/ast/lang.rs`):
+  tree-sitter-cpp can emit phantom `number_literal` nodes (and `unary_expression`
+  wrapping them) for digit sequences inside string content — e.g.
+  `"0 for layer 2 (default), 1 for layer 3+4"` produced spurious `is_magic='true'`
+  rows for every digit. The fix introduces a reusable `inside_literal: bool` field
+  in `EnrichContext`, maintained O(1) by a `literal_depth` counter in
+  `collect_nodes` that increments on descent into an opaque string or comment node
+  and decrements on ascent. `NumberEnricher` checks `ctx.inside_literal` as its
+  first guard; other enrichers with similar needs can use the same flag.
+  `LanguageConfig` gains an `is_opaque_string_kind()` predicate that returns `true`
+  only when `string_content_raw_kind` is set (C/C++, Rust), ensuring Python
+  f-string interpolations — which embed real expressions inside `string` nodes —
+  are not affected.
+
+### Cache Invalidation
+
+- **`ENRICH_VER` bumped from 6 to 7** (`crates/forgeql-core/src/storage/columnar/mod.rs`):
+  The `is_magic` field semantics changed (values that were `'false'` are now
+  `'true'` in comparison/argument contexts). Existing v6 segment caches are
+  automatically invalidated and rebuilt on first use.
+
 ## [0.50.1] — 2026-05-15 — Fix `cast_safety` always emitting `'unsafe'` for named C++ casts and Rust `as`-casts
 
 ### Bug Fixes

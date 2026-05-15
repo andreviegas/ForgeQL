@@ -1160,6 +1160,19 @@ fn collect_nodes(
     // O(1) by the cursor navigation below.  Avoids calling node.parent()
     // inside enrichers (which is O(sibling_count) in tree-sitter 0.25).
     let mut parent_kind_stack: Vec<&'static str> = Vec::new();
+    // Two independent depth counters exposed to enrichers via EnrichContext.
+    // Using usize (not bool) because a string_literal can appear inside an
+    // ERROR subtree, so each counter must track its own nesting depth.
+    //
+    // string_depth — incremented when descending into an opaque-string kind
+    //   or comment node; decremented on ascent.
+    //   → ctx.inside_string
+    //
+    // error_depth  — incremented when descending into a tree-sitter ERROR
+    //   recovery node; decremented on ascent.
+    //   → ctx.inside_error
+    let mut string_depth: usize = 0;
+    let mut error_depth: usize = 0;
     // Pre-compile env_guard_patterns once per file.
     let env_guard_regex: Option<regex::RegexSet> = if config.env_guard_patterns().is_empty() {
         None
@@ -1213,6 +1226,8 @@ fn collect_nodes(
                 guard_stack: &guard_stack,
                 macro_table,
                 parent_kind: parent_kind_stack.last().copied().unwrap_or(""),
+                inside_string: string_depth > 0,
+                inside_error: error_depth > 0,
             };
 
             // Every named node becomes a row.
@@ -1341,6 +1356,16 @@ fn collect_nodes(
 
             // Descend into children.
             if cursor.goto_first_child() {
+                // Maintain two independent depth counters so enrichers can gate
+                // on string/comment context and ERROR-recovery context separately.
+                // See EnrichContext::inside_string / inside_error for rationale.
+                if config.is_opaque_string_kind(node.kind()) || config.is_comment_kind(node.kind())
+                {
+                    string_depth += 1;
+                }
+                if node.is_error() {
+                    error_depth += 1;
+                }
                 // Record this node as the parent for the child level.
                 parent_kind_stack.push(node.kind());
                 continue;
@@ -1355,7 +1380,14 @@ fn collect_nodes(
         }
         let mut found_sibling = false;
         while cursor.goto_parent() {
-            let _ = parent_kind_stack.pop();
+            if let Some(popped) = parent_kind_stack.pop() {
+                if config.is_opaque_string_kind(popped) || config.is_comment_kind(popped) {
+                    string_depth = string_depth.saturating_sub(1);
+                }
+                if popped == "ERROR" {
+                    error_depth = error_depth.saturating_sub(1);
+                }
+            }
             if cursor.goto_next_sibling() {
                 found_sibling = true;
                 break;

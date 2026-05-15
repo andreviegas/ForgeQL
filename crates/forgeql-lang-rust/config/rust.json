@@ -98,6 +98,7 @@
   "literals": {
     "number_kinds": ["integer_literal", "float_literal"],
     "string_kinds": ["string_literal", "raw_string_literal", "char_literal"],
+    "string_content_kind": "string_content",
     "char_kind": "char_literal",
     "null_values": [],
     "boolean_values": ["true", "false"],

@@ -124,6 +124,7 @@
   "literals": {
     "number_kinds": ["number_literal"],
     "string_kinds": ["string_literal", "char_literal"],
+    "string_content_kind": "string_content",
     "char_kind": "char_literal",
     "null_values": ["nullptr", "NULL", "0"],
     "boolean_values": ["true", "false"],

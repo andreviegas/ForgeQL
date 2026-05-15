@@ -285,6 +285,12 @@ pub struct LanguageConfig {
     /// `["string_literal", "raw_string_literal"]` for Rust).
     pub(crate) string_literal_raw_kinds: Vec<String>,
 
+    /// Raw kind for the inline content node inside a string literal
+    /// (e.g. `"string_content"` for C++ and Rust tree-sitter grammars).
+    /// Number literals whose direct parent has this kind are inside a string
+    /// and must be excluded from magic-number detection.
+    pub(crate) string_content_raw_kind: String,
+
     /// Raw kind for throw/raise statements
     /// (e.g. `"throw_statement"` for C++, `""` for Rust which uses `panic!`).
     pub(crate) throw_statement_raw_kind: String,
@@ -516,6 +522,25 @@ impl LanguageConfig {
     #[must_use]
     pub fn is_string_literal_kind(&self, kind: &str) -> bool {
         self.string_literal_raw_kinds.iter().any(|s| s == kind)
+    }
+
+    /// Is this the raw kind for inline string content (child of a string literal)?
+    #[must_use]
+    pub fn is_string_content_kind(&self, kind: &str) -> bool {
+        !self.string_content_raw_kind.is_empty() && self.string_content_raw_kind == kind
+    }
+
+    /// Is this a string/char literal kind whose subtree is guaranteed to contain
+    /// only terminal tokens (no embedded expression children like f-string
+    /// interpolations)?  Grammars that set `string_content_raw_kind` use a
+    /// dedicated leaf token for string content, making their string literals
+    /// opaque from an enrichment perspective.  Languages like Python that omit
+    /// `string_content_raw_kind` may embed real expressions (f-strings) and
+    /// must still be descended into.
+    #[must_use]
+    pub fn is_opaque_string_kind(&self, kind: &str) -> bool {
+        !self.string_content_raw_kind.is_empty()
+            && (self.is_string_literal_kind(kind) || self.is_char_literal_kind(kind))
     }
 
     /// Should this kind be skipped during indexing?

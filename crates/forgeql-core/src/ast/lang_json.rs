@@ -399,6 +399,12 @@ pub struct LiteralsSection {
     #[serde(default)]
     pub string_kinds: Vec<String>,
 
+    /// Inline content node kind inside a string literal (e.g. `"string_content"`).
+    /// Number literals whose direct parent has this kind are inside a string literal
+    /// and are excluded from magic-number detection.
+    #[serde(default)]
+    pub string_content_kind: String,
+
     /// Character literal kind.
     #[serde(default)]
     pub char_kind: String,
@@ -669,6 +675,7 @@ impl LanguageConfigJson {
             call_expression_raw_kind: self.expressions.call,
             goto_statement_raw_kind: self.statements.goto,
             string_literal_raw_kinds: self.literals.string_kinds,
+            string_content_raw_kind: self.literals.string_content_kind,
             throw_statement_raw_kind: self.statements.throw,
             template_declaration_raw_kind: self.types.template_declaration,
             enumerator_raw_kind: self.types.enumerator,
