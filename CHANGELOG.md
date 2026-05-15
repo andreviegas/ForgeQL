@@ -4,6 +4,53 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.1] — 2026-05-15 — Fix `cast_safety` always emitting `'unsafe'` for named C++ casts and Rust `as`-casts
+
+### Bug Fixes
+
+- **`cast_safety` now correctly classifies named C++ casts and Rust `as`-casts**
+  (`crates/forgeql-lang-cpp/config/cpp.json`, `crates/forgeql-lang-rust/config/rust.json`,
+  `crates/forgeql-core/src/ast/enrich/casts.rs`, `crates/forgeql-core/src/ast/lang.rs`,
+  `crates/forgeql-core/src/ast/lang_json.rs`):
+  Previously every cast — including `static_cast<T>()`, `dynamic_cast<T>()`, and
+  Rust `as`-casts — was reported as `cast_safety='unsafe'`. Three root causes were fixed:
+
+  1. **Named C++ casts not detected at all**: tree-sitter-cpp 0.23 parses
+     `static_cast<T>(x)` as a `call_expression` containing a `template_function`
+     node, not as a dedicated `static_cast_expression` node. The `CastEnricher`
+     only walked raw cast nodes and therefore never saw named casts. A new
+     `named_casts` map in `LanguageConfig` (populated from `cpp.json`) and a
+     companion `detect_named_cast_row()` path in `CastEnricher` now recognise
+     `call_expression` + `template_function` pairs whose function name matches a
+     known cast keyword (`static_cast`, `dynamic_cast`, `const_cast`,
+     `reinterpret_cast`) and emit a synthetic cast enrichment row with the correct
+     `cast_style` and `cast_safety`.
+
+  2. **Incorrect safety for Rust `as`-casts**: the Rust config mapped the `as`
+     cast kind to `'unsafe'`. Rust `as` is a checked, non-panicking numeric
+     coercion that is never unsafe in safe code; it is now classified as
+     `'moderate'` (may truncate or lose precision, but does not violate memory
+     safety).
+
+  3. **Prefilter not covering `call_expression`**: the storage-layer prefilter that
+     maps `cast_safety` filter values to candidate node kinds was updated to include
+     `call_expression` alongside the existing `cast_expression` and `as_expression`
+     kinds, so `WHERE cast_safety='safe'` index scans now reach named-cast nodes.
+
+  **Classification after fix:**
+
+  | Cast form | `cast_style` | `cast_safety` |
+  |---|---|---|
+  | C-style `(T)x` | `c_style` | `unsafe` |
+  | `reinterpret_cast<T>()` | `reinterpret_cast` | `unsafe` |
+  | `const_cast<T>()` | `const_cast` | `moderate` |
+  | `static_cast<T>()` | `static_cast` | `safe` |
+  | `dynamic_cast<T>()` | `dynamic_cast` | `safe` |
+  | Rust `x as T` | `as_cast` | `moderate` |
+
+  Verified against `pisco-firmware`: 61 `safe` and 96 `unsafe` casts correctly
+  classified; previously all 157 were reported as `unsafe`.
+
 ## [0.50.0] — 2026-05-15 — Single-file `.fqsf` segment format (65× fewer files, 25× fewer VMAs)
 
 ### Breaking Changes

@@ -141,6 +141,11 @@ pub struct LanguageConfig {
     /// (`raw_kind`, `cast_style`, `cast_safety`) triples for cast detection.
     pub(crate) cast_kinds: Vec<(String, String, String)>,
 
+    /// (`keyword`, `cast_style`, `cast_safety`) triples for named-keyword casts
+    /// that tree-sitter parses as `call_expression(template_function(identifier))`.
+    /// Used for C++ `static_cast<T>()`, `reinterpret_cast<T>()`, etc.
+    pub(crate) named_cast_keywords: Vec<(String, String, String)>,
+
     // -- capabilities --
     /// Whether the language has `goto` statements.
     pub(crate) has_goto: bool,
@@ -1245,6 +1250,18 @@ impl LanguageConfig {
             .map(|(_, style, safety)| (style.as_str(), safety.as_str()))
     }
 
+    /// Look up named-cast info by keyword text (e.g. `"static_cast"`).
+    /// Returns `(style, safety)` for cast keywords that tree-sitter parses as
+    /// `call_expression(template_function(identifier))` rather than a distinct
+    /// cast node kind.
+    #[must_use]
+    pub fn named_cast_info(&self, keyword: &str) -> Option<(&str, &str)> {
+        self.named_cast_keywords
+            .iter()
+            .find(|(kw, _, _)| kw == keyword)
+            .map(|(_, style, safety)| (style.as_str(), safety.as_str()))
+    }
+
     /// Look up for-loop style by raw kind.
     #[must_use]
     pub fn for_style(&self, kind: &str) -> Option<&str> {
@@ -2081,7 +2098,7 @@ mod tests {
     #[test]
     fn query_methods_lookups() {
         let cfg = CppLanguageInline.config();
-        // cast_info
+        // cast_info (direct node-kind casts)
         assert_eq!(
             cfg.cast_info("cast_expression"),
             Some(("c_style", "unsafe"))
@@ -2091,6 +2108,24 @@ mod tests {
             Some(("static_cast", "safe"))
         );
         assert_eq!(cfg.cast_info("unknown"), None);
+        // named_cast_info (keyword-based, for tree-sitter-cpp 0.23 call_expression style)
+        assert_eq!(
+            cfg.named_cast_info("static_cast"),
+            Some(("static_cast", "safe"))
+        );
+        assert_eq!(
+            cfg.named_cast_info("dynamic_cast"),
+            Some(("dynamic_cast", "safe"))
+        );
+        assert_eq!(
+            cfg.named_cast_info("const_cast"),
+            Some(("const_cast", "moderate"))
+        );
+        assert_eq!(
+            cfg.named_cast_info("reinterpret_cast"),
+            Some(("reinterpret_cast", "unsafe"))
+        );
+        assert_eq!(cfg.named_cast_info("unknown_cast"), None);
         // for_style
         assert_eq!(cfg.for_style("for_statement"), Some("traditional"));
         assert_eq!(cfg.for_style("for_range_loop"), Some("range"));

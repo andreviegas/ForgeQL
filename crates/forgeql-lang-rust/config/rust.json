@@ -131,7 +131,7 @@
   },
 
   "casts": [
-    ["type_cast_expression", "as_cast", "unsafe"]
+    ["type_cast_expression", "as_cast", "moderate"]
   ],
 
   "comments": {

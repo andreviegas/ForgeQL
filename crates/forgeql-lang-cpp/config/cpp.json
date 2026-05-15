@@ -182,6 +182,13 @@
     ["dynamic_cast_expression", "dynamic_cast", "safe"]
   ],
 
+  "named_casts": [
+    ["static_cast",      "static_cast",      "safe"],
+    ["dynamic_cast",     "dynamic_cast",     "safe"],
+    ["const_cast",       "const_cast",       "moderate"],
+    ["reinterpret_cast", "reinterpret_cast", "unsafe"]
+  ],
+
   "comments": {
     "prefixes": [
       ["/**", "doc_block"],

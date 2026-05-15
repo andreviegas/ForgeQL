@@ -80,6 +80,14 @@ pub struct LanguageConfigJson {
     #[serde(default)]
     pub casts: Vec<(String, String, String)>,
 
+    /// Named cast detection: `[keyword, style, safety]` triples.
+    ///
+    /// For languages where named casts are parsed as
+    /// `call_expression(template_function(identifier))` rather than a distinct
+    /// node kind (e.g. C++ `static_cast<T>()` in tree-sitter-cpp 0.23).
+    #[serde(default)]
+    pub named_casts: Vec<(String, String, String)>,
+
     /// Comment style detection.
     #[serde(default)]
     pub comments: CommentsSection,
@@ -629,6 +637,7 @@ impl LanguageConfigJson {
             visibility_keywords: self.visibility.keywords,
             visibility_default_by_type: self.visibility.default_by_type,
             cast_kinds: self.casts,
+            named_cast_keywords: self.named_casts,
             has_goto: self.capabilities.has_goto,
             has_increment_decrement: self.capabilities.has_increment_decrement,
             has_implicit_truthiness: self.capabilities.has_implicit_truthiness,

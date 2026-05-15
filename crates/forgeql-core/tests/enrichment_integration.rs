@@ -2608,9 +2608,116 @@ fn cast_safety_c_style_unsafe() {
     }
 }
 
-// Named C++ casts (reinterpret_cast, const_cast, etc.) are NOT indexed
-// as separate node kinds in tree-sitter-cpp 0.23, so cast_safety tests
-// for those are omitted (see §7 note above).
+// In tree-sitter-cpp 0.23, named C++ casts (static_cast, reinterpret_cast,
+// etc.) are parsed as call_expression(template_function(identifier)) rather
+// than as distinct node kinds.  CastEnricher detects them via
+// LanguageConfig::named_cast_keywords.
+
+#[test]
+fn cast_safety_static_cast_safe() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // static_cast<T>() → call_expression with template_function "static_cast"
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE cast_style = 'static_cast'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one static_cast symbol"
+    );
+    for m in &qr.results {
+        assert_eq!(
+            field(m, "cast_safety"),
+            "safe",
+            "static_cast should have cast_safety='safe' on '{}'",
+            m.name
+        );
+    }
+}
+
+#[test]
+fn cast_safety_reinterpret_cast_unsafe() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE cast_style = 'reinterpret_cast'",
+    );
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one reinterpret_cast symbol"
+    );
+    for m in &qr.results {
+        assert_eq!(
+            field(m, "cast_safety"),
+            "unsafe",
+            "reinterpret_cast should have cast_safety='unsafe' on '{}'",
+            m.name
+        );
+    }
+}
+
+#[test]
+fn cast_safety_const_cast_moderate() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(&mut e, &sid, "FIND symbols WHERE cast_style = 'const_cast'");
+    let qr = as_query(&r);
+    assert!(
+        !qr.results.is_empty(),
+        "expected at least one const_cast symbol"
+    );
+    for m in &qr.results {
+        assert_eq!(
+            field(m, "cast_safety"),
+            "moderate",
+            "const_cast should have cast_safety='moderate' on '{}'",
+            m.name
+        );
+    }
+}
+
+#[test]
+fn cast_safety_named_cast_has_target_type() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // All named casts should expose cast_target_type
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE fql_kind = 'cast' WHERE cast_style = 'static_cast'",
+    );
+    let qr = as_query(&r);
+    assert!(!qr.results.is_empty(), "expected static_cast rows");
+    for m in &qr.results {
+        assert!(
+            field_opt(m, "cast_target_type").is_some(),
+            "static_cast should have cast_target_type on '{}'",
+            m.name
+        );
+    }
+}
+
+#[test]
+fn cast_count_includes_named_casts() {
+    let (mut e, sid, _d) = engine_enrichment_only();
+    // castPatterns() contains: 2 c_style + 1 reinterpret_cast + 1 const_cast
+    //                          + 1 static_cast + 1 dynamic_cast  = 6 casts
+    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'castPatterns'");
+    let qr = as_query(&r);
+    let func = qr
+        .results
+        .iter()
+        .find(|m| m.node_kind.as_deref() == Some("function_definition"));
+    if let Some(m) = func {
+        let cc: usize = field(m, "cast_count").parse().unwrap_or(0);
+        assert!(
+            cc >= 5,
+            "castPatterns should have cast_count >= 5 (c_style×2 + reinterpret + const + static + dynamic), got {cc}"
+        );
+    }
+}
 
 // --- ScopeEnricher: binding_kind, is_exported ---
 

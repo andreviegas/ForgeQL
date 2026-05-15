@@ -238,9 +238,13 @@ void castPatterns(void* ptr) {
     int cStyleCast = (int)(long)ptr;
     int* reinterpreted = reinterpret_cast<int*>(ptr);
     const void* constCasted = const_cast<const void*>(ptr);
+    unsigned int safeCast = static_cast<unsigned int>(cStyleCast);
+    void* dynCast = dynamic_cast<void*>(ptr);
     (void)cStyleCast;
     (void)reinterpreted;
     (void)constCasted;
+    (void)safeCast;
+    (void)dynCast;
 }
 
 /* ------------------------------------------------------------------ */

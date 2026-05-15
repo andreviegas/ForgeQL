@@ -135,13 +135,22 @@ fn field_to_kinds_for_config(config: &LanguageConfig, field: &str) -> Option<Vec
             Some(config.shift_expression_kinds().to_vec())
         }
         // casts.rs — per-cast-node fields
-        "cast_style" | "cast_target_type" | "cast_safety" => Some(
-            config
+        "cast_style" | "cast_target_type" | "cast_safety" => {
+            let mut kinds: Vec<String> = config
                 .cast_kind_triples()
                 .iter()
                 .map(|(raw_kind, _, _)| raw_kind.clone())
-                .collect(),
-        ),
+                .collect();
+            // Named casts (e.g. static_cast<T>()) are indexed under the
+            // call_expression node kind — include it when configured.
+            if !config.named_cast_keywords.is_empty() && !config.call_expression_kind().is_empty() {
+                let ce = config.call_expression_kind().to_owned();
+                if !kinds.contains(&ce) {
+                    kinds.push(ce);
+                }
+            }
+            Some(kinds)
+        }
         // casts.rs — per-function fields
         "has_cast" | "cast_count" => Some(config.function_raw_kinds.clone()),
         // control_flow.rs
