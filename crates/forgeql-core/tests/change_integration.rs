@@ -9,10 +9,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use forgeql_core::{
-    context::RequestContext, ir::ChangeTarget, transforms::change::ChangeFiles,
-    workspace::Workspace,
-};
+use forgeql_core::{ir::ChangeTarget, transforms::change::ChangeFiles, workspace::Workspace};
 use tempfile::tempdir;
 
 // -----------------------------------------------------------------------
@@ -45,10 +42,6 @@ fn setup_workspace() -> (tempfile::TempDir, Workspace) {
     (dir, ws)
 }
 
-fn ctx() -> RequestContext {
-    RequestContext::admin()
-}
-
 // -----------------------------------------------------------------------
 // MATCHING mode
 // -----------------------------------------------------------------------
@@ -72,7 +65,7 @@ fn change_matching_replaces_unique_occurrence() {
             word_boundary: false,
         },
     );
-    let plan = c.plan(&ctx(), &ws).expect("plan");
+    let plan = c.plan(&ws).expect("plan");
     assert!(!plan.is_empty());
     plan.apply().expect("apply");
 
@@ -100,7 +93,7 @@ fn change_lines_replaces_range() {
             content: "// replaced by CHANGE LINES\n".to_string(),
         },
     );
-    let plan = c.plan(&ctx(), &ws).expect("plan");
+    let plan = c.plan(&ws).expect("plan");
     assert_eq!(plan.edit_count(), 1);
     plan.apply().expect("apply");
 
@@ -125,7 +118,7 @@ fn change_with_content_creates_new_file() {
             content: "// new file\nint main() { return 0; }\n".to_string(),
         },
     );
-    let plan = c.plan(&ctx(), &ws).expect("plan");
+    let plan = c.plan(&ws).expect("plan");
     assert_eq!(plan.edit_count(), 1);
     plan.apply().expect("apply");
 
@@ -146,7 +139,7 @@ fn change_with_content_overwrites_existing_file() {
             content: "// completely replaced\n".to_string(),
         },
     );
-    let plan = c.plan(&ctx(), &ws).expect("plan");
+    let plan = c.plan(&ws).expect("plan");
     plan.apply().expect("apply");
 
     let after = fs::read_to_string(&abs_path).expect("read");
@@ -165,7 +158,7 @@ fn change_delete_empties_file() {
     assert!(abs_path.exists());
 
     let c = ChangeFiles::new(vec![cpp_rel.to_string()], ChangeTarget::Delete);
-    let plan = c.plan(&ctx(), &ws).expect("plan");
+    let plan = c.plan(&ws).expect("plan");
     let result = plan.apply().expect("apply");
 
     // File is emptied (apply writes empty content).
@@ -191,7 +184,7 @@ fn change_multi_file_with_content_rejected() {
             content: "x".to_string(),
         },
     );
-    assert!(c.plan(&ctx(), &ws).is_err());
+    assert!(c.plan(&ws).is_err());
 }
 
 // -----------------------------------------------------------------------
@@ -211,7 +204,7 @@ fn change_matching_with_glob_expands_to_matching_files() {
             word_boundary: false,
         },
     );
-    let plan = c.plan(&ctx(), &ws).expect("glob plan");
+    let plan = c.plan(&ws).expect("glob plan");
     // Should have edits for both .h and .cpp files.
     assert!(
         plan.file_edits.len() >= 2,
@@ -246,7 +239,7 @@ fn change_glob_no_match_returns_error() {
             word_boundary: false,
         },
     );
-    let err = c.plan(&ctx(), &ws).unwrap_err();
+    let err = c.plan(&ws).unwrap_err();
     assert!(
         err.to_string().contains("matched no files"),
         "expected 'matched no files' error, got: {err}"

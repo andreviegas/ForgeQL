@@ -4,6 +4,18 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.8] — 2026-05-16 — Bug fixes and dead-code removal
+
+### Fixed
+
+- **`mcp.rs` double-prepend bug** — `resolve_source()` and the budget map-key lookup in `exec_engine()` were manually prepending `user_id:` to a `session_id` that is already the full four-field token, producing a five-segment key that never matched any session entry. Both were silent: `resolve_source` always returned `"unknown"` (wrong log-file routing) and `budget_snap` was always `None` (missing budget lines). Fixed by using `session_id` directly as the map key.
+- Stale user-visible strings in the MCP tool description and `⚠️ IMPORTANT` session hint referred to `session_id` as "the alias you chose" — updated to describe it as an opaque token to store verbatim.
+
+### Internal
+
+- **`RequestContext` removed** (`context.rs` deleted, `pub mod context` removed from `lib.rs`) — this was a dead abstraction for a planned Phase E permission system that is no longer on the roadmap. Every call site used `RequestContext::admin()` and every receiving parameter was `_ctx` (explicitly ignored). No production code read any field of the struct.
+  - `ChangeFiles::plan()` and `plan_from_ir()` signatures simplified (drop the unused `ctx` parameter).
+
 ## [0.50.7] — 2026-05-17 — Self-describing session tokens and `execute()` takes `Option<&SessionCoords>`
 
 ### Internal

@@ -8,7 +8,6 @@ use std::path::Path;
 use anyhow::{Result, anyhow, bail};
 use tracing::debug;
 
-use crate::context::RequestContext;
 use crate::ir::ChangeTarget;
 use crate::transforms::{ByteRangeEdit, FileEdit, TransformPlan};
 use crate::workspace::Workspace;
@@ -33,7 +32,7 @@ impl ChangeFiles {
     /// # Errors
     /// Returns an error if multi-file validation fails, a target file cannot
     /// be read, or the targeting mode cannot be resolved to edits.
-    pub fn plan(&self, _ctx: &RequestContext, workspace: &Workspace) -> Result<TransformPlan> {
+    pub fn plan(&self, workspace: &Workspace) -> Result<TransformPlan> {
         let (resolved, from_glob) = resolve_file_globs(&self.files, workspace)?;
 
         // Security guard: .forgeql.yaml is a protected file.

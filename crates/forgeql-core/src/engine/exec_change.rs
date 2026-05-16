@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 
 use crate::{
-    context::RequestContext,
     ir::ForgeQLIR,
     result::{ForgeQLResult, MutationResult},
     transforms::copy_move::{plan_copy_lines, plan_copy_lines_at, plan_move_lines},
@@ -24,7 +23,7 @@ impl ForgeQLEngine {
 
         let mut plan = {
             let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
-            plan_from_ir(op, &RequestContext::admin(), &workspace)?
+            plan_from_ir(op, &workspace)?
         };
 
         let op_name = mutation_op_name(op);

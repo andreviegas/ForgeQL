@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::context::RequestContext;
 use crate::workspace::Workspace;
 
 // -----------------------------------------------------------------------
@@ -290,17 +289,13 @@ impl TransformResult {
 ///
 /// # Errors
 /// Returns `Err` if the operation is not `ChangeContent`, or if planning fails.
-pub fn plan_from_ir(
-    op: &crate::ir::ForgeQLIR,
-    ctx: &RequestContext,
-    ws: &Workspace,
-) -> anyhow::Result<TransformPlan> {
+pub fn plan_from_ir(op: &crate::ir::ForgeQLIR, ws: &Workspace) -> anyhow::Result<TransformPlan> {
     use crate::ir::ForgeQLIR;
     use change::ChangeFiles;
 
     match op {
         ForgeQLIR::ChangeContent { files, target, .. } => {
-            ChangeFiles::new(files.clone(), target.clone()).plan(ctx, ws)
+            ChangeFiles::new(files.clone(), target.clone()).plan(ws)
         }
         other => anyhow::bail!("op {other:?} is not a mutation and cannot be planned"),
     }
