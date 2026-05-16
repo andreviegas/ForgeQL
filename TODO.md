@@ -2,9 +2,9 @@
 
 ## Session architecture
 
-- [ ] Wire `SessionCoords` into `exec_source.rs`: replace inline alias≠branch guard,
+- [x] Wire `SessionCoords` into `exec_source.rs`: replace inline alias≠branch guard,
   `budget_branch` derivation, hardcoded `"anonymous"`, worktree dir construction, and git branch
-  format; change silent cross-source alias collision to a hard error; replace all 5 ad-hoc
+  format; changed silent cross-source alias collision to a hard error; replaced all 5 ad-hoc
   `data_dir.join("worktrees")` sites with `SessionCoords::worktrees_root()`
 - [ ] Add `resolve_commit()` helper in `worktree.rs` (try `find_branch` first, fall back to
   `revparse_single`) to support short-SHA `USE` references

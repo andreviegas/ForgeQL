@@ -3,6 +3,7 @@
 use super::*;
 use crate::ast::lang::CppLanguageInline;
 use crate::ir::{Backend, Clauses};
+use crate::session::SessionCoords;
 use crate::transforms::TransformPlan;
 
 fn make_registry() -> Arc<LanguageRegistry> {
@@ -65,7 +66,7 @@ fn engine_new_creates_worktrees_dir() {
     let tmp = tempfile::tempdir().unwrap();
     let data_dir = tmp.path().to_path_buf();
     let engine = ForgeQLEngine::new(data_dir.clone(), make_registry()).unwrap();
-    assert!(data_dir.join("worktrees").exists());
+    assert!(SessionCoords::worktrees_root(&data_dir).exists());
     assert_eq!(engine.session_count(), 0);
     assert_eq!(engine.source_count(), 0);
     assert_eq!(engine.commands_served(), 0);

@@ -38,8 +38,11 @@ use anyhow::Result;
 use tracing::{info, warn};
 
 use crate::{
-    ast::lang::LanguageRegistry, git::source::SourceRegistry, ir::ForgeQLIR, result::ForgeQLResult,
-    session::Session,
+    ast::lang::LanguageRegistry,
+    git::source::SourceRegistry,
+    ir::ForgeQLIR,
+    result::ForgeQLResult,
+    session::{Session, SessionCoords},
 };
 
 // -----------------------------------------------------------------------
@@ -139,7 +142,7 @@ impl ForgeQLEngine {
     /// # Errors
     /// Returns `Err` if the worktree directory cannot be created.
     pub fn new(data_dir: PathBuf, lang_registry: Arc<LanguageRegistry>) -> Result<Self> {
-        std::fs::create_dir_all(data_dir.join("worktrees"))?;
+        std::fs::create_dir_all(SessionCoords::worktrees_root(&data_dir))?;
         info!(dir = %data_dir.display(), "engine: data directory ready");
 
         let mut registry = SourceRegistry::new(data_dir.clone());

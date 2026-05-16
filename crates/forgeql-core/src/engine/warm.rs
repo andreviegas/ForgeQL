@@ -22,6 +22,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use tracing::{debug, info, warn};
 
+use crate::session::SessionCoords;
+
 use crate::ast::lang::LanguageRegistry;
 use crate::config::{WarmPolicy, WarmPolicyKind};
 use crate::git::{source::Source, worktree};
@@ -183,7 +185,7 @@ pub fn warm_snapshot(
     let safe_branch = target.branch.replace('/', "-");
     let safe_source = source_name.replace('/', "-");
     let wt_name = format!("__warm__{safe_source}__{safe_branch}__{sha12}");
-    let wt_path = data_dir.join("worktrees").join(&wt_name);
+    let wt_path = SessionCoords::worktrees_root(data_dir).join(&wt_name);
     let session_branch = format!("fql/__warm__/{safe_branch}/{sha12}");
 
     let cleanup_path = wt_path.clone();

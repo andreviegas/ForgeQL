@@ -22,6 +22,7 @@ use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::result::{ForgeQLResult, QueryResult};
+use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
 // -----------------------------------------------------------------------
@@ -114,10 +115,8 @@ fn engine_with_source_session() -> (
 
     // Worktree path mirrors the naming in exec_source.rs:
     // data_dir/worktrees/{source}.{branch}.{alias}
-    let wt_path = data_dir
-        .path()
-        .join("worktrees")
-        .join(format!("mysrc.{branch}.sess"));
+    let wt_path =
+        SessionCoords::worktrees_root(data_dir.path()).join(format!("mysrc.{branch}.sess"));
 
     assert!(
         wt_path.is_dir(),

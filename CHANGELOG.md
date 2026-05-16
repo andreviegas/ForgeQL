@@ -4,6 +4,41 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.5] — 2026-05-16 — Wire `SessionCoords` into `exec_source.rs`
+
+### Internal
+
+- **`SessionCoords` now drives all session identity derivations in `use_source()`**
+  (`crates/forgeql-core/src/engine/exec_source.rs`):
+
+  - **Validation** (`alias ≠ branch`): delegated to `SessionCoords::validate()` instead of an
+    inline `if as_branch == branch` check.
+  - **Budget-branch key**: delegated to `SessionCoords::budget_branch()` (trunk branches key
+    by alias; feature branches key by branch name).
+  - **`"anonymous"` user**: the hardcoded literal in `Session::new()` is replaced by
+    `&coords.user`, so the single migration touch-point is `SessionCoords::anonymous()` at
+    construction time.
+  - **Worktree dir name, git branch, worktree path**: derived exclusively through
+    `coords.worktree_dir()`, `coords.git_branch()`, and
+    `SessionCoords::worktrees_root(&data_dir).join(&wt_name)`.  The inline
+    `safe_source / safe_branch / safe_alias / format!(...)` block is removed.
+    The git-branch format is now `fql/{user}/{source}/{branch}/{alias}` (was
+    `fql/{branch}/{alias}`); the additional segments make it globally unique
+    across users and sources.
+
+- **Cross-source alias collision is now a hard error** instead of a silent eviction.
+  `USE src-b.main AS 'r'` while alias `r` is already bound to `src-a` now returns
+  `ForgeError::InvalidInput` with a clear message directing the agent to pick a
+  different alias or run `DROP SESSION 'r'` first.
+
+- **All 5 ad-hoc `data_dir.join("worktrees")` call-sites replaced** with
+  `SessionCoords::worktrees_root(&data_dir)` across:
+  - `src/engine/exec_source.rs` (worktree path construction)
+  - `src/engine.rs` (`ForgeQLEngine::new()` mkdir)
+  - `src/engine/warm.rs` (background warmer worktree path)
+  - `src/engine/tests.rs` (unit test assertion)
+  - `tests/reconnect_dirty.rs` (integration test setup)
+
 ## [0.50.4] — 2026-05-16 — Eager session restore at startup: replace `prune_orphaned_worktrees` + `try_auto_reconnect`
 
 ### Internal

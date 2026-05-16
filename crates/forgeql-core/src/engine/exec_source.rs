@@ -8,7 +8,7 @@ use crate::storage::git_sha1_provider::git_blob_sha1;
 use crate::{
     git::{self as git, source::Source, worktree},
     result::{ForgeQLResult, QueryResult, SessionStats, ShowContent, SourceOpResult, SymbolMatch},
-    session::Session,
+    session::{Session, SessionCoords},
 };
 
 use super::ForgeQLEngine;
@@ -152,32 +152,16 @@ impl ForgeQLEngine {
         branch: &str,
         as_branch: &str,
     ) -> Result<ForgeQLResult> {
-        // Validate: the alias must differ from the source branch name.
-        // Equal names (e.g. USE src.main AS 'main') are meaningless —
-        // the worktree would be named fql/main/main and the budget key
-        // would be ambiguous.
-        if as_branch == branch {
-            return Err(crate::error::ForgeError::InvalidInput(format!(
-                "alias '{as_branch}' must differ from the source branch '{branch}'"
-            ))
-            .into());
+        // Construct session identity — single source of truth for map key,
+        // git branch name, and worktree path derivations.
+        let coords = SessionCoords::anonymous(source_name, branch, as_branch);
+        if let Err(msg) = coords.validate() {
+            return Err(crate::error::ForgeError::InvalidInput(msg).into());
         }
 
-        // Compute the budget branch key:
-        //   - trunk branches (main/master) → use the alias (the feature name)
-        //   - feature branches → use the branch itself (alias is just local)
-        let budget_branch = if matches!(branch, "main" | "master") {
-            as_branch
-        } else {
-            branch
-        };
+        let budget_branch = coords.budget_branch();
 
         info!(%source_name, %branch, ?as_branch, %budget_branch, "starting session");
-
-        // TODO(users): replace "anonymous" with the real authenticated user identity
-        // once the user system is implemented.  All callers will pass a user_id
-        // parameter; `use_source` will forward it here and store it on the session.
-        let requesting_user = "anonymous";
 
         // Session resume: if an in-memory session already exists for this
         // source + branch + as_branch combination, reuse it — unless the
@@ -194,51 +178,47 @@ impl ForgeQLEngine {
                 // or a different user, evict it rather than returning the wrong
                 // repo's data or leaking one user's session to another.
                 if existing_session.source_name != source_name
-                    || existing_session.user_id != requesting_user
+                    || existing_session.user_id != coords.user
                 {
+                    return Err(crate::error::ForgeError::InvalidInput(format!(
+                        "alias '{as_branch}' is already bound to source '{}' (user '{}') — \
+                         choose a different alias or DROP SESSION '{as_branch}' first",
+                        existing_session.source_name, existing_session.user_id,
+                    ))
+                    .into());
+                }
+                // Compare the bare repo's current branch tip to what we
+                // indexed.  If `branch_head` returns None (repo unavailable
+                // or branch missing) we treat the session as fresh to avoid
+                // spurious evictions.
+                let is_stale = self
+                    .registry
+                    .get(source_name)
+                    .and_then(|src| git::branch_head(src.path(), branch))
+                    .is_some_and(|head| {
+                        existing_session.cached_commit().is_some_and(|c| c != head)
+                    });
+                if is_stale {
                     info!(
                         session_id = %existing_id,
-                        existing_source = %existing_session.source_name,
-                        requested_source = %source_name,
-                        existing_user = %existing_session.user_id,
-                        alias = %as_branch,
-                        "alias reused across sources or users — evicting stale session"
+                        %source_name,
+                        %branch,
+                        "branch HEAD moved after REFRESH — evicting stale session"
                     );
                     Some((existing_id.clone(), None))
                 } else {
-                    // Compare the bare repo's current branch tip to what we
-                    // indexed.  If `branch_head` returns None (repo unavailable
-                    // or branch missing) we treat the session as fresh to avoid
-                    // spurious evictions.
-                    let is_stale = self
-                        .registry
-                        .get(source_name)
-                        .and_then(|src| git::branch_head(src.path(), branch))
-                        .is_some_and(|head| {
-                            existing_session.cached_commit().is_some_and(|c| c != head)
-                        });
-                    if is_stale {
-                        info!(
-                            session_id = %existing_id,
-                            %source_name,
-                            %branch,
-                            "branch HEAD moved after REFRESH — evicting stale session"
-                        );
-                        Some((existing_id.clone(), None))
-                    } else {
-                        // PhaseFT5: prefer columnar stats; fall back to legacy table.
-                        let symbols_indexed = existing_session.engine().index_stats().map_or_else(
-                            || existing_session.index().map_or(0, |idx| idx.rows.len()),
-                            |s| s.rows,
-                        );
-                        info!(
-                            session_id = %existing_id,
-                            %source_name,
-                            %branch,
-                            "session resume — reusing existing in-memory session"
-                        );
-                        Some((existing_id.clone(), Some(symbols_indexed)))
-                    }
+                    // PhaseFT5: prefer columnar stats; fall back to legacy table.
+                    let symbols_indexed = existing_session.engine().index_stats().map_or_else(
+                        || existing_session.index().map_or(0, |idx| idx.rows.len()),
+                        |s| s.rows,
+                    );
+                    info!(
+                        session_id = %existing_id,
+                        %source_name,
+                        %branch,
+                        "session resume — reusing existing in-memory session"
+                    );
+                    Some((existing_id.clone(), Some(symbols_indexed)))
                 }
             } else {
                 None
@@ -281,25 +261,11 @@ impl ForgeQLEngine {
         // reconstructable from the USE command the model already knows.
         // No opaque generated ID needed.
         let session_id = as_branch.to_string();
-        // Composite key: source.branch.alias for filesystem (flat, no nesting)
-        // and fql/branch/alias for the git branch name.
-        // Including the source name in the directory makes the worktree path
-        // globally unique across sources — without it, two `USE` calls with
-        // the same branch and alias against different sources would collide
-        // on disk and corrupt each other (e.g. `USE foo.main AS 'r'` and
-        // `USE bar.main AS 'r'` would both resolve to `worktrees/main.r/`).
-        // Using the fql/ namespace prefix on the git branch avoids the loose-ref
-        // collision where refs/heads/<branch> already exists as a file when we
-        // try to create refs/heads/<branch>/<alias>.
-        // Slashes in any component would create nested directories when used
-        // in a filesystem path, so replace them with dashes for the worktree
-        // directory name.
-        let safe_source = source_name.replace('/', "-");
-        let safe_branch = branch.replace('/', "-");
-        let safe_alias = as_branch.replace('/', "-");
-        let wt_name = format!("{safe_source}.{safe_branch}.{safe_alias}");
-        let git_branch = format!("fql/{branch}/{as_branch}");
-        let wt_path = self.data_dir.join("worktrees").join(&wt_name);
+        // All path and branch name derivations go through `SessionCoords`
+        // so the layout can be changed in one place — see session/coords.rs.
+        let wt_name = coords.worktree_dir();
+        let git_branch = coords.git_branch();
+        let wt_path = SessionCoords::worktrees_root(&self.data_dir).join(&wt_name);
 
         let wt_existed = wt_path.exists();
         drop(worktree::create(
@@ -312,7 +278,7 @@ impl ForgeQLEngine {
 
         let mut session = Session::new(
             &session_id,
-            "anonymous",
+            &coords.user,
             wt_path,
             source_name,
             branch,
