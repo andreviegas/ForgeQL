@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry, RustLanguageInline};
+use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::result::ForgeQLResult;
@@ -61,7 +62,9 @@ fn multilang_engine() -> (ForgeQLEngine, String, tempfile::TempDir) {
 fn exec(engine: &mut ForgeQLEngine, session: &str, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("at least one op");
-    engine.execute(Some(session), op).expect("execute")
+    engine
+        .execute(auth(AuthContext::Tester), Some(session), op)
+        .expect("execute")
 }
 
 /// Parse and execute FQL, expecting an error. Returns the error message.
@@ -69,7 +72,7 @@ fn exec_err(engine: &mut ForgeQLEngine, session: &str, fql: &str) -> String {
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("at least one op");
     engine
-        .execute(Some(session), op)
+        .execute(auth(AuthContext::Tester), Some(session), op)
         .expect_err("expected error")
         .to_string()
 }

@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
+use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::ir::{Backend, Clauses, ForgeQLIR};
 use forgeql_core::parser;
@@ -77,7 +78,9 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
 fn execute_fql(engine: &mut ForgeQLEngine, session_id: &str, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("at least one op");
-    engine.execute(Some(session_id), op).expect("execute")
+    engine
+        .execute(auth(AuthContext::Tester), Some(session_id), op)
+        .expect("execute")
 }
 
 // -----------------------------------------------------------------------
@@ -97,7 +100,9 @@ fn engine_starts_with_zero_state() {
 fn show_sources_on_empty_engine() {
     let tmp = tempdir().unwrap();
     let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-    let result = engine.execute(None, &ForgeQLIR::ShowSources).unwrap();
+    let result = engine
+        .execute(auth(AuthContext::Tester), None, &ForgeQLIR::ShowSources)
+        .unwrap();
     match result {
         ForgeQLResult::Query(qr) => {
             assert_eq!(qr.op, "show_sources");
@@ -428,7 +433,11 @@ fn find_symbols_without_session_fails() {
         backend: Backend::default(),
         clauses: Clauses::default(),
     };
-    assert!(engine.execute(None, &op).is_err());
+    assert!(
+        engine
+            .execute(auth(AuthContext::Tester), None, &op)
+            .is_err()
+    );
 }
 
 // (disconnect_unknown_session_fails removed — DISCONNECT command eliminated)
@@ -1381,7 +1390,9 @@ fn budget_deducts_on_show_lines() {
     engine.init_session_budget(&sid, &budget_config());
 
     // Confirm budget starts at initial.
-    let snap = engine.budget_status(&sid).expect("budget active");
+    let snap = engine
+        .budget_status(&format!("{}:{sid}", auth(AuthContext::Tester)))
+        .expect("budget active");
     assert_eq!(snap.remaining, 50);
 
     // SHOW LINES returns source lines — budget should decrease.
@@ -1393,7 +1404,9 @@ fn budget_deducts_on_show_lines() {
     let lines_returned = result.source_lines_count();
     assert!(lines_returned > 0, "should return lines");
 
-    let snap = engine.budget_status(&sid).expect("budget active");
+    let snap = engine
+        .budget_status(&format!("{}:{sid}", auth(AuthContext::Tester)))
+        .expect("budget active");
     // No recovery on SHOW LINES — pure deduction.
     assert_eq!(snap.remaining, 50 - lines_returned);
 }
@@ -1410,7 +1423,9 @@ fn budget_not_deducted_on_find_symbols() {
         "FIND symbols WHERE fql_kind = 'function' LIMIT 5",
     );
 
-    let snap = engine.budget_status(&sid).expect("budget active");
+    let snap = engine
+        .budget_status(&format!("{}:{sid}", auth(AuthContext::Tester)))
+        .expect("budget active");
     // Recovery may increase it, but it should not go below initial.
     assert!(snap.remaining >= 50, "budget should not decrease for FIND");
 }
@@ -1452,8 +1467,16 @@ fn budget_critical_caps_show_lines() {
 fn budget_absent_without_config() {
     let (engine, sid, _dir) = engine_with_session();
     // No init_session_budget call — budget should be None.
-    assert!(engine.budget_status(&sid).is_none());
-    assert!(engine.budget_status(&sid).is_none());
+    assert!(
+        engine
+            .budget_status(&format!("{}:{sid}", auth(AuthContext::Tester)))
+            .is_none()
+    );
+    assert!(
+        engine
+            .budget_status(&format!("{}:{sid}", auth(AuthContext::Tester)))
+            .is_none()
+    );
 }
 
 // -----------------------------------------------------------------------

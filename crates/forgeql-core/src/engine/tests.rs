@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::ast::lang::CppLanguageInline;
+use crate::auth::{AuthContext, auth};
 use crate::ir::{Backend, Clauses};
 use crate::session::SessionCoords;
 use crate::transforms::TransformPlan;
@@ -76,7 +77,9 @@ fn engine_new_creates_worktrees_dir() {
 fn engine_show_sources_empty() {
     let tmp = tempfile::tempdir().unwrap();
     let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-    let result = engine.execute(None, &ForgeQLIR::ShowSources).unwrap();
+    let result = engine
+        .execute(auth(AuthContext::Tester), None, &ForgeQLIR::ShowSources)
+        .unwrap();
     match result {
         ForgeQLResult::Query(qr) => {
             assert_eq!(qr.op, "show_sources");
@@ -90,7 +93,7 @@ fn engine_show_sources_empty() {
 fn engine_show_branches_requires_session() {
     let tmp = tempfile::tempdir().unwrap();
     let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-    let result = engine.execute(None, &ForgeQLIR::ShowBranches);
+    let result = engine.execute(auth(AuthContext::Tester), None, &ForgeQLIR::ShowBranches);
     assert!(result.is_err());
 }
 
@@ -106,7 +109,7 @@ fn engine_find_symbols_without_session_fails() {
         backend: Backend::default(),
         clauses: Clauses::default(),
     };
-    let result = engine.execute(None, &op);
+    let result = engine.execute(auth(AuthContext::Tester), None, &op);
     assert!(result.is_err());
 }
 
@@ -150,7 +153,9 @@ fn find_globals_returns_declaration_nodes() {
 
     // FIND globals → FIND symbols WHERE fql_kind = 'variable' WHERE scope = 'file'
     let op = crate::parser::parse("FIND globals LIMIT 200").unwrap();
-    let result = engine.execute(Some(&session_id), &op[0]).unwrap();
+    let result = engine
+        .execute(auth(AuthContext::Tester), Some(&session_id), &op[0])
+        .unwrap();
     let results = match result {
         ForgeQLResult::Query(qr) => qr.results,
         other => panic!("expected Query, got: {other:?}"),
@@ -244,7 +249,9 @@ fn find_globals_with_conflicting_node_kind_returns_empty() {
     // not be silently dropped.
     let op =
         crate::parser::parse("FIND globals WHERE node_kind = 'enum_specifier' LIMIT 200").unwrap();
-    let result = engine.execute(Some(&session_id), &op[0]).unwrap();
+    let result = engine
+        .execute(auth(AuthContext::Tester), Some(&session_id), &op[0])
+        .unwrap();
     let results = match result {
         ForgeQLResult::Query(qr) => qr.results,
         other => panic!("expected Query, got: {other:?}"),

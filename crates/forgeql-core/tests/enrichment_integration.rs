@@ -52,6 +52,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
+use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::result::{ForgeQLResult, SymbolMatch};
@@ -139,7 +140,7 @@ fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).unwrap_or_else(|e| panic!("parse failed for: {fql}: {e}"));
     let op = ops.first().expect("at least one op");
     engine
-        .execute(Some(sid), op)
+        .execute(auth(AuthContext::Tester), Some(sid), op)
         .unwrap_or_else(|e| panic!("execute failed for: {fql}: {e}"))
 }
 

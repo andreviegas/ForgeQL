@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::{
+    auth::{AuthContext, auth},
     git::worktree,
     ir::Backend,
     session::{Session, SessionCoords, SessionSentinel, read_sentinel},
@@ -78,58 +79,83 @@ impl ForgeQLEngine {
             .unwrap_or_default()
             .as_secs();
 
-        let Ok(entries) = std::fs::read_dir(&wt_dir) else {
+        // Worktrees are now stored in a per-user subdirectory:
+        //   data_dir/worktrees/{user}/{source}.{branch}.{alias}/
+        // Scan two levels: user dirs → worktree dirs inside each.
+        //
+        // NOTE: old flat-layout worktrees (data_dir/worktrees/{wt_name}/) that
+        // pre-date this layout are ignored here and remain on disk harmlessly;
+        // they can be removed manually.
+        let Ok(user_entries) = std::fs::read_dir(&wt_dir) else {
             return;
         };
 
         let mut restored = 0u32;
         let mut pruned = 0u32;
 
-        for entry in entries.flatten() {
-            let wt_path = entry.path();
-            if !wt_path.is_dir() {
+        for user_entry in user_entries.flatten() {
+            let user_dir = user_entry.path();
+            if !user_dir.is_dir() {
                 continue;
             }
-            let wt_name = entry.file_name().to_string_lossy().to_string();
 
-            match read_sentinel(&wt_path) {
-                None => {
-                    // No readable sentinel — orphan from an older version or
-                    // a partially created worktree.  Prune unconditionally.
-                    info!(%wt_name, "startup: no sentinel, pruning");
-                    self.prune_single_worktree(&wt_path, &wt_name);
-                    pruned += 1;
+            let Ok(wt_entries) = std::fs::read_dir(&user_dir) else {
+                continue;
+            };
+
+            for entry in wt_entries.flatten() {
+                let wt_path = entry.path();
+                if !wt_path.is_dir() {
+                    continue;
                 }
-                Some(sentinel)
-                    if now.saturating_sub(sentinel.last_active_secs) >= SESSION_TTL_SECS =>
-                {
-                    info!(%wt_name, "startup: TTL expired, pruning");
-                    self.prune_single_worktree(&wt_path, &wt_name);
-                    pruned += 1;
-                }
-                Some(SessionSentinel {
-                    source: Some(source),
-                    branch: Some(branch),
-                    alias: Some(alias),
-                    ..
-                }) => {
-                    // Warm worktree with full metadata — restore into memory.
-                    info!(%source, %branch, %alias, "startup: restoring session");
-                    match self.use_source(&source, &branch, &alias) {
-                        Ok(_) => {
-                            info!(%alias, "startup: session restored");
-                            restored += 1;
-                        }
-                        Err(e) => {
-                            warn!(%alias, %e, "startup: session restore failed — skipping");
+                let wt_name = entry.file_name().to_string_lossy().to_string();
+
+                match read_sentinel(&wt_path) {
+                    None => {
+                        // No readable sentinel — orphan from an older version or
+                        // a partially created worktree.  Prune unconditionally.
+                        info!(%wt_name, "startup: no sentinel, pruning");
+                        self.prune_single_worktree(&wt_path, &wt_name);
+                        pruned += 1;
+                    }
+                    Some(sentinel)
+                        if now.saturating_sub(sentinel.last_active_secs) >= SESSION_TTL_SECS =>
+                    {
+                        info!(%wt_name, "startup: TTL expired, pruning");
+                        self.prune_single_worktree(&wt_path, &wt_name);
+                        pruned += 1;
+                    }
+                    Some(SessionSentinel {
+                        user,
+                        source: Some(source),
+                        branch: Some(branch),
+                        alias: Some(alias),
+                        ..
+                    }) => {
+                        // Warm worktree with full metadata — restore into memory.
+                        // The user comes from the sentinel file (set when the session was
+                        // first created).  Old sentinels that predate the user field fall
+                        // back to the session-context identity via auth().
+                        let user = user
+                            .as_deref()
+                            .unwrap_or_else(|| auth(AuthContext::Session));
+                        info!(%user, %source, %branch, %alias, "startup: restoring session");
+                        match self.use_source(user, &source, &branch, &alias) {
+                            Ok(_) => {
+                                info!(%alias, "startup: session restored");
+                                restored += 1;
+                            }
+                            Err(e) => {
+                                warn!(%alias, %e, "startup: session restore failed — skipping");
+                            }
                         }
                     }
-                }
-                Some(_) => {
-                    // Old-format sentinel (timestamp only) — cannot recover
-                    // source/branch/alias.  Leave on disk; the agent will
-                    // re-issue USE when it next connects.
-                    info!(%wt_name, "startup: old-format sentinel, leaving for agent reconnect");
+                    Some(_) => {
+                        // Old-format sentinel (timestamp only) — cannot recover
+                        // source/branch/alias.  Leave on disk; the agent will
+                        // re-issue USE when it next connects.
+                        info!(%wt_name, "startup: old-format sentinel, leaving for agent reconnect");
+                    }
                 }
             }
         }
@@ -287,6 +313,10 @@ impl ForgeQLEngine {
     #[cfg(feature = "test-helpers")]
     pub fn register_local_session(&mut self, workspace_root: &Path) -> Result<String> {
         let session_id = generate_session_id();
+        // Store under the composite key that execute() will compute:
+        // "{user_id}:{alias}".  Test sessions use auth(AuthContext::Tester)
+        // so they are distinguishable from production sessions in logs.
+        let map_key = format!("{}:{session_id}", auth(AuthContext::Tester));
         let mut session = Session::new(
             &session_id,
             "test-user",
@@ -297,10 +327,38 @@ impl ForgeQLEngine {
         );
         session.build_index()?;
 
-        let sid = session_id.clone();
         session.touch();
-        drop(self.sessions.insert(session_id, session));
-        Ok(sid)
+        drop(self.sessions.insert(map_key, session));
+        Ok(session_id)
+    }
+
+    /// Like [`register_local_session`] but uses an explicit `user_id` for the
+    /// session map key.  Use this when the test exercises a specific entry-point
+    /// user (e.g. `auth(AuthContext::Mcp)`) so the registered session is
+    /// discoverable by that code path.
+    ///
+    /// # Errors
+    /// Returns `Err` if the workspace cannot be created or indexing fails.
+    #[cfg(feature = "test-helpers")]
+    pub fn register_local_session_for(
+        &mut self,
+        user_id: &str,
+        workspace_root: &Path,
+    ) -> Result<String> {
+        let session_id = generate_session_id();
+        let map_key = format!("{user_id}:{session_id}");
+        let mut session = Session::new(
+            &session_id,
+            "test-user",
+            workspace_root.to_path_buf(),
+            "local",
+            "test-branch",
+            &Arc::clone(&self.lang_registry),
+        );
+        session.build_index()?;
+        session.touch();
+        drop(self.sessions.insert(map_key, session));
+        Ok(session_id)
     }
 
     /// Activate a line budget for an existing session.
@@ -313,7 +371,8 @@ impl ForgeQLEngine {
         config: &crate::config::LineBudgetConfig,
     ) {
         let data_dir = self.data_dir.clone();
-        if let Some(session) = self.sessions.get_mut(session_id) {
+        let map_key = format!("{}:{session_id}", auth(AuthContext::Tester));
+        if let Some(session) = self.sessions.get_mut(&map_key) {
             session.init_budget(config, false, &data_dir, "test-branch");
         }
     }
@@ -328,7 +387,8 @@ impl ForgeQLEngine {
         session_id: &str,
         storage: Box<dyn crate::storage::StorageEngine>,
     ) {
-        if let Some(session) = self.sessions.get_mut(session_id) {
+        let map_key = format!("{}:{session_id}", auth(AuthContext::Tester));
+        if let Some(session) = self.sessions.get_mut(&map_key) {
             session.install_columnar(storage);
         }
     }
@@ -337,8 +397,9 @@ impl ForgeQLEngine {
     #[cfg(feature = "test-helpers")]
     #[must_use]
     pub fn session_has_columnar(&self, session_id: &str) -> bool {
+        let map_key = format!("{}:{session_id}", auth(AuthContext::Tester));
         self.sessions
-            .get(session_id)
+            .get(&map_key)
             .is_some_and(Session::has_columnar)
     }
 
@@ -350,8 +411,9 @@ impl ForgeQLEngine {
     #[cfg(feature = "test-helpers")]
     #[must_use]
     pub fn session_index_stats_rows(&self, session_id: &str) -> Option<usize> {
+        let map_key = format!("{}:{session_id}", auth(AuthContext::Tester));
         self.sessions
-            .get(session_id)
+            .get(&map_key)
             .and_then(|s| s.engine().index_stats())
             .map(|st| st.rows)
     }
@@ -441,7 +503,9 @@ impl ForgeQLEngine {
 
         let sid = session_id.clone();
         session.touch();
-        drop(self.sessions.insert(session_id, session));
+        // Store under composite key matching execute()'s computation.
+        let map_key = format!("{}:{session_id}", auth(AuthContext::Tester));
+        drop(self.sessions.insert(map_key, session));
         Ok(sid)
     }
 }

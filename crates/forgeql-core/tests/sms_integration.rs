@@ -49,6 +49,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry, RustLanguageInline};
+use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::result::{ForgeQLResult, ShowContent};
@@ -887,7 +888,7 @@ fn tier2_no_crash(cmd: &GeneratedCommand, engine: &mut ForgeQLEngine, session: &
     // Catch panics — a panic is a real bug, but we record it
     // rather than letting the whole suite abort.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        engine.execute(Some(session), op)
+        engine.execute(auth(AuthContext::Tester), Some(session), op)
     }));
     let elapsed = start.elapsed().as_micros();
 
@@ -914,7 +915,9 @@ fn tier3_invariants(
     let ops = parser::parse(&cmd.fql).ok()?;
     let op = ops.first()?;
     let start = Instant::now();
-    let result = engine.execute(Some(session), op).ok()?;
+    let result = engine
+        .execute(auth(AuthContext::Tester), Some(session), op)
+        .ok()?;
     let elapsed = start.elapsed().as_micros();
     let rc = result_count(&result);
 

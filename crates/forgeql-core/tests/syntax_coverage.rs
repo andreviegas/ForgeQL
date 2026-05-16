@@ -32,6 +32,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
+use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
@@ -129,7 +130,7 @@ fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).unwrap_or_else(|e| panic!("parse failed for: {fql}: {e}"));
     let op = ops.first().expect("at least one op");
     engine
-        .execute(Some(sid), op)
+        .execute(auth(AuthContext::Tester), Some(sid), op)
         .unwrap_or_else(|e| panic!("execute failed for: {fql}: {e}"))
 }
 
@@ -138,7 +139,7 @@ fn exec_err(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> String {
     let ops = parser::parse(fql).unwrap_or_else(|e| panic!("parse failed for: {fql}: {e}"));
     let op = ops.first().expect("at least one op");
     engine
-        .execute(Some(sid), op)
+        .execute(auth(AuthContext::Tester), Some(sid), op)
         .expect_err(&format!("expected error for: {fql}"))
         .to_string()
 }
@@ -1860,7 +1861,7 @@ fn error_find_without_session() {
     let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
     let ops = parser::parse("FIND symbols").unwrap();
     let op = ops.first().unwrap();
-    assert!(engine.execute(None, op).is_err());
+    assert!(engine.execute(auth(AuthContext::Tester), None, op).is_err());
 }
 
 #[test]

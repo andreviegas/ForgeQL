@@ -14,6 +14,7 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use serde::Deserialize;
 use tracing::{debug, error};
 
+use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::compact;
 use forgeql_core::engine::{
     DEFAULT_BODY_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_QUERY_LIMIT, DEFAULT_SHOW_LINE_LIMIT,
@@ -72,14 +73,16 @@ impl ForgeQlMcp {
     }
 
     /// Resolve the source name for a session from the engine.
-    async fn resolve_source(&self, session_id: Option<&str>) -> String {
+    async fn resolve_source(&self, user_id: &str, session_id: Option<&str>) -> String {
         let Some(sid) = session_id else {
             return "unknown".to_string();
         };
+        // Convert bare alias to internal map key for the lookup.
+        let map_key = format!("{user_id}:{sid}");
         self.engine
             .lock()
             .await
-            .source_name_for_session(sid)
+            .source_name_for_session(&map_key)
             .map_or_else(|| "unknown".to_string(), str::to_owned)
     }
 }
@@ -188,6 +191,7 @@ fn append_meta(output: &str, budget_line: Option<&str>) -> String {
 /// normally after the unwind — subsequent requests can proceed.
 async fn exec_engine(
     engine: &TokioMutex<ForgeQLEngine>,
+    user_id: &str,
     session_id: Option<&str>,
     op: &ForgeQLIR,
 ) -> Result<(ForgeQLResult, Option<forgeql_core::budget::BudgetSnapshot>), ErrorData> {
@@ -195,7 +199,7 @@ async fn exec_engine(
 
     // Wrap execute() in catch_unwind to convert panics into error responses.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        guard.execute(session_id, op)
+        guard.execute(user_id, session_id, op)
     }))
     .map_err(|payload| {
         let msg = payload
@@ -216,7 +220,11 @@ async fn exec_engine(
     // Use budget_status_for_op so admin commands (ShowBranches, ShowSources,
     // CreateSource, RefreshSource) produce no snapshot — they should not
     // appear in the budget log with stale delta values.
-    let budget_snap = session_id.and_then(|sid| guard.budget_status_for_op(sid, op));
+    // Convert bare alias to internal map key for the lookup.
+    let map_key: Option<String> = session_id.map(|alias| format!("{user_id}:{alias}"));
+    let budget_snap = map_key
+        .as_deref()
+        .and_then(|mk| guard.budget_status_for_op(mk, op));
 
     drop(guard);
     Ok((result, budget_snap))
@@ -259,14 +267,20 @@ impl ForgeQlMcp {
         }
         // Execute each statement individually — one log row per command,
         // exactly as if each were sent in a separate run_fql call.
+        // user_id is the single birth point for identity in MCP mode.
+        // When auth is implemented, replace this with a JWT / API-key lookup
+        // on the incoming request — the lines below stay exactly as-is.
+        let user_id = auth(AuthContext::Mcp);
         let format = params.format.unwrap_or_default();
-        let mut log_source = self.resolve_source(params.session_id.as_deref()).await;
+        let mut log_source = self
+            .resolve_source(user_id, params.session_id.as_deref())
+            .await;
         let mut session_hint: Option<String> = None;
         let mut outputs: Vec<String> = Vec::with_capacity(ops.len());
         for (source_text, op) in &ops {
             let t0 = std::time::Instant::now();
             let (result, budget_snap) =
-                exec_engine(&self.engine, params.session_id.as_deref(), op).await?;
+                exec_engine(&self.engine, user_id, params.session_id.as_deref(), op).await?;
             let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
             if let ForgeQLIR::UseSource { source, .. } = op {
                 log_source.clone_from(source);
@@ -274,7 +288,9 @@ impl ForgeQlMcp {
             // After auto-reconnect the session now exists — re-resolve the
             // source name so the query lands in the right CSV log file.
             if log_source == "unknown" {
-                log_source = self.resolve_source(params.session_id.as_deref()).await;
+                log_source = self
+                    .resolve_source(user_id, params.session_id.as_deref())
+                    .await;
             }
             // Extract session_id (alias) from USE responses and build a hint for the agent.
             if session_hint.is_none()
@@ -431,8 +447,9 @@ mod tests {
 
         let data_dir = dir.path().join("data");
         let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
+        // Register the session under the MCP auth user so run_fql can find it.
         let session_id = engine
-            .register_local_session(dir.path())
+            .register_local_session_for(auth(AuthContext::Mcp), dir.path())
             .expect("register session");
         let mcp = ForgeQlMcp::new(Arc::new(TokioMutex::new(engine)), None);
         (mcp, session_id, dir)

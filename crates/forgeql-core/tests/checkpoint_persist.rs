@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
+use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::result::ForgeQLResult;
@@ -85,7 +86,9 @@ fn engine_with_git_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
 fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("op");
-    engine.execute(Some(sid), op).expect("execute")
+    engine
+        .execute(auth(AuthContext::Tester), Some(sid), op)
+        .expect("execute")
 }
 
 // -----------------------------------------------------------------------

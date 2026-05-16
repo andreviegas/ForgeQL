@@ -20,6 +20,7 @@
 )]
 
 pub mod ast;
+pub mod auth;
 pub mod budget;
 pub mod compact;
 pub mod config;

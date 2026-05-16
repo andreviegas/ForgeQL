@@ -5,6 +5,7 @@
 //! It is intentionally decomposed into three pure sub-functions so each
 //! concern can be unit-tested in isolation.
 
+use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::compact;
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::ir::ForgeQLIR;
@@ -130,7 +131,10 @@ pub(crate) fn execute_and_print(
 
     for (source_text, op) in &ops {
         let t0 = std::time::Instant::now();
-        match engine.execute(session.session_id.as_deref(), op) {
+        // user_id is the single birth point for identity in CLI mode.
+        // When auth is implemented, replace this with a real credential lookup.
+        let user_id = auth(AuthContext::Cli);
+        match engine.execute(user_id, session.session_id.as_deref(), op) {
             Ok(result) => {
                 let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
                 update_session_from_result(session, op, &result, &mut log_source);

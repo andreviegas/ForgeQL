@@ -208,34 +208,51 @@ impl ForgeQLEngine {
 
     /// The single entry point for all `ForgeQL` operations.
     ///
-    /// `session_id` is `Some(id)` for operations that require an active session
-    /// (queries, mutations, transactions).  Source-level operations (`CREATE
-    /// SOURCE`, `SHOW SOURCES`) pass `None`.
+    /// `user_id` is the authenticated user identity for this request.  Obtain
+    /// it by calling [`crate::auth::auth`] at the entry point (MCP handler,
+    /// CLI runner, session restorer) — never hard-code a literal here.
+    ///
+    /// `session_id` is the bare alias from `USE … AS 'alias'` (or `None` for
+    /// source-level operations such as `CREATE SOURCE`, `SHOW SOURCES`).  The
+    /// engine derives the internal map key from `"{user_id}:{alias}"` — callers
+    /// never need to know the key format.
     ///
     /// # Errors
     /// Returns `Err` for session-not-found, index-not-ready, git failures,
     /// transform planning errors, and other operational failures.
     #[allow(clippy::too_many_lines)]
-    pub fn execute(&mut self, session_id: Option<&str>, op: &ForgeQLIR) -> Result<ForgeQLResult> {
+    pub fn execute(
+        &mut self,
+        user_id: &str,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
         self.commands_served += 1;
 
+        // Build the internal map key "{user_id}:{alias}".  The sessions HashMap
+        // uses this composite key so different users may hold sessions under the
+        // same alias without collision.  Callers pass the bare alias; the engine
+        // constructs the key internally and uses `sid` throughout.
+        let map_key: Option<String> = session_id.map(|alias| format!("{user_id}:{alias}"));
+        let sid: Option<&str> = map_key.as_deref();
+
         // Keep session alive on every request.
-        if let Some(sid) = session_id
-            && let Some(session) = self.sessions.get_mut(sid)
+        if let Some(mk) = sid
+            && let Some(session) = self.sessions.get_mut(mk)
         {
             session.touch();
         }
 
         // Look up worktree root once — used to relativize paths in results.
-        let worktree_root = session_id
-            .and_then(|sid| self.sessions.get(sid))
+        let worktree_root = sid
+            .and_then(|mk| self.sessions.get(mk))
             .map(|s| s.worktree_path.clone());
 
         // Guard: for any session-dependent operation, verify the worktree
         // directory still exists on disk.  FIND/SHOW/mutations all need a
         // live worktree; source-management commands (CREATE, USE, DISCONNECT,
         // SHOW SOURCES, SHOW BRANCHES) do not.
-        if let Some(sid) = session_id {
+        if let Some(mk) = sid {
             let needs_worktree = matches!(
                 op,
                 ForgeQLIR::FindSymbols { .. }
@@ -255,11 +272,11 @@ impl ForgeQLEngine {
                     | ForgeQLIR::VerifyBuild { .. }
             );
             if needs_worktree
-                && let Some(session) = self.sessions.get(sid)
+                && let Some(session) = self.sessions.get(mk)
                 && !session.worktree_path.is_dir()
             {
                 anyhow::bail!(
-                    "session '{sid}' is stale — the worktree directory \
+                    "session '{mk}' is stale — the worktree directory \
                      '{}' no longer exists on disk.  \
                      Run USE <source>.<branch> to start a new session.",
                     session.worktree_path.display()
@@ -275,22 +292,28 @@ impl ForgeQLEngine {
                 source,
                 branch,
                 as_branch,
-            } => self.use_source(source, branch, as_branch),
+            } => self.use_source(user_id, source, branch, as_branch),
             ForgeQLIR::ShowSources => self.show_sources(),
-            ForgeQLIR::ShowBranches => self.show_branches(session_id),
+            ForgeQLIR::ShowBranches => self.show_branches(sid),
             ForgeQLIR::ShowStats {
                 session_id: for_session,
-            } => self.show_stats(for_session.as_deref()),
+            } => {
+                // SHOW STATS 'alias' — convert the bare alias from the IR to
+                // the internal map key so the filter inside show_stats matches.
+                let for_key: Option<String> =
+                    for_session.as_deref().map(|a| format!("{user_id}:{a}"));
+                self.show_stats(for_key.as_deref())
+            }
             // --- Read-only queries ---
             ForgeQLIR::FindSymbols {
                 backend, clauses, ..
-            } => self.find_symbols(session_id, backend, clauses),
+            } => self.find_symbols(sid, backend, clauses),
             ForgeQLIR::FindUsages {
                 of,
                 backend,
                 clauses,
                 ..
-            } => self.find_usages(session_id, of, backend, clauses),
+            } => self.find_usages(sid, of, backend, clauses),
 
             // --- Code exposure (SHOW) ---
             ForgeQLIR::ShowContext { .. }
@@ -300,18 +323,18 @@ impl ForgeQLEngine {
             | ForgeQLIR::ShowBody { .. }
             | ForgeQLIR::ShowCallees { .. }
             | ForgeQLIR::ShowLines { .. }
-            | ForgeQLIR::FindFiles { .. } => self.exec_show(session_id, op),
+            | ForgeQLIR::FindFiles { .. } => self.exec_show(sid, op),
 
             // --- Mutations ---
-            ForgeQLIR::ChangeContent { .. } => self.exec_mutation(session_id, op),
-            ForgeQLIR::CopyLines { .. } => self.exec_copy_lines(session_id, op),
-            ForgeQLIR::MoveLines { .. } => self.exec_move_lines(session_id, op),
+            ForgeQLIR::ChangeContent { .. } => self.exec_mutation(sid, op),
+            ForgeQLIR::CopyLines { .. } => self.exec_copy_lines(sid, op),
+            ForgeQLIR::MoveLines { .. } => self.exec_move_lines(sid, op),
 
             // --- Checkpoint-based transactions ---
-            ForgeQLIR::BeginTransaction { name } => self.exec_begin_transaction(session_id, name),
-            ForgeQLIR::Commit { message } => self.exec_commit(session_id, message),
-            ForgeQLIR::Rollback { name } => self.exec_rollback(session_id, name.as_deref()),
-            ForgeQLIR::VerifyBuild { step } => self.exec_verify_build(session_id, step),
+            ForgeQLIR::BeginTransaction { name } => self.exec_begin_transaction(sid, name),
+            ForgeQLIR::Commit { message } => self.exec_commit(sid, message),
+            ForgeQLIR::Rollback { name } => self.exec_rollback(sid, name.as_deref()),
+            ForgeQLIR::VerifyBuild { step } => self.exec_verify_build(sid, step),
         }?;
 
         // Strip absolute worktree prefixes so results carry only relative paths.
@@ -344,8 +367,8 @@ impl ForgeQLEngine {
                 | ForgeQLIR::ShowStats { .. }
         );
         if !is_admin_op
-            && let Some(sid) = session_id
-            && let Some(session) = self.sessions.get_mut(sid)
+            && let Some(mk) = sid
+            && let Some(session) = self.sessions.get_mut(mk)
         {
             if let ForgeQLResult::Mutation(ref m) = result {
                 // Productive work: reward proportional to lines written.

@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::result::{ForgeQLResult, SourceOpResult};
@@ -140,7 +141,10 @@ pub(crate) fn session_try_resume(engine: &mut ForgeQLEngine, session: &mut Sessi
         as_branch: as_branch.clone(),
     };
 
-    match engine.execute(None, &use_op) {
+    // user_id is the single birth point for identity in session-restore mode.
+    // When auth is implemented, replace this with a real credential lookup.
+    let user_id = auth(AuthContext::Session);
+    match engine.execute(user_id, None, &use_op) {
         Ok(ForgeQLResult::SourceOp(SourceOpResult {
             session_id: Some(ref new_sid),
             ..

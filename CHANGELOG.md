@@ -4,6 +4,50 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.6] — 2026-05-16 — Introduce `auth()` as single source of truth for user identity
+
+### Internal
+
+- **New `forgeql_core::auth` module** (`crates/forgeql-core/src/auth.rs`):
+
+  Introduces `AuthContext` (enum: `Mcp`, `Cli`, `Session`, `Tester`) and
+  `pub const fn auth(context: AuthContext) -> &'static str`.  The string
+  `"anonymous"` now appears **exactly once** in the entire codebase — as the
+  return value of `auth()` for production contexts.  `"fql_tester"` is
+  returned for `AuthContext::Tester`, making test sessions completely
+  distinguishable from production sessions in logs and on disk.
+
+- **Entry-point birth points** (`crates/forgeql/src/mcp.rs`,
+  `crates/forgeql/src/execute.rs`, `crates/forgeql/src/session.rs`):
+
+  Each entry point now calls `auth(AuthContext::X)` exactly once and passes
+  the resulting `user_id` variable everywhere else.  No `"anonymous"` literal
+  appears outside of `auth()`.  When real authentication is added, only
+  `auth()` needs to change — the rest of the call graph is already wired.
+
+- **Test helpers use `AuthContext::Tester`**
+  (`crates/forgeql-core/src/engine/exec_session.rs`):
+
+  `register_local_session`, `register_local_session_with_columnar`,
+  `init_session_budget`, `install_columnar_for_session`, `session_has_columnar`,
+  `session_index_stats_rows` — all test helpers now compute the session map key
+  via `auth(AuthContext::Tester)` = `"fql_tester"` instead of a hardcoded
+  `"anonymous"` literal.  A new `register_local_session_for(user_id, path)`
+  helper is added for tests that exercise a specific entry-point auth context
+  (e.g. the MCP unit tests).
+
+  Session restore fallback in `restore_sessions_from_disk()` uses
+  `auth(AuthContext::Session)` for old sentinels that pre-date the `user=`
+  field.
+
+- **All integration and unit tests updated** to import
+  `forgeql_core::auth::{auth, AuthContext}` and call
+  `engine.execute(auth(AuthContext::Tester), ...)` instead of the literal
+  `"anonymous"`.  `budget_status` key format strings updated to match.
+
+- **Clippy fixes**: `auth()` is declared `const fn`; redundant `.clone()` on
+  `session_id` in `exec_source.rs` removed.
+
 ## [0.50.5] — 2026-05-16 — Wire `SessionCoords` into `exec_source.rs`
 
 ### Internal

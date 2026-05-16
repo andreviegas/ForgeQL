@@ -148,13 +148,14 @@ impl ForgeQLEngine {
     #[allow(clippy::too_many_lines)]
     pub(super) fn use_source(
         &mut self,
+        user_id: &str,
         source_name: &str,
         branch: &str,
         as_branch: &str,
     ) -> Result<ForgeQLResult> {
         // Construct session identity — single source of truth for map key,
         // git branch name, and worktree path derivations.
-        let coords = SessionCoords::anonymous(source_name, branch, as_branch);
+        let coords = SessionCoords::new(user_id, source_name, branch, as_branch);
         if let Err(msg) = coords.validate() {
             return Err(crate::error::ForgeError::InvalidInput(msg).into());
         }
@@ -173,7 +174,9 @@ impl ForgeQLEngine {
         // `self.sessions` to avoid holding a shared borrow across a mutable one.
         // Because the alias is the session key (see below), an O(1) lookup suffices.
         let resume_outcome: Option<(String, Option<usize>)> = {
-            if let Some((existing_id, existing_session)) = self.sessions.get_key_value(as_branch) {
+            if let Some((existing_id, existing_session)) =
+                self.sessions.get_key_value(&coords.map_key())
+            {
                 // Guard: if the alias was previously bound to a *different* source
                 // or a different user, evict it rather than returning the wrong
                 // repo's data or leaking one user's session to another.
@@ -234,7 +237,8 @@ impl ForgeQLEngine {
                     symbols_indexed: Some(symbols_indexed),
                     resumed: true,
                     message: Some(format!(
-                        "resumed in-memory session for fql/{branch}/{as_branch}"
+                        "resumed in-memory session for {}",
+                        coords.git_branch()
                     )),
                 }));
             }
@@ -257,15 +261,21 @@ impl ForgeQLEngine {
             .path()
             .to_path_buf();
 
-        // The alias is the session key — deterministic, memorable, and
-        // reconstructable from the USE command the model already knows.
-        // No opaque generated ID needed.
-        let session_id = as_branch.to_string();
+        // The alias is the session key returned to the caller; internally the
+        // engine stores sessions under "{user}:{alias}" (coords.map_key()) to
+        // allow per-user isolation.  Callers never see the map key.
+        let session_id = as_branch.to_string(); // bare alias, returned to caller
+        let map_key = coords.map_key(); // internal HashMap key
         // All path and branch name derivations go through `SessionCoords`
         // so the layout can be changed in one place — see session/coords.rs.
         let wt_name = coords.worktree_dir();
         let git_branch = coords.git_branch();
-        let wt_path = SessionCoords::worktrees_root(&self.data_dir).join(&wt_name);
+        // Worktree lives under the per-user subdir: data_dir/worktrees/{user}/{dir}.
+        let wt_path = coords.worktree_path(&self.data_dir);
+        // Ensure the per-user worktree subdirectory exists before creating the worktree.
+        if let Some(parent) = wt_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
 
         let wt_existed = wt_path.exists();
         drop(worktree::create(
@@ -419,11 +429,11 @@ impl ForgeQLEngine {
             || session.index().map_or(0, |idx| idx.rows.len()),
             |s| s.rows,
         );
-        let sid = session_id.clone();
+        let sid = session_id;
 
         // Write the initial timestamp so background pruners see this worktree as active.
         session.touch();
-        drop(self.sessions.insert(session_id, session));
+        drop(self.sessions.insert(map_key, session));
 
         Ok(ForgeQLResult::SourceOp(SourceOpResult {
             op: "use_source".to_string(),
@@ -434,10 +444,11 @@ impl ForgeQLEngine {
             resumed: wt_existed,
             message: if wt_existed {
                 Some(format!(
-                    "resumed existing worktree for fql/{branch}/{as_branch} — uncommitted changes preserved"
+                    "resumed existing worktree for {} — uncommitted changes preserved",
+                    coords.git_branch()
                 ))
             } else {
-                Some(format!("created new worktree for fql/{branch}/{as_branch}"))
+                Some(format!("created new worktree for {}", coords.git_branch()))
             },
         }))
     }

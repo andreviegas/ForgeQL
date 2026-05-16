@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
+use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::result::{ForgeQLResult, QueryResult};
@@ -43,7 +44,9 @@ fn fixtures_dir() -> PathBuf {
 fn exec(engine: &mut ForgeQLEngine, session_id: Option<&str>, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("op");
-    engine.execute(session_id, op).expect("execute")
+    engine
+        .execute(auth(AuthContext::Tester), session_id, op)
+        .expect("execute")
 }
 
 /// Create a non-bare git repo at `dir` with an initial commit containing the
@@ -113,10 +116,10 @@ fn engine_with_source_session() -> (
     let use_fql = format!("USE mysrc.{branch} AS 'sess'");
     exec(&mut engine, Some("sess"), &use_fql);
 
-    // Worktree path mirrors the naming in exec_source.rs:
-    // data_dir/worktrees/{source}.{branch}.{alias}
-    let wt_path =
-        SessionCoords::worktrees_root(data_dir.path()).join(format!("mysrc.{branch}.sess"));
+    // Worktree path now lives in the per-user subdir:
+    // data_dir/worktrees/{user}/{source}.{branch}.{alias}
+    let wt_path = SessionCoords::user_worktrees_root(data_dir.path(), auth(AuthContext::Tester))
+        .join(format!("mysrc.{branch}.sess"));
 
     assert!(
         wt_path.is_dir(),
