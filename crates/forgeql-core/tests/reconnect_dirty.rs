@@ -44,8 +44,9 @@ fn fixtures_dir() -> PathBuf {
 fn exec(engine: &mut ForgeQLEngine, session_id: Option<&str>, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("op");
+    let coords = session_id.map(|s| SessionCoords::from_session_id(s).expect("valid session_id"));
     engine
-        .execute(auth(AuthContext::Tester), session_id, op)
+        .execute(auth(AuthContext::Tester), coords.as_ref(), op)
         .expect("execute")
 }
 
@@ -88,12 +89,12 @@ fn head_branch(repo: &git2::Repository) -> String {
 }
 
 /// Boot an engine, clone the source repo, open a worktree session, and return:
-/// `(engine, session_alias, branch_name, worktree_path, data_dir, source_dir)`
+/// `(engine, session_token, branch_name, worktree_path, data_dir, source_dir)`
 ///
 /// The last two `TempDir` values must remain alive for the duration of the test.
 fn engine_with_source_session() -> (
     ForgeQLEngine,
-    &'static str,
+    String,
     String,
     PathBuf,
     tempfile::TempDir,
@@ -112,9 +113,9 @@ fn engine_with_source_session() -> (
     let create_fql = format!("CREATE SOURCE 'mysrc' FROM '{}'", src_dir.path().display());
     exec(&mut engine, None, &create_fql);
 
-    // USE — creates a worktree + indexes.
+    // USE — creates a worktree + indexes.  No existing session context — pass None.
     let use_fql = format!("USE mysrc.{branch} AS 'sess'");
-    exec(&mut engine, Some("sess"), &use_fql);
+    exec(&mut engine, None, &use_fql);
 
     // Worktree path now lives in the per-user subdir:
     // data_dir/worktrees/{user}/{source}.{branch}.{alias}
@@ -127,7 +128,11 @@ fn engine_with_source_session() -> (
         wt_path.display()
     );
 
-    (engine, "sess", branch, wt_path, data_dir, src_dir)
+    // Build the full session token used as the map key.
+    let session_token =
+        SessionCoords::new(auth(AuthContext::Tester), "mysrc", &branch, "sess").to_session_id();
+
+    (engine, session_token, branch, wt_path, data_dir, src_dir)
 }
 
 /// Assert that a FIND symbols query returns at least one hit.
@@ -172,19 +177,19 @@ fn reconnect_reindexes_dirty_files() {
     let (mut engine, sess, branch, wt_path, data_dir, _src_dir) = engine_with_source_session();
 
     // Verify the initial state — encenderMotor is in the index.
-    assert_symbol_found(&mut engine, sess, "encenderMotor");
+    assert_symbol_found(&mut engine, &sess, "encenderMotor");
 
     // Overwrite motor_control.cpp via the engine's CHANGE command (no BEGIN).
     // This updates both disk and the in-memory index.
     exec(
         &mut engine,
-        Some(sess),
+        Some(&sess),
         "CHANGE FILE 'motor_control.cpp' WITH 'void reconnectTestFn(){}'",
     );
 
     // Confirm the in-memory index reflects the change.
-    assert_symbol_found(&mut engine, sess, "reconnectTestFn");
-    assert_symbol_not_found(&mut engine, sess, "encenderMotor");
+    assert_symbol_found(&mut engine, &sess, "reconnectTestFn");
+    assert_symbol_not_found(&mut engine, &sess, "encenderMotor");
 
     // --- Simulate crash: drop the engine (all in-memory sessions gone). ---
     drop(engine);
@@ -195,11 +200,13 @@ fn reconnect_reindexes_dirty_files() {
 
     // Reconnect: USE calls use_source → resume_index → FT7 dirty reindex.
     let use_fql = format!("USE mysrc.{branch} AS 'sess'");
-    exec(&mut new_engine, Some("sess"), &use_fql);
+    exec(&mut new_engine, None, &use_fql);
+    let new_sess =
+        SessionCoords::new(auth(AuthContext::Tester), "mysrc", &branch, "sess").to_session_id();
 
     // FT7 must reindex the dirty file so the post-change symbols are present.
-    assert_symbol_found(&mut new_engine, "sess", "reconnectTestFn");
-    assert_symbol_not_found(&mut new_engine, "sess", "encenderMotor");
+    assert_symbol_found(&mut new_engine, &new_sess, "reconnectTestFn");
+    assert_symbol_not_found(&mut new_engine, &new_sess, "encenderMotor");
 
     drop((wt_path, data_dir));
 }
@@ -222,10 +229,12 @@ fn reconnect_does_not_reindex_clean_files() {
 
     // Reconnect — git diff HEAD must be empty; index is restored from cache.
     let use_fql = format!("USE mysrc.{branch} AS 'sess'");
-    exec(&mut new_engine, Some("sess"), &use_fql);
+    exec(&mut new_engine, None, &use_fql);
+    let new_sess =
+        SessionCoords::new(auth(AuthContext::Tester), "mysrc", &branch, "sess").to_session_id();
 
     // Original symbols must still be present (index was valid, no reindex needed).
-    assert_symbol_found(&mut new_engine, "sess", "encenderMotor");
+    assert_symbol_found(&mut new_engine, &new_sess, "encenderMotor");
 
     drop((wt_path, data_dir));
 }
@@ -244,17 +253,17 @@ fn reconnect_after_begin_does_not_double_index() {
     let (mut engine, sess, branch, wt_path, data_dir, _src_dir) = engine_with_source_session();
 
     // Checkpoint with BEGIN before modifying (BEGIN commits first).
-    exec(&mut engine, Some(sess), "BEGIN TRANSACTION 'txn-save'");
+    exec(&mut engine, Some(&sess), "BEGIN TRANSACTION 'txn-save'");
 
     // Now change a file (the change is on top of the checkpoint commit).
     exec(
         &mut engine,
-        Some(sess),
+        Some(&sess),
         "CHANGE FILE 'motor_control.cpp' WITH 'void afterBeginFn(){}'",
     );
 
     // The in-memory index must reflect the new function.
-    assert_symbol_found(&mut engine, sess, "afterBeginFn");
+    assert_symbol_found(&mut engine, &sess, "afterBeginFn");
 
     // --- Simulate crash. ---
     drop(engine);
@@ -266,9 +275,11 @@ fn reconnect_after_begin_does_not_double_index() {
     // dirty relative to HEAD.  FT7 will reindex it.
     // The important assertion is that the symbol is correct, not double-indexed.
     let use_fql = format!("USE mysrc.{branch} AS 'sess'");
-    exec(&mut new_engine, Some("sess"), &use_fql);
+    exec(&mut new_engine, None, &use_fql);
+    let new_sess =
+        SessionCoords::new(auth(AuthContext::Tester), "mysrc", &branch, "sess").to_session_id();
 
-    assert_symbol_found(&mut new_engine, "sess", "afterBeginFn");
+    assert_symbol_found(&mut new_engine, &new_sess, "afterBeginFn");
 
     drop((wt_path, data_dir));
 }

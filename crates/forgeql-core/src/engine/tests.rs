@@ -154,7 +154,11 @@ fn find_globals_returns_declaration_nodes() {
     // FIND globals → FIND symbols WHERE fql_kind = 'variable' WHERE scope = 'file'
     let op = crate::parser::parse("FIND globals LIMIT 200").unwrap();
     let result = engine
-        .execute(auth(AuthContext::Tester), Some(&session_id), &op[0])
+        .execute(
+            auth(AuthContext::Tester),
+            Some(&SessionCoords::from_session_id(&session_id).unwrap()),
+            &op[0],
+        )
         .unwrap();
     let results = match result {
         ForgeQLResult::Query(qr) => qr.results,
@@ -250,7 +254,11 @@ fn find_globals_with_conflicting_node_kind_returns_empty() {
     let op =
         crate::parser::parse("FIND globals WHERE node_kind = 'enum_specifier' LIMIT 200").unwrap();
     let result = engine
-        .execute(auth(AuthContext::Tester), Some(&session_id), &op[0])
+        .execute(
+            auth(AuthContext::Tester),
+            Some(&SessionCoords::from_session_id(&session_id).unwrap()),
+            &op[0],
+        )
         .unwrap();
     let results = match result {
         ForgeQLResult::Query(qr) => qr.results,

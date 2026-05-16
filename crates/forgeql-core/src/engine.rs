@@ -212,10 +212,11 @@ impl ForgeQLEngine {
     /// it by calling [`crate::auth::auth`] at the entry point (MCP handler,
     /// CLI runner, session restorer) — never hard-code a literal here.
     ///
-    /// `session_id` is the bare alias from `USE … AS 'alias'` (or `None` for
-    /// source-level operations such as `CREATE SOURCE`, `SHOW SOURCES`).  The
-    /// engine derives the internal map key from `"{user_id}:{alias}"` — callers
-    /// never need to know the key format.
+    /// `coords` carries the full session identity for session-dependent
+    /// operations (FIND, SHOW, mutations, transactions).  Pass `None` for
+    /// session-independent operations (`CREATE SOURCE`, `REFRESH SOURCE`,
+    /// `SHOW SOURCES`, `USE`).  Build a `SessionCoords` from the opaque
+    /// token returned by `USE` via [`SessionCoords::from_session_id`].
     ///
     /// # Errors
     /// Returns `Err` for session-not-found, index-not-ready, git failures,
@@ -224,16 +225,15 @@ impl ForgeQLEngine {
     pub fn execute(
         &mut self,
         user_id: &str,
-        session_id: Option<&str>,
+        coords: Option<&SessionCoords>,
         op: &ForgeQLIR,
     ) -> Result<ForgeQLResult> {
         self.commands_served += 1;
 
-        // Build the internal map key "{user_id}:{alias}".  The sessions HashMap
-        // uses this composite key so different users may hold sessions under the
-        // same alias without collision.  Callers pass the bare alias; the engine
-        // constructs the key internally and uses `sid` throughout.
-        let map_key: Option<String> = session_id.map(|alias| format!("{user_id}:{alias}"));
+        // Derive the internal HashMap key directly from the SessionCoords.
+        // All key construction is now centralised inside `SessionCoords::map_key`
+        // so adding fields to SessionCoords never requires touching this function.
+        let map_key: Option<String> = coords.map(SessionCoords::map_key);
         let sid: Option<&str> = map_key.as_deref();
 
         // Keep session alive on every request.
@@ -298,11 +298,9 @@ impl ForgeQLEngine {
             ForgeQLIR::ShowStats {
                 session_id: for_session,
             } => {
-                // SHOW STATS 'alias' — convert the bare alias from the IR to
-                // the internal map key so the filter inside show_stats matches.
-                let for_key: Option<String> =
-                    for_session.as_deref().map(|a| format!("{user_id}:{a}"));
-                self.show_stats(for_key.as_deref())
+                // SHOW STATS 'token' — the token is the full to_session_id() value
+                // which equals map_key(), so it can be used for the sessions lookup directly.
+                self.show_stats(for_session.as_deref())
             }
             // --- Read-only queries ---
             ForgeQLIR::FindSymbols {

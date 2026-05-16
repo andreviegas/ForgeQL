@@ -2,12 +2,12 @@
 //!
 //! [`SessionCoords`] is the **single source of truth** for deriving:
 //!
-//! | Derived value      | Format                                                         |
-//! |--------------------|----------------------------------------------------------------|
-//! | Session map key    | `{user}:{alias}`                                               |
-//! | Git session branch | `fql/{user}/{source}/{branch}/{alias}`                         |
-//! | Worktree dir name  | `{source}.{safe_branch}.{alias}`                               |
-//! | Worktree path      | `{data_dir}/worktrees/{user}/{source}.{safe_branch}.{alias}`   |
+//! | Derived value      | Format                                                                  |
+//! |--------------------|-------------------------------------------------------------------------|
+//! | Session map key    | `{user}:{source}:{branch}:{alias}`                                      |
+//! | Git session branch | `fql/{user}/{source}/{branch}/{alias}`                                  |
+//! | Worktree dir name  | `{source}.{safe_branch}.{alias}`                                        |
+//! | Worktree path      | `{data_dir}/worktrees/{user}/{source}.{safe_branch}.{alias}`            |
 //!
 //! `safe_branch` replaces `/` with `-` so the worktree directory stays flat.
 //!
@@ -76,35 +76,57 @@ impl SessionCoords {
         }
     }
 
-    /// Shorthand for single-user / anonymous deployments.
-    ///
-    /// Equivalent to `SessionCoords::new("anonymous", source, branch, alias)`.
-    /// All current call-sites use this constructor; when real auth is wired,
-    /// they migrate to [`new`] and pass the authenticated user identity.
-    ///
-    /// [`new`]: SessionCoords::new
-    #[must_use]
-    pub fn anonymous(
-        source: impl Into<String>,
-        branch: impl Into<String>,
-        alias: impl Into<String>,
-    ) -> Self {
-        Self::new("anonymous", source, branch, alias)
-    }
-
     // -----------------------------------------------------------------------
     // Derived values — paths and branch names
     // -----------------------------------------------------------------------
 
+    /// Opaque session identifier returned to callers after `USE`.
+    ///
+    /// Format: `"{user}:{source}:{branch}:{alias}"`.
+    ///
+    /// All four components are included so the token is self-describing and
+    /// can be decoded back into a full `SessionCoords` via
+    /// [`from_session_id`].  The format is an implementation detail —
+    /// callers should treat it as opaque and echo it back verbatim.
+    ///
+    /// [`from_session_id`]: SessionCoords::from_session_id
+    #[must_use]
+    pub fn to_session_id(&self) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            self.user, self.source, self.branch, self.alias
+        )
+    }
+
+    /// Reconstruct `SessionCoords` from a token produced by
+    /// [`to_session_id`].
+    ///
+    /// # Errors
+    /// Returns `Err` when the string does not contain exactly four
+    /// `:`-separated components (`user:source:branch:alias`).
+    ///
+    /// [`to_session_id`]: SessionCoords::to_session_id
+    pub fn from_session_id(s: &str) -> Result<Self, String> {
+        // Use splitn(4) so the alias component may itself contain `:`.
+        let parts: Vec<&str> = s.splitn(4, ':').collect();
+        if parts.len() != 4 {
+            return Err(format!(
+                "invalid session id '{s}': expected 'user:source:branch:alias'"
+            ));
+        }
+        Ok(Self::new(parts[0], parts[1], parts[2], parts[3]))
+    }
+
     /// Key used in the engine's in-memory session map.
     ///
-    /// Format: `"{user}:{alias}"`.
+    /// Delegates to [`to_session_id`] so the map key and the external
+    /// session token are always in sync.  All code that needs a map key
+    /// should call this method rather than constructing the string manually.
     ///
-    /// Keying by `(user, alias)` means different users may each maintain their
-    /// own session under the same alias without collision.
+    /// [`to_session_id`]: SessionCoords::to_session_id
     #[must_use]
     pub fn map_key(&self) -> String {
-        format!("{}:{}", self.user, self.alias)
+        self.to_session_id()
     }
 
     /// Git branch created in the bare repo for this session.

@@ -261,11 +261,12 @@ impl ForgeQLEngine {
             .path()
             .to_path_buf();
 
-        // The alias is the session key returned to the caller; internally the
-        // engine stores sessions under "{user}:{alias}" (coords.map_key()) to
-        // allow per-user isolation.  Callers never see the map key.
-        let session_id = as_branch.to_string(); // bare alias, returned to caller
-        let map_key = coords.map_key(); // internal HashMap key
+        // The session token returned to callers is the full coords.to_session_id()
+        // value, which also serves as the HashMap key (map_key delegates to
+        // to_session_id).  Callers echo this opaque token back on every request;
+        // the engine decodes it into SessionCoords via from_session_id().
+        let session_token = coords.to_session_id(); // returned to caller & used as map key
+        let map_key = session_token.clone();
         // All path and branch name derivations go through `SessionCoords`
         // so the layout can be changed in one place — see session/coords.rs.
         let wt_name = coords.worktree_dir();
@@ -287,7 +288,7 @@ impl ForgeQLEngine {
         )?);
 
         let mut session = Session::new(
-            &session_id,
+            as_branch, // bare alias used as the internal session handle
             &coords.user,
             wt_path,
             source_name,
@@ -429,7 +430,6 @@ impl ForgeQLEngine {
             || session.index().map_or(0, |idx| idx.rows.len()),
             |s| s.rows,
         );
-        let sid = session_id;
 
         // Write the initial timestamp so background pruners see this worktree as active.
         session.touch();
@@ -438,7 +438,7 @@ impl ForgeQLEngine {
         Ok(ForgeQLResult::SourceOp(SourceOpResult {
             op: "use_source".to_string(),
             source_name: Some(source_name.to_string()),
-            session_id: Some(sid),
+            session_id: Some(session_token),
             branches: Vec::new(),
             symbols_indexed: Some(symbols_indexed),
             resumed: wt_existed,

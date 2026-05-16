@@ -20,6 +20,7 @@ use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::result::ForgeQLResult;
+use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
 // -----------------------------------------------------------------------
@@ -62,8 +63,9 @@ fn multilang_engine() -> (ForgeQLEngine, String, tempfile::TempDir) {
 fn exec(engine: &mut ForgeQLEngine, session: &str, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("at least one op");
+    let coords = SessionCoords::from_session_id(session).expect("valid session");
     engine
-        .execute(auth(AuthContext::Tester), Some(session), op)
+        .execute(auth(AuthContext::Tester), Some(&coords), op)
         .expect("execute")
 }
 
@@ -71,8 +73,9 @@ fn exec(engine: &mut ForgeQLEngine, session: &str, fql: &str) -> ForgeQLResult {
 fn exec_err(engine: &mut ForgeQLEngine, session: &str, fql: &str) -> String {
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("at least one op");
+    let coords = SessionCoords::from_session_id(session).expect("valid session");
     engine
-        .execute(auth(AuthContext::Tester), Some(session), op)
+        .execute(auth(AuthContext::Tester), Some(&coords), op)
         .expect_err("expected error")
         .to_string()
 }

@@ -12,6 +12,7 @@ use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
 use forgeql_core::result::ForgeQLResult;
+use forgeql_core::session::SessionCoords;
 use tracing::info;
 
 use crate::cli::CliFormat;
@@ -134,7 +135,15 @@ pub(crate) fn execute_and_print(
         // user_id is the single birth point for identity in CLI mode.
         // When auth is implemented, replace this with a real credential lookup.
         let user_id = auth(AuthContext::Cli);
-        match engine.execute(user_id, session.session_id.as_deref(), op) {
+        // Decode the opaque session token (produced by USE) into SessionCoords
+        // so the engine receives the full identity struct directly.
+        let coords = session
+            .session_id
+            .as_deref()
+            .map(SessionCoords::from_session_id)
+            .transpose()
+            .unwrap_or(None); // malformed token: treat as no session
+        match engine.execute(user_id, coords.as_ref(), op) {
             Ok(result) => {
                 let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
                 update_session_from_result(session, op, &result, &mut log_source);

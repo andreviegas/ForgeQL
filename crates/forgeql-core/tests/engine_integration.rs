@@ -25,6 +25,7 @@ use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::ir::{Backend, Clauses, ForgeQLIR};
 use forgeql_core::parser;
 use forgeql_core::result::{ForgeQLResult, ShowContent};
+use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
 fn make_registry() -> Arc<LanguageRegistry> {
@@ -78,8 +79,9 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
 fn execute_fql(engine: &mut ForgeQLEngine, session_id: &str, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("at least one op");
+    let coords = SessionCoords::from_session_id(session_id).expect("valid session_id");
     engine
-        .execute(auth(AuthContext::Tester), Some(session_id), op)
+        .execute(auth(AuthContext::Tester), Some(&coords), op)
         .expect("execute")
 }
 
@@ -1390,9 +1392,7 @@ fn budget_deducts_on_show_lines() {
     engine.init_session_budget(&sid, &budget_config());
 
     // Confirm budget starts at initial.
-    let snap = engine
-        .budget_status(&format!("{}:{sid}", auth(AuthContext::Tester)))
-        .expect("budget active");
+    let snap = engine.budget_status(&sid).expect("budget active");
     assert_eq!(snap.remaining, 50);
 
     // SHOW LINES returns source lines — budget should decrease.
@@ -1404,9 +1404,7 @@ fn budget_deducts_on_show_lines() {
     let lines_returned = result.source_lines_count();
     assert!(lines_returned > 0, "should return lines");
 
-    let snap = engine
-        .budget_status(&format!("{}:{sid}", auth(AuthContext::Tester)))
-        .expect("budget active");
+    let snap = engine.budget_status(&sid).expect("budget active");
     // No recovery on SHOW LINES — pure deduction.
     assert_eq!(snap.remaining, 50 - lines_returned);
 }
@@ -1423,9 +1421,7 @@ fn budget_not_deducted_on_find_symbols() {
         "FIND symbols WHERE fql_kind = 'function' LIMIT 5",
     );
 
-    let snap = engine
-        .budget_status(&format!("{}:{sid}", auth(AuthContext::Tester)))
-        .expect("budget active");
+    let snap = engine.budget_status(&sid).expect("budget active");
     // Recovery may increase it, but it should not go below initial.
     assert!(snap.remaining >= 50, "budget should not decrease for FIND");
 }
@@ -1467,16 +1463,8 @@ fn budget_critical_caps_show_lines() {
 fn budget_absent_without_config() {
     let (engine, sid, _dir) = engine_with_session();
     // No init_session_budget call — budget should be None.
-    assert!(
-        engine
-            .budget_status(&format!("{}:{sid}", auth(AuthContext::Tester)))
-            .is_none()
-    );
-    assert!(
-        engine
-            .budget_status(&format!("{}:{sid}", auth(AuthContext::Tester)))
-            .is_none()
-    );
+    assert!(engine.budget_status(&sid).is_none());
+    assert!(engine.budget_status(&sid).is_none());
 }
 
 // -----------------------------------------------------------------------

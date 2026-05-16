@@ -25,6 +25,7 @@ use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
 use forgeql_core::result::ForgeQLResult;
+use forgeql_core::session::SessionCoords;
 
 // -----------------------------------------------------------------------
 // MCP handler struct
@@ -197,9 +198,19 @@ async fn exec_engine(
 ) -> Result<(ForgeQLResult, Option<forgeql_core::budget::BudgetSnapshot>), ErrorData> {
     let mut guard = engine.lock().await;
 
+    // Decode the opaque session token into full SessionCoords before entering
+    // the engine.  The engine receives the struct directly — it never
+    // reconstructs session identity from raw strings.
+    let coords = session_id
+        .map(|sid| {
+            SessionCoords::from_session_id(sid)
+                .map_err(|e| ErrorData::invalid_params(format!("invalid session_id: {e}"), None))
+        })
+        .transpose()?;
+
     // Wrap execute() in catch_unwind to convert panics into error responses.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        guard.execute(user_id, session_id, op)
+        guard.execute(user_id, coords.as_ref(), op)
     }))
     .map_err(|payload| {
         let msg = payload

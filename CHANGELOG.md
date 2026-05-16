@@ -4,6 +4,23 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.7] — 2026-05-17 — Self-describing session tokens and `execute()` takes `Option<&SessionCoords>`
+
+### Internal
+
+- **`SessionCoords::to_session_id()`** — encodes all four identity fields (`user:source:branch:alias`) into an opaque token; the single encoding point for session identity.
+- **`SessionCoords::from_session_id()`** — decodes a token back into `SessionCoords`; uses `splitn(4, ':')` so alias may contain `':'`.
+- **`SessionCoords::map_key()`** now delegates to `to_session_id()` — map key and external token are always the same value, making the `HashMap<String, Session>` fully self-describing.
+- **`ForgeQLEngine::execute()`** signature changed from `session_id: Option<&str>` to `coords: Option<&SessionCoords>` — the engine receives the full identity struct and never reconstructs it from raw strings.
+- Entry-point callers (`mcp.rs::exec_engine`, `execute.rs::execute_and_print`) now decode the incoming session token via `from_session_id()` before calling `execute()`.
+- Test helpers in `exec_session.rs` (`register_local_session`, `register_local_session_for`, `register_local_session_with_columnar`) build `SessionCoords` directly and return `coords.to_session_id()` instead of bare aliases.
+- Lookup helpers (`init_session_budget`, `install_columnar_for_session`, `session_has_columnar`, `session_index_stats_rows`) now use `session_id` directly as the map key (it is the full token).
+- **Fixes the "alias already bound to source X" error**: `map_key()` previously encoded only `user:alias`, making the same alias across different sources collide. The four-field key makes each `(user, source, branch, alias)` tuple unique.
+- All integration and unit tests updated to pass `Option<&SessionCoords>` to `execute()` and to decode session tokens before use.
+- `budget_status()` call sites updated to pass the full token directly instead of manually constructing `"user:alias"`.
+- **`SessionCoords::anonymous()` removed** — the migration it was guarding has happened; all construction sites now call `SessionCoords::new(auth(AuthContext::Tester), ...)`. Tests in `coords.rs` updated accordingly; hardcoded `"anonymous"` strings in expected values replaced with `auth(AuthContext::Tester)`.
+- Fixed stale doc-table in `coords.rs` module comment (`Session map key` column now shows the correct four-field format).
+
 ## [0.50.6] — 2026-05-16 — Introduce `auth()` as single source of truth for user identity
 
 ### Internal

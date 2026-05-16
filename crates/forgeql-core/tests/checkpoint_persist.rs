@@ -21,7 +21,7 @@ use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::result::ForgeQLResult;
-use forgeql_core::session::Session;
+use forgeql_core::session::{Session, SessionCoords};
 use tempfile::tempdir;
 
 // -----------------------------------------------------------------------
@@ -86,8 +86,9 @@ fn engine_with_git_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
 fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("op");
+    let coords = SessionCoords::from_session_id(sid).expect("valid sid");
     engine
-        .execute(auth(AuthContext::Tester), Some(sid), op)
+        .execute(auth(AuthContext::Tester), Some(&coords), op)
         .expect("execute")
 }
 

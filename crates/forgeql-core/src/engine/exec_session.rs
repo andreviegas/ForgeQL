@@ -312,13 +312,11 @@ impl ForgeQLEngine {
     /// Returns `Err` if the workspace cannot be created or indexing fails.
     #[cfg(feature = "test-helpers")]
     pub fn register_local_session(&mut self, workspace_root: &Path) -> Result<String> {
-        let session_id = generate_session_id();
-        // Store under the composite key that execute() will compute:
-        // "{user_id}:{alias}".  Test sessions use auth(AuthContext::Tester)
-        // so they are distinguishable from production sessions in logs.
-        let map_key = format!("{}:{session_id}", auth(AuthContext::Tester));
+        let alias = generate_session_id();
+        let coords = SessionCoords::new(auth(AuthContext::Tester), "local", "test-branch", &alias);
+        let map_key = coords.map_key();
         let mut session = Session::new(
-            &session_id,
+            &alias,
             "test-user",
             workspace_root.to_path_buf(),
             "local",       // synthetic source name
@@ -329,7 +327,7 @@ impl ForgeQLEngine {
 
         session.touch();
         drop(self.sessions.insert(map_key, session));
-        Ok(session_id)
+        Ok(coords.to_session_id())
     }
 
     /// Like [`register_local_session`] but uses an explicit `user_id` for the
@@ -345,10 +343,11 @@ impl ForgeQLEngine {
         user_id: &str,
         workspace_root: &Path,
     ) -> Result<String> {
-        let session_id = generate_session_id();
-        let map_key = format!("{user_id}:{session_id}");
+        let alias = generate_session_id();
+        let coords = SessionCoords::new(user_id, "local", "test-branch", &alias);
+        let map_key = coords.map_key();
         let mut session = Session::new(
-            &session_id,
+            &alias,
             "test-user",
             workspace_root.to_path_buf(),
             "local",
@@ -358,7 +357,7 @@ impl ForgeQLEngine {
         session.build_index()?;
         session.touch();
         drop(self.sessions.insert(map_key, session));
-        Ok(session_id)
+        Ok(coords.to_session_id())
     }
 
     /// Activate a line budget for an existing session.
@@ -371,8 +370,8 @@ impl ForgeQLEngine {
         config: &crate::config::LineBudgetConfig,
     ) {
         let data_dir = self.data_dir.clone();
-        let map_key = format!("{}:{session_id}", auth(AuthContext::Tester));
-        if let Some(session) = self.sessions.get_mut(&map_key) {
+        // session_id is a full to_session_id() token — it equals the map key.
+        if let Some(session) = self.sessions.get_mut(session_id) {
             session.init_budget(config, false, &data_dir, "test-branch");
         }
     }
@@ -387,8 +386,8 @@ impl ForgeQLEngine {
         session_id: &str,
         storage: Box<dyn crate::storage::StorageEngine>,
     ) {
-        let map_key = format!("{}:{session_id}", auth(AuthContext::Tester));
-        if let Some(session) = self.sessions.get_mut(&map_key) {
+        // session_id is a full to_session_id() token — it equals the map key.
+        if let Some(session) = self.sessions.get_mut(session_id) {
             session.install_columnar(storage);
         }
     }
@@ -397,9 +396,9 @@ impl ForgeQLEngine {
     #[cfg(feature = "test-helpers")]
     #[must_use]
     pub fn session_has_columnar(&self, session_id: &str) -> bool {
-        let map_key = format!("{}:{session_id}", auth(AuthContext::Tester));
+        // session_id is a full to_session_id() token — it equals the map key.
         self.sessions
-            .get(&map_key)
+            .get(session_id)
             .is_some_and(Session::has_columnar)
     }
 
@@ -411,9 +410,9 @@ impl ForgeQLEngine {
     #[cfg(feature = "test-helpers")]
     #[must_use]
     pub fn session_index_stats_rows(&self, session_id: &str) -> Option<usize> {
-        let map_key = format!("{}:{session_id}", auth(AuthContext::Tester));
+        // session_id is a full to_session_id() token — it equals the map key.
         self.sessions
-            .get(&map_key)
+            .get(session_id)
             .and_then(|s| s.engine().index_stats())
             .map(|st| st.rows)
     }
@@ -442,9 +441,10 @@ impl ForgeQLEngine {
         use crate::storage::columnar::overlay::Overlay;
         use crate::storage::columnar::{ColumnarStorage, SegmentReader};
 
-        let session_id = crate::engine::exec_session::generate_session_id();
+        let alias = crate::engine::exec_session::generate_session_id();
+        let coords = SessionCoords::new(auth(AuthContext::Tester), "local", "test-branch", &alias);
         let mut session = Session::new(
-            &session_id,
+            &alias,
             "test-user",
             workspace_root.to_path_buf(),
             "local",
@@ -501,11 +501,8 @@ impl ForgeQLEngine {
             session.install_columnar(Box::new(columnar));
         }
 
-        let sid = session_id.clone();
         session.touch();
-        // Store under composite key matching execute()'s computation.
-        let map_key = format!("{}:{session_id}", auth(AuthContext::Tester));
-        drop(self.sessions.insert(map_key, session));
-        Ok(sid)
+        drop(self.sessions.insert(coords.map_key(), session));
+        Ok(coords.to_session_id())
     }
 }

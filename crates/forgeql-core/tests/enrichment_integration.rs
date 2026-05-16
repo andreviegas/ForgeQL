@@ -56,6 +56,7 @@ use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::result::{ForgeQLResult, SymbolMatch};
+use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
 // -----------------------------------------------------------------------
@@ -139,8 +140,9 @@ fn engine_bug2b_only() -> (ForgeQLEngine, String, tempfile::TempDir) {
 fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).unwrap_or_else(|e| panic!("parse failed for: {fql}: {e}"));
     let op = ops.first().expect("at least one op");
+    let coords = SessionCoords::from_session_id(sid).expect("valid sid");
     engine
-        .execute(auth(AuthContext::Tester), Some(sid), op)
+        .execute(auth(AuthContext::Tester), Some(&coords), op)
         .unwrap_or_else(|e| panic!("execute failed for: {fql}: {e}"))
 }
 

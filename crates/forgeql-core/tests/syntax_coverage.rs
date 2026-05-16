@@ -37,6 +37,7 @@ use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
 use forgeql_core::result::{ForgeQLResult, ShowContent};
+use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
 fn make_registry() -> Arc<LanguageRegistry> {
@@ -129,8 +130,9 @@ fn engine_with_git_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
 fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).unwrap_or_else(|e| panic!("parse failed for: {fql}: {e}"));
     let op = ops.first().expect("at least one op");
+    let coords = SessionCoords::from_session_id(sid).expect("valid sid");
     engine
-        .execute(auth(AuthContext::Tester), Some(sid), op)
+        .execute(auth(AuthContext::Tester), Some(&coords), op)
         .unwrap_or_else(|e| panic!("execute failed for: {fql}: {e}"))
 }
 
@@ -138,8 +140,9 @@ fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
 fn exec_err(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> String {
     let ops = parser::parse(fql).unwrap_or_else(|e| panic!("parse failed for: {fql}: {e}"));
     let op = ops.first().expect("at least one op");
+    let coords = SessionCoords::from_session_id(sid).expect("valid sid");
     engine
-        .execute(auth(AuthContext::Tester), Some(sid), op)
+        .execute(auth(AuthContext::Tester), Some(&coords), op)
         .expect_err(&format!("expected error for: {fql}"))
         .to_string()
 }

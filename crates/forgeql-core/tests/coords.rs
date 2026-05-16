@@ -10,17 +10,23 @@
 
 use std::path::{Path, PathBuf};
 
+use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::session::SessionCoords;
 
 fn coords() -> SessionCoords {
-    SessionCoords::anonymous("pisco-firmware", "main", "research")
+    SessionCoords::new(
+        auth(AuthContext::Tester),
+        "pisco-firmware",
+        "main",
+        "research",
+    )
 }
 
 // --- constructors ---
 
 #[test]
-fn anonymous_sets_user() {
-    assert_eq!(coords().user, "anonymous");
+fn tester_user_is_set_from_auth() {
+    assert_eq!(coords().user, auth(AuthContext::Tester));
 }
 
 #[test]
@@ -35,8 +41,11 @@ fn new_preserves_all_fields() {
 // --- map_key ---
 
 #[test]
-fn map_key_combines_user_and_alias() {
-    assert_eq!(coords().map_key(), "anonymous:research");
+fn map_key_combines_all_four_fields() {
+    assert_eq!(
+        coords().map_key(),
+        format!("{}:pisco-firmware:main:research", auth(AuthContext::Tester))
+    );
 }
 
 #[test]
@@ -52,7 +61,10 @@ fn map_key_different_users_same_alias_are_distinct() {
 fn git_branch_includes_all_four_components() {
     assert_eq!(
         coords().git_branch(),
-        "fql/anonymous/pisco-firmware/main/research"
+        format!(
+            "fql/{}/pisco-firmware/main/research",
+            auth(AuthContext::Tester)
+        )
     );
 }
 
@@ -85,21 +97,21 @@ fn worktree_dir_basic() {
 
 #[test]
 fn worktree_dir_replaces_slashes_in_branch_with_dashes() {
-    let c = SessionCoords::anonymous("repo", "fix/null-check", "task");
+    let c = SessionCoords::new(auth(AuthContext::Tester), "repo", "fix/null-check", "task");
     assert_eq!(c.worktree_dir(), "repo.fix-null-check.task");
 }
 
 #[test]
 fn worktree_dir_replaces_slashes_in_source_with_dashes() {
     // Pathological but must not create nested directories.
-    let c = SessionCoords::anonymous("org/repo", "main", "r");
+    let c = SessionCoords::new(auth(AuthContext::Tester), "org/repo", "main", "r");
     assert_eq!(c.worktree_dir(), "org-repo.main.r");
 }
 
 #[test]
 fn worktree_dir_different_sources_same_alias_are_distinct() {
-    let a = SessionCoords::anonymous("pisco-firmware", "main", "r");
-    let b = SessionCoords::anonymous("zephyr-andre", "main", "r");
+    let a = SessionCoords::new(auth(AuthContext::Tester), "pisco-firmware", "main", "r");
+    let b = SessionCoords::new(auth(AuthContext::Tester), "zephyr-andre", "main", "r");
     assert_ne!(a.worktree_dir(), b.worktree_dir());
 }
 
@@ -111,7 +123,10 @@ fn worktree_path_includes_user_subdir() {
     let path = coords().worktree_path(&data);
     assert_eq!(
         path,
-        PathBuf::from("/data/forgeql/worktrees/anonymous/pisco-firmware.main.research")
+        PathBuf::from(format!(
+            "/data/forgeql/worktrees/{}/pisco-firmware.main.research",
+            auth(AuthContext::Tester)
+        ))
     );
 }
 
@@ -145,50 +160,57 @@ fn user_worktrees_root_appends_user() {
 
 #[test]
 fn is_sha_ref_false_for_named_branch() {
-    assert!(!SessionCoords::anonymous("r", "main", "a").is_sha_ref());
-    assert!(!SessionCoords::anonymous("r", "fix/null-check", "a").is_sha_ref());
+    assert!(!SessionCoords::new(auth(AuthContext::Tester), "r", "main", "a").is_sha_ref());
+    assert!(
+        !SessionCoords::new(auth(AuthContext::Tester), "r", "fix/null-check", "a").is_sha_ref()
+    );
 }
 
 #[test]
 fn is_sha_ref_false_for_short_string() {
     // 6 hex chars — too short
-    assert!(!SessionCoords::anonymous("r", "a3f9b2", "a").is_sha_ref());
+    assert!(!SessionCoords::new(auth(AuthContext::Tester), "r", "a3f9b2", "a").is_sha_ref());
 }
 
 #[test]
 fn is_sha_ref_true_for_7_char_hex() {
-    assert!(SessionCoords::anonymous("r", "a3f9b2c", "a").is_sha_ref());
+    assert!(SessionCoords::new(auth(AuthContext::Tester), "r", "a3f9b2c", "a").is_sha_ref());
 }
 
 #[test]
 fn is_sha_ref_true_for_full_40_char_sha() {
     let sha = "a3f9b2c7e91f3d2b4c5e6f7a8b9c0d1e2f3a4b5c";
-    assert!(SessionCoords::anonymous("r", sha, "a").is_sha_ref());
+    assert!(SessionCoords::new(auth(AuthContext::Tester), "r", sha, "a").is_sha_ref());
 }
 
 #[test]
 fn is_sha_ref_false_when_contains_non_hex_letter() {
     // 'g' is not a hex digit
-    assert!(!SessionCoords::anonymous("r", "a3f9b2g", "a").is_sha_ref());
+    assert!(!SessionCoords::new(auth(AuthContext::Tester), "r", "a3f9b2g", "a").is_sha_ref());
 }
 
 // --- budget_branch ---
 
 #[test]
 fn budget_branch_returns_alias_for_main() {
-    let c = SessionCoords::anonymous("repo", "main", "my-feature");
+    let c = SessionCoords::new(auth(AuthContext::Tester), "repo", "main", "my-feature");
     assert_eq!(c.budget_branch(), "my-feature");
 }
 
 #[test]
 fn budget_branch_returns_alias_for_master() {
-    let c = SessionCoords::anonymous("repo", "master", "my-feature");
+    let c = SessionCoords::new(auth(AuthContext::Tester), "repo", "master", "my-feature");
     assert_eq!(c.budget_branch(), "my-feature");
 }
 
 #[test]
 fn budget_branch_returns_branch_for_feature_branch() {
-    let c = SessionCoords::anonymous("repo", "fix/null-check", "task-42");
+    let c = SessionCoords::new(
+        auth(AuthContext::Tester),
+        "repo",
+        "fix/null-check",
+        "task-42",
+    );
     assert_eq!(c.budget_branch(), "fix/null-check");
 }
 
@@ -201,7 +223,7 @@ fn validate_ok_when_alias_differs_from_branch() {
 
 #[test]
 fn validate_err_when_alias_equals_branch() {
-    let c = SessionCoords::anonymous("repo", "main", "main");
+    let c = SessionCoords::new(auth(AuthContext::Tester), "repo", "main", "main");
     assert!(c.validate().is_err());
     let msg = c.validate().unwrap_err();
     assert!(msg.contains("'main'"));
@@ -211,31 +233,54 @@ fn validate_err_when_alias_equals_branch() {
 
 #[test]
 fn from_dir_name_roundtrip() {
-    let c = SessionCoords::anonymous("pisco-firmware", "main", "research");
+    let c = SessionCoords::new(
+        auth(AuthContext::Tester),
+        "pisco-firmware",
+        "main",
+        "research",
+    );
     let dir = c.worktree_dir();
-    let recovered = SessionCoords::from_dir_name("anonymous", "pisco-firmware", "research", &dir);
+    let recovered = SessionCoords::from_dir_name(
+        auth(AuthContext::Tester),
+        "pisco-firmware",
+        "research",
+        &dir,
+    );
     assert_eq!(recovered, Some(c));
 }
 
 #[test]
 fn from_dir_name_feature_branch_loses_slashes() {
     // slash in branch becomes dash in dir name — recovered branch has dashes
-    let c = SessionCoords::anonymous("repo", "fix/null-check", "task");
+    let c = SessionCoords::new(auth(AuthContext::Tester), "repo", "fix/null-check", "task");
     let dir = c.worktree_dir(); // "repo.fix-null-check.task"
-    let recovered = SessionCoords::from_dir_name("anonymous", "repo", "task", &dir).unwrap();
+    let recovered =
+        SessionCoords::from_dir_name(auth(AuthContext::Tester), "repo", "task", &dir).unwrap();
     assert_eq!(recovered.branch, "fix-null-check"); // lossy — dashes, not slashes
 }
 
 #[test]
 fn from_dir_name_returns_none_on_mismatch() {
-    assert!(SessionCoords::from_dir_name("anonymous", "repo", "alias", "unrelated").is_none());
     assert!(
-        SessionCoords::from_dir_name("anonymous", "repo", "alias", "repo.main.other").is_none()
+        SessionCoords::from_dir_name(auth(AuthContext::Tester), "repo", "alias", "unrelated")
+            .is_none()
+    );
+    assert!(
+        SessionCoords::from_dir_name(
+            auth(AuthContext::Tester),
+            "repo",
+            "alias",
+            "repo.main.other"
+        )
+        .is_none()
     );
 }
 
 #[test]
 fn from_dir_name_returns_none_when_prefix_only() {
     // "repo." present but no suffix
-    assert!(SessionCoords::from_dir_name("anonymous", "repo", "alias", "repo.main").is_none());
+    assert!(
+        SessionCoords::from_dir_name(auth(AuthContext::Tester), "repo", "alias", "repo.main")
+            .is_none()
+    );
 }
