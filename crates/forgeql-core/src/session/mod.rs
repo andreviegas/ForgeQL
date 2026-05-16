@@ -25,6 +25,9 @@ use crate::storage::{BackendSet, LegacyMemoryStorage, StorageEngine};
 use crate::workspace::Workspace;
 
 pub mod checkpoint_file;
+pub mod coords;
+
+pub use coords::SessionCoords;
 
 /// Sentinel file written inside each worktree directory on every `touch()`.
 ///

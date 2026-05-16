@@ -4,6 +4,45 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.3] — 2026-05-16 — Introduce `SessionCoords`: single source of truth for session identity
+
+### Internal
+
+- **New `SessionCoords` struct** (`crates/forgeql-core/src/session/coords.rs`):
+  All session identity derivations — the session map key, git session-branch name,
+  worktree directory name, and worktree filesystem path — are now computed from a
+  single `SessionCoords { user, source, branch, alias }` value.
+
+  Previously these four strings were derived independently at each call-site
+  (`exec_source.rs`, `exec_session.rs`, `engine.rs`, `warm.rs`) with slightly
+  different formatting rules, making it easy for them to diverge silently.
+
+  Key methods:
+  - `SessionCoords::anonymous(source, branch, alias)` — default constructor
+    (`user = "anonymous"`); change only this call-site when real auth lands.
+  - `map_key()` → `"{user}:{alias}"` — future session `HashMap` key (scopes alias
+    per user, eliminating cross-user collisions).
+  - `git_branch()` → `"fql/{user}/{source}/{branch}/{alias}"` — globally unique
+    git branch name (adds `user` and `source` segments missing from the old format).
+  - `worktree_dir()` → `"{source}.{safe_branch}.{alias}"` (slashes in branch
+    names replaced with dashes to keep the directory flat).
+  - `worktree_path(data_dir)` → `data_dir/worktrees/{user}/{worktree_dir}`.
+  - `worktrees_root(data_dir)` / `user_worktrees_root(data_dir, user)` — typed
+    accessors replacing five ad-hoc `data_dir.join("worktrees")` call-sites.
+  - `is_sha_ref()` — heuristic predicate to distinguish branch names from short
+    SHA prefixes; gates the `revparse_single` code path in `worktree::create`.
+  - `budget_branch()` — trunk-vs-feature budget logic extracted from
+    `exec_source.rs`.
+  - `validate()` — alias ≠ branch guard (alias must differ from the branch name).
+  - `from_dir_name()` — inverse parse of `worktree_dir()` used by
+    `try_auto_reconnect`.
+
+  32 unit tests cover all methods including SHA detection, slash-to-dash
+  replacement, cross-user isolation, cross-source isolation, and roundtrip parsing.
+
+  This is a prerequisite for PR 2 (wiring `SessionCoords` into `exec_source.rs`
+  to harden the existing silent session alias collision bug).
+
 ## [0.50.2] — 2026-05-15 — Fix `is_magic` false positives: blanket 0/1/-1 exclusion removed; numbers in string literals excluded
 
 ### Bug Fixes
