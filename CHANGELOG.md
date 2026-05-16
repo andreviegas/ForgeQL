@@ -4,6 +4,52 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.4] — 2026-05-16 — Eager session restore at startup: replace `prune_orphaned_worktrees` + `try_auto_reconnect`
+
+### Internal
+
+- **`restore_sessions_from_disk()` replaces `prune_orphaned_worktrees()` + `try_auto_reconnect()`**
+  (`crates/forgeql-core/src/engine/exec_session.rs`, `crates/forgeql/src/runner/mcp_stdio.rs`,
+  `crates/forgeql-core/src/engine.rs`):
+
+  The previous architecture had two problems:
+  1. `prune_orphaned_worktrees` contained a latent bug in its live-session guard: it built
+     `live_ids` from session map keys (bare alias strings) but compared them against git
+     worktree directory names (`source.branch.alias`) and `wt.name` values — these never
+     match, so in-memory sessions were never protected from accidental pruning.
+  2. `try_auto_reconnect` ran on every request for an unknown session ID, triggering a
+     full disk scan and git-repo traversal on first use after a server restart.
+
+  The replacement is a single `restore_sessions_from_disk(&mut self)` called **once** at
+  MCP server startup (before the engine is wrapped in `Arc<Mutex>` and before accepting
+  requests).  It scans `<data_dir>/worktrees/`, prunes TTL-expired worktrees (using correct
+  `live_wt_names` built from `sessions.values().map(|s| s.worktree_name.as_str())`), and
+  restores all warm sessions into the in-memory map via `use_source()` — the same path taken
+  by an explicit `USE` command.  After startup, `require_session` is a pure O(1) map lookup.
+
+  A private `prune_single_worktree()` helper is extracted to avoid duplicating the
+  remove-worktree-dir + remove-git-metadata sequence.
+
+- **Extended `.forgeql-session` sentinel file** (`crates/forgeql-core/src/session/mod.rs`):
+
+  The sentinel file written by `Session::touch()` into each worktree directory previously
+  stored a bare Unix timestamp integer on a single line.  It now uses a `key=value` format:
+
+  ```
+  timestamp=1747123456
+  source=pisco-firmware
+  branch=main
+  alias=refactor
+  user=anonymous
+  ```
+
+  The old bare-integer format is still accepted (backward compat: the parser falls back to
+  treating a non-`key=value` line as the timestamp when no `timestamp=` key has been seen).
+
+  A new public `SessionSentinel` struct and `read_sentinel()` function replace the old
+  `read_last_active()`.  `restore_sessions_from_disk` uses the `source`/`branch`/`alias`
+  fields to restore sessions without git-repo traversal or directory-name parsing.
+
 ## [0.50.3] — 2026-05-16 — Introduce `SessionCoords`: single source of truth for session identity
 
 ### Internal

@@ -9,9 +9,13 @@
 - [ ] Add `resolve_commit()` helper in `worktree.rs` (try `find_branch` first, fall back to
   `revparse_single`) to support short-SHA `USE` references
 - [ ] Change session map key from bare alias to `"{user}:{alias}"`; add `user_id: &str`
-  to `execute()`; fix `require_session` and `try_auto_reconnect`
+  to `execute()`; fix `require_session`
 - [ ] Thread real user identity from MCP connection into `execute()`;
   add `user_id: Option<String>` to `RunFqlParams`
+- [x] Replace `prune_orphaned_worktrees` + `try_auto_reconnect` with a single
+  `restore_sessions_from_disk()` called once at MCP startup; extend `.forgeql-session`
+  sentinel with `source`/`branch`/`alias`/`user` so warm sessions are restored without
+  git traversal; fixed the always-false live-session guard bug in the process
 
 ## Session lifecycle
 

@@ -12,19 +12,19 @@ use crate::mcp;
 
 /// Start the MCP server, serving requests over stdin/stdout.
 ///
-/// Prunes stale worktrees first (orphaned leftovers from previous runs),
+/// Restores live sessions from disk and prunes expired worktrees first,
 /// then wraps the engine in `Arc<Mutex>` so it can be shared with the
 /// background session-eviction task.
 pub(crate) async fn run_mcp_stdio(
-    engine: ForgeQLEngine,
+    mut engine: ForgeQLEngine,
     logger: Option<QueryLogger>,
 ) -> Result<()> {
     use forgeql_core::engine::SESSION_TTL_SECS;
     use rmcp::ServiceExt;
     use tokio::sync::Mutex as TokioMutex;
 
-    // Prune orphaned worktrees that were abandoned by previous MCP sessions.
-    engine.prune_orphaned_worktrees();
+    // Restore warm sessions from disk and prune expired worktrees.
+    engine.restore_sessions_from_disk();
 
     let engine = Arc::new(TokioMutex::new(engine));
 

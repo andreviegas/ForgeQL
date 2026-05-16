@@ -130,11 +130,11 @@ impl ForgeQLEngine {
     /// Create a new engine rooted at `data_dir`.
     ///
     /// Creates the `<data_dir>/worktrees/` directory if it does not exist.
-    /// Call [`prune_orphaned_worktrees()`](Self::prune_orphaned_worktrees)
-    /// explicitly if running in a long-lived service mode (e.g. MCP) where
-    /// worktrees without in-memory sessions are truly orphaned.  In CLI
-    /// modes (REPL, pipe, one-shot) worktrees persist across invocations,
-    /// so pruning must **not** run automatically.
+    /// Call [`restore_sessions_from_disk()`](Self::restore_sessions_from_disk)
+    /// once at MCP server startup to prune expired worktrees and restore live
+    /// sessions into memory.  In CLI modes (REPL, pipe, one-shot) do not call
+    /// it — worktrees persist across invocations and sessions should not be
+    /// re-indexed on every invocation.
     ///
     /// # Errors
     /// Returns `Err` if the worktree directory cannot be created.
@@ -215,15 +215,6 @@ impl ForgeQLEngine {
     #[allow(clippy::too_many_lines)]
     pub fn execute(&mut self, session_id: Option<&str>, op: &ForgeQLIR) -> Result<ForgeQLResult> {
         self.commands_served += 1;
-
-        // Auto-reconnect: if the client passes a valid alias that's no longer in
-        // memory (e.g. after a server restart), silently restore the session from
-        // the matching on-disk worktree before touching or querying it.
-        if let Some(sid) = session_id
-            && !self.sessions.contains_key(sid)
-        {
-            self.try_auto_reconnect(sid);
-        }
 
         // Keep session alive on every request.
         if let Some(sid) = session_id

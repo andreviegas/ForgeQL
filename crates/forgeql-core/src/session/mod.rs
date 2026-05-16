@@ -31,18 +31,68 @@ pub use coords::SessionCoords;
 
 /// Sentinel file written inside each worktree directory on every `touch()`.
 ///
-/// Contains a single line: the Unix epoch timestamp (seconds) of the last
-/// successful access.  `prune_orphaned_worktrees` reads this to decide
-/// whether an ownerless worktree is still "warm" after a server restart.
+/// Format: `key=value` lines.  Required key: `timestamp` (Unix epoch, seconds).
+/// Optional keys written by [`Session::touch`]: `source`, `branch`, `alias`,
+/// `user`.  [`restore_sessions_from_disk`] reads these to restore sessions
+/// after a server restart without opening the git repo.
+///
+/// [`restore_sessions_from_disk`]: crate::engine::ForgeQLEngine::restore_sessions_from_disk
 const SESSION_SENTINEL: &str = ".forgeql-session";
 
-/// Read the last-active Unix timestamp from a worktree's sentinel file.
+/// Parsed contents of a worktree's sentinel file.
 ///
-/// Returns `None` if the file is missing, unreadable, or malformed.
+/// All fields except `last_active_secs` are `None` when the file was written
+/// by an older server version that stored only a bare timestamp.
+#[derive(Debug)]
+pub struct SessionSentinel {
+    /// Unix epoch timestamp (seconds) of the last access.
+    pub last_active_secs: u64,
+    /// Registered source name (bare repo name), e.g. `"pisco-firmware"`.
+    pub source: Option<String>,
+    /// Branch that is checked out in the worktree.
+    pub branch: Option<String>,
+    /// User-chosen session alias from `USE … AS 'alias'`.
+    pub alias: Option<String>,
+    /// User identity that owns this session.
+    pub user: Option<String>,
+}
+
+/// Read and parse the sentinel file from a worktree directory.
+///
+/// Returns `None` if the file is missing, unreadable, or the `timestamp`
+/// key cannot be parsed.
 #[must_use]
-pub fn read_last_active(worktree_path: &Path) -> Option<u64> {
+pub fn read_sentinel(worktree_path: &Path) -> Option<SessionSentinel> {
     let data = std::fs::read_to_string(worktree_path.join(SESSION_SENTINEL)).ok()?;
-    data.trim().parse().ok()
+    let mut timestamp: Option<u64> = None;
+    let mut source: Option<String> = None;
+    let mut branch: Option<String> = None;
+    let mut alias: Option<String> = None;
+    let mut user: Option<String> = None;
+
+    for line in data.lines() {
+        if let Some((key, val)) = line.split_once('=') {
+            match key {
+                "timestamp" => timestamp = val.parse().ok(),
+                "source" => source = Some(val.to_string()),
+                "branch" => branch = Some(val.to_string()),
+                "alias" => alias = Some(val.to_string()),
+                "user" => user = Some(val.to_string()),
+                _ => {}
+            }
+        } else if timestamp.is_none() {
+            // Backward compat: old files stored just a bare integer.
+            timestamp = line.trim().parse().ok();
+        }
+    }
+
+    Some(SessionSentinel {
+        last_active_secs: timestamp?,
+        source,
+        branch,
+        alias,
+        user,
+    })
 }
 
 // -----------------------------------------------------------------------
@@ -505,9 +555,13 @@ impl Session {
     /// Update the last-active timestamp to now.
     ///
     /// Call this on every request that touches the session so that the TTL
-    /// eviction task can accurately measure idle time.  The timestamp is
-    /// also persisted to `<worktree>/.forgeql-session` so that
-    /// `prune_orphaned_worktrees` can honour the TTL across restarts.
+    /// eviction task can accurately measure idle time.  The timestamp and
+    /// session metadata are also persisted to `<worktree>/.forgeql-session`
+    /// so that [`ForgeQLEngine::restore_sessions_from_disk`] can restore
+    /// live sessions after a server restart without requiring git repo
+    /// traversal or directory-name parsing.
+    ///
+    /// [`ForgeQLEngine::restore_sessions_from_disk`]: crate::engine::ForgeQLEngine::restore_sessions_from_disk
     pub fn touch(&mut self) {
         self.last_active = std::time::Instant::now();
         self.persist_last_active();
@@ -548,7 +602,11 @@ impl Session {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let _ = std::fs::write(self.worktree_path.join(SESSION_SENTINEL), now.to_string());
+        let contents = format!(
+            "timestamp={now}\nsource={}\nbranch={}\nalias={}\nuser={}\n",
+            self.source_name, self.branch, self.id, self.user_id,
+        );
+        let _ = std::fs::write(self.worktree_path.join(SESSION_SENTINEL), contents);
     }
 }
 

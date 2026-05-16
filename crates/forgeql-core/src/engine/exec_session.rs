@@ -2,12 +2,12 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "test-helpers")]
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::{
     git::worktree,
     ir::Backend,
-    session::{Session, read_last_active},
+    session::{Session, SessionCoords, SessionSentinel, read_sentinel},
     storage::StorageEngine,
     workspace::Workspace,
 };
@@ -52,93 +52,144 @@ impl ForgeQLEngine {
         }
     }
 
-    /// Remove orphaned worktrees left over from a previous engine run.
+    /// Restore live sessions from disk and prune expired worktrees.
     ///
-    /// Called automatically by `new()`.  Scans `<data_dir>/worktrees/` and
-    /// removes directories not belonging to any live session.
+    /// Call this **once** at MCP server startup (before accepting requests).
+    /// It replaces the old `prune_orphaned_worktrees` + `try_auto_reconnect`
+    /// pair with a single eager pass:
+    ///
+    /// - Scans `<data_dir>/worktrees/` for all worktree directories.
+    /// - Reads each worktree's `.forgeql-session` sentinel file.
+    /// - **Prunes** any worktree whose TTL has expired (removes the checkout
+    ///   directory and the git worktree metadata from every bare repo).
+    /// - **Restores** every warm worktree into the in-memory session map by
+    ///   calling `use_source()` — the same path taken by an explicit `USE`
+    ///   command.
+    ///
+    /// After this call, `require_session` is a pure O(1) map lookup with no
+    /// fallback disk scan.  Do **not** call in CLI modes — worktrees persist
+    /// across invocations and legitimate sessions would be re-indexed
+    /// unnecessarily.
     #[allow(clippy::cognitive_complexity)]
-    /// Prune worktrees whose session IDs are not in the live `sessions` map.
-    ///
-    /// Call this in long-lived service modes (MCP server) where an orphaned
-    /// worktree directory means the session is truly gone.  **Do not** call
-    /// in CLI modes — worktrees persist across invocations and legitimate
-    /// sessions would be destroyed.
-    pub fn prune_orphaned_worktrees(&self) {
-        let wt_dir = self.data_dir.join("worktrees");
-        let live_ids: Vec<&str> = self.sessions.keys().map(String::as_str).collect();
+    pub fn restore_sessions_from_disk(&mut self) {
+        let wt_dir = SessionCoords::worktrees_root(&self.data_dir);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
 
-        // Pass 1: checkout directories still present under data/worktrees/.
-        if let Ok(entries) = std::fs::read_dir(&wt_dir) {
-            for entry in entries.flatten() {
-                let session_id = entry.file_name().to_string_lossy().to_string();
-                if live_ids.contains(&session_id.as_str()) {
-                    continue;
+        let Ok(entries) = std::fs::read_dir(&wt_dir) else {
+            return;
+        };
+
+        let mut restored = 0u32;
+        let mut pruned = 0u32;
+
+        for entry in entries.flatten() {
+            let wt_path = entry.path();
+            if !wt_path.is_dir() {
+                continue;
+            }
+            let wt_name = entry.file_name().to_string_lossy().to_string();
+
+            match read_sentinel(&wt_path) {
+                None => {
+                    // No readable sentinel — orphan from an older version or
+                    // a partially created worktree.  Prune unconditionally.
+                    info!(%wt_name, "startup: no sentinel, pruning");
+                    self.prune_single_worktree(&wt_path, &wt_name);
+                    pruned += 1;
                 }
-                // Honour the persisted last-active timestamp — skip worktrees
-                // that were accessed within the TTL window, even though they
-                // have no in-memory session (e.g. after a server restart or
-                // short-lived CLI invocation).
-                let wt_path = entry.path();
-                if let Some(last_epoch) = read_last_active(&wt_path) {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    if now.saturating_sub(last_epoch) < SESSION_TTL_SECS {
-                        debug!(%session_id, idle_secs = now.saturating_sub(last_epoch),
-                               "startup: worktree still warm — skipping");
-                        continue;
-                    }
+                Some(sentinel)
+                    if now.saturating_sub(sentinel.last_active_secs) >= SESSION_TTL_SECS =>
+                {
+                    info!(%wt_name, "startup: TTL expired, pruning");
+                    self.prune_single_worktree(&wt_path, &wt_name);
+                    pruned += 1;
                 }
-                info!(%session_id, "startup: pruning orphaned worktree");
-                if let Ok(repo_entries) = std::fs::read_dir(&self.data_dir) {
-                    for re in repo_entries.flatten() {
-                        let rpath = re.path();
-                        if rpath.extension().is_some_and(|ext| ext == "git") {
-                            if let Err(err) = worktree::remove(&rpath, &session_id) {
-                                warn!(%session_id, repo = %rpath.display(), error = %err, "git prune failed");
-                            }
-                            if let Err(err) = worktree::delete_session_branch(&rpath, &session_id) {
-                                warn!(%session_id, repo = %rpath.display(), error = %err, "branch delete failed");
-                            }
+                Some(SessionSentinel {
+                    source: Some(source),
+                    branch: Some(branch),
+                    alias: Some(alias),
+                    ..
+                }) => {
+                    // Warm worktree with full metadata — restore into memory.
+                    info!(%source, %branch, %alias, "startup: restoring session");
+                    match self.use_source(&source, &branch, &alias) {
+                        Ok(_) => {
+                            info!(%alias, "startup: session restored");
+                            restored += 1;
+                        }
+                        Err(e) => {
+                            warn!(%alias, %e, "startup: session restore failed — skipping");
                         }
                     }
                 }
-                let path = entry.path();
-                if path.exists()
-                    && let Err(err) = std::fs::remove_dir_all(&path)
-                {
-                    warn!(%session_id, path = %path.display(), error = %err, "remove_dir_all failed");
+                Some(_) => {
+                    // Old-format sentinel (timestamp only) — cannot recover
+                    // source/branch/alias.  Leave on disk; the agent will
+                    // re-issue USE when it next connects.
+                    info!(%wt_name, "startup: old-format sentinel, leaving for agent reconnect");
                 }
             }
         }
 
-        // Pass 2: git worktree metadata entries whose checkout path is gone.
-        let Ok(repo_entries) = std::fs::read_dir(&self.data_dir) else {
-            return;
-        };
-        for re in repo_entries.flatten() {
-            let rpath = re.path();
-            if rpath.extension().is_none_or(|ext| ext != "git") {
-                continue;
-            }
-            let Ok(wts) = worktree::list(&rpath) else {
-                continue;
-            };
-            for wt in wts {
-                if live_ids.contains(&wt.name.as_str()) {
+        // Pass 2: sweep git worktree metadata entries whose checkout path
+        // is gone (handles crash-interrupted prune from a previous run).
+        if let Ok(repo_entries) = std::fs::read_dir(&self.data_dir) {
+            let live_wt_names: std::collections::HashSet<&str> = self
+                .sessions
+                .values()
+                .map(|s| s.worktree_name.as_str())
+                .collect();
+
+            for re in repo_entries.flatten() {
+                let rpath = re.path();
+                if rpath.extension().is_none_or(|ext| ext != "git") {
                     continue;
                 }
-                if !wt.path.exists() {
-                    info!(session_id = %wt.name, "startup: pruning stale git worktree metadata");
-                    if let Err(err) = worktree::remove(&rpath, &wt.name) {
-                        warn!(session_id = %wt.name, error = %err, "stale metadata prune failed");
+                let Ok(wts) = worktree::list(&rpath) else {
+                    continue;
+                };
+                for wt in wts {
+                    if live_wt_names.contains(wt.name.as_str()) {
+                        continue;
                     }
-                    if let Err(err) = worktree::delete_session_branch(&rpath, &wt.name) {
-                        warn!(session_id = %wt.name, error = %err, "stale branch delete failed");
+                    if !wt.path.exists() {
+                        info!(wt_name = %wt.name, "startup: pruning stale git worktree metadata");
+                        if let Err(e) = worktree::remove(&rpath, &wt.name) {
+                            warn!(wt_name = %wt.name, %e, "stale metadata prune failed");
+                        }
+                        if let Err(e) = worktree::delete_session_branch(&rpath, &wt.name) {
+                            warn!(wt_name = %wt.name, %e, "stale branch delete failed");
+                        }
                     }
                 }
             }
+        }
+
+        info!(restored, pruned, "startup: session restore complete");
+    }
+
+    /// Remove a single worktree directory and its git metadata from all bare repos.
+    fn prune_single_worktree(&self, wt_path: &Path, wt_name: &str) {
+        if let Ok(repo_entries) = std::fs::read_dir(&self.data_dir) {
+            for re in repo_entries.flatten() {
+                let rpath = re.path();
+                if rpath.extension().is_some_and(|ext| ext == "git") {
+                    if let Err(e) = worktree::remove(&rpath, wt_name) {
+                        warn!(%wt_name, repo = %rpath.display(), %e, "git prune failed");
+                    }
+                    if let Err(e) = worktree::delete_session_branch(&rpath, wt_name) {
+                        warn!(%wt_name, repo = %rpath.display(), %e, "branch delete failed");
+                    }
+                }
+            }
+        }
+        if wt_path.exists()
+            && let Err(e) = std::fs::remove_dir_all(wt_path)
+        {
+            warn!(path = %wt_path.display(), %e, "remove_dir_all failed");
         }
     }
 
@@ -188,83 +239,6 @@ impl ForgeQLEngine {
         self.sessions.get(session_id).ok_or_else(|| {
             anyhow::anyhow!("session '{session_id}' not found — run USE <source>.<branch> first")
         })
-    }
-
-    /// Attempt to silently restore a session from disk after a server restart.
-    ///
-    /// When the alias (= `session_id`) is not in memory but a matching worktree
-    /// directory exists on disk, this reads the persisted `.forgeql-meta` file
-    /// (written by `use_source` at session creation time) to recover the
-    /// source name and branch, then re-executes `USE` transparently.
-    ///
-    /// On success the session is restored exactly as if the client had re-issued
-    /// the `USE` command.  On any failure the call is a silent no-op and the
-    /// subsequent `require_session` will return the normal "not found" error.
-    pub(super) fn try_auto_reconnect(&mut self, alias: &str) {
-        let wt_dir = self.data_dir.join("worktrees");
-        let target_suffix = format!(".{alias}");
-
-        // Scan for a worktree directory whose name ends with .{alias}.
-        // Since the new naming format is "{source}.{branch}.{alias}", multiple
-        // sources could in principle have a worktree ending in the same alias.
-        // We pick the first one whose git metadata still resolves cleanly —
-        // the use_source() retry will validate the (source, branch, alias)
-        // tuple end-to-end.
-        let wt_path = std::fs::read_dir(&wt_dir).map_or(None, |entries| {
-            entries
-                .flatten()
-                .find(|e| e.file_name().to_string_lossy().ends_with(&target_suffix))
-                .map(|e| e.path())
-        });
-
-        let Some(wt_path) = wt_path else {
-            debug!(%alias, "auto-reconnect: no matching worktree directory on disk");
-            return;
-        };
-
-        // Derive source_name from the git worktree's link to its bare repo.
-        // For a linked worktree, `repo.path()` returns
-        // `<data_dir>/<source>.git/worktrees/<wt_name>/`, so going up two
-        // parents gives us the bare repo directory `<source>.git`.
-        let source_name: String = match git2::Repository::open(&wt_path) {
-            Ok(repo) => {
-                // .../source.git/worktrees/wt_name/ → .../source.git
-                let Some(bare) = repo.path().parent().and_then(Path::parent) else {
-                    debug!(%alias, "auto-reconnect: cannot derive bare repo path");
-                    return;
-                };
-                let Some(stem) = bare.file_stem().and_then(std::ffi::OsStr::to_str) else {
-                    debug!(%alias, path = %bare.display(), "auto-reconnect: cannot derive source name");
-                    return;
-                };
-                String::from(stem)
-            }
-            Err(err) => {
-                debug!(%alias, %err, "auto-reconnect: cannot open worktree repo");
-                return;
-            }
-        };
-
-        // Directory name layout: "{source}.{branch}.{alias}".
-        // Strip the known prefix and suffix to recover the branch component.
-        // Branch may itself contain '.' so we strip both ends rather than split.
-        let dir_name = wt_path.file_name().unwrap_or_default().to_string_lossy();
-        let source_prefix = format!("{source_name}.");
-        let Some(branch) = dir_name
-            .strip_prefix(&source_prefix)
-            .and_then(|rest| rest.strip_suffix(&target_suffix))
-        else {
-            debug!(
-                %alias, %dir_name, %source_name,
-                "auto-reconnect: directory name does not match the source.branch.alias layout — likely a legacy pre-0.38.2 layout, skipping",
-            );
-            return;
-        };
-
-        match self.use_source(&source_name, branch, alias) {
-            Ok(_) => info!(%alias, %source_name, %branch, "session auto-reconnected from disk"),
-            Err(err) => warn!(%alias, %err, "auto-reconnect attempt failed"),
-        }
     }
 
     /// Return the source name associated with the given session, if it exists.
