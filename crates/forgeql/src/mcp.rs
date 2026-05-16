@@ -74,16 +74,15 @@ impl ForgeQlMcp {
     }
 
     /// Resolve the source name for a session from the engine.
-    async fn resolve_source(&self, user_id: &str, session_id: Option<&str>) -> String {
+    async fn resolve_source(&self, session_id: Option<&str>) -> String {
         let Some(sid) = session_id else {
             return "unknown".to_string();
         };
-        // Convert bare alias to internal map key for the lookup.
-        let map_key = format!("{user_id}:{sid}");
+        // session_id is already the full map key ({user}:{source}:{branch}:{alias}).
         self.engine
             .lock()
             .await
-            .source_name_for_session(&map_key)
+            .source_name_for_session(sid)
             .map_or_else(|| "unknown".to_string(), str::to_owned)
     }
 }
@@ -110,10 +109,9 @@ pub(crate) enum OutputFormat {
 pub(crate) struct RunFqlParams {
     /// The `ForgeQL` statement to execute (e.g. "FIND symbols WHERE name LIKE 'set%'").
     pub fql: String,
-    /// The alias used in `USE source.branch AS 'alias'`.
+    /// The opaque session token returned by USE in the `session_id` field of the response.
     /// Required for all queries and mutations after the initial USE.
-    /// Because the alias equals the session key, you can always reconstruct it
-    /// from the USE command you issued — there is no opaque token to track.
+    /// Store the value exactly as returned and pass it verbatim — do not reconstruct it.
     pub session_id: Option<String>,
     /// Output format: "CSV" (default, compact grouped CSV) or "JSON" (full structured).
     /// CSV groups repeated fields and drops derivable data for minimum token usage.
@@ -231,11 +229,8 @@ async fn exec_engine(
     // Use budget_status_for_op so admin commands (ShowBranches, ShowSources,
     // CreateSource, RefreshSource) produce no snapshot — they should not
     // appear in the budget log with stale delta values.
-    // Convert bare alias to internal map key for the lookup.
-    let map_key: Option<String> = session_id.map(|alias| format!("{user_id}:{alias}"));
-    let budget_snap = map_key
-        .as_deref()
-        .and_then(|mk| guard.budget_status_for_op(mk, op));
+    // session_id is already the full map key ({user}:{source}:{branch}:{alias}).
+    let budget_snap = session_id.and_then(|mk| guard.budget_status_for_op(mk, op));
 
     drop(guard);
     Ok((result, budget_snap))
@@ -251,7 +246,7 @@ impl ForgeQlMcp {
     /// structured JSON results.  All `ForgeQL` operations are supported.
     #[tool(
         name = "run_fql",
-        description = "Execute any ForgeQL statement. CONNECT FIRST: USE source.branch AS 'alias' — the alias you choose becomes the session_id for all subsequent calls. OUTPUT: format defaults to CSV (pass format=JSON only when parsing fields programmatically). LIMIT: FIND queries without LIMIT default to 20 rows; add LIMIT N to override; when total > results.len() more rows exist. WORKFLOW: start narrow (WHERE/IN/LIMIT), verify, then widen."
+        description = "Execute any ForgeQL statement. CONNECT FIRST: USE source.branch AS 'alias' — the response returns an opaque session_id token; store it and pass it verbatim in ALL subsequent calls. OUTPUT: format defaults to CSV (pass format=JSON only when parsing fields programmatically). LIMIT: FIND queries without LIMIT default to 20 rows; add LIMIT N to override; when total > results.len() more rows exist. WORKFLOW: start narrow (WHERE/IN/LIMIT), verify, then widen."
     )]
     async fn run_fql(
         &self,
@@ -283,9 +278,7 @@ impl ForgeQlMcp {
         // on the incoming request — the lines below stay exactly as-is.
         let user_id = auth(AuthContext::Mcp);
         let format = params.format.unwrap_or_default();
-        let mut log_source = self
-            .resolve_source(user_id, params.session_id.as_deref())
-            .await;
+        let mut log_source = self.resolve_source(params.session_id.as_deref()).await;
         let mut session_hint: Option<String> = None;
         let mut outputs: Vec<String> = Vec::with_capacity(ops.len());
         for (source_text, op) in &ops {
@@ -299,9 +292,7 @@ impl ForgeQlMcp {
             // After auto-reconnect the session now exists — re-resolve the
             // source name so the query lands in the right CSV log file.
             if log_source == "unknown" {
-                log_source = self
-                    .resolve_source(user_id, params.session_id.as_deref())
-                    .await;
+                log_source = self.resolve_source(params.session_id.as_deref()).await;
             }
             // Extract session_id (alias) from USE responses and build a hint for the agent.
             if session_hint.is_none()
@@ -310,7 +301,7 @@ impl ForgeQlMcp {
             {
                 session_hint = Some(format!(
                     "\u{26a0}\u{fe0f} IMPORTANT: Pass session_id \"{sid}\" in ALL subsequent run_fql calls. \
-                     This equals the alias you chose in AS '...' — you can always reconstruct it."
+                     Store this token exactly as returned — do not reconstruct it from the alias."
                 ));
             }
             let output = match format {
