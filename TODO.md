@@ -49,8 +49,9 @@
 See `data/future-plans/mmap-zero-copy-overlay-plan.md` for the full plan.
 
 - [x] Replace the overlay parity unit test with a golden-value integration test against the frozen `zephyr-andre.zephyr-main` branch
-- [ ] Switch overlay open from full-file heap read to mmap — eliminate the per-session heap copy of the entire overlay file
-- [ ] Make the FST and name-postings zero-copy slice views into the mmap — no heap duplication when multiple sessions share the same commit
+- [x] Switch overlay open from full-file heap read to mmap — eliminate the per-session heap copy of the entire overlay file
+- [x] Make the FST zero-copy: `SegmentReader` uses `FstMap<MmapSlice>` (no `to_vec()`); `Overlay` moves bytes into FST (no `.clone()`)
+- [ ] Make name-postings zero-copy slice views into the mmap — no heap duplication when multiple sessions share the same commit
 - [ ] New FQOV v3 binary format — replace the bincode payload with a TOC-based layout so all structures (row table, bitmaps, FST) are zero-copy; delegates all RAM management to the OS page cache
 
 ## Miscellaneous

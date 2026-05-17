@@ -60,6 +60,27 @@ const CORE_COLUMN_NAMES: &[&str] = &[
 const HEADER_PREAMBLE_LEN: usize = 80;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MmapSlice — zero-copy FST backing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A byte slice of a parent segment's `Arc<Mmap>`, used to back the FST
+/// without any heap allocation.
+///
+/// `FstMap<MmapSlice>` holds the `Arc<Mmap>` alive and reads FST bytes
+/// directly from the mapped pages — no `to_vec()` needed.
+pub(crate) struct MmapSlice {
+    mmap: Arc<Mmap>,
+    start: usize,
+    end: usize,
+}
+
+impl AsRef<[u8]> for MmapSlice {
+    fn as_ref(&self) -> &[u8] {
+        &self.mmap[self.start..self.end]
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // StringPool — mmap-backed per-segment string intern table
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -192,7 +213,7 @@ pub struct SegmentReader {
     pub(crate) field_postings: HashMap<String, HashMap<u32, RoaringBitmap>>,
     pub(crate) zone_maps: HashMap<String, (u32, u32)>,
     pub(crate) name_prefix: HashMap<Vec<u8>, RoaringBitmap>,
-    pub(crate) name_fst: FstMap<Vec<u8>>,
+    pub(crate) name_fst: FstMap<MmapSlice>,
 }
 
 impl SegmentReader {
@@ -361,8 +382,13 @@ impl SegmentReader {
         let zone_maps = load_zone_maps(&blobs, &mmap)?;
 
         // ── 8. FST + name prefix ──────────────────────────────────────────
-        let fst_data = blob_slice(&blobs, &mmap, "name_fst").to_vec();
-        let name_fst = FstMap::new(fst_data).context("parsing name_fst blob")?;
+        let (fst_start, fst_end) = blobs.get("name_fst").copied().unwrap_or((0, 0));
+        let name_fst = FstMap::new(MmapSlice {
+            mmap: Arc::clone(&mmap),
+            start: fst_start,
+            end: fst_end,
+        })
+        .context("parsing name_fst blob")?;
         let name_prefix = {
             let data = blob_slice(&blobs, &mmap, "name_prefix");
             load_name_prefix(data)?

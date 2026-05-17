@@ -4,6 +4,30 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.10] — 2026-05-17 — Overlay mmap quick wins (Phase 1)
+
+### Performance
+
+- **Overlay open no longer heap-copies the raw file bytes** — `Overlay::open` previously
+  called `std::fs::read()`, allocating a heap `Vec<u8>` equal to the full overlay file
+  (up to hundreds of MB on large repos).  It now uses `memmap2::MmapOptions::new().map()`
+  instead; the OS demand-pages only the bytes touched by the bincode deserialiser and
+  releases the mapping immediately after the payload is decoded.  Multiple sessions on
+  the same commit SHA share OS page-cache pages rather than each holding a private copy.
+
+- **Overlay FST constructed without cloning bytes** — after bincode deserialises
+  `OverlayPayload`, the previous code called `FstMap::new(payload.name_fst_bytes.clone())`
+  creating a second heap copy of the FST bytes.  The payload is now declared `mut` and
+  `std::mem::take` moves the bytes directly into the FST, eliminating the extra allocation.
+  The same pattern is applied to `name_postings_bytes` and the other payload fields.
+
+- **SegmentReader FST is now zero-copy** — `SegmentReader::open` previously called
+  `blob_slice(...).to_vec()` to allocate a heap buffer for the FST bytes before
+  constructing the `FstMap`.  A new `MmapSlice` newtype (`pub(crate) struct MmapSlice`
+  holding `Arc<Mmap>` + `start/end` range, implementing `AsRef<[u8]>`) allows
+  `FstMap<MmapSlice>` to read FST data directly from the segment's existing mmap —
+  zero extra heap allocation per segment on open.
+
 ## [0.50.9] — 2026-05-17 — Lazy session restore, checkpoint fix, and zephyr golden test
 
 ### Fixed

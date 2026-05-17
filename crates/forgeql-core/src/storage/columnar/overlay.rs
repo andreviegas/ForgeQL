@@ -25,6 +25,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, ensure};
 use bytemuck::cast_slice;
 use fst::Map as FstMap;
+use memmap2::MmapOptions;
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
@@ -102,7 +103,12 @@ pub struct OverlayPayload {
 /// Workspace-level merged index shared across all [`ColumnarStorage`] instances
 /// on the same commit SHA.
 pub struct Overlay {
-    payload: OverlayPayload,
+    /// Ordered list of segments.
+    segments: Vec<SegmentMeta>,
+    /// `global_row_id → (segment_idx, local_row_idx)`.
+    global_row_table: Vec<RowPtr>,
+    /// Flat array of u32 global row IDs for name postings decode.
+    name_postings_bytes: Vec<u8>,
     /// Decoded bitmaps for O(1) `fql_kind` prefilter.
     kind_bitmaps: HashMap<String, RoaringBitmap>,
     /// Decoded FST for name-to-global-row-id lookup.
@@ -119,8 +125,12 @@ impl Overlay {
     /// Returns `Err` if the file cannot be read, the magic/version is wrong,
     /// the payload is truncated, or the bincode or FST data is corrupt.
     pub fn open(path: &Path) -> Result<Arc<Self>> {
-        let data =
-            std::fs::read(path).with_context(|| format!("reading overlay {}", path.display()))?;
+        let file = std::fs::File::open(path)
+            .with_context(|| format!("opening overlay {}", path.display()))?;
+        #[allow(unsafe_code)] // read-only mmap of immutable overlay file
+        let data = unsafe { MmapOptions::new().map(&file) }
+            .with_context(|| format!("mmap overlay {}", path.display()))?;
+        drop(file);
 
         ensure!(data.len() >= HEADER_LEN, "overlay file too short");
         ensure!(
@@ -153,9 +163,11 @@ impl Overlay {
         );
 
         #[allow(clippy::indexing_slicing)]
-        let payload: OverlayPayload =
+        let mut payload: OverlayPayload =
             bincode::deserialize(&data[HEADER_LEN..HEADER_LEN + payload_len])
                 .context("deserialising overlay payload")?;
+        // mmap is no longer needed — bincode has copied all data to the heap.
+        drop(data);
 
         // Decode kind bitmaps.
         let mut kind_bitmaps = HashMap::with_capacity(payload.kind_postings.len());
@@ -165,9 +177,9 @@ impl Overlay {
             let _ = kind_bitmaps.insert(kind.clone(), bm);
         }
 
-        // Decode FST.
-        let name_fst =
-            FstMap::new(payload.name_fst_bytes.clone()).context("loading name FST from overlay")?;
+        // Decode FST — move bytes to avoid a second heap copy (no .clone()).
+        let fst_bytes = std::mem::take(&mut payload.name_fst_bytes);
+        let name_fst = FstMap::new(fst_bytes).context("loading name FST from overlay")?;
 
         // Decode trigram bitmaps (absent in v1 overlays — empty map is fine).
         let mut trigram_bitmaps = HashMap::with_capacity(payload.name_trigram_postings.len());
@@ -177,8 +189,15 @@ impl Overlay {
             let _ = trigram_bitmaps.insert(*trigram, bm);
         }
 
+        // Move the remaining live fields out of the payload before dropping it.
+        let segments = std::mem::take(&mut payload.segments);
+        let global_row_table = std::mem::take(&mut payload.global_row_table);
+        let name_postings_bytes = std::mem::take(&mut payload.name_postings_bytes);
+
         Ok(Arc::new(Self {
-            payload,
+            segments,
+            global_row_table,
+            name_postings_bytes,
             kind_bitmaps,
             name_fst,
             trigram_bitmaps,
@@ -197,14 +216,14 @@ impl Overlay {
     /// Ordered list of segments in this overlay.
     #[must_use]
     pub fn segments(&self) -> &[SegmentMeta] {
-        &self.payload.segments
+        &self.segments
     }
 
     /// Total number of rows across all segments.
     #[must_use]
     pub const fn row_count(&self) -> u32 {
         #[allow(clippy::cast_possible_truncation)]
-        let len = self.payload.global_row_table.len() as u32;
+        let len = self.global_row_table.len() as u32;
         len
     }
 
@@ -285,10 +304,7 @@ impl Overlay {
     /// with a valid overlay, but is checked defensively).
     #[must_use]
     pub fn resolve_global(&self, global_id: u32) -> Option<RowPtr> {
-        self.payload
-            .global_row_table
-            .get(global_id as usize)
-            .copied()
+        self.global_row_table.get(global_id as usize).copied()
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -300,7 +316,7 @@ impl Overlay {
         let count = (encoded & 0xFFFF_FFFF) as usize;
         #[allow(clippy::cast_possible_truncation)]
         let byte_offset = ((encoded >> 32) & 0xFFFF_FFFF) as usize;
-        let postings = &self.payload.name_postings_bytes;
+        let postings = &self.name_postings_bytes;
         let end = byte_offset + count * 4;
         if end > postings.len() {
             return RoaringBitmap::new();
@@ -350,14 +366,9 @@ mod tests {
     #[test]
     fn substring_candidates_none_for_short_input() {
         let overlay = Overlay {
-            payload: OverlayPayload {
-                segments: Vec::new(),
-                global_row_table: Vec::new(),
-                kind_postings: HashMap::new(),
-                name_fst_bytes: FstMap::default().into_fst().into_inner(),
-                name_postings_bytes: Vec::new(),
-                name_trigram_postings: HashMap::new(),
-            },
+            segments: Vec::new(),
+            global_row_table: Vec::new(),
+            name_postings_bytes: Vec::new(),
             kind_bitmaps: HashMap::new(),
             name_fst: FstMap::default(),
             trigram_bitmaps: {
@@ -391,14 +402,9 @@ mod tests {
         let _ = trigram_bitmaps.insert(*b"pha", bm_pha);
 
         let overlay = Overlay {
-            payload: OverlayPayload {
-                segments: Vec::new(),
-                global_row_table: Vec::new(),
-                kind_postings: HashMap::new(),
-                name_fst_bytes: FstMap::default().into_fst().into_inner(),
-                name_postings_bytes: Vec::new(),
-                name_trigram_postings: HashMap::new(),
-            },
+            segments: Vec::new(),
+            global_row_table: Vec::new(),
+            name_postings_bytes: Vec::new(),
             kind_bitmaps: HashMap::new(),
             name_fst: FstMap::default(),
             trigram_bitmaps,

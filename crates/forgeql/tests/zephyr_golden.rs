@@ -68,6 +68,7 @@ impl McpClient {
             .arg("--mcp")
             .arg("--data-dir")
             .arg(data_dir)
+            .arg("--log-queries")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -159,10 +160,18 @@ impl McpClient {
         if let Some(err) = resp.get("error") {
             return Err(std::io::Error::other(format!("tools/call error: {err}")));
         }
-        let text = resp
-            .pointer("/result/content/0/text")
-            .and_then(Value::as_str)
+        let content = resp
+            .pointer("/result/content")
+            .and_then(Value::as_array)
             .ok_or_else(|| std::io::Error::other(format!("unexpected response shape: {resp}")))?;
+        // When the response contains a session hint (e.g. from USE), the hint
+        // is content[0] and the JSON body is the last item.  For plain queries
+        // there is only one item.  Always take the last text-type content.
+        let text = content
+            .iter()
+            .rev()
+            .find_map(|c| c.get("text").and_then(Value::as_str))
+            .ok_or_else(|| std::io::Error::other(format!("no text content in: {resp}")))?;
         serde_json::from_str(text)
             .map_err(|e| std::io::Error::other(format!("result JSON parse: {e}\npayload: {text}")))
     }
@@ -271,7 +280,13 @@ fn zephyr_golden_values() {
     );
     eprintln!("[zephyr_golden] G1 PASS — symbols_indexed = {symbols_indexed}");
 
-    let sid = GOLDEN_ALIAS;
+    // Extract the opaque session_id token returned by USE (format: user:source:branch:alias).
+    let sid_owned = use_result
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or(GOLDEN_ALIAS)
+        .to_owned();
+    let sid = sid_owned.as_str();
 
     // ── G2: first 5 functions in kernel/sched.c ordered by line ──────────────
     //
