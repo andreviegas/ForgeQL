@@ -1765,6 +1765,29 @@ fn metrics_lines_not_clipped_for_clean_function() {
     );
 }
 
+#[test]
+fn metrics_lines_not_clipped_for_c99_designator_array() {
+    // Regression for false-positive absorbed-sibling detection: a function
+    // containing a local static array with C99 subscript designators
+    // ([N] = value) must NOT be mistaken for a misparsed function that
+    // absorbed a file-scope global.  first_absorbed_toplevel_in_compound must
+    // return None for this function.
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE name = 'withC99DesignatorArray'",
+    );
+    let qr = as_query(&r);
+    let m = find_by_name(&qr.results, "withC99DesignatorArray");
+    let lines: usize = field(m, "lines").parse().unwrap();
+    assert!(
+        lines >= 10,
+        "withC99DesignatorArray contains a large C99 subscript-designator array \
+         and must not be clipped; expected >= 10 lines, got {lines}"
+    );
+}
+
 // =======================================================================
 // §7 — CastEnricher
 // =======================================================================

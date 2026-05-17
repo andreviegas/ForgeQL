@@ -451,15 +451,10 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
                             &sr.path,
                             &sr.line.to_string(),
                             sr.enclosing_fn.as_deref().unwrap_or(""),
-                            &sr.metric().to_string(),
+                            &sr.metric_str(),
                         ])
                     } else {
-                        bracket(&[
-                            &sr.name,
-                            &sr.path,
-                            &sr.line.to_string(),
-                            &sr.metric().to_string(),
-                        ])
+                        bracket(&[&sr.name, &sr.path, &sr.line.to_string(), &sr.metric_str()])
                     }
                 })
                 .collect();

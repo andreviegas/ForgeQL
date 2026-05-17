@@ -226,19 +226,20 @@ impl SymbolRow {
         }
     }
 
-    /// The numeric value to show in the last column.
+    /// The display string for the last column in CSV output.
     ///
-    /// Priority: `count` (GROUP BY) → `metric_value` (enrichment) → `usages`.
-    pub(crate) fn metric(&self) -> usize {
+    /// Unlike `metric()`, this preserves non-numeric enrichment strings
+    /// (e.g. `cast_style = "c_style"`) instead of falling back to 0.
+    ///
+    /// Priority: `count` (GROUP BY) → `metric_value` (enrichment, verbatim) → `usages`.
+    pub(crate) fn metric_str(&self) -> String {
         if let Some(c) = self.count {
-            return c;
+            return c.to_string();
         }
-        if let Some(ref v) = self.metric_value
-            && let Ok(n) = v.parse::<usize>()
-        {
-            return n;
+        if let Some(ref v) = self.metric_value {
+            return v.clone();
         }
-        self.usages.unwrap_or(0)
+        self.usages.unwrap_or(0).to_string()
     }
 }
 

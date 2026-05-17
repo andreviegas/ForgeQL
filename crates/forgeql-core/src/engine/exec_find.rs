@@ -23,8 +23,10 @@ impl ForgeQLEngine {
         let root = session.worktree_path.clone();
 
         // Delegate all filtering, fast-path GROUP BY, ORDER BY, explicit LIMIT
-        // to the storage engine. The engine returns sorted/filtered results
+        // to the storage engine.  The engine returns sorted/filtered results
         // WITHOUT the implicit DEFAULT_QUERY_LIMIT cap — that is applied below.
+        // The columnar backend uses clauses.limit for early-exit in
+        // materialize_all, so explicit LIMIT queries avoid a full segment scan.
         let mut results = session.engine_for(backend)?.find_symbols(clauses, &root)?;
 
         let total = results.len();

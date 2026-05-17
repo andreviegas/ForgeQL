@@ -22,13 +22,15 @@ pub const MAGIC: [u8; 4] = *b"FQSG";
 /// Low-cardinality enrichment fields for which `SegmentBuilder` writes
 /// per-segment Roaring-bitmap posting files (`postings_<field>.bin`).
 ///
-/// Criterion: boolean flags and small enums with ≤ 8 distinct values per
-/// segment.  The builder silently skips any field whose actual cardinality
-/// exceeds that cap at flush time.
+/// Criterion: boolean flags and low-cardinality string enums with
+/// ≤ `MAX_CARDINALITY` (= 8) distinct values per segment.  The builder
+/// silently skips any field whose actual cardinality exceeds that cap at
+/// flush time, so adding fields here is additive and safe.
 ///
-/// `SegmentReader` discovers the files by checking this list so readers
+/// `SegmentReader` discovers the blobs by checking this list so readers
 /// always know which fields to attempt to load.
 pub const POSTING_ENRICHMENT_FIELDS: &[&str] = &[
+    // ── Boolean flags (present only when true) ───────────────────────────
     "has_doc",
     "is_recursive",
     "has_fallthrough",
@@ -37,6 +39,31 @@ pub const POSTING_ENRICHMENT_FIELDS: &[&str] = &[
     "is_unsafe",
     "is_async",
     "is_generic",
+    "has_todo",
+    "is_exported",
+    "has_catch_all",
+    "has_escape",
+    "has_shadow",
+    "expanded_has_escape",
+    "expansion_failed",
+    // ── Low-cardinality string enums ─────────────────────────────────────
+    "cast_style",
+    "cast_safety",
+    "scope",
+    "binding_kind",
+    "naming",
+    "comment_style",
+    "member_kind",
+    "for_style",
+    "escape_tier",
+    "storage",
+    "operator_category",
+    "guard_kind",
+    "guard_branch",
+    "catch_all_kind",
+    "shift_direction",
+    "increment_op",
+    "increment_style",
 ];
 /// Numeric columns for which the builder writes `zonemap_<col>.bin`."
 ///

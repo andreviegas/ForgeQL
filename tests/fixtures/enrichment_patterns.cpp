@@ -830,4 +830,21 @@ void stringLiteralNumbers(void) {
     (void)msg;
 }
 
+/* R2 regression — a function whose body contains a static const array with
+   C99 subscript designators ([N] = value) must NOT have its line count
+   clipped by first_absorbed_toplevel_in_compound: the array is a legitimate
+   local variable, not an absorbed file-scope sibling.
+   The function must be reported with lines >= 10 (actual body: 12 lines). */
+int withC99DesignatorArray(int index) {
+    static const int mapping[] = {
+        [0] = 100,
+        [1] = 200,
+        [2] = 300,
+        [3] = 400,
+        [4] = 500,
+    };
+    if (index < 0 || index > 4)
+        return -1;
+    return mapping[index];
+}
 

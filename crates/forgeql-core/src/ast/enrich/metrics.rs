@@ -215,8 +215,16 @@ fn first_absorbed_toplevel_in_compound(node: tree_sitter::Node<'_>) -> Option<us
 }
 
 /// Returns `true` if `node` (kind `"declaration"`) contains an
-/// `initializer_list` — i.e. it is a struct or array initializer such as
-/// `static const struct foo api = { .poll_in = bar, ... };`.
+/// `initializer_list` that uses **field designators** (`.field = value`
+/// syntax) — the canonical shape of absorbed file-scope C driver tables:
+///
+/// ```c
+/// static const struct foo_api api = { .poll_in = my_fn, ... };
+/// ```
+///
+/// Plain array initializers (`{ 1, 2, 3 }`) and C99 subscript-designator
+/// arrays (`{ [ENUM_VAL] = 0, ... }`) are intentionally excluded: they are
+/// legitimate local variables and must not be mistaken for absorbed siblings.
 ///
 /// Checks both a direct `initializer_list` child and the idiomatic two-level
 /// path `init_declarator → initializer_list`.
@@ -224,15 +232,37 @@ fn declaration_has_initializer_list(node: tree_sitter::Node<'_>) -> bool {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "initializer_list" {
-            return true;
+            return initializer_list_has_field_designator(child);
         }
         if child.kind() == "init_declarator" {
             let mut c2 = child.walk();
             for gc in child.children(&mut c2) {
                 if gc.kind() == "initializer_list" {
-                    return true;
+                    return initializer_list_has_field_designator(gc);
                 }
             }
+        }
+    }
+    false
+}
+
+/// Returns `true` when an `initializer_list` subtree contains at least one
+/// `field_designator` node (`.member = value` syntax).
+///
+/// A DFS search is used so that arrays-of-structs
+/// (`{{ .a = 1 }, { .a = 2 }}`) are also detected: the `field_designator`
+/// nodes appear one level deeper than the outer `initializer_list`.
+///
+/// Subscript designators (`[ENUM] = 0`) and plain value lists do **not**
+/// contain `field_designator` and therefore return `false`.
+fn initializer_list_has_field_designator(node: tree_sitter::Node<'_>) -> bool {
+    if node.kind() == "field_designator" {
+        return true;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if initializer_list_has_field_designator(child) {
+            return true;
         }
     }
     false

@@ -6,6 +6,48 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.50.12] — 2026-05-17 — Bug fixes: CSV enrichment string output and SHOW body line clipping
+
+### Fixed
+
+- **CSV `ORDER BY` enrichment string field showed `0`** (`compact.rs`, `result.rs`) —
+  when the last sort column was a non-numeric enrichment string (e.g.
+  `ORDER BY cast_style`, which yields values like `"c_style"`), the compact
+  CSV renderer called `metric().to_string()`.  `metric()` tried to parse
+  `metric_value` as `usize`, failed silently, and fell back to
+  `usages.unwrap_or(0)` — always printing `0`.  Fixed by replacing `metric()`
+  with a new `metric_str()` method that returns `metric_value` verbatim when
+  set, then falls back to the `count` (GROUP BY) or `usages` integer only when
+  no string value is present.
+
+- **`SHOW body` returned only 3 lines for functions containing C99 subscript-designator local arrays**
+  (`ast/enrich/metrics.rs`) — `first_absorbed_toplevel_in_compound` is a
+  heuristic that detects when tree-sitter has mis-parsed a function and absorbed
+  a subsequent file-scope declaration into the function body; when it fires it
+  clips the enriched `lines` value to exclude the absorbed node.  The heuristic
+  incorrectly fired on functions that contain a *legitimate* local variable
+  declared as a `static const T arr[] = { [ENUM] = value, … }` C99
+  subscript-designator array (e.g. `__get_dwarf_regnum_for_perf_regnum_powerpc`
+  in the Linux kernel's `dwarf-regs-powerpc.c`), because that declaration has a
+  multi-line `initializer_list` that superficially looks like an absorbed
+  file-scope driver table.
+
+  The guard condition `declaration_has_initializer_list` now requires the
+  `initializer_list` to contain at least one `field_designator` node
+  (`.member = value` struct member syntax).  Arrays initialised with
+  subscript designators (`[N] = value`) or plain value lists no longer trigger
+  the heuristic.  A new `initializer_list_has_field_designator` DFS helper
+  handles arrays-of-structs where the `field_designator` is nested one level
+  deeper.
+
+### Tests
+
+- **`metrics_lines_not_clipped_for_c99_designator_array`** — new integration test
+  in `enrichment_integration.rs` backed by a `withC99DesignatorArray` fixture
+  function in `tests/fixtures/enrichment_patterns.cpp`.  Asserts that a function
+  whose body contains a C99 subscript-designator static array reports `lines >= 10`
+  (the function has 12 lines; without the fix it reported `lines = 3`).
+
 ## [0.50.11] — 2026-05-17 — FQOV v3: zero-copy TOC-based overlay format
 
 ### Performance

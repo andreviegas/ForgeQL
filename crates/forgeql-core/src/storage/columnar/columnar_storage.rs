@@ -357,8 +357,30 @@ impl ColumnarStorage {
                 .map(|m| m.source_path.clone())
         });
 
+        // Early-exit cap: when no ORDER BY and no GROUP BY and an explicit LIMIT
+        // was set, stop opening segment files once the fetch budget is exhausted.
+        // We fetch cap+1 so that `total > results.len()` stays reliable — the
+        // one extra row signals "more results exist" to the caller.
+        //
+        // NOTE: when `clauses.limit` is `None` we do NOT fall back to the
+        // engine's DEFAULT_QUERY_LIMIT here.  exec_find injects an explicit
+        // limit before calling find_symbols so that path is already covered;
+        // callers that invoke find_symbols directly (tests, etc.) still get all
+        // matching rows as expected.
+        let fetch_cap: Option<usize> = if clauses.order_by.is_none() && clauses.group_by.is_none() {
+            clauses.limit.map(|c| c.saturating_add(1))
+        } else {
+            None
+        };
+
         let mut results = Vec::new();
         for seg_idx in seg_order {
+            // Early-exit: checked before opening the segment file so that we
+            // don't pay I/O cost once the fetch budget is exhausted.
+            if fetch_cap.is_some_and(|cap| results.len() >= cap) {
+                break;
+            }
+
             let Some(local_rows) = by_segment.get(&seg_idx) else {
                 continue;
             };
@@ -381,6 +403,11 @@ impl ColumnarStorage {
             // apply_clauses works against the same relative paths that the
             // legacy backend stores.  Do NOT join with worktree_root here.
             let mut seg_results = seg.materialize_rows(&narrowed, Some(&seg_meta.source_path));
+            // Trim within this segment to avoid overshooting the fetch budget.
+            if let Some(cap) = fetch_cap {
+                let remaining = cap.saturating_sub(results.len());
+                seg_results.truncate(remaining);
+            }
             results.append(&mut seg_results);
         }
         results
