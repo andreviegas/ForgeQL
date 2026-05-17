@@ -41,8 +41,6 @@ use bytemuck::{Pod, Zeroable, cast_slice};
 use fst::Map as FstMap;
 use memmap2::{Mmap, MmapOptions};
 use roaring::RoaringBitmap;
-use serde::{Deserialize, Serialize};
-
 use super::segment_reader::MmapSlice;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -99,7 +97,7 @@ pub(crate) struct TocEntry {
 /// `#[repr(C)]` + `bytemuck::Pod` enables zero-copy reads from the
 /// `row_table` blob via `cast_slice`.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct RowPtr {
     /// Index into the overlay's segment list.
     pub segment_idx: u32,
@@ -161,7 +159,7 @@ pub(super) struct SegmentRecord {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Per-segment metadata stored in the overlay's segment table.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SegmentMeta {
     /// Hex-encoded content ID — directory name under
     /// `segments/<provider_id>/`.
@@ -170,25 +168,6 @@ pub struct SegmentMeta {
     pub source_path: PathBuf,
     /// Number of rows in this segment (== symbols in the source file).
     pub row_count: u32,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Dead code from v2 format (removed in the cleanup commit)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// The bincode-serialised body of an FQOV **v2** overlay.
-///
-/// Retained as dead code until the cleanup commit removes it.
-#[allow(dead_code)]
-#[derive(Serialize, Deserialize)]
-pub struct OverlayPayload {
-    pub segments: Vec<SegmentMeta>,
-    pub global_row_table: Vec<RowPtr>,
-    pub kind_postings: std::collections::HashMap<String, Vec<u8>>,
-    pub name_fst_bytes: Vec<u8>,
-    pub name_postings_bytes: Vec<u8>,
-    #[serde(default)]
-    pub name_trigram_postings: std::collections::HashMap<[u8; 3], Vec<u8>>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
