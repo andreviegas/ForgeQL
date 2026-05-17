@@ -84,6 +84,27 @@ pub const DEFAULT_CONTEXT_LINES: usize = 5;
 /// When the cap fires, a `hint` field explains how to paginate.
 pub const DEFAULT_SHOW_LINE_LIMIT: usize = 40;
 
+/// Metadata recorded for a session that exists on disk but has not yet been
+/// promoted to a full in-memory session.
+///
+/// Populated by [`ForgeQLEngine::restore_sessions_from_disk`] at MCP startup
+/// and consumed (removed) the first time the agent issues a `USE` command
+/// that matches this entry.  Holding only metadata avoids loading the full
+/// columnar index at startup.
+pub struct PendingSession {
+    /// Original user identity from the `.forgeql-session` sentinel file.
+    pub user: String,
+    /// Source name (e.g. `"zephyr-andre"`).
+    pub source: String,
+    /// Source branch (e.g. `"zephyr-main"`).
+    pub branch: String,
+    /// Session alias (e.g. `"tests"`).
+    pub alias: String,
+    /// Worktree directory name — used by the startup sweep to protect live
+    /// worktrees from accidental pruning before they are promoted.
+    pub worktree_name: String,
+}
+
 /// The central `ForgeQL` dispatcher — owns all state and executes all operations.
 ///
 /// Create one per process.  Transport layers hold a reference (typically
@@ -93,6 +114,9 @@ pub struct ForgeQLEngine {
     registry: SourceRegistry,
     /// Active sessions keyed by session ID.
     sessions: HashMap<String, Session>,
+    /// Sessions that exist on disk but have not yet been loaded into memory.
+    /// Populated at startup by `restore_sessions_from_disk`; cleared on first USE.
+    pending_sessions: HashMap<String, PendingSession>,
     /// Root directory for bare repos and worktrees on disk.
     data_dir: PathBuf,
     /// Lifetime command counter (informational, for `/health` equivalents).
@@ -151,6 +175,7 @@ impl ForgeQLEngine {
         let engine = Self {
             registry,
             sessions: HashMap::new(),
+            pending_sessions: HashMap::new(),
             data_dir,
             commands_served: 0,
             lang_registry,
@@ -404,10 +429,10 @@ impl ForgeQLEngine {
         self.commands_served
     }
 
-    /// Number of active sessions.
+    /// Number of active sessions (in-memory) plus pending sessions (on-disk, not yet loaded).
     #[must_use]
     pub fn session_count(&self) -> usize {
-        self.sessions.len()
+        self.sessions.len() + self.pending_sessions.len()
     }
 
     /// Return the current budget snapshot for a session.

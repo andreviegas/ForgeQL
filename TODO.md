@@ -14,6 +14,13 @@
   MCP/CLI callers decode via `SessionCoords::from_session_id()` before entering the engine
 - [ ] Thread real user identity from MCP connection into `execute()`;
   add `user_id: Option<String>` to `RunFqlParams` once JWT/API-key auth is wired in
+- [ ] **Opaque wire session token** — return a UUID or HMAC instead of the raw
+  `user:source:branch:alias` map key to clients; do this together with JWT auth so the
+  two land in the same PR. Preferred approach: HMAC(server-secret, map\_key) — no
+  side-map, survives restarts, zero persistence changes to `.forgeql-session`; downside
+  is a required server secret (env var). UUID variant needs the token stored in the
+  sentinel for warm reconnect and a `token_map: HashMap<String,String>` kept in sync
+  with session lifecycle (create / drop / eviction). Defer until auth is implemented.
 - [x] Replace `prune_orphaned_worktrees` + `try_auto_reconnect` with a single
   `restore_sessions_from_disk()` called once at MCP startup; extend `.forgeql-session`
   sentinel with `source`/`branch`/`alias`/`user` so warm sessions are restored without
@@ -31,6 +38,20 @@
 - [ ] Full-text index — surface identifiers inside **comments and string literals**
   (invisible to the AST index) and in non-code files (`.cmake`, `.md`, etc.);
   merge results into `FIND usages`; add a `FIND text` grep-style command
+
+## Session startup
+
+- [x] Defer index loading at startup — restore only session metadata from sentinel files; load the columnar index on the first `USE` command for that session
+- [x] Fix checkpoint empty-stack write — remove the checkpoint file after a full ROLLBACK instead of writing an unvalidatable empty record, eliminating spurious startup warnings
+
+## Overlay — mmap zero-copy (RAM sharing)
+
+See `data/future-plans/mmap-zero-copy-overlay-plan.md` for the full plan.
+
+- [x] Replace the overlay parity unit test with a golden-value integration test against the frozen `zephyr-andre.zephyr-main` branch
+- [ ] Switch overlay open from full-file heap read to mmap — eliminate the per-session heap copy of the entire overlay file
+- [ ] Make the FST and name-postings zero-copy slice views into the mmap — no heap duplication when multiple sessions share the same commit
+- [ ] New FQOV v3 binary format — replace the bincode payload with a TOC-based layout so all structures (row table, bitmaps, FST) are zero-copy; delegates all RAM management to the OS page cache
 
 ## Miscellaneous
 

@@ -433,7 +433,11 @@ impl ForgeQLEngine {
 
         // Write the initial timestamp so background pruners see this worktree as active.
         session.touch();
-        drop(self.sessions.insert(map_key, session));
+        drop(self.sessions.insert(map_key.clone(), session));
+
+        // If this session was previously registered as pending (from
+        // restore_sessions_from_disk), remove it now that it is fully active.
+        drop(self.pending_sessions.remove(&map_key));
 
         Ok(ForgeQLResult::SourceOp(SourceOpResult {
             op: "use_source".to_string(),

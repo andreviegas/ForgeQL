@@ -266,7 +266,15 @@ impl ForgeQLEngine {
             // is the pre-push state from the checkpoint commit tree — one entry
             // behind where in-memory is after the pop).  Saving here ensures
             // file == in-memory stack invariant is restored.
-            if let Err(e) = crate::session::checkpoint_file::save(session, &worktree_path) {
+            //
+            // Special case: when the last checkpoint was just popped and
+            // last_clean_oid is None there is no longer any active transaction
+            // state to persist.  Removing the file prevents try_restore from
+            // seeing expected=None on the next server start and emitting a
+            // spurious HEAD-mismatch warning.
+            if session.checkpoints.is_empty() && session.last_clean_oid.is_none() {
+                crate::session::checkpoint_file::remove(&worktree_path);
+            } else if let Err(e) = crate::session::checkpoint_file::save(session, &worktree_path) {
                 warn!(error = %e, "rollback: checkpoint file save failed (non-fatal)");
             }
         }

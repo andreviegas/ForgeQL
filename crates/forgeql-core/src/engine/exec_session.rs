@@ -14,6 +14,7 @@ use crate::{
 };
 
 use super::ForgeQLEngine;
+use super::PendingSession;
 #[cfg(feature = "test-helpers")]
 use super::generate_session_id;
 use super::{SESSION_TTL_SECS, require_session_id};
@@ -57,21 +58,26 @@ impl ForgeQLEngine {
     ///
     /// Call this **once** at MCP server startup (before accepting requests).
     /// It replaces the old `prune_orphaned_worktrees` + `try_auto_reconnect`
-    /// pair with a single eager pass:
+    /// pair with a single pass:
     ///
     /// - Scans `<data_dir>/worktrees/` for all worktree directories.
     /// - Reads each worktree's `.forgeql-session` sentinel file.
-    /// - **Prunes** any worktree whose TTL has expired (removes the checkout
-    ///   directory and the git worktree metadata from every bare repo).
-    /// - **Restores** every warm worktree into the in-memory session map by
-    ///   calling `use_source()` — the same path taken by an explicit `USE`
-    ///   command.
+    /// - **Prunes** any worktree whose TTL has expired.
+    /// - **Registers** every warm worktree as a [`PendingSession`] — metadata
+    ///   only; no columnar index is loaded until the agent issues a `USE`
+    ///   command for that session.
+    ///
+    /// This is intentionally lazy: on a shared server with many developers,
+    /// eagerly loading every columnar index at startup would exhaust RAM before
+    /// the first request is served.  The full session (worktree checkout +
+    /// columnar overlay) is loaded in `use_source` when the agent actually
+    /// reconnects.
     ///
     /// After this call, `require_session` is a pure O(1) map lookup with no
     /// fallback disk scan.  Do **not** call in CLI modes — worktrees persist
-    /// across invocations and legitimate sessions would be re-indexed
-    /// unnecessarily.
-    #[allow(clippy::cognitive_complexity)]
+    /// across invocations and sessions should not be re-indexed on every
+    /// invocation.
+    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
     pub fn restore_sessions_from_disk(&mut self) {
         let wt_dir = SessionCoords::worktrees_root(&self.data_dir);
         let now = std::time::SystemTime::now()
@@ -90,7 +96,7 @@ impl ForgeQLEngine {
             return;
         };
 
-        let mut restored = 0u32;
+        let mut registered = 0u32;
         let mut pruned = 0u32;
 
         for user_entry in user_entries.flatten() {
@@ -132,23 +138,28 @@ impl ForgeQLEngine {
                         alias: Some(alias),
                         ..
                     }) => {
-                        // Warm worktree with full metadata — restore into memory.
-                        // The user comes from the sentinel file (set when the session was
-                        // first created).  Old sentinels that predate the user field fall
-                        // back to the session-context identity via auth().
+                        // Warm worktree with full metadata — register as pending.
+                        // The index will be loaded lazily when the agent issues
+                        // a USE command for this session.
                         let user = user
                             .as_deref()
-                            .unwrap_or_else(|| auth(AuthContext::Session));
-                        info!(%user, %source, %branch, %alias, "startup: restoring session");
-                        match self.use_source(user, &source, &branch, &alias) {
-                            Ok(_) => {
-                                info!(%alias, "startup: session restored");
-                                restored += 1;
-                            }
-                            Err(e) => {
-                                warn!(%alias, %e, "startup: session restore failed — skipping");
-                            }
-                        }
+                            .unwrap_or_else(|| auth(AuthContext::Session))
+                            .to_owned();
+                        let coords = SessionCoords::new(&user, &source, &branch, &alias);
+                        let session_key = coords.map_key();
+                        let worktree_name = coords.worktree_dir();
+                        info!(%user, %source, %branch, %alias, "startup: session registered as pending");
+                        drop(self.pending_sessions.insert(
+                            session_key,
+                            PendingSession {
+                                user,
+                                source,
+                                branch,
+                                alias,
+                                worktree_name,
+                            },
+                        ));
+                        registered += 1;
                     }
                     Some(_) => {
                         // Old-format sentinel (timestamp only) — cannot recover
@@ -163,10 +174,17 @@ impl ForgeQLEngine {
         // Pass 2: sweep git worktree metadata entries whose checkout path
         // is gone (handles crash-interrupted prune from a previous run).
         if let Ok(repo_entries) = std::fs::read_dir(&self.data_dir) {
+            // Protect both fully-loaded in-memory sessions AND pending sessions
+            // (registered above) so their worktrees are never pruned here.
             let live_wt_names: std::collections::HashSet<&str> = self
                 .sessions
                 .values()
                 .map(|s| s.worktree_name.as_str())
+                .chain(
+                    self.pending_sessions
+                        .values()
+                        .map(|p| p.worktree_name.as_str()),
+                )
                 .collect();
 
             for re in repo_entries.flatten() {
@@ -194,7 +212,10 @@ impl ForgeQLEngine {
             }
         }
 
-        info!(restored, pruned, "startup: session restore complete");
+        info!(
+            registered,
+            pruned, "startup: session restore complete (lazy — indexes load on first USE)"
+        );
     }
 
     /// Remove a single worktree directory and its git metadata from all bare repos.

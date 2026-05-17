@@ -4,6 +4,45 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.9] — 2026-05-17 — Lazy session restore, checkpoint fix, and zephyr golden test
+
+### Fixed
+
+- **ROLLBACK checkpoint empty-stack bug** — after a full `ROLLBACK` (last checkpoint
+  popped, `last_clean_oid = None`) the engine previously called `checkpoint_file::save()`
+  with an empty stack, persisting a file where `expected = None`.  On the next server
+  start `try_restore` compared `expected=None` against the real HEAD OID and emitted a
+  spurious `"checkpoint file HEAD mismatch — discarding stale stack"` warning for every
+  restored session.  Fixed: `exec_rollback` now calls `checkpoint_file::remove()` when
+  the stack is fully drained, keeping the on-disk state consistent with the in-memory
+  state.
+
+### Performance
+
+- **Lazy session restore at MCP startup** — `restore_sessions_from_disk()` previously
+  called `use_source()` for every live worktree on disk, loading the full columnar index
+  into RAM before the first request.  On a shared server with many developers this could
+  exhaust all available memory at startup.  The function now only reads each worktree's
+  `.forgeql-session` sentinel file and records a lightweight `PendingSession` entry
+  (user, source, branch, alias, worktree name) — no index is loaded.  The columnar index
+  is loaded lazily the first time the agent issues a `USE` command for that session.
+  `session_count()` includes both active and pending sessions.  The pass-2 git metadata
+  sweep was updated to protect pending worktrees from accidental pruning.
+
+### Tests
+
+- **Zephyr golden integration test** (`crates/forgeql/tests/zephyr_golden.rs`) — new
+  Phase 0a test that opens a real MCP session against the frozen `zephyr-andre.zephyr-main`
+  branch and asserts four golden values recorded on 2026-05-17:
+  - Total `symbols_indexed = 2 720 018`
+  - First 5 functions in `kernel/sched.c` ordered by line (thread\_runq→51,
+    curr\_cpu\_runq→71, runq\_add→80, runq\_remove→88, runq\_yield→96)
+  - `k_mutex_lock` → exactly 1 result: `field`, line 3525, `include/zephyr/kernel.h`
+  - First function alphabetically → `AGC_IRQHandler`, line 64,
+    `modules/hal_silabs/simplicity_sdk/src/blob_stubs.c`
+  - Gated on `FORGEQL_DATA_DIR` env var; skips gracefully when unset.
+  - Activate: `FORGEQL_DATA_DIR=/path/to/data cargo test --package forgeql --test zephyr_golden`
+
 ## [0.50.8] — 2026-05-16 — Bug fixes and dead-code removal
 
 ### Fixed
