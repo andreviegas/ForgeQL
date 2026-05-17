@@ -6,6 +6,41 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.50.11] — 2026-05-17 — FQOV v3: zero-copy TOC-based overlay format
+
+### Performance
+
+- **FQOV v3 overlay format** (`crates/forgeql-core/src/storage/columnar/overlay_writer.rs`,
+  `overlay_builder.rs`, `overlay.rs`) — the overlay file format was completely
+  rewritten from bincode serialization to a hand-crafted, zero-copy binary layout:
+
+  - **Header** (20 bytes): 4-byte magic `FQOV`, 4-byte schema version (`1`), 8-byte
+    generation counter, 4-byte TOC entry count.
+  - **TOC** (36 bytes × 9 entries): each entry has a 28-byte zero-padded name,
+    4-byte offset, and 4-byte length — allowing random access to any blob without
+    parsing the rest of the file.
+  - **9 named blobs** laid out after the TOC: `row_table`, `kind_strings`,
+    `kind_index`, `bitmap_data`, `trigram_index`, `name_fst`, `name_postings`,
+    `segments`, `segment_strings`.
+
+  `Overlay::open` now reads the header and TOC from the mmap, then wraps each blob
+  as a range into the existing mmap — no heap copies, no bincode decode.
+  `FstMap` and the name postings are served directly from the mmap via `MmapSlice`.
+
+### Internal
+
+- **`WriteV3Params` struct** (`overlay_writer.rs`) — groups the 9 write parameters
+  to satisfy the ≤7 argument clippy limit and keep call sites readable.  The
+  `write_v3` function now takes `params: &WriteV3Params<'_>`.
+- **`compute_blobs` extracted** from `write_v3` — splits the blob-building logic
+  into a separate function, keeping each function under 100 lines.
+- **`HEADER_V3_LEN_U32` / `TOC_COUNT_U32` module-level consts** — replace inline
+  `as u32` casts that triggered `clippy::cast_possible_truncation`.
+- **Helper functions extracted from `Overlay::open`**:
+  `parse_toc_entries`, `find_blob_ranges`, `validate_blob_layout`,
+  `decode_segment_metas` — each under 30 lines; `open` itself is now ~68 lines.
+- **`MmapSlice::new` declared `const fn`** (`segment_reader.rs`).
+
 ### Tests
 
 - **Zephyr golden test: data-driven refactor + 14-query expansion** —
@@ -25,6 +60,13 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   All slow queries were scoped with `IN 'subdir/**'` to limit the candidate
   set; total suite runtime dropped from **~596 s → 27 s** (G11 and G12 each
   fell from 5+ minutes to under one second).
+
+### Cache Invalidation
+
+- **`ENRICH_VER` bumped from 7 to 8** (`crates/forgeql-core/src/storage/columnar/mod.rs`):
+  The FQOV v3 binary layout is incompatible with the old bincode-serialized
+  overlay files.  Existing v7 overlay caches are automatically invalidated and
+  rebuilt on first use.
 
 ## [0.50.10] — 2026-05-17 — Overlay mmap quick wins (Phase 1)
 

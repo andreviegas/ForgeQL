@@ -297,19 +297,19 @@ impl OverlayBuilder {
             let generation: u64 = 1;
             overlay_writer::write_v3(
                 &mut f,
-                generation,
-                &global_row_table,
-                &kind_postings,
-                &name_trigram_postings,
-                &name_fst_bytes,
-                &name_postings_bytes,
-                &segment_metas,
+                &overlay_writer::WriteV3Params {
+                    generation,
+                    global_row_table: &global_row_table,
+                    kind_postings: &kind_postings,
+                    trigram_postings: &name_trigram_postings,
+                    name_fst_bytes: &name_fst_bytes,
+                    name_postings_bytes: &name_postings_bytes,
+                    segment_metas: &segment_metas,
+                },
             )
             .context("writing v3 overlay")?;
             f.flush().context("flushing overlay buffer")?;
-            tmp.as_file()
-                .sync_all()
-                .context("fsyncing overlay file")?;
+            tmp.as_file().sync_all().context("fsyncing overlay file")?;
         }
 
         let _ = tmp

@@ -38,8 +38,8 @@ pub mod dirty_overlay;
 pub mod manifest;
 pub mod overlay;
 pub mod overlay_builder;
-pub mod overlay_writer;
 pub mod overlay_lock;
+pub mod overlay_writer;
 pub mod segment_builder;
 pub mod segment_reader;
 pub mod shadow_writer;
@@ -74,7 +74,10 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///   3 — `has_fallthrough` annotation suppression (v0.49.3)
 ///   4 — `lines` clipping for absorbed function_definition (v0.49.10, partial)
 ///   5 — `lines` clipping extended: preproc_ifdef + ERROR/DEVICE_API (v0.49.10)
-pub const ENRICH_VER: u32 = 7;
+///   6 — columnar overlay split into per-blob `.bin` files (v0.49.4)
+///   7 — `is_magic` semantics fixed; numbers in string literals excluded (v0.50.2)
+///   8 — FQOV v3: TOC-based binary overlay replaces bincode serialization (v0.50.11)
+pub const ENRICH_VER: u32 = 8;
 
 /// Encode a byte slice as a lowercase hex string.
 pub(crate) fn bytes_to_hex(bytes: &[u8]) -> String {

@@ -131,11 +131,7 @@ impl ColumnarStorage {
                     // bitmap immediately rather than None.  None would fall
                     // through to the full-table scan, causing ~8 s regressions
                     // for unknown-kind queries.  See Phase 06d, Root cause 1.
-                    Some(
-                        self.overlay
-                            .prefilter_kind(val)
-                            .unwrap_or_default(),
-                    )
+                    Some(self.overlay.prefilter_kind(val).unwrap_or_default())
                 }
                 ("name", CompareOp::Eq, PredicateValue::String(val)) => {
                     let bm = self.overlay.lookup_name_bitmap(val);

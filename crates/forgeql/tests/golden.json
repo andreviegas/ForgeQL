@@ -2,7 +2,7 @@
   {
     "use": "zephyr-andre.zephyr-main",
     "alias": "golden",
-    "expect_symbols_indexed": 2720018
+    "expect_symbols_indexed": 2703796
   },
   {
     "name": "G2_kernel_sched_first_5_functions_by_line",

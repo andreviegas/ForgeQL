@@ -36,12 +36,12 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::segment_reader::MmapSlice;
 use anyhow::{Context, Result, ensure};
 use bytemuck::{Pod, Zeroable, cast_slice};
 use fst::Map as FstMap;
 use memmap2::{Mmap, MmapOptions};
 use roaring::RoaringBitmap;
-use super::segment_reader::MmapSlice;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // On-disk constants
@@ -238,8 +238,7 @@ impl Overlay {
         );
 
         #[allow(clippy::indexing_slicing)]
-        let generation =
-            u64::from_le_bytes(mmap[8..16].try_into().context("generation bytes")?);
+        let generation = u64::from_le_bytes(mmap[8..16].try_into().context("generation bytes")?);
         #[allow(clippy::indexing_slicing)]
         let toc_count =
             u32::from_le_bytes(mmap[16..20].try_into().context("toc_count bytes")?) as usize;
@@ -251,128 +250,30 @@ impl Overlay {
             mmap.len()
         );
 
-        // Parse TOC entries field-by-field (TocEntry is not `Pod` due to the
-        // `[u8; 56]` field conflicting with `object::pod::Pod`).
-        let mut toc = Vec::with_capacity(toc_count);
-        for i in 0..toc_count {
-            let base = HEADER_LEN + i * TOC_ENTRY_SIZE;
-            ensure!(base + TOC_ENTRY_SIZE <= mmap.len(), "TOC entry {i} out of bounds");
-            #[allow(clippy::indexing_slicing)]
-            let entry_bytes = &mmap[base..base + TOC_ENTRY_SIZE];
-            let mut name = [0u8; TOC_ENTRY_NAME_LEN];
-            name.copy_from_slice(&entry_bytes[..TOC_ENTRY_NAME_LEN]);
-            let offset = u32::from_le_bytes(
-                entry_bytes[TOC_ENTRY_NAME_LEN..TOC_ENTRY_NAME_LEN + 4]
-                    .try_into()
-                    .context("TOC entry offset bytes")?,
-            );
-            let len = u32::from_le_bytes(
-                entry_bytes[TOC_ENTRY_NAME_LEN + 4..TOC_ENTRY_NAME_LEN + 8]
-                    .try_into()
-                    .context("TOC entry len bytes")?,
-            );
-            toc.push(TocEntry { name, offset, len });
-        }
+        let toc = parse_toc_entries(&mmap, toc_count)?;
 
-        // Helper: find a blob by NUL-terminated name, return its byte range.
-        let find_blob = |name: &[u8]| -> Result<Range<usize>> {
-            for entry in &toc {
-                let stored = entry
-                    .name
-                    .iter()
-                    .position(|&b| b == 0)
-                    .map_or(entry.name.as_ref(), |n| &entry.name[..n]);
-                if stored == name {
-                    let s = entry.offset as usize;
-                    return Ok(s..s + entry.len as usize);
-                }
-            }
-            anyhow::bail!(
-                "blob {:?} not found in overlay TOC",
-                std::str::from_utf8(name).unwrap_or("?")
-            )
-        };
+        let blobs = find_blob_ranges(&toc)?;
+        validate_blob_layout(mmap.len(), &blobs)?;
+        let [
+            row_table_range,
+            kind_strings_range,
+            kind_index_range,
+            bitmap_data_range,
+            trigram_index_range,
+            name_fst_range,
+            name_postings_range,
+            segments_range,
+            segment_strings_range,
+        ] = blobs;
 
-        let row_table_range = find_blob(b"row_table")?;
-        let kind_strings_range = find_blob(b"kind_strings")?;
-        let kind_index_range = find_blob(b"kind_index")?;
-        let bitmap_data_range = find_blob(b"bitmap_data")?;
-        let trigram_index_range = find_blob(b"trigram_index")?;
-        let name_fst_range = find_blob(b"name_fst")?;
-        let name_postings_range = find_blob(b"name_postings")?;
-        let segments_range = find_blob(b"segments")?;
-        let segment_strings_range = find_blob(b"segment_strings")?;
-
-        // Validate all blob ranges fit within the mmap.
-        let max_end = [
-            row_table_range.end,
-            kind_strings_range.end,
-            kind_index_range.end,
-            bitmap_data_range.end,
-            trigram_index_range.end,
-            name_fst_range.end,
-            name_postings_range.end,
-            segments_range.end,
-            segment_strings_range.end,
-        ]
-        .iter()
-        .copied()
-        .max()
-        .unwrap_or(0);
-        ensure!(
-            mmap.len() >= max_end,
-            "overlay file truncated: need {max_end} bytes, got {}",
-            mmap.len()
-        );
-
-        // Validate blob alignment.
-        ensure!(
-            row_table_range.len() % std::mem::size_of::<RowPtr>() == 0,
-            "row_table blob size not a multiple of RowPtr size"
-        );
-        ensure!(
-            kind_index_range.len() % std::mem::size_of::<KindEntry>() == 0,
-            "kind_index blob size not a multiple of KindEntry size"
-        );
-        ensure!(
-            trigram_index_range.len() % std::mem::size_of::<TrigramEntry>() == 0,
-            "trigram_index blob size not a multiple of TrigramEntry size"
-        );
-        ensure!(
-            segments_range.len() % std::mem::size_of::<SegmentRecord>() == 0,
-            "segments blob size not a multiple of SegmentRecord size"
-        );
-
-        let row_count =
-            (row_table_range.len() / std::mem::size_of::<RowPtr>()) as u32;
+        let row_count = u32::try_from(row_table_range.len() / std::mem::size_of::<RowPtr>())
+            .context("row count overflow")?;
 
         // Decode segment metadata at open time.
         #[allow(clippy::indexing_slicing)]
-        let seg_records: &[SegmentRecord] = cast_slice(&mmap[segments_range.clone()]);
+        let seg_records: &[SegmentRecord] = cast_slice(&mmap[segments_range]);
         #[allow(clippy::indexing_slicing)]
-        let seg_strings = &mmap[segment_strings_range.clone()];
-        let mut segments = Vec::with_capacity(seg_records.len());
-        for rec in seg_records {
-            let path_start = rec.path_offset as usize;
-            let path_end = path_start + rec.path_len as usize;
-            let hex_start = rec.hex_id_offset as usize;
-            let hex_end = hex_start + rec.hex_id_len as usize;
-            ensure!(
-                path_end <= seg_strings.len() && hex_end <= seg_strings.len(),
-                "segment string index out of bounds"
-            );
-            #[allow(clippy::indexing_slicing)]
-            let path_str = std::str::from_utf8(&seg_strings[path_start..path_end])
-                .context("segment source path not valid UTF-8")?;
-            #[allow(clippy::indexing_slicing)]
-            let hex_str = std::str::from_utf8(&seg_strings[hex_start..hex_end])
-                .context("segment hex_content_id not valid UTF-8")?;
-            segments.push(SegmentMeta {
-                hex_content_id: hex_str.to_owned(),
-                source_path: PathBuf::from(path_str),
-                row_count: rec.row_count,
-            });
-        }
+        let segments = decode_segment_metas(seg_records, &mmap[segment_strings_range])?;
 
         // Build the zero-copy name FST backed by a mmap slice.
         let name_fst = FstMap::new(MmapSlice::new(
@@ -434,7 +335,9 @@ impl Overlay {
             let s_start = e.kind_offset as usize;
             let s_end = s_start + e.kind_len as usize;
             #[allow(clippy::indexing_slicing)]
-            kind_strings.get(s_start..s_end).is_none_or(|s| s < kind_bytes)
+            kind_strings
+                .get(s_start..s_end)
+                .is_none_or(|s| s < kind_bytes)
         });
 
         let e = entries.get(idx)?;
@@ -482,8 +385,7 @@ impl Overlay {
         }
 
         #[allow(clippy::indexing_slicing)]
-        let entries: &[TrigramEntry] =
-            cast_slice(&self.mmap[self.trigram_index_range.clone()]);
+        let entries: &[TrigramEntry] = cast_slice(&self.mmap[self.trigram_index_range.clone()]);
         if entries.is_empty() {
             return None;
         }
@@ -575,6 +477,141 @@ impl Overlay {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Private helpers (extracted from Overlay::open to keep the function ≤ 100 lines)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Parse TOC entries field-by-field from the mmap.
+///
+/// `TocEntry` is not `Pod` due to `[u8; 56]` conflicting with
+/// `object::pod::Pod`, so reads are done manually.
+fn parse_toc_entries(mmap: &[u8], toc_count: usize) -> Result<Vec<TocEntry>> {
+    let mut toc = Vec::with_capacity(toc_count);
+    for i in 0..toc_count {
+        let base = HEADER_LEN + i * TOC_ENTRY_SIZE;
+        ensure!(
+            base + TOC_ENTRY_SIZE <= mmap.len(),
+            "TOC entry {i} out of bounds"
+        );
+        #[allow(clippy::indexing_slicing)]
+        let entry_bytes = &mmap[base..base + TOC_ENTRY_SIZE];
+        let mut name = [0u8; TOC_ENTRY_NAME_LEN];
+        name.copy_from_slice(&entry_bytes[..TOC_ENTRY_NAME_LEN]);
+        let offset = u32::from_le_bytes(
+            entry_bytes[TOC_ENTRY_NAME_LEN..TOC_ENTRY_NAME_LEN + 4]
+                .try_into()
+                .context("TOC entry offset bytes")?,
+        );
+        let len = u32::from_le_bytes(
+            entry_bytes[TOC_ENTRY_NAME_LEN + 4..TOC_ENTRY_NAME_LEN + 8]
+                .try_into()
+                .context("TOC entry len bytes")?,
+        );
+        toc.push(TocEntry { name, offset, len });
+    }
+    Ok(toc)
+}
+
+/// Locate all nine named blobs and return their byte ranges in TOC order.
+fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; 9]> {
+    let find_one = |name: &[u8]| -> Result<Range<usize>> {
+        for entry in toc {
+            let stored = entry
+                .name
+                .iter()
+                .position(|&b| b == 0)
+                .map_or_else(|| entry.name.as_ref(), |n| &entry.name[..n]);
+            if stored == name {
+                let s = entry.offset as usize;
+                return Ok(s..s + entry.len as usize);
+            }
+        }
+        anyhow::bail!(
+            "blob {:?} not found in overlay TOC",
+            std::str::from_utf8(name).unwrap_or("?")
+        )
+    };
+    Ok([
+        find_one(b"row_table")?,
+        find_one(b"kind_strings")?,
+        find_one(b"kind_index")?,
+        find_one(b"bitmap_data")?,
+        find_one(b"trigram_index")?,
+        find_one(b"name_fst")?,
+        find_one(b"name_postings")?,
+        find_one(b"segments")?,
+        find_one(b"segment_strings")?,
+    ])
+}
+
+/// Decode the fixed-size `SegmentRecord` slice into heap-allocated `SegmentMeta` values.
+fn decode_segment_metas(
+    seg_records: &[SegmentRecord],
+    seg_strings: &[u8],
+) -> Result<Vec<SegmentMeta>> {
+    let mut segments = Vec::with_capacity(seg_records.len());
+    for rec in seg_records {
+        let path_start = rec.path_offset as usize;
+        let path_end = path_start + rec.path_len as usize;
+        let hex_start = rec.hex_id_offset as usize;
+        let hex_end = hex_start + rec.hex_id_len as usize;
+        ensure!(
+            path_end <= seg_strings.len() && hex_end <= seg_strings.len(),
+            "segment string index out of bounds"
+        );
+        #[allow(clippy::indexing_slicing)]
+        let path_str = std::str::from_utf8(&seg_strings[path_start..path_end])
+            .context("segment source path not valid UTF-8")?;
+        #[allow(clippy::indexing_slicing)]
+        let hex_str = std::str::from_utf8(&seg_strings[hex_start..hex_end])
+            .context("segment hex_content_id not valid UTF-8")?;
+        segments.push(SegmentMeta {
+            hex_content_id: hex_str.to_owned(),
+            source_path: PathBuf::from(path_str),
+            row_count: rec.row_count,
+        });
+    }
+    Ok(segments)
+}
+
+/// Validate that all blob ranges fit within `mmap_len` and that
+/// fixed-record blobs have sizes that are multiples of the record size.
+fn validate_blob_layout(mmap_len: usize, blobs: &[Range<usize>; 9]) -> Result<()> {
+    let [
+        row_table_r,
+        _,
+        kind_index_r,
+        _,
+        trigram_r,
+        _,
+        _,
+        segments_r,
+        _,
+    ] = blobs;
+    let max_end = blobs.iter().map(|r| r.end).max().unwrap_or(0);
+    ensure!(
+        mmap_len >= max_end,
+        "overlay file truncated: need {max_end} bytes, got {mmap_len}"
+    );
+    ensure!(
+        row_table_r.len() % std::mem::size_of::<RowPtr>() == 0,
+        "row_table blob size not a multiple of RowPtr size"
+    );
+    ensure!(
+        kind_index_r.len() % std::mem::size_of::<KindEntry>() == 0,
+        "kind_index blob size not a multiple of KindEntry size"
+    );
+    ensure!(
+        trigram_r.len() % std::mem::size_of::<TrigramEntry>() == 0,
+        "trigram_index blob size not a multiple of TrigramEntry size"
+    );
+    ensure!(
+        segments_r.len() % std::mem::size_of::<SegmentRecord>() == 0,
+        "segments blob size not a multiple of SegmentRecord size"
+    );
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Unit tests
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -587,28 +624,42 @@ mod tests {
     use roaring::RoaringBitmap;
 
     use super::*;
-    use crate::storage::columnar::overlay_writer::write_v3;
+    use crate::storage::columnar::overlay_writer::{self, write_v3};
 
     /// Build a minimal FQOV v3 overlay in a tempfile.
     ///
     /// Only `trigram_postings` and `row_count` are populated; all other blobs
     /// are empty or trivially valid.
     fn make_test_overlay(
-        trigram_postings: HashMap<[u8; 3], Vec<u8>>,
+        trigram_postings: &HashMap<[u8; 3], Vec<u8>>,
         row_count: u32,
     ) -> tempfile::NamedTempFile {
         let empty_fst = fst::MapBuilder::memory()
             .into_inner()
             .expect("empty FST bytes");
         let row_table: Vec<RowPtr> = (0..row_count)
-            .map(|i| RowPtr { segment_idx: 0, local_row_idx: i })
+            .map(|i| RowPtr {
+                segment_idx: 0,
+                local_row_idx: i,
+            })
             .collect();
 
         let tmp = tempfile::NamedTempFile::new().expect("tempfile");
         {
             let mut f = BufWriter::new(tmp.as_file());
-            write_v3(&mut f, 1, &row_table, &HashMap::new(), &trigram_postings, &empty_fst, &[], &[])
-                .expect("write_v3");
+            write_v3(
+                &mut f,
+                &overlay_writer::WriteV3Params {
+                    generation: 1,
+                    global_row_table: &row_table,
+                    kind_postings: &HashMap::new(),
+                    trigram_postings,
+                    name_fst_bytes: &empty_fst,
+                    name_postings_bytes: &[],
+                    segment_metas: &[],
+                },
+            )
+            .expect("write_v3");
             f.flush().expect("flush");
         }
         tmp
@@ -642,12 +693,12 @@ mod tests {
     fn substring_candidates_none_for_short_input() {
         // Non-empty trigram index so we reach the length check.
         let mut trig = HashMap::new();
-        let bm: RoaringBitmap = [0u32].iter().copied().collect();
+        let bm: RoaringBitmap = std::iter::once(0u32).collect();
         let mut bm_bytes = Vec::new();
         bm.serialize_into(&mut bm_bytes).unwrap();
         trig.insert(*b"abc", bm_bytes);
 
-        let tmp = make_test_overlay(trig, 1);
+        let tmp = make_test_overlay(&trig, 1);
         let overlay = Overlay::open(tmp.path()).expect("open");
 
         assert!(overlay.name_substring_candidates("ab").is_none());
@@ -666,7 +717,7 @@ mod tests {
             trig.insert(t, bytes);
         }
 
-        let tmp = make_test_overlay(trig, 3);
+        let tmp = make_test_overlay(&trig, 3);
         let overlay = Overlay::open(tmp.path()).expect("open");
 
         // Single trigram "alp" → {0, 2}.
@@ -686,4 +737,3 @@ mod tests {
         assert!(got.is_empty());
     }
 }
-
