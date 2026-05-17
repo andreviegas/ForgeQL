@@ -4,6 +4,28 @@ All notable changes to ForgeQL will be documented in this file.
 
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Tests
+
+- **Zephyr golden test: data-driven refactor + 14-query expansion** —
+  `zephyr_golden.rs` was a hardcoded 4-query test; it is now a generic
+  data-driven runner that reads `crates/forgeql/tests/golden.json` and
+  executes each entry as a first-class assertion, making it trivial to add
+  new golden cases without touching Rust.
+
+  Coverage expanded from 4 → 14 queries:
+  - `FIND symbols` with `ORDER BY`, `LIMIT`, exact-match `WHERE`, and
+    enrichment filters (`param_count`, `language`, `name MATCHES`)
+  - `SHOW LINES` plain, `WHERE text LIKE`, and `WHERE text MATCHES`
+  - `FIND symbols GROUP BY fql_kind` with and without `HAVING`
+  - `FIND symbols GROUP BY file`
+  - `FIND files WHERE extension = …`
+
+  All slow queries were scoped with `IN 'subdir/**'` to limit the candidate
+  set; total suite runtime dropped from **~596 s → 27 s** (G11 and G12 each
+  fell from 5+ minutes to under one second).
+
 ## [0.50.10] — 2026-05-17 — Overlay mmap quick wins (Phase 1)
 
 ### Performance

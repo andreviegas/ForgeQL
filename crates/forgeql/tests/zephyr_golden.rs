@@ -1,21 +1,46 @@
-//! Phase 0a — Golden-value integration test against the frozen `zephyr-main` branch.
+//! Data-driven golden-value integration tests.
 //!
-//! Opens a real MCP session against `zephyr-andre.zephyr-main` and asserts that
-//! specific queries return the exact expected rows.  Values were recorded on
-//! 2026-05-17 from a live MCP session; the branch **must never be rebased or
-//! force-pushed** so these expectations remain permanently stable.
+//! Test cases are loaded from [`tests/golden.json`].  Each entry is either a
+//! `USE` step (opens or switches a session) or a query step (runs FQL and
+//! checks the response against declared expectations).
 //!
-//! Purpose: any refactor that breaks the overlay reader, the FST lookup, the bitmap
-//! prefilter, or the row materialiser produces a clear diff here rather than a
-//! silent regression.
+//! ## Adding or changing a test
+//!
+//! Edit `crates/forgeql/tests/golden.json` — **no Rust changes required**.
+//!
+//! ### JSON entry types
+//!
+//! **USE step** — opens a session; all following query steps use this session
+//! until the next USE step:
+//! ```json
+//! {
+//!   "use": "source-name.branch-name",
+//!   "alias": "my-alias",
+//!   "expect_symbols_indexed": 12345
+//! }
+//! ```
+//!
+//! **Query step** — runs FQL and checks the response:
+//! ```json
+//! {
+//!   "name": "human_readable_test_name",
+//!   "fql": "FIND symbols WHERE ...",
+//!   "expect_total": 1,
+//!   "expect_row_count": 5,
+//!   "expect_rows": [
+//!     {"name": "foo", "kind": "function", "line": 42, "path": "src/foo.c"}
+//!   ]
+//! }
+//! ```
+//!
+//! All fields except `name` and `fql` are optional.  `expect_rows[i]` checks
+//! only the fields listed — missing fields are ignored.
 //!
 //! ## Prerequisites
 //!
-//! | Env var            | Default         | Description                                              |
-//! |--------------------|-----------------|----------------------------------------------------------|
-//! | `FORGEQL_DATA_DIR` | *(required)*    | ForgeQL data dir with `zephyr-andre` already registered. |
-//! | `GOLDEN_SOURCE`    | `zephyr-andre`  | Source name in that data dir.                            |
-//! | `GOLDEN_BRANCH`    | `zephyr-main`   | Branch to open (frozen — do not change).                 |
+//! | Env var            | Description                                            |
+//! |--------------------|--------------------------------------------------------|
+//! | `FORGEQL_DATA_DIR` | ForgeQL data dir with all required sources registered. |
 //!
 //! The test **skips** when `FORGEQL_DATA_DIR` is unset; it never fails due to
 //! missing infrastructure.
@@ -41,18 +66,63 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 
-// ── total symbol count from USE response ────────────────────────────────────
+// ── golden entry types (deserialised from golden.json) ───────────────────────
 
-/// Recorded total when the session was first built against this commit.
-const GOLDEN_SYMBOLS_INDEXED: usize = 2_720_018;
+/// A single step in the golden test suite.
+///
+/// - [`GoldenEntry::Use`] — opens (or switches) a session.
+/// - [`GoldenEntry::Query`] — runs FQL and checks the response.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum GoldenEntry {
+    Use(UseEntry),
+    Query(QueryEntry),
+}
 
-// ── alias for the test session ───────────────────────────────────────────────
+/// `USE source.branch AS 'alias'` step.
+#[derive(Debug, Deserialize)]
+struct UseEntry {
+    /// `"source.branch"` fed directly into `USE … AS`.
+    #[serde(rename = "use")]
+    use_str: String,
+    /// Session alias (the `AS 'alias'` part).
+    alias: String,
+    /// If set, asserts `symbols_indexed` in the USE response equals this value.
+    #[serde(default)]
+    expect_symbols_indexed: Option<usize>,
+}
 
-const GOLDEN_ALIAS: &str = "golden";
+/// FQL query step with expected results.
+#[derive(Debug, Deserialize)]
+struct QueryEntry {
+    /// Human-readable test name printed on pass/fail.
+    name: String,
+    /// FQL statement to execute.
+    fql: String,
+    /// If set, asserts the `"total"` field in the response equals this value.
+    #[serde(default)]
+    expect_total: Option<usize>,
+    /// If set, asserts the number of rows in `"results"` (or `content.files`
+    /// for `FIND files`) equals this value.
+    #[serde(default)]
+    expect_row_count: Option<usize>,
+    /// Per-row field matchers for `FIND` responses (`results` / `content.files`).
+    /// Row `i` must contain every field listed; unlisted fields are ignored.
+    #[serde(default)]
+    expect_rows: Vec<Value>,
+    /// If set, asserts the number of lines in `content.lines` (for `SHOW LINES`).
+    #[serde(default)]
+    expect_line_count: Option<usize>,
+    /// Per-line field matchers for `SHOW LINES` responses (`content.lines`).
+    /// Line `i` must contain every field listed; unlisted fields are ignored.
+    #[serde(default)]
+    expect_lines: Vec<Value>,
+}
 
-// ── minimal MCP JSON-RPC client ─────────────────────────────────────────────
+// ── minimal MCP JSON-RPC client ──────────────────────────────────────────────
 
 struct McpClient {
     child: Child,
@@ -91,7 +161,7 @@ impl McpClient {
             &json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "zephyr_golden", "version": "1.0"},
+                "clientInfo": {"name": "golden_test", "version": "1.0"},
             }),
         )?;
         if init.get("error").is_some() {
@@ -164,9 +234,8 @@ impl McpClient {
             .pointer("/result/content")
             .and_then(Value::as_array)
             .ok_or_else(|| std::io::Error::other(format!("unexpected response shape: {resp}")))?;
-        // When the response contains a session hint (e.g. from USE), the hint
-        // is content[0] and the JSON body is the last item.  For plain queries
-        // there is only one item.  Always take the last text-type content.
+        // USE responses carry a session hint at content[0]; the JSON body is
+        // always the last content item.  For plain queries there is only one.
         let text = content
             .iter()
             .rev()
@@ -184,171 +253,194 @@ impl Drop for McpClient {
     }
 }
 
-// ── result extraction helpers ────────────────────────────────────────────────
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct Row {
-    name: String,
-    kind: String,
-    line: u64,
-    path: String,
-}
-
-fn extract_rows(payload: &Value, query: &str) -> Vec<Row> {
-    let results = payload
-        .get("results")
-        .and_then(Value::as_array)
-        .unwrap_or_else(|| panic!("missing 'results' array for [{query}]: {payload}"));
-    results
-        .iter()
-        .map(|r| Row {
-            name: r
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            kind: r
-                .get("kind")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            line: r.get("line").and_then(Value::as_u64).unwrap_or(0),
-            path: r
-                .get("path")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-        })
-        .collect()
-}
-
-fn total(payload: &Value) -> usize {
-    payload
-        .get("total")
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-        .try_into()
-        .unwrap_or(0)
-}
-
 // ── test ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn zephyr_golden_values() {
-    // ── Skip guard ───────────────────────────────────────────────────────────
+fn golden_values() {
+    // ── Skip guard ────────────────────────────────────────────────────────────
     let Ok(data_dir_str) = std::env::var("FORGEQL_DATA_DIR") else {
         eprintln!(
-            "[zephyr_golden] SKIP — FORGEQL_DATA_DIR not set.\n\
-             Set it to a ForgeQL data dir with 'zephyr-andre' registered:\n\
+            "[golden] SKIP — FORGEQL_DATA_DIR not set.\n\
+             Set it to a ForgeQL data dir with all required sources registered:\n\
              \n  FORGEQL_DATA_DIR=/path/to/data \
-             cargo test --package forgeql --test zephyr_golden"
+             cargo test --package forgeql --test zephyr_golden -- --nocapture"
         );
         return;
     };
     let data_dir = PathBuf::from(data_dir_str);
-    let source = std::env::var("GOLDEN_SOURCE").unwrap_or_else(|_| "zephyr-andre".into());
-    let branch = std::env::var("GOLDEN_BRANCH").unwrap_or_else(|_| "zephyr-main".into());
 
-    // ── Spawn MCP server ─────────────────────────────────────────────────────
+    // ── Load fixture ──────────────────────────────────────────────────────────
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("golden.json");
+    let fixture_str = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("[golden] cannot read {}: {e}", fixture_path.display()));
+    let entries: Vec<GoldenEntry> = serde_json::from_str(&fixture_str)
+        .unwrap_or_else(|e| panic!("[golden] cannot parse {}: {e}", fixture_path.display()));
+
+    // ── Spawn MCP server ──────────────────────────────────────────────────────
     let mut client = McpClient::spawn(&data_dir)
-        .unwrap_or_else(|e| panic!("[zephyr_golden] failed to spawn MCP server: {e}"));
+        .unwrap_or_else(|e| panic!("[golden] failed to spawn MCP server: {e}"));
 
-    // ── Open session ─────────────────────────────────────────────────────────
-    let use_fql = format!("USE {source}.{branch} AS '{GOLDEN_ALIAS}'");
-    let use_result = client.run_fql(None, &use_fql).unwrap_or_else(|e| {
-        panic!(
-            "[zephyr_golden] '{use_fql}' failed: {e}\n\
-                 Ensure '{source}' is registered in {}.",
-            data_dir.display()
-        )
-    });
+    let mut session_id: Option<String> = None;
+    let mut failures: Vec<String> = Vec::new();
+    let mut pass = 0usize;
 
-    eprintln!("[zephyr_golden] session open — source={source} branch={branch}");
+    // ── Run entries ───────────────────────────────────────────────────────────
+    for entry in &entries {
+        match entry {
+            // ── USE step ──────────────────────────────────────────────────────
+            GoldenEntry::Use(u) => {
+                let fql = format!("USE {} AS '{}'", u.use_str, u.alias);
+                let result = client.run_fql(None, &fql).unwrap_or_else(|e| {
+                    panic!(
+                        "[golden] '{fql}' failed: {e}\n\
+                         Ensure '{}' is registered in {}.",
+                        u.use_str,
+                        data_dir.display()
+                    )
+                });
+                session_id = Some(
+                    result
+                        .get("session_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&u.alias)
+                        .to_owned(),
+                );
+                eprintln!(
+                    "[golden] USE {} — sid={}",
+                    u.use_str,
+                    session_id.as_deref().unwrap_or("?")
+                );
+                if let Some(expected) = u.expect_symbols_indexed {
+                    let got = usize::try_from(
+                        result
+                            .get("symbols_indexed")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0),
+                    )
+                    .unwrap_or(0);
+                    if got == expected {
+                        eprintln!("[golden] USE {} symbols_indexed={got} ✓", u.use_str);
+                        pass += 1;
+                    } else {
+                        failures.push(format!(
+                            "USE {}: symbols_indexed expected {expected}, got {got}",
+                            u.use_str
+                        ));
+                    }
+                }
+            }
 
-    // ── G1: total symbol count ────────────────────────────────────────────────
-    // `symbols_indexed` is reported directly in the USE response payload.
-    let symbols_indexed = usize::try_from(
-        use_result
-            .get("symbols_indexed")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-    )
-    .unwrap_or(0);
-    assert_eq!(
-        symbols_indexed, GOLDEN_SYMBOLS_INDEXED,
-        "G1: expected {GOLDEN_SYMBOLS_INDEXED} symbols_indexed, got {symbols_indexed}"
+            // ── Query step ────────────────────────────────────────────────────
+            GoldenEntry::Query(q) => {
+                let result = client
+                    .run_fql(session_id.as_deref(), &q.fql)
+                    .unwrap_or_else(|e| panic!("[golden] '{}' run_fql failed: {e}", q.name));
+
+                let mut entry_failures: Vec<String> = Vec::new();
+
+                if let Some(expected_total) = q.expect_total {
+                    let got =
+                        usize::try_from(result.get("total").and_then(Value::as_u64).unwrap_or(0))
+                            .unwrap_or(0);
+                    if got != expected_total {
+                        entry_failures.push(format!("total: expected {expected_total}, got {got}"));
+                    }
+                }
+
+                // FIND symbols / globals → "results"
+                // FIND files            → "content/files"
+                let rows: &[Value] = result
+                    .get("results")
+                    .or_else(|| result.pointer("/content/files"))
+                    .and_then(Value::as_array)
+                    .map_or(&[], Vec::as_slice);
+
+                if let Some(expected_count) = q.expect_row_count
+                    && rows.len() != expected_count
+                {
+                    entry_failures.push(format!(
+                        "row_count: expected {expected_count}, got {}",
+                        rows.len()
+                    ));
+                }
+
+                for (i, expected_row) in q.expect_rows.iter().enumerate() {
+                    let Some(obj) = expected_row.as_object() else {
+                        continue;
+                    };
+                    let Some(actual_row) = rows.get(i) else {
+                        entry_failures.push(format!(
+                            "row[{i}] missing (only {} rows returned)",
+                            rows.len()
+                        ));
+                        continue;
+                    };
+                    for (field, expected_val) in obj {
+                        let actual_val = actual_row.get(field).unwrap_or(&Value::Null);
+                        if actual_val != expected_val {
+                            entry_failures.push(format!(
+                                "row[{i}].{field}: expected {expected_val}, got {actual_val}"
+                            ));
+                        }
+                    }
+                }
+
+                // ── SHOW LINES assertions ─────────────────────────────────
+                let lines: &[Value] = result
+                    .pointer("/content/lines")
+                    .and_then(Value::as_array)
+                    .map_or(&[], Vec::as_slice);
+
+                if let Some(expected_count) = q.expect_line_count
+                    && lines.len() != expected_count
+                {
+                    entry_failures.push(format!(
+                        "line_count: expected {expected_count}, got {}",
+                        lines.len()
+                    ));
+                }
+
+                for (i, expected_line) in q.expect_lines.iter().enumerate() {
+                    let Some(obj) = expected_line.as_object() else {
+                        continue;
+                    };
+                    let Some(actual_line) = lines.get(i) else {
+                        entry_failures.push(format!(
+                            "line[{i}] missing (only {} lines returned)",
+                            lines.len()
+                        ));
+                        continue;
+                    };
+                    for (field, expected_val) in obj {
+                        let actual_val = actual_line.get(field).unwrap_or(&Value::Null);
+                        if actual_val != expected_val {
+                            entry_failures.push(format!(
+                                "line[{i}].{field}: expected {expected_val}, got {actual_val}"
+                            ));
+                        }
+                    }
+                }
+
+                if entry_failures.is_empty() {
+                    eprintln!("[golden] PASS {}", q.name);
+                    pass += 1;
+                } else {
+                    for msg in &entry_failures {
+                        eprintln!("[golden] FAIL {} — {msg}", q.name);
+                        failures.push(format!("{}: {msg}", q.name));
+                    }
+                }
+            }
+        }
+    }
+
+    eprintln!("[golden] {pass} passed, {} failed", failures.len());
+    assert!(
+        failures.is_empty(),
+        "{} golden assertion(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n")
     );
-    eprintln!("[zephyr_golden] G1 PASS — symbols_indexed = {symbols_indexed}");
-
-    // Extract the opaque session_id token returned by USE (format: user:source:branch:alias).
-    let sid_owned = use_result
-        .get("session_id")
-        .and_then(Value::as_str)
-        .unwrap_or(GOLDEN_ALIAS)
-        .to_owned();
-    let sid = sid_owned.as_str();
-
-    // ── G2: first 5 functions in kernel/sched.c ordered by line ──────────────
-    //
-    // Frozen expected values (commit 2026-05-17):
-    //   thread_runq    line  51
-    //   curr_cpu_runq  line  71
-    //   runq_add       line  80
-    //   runq_remove    line  88
-    //   runq_yield     line  96
-    {
-        const Q: &str = "FIND symbols WHERE fql_kind = 'function' IN 'kernel/sched.c' ORDER BY line ASC LIMIT 5";
-        let payload = client
-            .run_fql(Some(sid), Q)
-            .unwrap_or_else(|e| panic!("G2: run_fql failed: {e}"));
-        let rows = extract_rows(&payload, Q);
-        assert_eq!(rows.len(), 5, "G2: expected 5 rows, got {}", rows.len());
-        assert_eq!(rows[0].name, "thread_runq", "G2[0].name");
-        assert_eq!(rows[0].line, 51, "G2[0].line");
-        assert_eq!(rows[1].name, "curr_cpu_runq", "G2[1].name");
-        assert_eq!(rows[1].line, 71, "G2[1].line");
-        assert_eq!(rows[2].name, "runq_add", "G2[2].name");
-        assert_eq!(rows[2].line, 80, "G2[2].line");
-        assert_eq!(rows[3].name, "runq_remove", "G2[3].name");
-        assert_eq!(rows[3].line, 88, "G2[3].line");
-        assert_eq!(rows[4].name, "runq_yield", "G2[4].name");
-        assert_eq!(rows[4].line, 96, "G2[4].line");
-        eprintln!("[zephyr_golden] G2 PASS — kernel/sched.c first 5 functions by line");
-    }
-
-    // ── G3: k_mutex_lock — exactly one result at the known declaration ────────
-    {
-        const Q: &str = "FIND symbols WHERE name = 'k_mutex_lock'";
-        let payload = client
-            .run_fql(Some(sid), Q)
-            .unwrap_or_else(|e| panic!("G3: run_fql failed: {e}"));
-        let t = total(&payload);
-        assert_eq!(t, 1, "G3: expected total=1, got {t}");
-        let rows = extract_rows(&payload, Q);
-        assert_eq!(rows.len(), 1, "G3: expected 1 row, got {}", rows.len());
-        assert_eq!(rows[0].name, "k_mutex_lock", "G3.name");
-        assert_eq!(rows[0].kind, "field", "G3.kind");
-        assert_eq!(rows[0].line, 3525, "G3.line");
-        assert_eq!(rows[0].path, "include/zephyr/kernel.h", "G3.path");
-        eprintln!("[zephyr_golden] G3 PASS — k_mutex_lock at include/zephyr/kernel.h:3525");
-    }
-
-    // ── G4: first function alphabetically ─────────────────────────────────────
-    {
-        const Q: &str = "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 1";
-        let payload = client
-            .run_fql(Some(sid), Q)
-            .unwrap_or_else(|e| panic!("G4: run_fql failed: {e}"));
-        let rows = extract_rows(&payload, Q);
-        assert_eq!(rows.len(), 1, "G4: expected 1 row, got {}", rows.len());
-        assert_eq!(rows[0].name, "AGC_IRQHandler", "G4.name");
-        assert_eq!(rows[0].line, 64, "G4.line");
-        assert_eq!(
-            rows[0].path, "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c",
-            "G4.path"
-        );
-        eprintln!("[zephyr_golden] G4 PASS — first function alphabetically = AGC_IRQHandler");
-    }
-
-    eprintln!("[zephyr_golden] ALL GOLDEN ASSERTIONS PASSED");
 }

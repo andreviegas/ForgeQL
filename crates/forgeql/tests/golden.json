@@ -1,0 +1,143 @@
+[
+  {
+    "use": "zephyr-andre.zephyr-main",
+    "alias": "golden",
+    "expect_symbols_indexed": 2720018
+  },
+  {
+    "name": "G2_kernel_sched_first_5_functions_by_line",
+    "fql": "FIND symbols WHERE fql_kind = 'function' IN 'kernel/sched.c' ORDER BY line ASC LIMIT 5",
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"name": "thread_runq",   "line": 51},
+      {"name": "curr_cpu_runq", "line": 71},
+      {"name": "runq_add",      "line": 80},
+      {"name": "runq_remove",   "line": 88},
+      {"name": "runq_yield",    "line": 96}
+    ]
+  },
+  {
+    "name": "G3_k_mutex_lock_exact_match",
+    "fql": "FIND symbols WHERE name = 'k_mutex_lock'",
+    "expect_total": 1,
+    "expect_rows": [
+      {"name": "k_mutex_lock", "kind": "field", "line": 3525, "path": "include/zephyr/kernel.h"}
+    ]
+  },
+  {
+    "name": "G4_first_function_alphabetically",
+    "fql": "FIND symbols WHERE fql_kind = 'function' IN 'modules/hal_silabs/**' ORDER BY name ASC LIMIT 1",
+    "expect_rows": [
+      {"name": "AGC_IRQHandler", "line": 64, "path": "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c"}
+    ]
+  },
+
+  {
+    "name": "G5_show_lines_plain",
+    "fql": "SHOW LINES 51-55 OF 'kernel/sched.c'",
+    "expect_line_count": 5,
+    "expect_lines": [
+      {"line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"},
+      {"line": 52, "text": "{"},
+      {"line": 53, "text": "#ifdef CONFIG_SCHED_CPU_MASK_PIN_ONLY"},
+      {"line": 54, "text": "\tint cpu, m = thread->base.cpu_mask;"},
+      {"line": 55, "text": ""}
+    ]
+  },
+  {
+    "name": "G6_show_lines_like_filter",
+    "fql": "SHOW LINES 51-75 OF 'kernel/sched.c' WHERE text LIKE '%runq%'",
+    "expect_line_count": 5,
+    "expect_lines": [
+      {"line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"},
+      {"line": 64, "text": "\treturn &_kernel.cpus[cpu].ready_q.runq;"},
+      {"line": 67, "text": "\treturn &_kernel.ready_q.runq;"},
+      {"line": 71, "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)"},
+      {"line": 74, "text": "\treturn &arch_curr_cpu()->ready_q.runq;"}
+    ]
+  },
+  {
+    "name": "G7_show_lines_matches_filter",
+    "fql": "SHOW LINES 51-75 OF 'kernel/sched.c' WHERE text MATCHES 'void \\*\\w+_runq'",
+    "expect_line_count": 2,
+    "expect_lines": [
+      {"line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"},
+      {"line": 71, "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)"}
+    ]
+  },
+
+  {
+    "name": "G8_top5_functions_by_param_count",
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE param_count >= 5 IN 'scripts/**' ORDER BY param_count DESC LIMIT 5",
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"name": "__init__",                      "line": 52,   "path": "scripts/west_commands/runners/openocd.py"},
+      {"name": "__init__",                      "line": 50,   "path": "scripts/west_commands/runners/jlink.py"},
+      {"name": "test_projectbuilder_process",   "line": 1463, "path": "scripts/tests/twister/test_runner.py"},
+      {"name": "__init__",                      "line": 23,   "path": "scripts/west_commands/runners/intel_cyclonev.py"},
+      {"name": "test_filterbuilder_parse_generated", "line": 640, "path": "scripts/tests/twister/test_runner.py"}
+    ]
+  },
+  {
+    "name": "G9_python_functions_alphabetical",
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' IN 'scripts/**' ORDER BY name ASC LIMIT 3",
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"name": "AddedProperty", "line": 70, "path": "scripts/release/list_devicetree_bindings_changes.py"},
+      {"name": "Board",         "line": 96, "path": "scripts/list_boards.py"},
+      {"name": "Changes",       "line": 49, "path": "scripts/release/list_devicetree_bindings_changes.py"}
+    ]
+  },
+  {
+    "name": "G10_z_impl_functions_alphabetical",
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES '^z_impl_' IN 'subsys/**' ORDER BY name ASC LIMIT 3",
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"name": "z_impl___ztest_set_test_phase",  "line": 1116, "path": "subsys/testsuite/ztest/src/ztest.c"},
+      {"name": "z_impl___ztest_set_test_result", "line": 1111, "path": "subsys/testsuite/ztest/src/ztest.c"},
+      {"name": "z_impl_llext_get_fn_table",      "line": 18,   "path": "subsys/llext/llext_handlers.c"}
+    ]
+  },
+
+  {
+    "name": "G11_group_by_kind_top3",
+    "fql": "FIND symbols GROUP BY fql_kind IN 'arch/arc/**' ORDER BY count DESC LIMIT 3",
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"kind": "variable",   "count": 808},
+      {"kind": "comment",    "count": 504},
+      {"kind": "macro_call", "count": 483}
+    ]
+  },
+  {
+    "name": "G12_group_by_kind_having_100",
+    "fql": "FIND symbols GROUP BY fql_kind IN 'arch/arc/**' HAVING count >= 100 ORDER BY count DESC",
+    "expect_row_count": 9,
+    "expect_rows": [
+      {"kind": "variable",   "count": 808},
+      {"kind": "comment",    "count": 504},
+      {"kind": "macro_call", "count": 483}
+    ]
+  },
+  {
+    "name": "G13_functions_group_by_file_top3",
+    "fql": "FIND symbols WHERE fql_kind = 'function' GROUP BY file IN 'subsys/**' ORDER BY count DESC LIMIT 3",
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"path": "subsys/net/ip/net_if.c",                      "count": 272},
+      {"path": "subsys/bluetooth/controller/hci/hci.c",       "count": 251},
+      {"path": "subsys/tracing/ctf/ctf_top.c",                "count": 245}
+    ]
+  },
+
+  {
+    "name": "G14_largest_c_files",
+    "fql": "FIND files WHERE extension = 'c' ORDER BY size DESC LIMIT 3",
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"path": "tests/bluetooth/controller/ctrl_isoal/src/sub_sets/isoal_test_rx.c"},
+      {"path": "subsys/bluetooth/controller/hci/hci.c"},
+      {"path": "tests/bluetooth/controller/ctrl_isoal/src/sub_sets/isoal_test_tx.c"}
+    ]
+  }
+]
