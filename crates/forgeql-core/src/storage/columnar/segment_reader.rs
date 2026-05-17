@@ -80,6 +80,12 @@ impl AsRef<[u8]> for MmapSlice {
     }
 }
 
+impl MmapSlice {
+    pub(crate) fn new(mmap: Arc<Mmap>, start: usize, end: usize) -> Self {
+        Self { mmap, start, end }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // StringPool — mmap-backed per-segment string intern table
 // ─────────────────────────────────────────────────────────────────────────────

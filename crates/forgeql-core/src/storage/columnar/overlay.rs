@@ -9,25 +9,41 @@
 //! Multiple sessions mmap the same file; the OS reference-counts physical
 //! pages so RSS does not multiply by session count.
 //!
-//! File format:
+//! # FQOV v3 file format
+//!
 //! ```text
-//! [0..4]   b"FQOV"           magic
-//! [4..8]   schema_version: u32 (little-endian)
-//! [8..16]  generation: u64 (little-endian)
-//! [16..24] payload_len: u64 (little-endian)
-//! [24..]   bincode-serialised OverlayPayload
+//! [0..4]           b"FQOV"            magic
+//! [4..8]           schema_version: u32 = 3 (little-endian)
+//! [8..16]          generation: u64 (little-endian)
+//! [16..20]         toc_count: u32 = 9
+//! [20..24]         _reserved: u32 = 0
+//! [24..24+9*64]    9 × 64-byte TocEntry records
+//! [600..]          blob data (absolute offsets from TocEntry)
 //! ```
+//!
+//! Named blobs (TOC order):
+//! 1. `row_table`       — `[RowPtr]` flat array (zero-copy via `cast_slice`)
+//! 2. `kind_strings`    — concatenated UTF-8 kind name bytes
+//! 3. `kind_index`      — `[KindEntry]` sorted by kind name (binary search)
+//! 4. `bitmap_data`     — all serialised `RoaringBitmap` bytes (kinds + trigrams)
+//! 5. `trigram_index`   — `[TrigramEntry]` sorted by trigram bytes
+//! 6. `name_fst`        — FST bytes for name → postings lookup
+//! 7. `name_postings`   — flat `[u32]` global row IDs
+//! 8. `segments`        — `[SegmentRecord]` fixed-size per-segment metadata
+//! 9. `segment_strings` — concatenated path + hex-id UTF-8 strings
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
-use bytemuck::cast_slice;
+use bytemuck::{Pod, Zeroable, cast_slice};
 use fst::Map as FstMap;
-use memmap2::MmapOptions;
+use memmap2::{Mmap, MmapOptions};
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
+
+use super::segment_reader::MmapSlice;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // On-disk constants
@@ -35,29 +51,114 @@ use serde::{Deserialize, Serialize};
 
 /// Magic bytes at the start of every overlay file.
 pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
+
 /// Current schema version.  Bump on any breaking format change.
 ///
 /// History:
-/// - **1**: initial overlay format (segments, global_row_table,
-///   kind_postings, name_fst_bytes, name_postings_bytes).
-/// - **2**: adds `name_trigram_postings` for fast `name LIKE`/`MATCHES`
-///   prefiltering.  Old (v1) overlay files are rebuilt on next `USE`.
-pub(crate) const SCHEMA_VERSION: u32 = 2;
-/// Number of bytes occupied by the fixed header before the bincode payload.
+/// - **1**: initial overlay format.
+/// - **2**: adds `name_trigram_postings`.
+/// - **3**: TOC-based mmap format; large blobs are zero-copy.
+pub(crate) const SCHEMA_VERSION: u32 = 3;
+
+/// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;
 
+/// Byte size of one TOC entry (matches FQSF `TOC_ENTRY_SIZE`).
+pub(crate) const TOC_ENTRY_SIZE: usize = 64;
+
+/// Max byte length of a blob name within a `TocEntry`.
+pub(crate) const TOC_ENTRY_NAME_LEN: usize = 56;
+
+/// Number of named blobs in an FQOV v3 file.
+pub(super) const TOC_COUNT: usize = 9;
+
+/// Total byte size of the header + TOC region (= 24 + 9 × 64 = 600).
+pub(super) const HEADER_V3_LEN: usize = HEADER_LEN + TOC_COUNT * TOC_ENTRY_SIZE;
+
 // ─────────────────────────────────────────────────────────────────────────────
-// On-disk data structures (bincode-serialised)
+// Fixed-size Pod types (all #[repr(C)], fields ordered to avoid gaps)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// One entry in the FQOV v3 TOC (64 bytes, matching FQSF layout).
+///
+/// Not derived as `Pod` because `[u8; 56]` conflicts with `object::pod::Pod`
+/// in the dependency graph.  Read/write is done field-by-field instead.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct TocEntry {
+    /// NUL-padded blob name (ASCII, ≤ `TOC_ENTRY_NAME_LEN` bytes used).
+    pub(crate) name: [u8; 56],
+    /// Absolute byte offset into the overlay file.
+    pub(crate) offset: u32,
+    /// Byte length of the blob.
+    pub(crate) len: u32,
+}
+
 /// Pointer from a global row ID into a specific segment.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+///
+/// `#[repr(C)]` + `bytemuck::Pod` enables zero-copy reads from the
+/// `row_table` blob via `cast_slice`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable, Serialize, Deserialize)]
 pub struct RowPtr {
     /// Index into the overlay's segment list.
     pub segment_idx: u32,
     /// Row index within that segment.
     pub local_row_idx: u32,
 }
+
+/// FQOV v3: one entry in the `kind_index` blob, sorted by kind name.
+///
+/// All fields are `u32` to avoid implicit padding.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub(super) struct KindEntry {
+    /// Byte offset into the `kind_strings` blob.
+    pub(super) kind_offset: u32,
+    /// Byte length of the kind name.
+    pub(super) kind_len: u32,
+    /// Byte offset into the `bitmap_data` blob.
+    pub(super) bitmap_offset: u32,
+    /// Byte length of the serialised `RoaringBitmap`.
+    pub(super) bitmap_len: u32,
+}
+
+/// FQOV v3: one entry in the `trigram_index` blob, sorted by trigram bytes.
+///
+/// `trigram[0..3]` holds the actual trigram; `trigram[3]` is reserved = 0
+/// (provides 4-byte alignment without an explicit pad field).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub(super) struct TrigramEntry {
+    /// Bytes 0–2: trigram; byte 3: reserved = 0.
+    pub(super) trigram: [u8; 4],
+    /// Byte offset into the `bitmap_data` blob.
+    pub(super) bitmap_offset: u32,
+    /// Byte length of the serialised `RoaringBitmap`.
+    pub(super) bitmap_len: u32,
+}
+
+/// FQOV v3: fixed-size metadata record for one segment in the `segments` blob.
+///
+/// Strings are resolved from `segment_strings` at open time.
+/// Fields ordered to pack two `u16`s at the end — 16 bytes total, no gaps.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub(super) struct SegmentRecord {
+    pub(super) row_count: u32,
+    /// Byte offset of the source-path string in `segment_strings`.
+    pub(super) path_offset: u32,
+    /// Byte offset of the hex content-ID string in `segment_strings`.
+    pub(super) hex_id_offset: u32,
+    /// Byte length of the source-path string.
+    pub(super) path_len: u16,
+    /// Byte length of the hex content-ID string (≤ 40 for SHA-1 hex).
+    pub(super) hex_id_len: u16,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Heap-allocated segment metadata (decoded at open time)
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Per-segment metadata stored in the overlay's segment table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,82 +167,91 @@ pub struct SegmentMeta {
     /// `segments/<provider_id>/`.
     pub hex_content_id: String,
     /// Source file path **relative to the worktree root**.
-    pub source_path: std::path::PathBuf,
+    pub source_path: PathBuf,
     /// Number of rows in this segment (== symbols in the source file).
     pub row_count: u32,
 }
 
-/// The bincode-serialised body written after the fixed header.
+// ─────────────────────────────────────────────────────────────────────────────
+// Dead code from v2 format (removed in the cleanup commit)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The bincode-serialised body of an FQOV **v2** overlay.
+///
+/// Retained as dead code until the cleanup commit removes it.
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize)]
 pub struct OverlayPayload {
-    /// Segments in stable sort order (by `hex_content_id`).
     pub segments: Vec<SegmentMeta>,
-    /// `global_row_id → (segment_idx, local_row_idx)`.
-    /// Indexed by global row ID (u32 index into this Vec).
     pub global_row_table: Vec<RowPtr>,
-    /// `fql_kind` string → serialised [`RoaringBitmap`] bytes covering
-    /// global row IDs with that kind.
-    pub kind_postings: HashMap<String, Vec<u8>>,
-    /// Raw FST bytes for name-to-global-row-id lookup.
-    /// The FST value encodes `(byte_offset_into_postings << 32) | count`.
+    pub kind_postings: std::collections::HashMap<String, Vec<u8>>,
     pub name_fst_bytes: Vec<u8>,
-    /// Flat array of u32 global row IDs; indexed by `(offset, count)` pairs
-    /// encoded in the name FST values.
     pub name_postings_bytes: Vec<u8>,
-    /// Trigram → serialised [`RoaringBitmap`] of global row IDs whose
-    /// **lower-cased** name contains that 3-byte window.  Used as a
-    /// candidate prefilter for `name LIKE 'pattern'` and `name MATCHES`
-    /// predicates — mirrors the legacy `TrigramIndex`.
     #[serde(default)]
-    pub name_trigram_postings: HashMap<[u8; 3], Vec<u8>>,
+    pub name_trigram_postings: std::collections::HashMap<[u8; 3], Vec<u8>>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Overlay reader
+// Overlay reader (v3 — mmap-backed, zero-copy for large blobs)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Workspace-level merged index shared across all [`ColumnarStorage`] instances
 /// on the same commit SHA.
+///
+/// All large blobs (`row_table`, `kind_index`, `trigram_index`, `bitmap_data`,
+/// `name_postings`) are accessed directly from the mmap — no heap copy at open
+/// time.  Kind and trigram bitmaps are decoded transiently per query; the OS
+/// page cache keeps hot pages resident.
 pub struct Overlay {
-    /// Ordered list of segments.
+    /// The memory-mapped overlay file (keeps all blob ranges alive).
+    mmap: Arc<Mmap>,
+    /// Segments decoded at open time (String/PathBuf are heap-allocated anyway).
     segments: Vec<SegmentMeta>,
-    /// `global_row_id → (segment_idx, local_row_idx)`.
-    global_row_table: Vec<RowPtr>,
-    /// Flat array of u32 global row IDs for name postings decode.
-    name_postings_bytes: Vec<u8>,
-    /// Decoded bitmaps for O(1) `fql_kind` prefilter.
-    kind_bitmaps: HashMap<String, RoaringBitmap>,
-    /// Decoded FST for name-to-global-row-id lookup.
-    name_fst: FstMap<Vec<u8>>,
-    /// Decoded trigram → row-id bitmaps for `name LIKE`/`MATCHES` prefilter.
-    trigram_bitmaps: HashMap<[u8; 3], RoaringBitmap>,
+    /// Total row count (= row_table blob size / sizeof(RowPtr)).
+    row_count: u32,
     generation: u64,
+
+    // Byte ranges within `mmap` for each zero-copy blob.
+    row_table_range: Range<usize>,
+    kind_strings_range: Range<usize>,
+    kind_index_range: Range<usize>,
+    bitmap_data_range: Range<usize>,
+    trigram_index_range: Range<usize>,
+    name_postings_range: Range<usize>,
+
+    /// Zero-copy FST backed by a slice of the mmap.
+    name_fst: FstMap<MmapSlice>,
 }
 
 impl Overlay {
-    /// Open an overlay file from disk and decode it into memory.
+    /// Open an FQOV v3 overlay file and memory-map it.
+    ///
+    /// Large blobs stay mmap-resident; segment metadata is decoded into a
+    /// heap-allocated `Vec<SegmentMeta>` at open time.
     ///
     /// # Errors
-    /// Returns `Err` if the file cannot be read, the magic/version is wrong,
-    /// the payload is truncated, or the bincode or FST data is corrupt.
+    /// Returns `Err` for missing/truncated files, wrong magic, unsupported
+    /// schema version, misaligned blobs, or a corrupt name FST.
     pub fn open(path: &Path) -> Result<Arc<Self>> {
         let file = std::fs::File::open(path)
             .with_context(|| format!("opening overlay {}", path.display()))?;
         #[allow(unsafe_code)] // read-only mmap of immutable overlay file
-        let data = unsafe { MmapOptions::new().map(&file) }
-            .with_context(|| format!("mmap overlay {}", path.display()))?;
+        let mmap: Arc<Mmap> = Arc::new(
+            unsafe { MmapOptions::new().map(&file) }
+                .with_context(|| format!("mmap overlay {}", path.display()))?,
+        );
         drop(file);
 
-        ensure!(data.len() >= HEADER_LEN, "overlay file too short");
+        ensure!(mmap.len() >= HEADER_LEN, "overlay file too short");
         ensure!(
-            data[..4] == MAGIC,
+            mmap[..4] == MAGIC,
             "invalid overlay magic in {}",
             path.display()
         );
 
-        #[allow(clippy::indexing_slicing)] // bounds checked by ensure! above
+        #[allow(clippy::indexing_slicing)]
         let schema_version =
-            u32::from_le_bytes(data[4..8].try_into().context("schema_version bytes")?);
+            u32::from_le_bytes(mmap[4..8].try_into().context("schema_version bytes")?);
         ensure!(
             schema_version == SCHEMA_VERSION,
             "overlay schema version mismatch in {}: expected {SCHEMA_VERSION}, got {schema_version}",
@@ -149,64 +259,166 @@ impl Overlay {
         );
 
         #[allow(clippy::indexing_slicing)]
-        let generation = u64::from_le_bytes(data[8..16].try_into().context("generation bytes")?);
+        let generation =
+            u64::from_le_bytes(mmap[8..16].try_into().context("generation bytes")?);
         #[allow(clippy::indexing_slicing)]
-        #[allow(clippy::cast_possible_truncation)]
-        let payload_len =
-            u64::from_le_bytes(data[16..24].try_into().context("payload_len bytes")?) as usize;
+        let toc_count =
+            u32::from_le_bytes(mmap[16..20].try_into().context("toc_count bytes")?) as usize;
 
+        let toc_end = HEADER_LEN + toc_count * TOC_ENTRY_SIZE;
         ensure!(
-            data.len() >= HEADER_LEN + payload_len,
-            "overlay file truncated: expected {} bytes, got {}",
-            HEADER_LEN + payload_len,
-            data.len()
+            mmap.len() >= toc_end,
+            "overlay TOC truncated: need {toc_end} bytes, file is {} bytes",
+            mmap.len()
         );
 
+        // Parse TOC entries field-by-field (TocEntry is not `Pod` due to the
+        // `[u8; 56]` field conflicting with `object::pod::Pod`).
+        let mut toc = Vec::with_capacity(toc_count);
+        for i in 0..toc_count {
+            let base = HEADER_LEN + i * TOC_ENTRY_SIZE;
+            ensure!(base + TOC_ENTRY_SIZE <= mmap.len(), "TOC entry {i} out of bounds");
+            #[allow(clippy::indexing_slicing)]
+            let entry_bytes = &mmap[base..base + TOC_ENTRY_SIZE];
+            let mut name = [0u8; TOC_ENTRY_NAME_LEN];
+            name.copy_from_slice(&entry_bytes[..TOC_ENTRY_NAME_LEN]);
+            let offset = u32::from_le_bytes(
+                entry_bytes[TOC_ENTRY_NAME_LEN..TOC_ENTRY_NAME_LEN + 4]
+                    .try_into()
+                    .context("TOC entry offset bytes")?,
+            );
+            let len = u32::from_le_bytes(
+                entry_bytes[TOC_ENTRY_NAME_LEN + 4..TOC_ENTRY_NAME_LEN + 8]
+                    .try_into()
+                    .context("TOC entry len bytes")?,
+            );
+            toc.push(TocEntry { name, offset, len });
+        }
+
+        // Helper: find a blob by NUL-terminated name, return its byte range.
+        let find_blob = |name: &[u8]| -> Result<Range<usize>> {
+            for entry in &toc {
+                let stored = entry
+                    .name
+                    .iter()
+                    .position(|&b| b == 0)
+                    .map_or(entry.name.as_ref(), |n| &entry.name[..n]);
+                if stored == name {
+                    let s = entry.offset as usize;
+                    return Ok(s..s + entry.len as usize);
+                }
+            }
+            anyhow::bail!(
+                "blob {:?} not found in overlay TOC",
+                std::str::from_utf8(name).unwrap_or("?")
+            )
+        };
+
+        let row_table_range = find_blob(b"row_table")?;
+        let kind_strings_range = find_blob(b"kind_strings")?;
+        let kind_index_range = find_blob(b"kind_index")?;
+        let bitmap_data_range = find_blob(b"bitmap_data")?;
+        let trigram_index_range = find_blob(b"trigram_index")?;
+        let name_fst_range = find_blob(b"name_fst")?;
+        let name_postings_range = find_blob(b"name_postings")?;
+        let segments_range = find_blob(b"segments")?;
+        let segment_strings_range = find_blob(b"segment_strings")?;
+
+        // Validate all blob ranges fit within the mmap.
+        let max_end = [
+            row_table_range.end,
+            kind_strings_range.end,
+            kind_index_range.end,
+            bitmap_data_range.end,
+            trigram_index_range.end,
+            name_fst_range.end,
+            name_postings_range.end,
+            segments_range.end,
+            segment_strings_range.end,
+        ]
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0);
+        ensure!(
+            mmap.len() >= max_end,
+            "overlay file truncated: need {max_end} bytes, got {}",
+            mmap.len()
+        );
+
+        // Validate blob alignment.
+        ensure!(
+            row_table_range.len() % std::mem::size_of::<RowPtr>() == 0,
+            "row_table blob size not a multiple of RowPtr size"
+        );
+        ensure!(
+            kind_index_range.len() % std::mem::size_of::<KindEntry>() == 0,
+            "kind_index blob size not a multiple of KindEntry size"
+        );
+        ensure!(
+            trigram_index_range.len() % std::mem::size_of::<TrigramEntry>() == 0,
+            "trigram_index blob size not a multiple of TrigramEntry size"
+        );
+        ensure!(
+            segments_range.len() % std::mem::size_of::<SegmentRecord>() == 0,
+            "segments blob size not a multiple of SegmentRecord size"
+        );
+
+        let row_count =
+            (row_table_range.len() / std::mem::size_of::<RowPtr>()) as u32;
+
+        // Decode segment metadata at open time.
         #[allow(clippy::indexing_slicing)]
-        let mut payload: OverlayPayload =
-            bincode::deserialize(&data[HEADER_LEN..HEADER_LEN + payload_len])
-                .context("deserialising overlay payload")?;
-        // mmap is no longer needed — bincode has copied all data to the heap.
-        drop(data);
-
-        // Decode kind bitmaps.
-        let mut kind_bitmaps = HashMap::with_capacity(payload.kind_postings.len());
-        for (kind, bytes) in &payload.kind_postings {
-            let bm = RoaringBitmap::deserialize_from(bytes.as_slice())
-                .with_context(|| format!("decoding kind bitmap for '{kind}'"))?;
-            let _ = kind_bitmaps.insert(kind.clone(), bm);
+        let seg_records: &[SegmentRecord] = cast_slice(&mmap[segments_range.clone()]);
+        #[allow(clippy::indexing_slicing)]
+        let seg_strings = &mmap[segment_strings_range.clone()];
+        let mut segments = Vec::with_capacity(seg_records.len());
+        for rec in seg_records {
+            let path_start = rec.path_offset as usize;
+            let path_end = path_start + rec.path_len as usize;
+            let hex_start = rec.hex_id_offset as usize;
+            let hex_end = hex_start + rec.hex_id_len as usize;
+            ensure!(
+                path_end <= seg_strings.len() && hex_end <= seg_strings.len(),
+                "segment string index out of bounds"
+            );
+            #[allow(clippy::indexing_slicing)]
+            let path_str = std::str::from_utf8(&seg_strings[path_start..path_end])
+                .context("segment source path not valid UTF-8")?;
+            #[allow(clippy::indexing_slicing)]
+            let hex_str = std::str::from_utf8(&seg_strings[hex_start..hex_end])
+                .context("segment hex_content_id not valid UTF-8")?;
+            segments.push(SegmentMeta {
+                hex_content_id: hex_str.to_owned(),
+                source_path: PathBuf::from(path_str),
+                row_count: rec.row_count,
+            });
         }
 
-        // Decode FST — move bytes to avoid a second heap copy (no .clone()).
-        let fst_bytes = std::mem::take(&mut payload.name_fst_bytes);
-        let name_fst = FstMap::new(fst_bytes).context("loading name FST from overlay")?;
-
-        // Decode trigram bitmaps (absent in v1 overlays — empty map is fine).
-        let mut trigram_bitmaps = HashMap::with_capacity(payload.name_trigram_postings.len());
-        for (trigram, bytes) in &payload.name_trigram_postings {
-            let bm = RoaringBitmap::deserialize_from(bytes.as_slice())
-                .with_context(|| format!("decoding trigram bitmap {trigram:?}"))?;
-            let _ = trigram_bitmaps.insert(*trigram, bm);
-        }
-
-        // Move the remaining live fields out of the payload before dropping it.
-        let segments = std::mem::take(&mut payload.segments);
-        let global_row_table = std::mem::take(&mut payload.global_row_table);
-        let name_postings_bytes = std::mem::take(&mut payload.name_postings_bytes);
+        // Build the zero-copy name FST backed by a mmap slice.
+        let name_fst = FstMap::new(MmapSlice::new(
+            Arc::clone(&mmap),
+            name_fst_range.start,
+            name_fst_range.end,
+        ))
+        .context("loading name FST from overlay")?;
 
         Ok(Arc::new(Self {
+            mmap,
             segments,
-            global_row_table,
-            name_postings_bytes,
-            kind_bitmaps,
-            name_fst,
-            trigram_bitmaps,
+            row_count,
             generation,
+            row_table_range,
+            kind_strings_range,
+            kind_index_range,
+            bitmap_data_range,
+            trigram_index_range,
+            name_postings_range,
+            name_fst,
         }))
     }
 
     /// Monotonic generation counter — bumped by every reindex.
-    /// Returns the overlay generation (reserved for Phase 07 staleness checks).
     #[allow(dead_code)]
     #[must_use]
     pub const fn generation(&self) -> u64 {
@@ -222,17 +434,45 @@ impl Overlay {
     /// Total number of rows across all segments.
     #[must_use]
     pub const fn row_count(&self) -> u32 {
-        #[allow(clippy::cast_possible_truncation)]
-        let len = self.global_row_table.len() as u32;
-        len
+        self.row_count
     }
 
-    /// Get the precomputed global-row-id bitmap for a given `fql_kind`.
+    /// Decode and return the global-row-id bitmap for a given `fql_kind`.
     ///
-    /// Returns `None` if the kind is not present in any segment.
+    /// Binary-searches the sorted `kind_index` blob and deserialises the
+    /// `RoaringBitmap` from `bitmap_data` on demand.
+    /// Returns `None` if the kind is absent from the overlay.
     #[must_use]
-    pub fn prefilter_kind(&self, kind: &str) -> Option<&RoaringBitmap> {
-        self.kind_bitmaps.get(kind)
+    pub fn prefilter_kind(&self, kind: &str) -> Option<RoaringBitmap> {
+        #[allow(clippy::indexing_slicing)]
+        let entries: &[KindEntry] = cast_slice(&self.mmap[self.kind_index_range.clone()]);
+        #[allow(clippy::indexing_slicing)]
+        let kind_strings = &self.mmap[self.kind_strings_range.clone()];
+        let kind_bytes = kind.as_bytes();
+
+        // Binary search: entries are sorted by kind string (established at build time).
+        let idx = entries.partition_point(|e| {
+            let s_start = e.kind_offset as usize;
+            let s_end = s_start + e.kind_len as usize;
+            #[allow(clippy::indexing_slicing)]
+            kind_strings.get(s_start..s_end).is_none_or(|s| s < kind_bytes)
+        });
+
+        let e = entries.get(idx)?;
+        let s_start = e.kind_offset as usize;
+        let s_end = s_start + e.kind_len as usize;
+        #[allow(clippy::indexing_slicing)]
+        let s = kind_strings.get(s_start..s_end)?;
+        if s != kind_bytes {
+            return None;
+        }
+
+        #[allow(clippy::indexing_slicing)]
+        let bitmap_data = &self.mmap[self.bitmap_data_range.clone()];
+        let bm_start = e.bitmap_offset as usize;
+        let bm_end = bm_start + e.bitmap_len as usize;
+        let bm_bytes = bitmap_data.get(bm_start..bm_end)?;
+        RoaringBitmap::deserialize_from(bm_bytes).ok()
     }
 
     /// Look up all global row IDs for a given symbol name (exact match).
@@ -246,29 +486,33 @@ impl Overlay {
 
     /// Trigram-based candidate prefilter for substring search over names.
     ///
-    /// Returns the intersection of the per-trigram global-row-id bitmaps
-    /// for every consecutive 3-byte window of `substr` (ASCII-lowercased).
+    /// Binary-searches the sorted `trigram_index` blob for each distinct
+    /// 3-byte window of `substr` (ASCII-lowercased) and intersects the
+    /// resulting bitmaps on demand.
     ///
     /// Returns:
-    /// - `None` when `substr` is shorter than 3 bytes — caller must fall
-    ///   back to a full scan (no prefilter possible).
-    /// - `Some(empty)` when at least one trigram is absent from the index
-    ///   (no row can match) **or** the trigram index is empty (v1 overlay
-    ///   lacking the section — caller should fall back rather than treat
-    ///   the empty result as authoritative).
-    /// - `Some(bitmap)` of candidate global row IDs whose name contains
-    ///   every trigram of `substr`.  Caller must still evaluate the full
-    ///   `LIKE`/`MATCHES` predicate to reject false positives.
+    /// - `None` when `substr` is shorter than 3 bytes (no prefilter possible).
+    /// - `None` when the trigram index is empty (no prefilter possible).
+    /// - `Some(empty)` when any trigram is absent (no row can match).
+    /// - `Some(bitmap)` of candidate global row IDs.
     #[must_use]
     pub fn name_substring_candidates(&self, substr: &str) -> Option<RoaringBitmap> {
         let bytes = substr.as_bytes();
         if bytes.len() < 3 {
             return None;
         }
-        if self.trigram_bitmaps.is_empty() {
-            // v1 overlay without trigram section — no prefilter possible.
+
+        #[allow(clippy::indexing_slicing)]
+        let entries: &[TrigramEntry] =
+            cast_slice(&self.mmap[self.trigram_index_range.clone()]);
+        if entries.is_empty() {
             return None;
         }
+
+        #[allow(clippy::indexing_slicing)]
+        let bitmap_data = &self.mmap[self.bitmap_data_range.clone()];
+
+        // Collect unique trigrams (ASCII-lowercased).
         let mut trigrams: Vec<[u8; 3]> = Vec::new();
         for w in bytes.windows(3) {
             let t = [
@@ -280,17 +524,37 @@ impl Overlay {
                 trigrams.push(t);
             }
         }
-        let mut bitmaps: Vec<&RoaringBitmap> = Vec::with_capacity(trigrams.len());
+
+        // Decode bitmaps for each trigram via binary search.
+        let mut bitmaps: Vec<RoaringBitmap> = Vec::with_capacity(trigrams.len());
         for t in &trigrams {
-            match self.trigram_bitmaps.get(t) {
-                Some(bm) => bitmaps.push(bm),
-                None => return Some(RoaringBitmap::new()),
+            let idx = entries.partition_point(|e| &e.trigram[..3] < t.as_ref());
+            // An out-of-bounds index means the trigram is larger than every
+            // stored entry — it is absent.  A mismatch at idx also means absent.
+            // Either way, no row can possibly match.
+            let Some(e) = entries.get(idx) else {
+                return Some(RoaringBitmap::new());
+            };
+            if e.trigram[..3] != *t {
+                // Trigram absent — no row can match.
+                return Some(RoaringBitmap::new());
             }
+            let bm_start = e.bitmap_offset as usize;
+            let bm_end = bm_start + e.bitmap_len as usize;
+            let bm_bytes = bitmap_data.get(bm_start..bm_end)?;
+            let bm = RoaringBitmap::deserialize_from(bm_bytes).ok()?;
+            bitmaps.push(bm);
         }
-        bitmaps.sort_unstable_by_key(|bm| bm.len());
-        let mut result = bitmaps[0].clone();
-        for bm in &bitmaps[1..] {
-            result &= *bm;
+
+        if bitmaps.is_empty() {
+            return None;
+        }
+
+        // Intersect in ascending cardinality order for fastest convergence.
+        bitmaps.sort_unstable_by_key(RoaringBitmap::len);
+        let mut result = bitmaps.remove(0);
+        for bm in bitmaps {
+            result &= bm;
             if result.is_empty() {
                 break;
             }
@@ -300,11 +564,12 @@ impl Overlay {
 
     /// Resolve a global row ID to a `RowPtr`.
     ///
-    /// Returns `None` if `global_id` is out of range (should not happen
-    /// with a valid overlay, but is checked defensively).
+    /// Returns `None` if `global_id` is out of range (defensive check).
     #[must_use]
     pub fn resolve_global(&self, global_id: u32) -> Option<RowPtr> {
-        self.global_row_table.get(global_id as usize).copied()
+        #[allow(clippy::indexing_slicing)]
+        let row_ptrs: &[RowPtr] = cast_slice(&self.mmap[self.row_table_range.clone()]);
+        row_ptrs.get(global_id as usize).copied()
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -316,12 +581,13 @@ impl Overlay {
         let count = (encoded & 0xFFFF_FFFF) as usize;
         #[allow(clippy::cast_possible_truncation)]
         let byte_offset = ((encoded >> 32) & 0xFFFF_FFFF) as usize;
-        let postings = &self.name_postings_bytes;
+        #[allow(clippy::indexing_slicing)]
+        let postings = &self.mmap[self.name_postings_range.clone()];
         let end = byte_offset + count * 4;
         if end > postings.len() {
             return RoaringBitmap::new();
         }
-        #[allow(clippy::indexing_slicing)] // bounds checked above
+        #[allow(clippy::indexing_slicing)]
         cast_slice::<u8, u32>(&postings[byte_offset..end])
             .iter()
             .copied()
@@ -336,12 +602,43 @@ impl Overlay {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::collections::HashMap;
+    use std::io::{BufWriter, Write};
+
+    use roaring::RoaringBitmap;
+
     use super::*;
+    use crate::storage::columnar::overlay_writer::write_v3;
+
+    /// Build a minimal FQOV v3 overlay in a tempfile.
+    ///
+    /// Only `trigram_postings` and `row_count` are populated; all other blobs
+    /// are empty or trivially valid.
+    fn make_test_overlay(
+        trigram_postings: HashMap<[u8; 3], Vec<u8>>,
+        row_count: u32,
+    ) -> tempfile::NamedTempFile {
+        let empty_fst = fst::MapBuilder::memory()
+            .into_inner()
+            .expect("empty FST bytes");
+        let row_table: Vec<RowPtr> = (0..row_count)
+            .map(|i| RowPtr { segment_idx: 0, local_row_idx: i })
+            .collect();
+
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        {
+            let mut f = BufWriter::new(tmp.as_file());
+            write_v3(&mut f, 1, &row_table, &HashMap::new(), &trigram_postings, &empty_fst, &[], &[])
+                .expect("write_v3");
+            f.flush().expect("flush");
+        }
+        tmp
+    }
 
     /// Attempting to open a non-existent file returns an error (not a panic).
     #[test]
     fn open_missing_file_returns_err() {
-        let result = Overlay::open(std::path::Path::new("/nonexistent/overlay.bin"));
+        let result = Overlay::open(Path::new("/nonexistent/overlay.bin"));
         assert!(result.is_err(), "expected Err for missing file");
     }
 
@@ -349,7 +646,6 @@ mod tests {
     #[test]
     fn open_wrong_magic_returns_err() {
         let tmp = tempfile::NamedTempFile::new().expect("tempfile");
-        // Write a header with wrong magic.
         let mut data = vec![0u8; HEADER_LEN];
         data[..4].copy_from_slice(b"XXXX");
         std::fs::write(tmp.path(), &data).expect("write");
@@ -362,66 +658,53 @@ mod tests {
         }
     }
 
-    /// `name_substring_candidates` returns `None` for sub-trigram queries.
+    /// `name_substring_candidates` returns `None` for sub-trigram inputs.
     #[test]
     fn substring_candidates_none_for_short_input() {
-        let overlay = Overlay {
-            segments: Vec::new(),
-            global_row_table: Vec::new(),
-            name_postings_bytes: Vec::new(),
-            kind_bitmaps: HashMap::new(),
-            name_fst: FstMap::default(),
-            trigram_bitmaps: {
-                // Non-empty so we exercise the length check, not the v1 fallback.
-                let mut m = HashMap::new();
-                let _ = m.insert(*b"abc", RoaringBitmap::new());
-                m
-            },
-            generation: 1,
-        };
+        // Non-empty trigram index so we reach the length check.
+        let mut trig = HashMap::new();
+        let bm: RoaringBitmap = [0u32].iter().copied().collect();
+        let mut bm_bytes = Vec::new();
+        bm.serialize_into(&mut bm_bytes).unwrap();
+        trig.insert(*b"abc", bm_bytes);
+
+        let tmp = make_test_overlay(trig, 1);
+        let overlay = Overlay::open(tmp.path()).expect("open");
+
         assert!(overlay.name_substring_candidates("ab").is_none());
         assert!(overlay.name_substring_candidates("").is_none());
     }
 
-    /// `name_substring_candidates` intersects per-trigram bitmaps and
-    /// short-circuits to an empty bitmap when a trigram is missing.
+    /// `name_substring_candidates` intersects per-trigram bitmaps correctly
+    /// and short-circuits to `Some(empty)` when a trigram is absent.
     #[test]
     fn substring_candidates_intersects_and_misses() {
-        let mut bm_alp = RoaringBitmap::new();
-        let _ = bm_alp.insert(0); // alpha
-        let _ = bm_alp.insert(2); // alphabet
-        let mut bm_lph = RoaringBitmap::new();
-        let _ = bm_lph.insert(0);
-        let _ = bm_lph.insert(2);
-        let mut bm_pha = RoaringBitmap::new();
-        let _ = bm_pha.insert(0);
-        let _ = bm_pha.insert(2);
-        let mut trigram_bitmaps = HashMap::new();
-        let _ = trigram_bitmaps.insert(*b"alp", bm_alp);
-        let _ = trigram_bitmaps.insert(*b"lph", bm_lph);
-        let _ = trigram_bitmaps.insert(*b"pha", bm_pha);
+        let rows: RoaringBitmap = [0u32, 2].iter().copied().collect();
+        let mut trig = HashMap::new();
+        for t in [*b"alp", *b"lph", *b"pha"] {
+            let mut bytes = Vec::new();
+            rows.serialize_into(&mut bytes).unwrap();
+            trig.insert(t, bytes);
+        }
 
-        let overlay = Overlay {
-            segments: Vec::new(),
-            global_row_table: Vec::new(),
-            name_postings_bytes: Vec::new(),
-            kind_bitmaps: HashMap::new(),
-            name_fst: FstMap::default(),
-            trigram_bitmaps,
-            generation: 1,
-        };
+        let tmp = make_test_overlay(trig, 3);
+        let overlay = Overlay::open(tmp.path()).expect("open");
 
-        // "alp" hits a single trigram with rows {0, 2}.
+        // Single trigram "alp" → {0, 2}.
         let got = overlay.name_substring_candidates("alp").expect("some");
-        assert_eq!(got.iter().collect::<Vec<_>>(), vec![0, 2]);
+        assert_eq!(got.iter().collect::<Vec<_>>(), vec![0u32, 2]);
+
         // "alpha" trigrams: alp, lph, pha — all present, intersection {0, 2}.
         let got = overlay.name_substring_candidates("alpha").expect("some");
-        assert_eq!(got.iter().collect::<Vec<_>>(), vec![0, 2]);
+        assert_eq!(got.iter().collect::<Vec<_>>(), vec![0u32, 2]);
+
         // ASCII case-insensitivity.
         let got = overlay.name_substring_candidates("ALP").expect("some");
-        assert_eq!(got.iter().collect::<Vec<_>>(), vec![0, 2]);
-        // Missing trigram \u2192 Some(empty).
+        assert_eq!(got.iter().collect::<Vec<_>>(), vec![0u32, 2]);
+
+        // Missing trigram → Some(empty).
         let got = overlay.name_substring_candidates("zzz").expect("some");
         assert!(got.is_empty());
     }
 }
+

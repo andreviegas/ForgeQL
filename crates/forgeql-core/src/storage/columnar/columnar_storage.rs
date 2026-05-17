@@ -134,7 +134,6 @@ impl ColumnarStorage {
                     Some(
                         self.overlay
                             .prefilter_kind(val)
-                            .cloned()
                             .unwrap_or_default(),
                     )
                 }

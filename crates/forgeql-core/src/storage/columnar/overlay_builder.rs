@@ -28,7 +28,8 @@ use roaring::RoaringBitmap;
 use tracing::{debug, info, warn};
 
 use super::bytes_to_hex;
-use super::overlay::{HEADER_LEN, MAGIC, OverlayPayload, RowPtr, SCHEMA_VERSION, SegmentMeta};
+use super::overlay::{RowPtr, SegmentMeta};
+use super::overlay_writer;
 use super::segment_reader::SegmentReader;
 
 /// Builds a workspace overlay from a set of per-file segments.
@@ -279,34 +280,7 @@ impl OverlayBuilder {
             })
             .collect();
 
-        // 8. Serialise payload.
-        let t_step = std::time::Instant::now();
-        let payload = OverlayPayload {
-            segments: segment_metas,
-            global_row_table,
-            kind_postings,
-            name_fst_bytes,
-            name_postings_bytes,
-            name_trigram_postings,
-        };
-        let payload_bytes = bincode::serialize(&payload).context("serialising overlay payload")?;
-        info!(
-            ms = t_step.elapsed().as_millis(),
-            bytes = payload_bytes.len(),
-            "TIMING step7-8: build metas + serialize payload"
-        );
-
-        // 9. Build fixed 24-byte header.
-        let mut header = Vec::with_capacity(HEADER_LEN);
-        header.extend_from_slice(&MAGIC);
-        header.extend_from_slice(&SCHEMA_VERSION.to_le_bytes());
-        let generation: u64 = 1;
-        header.extend_from_slice(&generation.to_le_bytes());
-        #[allow(clippy::cast_possible_truncation)]
-        header.extend_from_slice(&(payload_bytes.len() as u64).to_le_bytes());
-        debug_assert_eq!(header.len(), HEADER_LEN, "header length invariant");
-
-        // 10. Atomic write: temp file → fsync → rename.
+        // 8. Write the FQOV v3 overlay atomically (temp file → fsync → rename).
         let t_step = std::time::Instant::now();
         if let Some(parent) = overlay_path.parent() {
             std::fs::create_dir_all(parent)
@@ -319,11 +293,23 @@ impl OverlayBuilder {
         .context("creating temp overlay file")?;
 
         {
-            let mut f = tmp.as_file();
-            f.write_all(&header).context("writing overlay header")?;
-            f.write_all(&payload_bytes)
-                .context("writing overlay payload")?;
-            f.sync_all().context("fsyncing overlay file")?;
+            let mut f = std::io::BufWriter::new(tmp.as_file());
+            let generation: u64 = 1;
+            overlay_writer::write_v3(
+                &mut f,
+                generation,
+                &global_row_table,
+                &kind_postings,
+                &name_trigram_postings,
+                &name_fst_bytes,
+                &name_postings_bytes,
+                &segment_metas,
+            )
+            .context("writing v3 overlay")?;
+            f.flush().context("flushing overlay buffer")?;
+            tmp.as_file()
+                .sync_all()
+                .context("fsyncing overlay file")?;
         }
 
         let _ = tmp
@@ -331,7 +317,7 @@ impl OverlayBuilder {
             .with_context(|| format!("persisting overlay to {}", overlay_path.display()))?;
         info!(
             ms = t_step.elapsed().as_millis(),
-            "TIMING step10: atomic write (fsync + rename)"
+            "TIMING step8: write v3 overlay (atomic)"
         );
 
         info!(
