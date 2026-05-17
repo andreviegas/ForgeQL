@@ -30,3 +30,4 @@ tests/fixtures/**/.forgeql-session
 tests/fixtures/**/.forgeql-staging/
 tests/fixtures/**/.forgeql-columnar-delta
 tests/fixtures/**/.forgeql-checkpoints
+.continue/
