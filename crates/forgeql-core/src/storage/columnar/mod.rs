@@ -77,6 +77,9 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///   6 — columnar overlay split into per-blob `.bin` files (v0.49.4)
 ///   7 — `is_magic` semantics fixed; numbers in string literals excluded (v0.50.2)
 ///   8 — FQOV v3: TOC-based binary overlay replaces bincode serialization (v0.50.11)
+///   9 — `POSTING_ENRICHMENT_FIELDS` expansion: string-enum and boolean enrichment
+///       fields now stored as per-field posting blobs in segments, enabling fast
+///       WHERE/ORDER BY without full row materialization (v0.50.12)
 pub const ENRICH_VER: u32 = 9;
 
 /// Encode a byte slice as a lowercase hex string.

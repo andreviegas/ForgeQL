@@ -403,6 +403,20 @@ impl ColumnarStorage {
             // apply_clauses works against the same relative paths that the
             // legacy backend stores.  Do NOT join with worktree_root here.
             let mut seg_results = seg.materialize_rows(&narrowed, Some(&seg_meta.source_path));
+            // Apply WHERE predicates per-segment before counting toward the
+            // fetch cap.  This filters both enrichment-posting false positives
+            // (segments without a posting blob pass ALL rows through
+            // `prefilter_enrichment_postings`) and trigram false positives
+            // (e.g. `name LIKE 'alloc%'` matches names containing "alloc" but
+            // not necessarily starting with it).  Without this pre-filter,
+            // the cap is exhausted by non-matching rows and `apply_clauses`
+            // then returns fewer results than LIMIT requested.
+            if fetch_cap.is_some() {
+                for predicate in &clauses.where_predicates {
+                    let pred = predicate.clone();
+                    seg_results.retain(|item| eval_predicate(item, &pred));
+                }
+            }
             // Trim within this segment to avoid overshooting the fetch budget.
             if let Some(cap) = fetch_cap {
                 let remaining = cap.saturating_sub(results.len());

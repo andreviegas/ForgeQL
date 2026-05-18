@@ -6,6 +6,31 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.50.13] — 2026-05-18 — Bug fix: LIMIT with enrichment/LIKE queries returned 0
+
+### Fixed
+
+- **`FIND … WHERE <enrichment> = '…' LIMIT N` returned 0 results** (`columnar_storage.rs`) —
+  `materialize_all` applied a `fetch_cap = LIMIT+1` early-exit that counted raw
+  materialized rows *before* `apply_clauses` ran.  Two scenarios triggered this:
+
+  1. **Enrichment-only predicates** — segments without a posting blob for the
+     queried field (e.g. `postings_is_recursive`) let ALL their rows pass
+     through `prefilter_enrichment_postings`.  Those rows filled the cap
+     immediately; `apply_clauses` then filtered them all away → 0 results even
+     though matching rows existed in later segments.
+
+  2. **`name LIKE` / `name MATCHES` with trigram false positives** — the trigram
+     prefilter returns every row whose name *contains* the literal (e.g.
+     `"alloc"` matches `memalloc_*` names), not just rows that satisfy the full
+     LIKE pattern.  False positives from the first alphabetical segment exhausted
+     the budget before genuine matches were reached.
+
+  Fixed by applying the WHERE predicate filter *inside* the segment loop, before
+  truncating to the remaining capacity.  The cap now counts only rows that
+  actually pass the WHERE predicates, so `LIMIT N` reliably returns up to N
+  matching results regardless of segment order.
+
 ## [0.50.12] — 2026-05-17 — Bug fixes: CSV enrichment string output and SHOW body line clipping
 
 ### Fixed
