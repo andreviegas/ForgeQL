@@ -29,7 +29,7 @@ use crate::ast::index::IndexStats;
 use crate::ast::index::{SymbolTable, index_file};
 use crate::ast::lang::LanguageRegistry;
 use crate::ast::query::glob_matches;
-use crate::filter::{apply_clauses, eval_predicate};
+use crate::filter::{TOPK_THRESHOLD, apply_clauses, collect_top_k, eval_predicate, order_cmp};
 use crate::ir::{Clauses, CompareOp, PredicateValue};
 use crate::result::SymbolMatch;
 use crate::workspace::Workspace;
@@ -47,6 +47,13 @@ use crate::storage::{LegacyMemoryStorage, StorageEngine, SymbolLocation};
 // ─────────────────────────────────────────────────────────────────────────────
 // ColumnarStorage
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Over-fetch factor for the running top-K trim in [`materialize_all`].
+///
+/// We keep `K * TOPK_OVER_FETCH` rows in the working set before each trim so
+/// that the subsequent deduplication and `apply_clauses` passes never lose a
+/// row that would otherwise appear in the final top-K result.
+const TOPK_OVER_FETCH: usize = 4;
 
 /// Disk-backed columnar [`StorageEngine`] backed by per-file segment readers
 /// and a workspace-level overlay index.
@@ -373,6 +380,26 @@ impl ColumnarStorage {
             None
         };
 
+        // Top-K running trim (Phase 8): when ORDER BY is set, LIMIT is small,
+        // and GROUP BY is absent, periodically discard accumulated rows that
+        // cannot possibly make the final top-K.  This bounds peak result memory
+        // to O(K * TOPK_OVER_FETCH) instead of O(total_matching_rows).
+        //
+        // We trim whenever the working set exceeds K * TOPK_OVER_FETCH rows,
+        // keeping K * TOPK_OVER_FETCH / 2 survivors.  The over-fetch factor of
+        // 4 means we retain 4× the requested LIMIT throughout the scan so that
+        // later deduplication + apply_clauses passes never drop a row that would
+        // otherwise belong in the final top-K.
+        let topk_trim: Option<usize> = if clauses.order_by.is_some()
+            && clauses.group_by.is_none()
+            && clauses.offset.unwrap_or(0) == 0
+            && clauses.limit.is_some_and(|k| k <= TOPK_THRESHOLD)
+        {
+            clauses.limit
+        } else {
+            None
+        };
+
         let mut results = Vec::new();
         for seg_idx in seg_order {
             // Early-exit: checked before opening the segment file so that we
@@ -411,7 +438,7 @@ impl ColumnarStorage {
             // not necessarily starting with it).  Without this pre-filter,
             // the cap is exhausted by non-matching rows and `apply_clauses`
             // then returns fewer results than LIMIT requested.
-            if fetch_cap.is_some() {
+            if fetch_cap.is_some() || topk_trim.is_some() {
                 for predicate in &clauses.where_predicates {
                     let pred = predicate.clone();
                     seg_results.retain(|item| eval_predicate(item, &pred));
@@ -423,6 +450,18 @@ impl ColumnarStorage {
                 seg_results.truncate(remaining);
             }
             results.append(&mut seg_results);
+
+            // Running top-K trim: shed rows that cannot make the final top-K.
+            // Fires whenever the working set exceeds K * TOPK_OVER_FETCH.
+            if let Some(k) = topk_trim {
+                let trim_at = k.saturating_mul(TOPK_OVER_FETCH);
+                if results.len() > trim_at {
+                    let keep = k.saturating_mul(TOPK_OVER_FETCH / 2).max(k);
+                    results = collect_top_k(std::mem::take(&mut results), keep, |a, b| {
+                        order_cmp(a, b, clauses)
+                    });
+                }
+            }
         }
         results
     }
