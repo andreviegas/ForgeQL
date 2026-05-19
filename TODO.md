@@ -61,29 +61,41 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
 ### Phase 0 — `GROUP BY file` fast-path (no format change)
 
 - [ ] Add `fn group_by_file_fast_path(clauses: &Clauses) -> bool` — returns `true` when
-  `group_by == Some(GroupBy::File)`, no WHERE predicates, no HAVING
-  (`columnar_storage.rs`)
+  `matches!(&clauses.group_by, Some(GroupBy::Field(f)) if f == "file")`, no WHERE
+  predicates, `having_predicates.is_empty()` (note: `GroupBy` has no `File` variant and no
+  `PartialEq`; use `matches!` throughout) (`columnar_storage.rs`)
 - [ ] In `find_symbols`, when the fast-path fires, iterate `overlay.segments()`, skip entries
-  that don't pass `passes_resolve_glob`, build one `SymbolMatch { path, count: row_count }`
-  per segment, call `apply_clauses`, return early — zero segment files opened
+  that don't pass `passes_resolve_glob`, build one `SymbolMatch` with all fields spelled out
+  (no `..Default::default()` — `SymbolMatch` does not derive `Default`) with `path` and
+  `count: Some(seg.row_count as usize)`. Call `apply_clauses` with a **modified clone** of
+  `clauses` where `group_by = None` to preserve ORDER BY/HAVING/LIMIT/OFFSET without
+  re-counting the pre-populated `count` values. Return early — zero segment files opened
   (`columnar_storage.rs`)
 - [ ] Integration test: `FIND symbols GROUP BY file ORDER BY count DESC LIMIT 5` against
   frozen zephyr — assert ≤ 5 rows, each `count > 0`, wall time < 100 ms
 
 ### Phase 1 — `ORDER BY name LIMIT N` fast-path (no format change)
 
-- [ ] Add `fn order_by_name_fast_path(clauses: &Clauses) -> bool` — `order_by == Name`,
-  `limit` is `Some`, no GROUP BY, no WHERE predicates (`columnar_storage.rs`)
-- [ ] Extend `SegmentReader` with `fn materialize_one_row(&self, local_row_idx: u32, source_path: &Path) -> Option<SymbolMatch>` if not already present (`segment_reader.rs`)
+- [ ] Add `fn order_by_name_fast_path(clauses: &Clauses) -> bool` —
+  `clauses.order_by.as_ref().map(|o| o.field.as_str()) == Some("name")` (ASC),
+  `limit` is `Some`, no GROUP BY, no WHERE predicates (note: `OrderBy` is a struct
+  `{ field, direction }`, not an enum — `order_by == OrderBy::Name` will not compile)
+  (`columnar_storage.rs`)
+- [ ] Add `fn materialize_one_row(&self, local_row_idx: u32, source_path: &Path) -> Option<SymbolMatch>`
+  to `SegmentReader` — this method does **not** currently exist; the only API is
+  `materialize_rows(&bitmap, source_path)` (`segment_reader.rs`)
 - [ ] Add `fn stream_names_asc(&self, offset: usize, limit: usize) -> Vec<SymbolMatch>`:
   walk `overlay.name_fst.stream()`, skip `offset` entries, decode `name_postings`,
-  resolve `row_table[id]` → `RowPtr`, call `materialize_one_row`, stop after `limit` rows
-  (`columnar_storage.rs`)
+  resolve `row_table[id]` → `RowPtr`, call `materialize_one_row`, stop after `limit` rows.
+  Note: `Overlay::decode_postings` is currently private (`fn`, not `pub(crate)`); make it
+  `pub(crate)` or move `stream_names_asc` onto `Overlay` (`columnar_storage.rs`, `overlay.rs`)
 - [ ] In `find_symbols`, when the fast-path fires, call `stream_names_asc` and return early
   (`columnar_storage.rs`)
 - [ ] Integration test: `FIND symbols ORDER BY name LIMIT 10` — assert names are in ascending
   lexicographic order, wall time < 100 ms on zephyr
-- [ ] Integration test: `FIND symbols ORDER BY name DESC LIMIT 10` once DESC variant is done
+- [ ] Integration test: `FIND symbols ORDER BY name DESC LIMIT 10` once DESC variant is
+  implemented (DESC requires collect-then-reverse, not FST tail streaming — the `fst` crate
+  only iterates ascending; defer or bound separately)
 
 ### Phase 2 — Sort segments by path at build time (FQOV v4)
 
@@ -94,14 +106,16 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
 - [ ] Bump `SCHEMA_VERSION` from 3 to 4; add version history entry in the comment
   (`overlay.rs`)
 - [ ] Confirm the version-rejection path in `Overlay::open` returns an error (not a panic)
-  for unknown versions so old v3 overlays trigger a clean rebuild (`overlay.rs`)
+  for unknown versions — already uses `ensure!` (returns `Err`); this task is a verification
+  step. Note: the v3→v4 bump is atomic, so no silent-corruption window exists (`overlay.rs`)
 - [ ] Test: open a freshly built overlay, read `overlay.segments()`, assert paths are in
   non-decreasing lexicographic order
 
 ### Phase 3 — Compute `segment_offsets` at open time (no format change)
 
-- [ ] Add `segment_offsets: Vec<u32>` field to `Overlay` (N_segments + 1 entries, sentinel
-  at end = total row count) (`overlay.rs`)
+- [ ] Add `segment_offsets: Vec<u32>` field to `Overlay` (`segments.len() + 1` entries;
+  sentinel at index `segments.len()` = total row count); populate with `checked_add` to
+  guard against u32 overflow (`overlay.rs`)
 - [ ] Populate `segment_offsets` in `Overlay::open` as prefix sum of `SegmentRecord.row_count`
   immediately after decoding the `segments` blob (`overlay.rs`)
 - [ ] Add `pub fn segment_row_range(&self, seg_idx: usize) -> Range<u32>` on `Overlay`
@@ -112,17 +126,22 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
 ### Phase 4 — Add `path_fst` blob (FQOV v4 extended)
 
 - [ ] Add `BLOB_PATH_FST: &[u8] = b"path_fst"` constant; increment `TOC_COUNT` from 9 to 10;
-  update `HEADER_V3_LEN` (`overlay.rs`, `overlay_writer.rs`)
+  update `HEADER_V3_LEN` constant. **This is not a two-line edit** — `find_blob_ranges`
+  returns `[Range<usize>; 9]`, the destructuring in `Overlay::open` has 9 bindings, and
+  `validate_blob_layout` takes `&[Range<usize>; 9]`; all must change together
+  (`overlay.rs`, `overlay_writer.rs`)
 - [ ] Add `path_fst: Option<FstMap<MmapSlice>>` field to `Overlay`; decode in `Overlay::open`
-  when the blob is present, skip gracefully when absent (`overlay.rs`)
+  when the blob is present (v4 always has it; old v3 overlays are rejected by version gate
+  before this point) (`overlay.rs`)
 - [ ] In `overlay_builder.rs`, after the path-sort step, build path FST: iterate sorted `segs`,
   insert `(path_bytes, seg_idx as u64)` into `fst::MapBuilder::memory()`, finalise
   (`overlay_builder.rs`)
-- [ ] Add `path_fst_bytes: &[u8]` to `WriteV3Params` (or rename to `WriteV4Params`); emit the
-  blob in the writer (`overlay_writer.rs`)
+- [ ] Rename `WriteV3Params` → `WriteV4Params` and `write_v3` → `write_v4`; add
+  `path_fst_bytes: &[u8]` field; emit the blob in the writer (`overlay_writer.rs`)
 - [ ] Add `pub fn path_prefix_segment_range(&self, prefix: &str) -> Option<(usize, usize)>`:
-  FST range query `[prefix, prefix_incremented)` → collect segment indices → return
-  `(min_idx, max_idx)` (`overlay.rs`)
+  use two binary searches on `self.segments()` (path-sorted by Phase 2 invariant) — no
+  FST stream needed. Use the `prefix_successor` helper (backwards byte-walk) for the upper
+  bound to avoid 0xFF overflow (`overlay.rs`)
 - [ ] Add `pub fn path_exact_segment_idx(&self, path: &str) -> Option<usize>` for exact-path
   lookups (`overlay.rs`)
 - [ ] Test: build overlay, assert `path_prefix_segment_range("drivers/")` returns a contiguous
@@ -137,8 +156,9 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
   when `in_glob_as_prefix` succeeds, iterate only `seg_first..=seg_last` instead of all
   segments; keep existing glob fallback for non-prefix patterns (`columnar_storage.rs`)
 - [ ] In the normal path, after `group_by_segment`, when prefix range is available replace
-  the full `segments_passing_path_filter` glob scan with
-  `map.retain(|&idx, _| idx >= seg_first && idx <= seg_last)` (`columnar_storage.rs`)
+  the full glob scan with `map.retain(|&idx, _| idx >= seg_first as u32 && idx <= seg_last as u32)`;
+  for non-prefix globs (`in_glob_as_prefix` returns `None`) keep the existing
+  `segments_passing_path_filter` call as fallback — do not remove it (`columnar_storage.rs`)
 - [ ] Test: `FIND symbols WHERE is_recursive = 'true' IN 'drivers/**'` — assert all result
   paths start with `drivers/` and result counts match a full-scan filtered by path
 
@@ -164,9 +184,11 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
   return `entry.count` in O(log N_kinds) (`overlay.rs`)
 - [ ] Add `pub fn all_kind_counts(&self) -> Vec<(String, u32)>`: iterate full `kind_index`,
   return all `(kind_name, count)` pairs in O(N_kinds) (`overlay.rs`)
-- [ ] In `find_symbols`, add fast-path for `GROUP BY fql_kind` with no WHERE: call
-  `all_kind_counts()`, build `Vec<SymbolMatch>`, apply `apply_clauses`, return early
-  (`columnar_storage.rs`)
+- [ ] In `find_symbols`, add fast-path for `GROUP BY fql_kind` with no WHERE
+  (`matches!(&clauses.group_by, Some(GroupBy::Field(f)) if f == "fql_kind")`): call
+  `all_kind_counts()`, build `Vec<SymbolMatch>` with all fields spelled out (no
+  `..Default::default()`), call `apply_clauses` with a modified clone where `group_by = None`
+  to prevent re-counting the pre-populated counts, return early (`columnar_storage.rs`)
 - [ ] Integration test: compare `FIND symbols GROUP BY fql_kind` counts from fast-path against
   a forced full scan; assert counts are identical
 
