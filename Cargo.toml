@@ -136,3 +136,24 @@ tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
 # --- testing ---
 insta            = "1"
 criterion        = { version = "0.5", features = ["html_reports"] }
+
+# -----------------------------------------------------------------------
+# Build all ForgeQL packages with full optimisations in every profile.
+# This means `cargo test` spawns the same fast binary as `cargo build
+# --release`, so the zephyr_golden integration test runs in seconds.
+# There is no separate "debug binary"; a single optimised build is used.
+# -----------------------------------------------------------------------
+[profile.dev.package.forgeql]
+opt-level = 3
+
+[profile.dev.package.forgeql-core]
+opt-level = 3
+
+[profile.dev.package.forgeql-lang-rust]
+opt-level = 3
+
+[profile.dev.package.forgeql-lang-cpp]
+opt-level = 3
+
+[profile.dev.package.forgeql-lang-python]
+opt-level = 3
