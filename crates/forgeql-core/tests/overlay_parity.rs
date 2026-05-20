@@ -3542,3 +3542,58 @@ fn overlay_segments_are_in_path_order() {
         );
     }
 }
+
+#[test]
+fn overlay_segment_row_ranges_are_contiguous() {
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let overlays_dir = tmp.path().join("overlays");
+
+    let cpp_path = fixture_path("canonical.cpp");
+    let rs_path = fixture_path("canonical.rs");
+    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let table_rs = index_fixture(&RustLanguageInline, "canonical.rs");
+    let cid_cpp = build_segment(&table_cpp, &cpp_path, &segments_dir);
+    let cid_rs = build_segment(&table_rs, &rs_path, &segments_dir);
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(cpp_path, cid_cpp);
+    let _ = segment_map.insert(rs_path, cid_rs);
+
+    let overlay_path = overlays_dir.join("test").join("row_ranges.bin");
+    OverlayBuilder::new("test", segments_dir, fixtures_dir(), segment_map)
+        .build_and_persist(&overlay_path)
+        .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let n = overlay.segments().len();
+    assert!(n >= 2, "expected at least 2 segments");
+
+    // Ranges must be contiguous, non-overlapping, and cover 0..row_count.
+    let mut expected_start = 0u32;
+    for i in 0..n {
+        let range = overlay.segment_row_range(i);
+        assert_eq!(
+            range.start, expected_start,
+            "segment {i} range.start mismatch"
+        );
+        assert!(
+            range.end >= range.start,
+            "segment {i} has empty/inverted range"
+        );
+        expected_start = range.end;
+    }
+    assert_eq!(
+        expected_start,
+        overlay.row_count(),
+        "ranges do not cover all rows"
+    );
+    // Out-of-bounds index returns empty range.
+    assert_eq!(
+        overlay.segment_row_range(n),
+        0..0,
+        "OOB index should return 0..0"
+    );
+}

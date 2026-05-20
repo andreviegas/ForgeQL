@@ -192,6 +192,16 @@ pub struct Overlay {
     row_count: u32,
     generation: u64,
 
+    /// Inclusive-start global row-ID for each segment (length = segments.len() + 1).
+    ///
+    /// `segment_offsets[i]` is the first global row ID belonging to segment `i`.
+    /// `segment_offsets[segments.len()]` equals `row_count` (one-past-the-end
+    /// sentinel).  Built from the path-sorted `segments` list so that
+    /// `segment_offsets[i]..segment_offsets[i+1]` is the contiguous global
+    /// row-ID range for segment `i` — the foundation for the path fast-paths
+    /// added in Phases 4–6.
+    segment_offsets: Vec<u32>,
+
     // Byte ranges within `mmap` for each zero-copy blob.
     row_table_range: Range<usize>,
     kind_strings_range: Range<usize>,
@@ -275,7 +285,18 @@ impl Overlay {
         #[allow(clippy::indexing_slicing)]
         let seg_records: &[SegmentRecord] = cast_slice(&mmap[segments_range]);
         #[allow(clippy::indexing_slicing)]
+        #[allow(clippy::indexing_slicing)]
         let segments = decode_segment_metas(seg_records, &mmap[segment_strings_range])?;
+
+        // Build prefix-sum table: segment_offsets[i] = first global row ID for
+        // segment i; segment_offsets[n] = row_count (one-past-the-end sentinel).
+        let mut segment_offsets: Vec<u32> = Vec::with_capacity(segments.len() + 1);
+        let mut running = 0u32;
+        for seg in &segments {
+            segment_offsets.push(running);
+            running = running.saturating_add(seg.row_count);
+        }
+        segment_offsets.push(running);
 
         // Build the zero-copy name FST backed by a mmap slice.
         let name_fst = FstMap::new(MmapSlice::new(
@@ -290,6 +311,7 @@ impl Overlay {
             segments,
             row_count,
             generation,
+            segment_offsets,
             row_table_range,
             kind_strings_range,
             kind_index_range,
@@ -317,6 +339,26 @@ impl Overlay {
     #[must_use]
     pub const fn row_count(&self) -> u32 {
         self.row_count
+    }
+
+    /// Global row-ID range for segment `seg_idx`.
+    ///
+    /// Returns `segment_offsets[seg_idx]..segment_offsets[seg_idx + 1]`.
+    /// The range is guaranteed to be contiguous because segments are stored in
+    /// path-sorted order (FQOV v4+).
+    ///
+    /// Returns an empty range (`0..0`) when `seg_idx >= segments.len()`.
+    #[must_use]
+    pub fn segment_row_range(&self, seg_idx: usize) -> std::ops::Range<u32> {
+        if seg_idx >= self.segments.len() {
+            return 0..0;
+        }
+        // segment_offsets has length segments.len() + 1, so both indices exist.
+        #[allow(clippy::indexing_slicing)]
+        let start = self.segment_offsets[seg_idx];
+        #[allow(clippy::indexing_slicing)]
+        let end = self.segment_offsets[seg_idx + 1];
+        start..end
     }
 
     /// Decode and return the global-row-id bitmap for a given `fql_kind`.
