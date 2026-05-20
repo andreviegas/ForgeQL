@@ -116,9 +116,14 @@ impl OverlayBuilder {
             "TIMING step1: open segments (parallel)"
         );
 
-        // 2. Sort by hex_content_id for deterministic global row IDs.
+        // 2. Sort by source_path for deterministic, path-ordered global row IDs.
+        //    After this sort, all rows from "arch/" occupy a contiguous range,
+        //    all rows from "drivers/" occupy the next range, and so on.
+        //    This invariant is load-bearing for Phases 3–6 (path prefix → row
+        //    range lookup).  Do NOT change the sort key without bumping
+        //    SCHEMA_VERSION and updating the path_fst builder.
         let t_step = std::time::Instant::now();
-        segs.sort_by(|a, b| a.1.cmp(&b.1));
+        segs.sort_by(|a, b| a.0.cmp(&b.0));
         info!(
             ms = t_step.elapsed().as_millis(),
             "TIMING step2: sort segments"

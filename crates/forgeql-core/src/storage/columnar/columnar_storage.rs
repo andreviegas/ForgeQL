@@ -356,6 +356,12 @@ impl ColumnarStorage {
         // This matches the legacy backend's iteration order (parsed file-by-file
         // in path order), ensuring that ORDER BY tie-breaking on equal-name
         // symbols produces the same first-N result across both backends.
+        //
+        // Phase 2 note: after the FQOV v4 format change, segments are stored in
+        // path order in the overlay.  For queries over the full index this sort
+        // is therefore a no-op (segment indices are already path-sorted).  For
+        // queries filtered to a subset (IN / EXCLUDE / kind bitmap), the subset
+        // keys are still path-ordered so this sort remains O(k log k) but fast.
         let mut seg_order: Vec<u32> = by_segment.keys().copied().collect();
         seg_order.sort_by_key(|&idx| {
             self.overlay

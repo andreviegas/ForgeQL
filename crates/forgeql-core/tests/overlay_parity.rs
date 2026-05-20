@@ -3494,3 +3494,51 @@ fn ft5_session_has_columnar_after_install() {
 }
 
 // ── FT4 test helper ──────────────────────────────────────────────────────────
+
+/// Phase 2 (FQOV v4): overlay segments are stored in non-decreasing
+/// lexicographic source_path order.
+///
+/// Builds an overlay from two fixtures at distinct paths, opens it, and
+/// asserts `segments()[0].source_path <= segments()[1].source_path`.
+#[test]
+fn overlay_segments_are_in_path_order() {
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let overlays_dir = tmp.path().join("overlays");
+
+    // Build two segments from the two canonical fixtures.
+    let cpp_path = fixture_path("canonical.cpp");
+    let rs_path = fixture_path("canonical.rs");
+    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let table_rs = index_fixture(&RustLanguageInline, "canonical.rs");
+    let cid_cpp = build_segment(&table_cpp, &cpp_path, &segments_dir);
+    let cid_rs = build_segment(&table_rs, &rs_path, &segments_dir);
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(cpp_path, cid_cpp);
+    let _ = segment_map.insert(rs_path, cid_rs);
+
+    let overlay_path = overlays_dir.join("test").join("path_order.bin");
+    OverlayBuilder::new("test", segments_dir, fixtures_dir(), segment_map)
+        .build_and_persist(&overlay_path)
+        .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segs = overlay.segments();
+    assert!(
+        segs.len() >= 2,
+        "expected at least 2 segments, got {}",
+        segs.len()
+    );
+    // Assert non-decreasing lexicographic path order (FQOV v4 invariant).
+    for window in segs.windows(2) {
+        assert!(
+            window[0].source_path <= window[1].source_path,
+            "segments out of order: {:?} > {:?}",
+            window[0].source_path,
+            window[1].source_path,
+        );
+    }
+}

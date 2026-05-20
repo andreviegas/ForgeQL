@@ -319,18 +319,20 @@ impl ForgeQLEngine {
         }
 
         // Warm-path optimisation: if the columnar overlay already exists for
-        // the current HEAD commit, skip resume_index() entirely — loading the
-        // 2-3 GB legacy SymbolTable only to immediately discard it wastes RAM
-        // and time.  We go straight to warm_or_open(ctx, None) which reads
-        // the overlay from disk in seconds.
+        // the current HEAD commit AND opens cleanly (schema version matches),
+        // skip resume_index() entirely — loading the 2-3 GB legacy SymbolTable
+        // only to immediately discard it wastes RAM and time.  We go straight
+        // to warm_or_open(ctx, None) which reads the overlay from disk in
+        // seconds.
         //
-        // Cold path (no overlay yet): fall through to resume_index() so the
-        // legacy SymbolTable is available for the shadow-writer to build
-        // segments and create the overlay for the first time.
+        // Cold path (no overlay yet, or overlay has a schema-version mismatch):
+        // fall through to resume_index() so the legacy SymbolTable is available
+        // for the shadow-writer to build/rebuild the overlay.
         let columnar_warm = if let Some(ctx) = session.columnar_build() {
             let commit =
                 crate::session::Session::get_head_oid(&session.worktree_path).unwrap_or_default();
-            ctx.overlay_path_for(&commit).exists()
+            let path = ctx.overlay_path_for(&commit);
+            path.exists() && crate::storage::columnar::overlay::Overlay::open(&path).is_ok()
         } else {
             false
         };

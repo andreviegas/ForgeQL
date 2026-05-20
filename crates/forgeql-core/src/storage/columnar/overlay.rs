@@ -50,14 +50,15 @@ use roaring::RoaringBitmap;
 
 /// Magic bytes at the start of every overlay file.
 pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
-
 /// Current schema version.  Bump on any breaking format change.
 ///
 /// History:
 /// - **1**: initial overlay format.
 /// - **2**: adds `name_trigram_postings`.
 /// - **3**: TOC-based mmap format; large blobs are zero-copy.
-pub(crate) const SCHEMA_VERSION: u32 = 3;
+/// - **4**: segments sorted by `source_path` (path-ordered global row IDs).
+///   Prerequisite for path-prefix → row-range fast-paths (Phases 3–6).
+pub(crate) const SCHEMA_VERSION: u32 = 4;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;
