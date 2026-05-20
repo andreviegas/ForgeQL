@@ -128,8 +128,17 @@ impl ColumnarStorage {
     /// `WHERE name LIKE 'pattern'` / `WHERE name MATCHES 'regex'` via the
     /// trigram index when the pattern contains a literal substring of \u22653 chars.
     /// Other predicates are handled later by `apply_clauses`.
-    fn prefilter_global(&self, clauses: &Clauses) -> RoaringBitmap {
-        let mut result: Option<RoaringBitmap> = None;
+    /// `path_floor` — when the caller knows a contiguous path row-range,
+    /// it passes it here so that (a) the fallback universe is bounded to
+    /// that range instead of the full table, and (b) every per-predicate
+    /// bitmap is intersected with the path range immediately, keeping
+    /// intermediate results small.
+    fn prefilter_global(
+        &self,
+        clauses: &Clauses,
+        path_floor: Option<RoaringBitmap>,
+    ) -> RoaringBitmap {
+        let mut result: Option<RoaringBitmap> = path_floor;
 
         for pred in &clauses.where_predicates {
             let Some(kind_bm) = (match (pred.field.as_str(), &pred.op, &pred.value) {
@@ -916,9 +925,9 @@ impl StorageEngine for ColumnarStorage {
         //
         // FAST PATH (2a+2b combined): when a path filter is present but no
         // indexed predicate is available (fql_kind=, name=/LIKE/MATCHES),
-        // prefilter_global returns the full row-ID universe — building that
-        // 500k-row bitmap and distributing it across 5 000 segment buckets
-        // just to retain 25 of them is pure overhead.  Instead, iterate only
+        // prefilter_global would return the path-floor bitmap (Phase 6) but
+        // group_by_segment would still split it across every matching segment.
+        // Instead, iterate only
         // the path-filtered segments and seed their local bitmaps directly.
         // This is the common case for enrichment-only queries such as
         // `WHERE is_recursive = 'true' IN 'drivers/**'`.
@@ -978,23 +987,21 @@ impl StorageEngine for ColumnarStorage {
             map
         } else {
             // Normal path: global prefilter → group by segment → path prune.
-            let mut candidates = self.prefilter_global(clauses);
-            // Phase 5 — path row-range clamp: when the IN glob maps to a
-            // contiguous path prefix, intersect the candidates bitmap with
-            // the precomputed global row-ID range for that prefix before
-            // splitting into per-segment buckets.  This avoids distributing
-            // O(total_rows) IDs across segments only to immediately discard
-            // most of them in Stage 2b.
-            if let Some(prefix) = clauses.in_glob.as_deref().and_then(glob_to_path_prefix) {
-                let row_range = self.overlay.path_row_range(prefix);
-                if row_range.is_empty() {
-                    // Prefix has no matching segments — result is empty.
-                    candidates.clear();
-                } else {
-                    let path_bm: RoaringBitmap = row_range.collect();
-                    candidates &= path_bm;
-                }
-            }
+            // Phase 6 — build path_floor bitmap before calling prefilter_global
+            // so the prefilter can use it as the baseline universe.  This
+            // means (a) when no indexed predicate matches, path_floor is
+            // returned directly instead of building a full-universe bitmap, and
+            // (b) when a kind / name predicate matches, the resulting bitmap is
+            // already intersected with the path range.
+            let path_floor = clauses
+                .in_glob
+                .as_deref()
+                .and_then(glob_to_path_prefix)
+                .map(|prefix| {
+                    let row_range = self.overlay.path_row_range(prefix);
+                    row_range.collect::<RoaringBitmap>()
+                });
+            let candidates = self.prefilter_global(clauses, path_floor);
             let mut map = self.group_by_segment(&candidates);
             // Stage 2b — drop segments whose source_path does not match the
             // IN / EXCLUDE glob filters.
