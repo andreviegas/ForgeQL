@@ -522,6 +522,24 @@ fn pattern_as_prefix(pattern: &str) -> Option<Vec<u8>> {
     }
 }
 
+/// Extract a literal directory prefix from a glob pattern for `path_row_range` clamping.
+///
+/// Returns the longest literal path prefix (including the trailing `/`) that
+/// appears before the first wildcard character (`*`, `?`, or `[`).
+/// Returns `None` when the glob has no such prefix (e.g. `*.c`, `**/*.c`).
+///
+/// Examples:
+/// - `"include/**"`    → `Some("include/")`
+/// - `"drivers/net/**"` → `Some("drivers/net/")`
+/// - `"*.c"`           → `None`
+/// - `"**/*.c"`        → `None`
+fn glob_to_path_prefix(glob: &str) -> Option<&str> {
+    let wild_pos = glob.find(['*', '?', '['])?;
+    let up_to = &glob[..wild_pos];
+    let slash_pos = up_to.rfind('/')?;
+    Some(&glob[..=slash_pos])
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Resolve helpers — shared by the three StorageEngine::resolve_* methods
 // ─────────────────────────────────────────────────────────────────────────────
@@ -885,6 +903,7 @@ impl StorageEngine for ColumnarStorage {
         "columnar"
     }
 
+    #[allow(clippy::too_many_lines)]
     fn find_symbols(&self, clauses: &Clauses, _root: &Path) -> Result<Vec<SymbolMatch>> {
         // ── Query plan (Phase 06d + fast-path) ──────────────────────────────
         // Stage 1  — prefilter_global: intersect indexed predicates
@@ -959,7 +978,23 @@ impl StorageEngine for ColumnarStorage {
             map
         } else {
             // Normal path: global prefilter → group by segment → path prune.
-            let candidates = self.prefilter_global(clauses);
+            let mut candidates = self.prefilter_global(clauses);
+            // Phase 5 — path row-range clamp: when the IN glob maps to a
+            // contiguous path prefix, intersect the candidates bitmap with
+            // the precomputed global row-ID range for that prefix before
+            // splitting into per-segment buckets.  This avoids distributing
+            // O(total_rows) IDs across segments only to immediately discard
+            // most of them in Stage 2b.
+            if let Some(prefix) = clauses.in_glob.as_deref().and_then(glob_to_path_prefix) {
+                let row_range = self.overlay.path_row_range(prefix);
+                if row_range.is_empty() {
+                    // Prefix has no matching segments — result is empty.
+                    candidates.clear();
+                } else {
+                    let path_bm: RoaringBitmap = row_range.collect();
+                    candidates &= path_bm;
+                }
+            }
             let mut map = self.group_by_segment(&candidates);
             // Stage 2b — drop segments whose source_path does not match the
             // IN / EXCLUDE glob filters.
