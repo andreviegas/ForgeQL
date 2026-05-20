@@ -187,6 +187,93 @@ const fn numeric_rhs(value: &PredicateValue) -> Option<i64> {
 }
 
 // -----------------------------------------------------------------------
+// Top-K helpers (Phase 8)
+// -----------------------------------------------------------------------
+
+/// Maximum LIMIT value for which the bounded top-K path is activated.
+/// Beyond this threshold the existing full-sort path is used.
+pub(crate) const TOPK_THRESHOLD: usize = 1_000;
+
+/// Compare two [`ClauseTarget`] items according to the ORDER BY clause in
+/// `clauses`, including the deterministic `(name, line, path)` tie-breakers.
+///
+/// This is the single source-of-truth comparator shared by:
+/// - the full sort in `apply_clauses` (step 6), and
+/// - the bounded top-K path (`collect_top_k`), and
+/// - the per-segment running heap in `ColumnarStorage::materialize_all`.
+///
+/// Returning [`Ordering::Less`] means `a` sorts *before* `b` (i.e. `a` is
+/// the "better" row that should appear first in the output).
+pub(crate) fn order_cmp<T: ClauseTarget>(a: &T, b: &T, clauses: &Clauses) -> Ordering {
+    // Primary key — only when an explicit ORDER BY clause is present.
+    if let Some(ref order_by) = clauses.order_by {
+        let field = order_by.field.as_str();
+        let primary = if let (Some(va), Some(vb)) = (a.field_num(field), b.field_num(field)) {
+            match order_by.direction {
+                SortDirection::Desc => vb.cmp(&va),
+                SortDirection::Asc => va.cmp(&vb),
+            }
+        } else {
+            let sa = a.field_str(field).unwrap_or("");
+            let sb = b.field_str(field).unwrap_or("");
+            match order_by.direction {
+                SortDirection::Asc => sa.cmp(sb),
+                SortDirection::Desc => sb.cmp(sa),
+            }
+        };
+        if primary != Ordering::Equal {
+            return primary;
+        }
+    }
+    // Tie-breakers: name → line → path.  Guarantees a deterministic ordering
+    // before LIMIT truncation so both storage backends return the same rows.
+    let na = a.field_str("name").unwrap_or("");
+    let nb = b.field_str("name").unwrap_or("");
+    match na.cmp(nb) {
+        Ordering::Equal => {}
+        other => return other,
+    }
+    let la = a.field_num("line").unwrap_or(0);
+    let lb = b.field_num("line").unwrap_or(0);
+    match la.cmp(&lb) {
+        Ordering::Equal => {}
+        other => return other,
+    }
+    let pa = a.field_str("path").unwrap_or("");
+    let pb = b.field_str("path").unwrap_or("");
+    pa.cmp(pb)
+}
+
+/// Return the top-`k` items from `items` ranked by `cmp`, without fully
+/// sorting the input.
+///
+/// Uses [`slice::select_nth_unstable_by`] (introselect, O(N) average) to
+/// partition and then sorts only the k-element window (O(k log k)).
+/// Falls back to a full sort when `items.len() <= k`.
+///
+/// # Comparator contract
+/// `cmp(a, b) == Ordering::Less` means `a` is *better* (sorts earlier) than
+/// `b`.  Same convention as [`order_cmp`].
+pub(crate) fn collect_top_k<T, F>(mut items: Vec<T>, k: usize, cmp: F) -> Vec<T>
+where
+    F: Fn(&T, &T) -> Ordering,
+{
+    if k == 0 {
+        return Vec::new();
+    }
+    if items.len() <= k {
+        items.sort_by(|a, b| cmp(a, b));
+        return items;
+    }
+    // Partition: items[..k] become the k "best" elements (unsorted),
+    // items[k..] are all "worse".  O(N) average, O(N) worst case.
+    let _ = items.select_nth_unstable_by(k - 1, |a, b| cmp(a, b));
+    items.truncate(k);
+    items.sort_by(|a, b| cmp(a, b));
+    items
+}
+
+// -----------------------------------------------------------------------
 // Apply clauses — universal pipeline
 // -----------------------------------------------------------------------
 
@@ -247,54 +334,29 @@ pub fn apply_clauses<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
         results.retain(|item| eval_predicate(item, &pred));
     }
 
-    // 6. ORDER BY
+    // 6. ORDER BY (+ 7/8 fast-path for bounded top-K)
     //
     // A deterministic ordering is required *before* OFFSET/LIMIT so that
     // truncation picks the same rows across backends (legacy ↔ columnar).
     // Even when no ORDER BY is supplied we apply a stable default sort by
     // `(name, line, path)` to keep parity tests deterministic.
-    let order_field = clauses.order_by.as_ref().map(|o| o.field.clone());
-    let order_dir = clauses.order_by.as_ref().map(|o| o.direction);
-    results.sort_by(|a, b| {
-        // Primary key — only when an explicit ORDER BY clause is present.
-        if let (Some(field), Some(direction)) = (order_field.as_deref(), order_dir) {
-            let primary = if let (Some(va), Some(vb)) = (a.field_num(field), b.field_num(field)) {
-                match direction {
-                    SortDirection::Desc => vb.cmp(&va),
-                    SortDirection::Asc => va.cmp(&vb),
-                }
-            } else {
-                let sa = a.field_str(field).unwrap_or("");
-                let sb = b.field_str(field).unwrap_or("");
-                match direction {
-                    SortDirection::Asc => sa.cmp(sb),
-                    SortDirection::Desc => sb.cmp(sa),
-                }
-            };
-            if primary != Ordering::Equal {
-                return primary;
-            }
-        }
-        // Tie-breakers (also the default order when no ORDER BY is given):
-        // name → line → path.  This guarantees a deterministic ordering
-        // before LIMIT truncation so both storage backends return the
-        // same set of rows.
-        let na = a.field_str("name").unwrap_or("");
-        let nb = b.field_str("name").unwrap_or("");
-        match na.cmp(nb) {
-            Ordering::Equal => {}
-            other => return other,
-        }
-        let la = a.field_num("line").unwrap_or(0);
-        let lb = b.field_num("line").unwrap_or(0);
-        match la.cmp(&lb) {
-            Ordering::Equal => {}
-            other => return other,
-        }
-        let pa = a.field_str("path").unwrap_or("");
-        let pb = b.field_str("path").unwrap_or("");
-        pa.cmp(pb)
-    });
+    //
+    // Fast path: when ORDER BY is present, LIMIT <= TOPK_THRESHOLD, OFFSET
+    // is zero, and GROUP BY is absent, use `collect_top_k` (introselect
+    // O(N) avg) instead of a full O(N log N) sort.  Produces byte-identical
+    // results via the shared `order_cmp` comparator.
+    let want_topk = clauses.order_by.is_some()
+        && clauses.group_by.is_none()
+        && clauses.offset.unwrap_or(0) == 0
+        && clauses.limit.is_some_and(|k| k <= TOPK_THRESHOLD);
+
+    if let (Some(k), true) = (clauses.limit, want_topk) {
+        let taken = std::mem::take(results);
+        *results = collect_top_k(taken, k, |a, b| order_cmp(a, b, clauses));
+        return; // OFFSET == 0 and LIMIT already applied by collect_top_k.
+    }
+
+    results.sort_by(|a, b| order_cmp(a, b, clauses));
 
     // 7. OFFSET
     let skip = clauses.offset.unwrap_or(0);

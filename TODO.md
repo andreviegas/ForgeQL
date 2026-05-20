@@ -87,8 +87,10 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
 - [ ] Add `fn stream_names_asc(&self, offset: usize, limit: usize) -> Vec<SymbolMatch>`:
   walk `overlay.name_fst.stream()`, skip `offset` entries, decode `name_postings`,
   resolve `row_table[id]` → `RowPtr`, call `materialize_one_row`, stop after `limit` rows.
-  Note: `Overlay::decode_postings` is currently private (`fn`, not `pub(crate)`); make it
-  `pub(crate)` or move `stream_names_asc` onto `Overlay` (`columnar_storage.rs`, `overlay.rs`)
+  Note: both `Overlay::name_fst` and `Overlay::decode_postings` are private; the cleanest
+  fix is to implement `stream_names_asc` as a method on `Overlay` itself (where both are in
+  scope); if it must stay in `columnar_storage.rs`, both must be made `pub(crate)`
+  (`columnar_storage.rs`, `overlay.rs`)
 - [ ] In `find_symbols`, when the fast-path fires, call `stream_names_asc` and return early
   (`columnar_storage.rs`)
 - [ ] Integration test: `FIND symbols ORDER BY name LIMIT 10` — assert names are in ascending
@@ -130,9 +132,9 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
   returns `[Range<usize>; 9]`, the destructuring in `Overlay::open` has 9 bindings, and
   `validate_blob_layout` takes `&[Range<usize>; 9]`; all must change together
   (`overlay.rs`, `overlay_writer.rs`)
-- [ ] Add `path_fst: Option<FstMap<MmapSlice>>` field to `Overlay`; decode in `Overlay::open`
-  when the blob is present (v4 always has it; old v3 overlays are rejected by version gate
-  before this point) (`overlay.rs`)
+- [ ] Add `path_fst: FstMap<MmapSlice>` field to `Overlay` (non-optional — the version gate
+  ensures every v4 file has the blob; `find_blob_ranges` must `bail!` when it is absent);
+  decode after `find_blob_ranges` returns the 10-element array (`overlay.rs`)
 - [ ] In `overlay_builder.rs`, after the path-sort step, build path FST: iterate sorted `segs`,
   insert `(path_bytes, seg_idx as u64)` into `fst::MapBuilder::memory()`, finalise
   (`overlay_builder.rs`)
@@ -155,10 +157,12 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
 - [ ] In the fast-path branch of `find_symbols` (`has_path_filter && !has_any_indexed_predicate`),
   when `in_glob_as_prefix` succeeds, iterate only `seg_first..=seg_last` instead of all
   segments; keep existing glob fallback for non-prefix patterns (`columnar_storage.rs`)
-- [ ] In the normal path, after `group_by_segment`, when prefix range is available replace
-  the full glob scan with `map.retain(|&idx, _| idx >= seg_first as u32 && idx <= seg_last as u32)`;
-  for non-prefix globs (`in_glob_as_prefix` returns `None`) keep the existing
-  `segments_passing_path_filter` call as fallback — do not remove it (`columnar_storage.rs`)
+- [ ] In the normal path, after `group_by_segment`, when a prefix range is available apply
+  the range retain (`map.retain(|&idx, _| idx >= seg_first as u32 && idx <= seg_last as u32)`),
+  then apply `EXCLUDE` glob separately if present (a second retain calling
+  `passes_resolve_glob` for the exclude side only); for non-prefix globs
+  (`in_glob_as_prefix` returns `None`) keep the existing `segments_passing_path_filter`
+  call as fallback — do not remove it (`columnar_storage.rs`)
 - [ ] Test: `FIND symbols WHERE is_recursive = 'true' IN 'drivers/**'` — assert all result
   paths start with `drivers/` and result counts match a full-scan filtered by path
 
@@ -177,8 +181,13 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
 
 - [ ] Add `pub(super) count: u32` to `KindEntry` (16 → 20 bytes, 5 × u32, no padding needed);
   update the struct-size comment (`overlay.rs`)
-- [ ] In `overlay_builder.rs`, populate `count` from `bitmap.len()` when serialising kind
-  entries (`overlay_builder.rs`)
+- [ ] Fix kind-count serialisation: `compute_blobs` in `overlay_writer.rs` only receives
+  pre-serialised bitmap bytes (`HashMap<String, Vec<u8>>`), not the original
+  `RoaringBitmap`, so `bitmap.len()` is unavailable there. Add
+  `kind_counts: HashMap<String, u32>` to `WriteV4Params`; populate it in
+  `overlay_builder.rs` from `kind_merged.iter().map(|(k, bm)| (k.clone(), bm.len() as u32)).collect()`
+  **before** serialising the bitmaps; use `kind_counts[kind_str]` in `compute_blobs` when
+  constructing each `KindEntry` (`overlay_builder.rs`, `overlay_writer.rs`)
 - [ ] Bump `SCHEMA_VERSION` to 5; add version history entry (`overlay.rs`)
 - [ ] Add `pub fn kind_count(&self, kind: &str) -> Option<u32>`: binary-search `kind_index`,
   return `entry.count` in O(log N_kinds) (`overlay.rs`)
@@ -191,6 +200,37 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
   to prevent re-counting the pre-populated counts, return early (`columnar_storage.rs`)
 - [ ] Integration test: compare `FIND symbols GROUP BY fql_kind` counts from fast-path against
   a forced full scan; assert counts are identical
+
+### Phase 8 — Bounded top-K materialization (no format change)
+
+- [x] Extract the existing order-by comparator from `apply_clauses` into a free function
+  `pub(crate) fn order_cmp<T: ClauseTarget>(a: &T, b: &T, clauses: &Clauses) -> Ordering`;
+  keep behaviour identical including the `(name, line, path)` tie-breakers (`filter.rs`)
+- [x] Add `fn collect_top_k<T, F>(items: Vec<T>, k: usize, cmp: F) -> Vec<T>` using
+  `slice::select_nth_unstable_by` (introselect, O(N) average) to partition the k-best
+  rows, then sort only that k-element window — faster in practice than a `BinaryHeap`
+  (`filter.rs`)
+- [x] Add `const TOPK_THRESHOLD: usize = 1_000`. In `apply_clauses`, after HAVING (step 5),
+  gate on `order_by.is_some() && limit.is_some_and(|k| k <= TOPK_THRESHOLD) && offset.unwrap_or(0) == 0 && group_by.is_none()`;
+  when true replace steps 6–8 with `collect_top_k`; otherwise fall through unchanged
+  (`filter.rs`)
+- [ ] Unit tests covering: (a) numeric ASC/DESC top-K matches full-sort; (b) string ORDER BY
+  top-K matches full-sort; (c) ties broken by `(name, line, path)` produce the same
+  ordering in both paths; (d) `OFFSET > 0` is not redirected to top-K path;
+  (e) `GROUP BY` queries are not redirected (`filter.rs`)
+- [x] In `columnar_storage::materialize_all`, when `order_by.is_some()`, `limit.is_some_and(|k| k <= TOPK_THRESHOLD)`,
+  and `group_by.is_none()`, use a running trim via `collect_top_k` (keeping `K * TOPK_OVER_FETCH`
+  rows) instead of accumulating all rows. WHERE predicates are applied per-segment before
+  the trim (`columnar_storage.rs`)
+- [x] Secondary over-fetch trim in `materialize_all`: `const TOPK_OVER_FETCH: usize = 4`;
+  trim fires when `results.len() > k * 4`, retaining `max(k * 2, k)` survivors via
+  `collect_top_k` — bounds peak memory to O(K) (`columnar_storage.rs`)
+- [ ] Regression test: for each of `param_count`, `lines`, `usages`, `condition_tests`, run
+  `FIND symbols WHERE <field> >= 1 ORDER BY <field> DESC LIMIT 20` under top-K path and a
+  forced full-sort path; assert byte-identical results (`crates/forgeql-core/tests/`)
+- [ ] Micro-benchmark: `FIND symbols ORDER BY usages DESC LIMIT 20` on a fixture of
+  N = 100 000 rows; target ≥5× speedup vs. full-sort and ≤50 KB peak heap
+  (`crates/forgeql-core/benches/`)
 
 ## Miscellaneous
 
