@@ -3597,3 +3597,127 @@ fn overlay_segment_row_ranges_are_contiguous() {
         "OOB index should return 0..0"
     );
 }
+
+// ── Phase 4: path_seg_range / path_row_range ─────────────────────────────────
+
+#[test]
+fn overlay_path_seg_range_exact_match() {
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let overlays_dir = tmp.path().join("overlays");
+
+    let cpp_path = fixture_path("canonical.cpp");
+    let rs_path = fixture_path("canonical.rs");
+    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let table_rs = index_fixture(&RustLanguageInline, "canonical.rs");
+    let cid_cpp = build_segment(&table_cpp, &cpp_path, &segments_dir);
+    let cid_rs = build_segment(&table_rs, &rs_path, &segments_dir);
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(cpp_path, cid_cpp);
+    let _ = segment_map.insert(rs_path, cid_rs);
+
+    let overlay_path = overlays_dir.join("test").join("path_seg.bin");
+    OverlayBuilder::new("test", segments_dir, fixtures_dir(), segment_map)
+        .build_and_persist(&overlay_path)
+        .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+
+    // Segments are path-sorted: canonical.cpp < canonical.rs.
+    let n = overlay.segments().len();
+    assert!(n >= 2, "expected at least 2 segments");
+
+    // Exact-file prefix matches exactly one segment.
+    let cpp_range = overlay.path_seg_range("canonical.cpp");
+    assert_eq!(cpp_range.len(), 1, "canonical.cpp should match one segment");
+
+    let rs_range = overlay.path_seg_range("canonical.rs");
+    assert_eq!(rs_range.len(), 1, "canonical.rs should match one segment");
+
+    // The two single-file ranges must be disjoint and cover different positions.
+    assert!(
+        cpp_range.start < rs_range.start,
+        "cpp segment must precede rs segment"
+    );
+
+    // Common prefix matches both.
+    let both = overlay.path_seg_range("canonical");
+    assert_eq!(
+        both.len(),
+        2,
+        "prefix 'canonical' should match both segments"
+    );
+
+    // Non-existent prefix matches nothing.
+    let none = overlay.path_seg_range("nonexistent");
+    assert!(none.is_empty(), "nonexistent prefix should match nothing");
+
+    // Empty prefix matches everything.
+    let all = overlay.path_seg_range("");
+    assert_eq!(all.len(), n, "empty prefix should match all segments");
+}
+
+#[test]
+fn overlay_path_row_range_covers_segment_rows() {
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let overlays_dir = tmp.path().join("overlays");
+
+    let cpp_path = fixture_path("canonical.cpp");
+    let rs_path = fixture_path("canonical.rs");
+    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let table_rs = index_fixture(&RustLanguageInline, "canonical.rs");
+    let cid_cpp = build_segment(&table_cpp, &cpp_path, &segments_dir);
+    let cid_rs = build_segment(&table_rs, &rs_path, &segments_dir);
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(cpp_path, cid_cpp);
+    let _ = segment_map.insert(rs_path, cid_rs);
+
+    let overlay_path = overlays_dir.join("test").join("path_row.bin");
+    OverlayBuilder::new("test", segments_dir, fixtures_dir(), segment_map)
+        .build_and_persist(&overlay_path)
+        .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let total_rows = overlay.row_count();
+
+    // path_row_range("canonical") must span all rows.
+    let all_rows = overlay.path_row_range("canonical");
+    assert_eq!(all_rows.start, 0, "common prefix row range must start at 0");
+    assert_eq!(
+        all_rows.end, total_rows,
+        "common prefix row range must cover all rows"
+    );
+
+    // path_row_range for each file must agree with segment_row_range.
+    let cpp_row_range = overlay.path_row_range("canonical.cpp");
+    let rs_row_range = overlay.path_row_range("canonical.rs");
+
+    // They must be non-empty and non-overlapping.
+    assert!(!cpp_row_range.is_empty(), "cpp row range must be non-empty");
+    assert!(!rs_row_range.is_empty(), "rs row range must be non-empty");
+    assert!(
+        cpp_row_range.end <= rs_row_range.start,
+        "cpp and rs row ranges must not overlap"
+    );
+
+    // Together they must cover all rows.
+    assert_eq!(cpp_row_range.start, 0, "cpp row range must start at 0");
+    assert_eq!(
+        rs_row_range.end, total_rows,
+        "rs row range must end at total_rows"
+    );
+
+    // path_row_range("nonexistent") must return 0..0.
+    assert_eq!(
+        overlay.path_row_range("nonexistent"),
+        0..0,
+        "nonexistent prefix row range must be 0..0"
+    );
+}

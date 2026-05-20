@@ -361,6 +361,64 @@ impl Overlay {
         start..end
     }
 
+    /// Returns the contiguous range of segment indices `[lo, hi)` whose
+    /// `source_path` starts with `prefix`.
+    ///
+    /// Segments are path-sorted (FQOV v4+), so all matching paths form a
+    /// contiguous block.  Two `partition_point` calls locate the boundaries
+    /// in O(log N) time without allocating.
+    ///
+    /// Returns `0..0` when no segments match.
+    /// Returns `0..self.segments.len()` when `prefix` is empty.
+    #[must_use]
+    pub fn path_seg_range(&self, prefix: &str) -> Range<usize> {
+        if prefix.is_empty() {
+            return 0..self.segments.len();
+        }
+        let lo = self
+            .segments
+            .partition_point(|s| s.source_path.as_os_str().as_encoded_bytes() < prefix.as_bytes());
+        // Upper bound: smallest string > all strings that start with `prefix`.
+        // Walk from the right, skip 0xFF bytes, increment the first byte < 0xFF.
+        let hi = {
+            let mut upper = prefix.as_bytes().to_vec();
+            loop {
+                match upper.last_mut() {
+                    None => break self.segments.len(),
+                    Some(b) if *b < 0xFF => {
+                        *b += 1;
+                        break self.segments.partition_point(|s| {
+                            s.source_path.as_os_str().as_encoded_bytes() < upper.as_slice()
+                        });
+                    }
+                    Some(_) => {
+                        let _ = upper.pop();
+                    }
+                }
+            }
+        };
+        lo..hi
+    }
+
+    /// Global row-ID range for all segments whose `source_path` starts with `prefix`.
+    ///
+    /// Combines `path_seg_range` with the `segment_offsets` prefix-sum table to
+    /// return the contiguous `start..end` range in O(log N) time.
+    ///
+    /// Returns `0..0` when no segments match.
+    #[must_use]
+    pub fn path_row_range(&self, prefix: &str) -> Range<u32> {
+        let seg_range = self.path_seg_range(prefix);
+        if seg_range.is_empty() {
+            return 0..0;
+        }
+        #[allow(clippy::indexing_slicing)]
+        let start = self.segment_offsets[seg_range.start];
+        #[allow(clippy::indexing_slicing)]
+        let end = self.segment_offsets[seg_range.end];
+        start..end
+    }
+
     /// Decode and return the global-row-id bitmap for a given `fql_kind`.
     ///
     /// Binary-searches the sorted `kind_index` blob and deserialises the
