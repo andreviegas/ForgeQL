@@ -30,7 +30,7 @@ use crate::ast::index::{SymbolTable, index_file};
 use crate::ast::lang::LanguageRegistry;
 use crate::ast::query::glob_matches;
 use crate::filter::{TOPK_THRESHOLD, apply_clauses, collect_top_k, eval_predicate, order_cmp};
-use crate::ir::{Clauses, CompareOp, PredicateValue};
+use crate::ir::{Clauses, CompareOp, OrderBy, PredicateValue, SortDirection};
 use crate::result::SymbolMatch;
 use crate::workspace::Workspace;
 
@@ -544,6 +544,22 @@ fn split_qualified_name(name: &str) -> (&str, Option<&str>) {
 /// [`ColumnarStorage::prefilter_global`] can answer with a bitmap narrower
 /// than the full row-ID universe.  Used to decide whether the "fast path"
 /// in `find_symbols` can skip the global bitmap entirely.
+/// Return `true` when `ORDER BY name ASC LIMIT N` fast-path is eligible.
+///
+/// Conditions: ORDER BY name ASC, explicit LIMIT, no GROUP BY, no WHERE
+/// predicates, no path filter.  The caller also gates on the dirty overlay
+/// being empty so dirty rows cannot shadow committed rows with earlier names.
+fn order_by_name_fast_path(clauses: &Clauses) -> bool {
+    matches!(
+        &clauses.order_by,
+        Some(OrderBy { field, direction: SortDirection::Asc }) if field == "name"
+    ) && clauses.limit.is_some()
+        && clauses.group_by.is_none()
+        && clauses.where_predicates.is_empty()
+        && clauses.in_glob.is_none()
+        && clauses.exclude_glob.is_none()
+}
+
 fn has_any_indexed_predicate(clauses: &Clauses) -> bool {
     clauses.where_predicates.iter().any(|pred| {
         matches!(
@@ -888,6 +904,35 @@ impl StorageEngine for ColumnarStorage {
         //             rows via enrichment-posting prefilter, then materialise.
         // Stage 4  — deduplicate on (name, fql_kind, path, line).
         // Stage 5  — apply_clauses: residual WHERE, ORDER BY, LIMIT, OFFSET.
+        // ─────────────────────────────────────────────────────────────────────
+        // ── ORDER BY name ASC LIMIT N fast-path ──────────────────────────────
+        // Stream the first (limit + offset) rows directly from the name FST in
+        // lexicographic order, materialising only those rows.  The dirty overlay
+        // is skipped (gated on is_empty) because dirty rows are not path-sorted
+        // and could have names that precede committed rows already streamed.
+        if order_by_name_fast_path(clauses) && self.dirty.is_empty() {
+            let need = clauses
+                .limit
+                .unwrap_or(0)
+                .saturating_add(clauses.offset.unwrap_or(0))
+                .max(1);
+            let mut results = self.overlay.stream_names_asc(need, &self.segments);
+            // Deduplicate on (name, fql_kind, path, line) — same as Stage 4.
+            {
+                type DedupeKey = (
+                    String,
+                    Option<String>,
+                    Option<std::path::PathBuf>,
+                    Option<usize>,
+                );
+                let mut seen: HashSet<DedupeKey> = HashSet::new();
+                results.retain(|r| {
+                    seen.insert((r.name.clone(), r.fql_kind.clone(), r.path.clone(), r.line))
+                });
+            }
+            apply_clauses(&mut results, clauses);
+            return Ok(results);
+        }
         // ─────────────────────────────────────────────────────────────────────
         let has_path_filter = clauses.in_glob.is_some() || clauses.exclude_glob.is_some();
 

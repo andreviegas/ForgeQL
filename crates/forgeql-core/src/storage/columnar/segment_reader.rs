@@ -721,6 +721,64 @@ impl SegmentReader {
             })
             .collect()
     }
+
+    /// Materialise a single row by local row index.
+    ///
+    /// Equivalent to calling `materialize_rows` with a single-element bitmap
+    /// but avoids constructing a `RoaringBitmap`.  Returns `None` when
+    /// `local_row_idx >= row_count`.
+    pub(crate) fn materialize_one_row(
+        &self,
+        local_row_idx: u32,
+        source_path: &Path,
+    ) -> Option<SymbolMatch> {
+        if local_row_idx >= self.row_count {
+            return None;
+        }
+        let row = local_row_idx;
+        let name = self.str_of("name_id", row).to_owned();
+        let fql_kind = self.str_of("fql_kind_id", row).to_owned();
+        let language = self.str_of("language_id", row).to_owned();
+        let line = self.u32_at("line", row);
+        let usages = self.u32_at("usages_count", row);
+
+        let mut fields: HashMap<String, String> = HashMap::new();
+        for col_name in &self.extra_col_names {
+            let blob = self.blob_bytes(&format!("col_{col_name}"));
+            if blob.is_empty() {
+                continue;
+            }
+            let slice: &[u32] = cast_slice(blob);
+            if let Some(&id) = slice.get(row as usize) {
+                if id != u32::MAX {
+                    let s = self.strings.get(id);
+                    if !s.is_empty() {
+                        let _ = fields.insert(col_name.clone(), s.to_owned());
+                    }
+                }
+            }
+        }
+
+        Some(SymbolMatch {
+            name,
+            node_kind: None,
+            fql_kind: if fql_kind.is_empty() {
+                None
+            } else {
+                Some(fql_kind)
+            },
+            language: if language.is_empty() {
+                None
+            } else {
+                Some(language)
+            },
+            path: Some(source_path.to_owned()),
+            line: if line == 0 { None } else { Some(line as usize) },
+            usages_count: Some(usages as usize),
+            fields,
+            count: None,
+        })
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

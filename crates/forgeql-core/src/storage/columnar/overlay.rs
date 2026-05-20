@@ -36,7 +36,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::segment_reader::MmapSlice;
+use super::segment_reader::{MmapSlice, SegmentReader};
+use crate::result::SymbolMatch;
 use anyhow::{Context, Result, ensure};
 use bytemuck::{Pod, Zeroable, cast_slice};
 use fst::Map as FstMap;
@@ -456,6 +457,50 @@ impl Overlay {
     // ─────────────────────────────────────────────────────────────────────
     // Private helpers
     // ─────────────────────────────────────────────────────────────────────
+
+    /// Stream symbol rows in ascending name order from the name FST.
+    ///
+    /// Walks the overlay's `name_fst` (keys are already in lexicographic
+    /// order), decodes each name's postings, and materialises each row via
+    /// [`SegmentReader::materialize_one_row`].  Stops after exhausting the
+    /// first FST key whose addition pushes the result count to at least
+    /// `need`, so that all rows sharing a name are present before
+    /// `apply_clauses` applies tie-breaking.
+    ///
+    /// Used by the `ORDER BY name ASC LIMIT N` fast-path in
+    /// [`ColumnarStorage::find_symbols`].
+    pub(crate) fn stream_names_asc(
+        &self,
+        need: usize,
+        segments: &[Arc<SegmentReader>],
+    ) -> Vec<SymbolMatch> {
+        use fst::Streamer as _;
+        let mut results = Vec::new();
+        let mut stream = self.name_fst.stream();
+        while let Some((_name_bytes, encoded)) = stream.next() {
+            let bitmap = self.decode_postings(encoded);
+            for global_id in &bitmap {
+                let Some(ptr) = self.resolve_global(global_id) else {
+                    continue;
+                };
+                let Some(seg) = segments.get(ptr.segment_idx as usize) else {
+                    continue;
+                };
+                let Some(meta) = self.segments.get(ptr.segment_idx as usize) else {
+                    continue;
+                };
+                if let Some(row) = seg.materialize_one_row(ptr.local_row_idx, &meta.source_path) {
+                    results.push(row);
+                }
+            }
+            // Complete the current name group fully before checking the budget
+            // so apply_clauses can correctly tie-break rows with the same name.
+            if results.len() >= need {
+                break;
+            }
+        }
+        results
+    }
 
     fn decode_postings(&self, encoded: u64) -> RoaringBitmap {
         #[allow(clippy::cast_possible_truncation)]
