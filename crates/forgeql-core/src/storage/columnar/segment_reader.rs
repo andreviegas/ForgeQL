@@ -482,6 +482,20 @@ impl SegmentReader {
         self.str_of("name_id", row)
     }
 
+    /// Read the raw string-pool ID for the `name` column at `row`.
+    ///
+    /// Used by [`super::overlay_builder`] to build dedup keys without string allocation.
+    pub(crate) fn name_id_of(&self, row: u32) -> u32 {
+        self.u32_at("name_id", row)
+    }
+
+    /// Read the raw string-pool ID for the `fql_kind` column at `row`.
+    ///
+    /// Used by [`super::overlay_builder`] to build dedup keys without string allocation.
+    pub(crate) fn fql_kind_id_of(&self, row: u32) -> u32 {
+        self.u32_at("fql_kind_id", row)
+    }
+
     /// Read the FQL kind string for row `row`.
     pub fn fql_kind_of(&self, row: u32) -> &str {
         self.str_of("fql_kind_id", row)

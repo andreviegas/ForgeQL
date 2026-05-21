@@ -30,7 +30,7 @@ use crate::ast::index::{SymbolTable, index_file};
 use crate::ast::lang::LanguageRegistry;
 use crate::ast::query::glob_matches;
 use crate::filter::{TOPK_THRESHOLD, apply_clauses, collect_top_k, eval_predicate, order_cmp};
-use crate::ir::{Clauses, CompareOp, OrderBy, PredicateValue, SortDirection};
+use crate::ir::{Clauses, CompareOp, GroupBy, OrderBy, PredicateValue, SortDirection};
 use crate::result::SymbolMatch;
 use crate::workspace::Workspace;
 
@@ -134,7 +134,7 @@ impl ColumnarStorage {
             if !passes_resolve_glob(&meta.source_path, clauses) {
                 continue;
             }
-            *counts.entry(meta.source_path.clone()).or_insert(0) += meta.row_count as usize;
+            *counts.entry(meta.source_path.clone()).or_insert(0) += meta.dedup_row_count as usize;
         }
         let mut results: Vec<SymbolMatch> = counts
             .into_iter()
@@ -648,20 +648,18 @@ fn glob_to_path_prefix(glob: &str) -> Option<&str> {
 /// Condition: GROUP BY on the file/path field, no WHERE predicates (we cannot
 /// predict which rows match a filter without reading them), dirty overlay empty
 /// (dirty segments are not integrated into the overlay metadata yet).
-const fn group_by_file_fast_path_eligible(_clauses: &Clauses, _dirty_empty: bool) -> bool {
-    // Disabled: `meta.row_count` is a raw AST-node count that includes
-    // intra-file duplicates removed by the normal pipeline's (name, fql_kind,
-    // path, line) deduplication step.  Re-enable once the overlay stores
-    // per-segment deduplicated row counts (future phase).
-    false
+fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> bool {
+    dirty_empty
+        && clauses.where_predicates.is_empty()
+        && matches!(&clauses.group_by, Some(GroupBy::Field(f)) if f == "file" || f == "path")
 }
 
 /// Returns `true` when `GROUP BY fql_kind` can be served from the overlay's
 /// kind bitmaps alone (no per-row materialisation needed).
-const fn group_by_kind_fast_path_eligible(_clauses: &Clauses, _dirty_empty: bool) -> bool {
-    // Disabled for the same reason as `group_by_file_fast_path_eligible`:
-    // kind-bitmap lengths count duplicate AST rows.
-    false
+fn group_by_kind_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> bool {
+    dirty_empty
+        && clauses.where_predicates.is_empty()
+        && matches!(&clauses.group_by, Some(GroupBy::Field(f)) if f == "fql_kind")
 }
 
 /// Returns `(kind_str, true)` when `ORDER BY name ASC LIMIT N` with a single

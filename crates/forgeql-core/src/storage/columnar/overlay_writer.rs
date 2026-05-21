@@ -112,8 +112,9 @@ fn compute_blobs(params: &WriteV3Params<'_>) -> ComputedBlobs {
         let rec = SegmentRecord {
             row_count: meta.row_count,
             path_offset: segment_strings.len() as u32,
-            path_len: path_bytes.len() as u16,
             hex_id_offset: (segment_strings.len() + path_bytes.len()) as u32,
+            dedup_row_count: meta.dedup_row_count,
+            path_len: path_bytes.len() as u16,
             hex_id_len: meta.hex_content_id.len() as u16,
         };
         segment_strings.extend_from_slice(path_bytes.as_bytes());

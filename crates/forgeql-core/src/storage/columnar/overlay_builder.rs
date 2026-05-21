@@ -16,7 +16,7 @@
 //! The overlay file is written atomically (temp-file + rename) so a crash
 //! mid-write leaves either the old or the new file, never a partial one.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -162,20 +162,55 @@ impl OverlayBuilder {
             "TIMING step3-4: row offsets + global_row_table"
         );
 
+        // 4.5. Compute per-segment canonical row sets: for each segment, keep only
+        //      the first occurrence of each (name_id, fql_kind_id, line) triple.
+        //      This deduplicates tree-sitter AST nodes that map to the same symbol.
+        //      `dedup_counts[seg_idx]` is stored in the overlay for the GROUP BY
+        //      file fast-path; `canonical_bms[seg_idx]` gates kind bitmap merging.
+        let t_step = std::time::Instant::now();
+        let seg_dedup: Vec<(RoaringBitmap, u32)> = segs
+            .par_iter()
+            .map(|(_, _, reader)| {
+                let mut seen: HashSet<(u32, u32, u32)> =
+                    HashSet::with_capacity(reader.row_count as usize);
+                let mut canonical = RoaringBitmap::new();
+                for local_row in 0..reader.row_count {
+                    if seen.insert((
+                        reader.name_id_of(local_row),
+                        reader.fql_kind_id_of(local_row),
+                        reader.line_of(local_row),
+                    )) {
+                        let _ = canonical.insert(local_row);
+                    }
+                }
+                #[allow(clippy::cast_possible_truncation)]
+                let cnt = canonical.len() as u32;
+                (canonical, cnt)
+            })
+            .collect();
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            segs = segs.len(),
+            "TIMING step4.5: per-segment dedup canonical row sets"
+        );
         // 5. Build kind postings by merging per-segment kind bitmaps.
-        //    Each segment uses its own string-pool IDs; resolve to strings
-        //    via `segment_reader.string_of_id`.
+        //    Only canonical rows (deduplicated by name_id+fql_kind_id+line) are
+        //    inserted so that kind-bitmap cardinalities match the query pipeline
+        //    dedup output.  Each segment uses its own string-pool IDs; resolve
+        //    to strings via `segment_reader.string_of_id`.
         let t_step = std::time::Instant::now();
         let mut kind_merged: HashMap<String, RoaringBitmap> = HashMap::new();
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
             let row_offset = row_offsets[seg_idx];
+            let canonical_bm = &seg_dedup[seg_idx].0;
             for (&kind_id, local_bm) in &reader.kind_postings {
                 let kind_str = reader.string_of_id(kind_id);
                 if kind_str.is_empty() {
                     continue;
                 }
                 let merged = kind_merged.entry(kind_str.to_owned()).or_default();
-                for local_row in local_bm {
+                // Intersect with canonical_bm to skip intra-segment duplicates.
+                for local_row in local_bm & canonical_bm {
                     let _ = merged.insert(local_row + row_offset);
                 }
             }
@@ -278,10 +313,12 @@ impl OverlayBuilder {
         // 7. Build SegmentMeta list.
         let segment_metas: Vec<SegmentMeta> = segs
             .iter()
-            .map(|(rel_path, hex, reader)| SegmentMeta {
+            .enumerate()
+            .map(|(seg_idx, (rel_path, hex, reader))| SegmentMeta {
                 hex_content_id: hex.clone(),
                 source_path: rel_path.clone(),
                 row_count: reader.row_count,
+                dedup_row_count: seg_dedup[seg_idx].1,
             })
             .collect();
 

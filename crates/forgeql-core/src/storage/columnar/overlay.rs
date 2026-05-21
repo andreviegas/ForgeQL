@@ -58,7 +58,10 @@ pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 /// - **3**: TOC-based mmap format; large blobs are zero-copy.
 /// - **4**: segments sorted by `source_path` (path-ordered global row IDs).
 ///   Prerequisite for path-prefix → row-range fast-paths (Phases 3–6).
-pub(crate) const SCHEMA_VERSION: u32 = 4;
+/// - **5**: `SegmentRecord` gains `dedup_row_count` field (20 bytes, was 16).
+///   Per-segment unique-(name,kind,line) counts enable GROUP BY file fast-path.
+///   Kind bitmaps are deduplicated at build time, enabling GROUP BY kind fast-path.
+pub(crate) const SCHEMA_VERSION: u32 = 5;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;
@@ -141,7 +144,7 @@ pub(super) struct TrigramEntry {
 /// FQOV v3: fixed-size metadata record for one segment in the `segments` blob.
 ///
 /// Strings are resolved from `segment_strings` at open time.
-/// Fields ordered to pack two `u16`s at the end — 16 bytes total, no gaps.
+/// Fields ordered to pack two `u16`s at the end — 20 bytes total, no gaps.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub(super) struct SegmentRecord {
@@ -150,6 +153,11 @@ pub(super) struct SegmentRecord {
     pub(super) path_offset: u32,
     /// Byte offset of the hex content-ID string in `segment_strings`.
     pub(super) hex_id_offset: u32,
+    /// Number of unique (name, fql_kind, line) tuples in this segment.
+    ///
+    /// Used by the GROUP BY file fast-path to return deduplicated symbol counts
+    /// without materialising individual rows.  Added in SCHEMA_VERSION 5.
+    pub(super) dedup_row_count: u32,
     /// Byte length of the source-path string.
     pub(super) path_len: u16,
     /// Byte length of the hex content-ID string (≤ 40 for SHA-1 hex).
@@ -170,6 +178,10 @@ pub struct SegmentMeta {
     pub source_path: PathBuf,
     /// Number of rows in this segment (== symbols in the source file).
     pub row_count: u32,
+    /// Number of unique (name, fql_kind, line) tuples in this segment.
+    ///
+    /// This is the deduplicated symbol count used by the GROUP BY file fast-path.
+    pub dedup_row_count: u32,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -824,6 +836,7 @@ fn decode_segment_metas(
             hex_content_id: hex_str.to_owned(),
             source_path: PathBuf::from(path_str),
             row_count: rec.row_count,
+            dedup_row_count: rec.dedup_row_count,
         });
     }
     Ok(segments)

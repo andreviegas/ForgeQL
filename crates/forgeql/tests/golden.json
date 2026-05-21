@@ -108,7 +108,7 @@
   {
     "name": "G12_group_by_kind_having_100",
     "fql": "FIND symbols GROUP BY fql_kind IN 'arch/arc/**' HAVING count >= 100 ORDER BY count DESC",
-    "expect_row_count": 9,
+    "expect_row_count": 8,
     "expect_rows": [
       {"kind": "variable", "count": 808},
       {"kind": "comment", "count": 504},
@@ -255,7 +255,7 @@
   {
     "name": "G25_group_by_kind_kernel_having_100",
     "fql": "FIND symbols GROUP BY fql_kind IN 'kernel/**' HAVING count >= 100 ORDER BY count DESC",
-    "expect_row_count": 11,
+    "expect_row_count": 10,
     "expect_rows": [
       {"kind": "variable", "count": 2531},
       {"kind": "comment", "count": 1591},
