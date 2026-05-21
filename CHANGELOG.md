@@ -6,7 +6,48 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.50.13] — 2026-05-18 — Bug fix: LIMIT with enrichment/LIKE queries returned 0
+## [0.51.0] — 2026-05-21 — Path acceleration fast-paths; GROUP BY sub-second; bounded top-K
+
+### Added
+
+- **Path-prefix segment skip (Phases 2–6)** — `FIND … IN 'path/**'` queries now skip all
+  segments outside the matching path prefix.  Phase 2 sorts segments by `source_path` at
+  build time (FQOV v4) so rows from each path prefix occupy a contiguous global row-ID
+  range.  Phase 3 adds an O(1) `segment_row_range` lookup.  Phase 4 adds `path_seg_range`
+  and `path_row_range` via binary search (O(log N), no FST blob needed).  Phase 5 restricts
+  the segment loop to the matching range.  Phase 6 passes the row range into
+  `prefilter_global` to clamp the kind/name bitmap intersection before any segment is
+  opened.
+
+- **`ORDER BY name ASC LIMIT N` FST stream fast-path (Phase 1)** — bare name-sorted queries
+  with no WHERE predicates stream names directly from the in-memory FST; no segments are
+  opened.  Phase 9 extends this to `WHERE fql_kind = X` queries via
+  `stream_names_asc_kind_filtered`.
+
+- **`GROUP BY file` and `GROUP BY fql_kind` sub-second fast-paths (Phases 0, 7, 9, 9b)** —
+  `GROUP BY file` reads only `dedup_row_count` from segment metadata (zero segment I/O);
+  `GROUP BY fql_kind` sums per-kind deduplicated counts from the kind bitmaps.  Whole-repo
+  GROUP BY queries that previously took ~82 s now complete in under a second.
+
+- **Deduplicated row counts in overlay (Phase 9b, FQOV v5)** — `SegmentRecord` gains
+  `dedup_row_count: u32` computed at build time via canonical (name, fql_kind, line) set
+  intersection.  Kind bitmaps are also deduplicated, eliminating the 17–18% overcounting
+  from tree-sitter intra-file duplicate AST nodes.  `SCHEMA_VERSION` bumped 3 → 4 → 5;
+  old overlays are detected and rebuilt automatically on first use.
+
+- **Bounded top-K materialization (Phase 8)** — `ORDER BY field LIMIT K` queries (K ≤ 1000)
+  use introselect (`slice::select_nth_unstable_by`, O(N) average) instead of a full sort.
+  A running trim in `materialize_all` bounds peak memory to O(K) via `TOPK_OVER_FETCH = 4`.
+
+### Fixed
+
+- `exec_source.rs` warm-path now verifies `Overlay::open().is_ok()` before skipping the
+  cold-rebuild path; a schema-version mismatch no longer silently loads a stale overlay.
+
+- `apply_clauses` was re-applying `in_glob`/`exclude_glob` to synthetic `SymbolMatch`
+  results (path = None) from GROUP BY fast-paths, dropping all rows when an IN clause was
+  present.  Fast-path methods now strip those clauses from the `no_group` clone.
+ — 2026-05-18 — Bug fix: LIMIT with enrichment/LIKE queries returned 0
 
 ### Fixed
 

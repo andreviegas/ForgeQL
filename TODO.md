@@ -60,146 +60,87 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
 
 ### Phase 0 — `GROUP BY file` fast-path (no format change)
 
-- [ ] Add `fn group_by_file_fast_path(clauses: &Clauses) -> bool` — returns `true` when
-  `matches!(&clauses.group_by, Some(GroupBy::Field(f)) if f == "file")`, no WHERE
-  predicates, `having_predicates.is_empty()` (note: `GroupBy` has no `File` variant and no
-  `PartialEq`; use `matches!` throughout) (`columnar_storage.rs`)
-- [ ] In `find_symbols`, when the fast-path fires, iterate `overlay.segments()`, skip entries
-  that don't pass `passes_resolve_glob`, build one `SymbolMatch` with all fields spelled out
-  (no `..Default::default()` — `SymbolMatch` does not derive `Default`) with `path` and
-  `count: Some(seg.row_count as usize)`. Call `apply_clauses` with a **modified clone** of
-  `clauses` where `group_by = None` to preserve ORDER BY/HAVING/LIMIT/OFFSET without
-  re-counting the pre-populated `count` values. Return early — zero segment files opened
+- [x] Add `fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> bool`
   (`columnar_storage.rs`)
-- [ ] Integration test: `FIND symbols GROUP BY file ORDER BY count DESC LIMIT 5` against
-  frozen zephyr — assert ≤ 5 rows, each `count > 0`, wall time < 100 ms
+- [x] In `find_symbols`, fast_group_by_file reads `meta.dedup_row_count` (not raw `row_count`
+  — Phase 9b provides exact deduplicated counts), builds `SymbolMatch` with path and count,
+  calls `apply_clauses` with `group_by = None` clone, returns early — zero segment files
+  opened (`columnar_storage.rs`)
+- [x] Integration test: covered by golden.json G13–G19 (GROUP BY file variants)
 
 ### Phase 1 — `ORDER BY name LIMIT N` fast-path (no format change)
 
-- [ ] Add `fn order_by_name_fast_path(clauses: &Clauses) -> bool` —
-  `clauses.order_by.as_ref().map(|o| o.field.as_str()) == Some("name")` (ASC),
-  `limit` is `Some`, no GROUP BY, no WHERE predicates (note: `OrderBy` is a struct
-  `{ field, direction }`, not an enum — `order_by == OrderBy::Name` will not compile)
-  (`columnar_storage.rs`)
-- [ ] Add `fn materialize_one_row(&self, local_row_idx: u32, source_path: &Path) -> Option<SymbolMatch>`
-  to `SegmentReader` — this method does **not** currently exist; the only API is
-  `materialize_rows(&bitmap, source_path)` (`segment_reader.rs`)
-- [ ] Add `fn stream_names_asc(&self, offset: usize, limit: usize) -> Vec<SymbolMatch>`:
-  walk `overlay.name_fst.stream()`, skip `offset` entries, decode `name_postings`,
-  resolve `row_table[id]` → `RowPtr`, call `materialize_one_row`, stop after `limit` rows.
-  Note: both `Overlay::name_fst` and `Overlay::decode_postings` are private; the cleanest
-  fix is to implement `stream_names_asc` as a method on `Overlay` itself (where both are in
-  scope); if it must stay in `columnar_storage.rs`, both must be made `pub(crate)`
-  (`columnar_storage.rs`, `overlay.rs`)
-- [ ] In `find_symbols`, when the fast-path fires, call `stream_names_asc` and return early
-  (`columnar_storage.rs`)
-- [ ] Integration test: `FIND symbols ORDER BY name LIMIT 10` — assert names are in ascending
-  lexicographic order, wall time < 100 ms on zephyr
-- [ ] Integration test: `FIND symbols ORDER BY name DESC LIMIT 10` once DESC variant is
-  implemented (DESC requires collect-then-reverse, not FST tail streaming — the `fst` crate
-  only iterates ascending; defer or bound separately)
+- [x] Add `fn order_by_name_fast_path(clauses: &Clauses) -> bool` (`columnar_storage.rs`)
+- [x] Add `pub(crate) fn materialize_one_row(&self, local_row_idx: u32, source_path: &Path)
+  -> Option<SymbolMatch>` to `SegmentReader` (`segment_reader.rs`)
+- [x] Add `pub(crate) fn stream_names_asc(&self, need: usize, segments: &[Arc<SegmentReader>])
+  -> Vec<SymbolMatch>` as a method on `Overlay`; complete current name group before
+  checking `need` budget (`overlay.rs`)
+- [x] In `find_symbols`, fast-path fires when `order_by_name_fast_path` and
+  `dirty.is_empty()`; `need = limit + offset`; dedup on (name, fql_kind, path, line);
+  calls `apply_clauses` for residual OFFSET/LIMIT (`columnar_storage.rs`)
+- [ ] Integration test: `FIND symbols ORDER BY name LIMIT 10` — assert ascending order,
+  wall time < 100 ms on zephyr
+- [ ] Integration test: `FIND symbols ORDER BY name DESC LIMIT 10` — defer (DESC requires
+  collect-then-reverse; FST only iterates ascending)
 
 ### Phase 2 — Sort segments by path at build time (FQOV v4)
 
-- [ ] In `overlay_builder.rs` step 2, change sort key from `a.1` (hex_content_id) to `a.0`
-  (source_path); update the comment to document the new invariant: _segments are in
-  lexicographic source_path order; global_row_ids for each path are contiguous_
-  (`overlay_builder.rs`)
-- [ ] Bump `SCHEMA_VERSION` from 3 to 4; add version history entry in the comment
+- [x] Sort key changed from `a.1` (hex_content_id) to `a.0` (source_path) with invariant
+  comment (`overlay_builder.rs`)
+- [x] `SCHEMA_VERSION` bumped 3 → 4 (later 4 → 5 in Phase 9b); history comment updated
   (`overlay.rs`)
-- [ ] Confirm the version-rejection path in `Overlay::open` returns an error (not a panic)
-  for unknown versions — already uses `ensure!` (returns `Err`); this task is a verification
-  step. Note: the v3→v4 bump is atomic, so no silent-corruption window exists (`overlay.rs`)
-- [ ] Test: open a freshly built overlay, read `overlay.segments()`, assert paths are in
-  non-decreasing lexicographic order
+- [x] Version-rejection via `ensure!` returns `Err` (not panic); `exec_source.rs` warm-path
+  also checks `Overlay::open().is_ok()` to auto-rebuild on schema mismatch (`overlay.rs`)
+- [x] `overlay_segments_are_in_path_order` test added (`overlay_parity.rs`)
 
 ### Phase 3 — Compute `segment_offsets` at open time (no format change)
 
-- [ ] Add `segment_offsets: Vec<u32>` field to `Overlay` (`segments.len() + 1` entries;
-  sentinel at index `segments.len()` = total row count); populate with `checked_add` to
-  guard against u32 overflow (`overlay.rs`)
-- [ ] Populate `segment_offsets` in `Overlay::open` as prefix sum of `SegmentRecord.row_count`
-  immediately after decoding the `segments` blob (`overlay.rs`)
-- [ ] Add `pub fn segment_row_range(&self, seg_idx: usize) -> Range<u32>` on `Overlay`
-  (`overlay.rs`)
-- [ ] Unit test: for each segment index, assert `segment_row_range` ranges are contiguous,
-  non-overlapping, and the last range ends at `row_count()`
+- [x] `segment_offsets: Vec<u32>` field added; uses `saturating_add` (`overlay.rs`)
+- [x] Populated at `Overlay::open` as prefix sum of `SegmentRecord.row_count` (`overlay.rs`)
+- [x] `pub fn segment_row_range(&self, seg_idx: usize) -> Range<u32>` added (`overlay.rs`)
+- [x] `overlay_segment_row_ranges_are_contiguous` test added (`overlay_parity.rs`)
 
-### Phase 4 — Add `path_fst` blob (FQOV v4 extended)
+### Phase 4 — Path prefix → segment/row range lookup (no format change)
 
-- [ ] Add `BLOB_PATH_FST: &[u8] = b"path_fst"` constant; increment `TOC_COUNT` from 9 to 10;
-  update `HEADER_V3_LEN` constant. **This is not a two-line edit** — `find_blob_ranges`
-  returns `[Range<usize>; 9]`, the destructuring in `Overlay::open` has 9 bindings, and
-  `validate_blob_layout` takes `&[Range<usize>; 9]`; all must change together
-  (`overlay.rs`, `overlay_writer.rs`)
-- [ ] Add `path_fst: FstMap<MmapSlice>` field to `Overlay` (non-optional — the version gate
-  ensures every v4 file has the blob; `find_blob_ranges` must `bail!` when it is absent);
-  decode after `find_blob_ranges` returns the 10-element array (`overlay.rs`)
-- [ ] In `overlay_builder.rs`, after the path-sort step, build path FST: iterate sorted `segs`,
-  insert `(path_bytes, seg_idx as u64)` into `fst::MapBuilder::memory()`, finalise
-  (`overlay_builder.rs`)
-- [ ] Rename `WriteV3Params` → `WriteV4Params` and `write_v3` → `write_v4`; add
-  `path_fst_bytes: &[u8]` field; emit the blob in the writer (`overlay_writer.rs`)
-- [ ] Add `pub fn path_prefix_segment_range(&self, prefix: &str) -> Option<(usize, usize)>`:
-  use two binary searches on `self.segments()` (path-sorted by Phase 2 invariant) — no
-  FST stream needed. Use the `prefix_successor` helper (backwards byte-walk) for the upper
-  bound to avoid 0xFF overflow (`overlay.rs`)
-- [ ] Add `pub fn path_exact_segment_idx(&self, path: &str) -> Option<usize>` for exact-path
-  lookups (`overlay.rs`)
-- [ ] Test: build overlay, assert `path_prefix_segment_range("drivers/")` returns a contiguous
-  range; assert row range covers only `drivers/` rows
+  _Implementation note: path_fst blob was not needed — binary search on the sorted
+  segments array (Phase 2 invariant) is O(log N) and allocation-free._
 
-### Phase 5 — Use path row range to skip segments in `materialize_all` (no format change)
+- [x] `pub fn path_seg_range(&self, prefix: &str) -> Range<usize>` — binary-search
+  `self.segments()` for the contiguous segment-index range covering `prefix` (`overlay.rs`)
+- [x] `pub fn path_row_range(&self, prefix: &str) -> Range<u32>` — combines `path_seg_range`
+  with `segment_offsets` to return the global row-ID range in O(log N) (`overlay.rs`)
+- [x] `overlay_path_seg_range_exact_match` and `overlay_path_row_range_covers_segment_rows`
+  tests added (`overlay_parity.rs`)
 
-- [ ] Add `fn in_glob_as_prefix(glob: &str) -> Option<&str>`: returns the path prefix when the
-  glob is `prefix/**` or bare `prefix/`; returns `None` for all other patterns
-  (`columnar_storage.rs`)
-- [ ] In the fast-path branch of `find_symbols` (`has_path_filter && !has_any_indexed_predicate`),
-  when `in_glob_as_prefix` succeeds, iterate only `seg_first..=seg_last` instead of all
-  segments; keep existing glob fallback for non-prefix patterns (`columnar_storage.rs`)
-- [ ] In the normal path, after `group_by_segment`, when a prefix range is available apply
-  the range retain (`map.retain(|&idx, _| idx >= seg_first as u32 && idx <= seg_last as u32)`),
-  then apply `EXCLUDE` glob separately if present (a second retain calling
-  `passes_resolve_glob` for the exclude side only); for non-prefix globs
-  (`in_glob_as_prefix` returns `None`) keep the existing `segments_passing_path_filter`
-  call as fallback — do not remove it (`columnar_storage.rs`)
-- [ ] Test: `FIND symbols WHERE is_recursive = 'true' IN 'drivers/**'` — assert all result
-  paths start with `drivers/` and result counts match a full-scan filtered by path
+### Phase 5 — Clamp segment loop to path row range (no format change)
 
-### Phase 6 — Clamp bitmap intersection to path row range (no format change)
+- [x] Path prefix fast-path in `find_symbols`: `path_row_range(prefix)` resolves the segment
+  range; segment loop restricted to `seg_first..=seg_last` (`columnar_storage.rs`)
+- [x] Glob fallback kept for non-prefix patterns (`columnar_storage.rs`)
+- [x] Tests covered by golden.json G26–G29 (IN 'path/**' variants)
 
-- [ ] Resolve the path prefix range early in `find_symbols` (before Stage 1 prefilter) when
-  `in_glob_as_prefix` succeeds; store as `path_row_range: Option<Range<u32>>`
-  (`columnar_storage.rs`)
-- [ ] After `prefilter_global` returns `candidates`, when `path_row_range` is `Some(r)`, apply
-  `candidates.remove_range(0..r.start); candidates.remove_range(r.end..u32::MAX)`
-  (`columnar_storage.rs`)
-- [ ] Test: `FIND symbols WHERE fql_kind = 'function' IN 'drivers/**'` — assert all result
-  paths start with `drivers/` and counts match full-scan-filtered result
+### Phase 6 — Clamp prefilter bitmap to path row range (no format change)
 
-### Phase 7 — Add `count: u32` to `KindEntry` (FQOV v5)
+- [x] `path_row_range` resolved before `prefilter_global`; passed as `path_floor` bitmap
+  mask into `prefilter_global` so kind/name bitmap intersection is clamped before any
+  segment is opened (`columnar_storage.rs`)
+- [x] Tests covered by golden.json G30–G45 (kind+path combinations)
 
-- [ ] Add `pub(super) count: u32` to `KindEntry` (16 → 20 bytes, 5 × u32, no padding needed);
-  update the struct-size comment (`overlay.rs`)
-- [ ] Fix kind-count serialisation: `compute_blobs` in `overlay_writer.rs` only receives
-  pre-serialised bitmap bytes (`HashMap<String, Vec<u8>>`), not the original
-  `RoaringBitmap`, so `bitmap.len()` is unavailable there. Add
-  `kind_counts: HashMap<String, u32>` to `WriteV4Params`; populate it in
-  `overlay_builder.rs` from `kind_merged.iter().map(|(k, bm)| (k.clone(), bm.len() as u32)).collect()`
-  **before** serialising the bitmaps; use `kind_counts[kind_str]` in `compute_blobs` when
-  constructing each `KindEntry` (`overlay_builder.rs`, `overlay_writer.rs`)
-- [ ] Bump `SCHEMA_VERSION` to 5; add version history entry (`overlay.rs`)
-- [ ] Add `pub fn kind_count(&self, kind: &str) -> Option<u32>`: binary-search `kind_index`,
-  return `entry.count` in O(log N_kinds) (`overlay.rs`)
-- [ ] Add `pub fn all_kind_counts(&self) -> Vec<(String, u32)>`: iterate full `kind_index`,
-  return all `(kind_name, count)` pairs in O(N_kinds) (`overlay.rs`)
-- [ ] In `find_symbols`, add fast-path for `GROUP BY fql_kind` with no WHERE
-  (`matches!(&clauses.group_by, Some(GroupBy::Field(f)) if f == "fql_kind")`): call
-  `all_kind_counts()`, build `Vec<SymbolMatch>` with all fields spelled out (no
-  `..Default::default()`), call `apply_clauses` with a modified clone where `group_by = None`
-  to prevent re-counting the pre-populated counts, return early (`columnar_storage.rs`)
-- [ ] Integration test: compare `FIND symbols GROUP BY fql_kind` counts from fast-path against
-  a forced full scan; assert counts are identical
+### Phase 7 — Deduplicated kind counts + `GROUP BY fql_kind` fast-path (FQOV v5)
+
+  _Implemented via Phase 9b (different approach than originally planned: deduplicated kind
+  bitmaps + `dedup_row_count` per segment rather than a `count` field in `KindEntry`)._
+
+- [x] Kind bitmaps deduplicated at build time (canonical (name_id, fql_kind_id, line) sets);
+  `bitmap.len()` now gives exact deduplicated counts (`overlay_builder.rs`)
+- [x] `pub(super) fn kind_global_counts(&self, path_mask: Option<Range<u32>>) -> Vec<(String, u32)>`
+  on `Overlay` (`overlay.rs`)
+- [x] `SCHEMA_VERSION` bumped 4 → 5; history comment updated (`overlay.rs`)
+- [x] `GROUP BY fql_kind` fast-path via `group_by_kind_fast_path_eligible` +
+  `fast_group_by_kind`; uses `kind_global_counts`, calls `apply_clauses` with
+  `group_by = None` clone, returns early (`columnar_storage.rs`)
+- [x] Integration test: covered by golden.json G11, G23–G25
 
 ### Phase 8 — Bounded top-K materialization (no format change)
 
@@ -231,6 +172,31 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
 - [ ] Micro-benchmark: `FIND symbols ORDER BY usages DESC LIMIT 20` on a fixture of
   N = 100 000 rows; target ≥5× speedup vs. full-sort and ≤50 KB peak heap
   (`crates/forgeql-core/benches/`)
+
+### Phase 9 — ORDER BY name+kind fast-path + GROUP BY scaffolding (no format change)
+
+- [x] `pub(crate) fn stream_names_asc_kind_filtered(&self, need: usize, kind_bm: &RoaringBitmap,
+  segments: &[Arc<SegmentReader>]) -> Vec<SymbolMatch>` on `Overlay` — streams FST
+  names while gating each row through the kind bitmap; avoids full materialization for
+  sorted, kind-filtered name queries (`overlay.rs`)
+- [x] `has_duplicate_paths` field on `Overlay` (detects dirty/duplication state) (`overlay.rs`)
+- [x] `group_by_file_fast_path_eligible` / `group_by_kind_fast_path_eligible` eligibility
+  guards added (were disabled pending dedup counts — re-enabled in Phase 9b) (`columnar_storage.rs`)
+- [x] Fixed: `apply_clauses` was re-applying `in_glob`/`exclude_glob` to synthetic `SymbolMatch`
+  results (path = None) from GROUP BY fast-paths; fast-path methods now strip those
+  clauses from the `no_group` clone before calling `apply_clauses` (`columnar_storage.rs`)
+
+### Phase 9b — `dedup_row_count` per segment; FQOV v5 (format change)
+
+- [x] `SegmentRecord` gains `dedup_row_count: u32` (20 bytes; SCHEMA_VERSION 4 → 5)
+  (`overlay.rs`, `overlay_writer.rs`)
+- [x] `overlay_builder` step 4.5: compute canonical row sets per segment via
+  `HashSet<(name_id, fql_kind_id, line)>`; write exact deduplicated count at build time
+  (`overlay_builder.rs`)
+- [x] `fast_group_by_file` uses `dedup_row_count` instead of raw `row_count` — eliminates
+  17–18% overcounting from tree-sitter intra-file duplicate AST nodes (`columnar_storage.rs`)
+- [x] GROUP BY file and kind whole-repo queries: ~82 s → sub-second
+- [x] `segment_reader.rs` exposes `dedup_row_count` field (`segment_reader.rs`)
 
 ## Miscellaneous
 
