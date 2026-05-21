@@ -119,6 +119,95 @@ impl ColumnarStorage {
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // Phase 9 — GROUP BY / ORDER BY fast-path methods
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Fast-path for `FIND symbols GROUP BY file ORDER BY count DESC LIMIT N`
+    /// when there are no WHERE predicates.
+    ///
+    /// Sums `SegmentMeta.row_count` per source path in O(segments) time.
+    /// No individual symbol rows are materialised.
+    #[allow(clippy::unnecessary_wraps)]
+    fn fast_group_by_file(&self, clauses: &Clauses) -> Result<Vec<SymbolMatch>> {
+        let mut counts: HashMap<PathBuf, usize> = HashMap::new();
+        for meta in self.overlay.segments() {
+            if !passes_resolve_glob(&meta.source_path, clauses) {
+                continue;
+            }
+            *counts.entry(meta.source_path.clone()).or_insert(0) += meta.row_count as usize;
+        }
+        let mut results: Vec<SymbolMatch> = counts
+            .into_iter()
+            .map(|(path, count)| SymbolMatch {
+                name: String::new(),
+                path: Some(path),
+                count: Some(count),
+                ..SymbolMatch::default()
+            })
+            .collect();
+        // HAVING (count-based filtering)
+        for pred in &clauses.having_predicates {
+            let p = pred.clone();
+            results.retain(|item| eval_predicate(item, &p));
+        }
+        // ORDER BY + LIMIT (skip GROUP BY — already grouped; IN/EXCLUDE already applied
+        // during segment iteration so strip them here to avoid re-filtering by path,
+        // which would drop entries that have path = None).
+        let mut no_group = clauses.clone();
+        no_group.group_by = None;
+        no_group.in_glob = None;
+        no_group.exclude_glob = None;
+        apply_clauses(&mut results, &no_group);
+        Ok(results)
+    }
+
+    /// Fast-path for `FIND symbols GROUP BY fql_kind ORDER BY count DESC LIMIT N`
+    /// when there are no WHERE predicates.
+    ///
+    /// Deserialises each kind bitmap and reads its cardinality in O(n_kinds) time.
+    /// For IN-glob queries, intersects each kind bitmap with the path range bitmap.
+    #[allow(clippy::unnecessary_wraps)]
+    fn fast_group_by_kind(&self, clauses: &Clauses) -> Result<Vec<SymbolMatch>> {
+        // Build an optional path mask for IN/EXCLUDE glob filtering.
+        let path_mask: Option<RoaringBitmap> =
+            if clauses.in_glob.is_some() || clauses.exclude_glob.is_some() {
+                let bm: RoaringBitmap = self
+                    .overlay
+                    .segments()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, meta)| passes_resolve_glob(&meta.source_path, clauses))
+                    .flat_map(|(seg_idx, _)| self.overlay.segment_row_range(seg_idx))
+                    .collect();
+                Some(bm)
+            } else {
+                None
+            };
+
+        let kind_counts = self.overlay.kind_global_counts(path_mask.as_ref());
+        let mut results: Vec<SymbolMatch> = kind_counts
+            .into_iter()
+            .map(|(kind, count)| SymbolMatch {
+                name: kind.clone(),
+                fql_kind: Some(kind),
+                count: Some(count),
+                ..SymbolMatch::default()
+            })
+            .collect();
+        for pred in &clauses.having_predicates {
+            let p = pred.clone();
+            results.retain(|item| eval_predicate(item, &p));
+        }
+        // IN/EXCLUDE already applied via path_mask — strip to avoid re-filtering.
+        let mut no_group = clauses.clone();
+        no_group.group_by = None;
+        no_group.in_glob = None;
+        no_group.exclude_glob = None;
+        apply_clauses(&mut results, &no_group);
+        Ok(results)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // Query helpers
     // ─────────────────────────────────────────────────────────────────────
 
@@ -550,6 +639,66 @@ fn glob_to_path_prefix(glob: &str) -> Option<&str> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Phase 9 — GROUP BY / ORDER BY fast-paths that bypass full materialisation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns `true` when `GROUP BY file/path` can be served from segment metadata
+/// alone (no per-row materialisation needed).
+///
+/// Condition: GROUP BY on the file/path field, no WHERE predicates (we cannot
+/// predict which rows match a filter without reading them), dirty overlay empty
+/// (dirty segments are not integrated into the overlay metadata yet).
+const fn group_by_file_fast_path_eligible(_clauses: &Clauses, _dirty_empty: bool) -> bool {
+    // Disabled: `meta.row_count` is a raw AST-node count that includes
+    // intra-file duplicates removed by the normal pipeline's (name, fql_kind,
+    // path, line) deduplication step.  Re-enable once the overlay stores
+    // per-segment deduplicated row counts (future phase).
+    false
+}
+
+/// Returns `true` when `GROUP BY fql_kind` can be served from the overlay's
+/// kind bitmaps alone (no per-row materialisation needed).
+const fn group_by_kind_fast_path_eligible(_clauses: &Clauses, _dirty_empty: bool) -> bool {
+    // Disabled for the same reason as `group_by_file_fast_path_eligible`:
+    // kind-bitmap lengths count duplicate AST rows.
+    false
+}
+
+/// Returns `(kind_str, true)` when `ORDER BY name ASC LIMIT N` with a single
+/// `WHERE fql_kind = 'kind_str'` predicate is eligible for the name-stream
+/// fast-path extended with kind filtering.
+fn order_by_name_kind_fast_path(clauses: &Clauses) -> Option<&str> {
+    // Base conditions same as order_by_name_fast_path, but allow exactly one
+    // WHERE predicate that is a fql_kind equality.
+    if !matches!(
+        &clauses.order_by,
+        Some(OrderBy { field, direction: SortDirection::Asc }) if field == "name"
+    ) {
+        return None;
+    }
+    if clauses.limit.is_none()
+        || clauses.group_by.is_some()
+        || clauses.in_glob.is_some()
+        || clauses.exclude_glob.is_some()
+    {
+        return None;
+    }
+    // Exactly one WHERE predicate: fql_kind = '<kind>'
+    if clauses.where_predicates.len() != 1 {
+        return None;
+    }
+    let pred = &clauses.where_predicates[0];
+    if pred.field != "fql_kind" || pred.op != CompareOp::Eq {
+        return None;
+    }
+    if let PredicateValue::String(ref kind) = pred.value {
+        Some(kind.as_str())
+    } else {
+        None
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Resolve helpers — shared by the three StorageEngine::resolve_* methods
 // ─────────────────────────────────────────────────────────────────────────────
 /// Split a qualified name (`Owner::member` or `Owner.member`) into
@@ -939,6 +1088,20 @@ impl StorageEngine for ColumnarStorage {
         // Stage 4  — deduplicate on (name, fql_kind, path, line).
         // Stage 5  — apply_clauses: residual WHERE, ORDER BY, LIMIT, OFFSET.
         // ─────────────────────────────────────────────────────────────────────
+        // ── Phase 9 fast-paths — GROUP BY file / fql_kind ────────────────────
+        // When there are no WHERE predicates, GROUP BY file and GROUP BY fql_kind
+        // can be served from overlay metadata or kind bitmaps without
+        // materialising any individual symbol rows.
+        // The count-based fast-paths are only valid when the overlay has no
+        // duplicate source paths.  If duplicates exist, row_count and kind-bitmap
+        // lengths overcount; fall through to the normal pipeline which deduplicates.
+        let no_dup_paths = !self.overlay.has_duplicate_paths();
+        if group_by_file_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
+            return self.fast_group_by_file(clauses);
+        }
+        if group_by_kind_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
+            return self.fast_group_by_kind(clauses);
+        }
         // ── ORDER BY name ASC LIMIT N fast-path ──────────────────────────────
         // Stream the first (limit + offset) rows directly from the name FST in
         // lexicographic order, materialising only those rows.  The dirty overlay
@@ -952,6 +1115,36 @@ impl StorageEngine for ColumnarStorage {
                 .max(1);
             let mut results = self.overlay.stream_names_asc(need, &self.segments);
             // Deduplicate on (name, fql_kind, path, line) — same as Stage 4.
+            {
+                type DedupeKey = (
+                    String,
+                    Option<String>,
+                    Option<std::path::PathBuf>,
+                    Option<usize>,
+                );
+                let mut seen: HashSet<DedupeKey> = HashSet::new();
+                results.retain(|r| {
+                    seen.insert((r.name.clone(), r.fql_kind.clone(), r.path.clone(), r.line))
+                });
+            }
+            apply_clauses(&mut results, clauses);
+            return Ok(results);
+        }
+        // ── ORDER BY name ASC LIMIT N WHERE fql_kind='X' fast-path ───────────
+        // Same as above but the kind bitmap is pre-loaded and used to gate which
+        // FST rows are materialised.
+        if let Some(kind) = order_by_name_kind_fast_path(clauses)
+            && self.dirty.is_empty()
+            && let Some(kind_bm) = self.overlay.prefilter_kind(kind)
+        {
+            let need = clauses
+                .limit
+                .unwrap_or(0)
+                .saturating_add(clauses.offset.unwrap_or(0))
+                .max(1);
+            let mut results =
+                self.overlay
+                    .stream_names_asc_kind_filtered(need, &kind_bm, &self.segments);
             {
                 type DedupeKey = (
                     String,

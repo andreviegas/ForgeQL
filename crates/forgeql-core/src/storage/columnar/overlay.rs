@@ -210,6 +210,12 @@ pub struct Overlay {
     trigram_index_range: Range<usize>,
     name_postings_range: Range<usize>,
 
+    /// True when the segment list contains two or more entries with the same
+    /// `source_path`.  When true, row-count-based fast-paths (GROUP BY file,
+    /// GROUP BY kind) are unsafe because the overlay includes duplicate rows
+    /// that the normal query pipeline eliminates via deduplication.
+    has_duplicate_paths: bool,
+
     /// Zero-copy FST backed by a slice of the mmap.
     name_fst: FstMap<MmapSlice>,
 }
@@ -306,6 +312,14 @@ impl Overlay {
         ))
         .context("loading name FST from overlay")?;
 
+        // Detect duplicate source paths — signals that the overlay contains
+        // redundant rows that the query pipeline deduplicates but raw counts
+        // (row_count, kind bitmap lengths) do not.
+        let has_duplicate_paths = {
+            let mut seen = std::collections::HashSet::with_capacity(segments.len());
+            segments.iter().any(|s| !seen.insert(&s.source_path))
+        };
+
         Ok(Arc::new(Self {
             mmap,
             segments,
@@ -318,6 +332,7 @@ impl Overlay {
             bitmap_data_range,
             trigram_index_range,
             name_postings_range,
+            has_duplicate_paths,
             name_fst,
         }))
     }
@@ -327,6 +342,14 @@ impl Overlay {
     #[must_use]
     pub const fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Returns `true` if the overlay contains two or more segments with the
+    /// same `source_path`, indicating that raw row-count metrics include
+    /// duplicates and count-based fast-paths must be skipped.
+    #[must_use]
+    pub const fn has_duplicate_paths(&self) -> bool {
+        self.has_duplicate_paths
     }
 
     /// Ordered list of segments in this overlay.
@@ -457,6 +480,54 @@ impl Overlay {
         let bm_end = bm_start + e.bitmap_len as usize;
         let bm_bytes = bitmap_data.get(bm_start..bm_end)?;
         RoaringBitmap::deserialize_from(bm_bytes).ok()
+    }
+
+    /// Iterate every kind in the index and return `(kind_name, global_row_count)` pairs.
+    ///
+    /// Used by the `GROUP BY fql_kind` fast-path to produce per-kind counts without
+    /// materialising any individual symbol rows.  The pairs are returned in the same
+    /// sorted order as the `kind_index` blob (lexicographic by kind name).
+    ///
+    /// An optional `path_mask` narrows the count to only rows in a specific path range.
+    #[must_use]
+    pub(super) fn kind_global_counts(
+        &self,
+        path_mask: Option<&RoaringBitmap>,
+    ) -> Vec<(String, usize)> {
+        #[allow(clippy::indexing_slicing)]
+        let entries: &[KindEntry] = cast_slice(&self.mmap[self.kind_index_range.clone()]);
+        #[allow(clippy::indexing_slicing)]
+        let kind_strings = &self.mmap[self.kind_strings_range.clone()];
+        #[allow(clippy::indexing_slicing)]
+        let bitmap_data = &self.mmap[self.bitmap_data_range.clone()];
+
+        let mut out = Vec::with_capacity(entries.len());
+        for e in entries {
+            let s_start = e.kind_offset as usize;
+            let s_end = s_start + e.kind_len as usize;
+            let Some(s_bytes) = kind_strings.get(s_start..s_end) else {
+                continue;
+            };
+            let Ok(kind_name) = std::str::from_utf8(s_bytes) else {
+                continue;
+            };
+            let bm_start = e.bitmap_offset as usize;
+            let bm_end = bm_start + e.bitmap_len as usize;
+            let Some(bm_bytes) = bitmap_data.get(bm_start..bm_end) else {
+                continue;
+            };
+            let Ok(bm) = RoaringBitmap::deserialize_from(bm_bytes) else {
+                continue;
+            };
+            let count = match path_mask {
+                Some(mask) => usize::try_from((bm & mask).len()).unwrap_or(0),
+                None => usize::try_from(bm.len()).unwrap_or(0),
+            };
+            if count > 0 {
+                out.push((kind_name.to_owned(), count));
+            }
+        }
+        out
     }
 
     /// Look up all global row IDs for a given symbol name (exact match).
@@ -596,6 +667,45 @@ impl Overlay {
             }
             // Complete the current name group fully before checking the budget
             // so apply_clauses can correctly tie-break rows with the same name.
+            if results.len() >= need {
+                break;
+            }
+        }
+        results
+    }
+
+    /// Like [`stream_names_asc`] but only emits rows whose global row ID is in `kind_bm`.
+    ///
+    /// Used by the `ORDER BY name ASC LIMIT N WHERE fql_kind = 'X'` fast-path to
+    /// stream FST names in lexicographic order, filtering to a specific kind without
+    /// materialising the full kind bitmap first and without distributing it across segments.
+    pub(super) fn stream_names_asc_kind_filtered(
+        &self,
+        need: usize,
+        kind_bm: &RoaringBitmap,
+        segments: &[Arc<SegmentReader>],
+    ) -> Vec<SymbolMatch> {
+        use fst::Streamer as _;
+        let mut results = Vec::new();
+        let mut stream = self.name_fst.stream();
+        while let Some((_name_bytes, encoded)) = stream.next() {
+            let bitmap = self.decode_postings(encoded);
+            // Only process rows that are in the kind bitmap.
+            let matching = bitmap & kind_bm;
+            for global_id in &matching {
+                let Some(ptr) = self.resolve_global(global_id) else {
+                    continue;
+                };
+                let Some(seg) = segments.get(ptr.segment_idx as usize) else {
+                    continue;
+                };
+                let Some(meta) = self.segments.get(ptr.segment_idx as usize) else {
+                    continue;
+                };
+                if let Some(row) = seg.materialize_one_row(ptr.local_row_idx, &meta.source_path) {
+                    results.push(row);
+                }
+            }
             if results.len() >= need {
                 break;
             }

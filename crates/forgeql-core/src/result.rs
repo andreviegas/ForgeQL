@@ -101,7 +101,7 @@ impl QueryResult {
 /// Flat row model: every query produces a uniform `SymbolMatch` populated
 /// with the fields that make sense for that operation.  Dynamic per-type
 /// metadata (signature, value, enum members, etc.) lives in `fields`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SymbolMatch {
     /// Symbol, macro, enum, or file name.
     pub name: String,
