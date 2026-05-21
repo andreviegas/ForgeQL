@@ -130,11 +130,39 @@ impl ColumnarStorage {
     #[allow(clippy::unnecessary_wraps)]
     fn fast_group_by_file(&self, clauses: &Clauses) -> Result<Vec<SymbolMatch>> {
         let mut counts: HashMap<PathBuf, usize> = HashMap::new();
-        for meta in self.overlay.segments() {
+
+        let path_floor = clauses
+            .in_glob
+            .as_deref()
+            .and_then(glob_to_path_prefix)
+            .map(|prefix| {
+                let row_range = self.overlay.path_row_range(prefix);
+                row_range.collect::<RoaringBitmap>()
+            });
+
+        // Compute candidates if there are filters
+        let has_filters = !clauses.where_predicates.is_empty();
+        let candidates = if has_filters {
+            Some(self.prefilter_global(clauses, path_floor))
+        } else {
+            None
+        };
+
+        for (idx, meta) in self.overlay.segments().iter().enumerate() {
             if !passes_resolve_glob(&meta.source_path, clauses) {
                 continue;
             }
-            *counts.entry(meta.source_path.clone()).or_insert(0) += meta.dedup_row_count as usize;
+            let count = candidates
+                .as_ref()
+                .map_or(meta.dedup_row_count as usize, |cand| {
+                    let range = self.overlay.segment_row_range(idx);
+                    #[allow(clippy::cast_possible_truncation)]
+                    let val = cand.range_cardinality(range) as usize;
+                    val
+                });
+            if count > 0 {
+                *counts.entry(meta.source_path.clone()).or_insert(0) += count;
+            }
         }
         let mut results: Vec<SymbolMatch> = counts
             .into_iter()
@@ -146,17 +174,14 @@ impl ColumnarStorage {
             })
             .collect();
         // HAVING (count-based filtering)
-        for pred in &clauses.having_predicates {
-            let p = pred.clone();
-            results.retain(|item| eval_predicate(item, &p));
-        }
-        // ORDER BY + LIMIT (skip GROUP BY — already grouped; IN/EXCLUDE already applied
-        // during segment iteration so strip them here to avoid re-filtering by path,
-        // which would drop entries that have path = None).
+        // HAVING, ORDER BY, LIMIT (skip GROUP BY — already grouped; IN/EXCLUDE already applied
+        // during segment iteration so strip them here to avoid re-filtering by path.
+        // Also clear where_predicates since we already filtered the roaring bitmaps by them.)
         let mut no_group = clauses.clone();
         no_group.group_by = None;
         no_group.in_glob = None;
         no_group.exclude_glob = None;
+        no_group.where_predicates.clear();
         apply_clauses(&mut results, &no_group);
         Ok(results)
     }
@@ -649,9 +674,25 @@ fn glob_to_path_prefix(glob: &str) -> Option<&str> {
 /// predict which rows match a filter without reading them), dirty overlay empty
 /// (dirty segments are not integrated into the overlay metadata yet).
 fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> bool {
-    dirty_empty
-        && clauses.where_predicates.is_empty()
-        && matches!(&clauses.group_by, Some(GroupBy::Field(f)) if f == "file" || f == "path")
+    if !dirty_empty {
+        return false;
+    }
+    if !matches!(&clauses.group_by, Some(GroupBy::Field(f)) if f == "file" || f == "path") {
+        return false;
+    }
+    // Phase 1: eligible if no where predicates, OR if all where predicates
+    // are fully resolvable by prefilter_global.
+    if clauses.where_predicates.is_empty() {
+        return true;
+    }
+    // Check if every predicate is indexed (resolvable by prefilter_global)
+    clauses.where_predicates.iter().all(|pred| {
+        matches!(
+            (pred.field.as_str(), &pred.op),
+            ("fql_kind", CompareOp::Eq)
+                | ("name", CompareOp::Eq | CompareOp::Like | CompareOp::Matches)
+        )
+    })
 }
 
 /// Returns `true` when `GROUP BY fql_kind` can be served from the overlay's
@@ -1094,11 +1135,11 @@ impl StorageEngine for ColumnarStorage {
         // duplicate source paths.  If duplicates exist, row_count and kind-bitmap
         // lengths overcount; fall through to the normal pipeline which deduplicates.
         let no_dup_paths = !self.overlay.has_duplicate_paths();
-        if group_by_file_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
-            return self.fast_group_by_file(clauses);
-        }
         if group_by_kind_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
             return self.fast_group_by_kind(clauses);
+        }
+        if group_by_file_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
+            return self.fast_group_by_file(clauses);
         }
         // ── ORDER BY name ASC LIMIT N fast-path ──────────────────────────────
         // Stream the first (limit + offset) rows directly from the name FST in

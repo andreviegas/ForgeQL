@@ -6,6 +6,10 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Corrected `GROUP BY file` Optimized Fast-Path (Phase 1)** — We resolved a critical issue where golden integration tests (G13, G17, G19) returned 0 rows because `where_predicates` were left in `no_group` and evaluated on grouped results (which lacked symbol-level fields), dropping all matches. Clearing `where_predicates` before invoking `apply_clauses` resolves this.
+- **Enabled `GROUP BY file` Fast-path Dispatch** — Dispatched the `fast_group_by_file` plan inside the query compiler (`find_symbols`) when eligible, enabling lightning-fast in-memory roaring bitmap range intersections.
 ## [0.51.0] — 2026-05-21 — Path acceleration fast-paths; GROUP BY sub-second; bounded top-K
 
 ### Added
