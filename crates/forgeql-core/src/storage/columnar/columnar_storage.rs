@@ -100,8 +100,8 @@ impl ColumnarStorage {
         overlay: Arc<Overlay>,
         lang_registry: Arc<LanguageRegistry>,
     ) -> Self {
-        let staging_dir = worktree_root.join(".forgeql-staging");
-        let delta_path = worktree_root.join(".forgeql-columnar-delta");
+        let staging_dir = worktree_root.join(super::STAGING_DIR_NAME);
+        let delta_path = worktree_root.join(super::DELTA_FILE_NAME);
         let stats = IndexStats {
             rows: overlay.row_count() as usize,
             ..IndexStats::default()

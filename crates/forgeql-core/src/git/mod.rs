@@ -98,7 +98,7 @@ pub fn soft_reset(repo: &Repository, oid_hex: &str) -> Result<()> {
 const CLEAN_COMMIT_EXCLUDED: &[&str] = &[
     ".forgeql-index",
     ".forgeql-session",
-    ".forgeql-columnar-delta",
+    crate::storage::columnar::DELTA_FILE_NAME,
     ".forgeql-checkpoints", // FT6: never in user-facing history
 ];
 
@@ -107,7 +107,10 @@ const CLEAN_COMMIT_EXCLUDED: &[&str] = &[
 /// restores it automatically, giving instant rollback without re-indexing.
 /// `.forgeql-staging/` holds binary segment data that is never committed —
 /// GC via `DeltaFile::gc_orphaned_staging` keeps it clean on rollback.
-const CHECKPOINT_EXCLUDED: &[&str] = &[".forgeql-session", ".forgeql-staging"];
+const CHECKPOINT_EXCLUDED: &[&str] = &[
+    ".forgeql-session",
+    crate::storage::columnar::STAGING_DIR_NAME,
+];
 
 fn is_clean_commit_excluded(path: &std::path::Path) -> bool {
     path.file_name()

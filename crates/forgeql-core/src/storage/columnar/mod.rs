@@ -82,6 +82,11 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///       WHERE/ORDER BY without full row materialization (v0.50.12)
 pub const ENRICH_VER: u32 = 9;
 
+/// The filename used for the columnar delta file in the repository root.
+pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";
+
+/// The folder name used for columnar staging segments.
+pub const STAGING_DIR_NAME: &str = ".forgeql-staging";
 /// Encode a byte slice as a lowercase hex string.
 pub(crate) fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
