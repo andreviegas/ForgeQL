@@ -658,5 +658,61 @@
       {"name": "unregister_service", "line": 321, "path": "tests/bluetooth/tester/src/btp_core.c"},
       {"name": "tp_input", "line": 4339, "path": "subsys/net/ip/tcp.c"}
     ]
+  },
+  {
+    "name": "GBUG7a_mixed_logic_false_positive_sched_prio_set",
+    "fql": "FIND symbols WHERE fql_kind = 'if' WHERE mixed_logic = 'true' WHERE enclosing_fn = 'z_impl_k_thread_priority_set' IN 'kernel/sched.c'",
+    "expect_total": 0,
+    "expect_rows": []
+  },
+  {
+    "name": "GBUG7b_mixed_logic_false_positive_next_up",
+    "fql": "FIND symbols WHERE fql_kind = 'if' WHERE mixed_logic = 'true' WHERE enclosing_fn = 'next_up' IN 'kernel/sched.c'",
+    "expect_total": 0,
+    "expect_rows": []
+  },
+  {
+    "name": "GEXTAa_num_suffix_f_hex_false_positive_att",
+    "fql": "FIND symbols WHERE fql_kind = 'number' WHERE num_suffix = 'f' WHERE path = 'subsys/bluetooth/host/att.c'",
+    "expect_total": 0,
+    "expect_rows": []
+  },
+  {
+    "name": "GEXTAb_num_suffix_f_hex_false_positive_ina228",
+    "fql": "FIND symbols WHERE fql_kind = 'number' WHERE num_suffix = 'f' WHERE path = 'tests/drivers/sensor/ina228/src/ina228_test.c'",
+    "expect_total": 0,
+    "expect_rows": []
+  },
+  {
+    "name": "GEXTBa_compound_assignment_not_indexed",
+    "fql": "FIND symbols WHERE fql_kind = 'compound_assignment' GROUP BY fql_kind LIMIT 1",
+    "expect_row_count": 1,
+    "expect_rows": [
+      {"kind": "compound_assignment"}
+    ]
+  },
+  {
+    "name": "GEXTBb_shift_expression_not_indexed",
+    "fql": "FIND symbols WHERE fql_kind = 'shift_expression' GROUP BY fql_kind LIMIT 1",
+    "expect_row_count": 1,
+    "expect_rows": [
+      {"kind": "shift_expression"}
+    ]
+  },
+  {
+    "name": "GBUG11a_usages_encode_node_call_at_679",
+    "fql": "FIND usages OF 'encode_node' IN 'subsys/bluetooth/controller/hci/hci_driver.c' WHERE line = 679 LIMIT 1",
+    "expect_row_count": 1,
+    "expect_rows": [
+      {"line": 679, "path": "subsys/bluetooth/controller/hci/hci_driver.c"}
+    ]
+  },
+  {
+    "name": "GBUG11b_usages_encode_node_call_at_750",
+    "fql": "FIND usages OF 'encode_node' IN 'subsys/bluetooth/controller/hci/hci_driver.c' WHERE line = 750 LIMIT 1",
+    "expect_row_count": 1,
+    "expect_rows": [
+      {"line": 750, "path": "subsys/bluetooth/controller/hci/hci_driver.c"}
+    ]
   }
 ]
