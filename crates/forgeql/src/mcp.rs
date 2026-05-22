@@ -420,11 +420,15 @@ mod tests {
     use std::sync::Arc;
 
     use forgeql_core::ast::lang::LanguageRegistry;
+    use forgeql_lang_c::CLanguage;
     use forgeql_lang_cpp::CppLanguage;
     use tempfile::tempdir;
 
     fn make_registry() -> Arc<LanguageRegistry> {
-        Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]))
+        Arc::new(LanguageRegistry::new(vec![
+            Arc::new(CLanguage),
+            Arc::new(CppLanguage),
+        ]))
     }
 
     fn fixtures_dir() -> PathBuf {

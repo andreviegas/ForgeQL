@@ -732,7 +732,7 @@ mod tests {
         let json = include_bytes!("../../../forgeql-lang-cpp/config/cpp.json");
         let parsed = LanguageConfigJson::from_json_bytes(json).expect("cpp.json should parse");
         assert_eq!(parsed.language.name, "cpp");
-        assert_eq!(parsed.language.extensions.len(), 8);
+        assert_eq!(parsed.language.extensions.len(), 7);
         assert_eq!(parsed.syntax.root_node, "translation_unit");
         assert_eq!(parsed.syntax.scope_separator, "::");
         assert_eq!(

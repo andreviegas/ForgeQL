@@ -24,8 +24,9 @@
 //!
 //! | Extension            | Grammar           |
 //! |----------------------|-------------------|
-//! | `.c .cpp .cc .cxx`   | tree-sitter-cpp   |
-//! | `.h .hpp .hxx`       | tree-sitter-cpp   |
+//! | `.c .h`              | tree-sitter-c     |
+//! | `.cpp .cc .cxx`      | tree-sitter-cpp   |
+//! | `.hpp .hxx`          | tree-sitter-cpp   |
 //! | `.rs`                | tree-sitter-rust  |
 //! | `.py`                | tree-sitter-python|
 
@@ -61,9 +62,10 @@ Options:
   --help        Print this message
 
 Supported extensions:
-  .c  .cpp  .cc  .cxx  .h  .hpp  .hxx  → tree-sitter-cpp
-  .rs                                   → tree-sitter-rust
-  .py                                   → tree-sitter-python"
+  .c  .h                              → tree-sitter-c
+  .cpp  .cc  .cxx  .hpp  .hxx        → tree-sitter-cpp
+  .rs                                 → tree-sitter-rust
+  .py                                 → tree-sitter-python"
     );
 }
 
@@ -162,9 +164,8 @@ fn detect_language(path: &Path) -> Option<Language> {
         .map(str::to_lowercase)
         .as_deref()
     {
-        Some("c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "hxx") => {
-            Some(tree_sitter_cpp::LANGUAGE.into())
-        }
+        Some("c" | "h") => Some(tree_sitter_c::LANGUAGE.into()),
+        Some("cpp" | "cc" | "cxx" | "hpp" | "hxx") => Some(tree_sitter_cpp::LANGUAGE.into()),
         Some("rs") => Some(tree_sitter_rust::LANGUAGE.into()),
         Some("py") => Some(tree_sitter_python::LANGUAGE.into()),
         _ => None,
@@ -178,7 +179,8 @@ fn language_label(path: &Path) -> &'static str {
         .map(str::to_lowercase)
         .as_deref()
     {
-        Some("c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "hxx") => "tree-sitter-cpp",
+        Some("c" | "h") => "tree-sitter-c",
+        Some("cpp" | "cc" | "cxx" | "hpp" | "hxx") => "tree-sitter-cpp",
         Some("rs") => "tree-sitter-rust",
         Some("py") => "tree-sitter-python",
         _ => "unknown",

@@ -278,6 +278,18 @@ fn golden_values() {
     let entries: Vec<GoldenEntry> = serde_json::from_str(&fixture_str)
         .unwrap_or_else(|e| panic!("[golden] cannot parse {}: {e}", fixture_path.display()));
 
+    // ── Update mode ───────────────────────────────────────────────────────────
+    // Run with `GOLDEN_UPDATE=1 cargo test ... -- --nocapture` to rewrite
+    // golden.json with the actual values returned by the current index.
+    // Only the fields already declared in each entry are updated; the shape
+    // of the file is preserved.
+    let update_mode = std::env::var("GOLDEN_UPDATE").as_deref() == Ok("1");
+    let mut raw_entries: Vec<Value> = serde_json::from_str(&fixture_str)
+        .unwrap_or_else(|e| panic!("[golden] cannot parse raw {}: {e}", fixture_path.display()));
+    if update_mode {
+        eprintln!("[golden] UPDATE MODE — will rewrite golden.json with actual values");
+    }
+
     // ── Spawn MCP server ──────────────────────────────────────────────────────
     let mut client = McpClient::spawn(&data_dir)
         .unwrap_or_else(|e| panic!("[golden] failed to spawn MCP server: {e}"));
@@ -287,7 +299,7 @@ fn golden_values() {
     let mut pass = 0usize;
 
     // ── Run entries ───────────────────────────────────────────────────────────
-    for entry in &entries {
+    for (idx, entry) in entries.iter().enumerate() {
         match entry {
             // ── USE step ──────────────────────────────────────────────────────
             GoldenEntry::Use(u) => {
@@ -312,23 +324,26 @@ fn golden_values() {
                     u.use_str,
                     session_id.as_deref().unwrap_or("?")
                 );
+                let got_indexed = usize::try_from(
+                    result
+                        .get("symbols_indexed")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                )
+                .unwrap_or(0);
                 if let Some(expected) = u.expect_symbols_indexed {
-                    let got = usize::try_from(
-                        result
-                            .get("symbols_indexed")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0),
-                    )
-                    .unwrap_or(0);
-                    if got == expected {
-                        eprintln!("[golden] USE {} symbols_indexed={got} ✓", u.use_str);
+                    if got_indexed == expected {
+                        eprintln!("[golden] USE {} symbols_indexed={got_indexed} ✓", u.use_str);
                         pass += 1;
                     } else {
                         failures.push(format!(
-                            "USE {}: symbols_indexed expected {expected}, got {got}",
+                            "USE {}: symbols_indexed expected {expected}, got {got_indexed}",
                             u.use_str
                         ));
                     }
+                }
+                if update_mode && u.expect_symbols_indexed.is_some() {
+                    raw_entries[idx]["expect_symbols_indexed"] = json!(got_indexed);
                 }
             }
 
@@ -430,6 +445,55 @@ fn golden_values() {
                     .unwrap_or(0);
                 let got_total = result.get("total").and_then(Value::as_u64).unwrap_or(0);
 
+                // ── Update mode: rewrite declared fields with actual values ──
+                if update_mode {
+                    if raw_entries[idx].get("expect_total").is_some() {
+                        raw_entries[idx]["expect_total"] = json!(got_total);
+                    }
+                    if raw_entries[idx].get("expect_row_count").is_some() {
+                        raw_entries[idx]["expect_row_count"] = json!(rows.len());
+                    }
+                    if let Some(arr) = raw_entries[idx]
+                        .get_mut("expect_rows")
+                        .and_then(Value::as_array_mut)
+                    {
+                        arr.truncate(rows.len());
+                        for (i, expected_row) in arr.iter_mut().enumerate() {
+                            if let (Some(obj), Some(actual_row)) =
+                                (expected_row.as_object_mut(), rows.get(i))
+                            {
+                                let keys: Vec<String> = obj.keys().cloned().collect();
+                                for key in keys {
+                                    if let Some(av) = actual_row.get(&key) {
+                                        let _ = obj.insert(key, av.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if raw_entries[idx].get("expect_line_count").is_some() {
+                        raw_entries[idx]["expect_line_count"] = json!(lines.len());
+                    }
+                    if let Some(arr) = raw_entries[idx]
+                        .get_mut("expect_lines")
+                        .and_then(Value::as_array_mut)
+                    {
+                        arr.truncate(lines.len());
+                        for (i, expected_line) in arr.iter_mut().enumerate() {
+                            if let (Some(obj), Some(actual_line)) =
+                                (expected_line.as_object_mut(), lines.get(i))
+                            {
+                                let keys: Vec<String> = obj.keys().cloned().collect();
+                                for key in keys {
+                                    if let Some(av) = actual_line.get(&key) {
+                                        let _ = obj.insert(key, av.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if entry_failures.is_empty() {
                     eprintln!(
                         "[golden] PASS {} — tokens={} got_total={}",
@@ -450,6 +514,21 @@ fn golden_values() {
     }
 
     eprintln!("[golden] {pass} passed, {} failed", failures.len());
+
+    // ── Write-back (update mode) ───────────────────────────────────────────
+    if update_mode {
+        let json_str = serde_json::to_string_pretty(&raw_entries)
+            .unwrap_or_else(|e| panic!("[golden] cannot serialize updated entries: {e}"));
+        std::fs::write(&fixture_path, json_str + "\n")
+            .unwrap_or_else(|e| panic!("[golden] cannot write {}: {e}", fixture_path.display()));
+        eprintln!(
+            "[golden] golden.json rewritten ({} entries, {} assertions updated)",
+            raw_entries.len(),
+            failures.len(),
+        );
+        return;
+    }
+
     assert!(
         failures.is_empty(),
         "{} golden assertion(s) failed:\n{}",

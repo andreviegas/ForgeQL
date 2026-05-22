@@ -1,25 +1,21 @@
-//! C++ language support for ForgeQL.
+//! C language support for ForgeQL.
 //!
-//! This crate implements [`LanguageSupport`] for C++ using `tree-sitter-cpp`.
+//! This crate implements [`LanguageSupport`] for C using `tree-sitter-c`.
 //! Register an instance with [`LanguageRegistry`] at application startup to
-//! enable indexing and analysis of C++ source files.
+//! enable indexing and analysis of C source files.
 //!
-//! C files (`.c`, `.h`) are handled by `forgeql-lang-c` which uses
-//! `tree-sitter-c` and avoids C++ keyword conflicts with valid C identifiers.
+//! C is treated as a separate language from C++ (`forgeql-lang-cpp`).
+//! `.c` files use the C grammar; `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`,
+//! `.hxx`, and `.ino` files use the C++ grammar.
 //!
 //! ```ignore
-//! use forgeql_lang_cpp::CppLanguage;
+//! use forgeql_lang_c::CLanguage;
 //! use forgeql_core::ast::lang::LanguageRegistry;
 //!
-//! let registry = LanguageRegistry::new(vec![Arc::new(CppLanguage)]);
+//! let registry = LanguageRegistry::new(vec![Arc::new(CLanguage)]);
 //! ```
 
-#![allow(
-    // False positive: re-export of FQL kind constants for convenience.
-    clippy::module_name_repetitions,
-    // Doc comments for this module are fine as-is.
-    clippy::doc_markdown,
-)]
+#![allow(clippy::module_name_repetitions, clippy::doc_markdown)]
 
 use std::sync::{Arc, OnceLock};
 
@@ -30,49 +26,43 @@ use forgeql_core::ast::lang_json::LanguageConfigJson;
 
 pub(crate) mod macro_expand;
 
-/// C++ language support for ForgeQL.
-pub struct CppLanguage;
+/// C language support for ForgeQL.
+pub struct CLanguage;
 
-/// Static configuration for C++.
-static CPP_CONFIG: OnceLock<LanguageConfig> = OnceLock::new();
+/// Static configuration for C.
+static C_CONFIG: OnceLock<LanguageConfig> = OnceLock::new();
 
-/// Returns the static C/C++ language configuration, loaded from
-/// `config/cpp.json` (embedded at compile time).
+/// Returns the static C language configuration, loaded from
+/// `config/c.json` (embedded at compile time).
 ///
 /// # Panics
 ///
-/// Panics if the embedded `cpp.json` is malformed (should never happen —
+/// Panics if the embedded `c.json` is malformed (should never happen —
 /// the file is validated at test time).
 #[allow(clippy::expect_used)]
-pub fn cpp_config() -> &'static LanguageConfig {
-    CPP_CONFIG.get_or_init(|| {
-        let json_bytes = include_bytes!("../config/cpp.json");
-        let json_config = LanguageConfigJson::from_json_bytes(json_bytes)
-            .expect("embedded cpp.json must be valid");
+pub fn c_config() -> &'static LanguageConfig {
+    C_CONFIG.get_or_init(|| {
+        let json_bytes = include_bytes!("../config/c.json");
+        let json_config =
+            LanguageConfigJson::from_json_bytes(json_bytes).expect("embedded c.json must be valid");
         json_config.into_language_config()
     })
 }
 
-impl LanguageSupport for CppLanguage {
+impl LanguageSupport for CLanguage {
     fn name(&self) -> &'static str {
-        "cpp"
+        "c"
     }
 
     fn extensions(&self) -> &'static [&'static str] {
-        &["cpp", "cc", "cxx", "h", "hpp", "hxx", "ino"]
+        &["c"]
     }
 
     fn tree_sitter_language(&self) -> tree_sitter::Language {
-        tree_sitter_cpp::LANGUAGE.into()
+        tree_sitter_c::LANGUAGE.into()
     }
 
     fn extract_name(&self, node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-        // Structural nodes that are part of a declarator tree should never
-        // produce their own index rows.
-        if node.kind() == "qualified_identifier" {
-            return None;
-        }
-
         // Universal: most grammars expose a "name" field on definition nodes.
         if let Some(name_node) = node.child_by_field_name("name") {
             let text = node_text(source, name_node);
@@ -118,14 +108,6 @@ impl LanguageSupport for CppLanguage {
                 if text.is_empty() { None } else { Some(text) }
             }
 
-            // macro_invocation: extract the macro name via the "macro" field.
-            //
-            // NOTE: tree-sitter-cpp 0.23.x rarely produces macro_invocation nodes
-            // in practice — both statement-position and declaration-position macro calls
-            // are parsed as expression_statement(call_expression(...)) instead.
-            // See macro_expand.rs tests `call_expr_macro_structure` and
-            // `decl_position_macro_is_also_call_expression` for confirmation.
-            // Full C/C++ macro-call indexing requires the two-pass pipeline (Task 4.2).
             "macro_invocation" => node
                 .child_by_field_name("macro")
                 .map(|n| node_text(source, n))
@@ -136,34 +118,27 @@ impl LanguageSupport for CppLanguage {
     }
 
     fn map_kind(&self, raw_kind: &str) -> Option<&'static str> {
-        cpp_config().kind_map_lookup(raw_kind)
+        c_config().kind_map_lookup(raw_kind)
     }
 
     fn config(&self) -> &'static LanguageConfig {
-        cpp_config()
+        c_config()
     }
 
     fn macro_expander(&self) -> Option<&dyn MacroExpander> {
-        static EXPANDER: macro_expand::CppMacroExpander = macro_expand::CppMacroExpander;
+        static EXPANDER: macro_expand::CMacroExpander = macro_expand::CMacroExpander;
         Some(&EXPANDER)
     }
 }
 
 // -----------------------------------------------------------------------
-// C++ helper functions
+// C helper functions
 // -----------------------------------------------------------------------
 
 fn find_function_name(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
     match node.kind() {
-        "identifier"
-        | "field_identifier"
-        | "destructor_name"
-        | "operator_name"
-        | "qualified_identifier" => Some(node),
-        "function_declarator"
-        | "pointer_declarator"
-        | "reference_declarator"
-        | "abstract_function_declarator" => node
+        "identifier" | "field_identifier" => Some(node),
+        "function_declarator" | "pointer_declarator" | "reference_declarator" => node
             .child_by_field_name("declarator")
             .and_then(find_function_name),
         _ => {
@@ -192,13 +167,13 @@ fn contains_function_declarator(node: tree_sitter::Node<'_>) -> bool {
 }
 
 // -----------------------------------------------------------------------
-// Convenience: build a default C++ registry
+// Convenience: build a default C registry
 // -----------------------------------------------------------------------
 
-/// Build a [`LanguageRegistry`] containing only C/C++ support.
+/// Build a [`LanguageRegistry`] containing only C support.
 #[must_use]
-pub fn cpp_registry() -> LanguageRegistry {
-    LanguageRegistry::new(vec![Arc::new(CppLanguage)])
+pub fn c_registry() -> LanguageRegistry {
+    LanguageRegistry::new(vec![Arc::new(CLanguage)])
 }
 
 // -----------------------------------------------------------------------
@@ -212,9 +187,8 @@ mod tests {
 
     #[test]
     fn map_kind_covers_all_definition_kinds() {
-        let lang = CppLanguage;
+        let lang = CLanguage;
         assert_eq!(lang.map_kind("function_definition"), Some("function"));
-        assert_eq!(lang.map_kind("class_specifier"), Some("class"));
         assert_eq!(lang.map_kind("struct_specifier"), Some("struct"));
         assert_eq!(lang.map_kind("enum_specifier"), Some("enum"));
         assert_eq!(lang.map_kind("declaration"), Some("variable"));
@@ -223,84 +197,65 @@ mod tests {
         assert_eq!(lang.map_kind("preproc_include"), Some("import"));
         assert_eq!(lang.map_kind("preproc_def"), Some("macro"));
         assert_eq!(lang.map_kind("type_definition"), Some("type_alias"));
-        assert_eq!(lang.map_kind("namespace_definition"), Some("namespace"));
     }
 
     #[test]
     fn map_kind_covers_expression_kinds() {
-        let lang = CppLanguage;
+        let lang = CLanguage;
         assert_eq!(lang.map_kind("number_literal"), Some("number"));
         assert_eq!(lang.map_kind("cast_expression"), Some("cast"));
-        assert_eq!(lang.map_kind("static_cast_expression"), Some("cast"));
         assert_eq!(lang.map_kind("update_expression"), Some("increment"));
         assert_eq!(
             lang.map_kind("compound_assignment"),
             Some("compound_assignment")
         );
-        assert_eq!(lang.map_kind("shift_expression"), Some("shift_expression"));
     }
 
     #[test]
     fn map_kind_covers_control_flow_kinds() {
-        let lang = CppLanguage;
+        let lang = CLanguage;
         assert_eq!(lang.map_kind("if_statement"), Some("if"));
         assert_eq!(lang.map_kind("while_statement"), Some("while"));
         assert_eq!(lang.map_kind("for_statement"), Some("for"));
-        assert_eq!(lang.map_kind("for_range_loop"), Some("for"));
         assert_eq!(lang.map_kind("switch_statement"), Some("switch"));
         assert_eq!(lang.map_kind("do_statement"), Some("do"));
     }
 
     #[test]
+    fn map_kind_does_not_map_cpp_only_kinds() {
+        let lang = CLanguage;
+        // C has no classes, namespaces, or C++ casts.
+        assert_eq!(lang.map_kind("class_specifier"), None);
+        assert_eq!(lang.map_kind("namespace_definition"), None);
+        assert_eq!(lang.map_kind("static_cast_expression"), None);
+        assert_eq!(lang.map_kind("for_range_loop"), None);
+    }
+
+    #[test]
     fn map_kind_returns_none_for_unknown() {
-        let lang = CppLanguage;
+        let lang = CLanguage;
         assert_eq!(lang.map_kind("translation_unit"), None);
         assert_eq!(lang.map_kind("compound_statement"), None);
     }
 
     #[test]
-    fn registry_resolves_cpp_extensions() {
-        let registry = cpp_registry();
+    fn registry_resolves_c_extensions() {
+        let registry = c_registry();
+        let path = std::path::PathBuf::from("test.c");
+        let lang = registry.language_for_path(&path);
+        assert!(lang.is_some(), "extension c should resolve");
+        assert_eq!(lang.as_ref().map(|l| l.name()), Some("c"));
+    }
 
-        for ext in ["cpp", "cc", "cxx", "hpp", "hxx", "ino"] {
+    #[test]
+    fn registry_does_not_resolve_cpp_extensions() {
+        let registry = c_registry();
+        for ext in ["cpp", "cc", "cxx", "h", "hpp", "hxx"] {
             let path = std::path::PathBuf::from(format!("test.{ext}"));
-            let lang = registry.language_for_path(&path);
-            assert!(lang.is_some(), "extension {ext} should resolve");
-            assert_eq!(lang.as_ref().map(|l| l.name()), Some("cpp"));
+            assert!(
+                registry.language_for_path(&path).is_none(),
+                "extension {ext} should not resolve in C-only registry"
+            );
         }
-    }
-
-    #[test]
-    fn registry_returns_none_for_unknown_extension() {
-        let registry = cpp_registry();
-        let path = std::path::PathBuf::from("test.rs");
-        assert!(registry.language_for_path(&path).is_none());
-    }
-
-    #[test]
-    fn config_is_consistent() {
-        let config = CppLanguage.config();
-        assert_eq!(config.scope_sep(), "::");
-        assert!(!config.function_kinds().is_empty());
-        assert!(!config.type_kinds().is_empty());
-    }
-
-    #[test]
-    fn extract_name_via_trait() {
-        let lang = CppLanguage;
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&lang.tree_sitter_language())
-            .expect("set language");
-
-        let source = b"void processSignal(int speed) { return; }";
-        let tree = parser.parse(source, None).expect("parse");
-        let root = tree.root_node();
-
-        let func_node = root.child(0).expect("function_definition");
-        assert_eq!(func_node.kind(), "function_definition");
-
-        let name = lang.extract_name(func_node, source);
-        assert_eq!(name.as_deref(), Some("processSignal"));
     }
 }

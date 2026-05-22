@@ -342,6 +342,7 @@ mod tests {
 
     fn make_test_engine() -> (ForgeQLEngine, TempDir) {
         use forgeql_core::ast::lang::LanguageRegistry;
+        use forgeql_lang_c::CLanguage;
         use forgeql_lang_cpp::CppLanguage;
         use std::sync::Arc;
 
@@ -360,7 +361,10 @@ mod tests {
         )
         .expect("copy motor_control.cpp");
 
-        let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
+        let registry = Arc::new(LanguageRegistry::new(vec![
+            Arc::new(CLanguage),
+            Arc::new(CppLanguage),
+        ]));
         let data_dir = tmp.path().join("data");
         let engine = ForgeQLEngine::new(data_dir, registry).unwrap();
         (engine, tmp)

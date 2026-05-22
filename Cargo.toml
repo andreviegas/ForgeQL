@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/forgeql-core",
+    "crates/forgeql-lang-c",
     "crates/forgeql-lang-cpp",
     "crates/forgeql-lang-python",
     "crates/forgeql-lang-rust",
@@ -13,6 +14,7 @@ members = [
 # Build the debug tool explicitly with: cargo build -p forgeql-ts-debug
 default-members = [
     "crates/forgeql-core",
+    "crates/forgeql-lang-c",
     "crates/forgeql-lang-cpp",
     "crates/forgeql-lang-python",
     "crates/forgeql-lang-rust",
@@ -20,7 +22,7 @@ default-members = [
 ]
 
 [workspace.package]
-version   = "0.53.1"
+version   = "0.53.2"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"
@@ -74,6 +76,7 @@ serde_yml        = "0.0.12"
 
 # --- AST parsing ---
 tree-sitter      = "0.25"
+tree-sitter-c    = "0.23"
 tree-sitter-cpp  = "0.23"
 tree-sitter-python = "0.23"
 tree-sitter-rust = "0.24"
@@ -126,6 +129,7 @@ dirs             = "5"
 
 # --- internal crates ---
 forgeql-core        = { path = "crates/forgeql-core" }
+forgeql-lang-c      = { path = "crates/forgeql-lang-c" }
 forgeql-lang-cpp    = { path = "crates/forgeql-lang-cpp" }
 forgeql-lang-python = { path = "crates/forgeql-lang-python" }
 forgeql-lang-rust   = { path = "crates/forgeql-lang-rust" }
@@ -153,6 +157,9 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.forgeql-lang-cpp]
+opt-level = 3
+
+[profile.dev.package.forgeql-lang-c]
 opt-level = 3
 
 [profile.dev.package.forgeql-lang-python]

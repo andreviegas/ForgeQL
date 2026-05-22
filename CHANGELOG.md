@@ -6,6 +6,38 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.53.2] — 2026-05-23 — `forgeql-lang-c`: dedicated C language crate with `tree-sitter-c`
+
+### Added
+
+- **`forgeql-lang-c` crate** — New language crate for C source files (`.c`, `.h`) backed by `tree-sitter-c`.
+  Previously, all C and C++ files were parsed by `tree-sitter-cpp`, which treats `class`, `template`,
+  `namespace`, and other C++ keywords as reserved — causing `tree-sitter-cpp` to catastrophically mis-parse
+  any C file that uses them as ordinary identifiers (GBUG11: `class` parameter in `hci_driver.c` turned a
+  valid `switch` statement into a phantom anonymous class body, corrupting all symbols from that point).
+
+- **`CLanguage` struct** implements `LanguageSupport` for C with:
+  - `tree-sitter-c` grammar (no C++ keyword conflicts)
+  - `c.json` configuration: C-only kind map (no templates, no OOP visibility, no named casts, no range `for`)
+  - `CMacroExpander` for two-pass `#define` expansion
+  - Full test suite: 7 unit tests covering `map_kind`, extension resolution, and negative assertions
+
+- **`tree-sitter-c = "0.23"` workspace dependency** added.
+
+### Fixed
+
+- **GBUG11** — `.c` and `.h` files now route through `tree-sitter-c` instead of `tree-sitter-cpp`, eliminating
+  the class-keyword parse corruption in Zephyr's `hci_driver.c` and any similar C file that uses C++ keywords
+  as valid C identifiers.
+
+### Changed
+
+- **`forgeql-lang-cpp` extensions** — Removed `.c` and `.h` from `CppLanguage::extensions()` and `cpp.json`.
+  C++ grammar now covers only `["cpp", "cc", "cxx", "hpp", "hxx", "ino"]`.
+
+- **`ts-debug` tool** — `.c`/`.h` files now parsed with `tree-sitter-c`; `.cpp`/`.cc`/`.cxx`/`.hpp`/`.hxx`
+  continue to use `tree-sitter-cpp`.
+
 ## [0.53.1] — 2026-05-22 — Enrichment bug fixes: `mixed_logic` MISRA semantics, negative-hex suffix, `fql_kind` for operator rows
 
 ### Fixed

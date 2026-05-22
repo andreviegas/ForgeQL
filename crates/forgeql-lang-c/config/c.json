@@ -1,8 +1,27 @@
 {
   "language": {
-    "name": "cpp",
-    "extensions": ["cpp", "cc", "cxx", "h", "hpp", "hxx", "ino"],
-    "tree_sitter_grammar": "tree-sitter-cpp"
+    "name": "c",
+    "extensions": ["c"],
+    "tree_sitter_grammar": "tree-sitter-c"
+  },
+
+  "definitions": {
+    "function_kinds": ["function_definition"],
+    "type_kinds": ["struct_specifier", "enum_specifier", "union_specifier"],
+    "definition_kinds": [
+      "function_definition",
+      "struct_specifier",
+      "enum_specifier",
+      "union_specifier"
+    ],
+    "declaration_kinds": ["declaration"],
+    "field_kinds": ["field_declaration"],
+    "parameter_kind": "parameter_declaration",
+    "member_body_kind": "field_declaration_list",
+    "member_kinds": ["field_declaration"],
+    "owner_container_kinds": ["struct_specifier", "union_specifier"],
+    "nested_function_body_kinds": ["function_definition"],
+    "constant_def_parent_kinds": ["preproc_def", "enumerator", "init_declarator"]
   },
 
   "syntax": {
@@ -23,39 +42,16 @@
       "if_statement",
       "while_statement",
       "for_statement",
-      "for_range_loop",
       "switch_statement",
       "do_statement",
       "return_statement",
       "break_statement",
       "continue_statement",
       "goto_statement",
-      "throw_statement",
-      "case_statement",
-      "labeled_statement",
-      "try_statement",
-      "declaration",
-      "attributed_statement"
-    ]
-  },
-
-  "definitions": {
-    "function_kinds": ["function_definition"],
-    "type_kinds": ["class_specifier", "struct_specifier", "enum_specifier"],
-    "definition_kinds": [
-      "function_definition",
-      "class_specifier",
-      "struct_specifier",
-      "enum_specifier"
+      "declaration"
     ],
-    "declaration_kinds": ["declaration"],
-    "field_kinds": ["field_declaration"],
-    "parameter_kind": "parameter_declaration",
-    "member_body_kind": "field_declaration_list",
-    "member_kinds": ["field_declaration"],
-    "owner_container_kinds": ["class_specifier", "struct_specifier"],
-    "nested_function_body_kinds": ["lambda_expression", "function_definition"],
-    "constant_def_parent_kinds": ["preproc_def", "enumerator", "init_declarator"]
+    "loop_kinds": ["for_statement", "while_statement", "do_statement"],
+    "exception_handler_kinds": []
   },
 
   "control_flow": {
@@ -63,31 +59,31 @@
       "if_statement",
       "while_statement",
       "for_statement",
-      "for_range_loop",
       "switch_statement",
       "do_statement"
     ],
     "switch_kinds": ["switch_statement"],
     "for_style_map": [
-      ["for_statement", "traditional"],
-      ["for_range_loop", "range"]
+      ["for_statement", "traditional"]
     ],
-    "condition_clause": "condition_clause",
+    "condition_clause": "condition",
     "branch_kinds": [
-      "if_statement", "else_clause",
-      "for_statement", "for_range_loop",
-      "while_statement", "do_statement",
-      "switch_statement", "case_statement"
+      "if_statement",
+      "else_clause",
+      "for_statement",
+      "while_statement",
+      "do_statement",
+      "switch_statement",
+      "case_statement"
     ],
-    "loop_kinds": ["for_statement", "for_range_loop", "while_statement", "do_statement"],
-    "exception_handler_kinds": ["try_statement", "catch_clause"]
+    "loop_kinds": ["for_statement", "while_statement", "do_statement"],
+    "exception_handler_kinds": []
   },
 
   "statements": {
     "return": "return_statement",
     "break": "break_statement",
     "goto": "goto_statement",
-    "throw": "throw_statement",
     "case": "case_statement",
     "assignment_kinds": ["assignment_expression"],
     "update_kinds": ["update_expression"]
@@ -96,7 +92,6 @@
   "expressions": {
     "call": "call_expression",
     "binary": "binary_expression",
-    "logical": "logical_expression",
     "unary": "unary_expression",
     "field_access": "field_expression",
     "subscript": "subscript_expression",
@@ -104,21 +99,14 @@
     "comma": "comma_expression",
     "address_of": "pointer_expression",
     "address_of_operator": "&",
-    "shift_kinds": ["shift_expression"],
+    "shift_kinds": [],
     "compound_assignment": "compound_assignment"
   },
 
   "types": {
     "type_descriptor": "type_descriptor",
-    "template_argument_list": "template_argument_list",
-    "template_declaration": "template_declaration",
     "array_declarator": "array_declarator",
-    "enumerator": "enumerator",
-    "template_misparse_kinds": [
-      "template_function",
-      "template_type",
-      "template_argument_list"
-    ]
+    "enumerator": "enumerator"
   },
 
   "literals": {
@@ -126,7 +114,7 @@
     "string_kinds": ["string_literal", "char_literal"],
     "string_content_kind": "string_content",
     "char_kind": "char_literal",
-    "null_values": ["nullptr", "NULL", "0"],
+    "null_values": ["NULL", "0"],
     "boolean_values": ["true", "false"],
     "digit_separator": "'",
     "number_suffixes": [
@@ -145,55 +133,25 @@
     "map": [
       ["const", "is_const"],
       ["static", "is_static"],
-      ["virtual", "is_virtual"],
       ["inline", "is_inline"],
       ["extern", "is_extern"],
       ["volatile", "is_volatile"],
-      ["mutable", "is_mutable"],
-      ["constexpr", "is_constexpr"],
-      ["explicit", "is_explicit"],
-      ["override", "is_override"],
-      ["final", "is_final"]
+      ["restrict", "is_restrict"]
     ],
     "node_kinds": [
       "type_qualifier",
-      "storage_class_specifier",
-      "virtual_specifier"
+      "storage_class_specifier"
     ],
     "static_storage_keywords": ["static"]
   },
 
-  "visibility": {
-    "keywords": [
-      ["public", "public"],
-      ["private", "private"],
-      ["protected", "protected"]
-    ],
-    "default_by_type": [
-      ["class_specifier", "private"],
-      ["struct_specifier", "public"]
-    ]
-  },
-
   "casts": [
-    ["cast_expression", "c_style", "unsafe"],
-    ["static_cast_expression", "static_cast", "safe"],
-    ["reinterpret_cast_expression", "reinterpret_cast", "unsafe"],
-    ["const_cast_expression", "const_cast", "moderate"],
-    ["dynamic_cast_expression", "dynamic_cast", "safe"]
-  ],
-
-  "named_casts": [
-    ["static_cast",      "static_cast",      "safe"],
-    ["dynamic_cast",     "dynamic_cast",     "safe"],
-    ["const_cast",       "const_cast",       "moderate"],
-    ["reinterpret_cast", "reinterpret_cast", "unsafe"]
+    ["cast_expression", "c_style", "unsafe"]
   ],
 
   "comments": {
     "prefixes": [
       ["/**", "doc_block"],
-      ["///", "doc_line"],
       ["/*", "block"],
       ["//", "line"]
     ]
@@ -224,7 +182,6 @@
 
   "kind_map": {
     "function_definition": "function",
-    "class_specifier": "class",
     "struct_specifier": "struct",
     "enum_specifier": "enum",
     "declaration": "variable",
@@ -235,21 +192,13 @@
     "preproc_def": "macro",
     "preproc_function_def": "macro",
     "type_definition": "type_alias",
-    "alias_declaration": "type_alias",
-    "namespace_definition": "namespace",
     "number_literal": "number",
     "cast_expression": "cast",
-    "static_cast_expression": "cast",
-    "reinterpret_cast_expression": "cast",
-    "const_cast_expression": "cast",
-    "dynamic_cast_expression": "cast",
     "update_expression": "increment",
     "compound_assignment": "compound_assignment",
-    "shift_expression": "shift_expression",
     "if_statement": "if",
     "while_statement": "while",
     "for_statement": "for",
-    "for_range_loop": "for",
     "switch_statement": "switch",
     "do_statement": "do",
     "macro_invocation": "macro_call"
