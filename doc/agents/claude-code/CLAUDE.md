@@ -209,7 +209,7 @@ Computed at index time. Use in `WHERE` clauses like any other field.
 | `catch_all_kind` | `switch` | e.g. `"default"` |
 | `for_style` | `for` | `"traditional"` or `"range"` |
 | `has_assignment_in_condition` | `if`, `while`, `for` | `"true"` if condition contains `=` (not `==`) |
-| `mixed_logic` | `if`, `while`, `for` | `"true"` if mixes `&&` and `||` without grouping |
+| `mixed_logic` | `if`, `while`, `for` | `"true"` if `&&` and `||` appear at the same top-level without explicit parentheses (MISRA Rule 12.1) |
 | `dup_logic` | `if`, `while`, `for`, `do` | `"true"` if duplicate sub-expressions in `&&`/`||` chains |
 | `branch_count` | `function` | Total control-flow branch points |
 

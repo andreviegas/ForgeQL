@@ -230,6 +230,11 @@ mod tests {
         assert_eq!(lang.map_kind("cast_expression"), Some("cast"));
         assert_eq!(lang.map_kind("static_cast_expression"), Some("cast"));
         assert_eq!(lang.map_kind("update_expression"), Some("increment"));
+        assert_eq!(
+            lang.map_kind("compound_assignment"),
+            Some("compound_assignment")
+        );
+        assert_eq!(lang.map_kind("shift_expression"), Some("shift_expression"));
     }
 
     #[test]

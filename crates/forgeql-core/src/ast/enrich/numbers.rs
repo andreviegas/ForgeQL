@@ -128,14 +128,19 @@ impl NodeEnricher for NumberEnricher {
 }
 
 /// Return `true` if `suffix` is a single character that is a valid hex digit
-/// (`a`–`f`) AND the literal `lower` starts with `0x`.
+/// (`a`–`f`) AND the literal `lower` is a hex literal (starts with `0x` or
+/// optionally a leading `-` for negative literals like `-0xff`).
 ///
 /// Such characters are part of the number itself, not a type suffix, and must
 /// not be treated as one.  Shared by `detect_suffix_with_table` and
 /// `strip_suffix_with_table` which previously each contained an identical guard.
 #[inline]
 fn is_hex_digit_suffix(lower: &str, suffix: &str) -> bool {
-    suffix.len() == 1 && lower.starts_with("0x") && "abcdef".contains(suffix)
+    if suffix.len() != 1 || !"abcdef".contains(suffix) {
+        return false;
+    }
+    let digits = lower.strip_prefix('-').unwrap_or(lower);
+    digits.starts_with("0x")
 }
 
 /// Detect the type suffix of a number literal using the config suffix table.
@@ -336,6 +341,14 @@ mod tests {
         let s = cpp_config().number_suffix_table();
         // 0xffu: the trailing 'u' is a suffix; 'f' is a hex digit, not a suffix.
         assert_eq!(detect_suffix_with_table("0xffu", s), "u");
+    }
+
+    #[test]
+    fn suffix_detection_negative_hex_f_not_suffix() {
+        let s = cpp_config().number_suffix_table();
+        // Negative hex literals: the trailing 'f' is a hex digit, not a float suffix.
+        assert_eq!(detect_suffix_with_table("-0xff", s), "");
+        assert_eq!(detect_suffix_with_table("-0x0000007fffffffff", s), "");
     }
 
     #[test]

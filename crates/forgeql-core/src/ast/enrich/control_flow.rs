@@ -8,7 +8,8 @@
 /// - `catch_all_kind`: (switch only, when `has_catch_all` is true) e.g. `"default"`
 /// - `for_style`: (for loops only) `"traditional"` or `"range"`
 /// - `has_assignment_in_condition`: `"true"` if `=` (not `==`) in condition
-/// - `mixed_logic`: `"true"` if both `&&` and `||` appear
+/// - `mixed_logic`: `"true"` if `&&` and `||` appear at the same top-level without
+///   explicit parentheses separating them (MISRA Rule 12.1)
 /// - `dup_logic`: `"true"` if duplicate sub-expression in `&&`/`||` chain
 ///
 /// Post-pass aggregates on `function_definition` rows:
@@ -67,7 +68,7 @@ impl NodeEnricher for ControlFlowEnricher {
                 has_assign.to_string(),
             ));
 
-            let mixed = skeleton.contains("&&") && skeleton.contains("||");
+            let mixed = detect_mixed_logic(&skeleton);
             drop(fields.insert("mixed_logic".to_string(), mixed.to_string()));
 
             let dup = detect_dup_logic(&skeleton);
@@ -579,6 +580,25 @@ fn skeleton_walk(
 // Duplicate logic detection
 // -----------------------------------------------------------------------
 
+/// Detect MISRA-style mixed logic: returns `true` only when both `&&` and `||`
+/// appear as **top-level operators** — i.e., they are not separated by explicit
+/// parentheses grouping one side.
+///
+/// Examples:
+/// - `a && b || c`          → `true`  (no parens)
+/// - `(a && b) || c`        → `false` (`&&` grouped inside parens)
+/// - `a && (b || c)`        → `false` (`||` grouped inside parens)
+/// - `(a) && (b || (c==d))` → `false` (all sub-expressions grouped)
+fn detect_mixed_logic(skeleton: &str) -> bool {
+    let s = strip_outer_parens(skeleton);
+    if s.is_empty() {
+        return false;
+    }
+    !split_top_level(s, "&&").is_empty() && !split_top_level(s, "||").is_empty()
+}
+
+// -----------------------------------------------------------------------
+
 /// Detect duplicate sub-expressions in `&&` / `||` chains within a skeleton.
 ///
 /// Splits the skeleton on top-level `&&` or `||` operators (respecting
@@ -923,5 +943,43 @@ mod tests {
     #[test]
     fn detect_dup_logic_empty_string() {
         assert!(!detect_dup_logic(""));
+    }
+
+    // -- detect_mixed_logic ----------------------------------------------
+
+    #[test]
+    fn mixed_logic_unparenthesised_flags() {
+        assert!(detect_mixed_logic("a&&b||c"));
+        assert!(detect_mixed_logic("a || b && c"));
+    }
+
+    #[test]
+    fn mixed_logic_and_grouped_does_not_flag() {
+        // (a && b) || c — the && is inside parens
+        assert!(!detect_mixed_logic("(a&&b)||c"));
+    }
+
+    #[test]
+    fn mixed_logic_or_grouped_does_not_flag() {
+        // a && (b || c) — the || is inside parens
+        assert!(!detect_mixed_logic("a&&(b||c)"));
+    }
+
+    #[test]
+    fn mixed_logic_fully_parenthesised_does_not_flag() {
+        // ((a)&&(b||(c==d))) — all sub-expressions grouped
+        assert!(!detect_mixed_logic("((a)&&(b||(c==d)))"));
+        assert!(!detect_mixed_logic("((a>b)||((a==b)&&!c))"));
+    }
+
+    #[test]
+    fn mixed_logic_single_operator_does_not_flag() {
+        assert!(!detect_mixed_logic("a&&b&&c"));
+        assert!(!detect_mixed_logic("a||b||c"));
+    }
+
+    #[test]
+    fn mixed_logic_empty_does_not_flag() {
+        assert!(!detect_mixed_logic(""));
     }
 }

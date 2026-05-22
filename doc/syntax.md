@@ -465,7 +465,7 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | `catch_all_kind` | `switch` | Kind of catch-all (e.g. `"default"`) when present |
 | `for_style` | `for` | `"traditional"` or `"range"` |
 | `has_assignment_in_condition` | `if`, `while`, `for` | `"true"` if condition contains `=` (not `==`) |
-| `mixed_logic` | `if`, `while`, `for` | `"true"` if mixes `&&` and `\|\|` without grouping |
+| `mixed_logic` | `if`, `while`, `for` | `"true"` if `&&` and `\|\|` appear at the same top-level without explicit parentheses (MISRA Rule 12.1) |
 | `dup_logic` | `if`, `while`, `for`, `do` | `"true"` if condition contains duplicate sub-expressions in `&&`/`\|\|` chains |
 | `branch_count` | `function` | Total control-flow branch points |
 | `enclosing_fn` | `if`, `switch`, `for`, `while`, `do` | Name of the containing function — enables `SHOW body OF` directly from a CF-enrichment query result |

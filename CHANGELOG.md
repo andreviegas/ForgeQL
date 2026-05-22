@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.53.1] — 2026-05-22 — Enrichment bug fixes: `mixed_logic` MISRA semantics, negative-hex suffix, `fql_kind` for operator rows
+
+### Fixed
+
+- **`mixed_logic` now uses MISRA Rule 12.1 semantics** (`control_flow.rs`) — The previous check (`skeleton.contains("&&") && skeleton.contains("||")`)
+  produced false positives whenever both operators appeared anywhere in the condition, even when one was fully parenthesised (e.g. `((a > b) || ((a == b) && !c))`).
+  The new `detect_mixed_logic()` function uses `strip_outer_parens` + `split_top_level` to flag only the case where `&&` and `||` appear as *top-level operators*
+  without explicit parentheses separating them (MISRA Rule 12.1). Six dedicated unit tests added.
+
+- **Negative-hex literals no longer reported as float-suffixed** (`numbers.rs`) — `is_hex_digit_suffix` checked `lower.starts_with("0x")`,
+  which fails for negative literals such as `-0xff` (starts with `"-"`). A leading `-` is now stripped before the `"0x"` prefix test,
+  so `num_suffix` is no longer incorrectly set to `"f"` for values like `-0xff`, `-0x0007FFFF`, etc. Unit test added.
+
+- **`fql_kind` populated for `compound_assignment` and `shift_expression` operator rows** (`cpp.json`) — `OperatorEnricher` already
+  created `ExtraRow`s with `node_kind = "compound_assignment"` / `"shift_expression"`, but both were absent from the C++ `kind_map`,
+  so `fql_kind` was always `""`. Added `"compound_assignment": "compound_assignment"` and `"shift_expression": "shift_expression"`
+  to the `kind_map`; `FIND symbols WHERE fql_kind = 'compound_assignment'` and `fql_kind = 'shift_expression'` now return results.
+  `map_kind` unit-test assertions added for both kinds.
+
 ## [0.53.0] — 2026-05-22 — Enrichment bitmaps; O(1) predicate prefiltering; DESC streaming; `index_files` overlay; zero-alloc FST
 
 ### Added

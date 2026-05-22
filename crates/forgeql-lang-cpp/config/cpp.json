@@ -244,6 +244,8 @@
     "const_cast_expression": "cast",
     "dynamic_cast_expression": "cast",
     "update_expression": "increment",
+    "compound_assignment": "compound_assignment",
+    "shift_expression": "shift_expression",
     "if_statement": "if",
     "while_statement": "while",
     "for_statement": "for",
