@@ -1627,5 +1627,364 @@
     "expect_total": 0,
     "fql": "FIND usages OF 'encode_node' IN 'subsys/bluetooth/controller/hci/hci_driver.c' WHERE line = 750 LIMIT 1",
     "name": "GBUG11b_usages_encode_node_call_at_750"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 52, "name": "elapsed", "path": "kernel/timeout.c"},
+      {"line": 29, "name": "first",   "path": "kernel/timeout.c"},
+      {"line": 22, "name": "idle",    "path": "kernel/idle.c"}
+    ],
+    "fql": "FIND symbols WHERE naming = 'flatcase' WHERE fql_kind = 'function' IN 'kernel/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST16_naming_flatcase_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 52, "name": "A2DP_SBC_ALLOC_MTHD_LOUDNESS", "path": "include/zephyr/bluetooth/classic/a2dp_codec_sbc.h"},
+      {"line": 51, "name": "A2DP_SBC_ALLOC_MTHD_SNR",      "path": "include/zephyr/bluetooth/classic/a2dp_codec_sbc.h"},
+      {"line": 43, "name": "A2DP_SBC_BLK_LEN_12",          "path": "include/zephyr/bluetooth/classic/a2dp_codec_sbc.h"}
+    ],
+    "fql": "FIND symbols WHERE naming = 'UPPER_SNAKE' WHERE fql_kind = 'macro' IN 'include/zephyr/bluetooth/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST17_naming_upper_snake_bluetooth_macros"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 183, "name": "checkReadBytesAvailable", "path": "modules/thrift/src/thrift/protocol/TBinaryProtocol.h"},
+      {"line": 188, "name": "checkReadBytesAvailable", "path": "modules/thrift/src/thrift/protocol/TBinaryProtocol.h"},
+      {"line": 193, "name": "checkReadBytesAvailable", "path": "modules/thrift/src/thrift/protocol/TBinaryProtocol.h"}
+    ],
+    "fql": "FIND symbols WHERE naming = 'camelCase' WHERE fql_kind = 'function' IN 'modules/thrift/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST18_naming_camelcase_thrift"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 723, "metric_value": "61", "name": "z_impl_k_thread_runtime_stack_safety_unused_threshold_pct_set", "path": "kernel/thread.c"},
+      {"line": 757, "metric_value": "61", "name": "z_vrfy_k_thread_runtime_stack_safety_unused_threshold_pct_set", "path": "kernel/thread.c"},
+      {"line": 751, "metric_value": "57", "name": "z_impl_k_thread_runtime_stack_safety_unused_threshold_get",     "path": "kernel/thread.c"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name_length >= 57 IN 'kernel/**' ORDER BY name_length DESC LIMIT 3",
+    "name": "GST19_name_length_gte57_kernel"
+  },
+  {
+    "expect_rows": [
+      {"line": 22, "metric_value": "4", "name": "idle", "path": "kernel/idle.c"},
+      {"line": 24, "metric_value": "4", "name": "main", "path": "kernel/main_weak.c"},
+      {"line": 36, "metric_value": "4", "name": "next", "path": "kernel/timeout.c"}
+    ],
+    "expect_total": 3,
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name_length <= 4 IN 'kernel/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST20_name_length_lte4_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 36,  "name": "_StackCheckHandler",     "path": "kernel/compiler_stack_protect.c"},
+      {"line": 95,  "name": "are_wait_conditions_met", "path": "kernel/events.c"},
+      {"line": 220, "name": "atomic_get",              "path": "kernel/atomic_c.c"}
+    ],
+    "fql": "FIND symbols WHERE has_doc = 'true' WHERE fql_kind = 'function' IN 'kernel/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST21_has_doc_true_kernel"
+  },
+  {
+    "expect_rows": [
+      {"line": 591, "name": "DefaultClientAccessManager::verify", "path": "modules/thrift/src/thrift/transport/TSSLSocket.cpp"},
+      {"line": 599, "name": "DefaultClientAccessManager::verify", "path": "modules/thrift/src/thrift/transport/TSSLSocket.cpp"},
+      {"line": 25,  "name": "Mutex::Mutex",                       "path": "modules/thrift/src/thrift/concurrency/Mutex.cpp"}
+    ],
+    "expect_total": 3,
+    "fql": "FIND symbols WHERE has_doc = 'false' WHERE fql_kind = 'function' IN 'modules/thrift/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST22_has_doc_false_thrift"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"kind": "number", "line": 49,  "name": "0xffffffff", "path": "kernel/cpu_mask.c"},
+      {"kind": "number", "line": 54,  "name": "0xffffffff", "path": "kernel/cpu_mask.c"},
+      {"kind": "number", "line": 165, "name": "0x1",        "path": "kernel/queue.c"}
+    ],
+    "fql": "FIND symbols WHERE num_format = 'hex' WHERE is_magic = 'true' IN 'kernel/**' ORDER BY line ASC LIMIT 3",
+    "name": "GST23_num_format_hex_magic_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"kind": "number", "line": 14, "name": "0U", "path": "kernel/spinlock_validate.c"},
+      {"kind": "number", "line": 15, "name": "3U", "path": "kernel/spinlock_validate.c"},
+      {"kind": "number", "line": 25, "name": "0U", "path": "kernel/sys_clock_hw_cycles.c"}
+    ],
+    "fql": "FIND symbols WHERE num_suffix = 'u' IN 'kernel/**' ORDER BY line ASC LIMIT 3",
+    "name": "GST24_num_suffix_u_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"kind": "increment", "line": 37, "name": "i", "path": "kernel/boot_args.c"},
+      {"kind": "increment", "line": 40, "name": "i", "path": "kernel/idle.c"},
+      {"kind": "increment", "line": 41, "name": "i", "path": "kernel/ipi.c"}
+    ],
+    "fql": "FIND symbols WHERE increment_style = 'postfix' IN 'kernel/**' ORDER BY line ASC LIMIT 3",
+    "name": "GST25_increment_postfix_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"kind": "increment", "line": 51,  "name": "heap_ref", "path": "kernel/mempool.c"},
+      {"kind": "increment", "line": 64,  "name": "heap_ref", "path": "kernel/mempool.c"},
+      {"kind": "increment", "line": 139, "name": "heap_ref", "path": "kernel/mempool.c"}
+    ],
+    "fql": "FIND symbols WHERE increment_style = 'prefix' IN 'kernel/**' ORDER BY line ASC LIMIT 3",
+    "name": "GST26_increment_prefix_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"kind": "compound_assignment", "line": 43, "name": "cpu->usage->total",   "path": "kernel/usage.c"},
+      {"kind": "compound_assignment", "line": 46, "name": "cpu->usage->current", "path": "kernel/usage.c"},
+      {"kind": "compound_assignment", "line": 46, "name": "next(t)->dticks",     "path": "kernel/timeout.c"}
+    ],
+    "fql": "FIND symbols WHERE compound_op = '+=' IN 'kernel/**' ORDER BY line ASC LIMIT 3",
+    "name": "GST27_compound_op_plus_equals_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 27, "name": "1 << 0",                "path": "arch/riscv/custom/thead/cache_xtheadcmo_e907.c"},
+      {"line": 37, "name": "1 << (rasr_size + 1U)", "path": "arch/arm/core/mpu/cortex_m/arm_mpu_internal.h"},
+      {"line": 37, "name": "ST0_IP0 << irq",         "path": "arch/mips/core/irq_manage.c"}
+    ],
+    "fql": "FIND symbols WHERE shift_direction = 'left' IN 'arch/**' ORDER BY line ASC LIMIT 3",
+    "name": "GST28_shift_direction_left_arch"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"kind": "cast", "line": 21, "name": "c_style<char *>",  "path": "kernel/boot_args.c"},
+      {"kind": "cast", "line": 22, "name": "c_style<char **>", "path": "kernel/boot_args.c"},
+      {"kind": "cast", "line": 22, "name": "c_style<uint64_t>","path": "kernel/busy_wait.c"}
+    ],
+    "fql": "FIND symbols WHERE cast_style = 'c_style' IN 'kernel/**' ORDER BY line ASC LIMIT 3",
+    "name": "GST29_cast_style_c_style_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 383, "metric_value": "9", "name": "setup_thread_stack",  "path": "kernel/thread.c"},
+      {"line": 892, "metric_value": "8", "name": "k_mem_map_phys_bare", "path": "kernel/mmu.c"},
+      {"line": 130, "metric_value": "8", "name": "put_msg_in_queue",    "path": "kernel/msg_q.c"}
+    ],
+    "fql": "FIND symbols WHERE has_cast = 'true' WHERE cast_count >= 5 WHERE fql_kind = 'function' IN 'kernel/**' ORDER BY cast_count DESC LIMIT 3",
+    "name": "GST30_has_cast_count_gte5_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 15,  "metric_value": "2", "name": "k_heap_array_get",         "path": "kernel/kheap.c"},
+      {"line": 508, "metric_value": "2", "name": "k_object_wordlist_foreach", "path": "kernel/userspace.c"},
+      {"line": 272, "metric_value": "2", "name": "sys_clock_tick_get",        "path": "kernel/timeout.c"}
+    ],
+    "fql": "FIND symbols WHERE has_escape = 'true' WHERE escape_tier >= 2 WHERE fql_kind = 'function' IN 'kernel/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST31_escape_tier_gte2_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 958, "name": "__app_shmem_regions_end",   "path": "kernel/userspace.c"},
+      {"line": 957, "name": "__app_shmem_regions_start", "path": "kernel/userspace.c"},
+      {"line": 123, "name": "__init_APPLICATION_start",  "path": "kernel/init.c"}
+    ],
+    "fql": "FIND symbols WHERE scope = 'file' WHERE is_exported = 'true' WHERE fql_kind = 'variable' IN 'kernel/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST32_scope_file_exported_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 475, "name": "FUNC_NORETURN", "path": "kernel/init.c"},
+      {"line": 20,  "name": "args_buf",      "path": "kernel/boot_args.c"},
+      {"line": 57,  "name": "async_msg",     "path": "kernel/mailbox.c"}
+    ],
+    "fql": "FIND symbols WHERE scope = 'local' WHERE storage = 'static' WHERE fql_kind = 'variable' IN 'kernel/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST33_scope_local_static_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"kind": "field", "line": 43, "name": "DEFAULT_BACKLOG", "path": "modules/thrift/src/thrift/transport/TServerSocket.h"},
+      {"kind": "field", "line": 50, "name": "VERSION_1",       "path": "modules/thrift/src/thrift/protocol/TBinaryProtocol.h"},
+      {"kind": "field", "line": 49, "name": "VERSION_MASK",    "path": "modules/thrift/src/thrift/protocol/TBinaryProtocol.h"}
+    ],
+    "fql": "FIND symbols WHERE visibility = 'public' WHERE fql_kind = 'field' IN 'modules/thrift/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST34_visibility_public_thrift_fields"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"enclosing_fn": "ipi_mask_create",   "kind": "if", "line": 61,  "metric_value": "5", "name": "((a!=b)&&(((c<d)&&(e))||f)&&g)",                       "path": "kernel/ipi.c"},
+      {"enclosing_fn": "mbox_message_match","kind": "if", "line": 118, "metric_value": "4", "name": "(((a==(b)c)||(a==d))&&((e==(b)c)||(e==f)))",           "path": "kernel/mailbox.c"},
+      {"enclosing_fn": "virt_region_free",  "kind": "if", "line": 273, "metric_value": "4", "name": "(((a>=b)&&(a<c))||(((a+d-e)>=b)&&((a+d-e)<c)))",       "path": "kernel/mmu.c"}
+    ],
+    "fql": "FIND symbols WHERE condition_tests >= 3 WHERE fql_kind = 'if' IN 'kernel/**' ORDER BY condition_tests DESC LIMIT 3",
+    "name": "GST35_condition_tests_gte3_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"enclosing_fn": "reason_to_str", "kind": "switch", "line": 62, "name": "(a)", "path": "kernel/fatal.c"},
+      {"enclosing_fn": "is_condition_met","kind": "switch","line": 65, "name": "(a)", "path": "kernel/poll.c"},
+      {"enclosing_fn": "otype_to_str",   "kind": "switch", "line": 91, "name": "(a)", "path": "kernel/userspace.c"}
+    ],
+    "fql": "FIND symbols WHERE has_catch_all = 'true' WHERE fql_kind = 'switch' IN 'kernel/**' ORDER BY line ASC LIMIT 3",
+    "name": "GST36_has_catch_all_switch_kernel"
+  },
+  {
+    "expect_rows": [
+      {"enclosing_fn": "read_virt",               "kind": "for", "line": 83,  "name": "", "path": "modules/thrift/src/thrift/server/TFDServer.cpp"},
+      {"enclosing_fn": "TFDServer::interruptChildren","kind": "for","line": 214, "name": "", "path": "modules/thrift/src/thrift/server/TFDServer.cpp"}
+    ],
+    "expect_total": 2,
+    "fql": "FIND symbols WHERE for_style = 'range' IN 'modules/thrift/**' ORDER BY line ASC LIMIT 2",
+    "name": "GST37_for_style_range_thrift"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"enclosing_fn": "mld_create_packet",        "kind": "if", "line": 104, "name": "(a||b||b)",                             "path": "subsys/net/ip/ipv6_mld.c"},
+      {"enclosing_fn": "pd_decode_command",         "kind": "if", "line": 417, "name": "(a>b||((c-d)<a)||a>b)",                "path": "subsys/mgmt/osdp/src/osdp_pd.c"},
+      {"enclosing_fn": "valid_conn_cte_tx_params",  "kind": "if", "line": 481, "name": "((a&b||a&b)&&(c<d||c>e||!f||!g))",    "path": "subsys/bluetooth/host/direction.c"}
+    ],
+    "fql": "FIND symbols WHERE dup_logic = 'true' IN 'subsys/**' ORDER BY line ASC LIMIT 3",
+    "name": "GST38_dup_logic_subsys"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 11,  "metric_value": "12", "name": "prepare_main_args",   "path": "kernel/boot_args.c"},
+      {"line": 130, "metric_value": "11", "name": "put_msg_in_queue",    "path": "kernel/msg_q.c"},
+      {"line": 147, "metric_value": "11", "name": "z_impl_k_pipe_write", "path": "kernel/pipe.c"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE branch_count >= 10 IN 'kernel/**' ORDER BY branch_count DESC LIMIT 3",
+    "name": "GST39_branch_count_gte10_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 562, "name": "CBWDecode",            "path": "subsys/usb/device/class/msc.c"},
+      {"line": 150, "name": "__l2cap_lookup_ident", "path": "subsys/bluetooth/host/l2cap.c"},
+      {"line": 625, "name": "__wifi_args_to_params","path": "subsys/net/l2/wifi/wifi_shell.c"}
+    ],
+    "fql": "FIND symbols WHERE has_repeated_condition_calls = 'true' IN 'subsys/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST40_repeated_condition_calls_subsys"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 570, "metric_value": "5", "name": "k_mem_map_phys_guard", "path": "kernel/mmu.c"},
+      {"line": 226, "metric_value": "5", "name": "k_thread_state_str",   "path": "kernel/thread.c"},
+      {"line": 812, "metric_value": "5", "name": "k_work_queue_start",   "path": "kernel/work.c"}
+    ],
+    "fql": "FIND symbols WHERE null_check_count >= 3 WHERE fql_kind = 'function' IN 'kernel/**' ORDER BY null_check_count DESC LIMIT 3",
+    "name": "GST41_null_check_count_gte3_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 438, "metric_value": "5", "name": "ieee802154_associate", "path": "subsys/net/l2/ieee802154/ieee802154_mgmt.c"},
+      {"line": 100, "metric_value": "4", "name": "big_create",           "path": "subsys/bluetooth/controller/ll_sw/ull_adv_iso.c"},
+      {"line": 572, "metric_value": "4", "name": "isr_rx",               "path": "subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync_iso.c"}
+    ],
+    "fql": "FIND symbols WHERE has_todo = 'true' WHERE todo_count >= 2 WHERE fql_kind = 'function' IN 'subsys/**' ORDER BY todo_count DESC LIMIT 3",
+    "name": "GST42_todo_count_gte2_subsys"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 24, "metric_value": "6", "name": "check_add_partition", "path": "kernel/mem_domain.c"},
+      {"line": 63, "metric_value": "6", "name": "is_condition_met",    "path": "kernel/poll.c"},
+      {"line": 60, "metric_value": "6", "name": "reason_to_str",       "path": "kernel/fatal.c"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE return_count >= 3 IN 'kernel/**' ORDER BY return_count DESC LIMIT 3",
+    "name": "GST43_return_count_gte3_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 11,   "metric_value": "10", "name": "prepare_main_args",   "path": "kernel/boot_args.c"},
+      {"line": 107,  "metric_value": "10", "name": "z_impl_k_mutex_lock", "path": "kernel/mutex.c"},
+      {"line": 1614, "metric_value": "7",  "name": "do_page_fault",       "path": "kernel/mmu.c"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE string_count >= 5 IN 'kernel/**' ORDER BY string_count DESC LIMIT 3",
+    "name": "GST44_string_count_gte5_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 142, "name": "_is_valid_prio",           "path": "kernel/include/ksched.h"},
+      {"line": 111, "name": "add_event",                "path": "kernel/poll.c"},
+      {"line": 18,  "name": "busy_wait_us_to_cyc_ceil32","path": "kernel/busy_wait.c"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE is_inline = 'true' WHERE is_static = 'true' IN 'kernel/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST45_is_inline_and_static_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 109, "metric_value": "12", "name": "TSSLSocket::openSecConnection", "path": "modules/thrift/src/thrift/transport/TSSLSocket.cpp"},
+      {"line": 66,  "metric_value": "6",  "name": "TSSLServerSocket::listen",      "path": "modules/thrift/src/thrift/transport/TSSLServerSocket.cpp"},
+      {"line": 273, "metric_value": "4",  "name": "TSSLSocket::open",               "path": "modules/thrift/src/thrift/transport/TSSLSocket.cpp"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE throw_count >= 1 IN 'modules/thrift/**' ORDER BY throw_count DESC LIMIT 3",
+    "name": "GST46_throw_count_gte1_thrift"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 69,  "metric_value": "1", "name": "handle_flush",            "path": "kernel/work.c"},
+      {"line": 545, "metric_value": "3", "name": "k_object_wordlist_foreach","path": "kernel/userspace.c"},
+      {"line": 22,  "metric_value": "3", "name": "k_sys_work_q_init",        "path": "kernel/system_work_q.c"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines <= 3 IN 'kernel/**' ORDER BY lines ASC LIMIT 3",
+    "name": "GST47_lines_lte3_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 308,  "name": "add_thread_locked", "path": "kernel/mem_domain.c"},
+      {"line": 1378, "name": "do_mem_evict",      "path": "kernel/mmu.c"},
+      {"line": 1614, "name": "do_page_fault",     "path": "kernel/mmu.c"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_unused_reassign = 'true' IN 'kernel/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST48_has_unused_reassign_kernel"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 497, "metric_value": "2", "name": "delete_blocks",        "path": "subsys/fs/ext2/ext2_diskops.c"},
+      {"line": 445, "metric_value": "2", "name": "filter_set",           "path": "subsys/logging/log_mgmt.c"},
+      {"line": 269, "metric_value": "2", "name": "receive_state_machine","path": "subsys/canbus/isotp/isotp.c"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE recursion_count >= 2 IN 'subsys/**' ORDER BY recursion_count DESC LIMIT 3",
+    "name": "GST49_recursion_count_gte2_subsys"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 96,   "metric_value": "16", "name": "mspi_set_freq",                          "path": "drivers/mspi/mspi_ambiq_ap5.c"},
+      {"line": 228,  "metric_value": "14", "name": "is_valid_gatt_packet_len",               "path": "tests/bsim/bluetooth/tester/src/bsim_btp.c"},
+      {"line": 1508, "metric_value": "9",  "name": "_add_instance_testcases_to_status_counts","path": "scripts/pylib/twister/twisterlib/runner.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_fallthrough = 'true' WHERE fallthrough_count >= 2 ORDER BY fallthrough_count DESC LIMIT 3",
+    "name": "GST50_fallthrough_count_gte2"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 69,  "metric_value": "1", "name": "handle_flush",        "path": "kernel/work.c"},
+      {"line": 540, "metric_value": "1", "name": "k_object_find",       "path": "kernel/userspace.c"},
+      {"line": 601, "metric_value": "1", "name": "signal_triggered_work","path": "kernel/poll.c"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_unused_param = 'true' WHERE unused_param_count = 1 IN 'kernel/**' ORDER BY name ASC LIMIT 3",
+    "name": "GST51_unused_param_count_eq1_kernel"
   }
 ]
