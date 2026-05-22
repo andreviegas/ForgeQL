@@ -322,6 +322,18 @@ impl OverlayBuilder {
             })
             .collect();
 
+        // 7.5. Build cached file sizes array.
+        let mut index_files_u32 = Vec::with_capacity(segs.len());
+        for (rel_path, _, _) in &segs {
+            let full_path = self.worktree_root.join(rel_path);
+            #[allow(clippy::cast_possible_truncation)]
+            let size = std::fs::metadata(&full_path)
+                .map(|m| m.len() as u32)
+                .unwrap_or(0);
+            index_files_u32.push(size);
+        }
+        let index_files_bytes: &[u8] = cast_slice(&index_files_u32);
+
         // 8. Write the FQOV v3 overlay atomically (temp file → fsync → rename).
         let t_step = std::time::Instant::now();
         if let Some(parent) = overlay_path.parent() {
@@ -347,6 +359,7 @@ impl OverlayBuilder {
                     name_fst_bytes: &name_fst_bytes,
                     name_postings_bytes: &name_postings_bytes,
                     segment_metas: &segment_metas,
+                    index_files_bytes,
                 },
             )
             .context("writing v3 overlay")?;

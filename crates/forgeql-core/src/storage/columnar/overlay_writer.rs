@@ -25,13 +25,14 @@ const BLOB_NAME_FST: &[u8] = b"name_fst";
 const BLOB_NAME_POSTINGS: &[u8] = b"name_postings";
 const BLOB_SEGMENTS: &[u8] = b"segments";
 const BLOB_SEGMENT_STRINGS: &[u8] = b"segment_strings";
+const BLOB_INDEX_FILES: &[u8] = b"index_files";
 
 // Type-narrowed copies of usize constants — used in the on-disk header.
 // Const-context casts are compile-time validated; overflow is a compile error.
 #[allow(clippy::cast_possible_truncation)]
-const HEADER_V3_LEN_U32: u32 = HEADER_V3_LEN as u32; // = 600
+const HEADER_V3_LEN_U32: u32 = HEADER_V3_LEN as u32;
 #[allow(clippy::cast_possible_truncation)]
-const TOC_COUNT_U32: u32 = TOC_COUNT as u32; // = 9
+const TOC_COUNT_U32: u32 = TOC_COUNT as u32;
 
 /// Input parameters for [`write_v3`].
 ///
@@ -45,9 +46,8 @@ pub(super) struct WriteV3Params<'a> {
     pub(super) name_fst_bytes: &'a [u8],
     pub(super) name_postings_bytes: &'a [u8],
     pub(super) segment_metas: &'a [SegmentMeta],
+    pub(super) index_files_bytes: &'a [u8],
 }
-
-/// Intermediate blobs built from the write parameters before TOC/header serialisation.
 struct ComputedBlobs {
     kind_strings: Vec<u8>,
     kind_index: Vec<u8>,
@@ -158,6 +158,7 @@ pub(super) fn write_v3(out: &mut impl Write, params: &WriteV3Params<'_>) -> io::
         (BLOB_NAME_POSTINGS, params.name_postings_bytes),
         (BLOB_SEGMENTS, &blobs.segments),
         (BLOB_SEGMENT_STRINGS, &blobs.segment_strings),
+        (BLOB_INDEX_FILES, params.index_files_bytes),
     ];
 
     // ── Compute TOC offsets ───────────────────────────────────────────────

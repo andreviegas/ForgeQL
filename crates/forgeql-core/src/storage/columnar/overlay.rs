@@ -61,7 +61,7 @@ pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 /// - **5**: `SegmentRecord` gains `dedup_row_count` field (20 bytes, was 16).
 ///   Per-segment unique-(name,kind,line) counts enable GROUP BY file fast-path.
 ///   Kind bitmaps are deduplicated at build time, enabling GROUP BY kind fast-path.
-pub(crate) const SCHEMA_VERSION: u32 = 5;
+pub(crate) const SCHEMA_VERSION: u32 = 6;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;
@@ -73,9 +73,9 @@ pub(crate) const TOC_ENTRY_SIZE: usize = 64;
 pub(crate) const TOC_ENTRY_NAME_LEN: usize = 56;
 
 /// Number of named blobs in an FQOV v3 file.
-pub(super) const TOC_COUNT: usize = 9;
+pub(super) const TOC_COUNT: usize = 10;
 
-/// Total byte size of the header + TOC region (= 24 + 9 × 64 = 600).
+/// Total byte size of the header + TOC region (= 24 + 10 * 64 = 664).
 pub(super) const HEADER_V3_LEN: usize = HEADER_LEN + TOC_COUNT * TOC_ENTRY_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -221,6 +221,7 @@ pub struct Overlay {
     bitmap_data_range: Range<usize>,
     trigram_index_range: Range<usize>,
     name_postings_range: Range<usize>,
+    index_files_range: Range<usize>,
 
     /// True when the segment list contains two or more entries with the same
     /// `source_path`.  When true, row-count-based fast-paths (GROUP BY file,
@@ -294,6 +295,7 @@ impl Overlay {
             name_postings_range,
             segments_range,
             segment_strings_range,
+            index_files_range,
         ] = blobs;
 
         let row_count = u32::try_from(row_table_range.len() / std::mem::size_of::<RowPtr>())
@@ -344,6 +346,7 @@ impl Overlay {
             bitmap_data_range,
             trigram_index_range,
             name_postings_range,
+            index_files_range,
             has_duplicate_paths,
             name_fst,
         }))
@@ -370,6 +373,13 @@ impl Overlay {
         &self.segments
     }
 
+    /// Retrieve the cached file size for segment `idx`.
+    #[must_use]
+    pub fn file_size(&self, idx: usize) -> u32 {
+        #[allow(clippy::indexing_slicing)]
+        let slice: &[u32] = cast_slice(&self.mmap[self.index_files_range.clone()]);
+        slice.get(idx).copied().unwrap_or(0)
+    }
     /// Total number of rows across all segments.
     #[must_use]
     pub const fn row_count(&self) -> u32 {
@@ -894,8 +904,8 @@ fn parse_toc_entries(mmap: &[u8], toc_count: usize) -> Result<Vec<TocEntry>> {
     Ok(toc)
 }
 
-/// Locate all nine named blobs and return their byte ranges in TOC order.
-fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; 9]> {
+/// Locate all ten named blobs and return their byte ranges in TOC order.
+fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; 10]> {
     let find_one = |name: &[u8]| -> Result<Range<usize>> {
         for entry in toc {
             let stored = entry
@@ -923,6 +933,7 @@ fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; 9]> {
         find_one(b"name_postings")?,
         find_one(b"segments")?,
         find_one(b"segment_strings")?,
+        find_one(b"index_files")?,
     ])
 }
 
@@ -959,7 +970,7 @@ fn decode_segment_metas(
 
 /// Validate that all blob ranges fit within `mmap_len` and that
 /// fixed-record blobs have sizes that are multiples of the record size.
-fn validate_blob_layout(mmap_len: usize, blobs: &[Range<usize>; 9]) -> Result<()> {
+fn validate_blob_layout(mmap_len: usize, blobs: &[Range<usize>; TOC_COUNT]) -> Result<()> {
     let [
         row_table_r,
         _,
@@ -970,6 +981,7 @@ fn validate_blob_layout(mmap_len: usize, blobs: &[Range<usize>; 9]) -> Result<()
         _,
         segments_r,
         _,
+        index_files_r,
     ] = blobs;
     let max_end = blobs.iter().map(|r| r.end).max().unwrap_or(0);
     ensure!(
@@ -991,6 +1003,16 @@ fn validate_blob_layout(mmap_len: usize, blobs: &[Range<usize>; 9]) -> Result<()
     ensure!(
         segments_r.len() % std::mem::size_of::<SegmentRecord>() == 0,
         "segments blob size not a multiple of SegmentRecord size"
+    );
+    ensure!(
+        index_files_r.len() % std::mem::size_of::<u32>() == 0,
+        "index_files blob size not a multiple of u32 size"
+    );
+    let segment_count = segments_r.len() / std::mem::size_of::<SegmentRecord>();
+    let file_count = index_files_r.len() / std::mem::size_of::<u32>();
+    ensure!(
+        segment_count == file_count,
+        "mismatched segments and index_files: segment_count={segment_count}, file_count={file_count}"
     );
     Ok(())
 }
@@ -1073,6 +1095,7 @@ mod tests {
                     name_fst_bytes: &empty_fst,
                     name_postings_bytes: &[],
                     segment_metas: &[],
+                    index_files_bytes: &[],
                 },
             )
             .expect("write_v3");
