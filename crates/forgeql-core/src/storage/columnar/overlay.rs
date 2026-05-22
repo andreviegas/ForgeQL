@@ -61,7 +61,10 @@ pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 /// - **5**: `SegmentRecord` gains `dedup_row_count` field (20 bytes, was 16).
 ///   Per-segment unique-(name,kind,line) counts enable GROUP BY file fast-path.
 ///   Kind bitmaps are deduplicated at build time, enabling GROUP BY kind fast-path.
-pub(crate) const SCHEMA_VERSION: u32 = 6;
+/// - **6**: `index_files` blob added; file sizes cached for `FIND files` fast-path.
+/// - **7**: `enrich_bitmaps` blob added; per-(field,value) global bitmaps for
+///   O(1) enrichment-predicate prefiltering (Phase 5).
+pub(crate) const SCHEMA_VERSION: u32 = 7;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;
@@ -72,10 +75,10 @@ pub(crate) const TOC_ENTRY_SIZE: usize = 64;
 /// Max byte length of a blob name within a `TocEntry`.
 pub(crate) const TOC_ENTRY_NAME_LEN: usize = 56;
 
-/// Number of named blobs in an FQOV v3 file.
-pub(super) const TOC_COUNT: usize = 10;
+/// Number of named blobs in an FQOV v7 file (10 original + `enrich_bitmaps`).
+pub(super) const TOC_COUNT: usize = 11;
 
-/// Total byte size of the header + TOC region (= 24 + 10 * 64 = 664).
+/// Total byte size of the header + TOC region (= 24 + 11 * 64 = 728).
 pub(super) const HEADER_V3_LEN: usize = HEADER_LEN + TOC_COUNT * TOC_ENTRY_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -164,6 +167,29 @@ pub(super) struct SegmentRecord {
     pub(super) hex_id_len: u16,
 }
 
+/// FQOV v7: one entry in the `enrich_bitmaps` blob.
+///
+/// Blob layout:
+///   `[u32: entry_count][u32: key_data_len][EnrichEntry × entry_count]`
+///   `[key_strings bytes][bitmap_data bytes]`
+///
+/// Keys are `"field=value"` strings sorted lexicographically.
+/// Bitmap data is serialised `RoaringBitmap`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub(super) struct EnrichEntry {
+    /// Byte offset into the key-strings region of the `enrich_bitmaps` blob.
+    pub(super) key_offset: u32,
+    /// Byte length of the key string (= `"field=value".len()`).
+    pub(super) key_len: u16,
+    /// Reserved, must be zero.
+    pub(super) _pad: u16,
+    /// Byte offset into the bitmap-data region of the `enrich_bitmaps` blob.
+    pub(super) bitmap_offset: u32,
+    /// Byte length of the serialised `RoaringBitmap`.
+    pub(super) bitmap_len: u32,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Heap-allocated segment metadata (decoded at open time)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -222,6 +248,15 @@ pub struct Overlay {
     trigram_index_range: Range<usize>,
     name_postings_range: Range<usize>,
     index_files_range: Range<usize>,
+    /// Byte range of the `enrich_bitmaps` blob within `mmap` (Phase 5 / FQOV v7).
+    /// Retained for potential future re-parsing; not read after `open()`.
+    #[allow(dead_code)]
+    enrich_bitmaps_range: Range<usize>,
+    /// Pre-parsed enrichment index: sorted `(key, bitmap_mmap_range)` pairs.
+    ///
+    /// key = `"field=value"` (byte-lexicographic order).
+    /// The mmap range refers to the serialised `RoaringBitmap` within `mmap`.
+    enrich_index: Vec<(String, Range<usize>)>,
 
     /// True when the segment list contains two or more entries with the same
     /// `source_path`.  When true, row-count-based fast-paths (GROUP BY file,
@@ -242,6 +277,7 @@ impl Overlay {
     /// # Errors
     /// Returns `Err` for missing/truncated files, wrong magic, unsupported
     /// schema version, misaligned blobs, or a corrupt name FST.
+    #[allow(clippy::too_many_lines)]
     pub fn open(path: &Path) -> Result<Arc<Self>> {
         let file = std::fs::File::open(path)
             .with_context(|| format!("opening overlay {}", path.display()))?;
@@ -296,6 +332,7 @@ impl Overlay {
             segments_range,
             segment_strings_range,
             index_files_range,
+            enrich_bitmaps_range,
         ] = blobs;
 
         let row_count = u32::try_from(row_table_range.len() / std::mem::size_of::<RowPtr>())
@@ -334,6 +371,44 @@ impl Overlay {
             segments.iter().any(|s| !seen.insert(&s.source_path))
         };
 
+        // Parse enrichment bitmaps blob (Phase 5 / FQOV v7).
+        // Build enrich_index: sorted (key, bitmap_mmap_range) pairs.
+        let mut enrich_index: Vec<(String, Range<usize>)> = Vec::new();
+        {
+            #[allow(clippy::indexing_slicing)]
+            let blob = &mmap[enrich_bitmaps_range.clone()];
+            if blob.len() >= 8 {
+                #[allow(clippy::indexing_slicing)]
+                let entry_count =
+                    u32::from_le_bytes(blob[0..4].try_into().unwrap_or_default()) as usize;
+                #[allow(clippy::indexing_slicing)]
+                let key_data_len =
+                    u32::from_le_bytes(blob[4..8].try_into().unwrap_or_default()) as usize;
+                let entry_bytes = std::mem::size_of::<EnrichEntry>();
+                let entries_end = 8 + entry_count * entry_bytes;
+                if blob.len() >= entries_end + key_data_len {
+                    #[allow(clippy::indexing_slicing)]
+                    let entries: &[EnrichEntry] = cast_slice(&blob[8..entries_end]);
+                    #[allow(clippy::indexing_slicing)]
+                    let key_data = &blob[entries_end..entries_end + key_data_len];
+                    let bitmap_base = enrich_bitmaps_range.start + entries_end + key_data_len;
+                    for e in entries {
+                        let k_start = e.key_offset as usize;
+                        let k_end = k_start + e.key_len as usize;
+                        if k_end > key_data.len() {
+                            continue;
+                        }
+                        #[allow(clippy::indexing_slicing)]
+                        if let Ok(key) = std::str::from_utf8(&key_data[k_start..k_end]) {
+                            let b_start = bitmap_base + e.bitmap_offset as usize;
+                            let b_end = b_start + e.bitmap_len as usize;
+                            enrich_index.push((key.to_owned(), b_start..b_end));
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(Arc::new(Self {
             mmap,
             segments,
@@ -347,6 +422,8 @@ impl Overlay {
             trigram_index_range,
             name_postings_range,
             index_files_range,
+            enrich_bitmaps_range,
+            enrich_index,
             has_duplicate_paths,
             name_fst,
         }))
@@ -380,6 +457,106 @@ impl Overlay {
         let slice: &[u32] = cast_slice(&self.mmap[self.index_files_range.clone()]);
         slice.get(idx).copied().unwrap_or(0)
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Phase 5: enrichment bitmap prefiltering (FQOV v7)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Returns `true` if any enrichment bitmap entry exists for `field`.
+    ///
+    /// Used to check predicate eligibility without deserialising bitmaps.
+    #[must_use]
+    pub fn has_enrichment_field(&self, field: &str) -> bool {
+        let prefix = format!("{field}=");
+        let pos = self
+            .enrich_index
+            .partition_point(|(k, _)| k.as_str() < prefix.as_str());
+        self.enrich_index
+            .get(pos)
+            .is_some_and(|(k, _)| k.starts_with(&prefix))
+    }
+
+    /// Look up the global row bitmap for `field = value`.
+    ///
+    /// Returns `None` if no bitmap was stored for this (field, value) pair.
+    #[must_use]
+    pub fn prefilter_enrichment_eq(&self, field: &str, value: &str) -> Option<RoaringBitmap> {
+        let target = format!("{field}={value}");
+        let pos = self
+            .enrich_index
+            .partition_point(|(k, _)| k.as_str() < target.as_str());
+        let (key, range) = self.enrich_index.get(pos)?;
+        if key != &target {
+            return None;
+        }
+        #[allow(clippy::indexing_slicing)]
+        RoaringBitmap::deserialize_from(&self.mmap[range.clone()]).ok()
+    }
+
+    /// Union global row bitmaps for `field >= threshold` (numeric enrichment fields).
+    ///
+    /// Returns `None` if no enrichment bitmaps were stored for this field.
+    #[must_use]
+    pub fn prefilter_enrichment_ge(&self, field: &str, threshold: i64) -> Option<RoaringBitmap> {
+        let prefix = format!("{field}=");
+        let pos = self
+            .enrich_index
+            .partition_point(|(k, _)| k.as_str() < prefix.as_str());
+        let mut result: Option<RoaringBitmap> = None;
+        #[allow(clippy::indexing_slicing)]
+        for (key, range) in &self.enrich_index[pos..] {
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            #[allow(clippy::indexing_slicing)]
+            let value_str = &key[prefix.len()..];
+            if let Ok(v) = value_str.parse::<i64>()
+                && v >= threshold
+            {
+                #[allow(clippy::indexing_slicing)]
+                if let Ok(bm) = RoaringBitmap::deserialize_from(&self.mmap[range.clone()]) {
+                    result = Some(match result {
+                        Some(prev) => prev | bm,
+                        None => bm,
+                    });
+                }
+            }
+        }
+        result
+    }
+
+    /// Union global row bitmaps for `field <= threshold` (numeric enrichment fields).
+    ///
+    /// Returns `None` if no enrichment bitmaps were stored for this field.
+    #[must_use]
+    pub fn prefilter_enrichment_le(&self, field: &str, threshold: i64) -> Option<RoaringBitmap> {
+        let prefix = format!("{field}=");
+        let pos = self
+            .enrich_index
+            .partition_point(|(k, _)| k.as_str() < prefix.as_str());
+        let mut result: Option<RoaringBitmap> = None;
+        #[allow(clippy::indexing_slicing)]
+        for (key, range) in &self.enrich_index[pos..] {
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            #[allow(clippy::indexing_slicing)]
+            let value_str = &key[prefix.len()..];
+            if let Ok(v) = value_str.parse::<i64>()
+                && v <= threshold
+            {
+                #[allow(clippy::indexing_slicing)]
+                if let Ok(bm) = RoaringBitmap::deserialize_from(&self.mmap[range.clone()]) {
+                    result = Some(match result {
+                        Some(prev) => prev | bm,
+                        None => bm,
+                    });
+                }
+            }
+        }
+        result
+    }
+
     /// Total number of rows across all segments.
     #[must_use]
     pub const fn row_count(&self) -> u32 {
@@ -905,7 +1082,7 @@ fn parse_toc_entries(mmap: &[u8], toc_count: usize) -> Result<Vec<TocEntry>> {
 }
 
 /// Locate all ten named blobs and return their byte ranges in TOC order.
-fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; 10]> {
+fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; 11]> {
     let find_one = |name: &[u8]| -> Result<Range<usize>> {
         for entry in toc {
             let stored = entry
@@ -934,6 +1111,7 @@ fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; 10]> {
         find_one(b"segments")?,
         find_one(b"segment_strings")?,
         find_one(b"index_files")?,
+        find_one(b"enrich_bitmaps")?,
     ])
 }
 
@@ -982,6 +1160,7 @@ fn validate_blob_layout(mmap_len: usize, blobs: &[Range<usize>; TOC_COUNT]) -> R
         segments_r,
         _,
         index_files_r,
+        _, // enrich_bitmaps: no size constraint
     ] = blobs;
     let max_end = blobs.iter().map(|r| r.end).max().unwrap_or(0);
     ensure!(
@@ -1096,6 +1275,7 @@ mod tests {
                     name_postings_bytes: &[],
                     segment_metas: &[],
                     index_files_bytes: &[],
+                    enrich_bitmaps_bytes: &[],
                 },
             )
             .expect("write_v3");

@@ -26,6 +26,7 @@ const BLOB_NAME_POSTINGS: &[u8] = b"name_postings";
 const BLOB_SEGMENTS: &[u8] = b"segments";
 const BLOB_SEGMENT_STRINGS: &[u8] = b"segment_strings";
 const BLOB_INDEX_FILES: &[u8] = b"index_files";
+const BLOB_ENRICH_BITMAPS: &[u8] = b"enrich_bitmaps";
 
 // Type-narrowed copies of usize constants — used in the on-disk header.
 // Const-context casts are compile-time validated; overflow is a compile error.
@@ -47,6 +48,9 @@ pub(super) struct WriteV3Params<'a> {
     pub(super) name_postings_bytes: &'a [u8],
     pub(super) segment_metas: &'a [SegmentMeta],
     pub(super) index_files_bytes: &'a [u8],
+    /// Serialised enrichment bitmaps blob (Phase 5 / FQOV v7).
+    /// Pass `&[]` for older overlays or when no enrichment data is available.
+    pub(super) enrich_bitmaps_bytes: &'a [u8],
 }
 struct ComputedBlobs {
     kind_strings: Vec<u8>,
@@ -159,6 +163,7 @@ pub(super) fn write_v3(out: &mut impl Write, params: &WriteV3Params<'_>) -> io::
         (BLOB_SEGMENTS, &blobs.segments),
         (BLOB_SEGMENT_STRINGS, &blobs.segment_strings),
         (BLOB_INDEX_FILES, params.index_files_bytes),
+        (BLOB_ENRICH_BITMAPS, params.enrich_bitmaps_bytes),
     ];
 
     // ── Compute TOC offsets ───────────────────────────────────────────────
@@ -201,7 +206,7 @@ pub(super) fn write_v3(out: &mut impl Write, params: &WriteV3Params<'_>) -> io::
         "HEADER_V3_LEN invariant"
     );
 
-    // ── Write TOC (9 × 64 bytes = 576 bytes) ─────────────────────────────
+    // ── Write TOC (11 × 64 bytes = 704 bytes) ────────────────────────────
     // Field-by-field because TocEntry is not `Pod` (the `[u8; 56]` name
     // field conflicts with `object::pod::Pod` in the dependency graph).
     for entry in &toc {

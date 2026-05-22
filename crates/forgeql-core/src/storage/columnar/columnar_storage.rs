@@ -283,6 +283,29 @@ impl ColumnarStorage {
                 ("name", CompareOp::Matches, PredicateValue::String(val)) => {
                     self.trigram_prefilter_for_regex(val)
                 }
+                // Phase 5: enrichment bitmap prefilter (FQOV v7).
+                // Look up global bitmaps for enrichment predicates.
+                (field, CompareOp::Eq, PredicateValue::String(val))
+                    if field != "fql_kind" && field != "name" =>
+                {
+                    self.overlay.prefilter_enrichment_eq(field, val.as_str())
+                }
+                (field, CompareOp::Eq, PredicateValue::Bool(b)) => {
+                    let val_str = if *b { "true" } else { "false" };
+                    self.overlay.prefilter_enrichment_eq(field, val_str)
+                }
+                (field, CompareOp::Gte, PredicateValue::Number(v)) => {
+                    self.overlay.prefilter_enrichment_ge(field, *v)
+                }
+                (field, CompareOp::Gt, PredicateValue::Number(v)) => {
+                    self.overlay.prefilter_enrichment_ge(field, v + 1)
+                }
+                (field, CompareOp::Lte, PredicateValue::Number(v)) => {
+                    self.overlay.prefilter_enrichment_le(field, *v)
+                }
+                (field, CompareOp::Lt, PredicateValue::Number(v)) => {
+                    self.overlay.prefilter_enrichment_le(field, v - 1)
+                }
                 _ => None,
             }) else {
                 continue;
@@ -681,11 +704,14 @@ fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> boo
         return false;
     }
     // Phase 1: eligible if no where predicates, OR if all where predicates
-    // are fully resolvable by prefilter_global.
+    // are fql_kind / name indexed predicates only.
+    // NOTE: enrichment predicates are intentionally excluded — fast_group_by_file
+    // returns empty names, which breaks ordering and dedup in GROUP BY results.
+    // Enrichment-predicate GROUP BY file queries use the normal pipeline, which
+    // benefits from Phase 5 prefilter_global enrichment bitmaps for speed.
     if clauses.where_predicates.is_empty() {
         return true;
     }
-    // Check if every predicate is indexed (resolvable by prefilter_global)
     clauses.where_predicates.iter().all(|pred| {
         matches!(
             (pred.field.as_str(), &pred.op),
@@ -820,20 +846,15 @@ fn order_by_name_desc_fast_path(clauses: &Clauses) -> bool {
         && clauses.exclude_glob.is_none()
 }
 
-fn has_any_indexed_predicate(clauses: &Clauses) -> bool {
+fn has_any_indexed_predicate(clauses: &Clauses, overlay: &Overlay) -> bool {
     clauses.where_predicates.iter().any(|pred| {
         matches!(
             (pred.field.as_str(), &pred.op),
             ("fql_kind", CompareOp::Eq)
                 | ("name", CompareOp::Eq | CompareOp::Like | CompareOp::Matches)
-        )
+        ) || overlay.has_enrichment_field(&pred.field)
     })
 }
-
-/// Check whether a workspace-relative `path` passes the `IN` / `EXCLUDE`
-/// glob filters stored in `clauses`.
-///
-/// Operates on relative paths (as stored in [`SegmentMeta::source_path`]) —
 /// no worktree-root stripping is needed.
 fn passes_resolve_glob(relative_path: &Path, clauses: &Clauses) -> bool {
     let in_ok = clauses
@@ -1293,7 +1314,7 @@ impl StorageEngine for ColumnarStorage {
         let has_path_filter = clauses.in_glob.is_some() || clauses.exclude_glob.is_some();
 
         let mut by_segment: HashMap<u32, RoaringBitmap> = if has_path_filter
-            && !has_any_indexed_predicate(clauses)
+            && !has_any_indexed_predicate(clauses, &self.overlay)
         {
             // Fast path: skip Stage 1 + group_by_segment entirely.
             // Directly seed by_segment with all local rows for every segment

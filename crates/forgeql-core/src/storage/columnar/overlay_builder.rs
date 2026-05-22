@@ -28,8 +28,9 @@ use roaring::RoaringBitmap;
 use tracing::{debug, info, warn};
 
 use super::bytes_to_hex;
-use super::overlay::{RowPtr, SegmentMeta};
+use super::overlay::{EnrichEntry, RowPtr, SegmentMeta};
 use super::overlay_writer;
+use super::segment_builder::POSTING_ENRICHMENT_FIELDS;
 use super::segment_reader::SegmentReader;
 
 /// Builds a workspace overlay from a set of per-file segments.
@@ -231,6 +232,141 @@ impl OverlayBuilder {
             "TIMING step5: kind postings merge"
         );
 
+        // 5.5. Build enrichment attribute bitmaps (Phase 5 / FQOV v7).
+        //
+        // For each (field, value) pair across all canonical rows, build a global
+        // RoaringBitmap keyed as "field=value".  Fields with more than
+        // MAX_ENRICH_BUCKETS distinct values are pruned to keep the blob small.
+        //
+        // Two categories:
+        //   Category 1 — fields in POSTING_ENRICHMENT_FIELDS: use field_postings
+        //                (sparse path; avoids iterating every row).
+        //   Category 2 — numeric/other fields: iterate canonical rows via
+        //                enrichment_for_row (only for fields not in category 1).
+        #[allow(clippy::items_after_statements)]
+        const MAX_ENRICH_BUCKETS: usize = 64;
+        let t_step = std::time::Instant::now();
+        let mut enrich_raw: HashMap<String, RoaringBitmap> = HashMap::new();
+        let mut field_seen: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut pruned_fields: HashSet<String> = HashSet::new();
+
+        let posting_field_set: HashSet<&str> = POSTING_ENRICHMENT_FIELDS.iter().copied().collect();
+
+        // Category 1: boolean flags + string enums via field_postings.
+        // Category 1: boolean flags + string enums via field_postings.
+        for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
+            let row_offset = row_offsets[seg_idx];
+            let canonical_bm = &seg_dedup[seg_idx].0;
+            for (field_name, value_map) in &reader.field_postings {
+                if pruned_fields.contains(field_name.as_str()) {
+                    continue;
+                }
+                for (&value_id, local_bm) in value_map {
+                    let value_str = reader.string_of_id(value_id);
+                    if value_str.is_empty() {
+                        continue;
+                    }
+                    let seen = field_seen.entry(field_name.clone()).or_default();
+                    if !seen.contains(value_str) {
+                        if seen.len() >= MAX_ENRICH_BUCKETS {
+                            let _ = pruned_fields.insert(field_name.clone());
+                            let pfx = format!("{field_name}=");
+                            enrich_raw.retain(|k, _| !k.starts_with(&pfx));
+                            break;
+                        }
+                        let _ = seen.insert(value_str.to_owned());
+                    }
+                    if pruned_fields.contains(field_name.as_str()) {
+                        continue;
+                    }
+                    let key = format!("{field_name}={value_str}");
+                    let canonical_matching: RoaringBitmap = local_bm & canonical_bm;
+                    if !canonical_matching.is_empty() {
+                        let bm = enrich_raw.entry(key).or_default();
+                        for local_row in &canonical_matching {
+                            let _ = bm.insert(local_row + row_offset);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Category 2: numeric fields not in POSTING_ENRICHMENT_FIELDS.
+        for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
+            let row_offset = row_offsets[seg_idx];
+            let canonical_bm = &seg_dedup[seg_idx].0;
+            for local_row in canonical_bm {
+                let global_row = local_row + row_offset;
+                for (field_name, value_str) in reader.enrichment_for_row(local_row) {
+                    if posting_field_set.contains(field_name.as_str()) {
+                        continue;
+                    }
+                    if pruned_fields.contains(&field_name) {
+                        continue;
+                    }
+                    let seen = field_seen.entry(field_name.clone()).or_default();
+                    if !seen.contains(&value_str) {
+                        if seen.len() >= MAX_ENRICH_BUCKETS {
+                            let _ = pruned_fields.insert(field_name.clone());
+                            let pfx = format!("{field_name}=");
+                            enrich_raw.retain(|k, _| !k.starts_with(&pfx));
+                            continue;
+                        }
+                        let _ = seen.insert(value_str.clone());
+                    }
+                    if pruned_fields.contains(&field_name) {
+                        continue;
+                    }
+                    let key = format!("{field_name}={value_str}");
+                    let _ = enrich_raw.entry(key).or_default().insert(global_row);
+                }
+            }
+        }
+
+        // Serialise enrichment bitmaps into the `enrich_bitmaps` blob.
+        let mut sorted_enrich: Vec<(&String, &RoaringBitmap)> = enrich_raw.iter().collect();
+        sorted_enrich.sort_by_key(|(k, _)| k.as_str());
+        let mut enrich_key_bytes: Vec<u8> = Vec::new();
+        let mut enrich_bitmap_data: Vec<u8> = Vec::new();
+        let mut enrich_entries: Vec<EnrichEntry> = Vec::new();
+        for (key, bitmap) in &sorted_enrich {
+            let mut bm_bytes = Vec::new();
+            bitmap
+                .serialize_into(&mut bm_bytes)
+                .with_context(|| format!("serialising enrich bitmap '{key}'"))?;
+            #[allow(clippy::cast_possible_truncation)]
+            enrich_entries.push(EnrichEntry {
+                key_offset: enrich_key_bytes.len() as u32,
+                key_len: key.len() as u16,
+                _pad: 0,
+                bitmap_offset: enrich_bitmap_data.len() as u32,
+                bitmap_len: bm_bytes.len() as u32,
+            });
+            enrich_key_bytes.extend_from_slice(key.as_bytes());
+            enrich_bitmap_data.extend_from_slice(&bm_bytes);
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let entry_count_le = (enrich_entries.len() as u32).to_le_bytes();
+        #[allow(clippy::cast_possible_truncation)]
+        let key_data_len_le = (enrich_key_bytes.len() as u32).to_le_bytes();
+        let mut enrich_bitmaps_bytes: Vec<u8> = Vec::with_capacity(
+            8 + enrich_entries.len() * std::mem::size_of::<EnrichEntry>()
+                + enrich_key_bytes.len()
+                + enrich_bitmap_data.len(),
+        );
+        enrich_bitmaps_bytes.extend_from_slice(&entry_count_le);
+        enrich_bitmaps_bytes.extend_from_slice(&key_data_len_le);
+        enrich_bitmaps_bytes.extend_from_slice(cast_slice(enrich_entries.as_slice()));
+        enrich_bitmaps_bytes.extend_from_slice(&enrich_key_bytes);
+        enrich_bitmaps_bytes.extend_from_slice(&enrich_bitmap_data);
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            entries = enrich_entries.len(),
+            pruned = pruned_fields.len(),
+            bytes = enrich_bitmaps_bytes.len(),
+            "TIMING step5.5: enrichment bitmaps"
+        );
+
         // 6. Build merged name FST + postings.
         //    Accumulate (name_bytes → Vec<global_row_id>) in a BTreeMap so
         //    we can insert into the FST in sorted order (FST requires it).
@@ -360,6 +496,7 @@ impl OverlayBuilder {
                     name_postings_bytes: &name_postings_bytes,
                     segment_metas: &segment_metas,
                     index_files_bytes,
+                    enrich_bitmaps_bytes: &enrich_bitmaps_bytes,
                 },
             )
             .context("writing v3 overlay")?;
