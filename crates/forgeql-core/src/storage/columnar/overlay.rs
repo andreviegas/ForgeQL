@@ -662,8 +662,8 @@ impl Overlay {
         let mut results = Vec::new();
         let mut stream = self.name_fst.stream();
         while let Some((_name_bytes, encoded)) = stream.next() {
-            let bitmap = self.decode_postings(encoded);
-            for global_id in &bitmap {
+            let slice = self.decode_postings_slice(encoded);
+            for &global_id in slice {
                 let Some(ptr) = self.resolve_global(global_id) else {
                     continue;
                 };
@@ -701,21 +701,23 @@ impl Overlay {
         let mut results = Vec::new();
         let mut stream = self.name_fst.stream();
         while let Some((_name_bytes, encoded)) = stream.next() {
-            let bitmap = self.decode_postings(encoded);
+            let slice = self.decode_postings_slice(encoded);
             // Only process rows that are in the kind bitmap.
-            let matching = bitmap & kind_bm;
-            for global_id in &matching {
-                let Some(ptr) = self.resolve_global(global_id) else {
-                    continue;
-                };
-                let Some(seg) = segments.get(ptr.segment_idx as usize) else {
-                    continue;
-                };
-                let Some(meta) = self.segments.get(ptr.segment_idx as usize) else {
-                    continue;
-                };
-                if let Some(row) = seg.materialize_one_row(ptr.local_row_idx, &meta.source_path) {
-                    results.push(row);
+            for &global_id in slice {
+                if kind_bm.contains(global_id) {
+                    let Some(ptr) = self.resolve_global(global_id) else {
+                        continue;
+                    };
+                    let Some(seg) = segments.get(ptr.segment_idx as usize) else {
+                        continue;
+                    };
+                    let Some(meta) = self.segments.get(ptr.segment_idx as usize) else {
+                        continue;
+                    };
+                    if let Some(row) = seg.materialize_one_row(ptr.local_row_idx, &meta.source_path)
+                    {
+                        results.push(row);
+                    }
                 }
             }
             if results.len() >= need {
@@ -725,7 +727,7 @@ impl Overlay {
         results
     }
 
-    fn decode_postings(&self, encoded: u64) -> RoaringBitmap {
+    fn decode_postings_slice(&self, encoded: u64) -> &[u32] {
         #[allow(clippy::cast_possible_truncation)]
         let count = (encoded & 0xFFFF_FFFF) as usize;
         #[allow(clippy::cast_possible_truncation)]
@@ -734,16 +736,19 @@ impl Overlay {
         let postings = &self.mmap[self.name_postings_range.clone()];
         let end = byte_offset + count * 4;
         if end > postings.len() {
-            return RoaringBitmap::new();
+            return &[];
         }
         #[allow(clippy::indexing_slicing)]
         cast_slice::<u8, u32>(&postings[byte_offset..end])
+    }
+
+    fn decode_postings(&self, encoded: u64) -> RoaringBitmap {
+        self.decode_postings_slice(encoded)
             .iter()
             .copied()
             .collect()
     }
 }
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Private helpers (extracted from Overlay::open to keep the function ≤ 100 lines)
 // ─────────────────────────────────────────────────────────────────────────────

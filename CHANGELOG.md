@@ -6,9 +6,9 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Phase 2: Zero-allocation FST Stream Filtering** — Replaced deserialising of the FST name postings list into a fresh `RoaringBitmap` heap allocation with a zero-copy direct cast to a slice `&[u32]` via `decode_postings_slice`. This eliminates redundant collections/allocations inside the main loops of `stream_names_asc` and `stream_names_asc_kind_filtered`, avoiding thousands of heap allocations and improving performance dramatically.
 - **Enhanced Golden-Value Assertion Harness** — Added tracking and reporting of total matched rows and `tokens_approx` count in `zephyr_golden.rs` test runner. It now prints detailed context for each passed/failed query, including diagnostic differences when outputs do not match.
 - **Added 15 Strategic Golden Queries** — Expanded `golden.json` integration test library with robust queries (`GST1` through `GST15`) targeting deep AST attributes, data-flow metrics, unused parameter patterns, shadow variables, duplicate conditions, recursive logic, and alphabetical limits.
-
 ## [0.52.0] — 2026-05-22 — `GROUP BY file` fast-path operational; internal constant hygiene
 ### Fixed
 
