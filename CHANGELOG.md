@@ -6,8 +6,8 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Phase 3: Bounded DESC streaming query path** — Implemented two high-speed descending name-stream fast-paths, `stream_names_desc` and `stream_names_desc_kind_filtered`, inside `overlay.rs`. These utilize an in-memory Bounded Min-Heap (`std::collections::BinaryHeap<HeapEntry>`) over a forward walk of the sorted name FST table to retain and return only the alphabetically largest $N$ matches. This executes in $O(K)$ resource footprint and completely avoids materialising non-essential candidates or reading segment files for non-top-K nodes.
 - **Phase 2: Zero-allocation FST Stream Filtering** — Replaced deserialising of the FST name postings list into a fresh `RoaringBitmap` heap allocation with a zero-copy direct cast to a slice `&[u32]` via `decode_postings_slice`. This eliminates redundant collections/allocations inside the main loops of `stream_names_asc` and `stream_names_asc_kind_filtered`, avoiding thousands of heap allocations and improving performance dramatically.
-- **Enhanced Golden-Value Assertion Harness** — Added tracking and reporting of total matched rows and `tokens_approx` count in `zephyr_golden.rs` test runner. It now prints detailed context for each passed/failed query, including diagnostic differences when outputs do not match.
 - **Added 15 Strategic Golden Queries** — Expanded `golden.json` integration test library with robust queries (`GST1` through `GST15`) targeting deep AST attributes, data-flow metrics, unused parameter patterns, shadow variables, duplicate conditions, recursive logic, and alphabetical limits.
 ## [0.52.0] — 2026-05-22 — `GROUP BY file` fast-path operational; internal constant hygiene
 ### Fixed
