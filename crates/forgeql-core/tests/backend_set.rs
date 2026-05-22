@@ -71,3 +71,25 @@ fn set_columnar_replaces() {
     // Columnar engine still reachable.
     assert!(bs.engine_for(&Backend::Columnar).is_ok());
 }
+
+#[test]
+fn default_engine_is_columnar_when_installed() {
+    let bs = make_backend_set().with_columnar(Box::new(StubColumnarStorage));
+    assert!(bs.has_columnar());
+    assert_eq!(bs.default_engine().backend_name(), "stub");
+}
+
+#[test]
+#[allow(clippy::redundant_closure_for_method_calls)]
+fn engine_for_default_routes_to_columnar_when_installed() {
+    let bs = make_backend_set().with_columnar(Box::new(StubColumnarStorage));
+    assert!(bs.has_columnar());
+    assert_eq!(
+        bs.engine_for(&Backend::Default)
+            .map(|e| e.backend_name())
+            .as_ref()
+            .copied()
+            .ok(),
+        Some("stub")
+    );
+}

@@ -422,6 +422,15 @@ impl ForgeQLEngine {
             .get(session_id)
             .is_some_and(Session::has_columnar)
     }
+    /// Returns `true` if the legacy symbol table is `None` for the given session.
+    #[cfg(feature = "test-helpers")]
+    #[must_use]
+    pub fn session_legacy_table_is_none(&self, session_id: &str) -> bool {
+        self.sessions
+            .get(session_id)
+            .and_then(|s| s.legacy_storage())
+            .is_none_or(|l| l.table().is_none())
+    }
 
     /// Return `index_stats().rows` for the session's default engine.
     ///
@@ -520,8 +529,8 @@ impl ForgeQLEngine {
                 Arc::clone(&self.lang_registry),
             );
             session.install_columnar(Box::new(columnar));
+            session.drop_legacy_index();
         }
-
         session.touch();
         drop(self.sessions.insert(coords.map_key(), session));
         Ok(coords.to_session_id())
