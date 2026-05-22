@@ -198,6 +198,44 @@ See `data/future-plans/overlay-path-acceleration-plan.md` for the full plan.
 - [x] GROUP BY file and kind whole-repo queries: ~82 s → sub-second
 - [x] `segment_reader.rs` exposes `dedup_row_count` field (`segment_reader.rs`)
 
+## Overlay — enrichment acceleration (FQOV v6/v7)
+
+See `data/future-plans/overlay-enrichment-acceleration-plan.md` for the full plan.
+
+### Phase 2 — Zero-allocation FST stream filtering (no format change)
+
+- [x] Replace per-name `RoaringBitmap` heap allocation with zero-copy `&[u32]` slice via
+  `decode_postings_slice` inside `stream_names_asc` and `stream_names_asc_kind_filtered`
+  — eliminates thousands of heap allocations per query (`overlay.rs`)
+
+### Phase 3 — Bounded DESC streaming fast-path (no format change)
+
+- [x] `stream_names_desc` and `stream_names_desc_kind_filtered` on `Overlay` — in-memory
+  bounded min-heap (`BinaryHeap<HeapEntry>`) over a forward FST walk; retains only the
+  alphabetically largest N names in O(K) footprint without opening segment files (`overlay.rs`)
+
+### Phase 4 — `index_files` table in overlay (FQOV v6, format change)
+
+- [x] `SCHEMA_VERSION` bumped 5 → 6; TOC count increased to 10 (`overlay.rs`)
+- [x] Flat `u32` file-size array (`index_files_bytes`) serialised alongside segment metadata;
+  eliminates disk directory walks for file-system queries (`overlay_builder.rs`, `overlay.rs`)
+- [x] Automated version up-conversion; runtime validation on open
+
+### Phase 5 — Global enrichment bitmaps (FQOV v7, format change)
+
+- [x] `SCHEMA_VERSION` bumped 6 → 7; TOC count increased to 11; `enrich_bitmaps` blob added
+  (`overlay.rs`, `overlay_builder.rs`)
+- [x] `RoaringBitmap`s keyed by `"field=value"` built at overlay-write time for all enrichment
+  attributes (step 5.5 in `overlay_builder.rs`)
+- [x] `prefilter_global` intersects enrichment bitmaps for Eq/Bool/Gte/Gt/Lte/Lt predicates —
+  candidate set shrinks from 37k+ rows to ~50–500 rows before segment materialisation
+  (`columnar_storage.rs`)
+- [x] `group_by_file_fast_path_eligible` intentionally excludes enrichment predicates; those
+  queries fall through to the normal pipeline (now fast via bitmap narrowing)
+- [x] 15 strategic golden queries added (`GST1`–`GST15` in `golden.json`)
+- [ ] Numeric range prefilter: replace lexicographic-scan + parse in `prefilter_enrichment_ge/le`
+  with a compact sorted `Vec<(i64, u32)>` value→row map stored in the `enrich_bitmaps` blob
+
 ## Miscellaneous
 
 - [ ] Per-user engine isolation when lock contention becomes measurable (each user gets their
