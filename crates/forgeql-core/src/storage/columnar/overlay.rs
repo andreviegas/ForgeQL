@@ -726,7 +726,117 @@ impl Overlay {
         }
         results
     }
+    /// Streams name entries in DESC order using a Bounded Min-Heap over a forward walk of the FST.
+    pub(super) fn stream_names_desc(
+        &self,
+        need: usize,
+        segments: &[Arc<SegmentReader>],
+    ) -> Vec<SymbolMatch> {
+        use fst::Streamer as _;
+        use std::collections::BinaryHeap;
 
+        let mut heap: BinaryHeap<HeapEntry> = BinaryHeap::new();
+        let mut stream = self.name_fst.stream();
+
+        while let Some((name_bytes, encoded)) = stream.next() {
+            let name_str = String::from_utf8_lossy(name_bytes).into_owned();
+            let slice = self.decode_postings_slice(encoded);
+            for &global_id in slice {
+                if let Some(ptr) = self.resolve_global(global_id)
+                    && let Some(seg) = segments.get(ptr.segment_idx as usize)
+                    && let Some(meta) = self.segments.get(ptr.segment_idx as usize)
+                {
+                    let line = seg.u32_at("line", ptr.local_row_idx);
+                    let path = meta.source_path.to_string_lossy().into_owned();
+                    let entry = HeapEntry {
+                        name: name_str.clone(),
+                        global_id,
+                        line,
+                        path,
+                    };
+                    heap.push(entry);
+                    if heap.len() > need {
+                        let _ = heap.pop();
+                    }
+                }
+            }
+        }
+
+        let mut results = Vec::new();
+        while let Some(entry) = heap.pop() {
+            results.push(entry);
+        }
+        results.reverse();
+
+        let mut matched_symbols = Vec::new();
+        for entry in results {
+            if let Some(ptr) = self.resolve_global(entry.global_id)
+                && let Some(seg) = segments.get(ptr.segment_idx as usize)
+                && let Some(meta) = self.segments.get(ptr.segment_idx as usize)
+                && let Some(row) = seg.materialize_one_row(ptr.local_row_idx, &meta.source_path)
+            {
+                matched_symbols.push(row);
+            }
+        }
+        matched_symbols
+    }
+
+    /// Streams kind-filtered name entries in DESC order using a Bounded Min-Heap over a forward walk of the FST.
+    pub(super) fn stream_names_desc_kind_filtered(
+        &self,
+        need: usize,
+        kind_bm: &RoaringBitmap,
+        segments: &[Arc<SegmentReader>],
+    ) -> Vec<SymbolMatch> {
+        use fst::Streamer as _;
+        use std::collections::BinaryHeap;
+
+        let mut heap: BinaryHeap<HeapEntry> = BinaryHeap::new();
+        let mut stream = self.name_fst.stream();
+
+        while let Some((name_bytes, encoded)) = stream.next() {
+            let name_str = String::from_utf8_lossy(name_bytes).into_owned();
+            let slice = self.decode_postings_slice(encoded);
+            for &global_id in slice {
+                if kind_bm.contains(global_id)
+                    && let Some(ptr) = self.resolve_global(global_id)
+                    && let Some(seg) = segments.get(ptr.segment_idx as usize)
+                    && let Some(meta) = self.segments.get(ptr.segment_idx as usize)
+                {
+                    let line = seg.u32_at("line", ptr.local_row_idx);
+                    let path = meta.source_path.to_string_lossy().into_owned();
+                    let entry = HeapEntry {
+                        name: name_str.clone(),
+                        global_id,
+                        line,
+                        path,
+                    };
+                    heap.push(entry);
+                    if heap.len() > need {
+                        let _ = heap.pop();
+                    }
+                }
+            }
+        }
+
+        let mut results = Vec::new();
+        while let Some(entry) = heap.pop() {
+            results.push(entry);
+        }
+        results.reverse();
+
+        let mut matched_symbols = Vec::new();
+        for entry in results {
+            if let Some(ptr) = self.resolve_global(entry.global_id)
+                && let Some(seg) = segments.get(ptr.segment_idx as usize)
+                && let Some(meta) = self.segments.get(ptr.segment_idx as usize)
+                && let Some(row) = seg.materialize_one_row(ptr.local_row_idx, &meta.source_path)
+            {
+                matched_symbols.push(row);
+            }
+        }
+        matched_symbols
+    }
     fn decode_postings_slice(&self, encoded: u64) -> &[u32] {
         #[allow(clippy::cast_possible_truncation)]
         let count = (encoded & 0xFFFF_FFFF) as usize;
@@ -883,6 +993,38 @@ fn validate_blob_layout(mmap_len: usize, blobs: &[Range<usize>; 9]) -> Result<()
         "segments blob size not a multiple of SegmentRecord size"
     );
     Ok(())
+}
+
+#[derive(Eq, PartialEq)]
+struct HeapEntry {
+    name: String,
+    global_id: u32,
+    line: u32,
+    path: String,
+}
+
+impl Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // We want a MIN-heap, meaning the element with the LOWEST rank (first to be discarded in DESC query)
+        // should be at the top of the heap.
+        // Lowest rank means:
+        // 1. Alphabetically smaller name.
+        // 2. Or, same name, but larger line.
+        // 3. Or, same name, same line, but lexicographically larger path.
+        match other.name.cmp(&self.name) {
+            std::cmp::Ordering::Equal => match self.line.cmp(&other.line) {
+                std::cmp::Ordering::Equal => self.path.cmp(&other.path),
+                ord => ord,
+            },
+            ord => ord,
+        }
+    }
+}
+
+impl PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

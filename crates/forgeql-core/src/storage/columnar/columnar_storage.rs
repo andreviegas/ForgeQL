@@ -737,6 +737,34 @@ fn order_by_name_kind_fast_path(clauses: &Clauses) -> Option<&str> {
     }
 }
 
+fn order_by_name_kind_desc_fast_path(clauses: &Clauses) -> Option<&str> {
+    if !matches!(
+        &clauses.order_by,
+        Some(OrderBy { field, direction: SortDirection::Desc }) if field == "name"
+    ) {
+        return None;
+    }
+    if clauses.limit.is_none()
+        || clauses.group_by.is_some()
+        || clauses.in_glob.is_some()
+        || clauses.exclude_glob.is_some()
+    {
+        return None;
+    }
+    if clauses.where_predicates.len() != 1 {
+        return None;
+    }
+    let pred = &clauses.where_predicates[0];
+    if pred.field != "fql_kind" || pred.op != CompareOp::Eq {
+        return None;
+    }
+    if let PredicateValue::String(ref kind) = pred.value {
+        Some(kind.as_str())
+    } else {
+        None
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Resolve helpers — shared by the three StorageEngine::resolve_* methods
 // ─────────────────────────────────────────────────────────────────────────────
@@ -774,6 +802,17 @@ fn order_by_name_fast_path(clauses: &Clauses) -> bool {
     matches!(
         &clauses.order_by,
         Some(OrderBy { field, direction: SortDirection::Asc }) if field == "name"
+    ) && clauses.limit.is_some()
+        && clauses.group_by.is_none()
+        && clauses.where_predicates.is_empty()
+        && clauses.in_glob.is_none()
+        && clauses.exclude_glob.is_none()
+}
+
+fn order_by_name_desc_fast_path(clauses: &Clauses) -> bool {
+    matches!(
+        &clauses.order_by,
+        Some(OrderBy { field, direction: SortDirection::Desc }) if field == "name"
     ) && clauses.limit.is_some()
         && clauses.group_by.is_none()
         && clauses.where_predicates.is_empty()
@@ -1184,6 +1223,57 @@ impl StorageEngine for ColumnarStorage {
             let mut results =
                 self.overlay
                     .stream_names_asc_kind_filtered(need, &kind_bm, &self.segments);
+            {
+                type DedupeKey = (
+                    String,
+                    Option<String>,
+                    Option<std::path::PathBuf>,
+                    Option<usize>,
+                );
+                let mut seen: HashSet<DedupeKey> = HashSet::new();
+                results.retain(|r| {
+                    seen.insert((r.name.clone(), r.fql_kind.clone(), r.path.clone(), r.line))
+                });
+            }
+            apply_clauses(&mut results, clauses);
+            return Ok(results);
+        }
+        // ── ORDER BY name DESC LIMIT N fast-path ─────────────────────────────
+        if order_by_name_desc_fast_path(clauses) && self.dirty.is_empty() {
+            let need = clauses
+                .limit
+                .unwrap_or(0)
+                .saturating_add(clauses.offset.unwrap_or(0))
+                .max(1);
+            let mut results = self.overlay.stream_names_desc(need, &self.segments);
+            {
+                type DedupeKey = (
+                    String,
+                    Option<String>,
+                    Option<std::path::PathBuf>,
+                    Option<usize>,
+                );
+                let mut seen: HashSet<DedupeKey> = HashSet::new();
+                results.retain(|r| {
+                    seen.insert((r.name.clone(), r.fql_kind.clone(), r.path.clone(), r.line))
+                });
+            }
+            apply_clauses(&mut results, clauses);
+            return Ok(results);
+        }
+        // ── ORDER BY name DESC LIMIT N WHERE fql_kind='X' fast-path ──────────
+        if let Some(kind) = order_by_name_kind_desc_fast_path(clauses)
+            && self.dirty.is_empty()
+            && let Some(kind_bm) = self.overlay.prefilter_kind(kind)
+        {
+            let need = clauses
+                .limit
+                .unwrap_or(0)
+                .saturating_add(clauses.offset.unwrap_or(0))
+                .max(1);
+            let mut results =
+                self.overlay
+                    .stream_names_desc_kind_filtered(need, &kind_bm, &self.segments);
             {
                 type DedupeKey = (
                     String,

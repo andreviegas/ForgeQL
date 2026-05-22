@@ -584,7 +584,7 @@ impl SegmentReader {
 
     /// Return a u32 column value at `row`.
     /// `col` is the short column name (without the `col_` prefix).
-    fn u32_at(&self, col: &str, row: u32) -> u32 {
+    pub(crate) fn u32_at(&self, col: &str, row: u32) -> u32 {
         let blob = self.blob_bytes(&format!("col_{col}"));
         if blob.is_empty() {
             return 0;
