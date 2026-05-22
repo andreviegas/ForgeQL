@@ -481,5 +481,182 @@
       {"name": "net_bytes_from_str", "line": 1160, "path": "subsys/net/ip/utils.c"},
       {"name": "net_conn_change_callback", "line": 269, "path": "subsys/net/ip/connection.c"}
     ]
+  },
+  {
+    "name": "GST1_function_alphabetic_asc_limit10",
+    "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 10",
+    "expect_row_count": 10,
+    "expect_rows": [
+      {"name": "AGC_IRQHandler", "line": 64, "path": "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c"},
+      {"name": "ALWAYS_INLINE handle_ep_isr", "line": 542, "path": "drivers/usb/udc/udc_sam0.c"},
+      {"name": "ALWAYS_INLINE rpi_pico_bit_clr", "line": 106, "path": "drivers/usb/udc/udc_rpi_pico.c"},
+      {"name": "ALWAYS_INLINE rpi_pico_bit_set", "line": 100, "path": "drivers/usb/udc/udc_rpi_pico.c"},
+      {"name": "ALWAYS_INLINE sie_status_clr", "line": 124, "path": "drivers/usb/udc/udc_rpi_pico.c"},
+      {"name": "ARM_MPU_ClrRegion", "line": 82, "path": "arch/arm/core/mpu/cortex_a_r/arm_mpu_internal.h"},
+      {"name": "ARRAY_FOR_EACH", "line": 30, "path": "tests/drivers/rtc/rtc_utils/src/test_rtc_utils.c"},
+      {"name": "ARRAY_FOR_EACH", "line": 33, "path": "tests/posix/xsi_single_process/src/putenv.c"},
+      {"name": "ARRAY_FOR_EACH", "line": 42, "path": "drivers/spi/spi_nxp_lpspi/spi_nxp_lpspi_common.c"},
+      {"name": "ARRAY_FOR_EACH", "line": 44, "path": "tests/drivers/rtc/rtc_api_helpers/src/test_rtc_calibration_from_frequency.c"}
+    ]
+  },
+  {
+    "name": "GST2_variable_subsys_net_desc_limit5",
+    "fql": "FIND symbols WHERE fql_kind = 'variable' IN 'subsys/net/**' ORDER BY name DESC LIMIT 5",
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"name": "zperf_work_q", "line": 76, "path": "subsys/net/lib/zperf/zperf_common.c"},
+      {"name": "zperf_work_q", "line": 106, "path": "subsys/net/lib/zperf/zperf_common.c"},
+      {"name": "zperf", "line": 279, "path": "subsys/net/lib/zperf/zperf_tcp_uploader.c"},
+      {"name": "zperf", "line": 510, "path": "subsys/net/lib/zperf/zperf_udp_uploader.c"},
+      {"name": "zo", "line": 230, "path": "subsys/net/lib/sockets/socketpair.c"}
+    ]
+  },
+  {
+    "name": "GST3_struct_member_count_group_by_file_limit3",
+    "fql": "FIND symbols WHERE fql_kind = 'struct' WHERE member_count >= 10 IN 'include/zephyr/**' GROUP BY file ORDER BY count DESC LIMIT 3",
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"count": 34, "name": "bt_hci_cp_le_create_conn", "path": "include/zephyr/bluetooth/hci_types.h"},
+      {"count": 8, "name": "wifi_p2p_device_info", "path": "include/zephyr/net/wifi_mgmt.h"},
+      {"count": 6, "name": "bt_conn_le_cs_capabilities", "path": "include/zephyr/bluetooth/conn.h"}
+    ]
+  },
+  {
+    "name": "GST4_recursive_functions_param_count_group_by_file_limit5",
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE is_recursive = 'true' WHERE param_count >= 4 GROUP BY file LIMIT 5",
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"count": 2, "name": "_merge_props", "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"},
+      {"count": 1, "name": "adc_ad7124_read_reg", "path": "drivers/adc/adc_ad7124.c"},
+      {"count": 1, "name": "clock_get_rate_gclkgen", "path": "drivers/clock_control/clock_control_mchp_pic32cm_pl.c"},
+      {"count": 1, "name": "clock_get_rate_gclkgen", "path": "drivers/clock_control/clock_control_mchp_pic32cz_ca.c"},
+      {"count": 1, "name": "clock_get_rate_gclkgen", "path": "drivers/clock_control/clock_control_mchp_pic32cm_jh.c"}
+    ]
+  },
+  {
+    "name": "GST5_class_alphabetical_asc_limit3",
+    "fql": "FIND symbols WHERE fql_kind = 'class' ORDER BY name ASC LIMIT 3",
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"name": "AccessManager", "line": 25, "path": "modules/thrift/src/thrift/transport/TSSLSocket.h"},
+      {"name": "AccessManager", "line": 390, "path": "modules/thrift/src/thrift/transport/TSSLSocket.h"},
+      {"name": "AddedProperty", "line": 71, "path": "scripts/release/list_devicetree_bindings_changes.py"}
+    ]
+  },
+  {
+    "name": "GST6_functions_regex_k_sem_order_by_line_limit5",
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES 'k_sem_' ORDER BY line ASC LIMIT 5",
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"name": "z_impl_k_sem_give", "line": 37, "path": "lib/libc/armstdc/src/threading_weak.c"},
+      {"name": "z_impl_k_sem_init", "line": 41, "path": "lib/libc/armstdc/src/threading_weak.c"},
+      {"name": "z_impl_k_sem_init", "line": 45, "path": "kernel/sem.c"},
+      {"name": "z_impl_k_sem_take", "line": 47, "path": "lib/libc/armstdc/src/threading_weak.c"},
+      {"name": "sys_track_k_sem_init", "line": 72, "path": "subsys/tracing/tracing_tracking.c"}
+    ]
+  },
+  {
+    "name": "GST7_const_functions_in_gpio_limit5",
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE is_const = 'true' IN 'drivers/gpio/**' LIMIT 5",
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"name": "get_dev", "line": 547, "path": "drivers/gpio/gpio_nrfx.c"},
+      {"name": "get_gpio_ctrl", "line": 135, "path": "drivers/gpio/gpio_shell.c"},
+      {"name": "get_port_cfg", "line": 64, "path": "drivers/gpio/gpio_nrfx.c"},
+      {"name": "npcx_get_gpio_dev", "line": 53, "path": "drivers/gpio/gpio_npcx.c"},
+      {"name": "query_irq_info", "line": 43, "path": "drivers/gpio/gpio_renesas_ra_ioport.c"}
+    ]
+  },
+  {
+    "name": "GST8_init_param_functions_in_arm_desc_limit5",
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES 'init' WHERE param_count >= 1 IN 'arch/arm/**' ORDER BY line DESC LIMIT 5",
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"name": "z_arm_fault_init", "line": 1125, "path": "arch/arm/core/cortex_m/fault.c"},
+      {"name": "z_arm_mmu_init", "line": 739, "path": "arch/arm/core/mmu/arm_mmu.c"},
+      {"name": "z_arm_mpu_init", "line": 670, "path": "arch/arm/core/mpu/nxp_mpu.c"},
+      {"name": "z_arm_mpu_init", "line": 502, "path": "arch/arm/core/mpu/arm_mpu.c"},
+      {"name": "z_arm_fault_init", "line": 437, "path": "arch/arm/core/cortex_a_r/fault.c"}
+    ]
+  },
+  {
+    "name": "GST9_enum_group_by_file_zephyr_drivers_limit5",
+    "fql": "FIND symbols WHERE fql_kind = 'enum' IN 'include/zephyr/drivers/**' GROUP BY file ORDER BY count DESC LIMIT 5",
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"count": 43, "path": "include/zephyr/drivers/modem/hl78xx_apis.h"},
+      {"count": 35, "path": "include/zephyr/drivers/usb_c/usbc_tcpc.h"},
+      {"count": 33, "path": "include/zephyr/drivers/mspi.h"},
+      {"count": 29, "path": "include/zephyr/drivers/espi.h"},
+      {"count": 27, "path": "include/zephyr/drivers/sensor.h"}
+    ]
+  },
+  {
+    "name": "GST10_shadow_functions_desc_limit3",
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_shadow = 'true' WHERE shadow_count >= 2 ORDER BY line ASC LIMIT 3",
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"name": "_ifx_cat1_irq_set_priority", "line": 30, "path": "include/zephyr/drivers/serial/uart_ifx_cat1.h"},
+      {"name": "ZTEST", "line": 56, "path": "tests/boards/realtek/bee_osif/src/osif_mem.c"},
+      {"name": "common_create_adv_set", "line": 63, "path": "tests/bluetooth/df/connectionless_cte_chains/src/common.c"}
+    ]
+  },
+  {
+    "name": "GST11_goto_audit_functions_limit5",
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE goto_count >= 1 WHERE lines >= 100 ORDER BY lines DESC LIMIT 5",
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"name": "parser_execute", "line": 862, "path": "subsys/net/lib/http/http_parser.c"},
+      {"name": "isr_rx", "line": 572, "path": "subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync_iso.c"},
+      {"name": "ull_scan_aux_setup", "line": 170, "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"},
+      {"name": "tcp_in", "line": 2905, "path": "subsys/net/ip/tcp.c"},
+      {"name": "ull_scan_aux_setup", "line": 1612, "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"}
+    ]
+  },
+  {
+    "name": "GST12_data_flow_decl_distance_limit5",
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE decl_far_count >= 5 ORDER BY decl_distance DESC LIMIT 5",
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"name": "ull_scan_aux_setup", "line": 170, "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"},
+      {"name": "le_ext_adv_report", "line": 7173, "path": "subsys/bluetooth/controller/hci/hci.c"},
+      {"name": "isr_rx", "line": 572, "path": "subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync_iso.c"},
+      {"name": "big_create", "line": 100, "path": "subsys/bluetooth/controller/ll_sw/ull_adv_iso.c"},
+      {"name": "ull_scan_aux_setup", "line": 1612, "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"}
+    ]
+  },
+  {
+    "name": "GST13_duplicate_condition_limit3",
+    "fql": "FIND symbols WHERE duplicate_condition = 'true' LIMIT 3",
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"enclosing_fn": "z_check_thread_stack_fail", "kind": "if", "line": 65, "name": "((a&b)!=c)", "path": "arch/arc/core/fault.c"},
+      {"enclosing_fn": "z_check_thread_stack_fail", "kind": "if", "line": 66, "name": "((a&b)!=c)", "path": "arch/arc/core/fault.c"},
+      {"enclosing_fn": "arch_dcache_invd_range", "kind": "if", "line": 135, "name": "(a&(b-c))", "path": "arch/arm/core/cortex_a_r/cache.c"}
+    ]
+  },
+  {
+    "name": "GST14_fallthrough_functions_in_usb_limit5",
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_fallthrough = 'true' IN 'subsys/usb/**' ORDER BY line ASC LIMIT 5",
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"name": "tc_run", "line": 39, "path": "subsys/usb/usb_c/usbc_tc_common.c"},
+      {"name": "cdc_acm_class_handle_req", "line": 152, "path": "subsys/usb/device/class/cdc_acm.c"},
+      {"name": "pe_run", "line": 153, "path": "subsys/usb/usb_c/usbc_pe_common.c"},
+      {"name": "prl_run", "line": 293, "path": "subsys/usb/usb_c/usbc_prl.c"},
+      {"name": "dfu_dnload_idle_next", "line": 346, "path": "subsys/usb/device_next/class/usbd_dfu.c"}
+    ]
+  },
+  {
+    "name": "GST15_unused_param_metric_combos_limit5",
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_unused_param = 'true' WHERE unused_param_count >= 3 ORDER BY lines DESC LIMIT 5",
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"name": "i3c_driver_api", "line": 538, "path": "include/zephyr/drivers/i3c.h"},
+      {"name": "frag_transport_package_callback", "line": 106, "path": "subsys/lorawan/services/frag_transport.c"},
+      {"name": "register_service", "line": 153, "path": "tests/bluetooth/tester/src/btp_core.c"},
+      {"name": "unregister_service", "line": 321, "path": "tests/bluetooth/tester/src/btp_core.c"},
+      {"name": "tp_input", "line": 4339, "path": "subsys/net/ip/tcp.c"}
+    ]
   }
 ]

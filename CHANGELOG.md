@@ -6,12 +6,10 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Enhanced Golden-Value Assertion Harness** — Added tracking and reporting of total matched rows and `tokens_approx` count in `zephyr_golden.rs` test runner. It now prints detailed context for each passed/failed query, including diagnostic differences when outputs do not match.
+- **Added 15 Strategic Golden Queries** — Expanded `golden.json` integration test library with robust queries (`GST1` through `GST15`) targeting deep AST attributes, data-flow metrics, unused parameter patterns, shadow variables, duplicate conditions, recursive logic, and alphabetical limits.
+
 ## [0.52.0] — 2026-05-22 — `GROUP BY file` fast-path operational; internal constant hygiene
-
-### Added
-
-- **`GROUP BY file` WHERE-predicate fast-path (Phase 1 acceleration)** — `FIND symbols … GROUP BY file WHERE …` queries now use in-memory roaring bitmap range intersections via `fast_group_by_file`. When `has_duplicate_paths` is false and no path-segment filtering is needed, the query bypasses all segment I/O and returns per-file symbol counts in O(segments) time even with WHERE predicates active.
-
 ### Fixed
 
 - **`GROUP BY file` fast-path predicate evaluation** — WHERE predicates were left in `no_group` and evaluated against grouped results (which lack per-symbol fields), causing golden tests G13, G17, G19 to return 0 rows. Predicates are now cleared before `apply_clauses` runs on the grouped output.

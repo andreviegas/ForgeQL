@@ -423,12 +423,25 @@ fn golden_values() {
                     }
                 }
 
+                // Print execution context details (tokens_approx, results count)
+                let tokens = result
+                    .get("tokens_approx")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let got_total = result.get("total").and_then(Value::as_u64).unwrap_or(0);
+
                 if entry_failures.is_empty() {
-                    eprintln!("[golden] PASS {}", q.name);
+                    eprintln!(
+                        "[golden] PASS {} — tokens={} got_total={}",
+                        q.name, tokens, got_total
+                    );
                     pass += 1;
                 } else {
                     for msg in &entry_failures {
-                        eprintln!("[golden] FAIL {} — {msg}", q.name);
+                        eprintln!(
+                            "[golden] FAIL {} — {} (tokens={} got_total={})",
+                            q.name, msg, tokens, got_total
+                        );
                         failures.push(format!("{}: {msg}", q.name));
                     }
                 }
