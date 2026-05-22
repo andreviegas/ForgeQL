@@ -6,10 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.52.0] — 2026-05-22 — `GROUP BY file` fast-path operational; internal constant hygiene
+
+### Added
+
+- **`GROUP BY file` WHERE-predicate fast-path (Phase 1 acceleration)** — `FIND symbols … GROUP BY file WHERE …` queries now use in-memory roaring bitmap range intersections via `fast_group_by_file`. When `has_duplicate_paths` is false and no path-segment filtering is needed, the query bypasses all segment I/O and returns per-file symbol counts in O(segments) time even with WHERE predicates active.
+
 ### Fixed
 
-- **Corrected `GROUP BY file` Optimized Fast-Path (Phase 1)** — We resolved a critical issue where golden integration tests (G13, G17, G19) returned 0 rows because `where_predicates` were left in `no_group` and evaluated on grouped results (which lacked symbol-level fields), dropping all matches. Clearing `where_predicates` before invoking `apply_clauses` resolves this.
-- **Enabled `GROUP BY file` Fast-path Dispatch** — Dispatched the `fast_group_by_file` plan inside the query compiler (`find_symbols`) when eligible, enabling lightning-fast in-memory roaring bitmap range intersections.
+- **`GROUP BY file` fast-path predicate evaluation** — WHERE predicates were left in `no_group` and evaluated against grouped results (which lack per-symbol fields), causing golden tests G13, G17, G19 to return 0 rows. Predicates are now cleared before `apply_clauses` runs on the grouped output.
+- **`GROUP BY file` fast-path dispatch** — `find_symbols` now dispatches to `fast_group_by_file` when `group_by_file_fast_path_eligible` is true, enabling the sub-second GROUP BY path introduced in Phase 1.
+
+### Changed
+
+- Internal filenames `.forgeql-columnar-delta` and `.forgeql-staging` are now referenced via `storage::columnar::DELTA_FILE_NAME` and `STAGING_DIR_NAME` module constants rather than hardcoded string literals in `git/mod.rs`.
+
 ## [0.51.0] — 2026-05-21 — Path acceleration fast-paths; GROUP BY sub-second; bounded top-K
 
 ### Added
