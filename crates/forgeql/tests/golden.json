@@ -1394,8 +1394,7 @@
     "name": "RWT03_find_old_name_gone"
   },
   {
-    "expect_line_count": 1,
-    "expect_lines": [{"text": "void boot_banner_v2(void)"}],
+    "expect_pointer": {"/content/signature": "void boot_banner_v2(void)"},
     "fql": "SHOW signature OF 'boot_banner_v2'",
     "name": "RWT04_show_signature_reflects_rename_bug6"
   },

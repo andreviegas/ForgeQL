@@ -130,6 +130,11 @@ struct QueryEntry {
     /// the full value is large (e.g. `diff`) but a key marker must be present.
     #[serde(default)]
     expect_field_contains: serde_json::Map<String, Value>,
+    /// JSON-pointer assertions on nested fields.  Keys are RFC 6901 pointers
+    /// (e.g. `"/content/signature"`); values are the expected JSON values.
+    /// Use this when the field you want to check is not at the top level.
+    #[serde(default)]
+    expect_pointer: serde_json::Map<String, Value>,
 }
 
 // ── minimal MCP JSON-RPC client ──────────────────────────────────────────────
@@ -572,6 +577,16 @@ fn golden_values() {
                     if actual_val != expected_val {
                         entry_failures.push(format!(
                             "field[{field}]: expected {expected_val}, got {actual_val}"
+                        ));
+                    }
+                }
+
+                // ── expect_pointer: nested JSON-pointer assertions ─────────────
+                for (pointer, expected_val) in &q.expect_pointer {
+                    let actual_val = result.pointer(pointer).unwrap_or(&Value::Null);
+                    if actual_val != expected_val {
+                        entry_failures.push(format!(
+                            "pointer[{pointer}]: expected {expected_val}, got {actual_val}"
                         ));
                     }
                 }
