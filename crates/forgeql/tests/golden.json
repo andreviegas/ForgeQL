@@ -1589,5 +1589,165 @@
     "expect_row_count": 1,
     "fql": "FIND files IN 'lib/rw_golden_test/**'",
     "name": "RWT33_new_folder_not_cleaned_up_by_rollback"
+  },
+  {
+    "alias": "enrich-stale-tests",
+    "expect_symbols_indexed": 2710729,
+    "use": "zephyr-andre.zephyr-main"
+  },
+  {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'rw-enrich-stale'",
+    "name": "RWTE00_begin_enrichment_stale_transaction"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE lines = 22",
+    "name": "RWTE01_baseline_lines_is_22"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE param_count = 1",
+    "name": "RWTE02_baseline_param_count_is_1"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE return_count = 0",
+    "name": "RWTE03_baseline_return_count_is_0"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE goto_count = 0",
+    "name": "RWTE04_baseline_goto_count_is_0"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE string_count = 6",
+    "name": "RWTE05_baseline_string_count_is_6"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE branch_count >= 1",
+    "name": "RWTE06_baseline_no_branch_count"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE max_condition_tests >= 1",
+    "name": "RWTE07_baseline_no_max_condition_tests"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE has_todo = 'true'",
+    "name": "RWTE08_baseline_no_has_todo"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE is_static = 'true'",
+    "name": "RWTE09_baseline_no_is_static"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE is_inline = 'true'",
+    "name": "RWTE10_baseline_no_is_inline"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE is_recursive = 'true'",
+    "name": "RWTE11_baseline_no_is_recursive"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE has_cast = 'true'",
+    "name": "RWTE12_baseline_no_has_cast"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE has_unused_param = 'true'",
+    "name": "RWTE13_baseline_no_has_unused_param"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE FILE 'kernel/banner.c' MATCHING 'void boot_banner(void)' WITH 'static inline void boot_banner(int enrich_a, int enrich_b)'",
+    "name": "RWTE14_mutate_signature_static_inline_two_params"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE FILE 'kernel/banner.c' MATCHING '#endif /* CONFIG_BOOT_BANNER */\n}' WITH '#endif /* CONFIG_BOOT_BANNER */\n\t/* TODO: enrichment-test */\n\tint x = (int)(enrich_a);\n\tif (enrich_a > 0) { goto done; }\n\treturn;\n\tdone:;\n\tprintk(\"enrichment_test\");\n\tboot_banner(enrich_a, 0);\n}'",
+    "name": "RWTE15_mutate_body_add_todo_cast_branch_goto_return_string_recursion"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE lines = 29",
+    "name": "RWTE16_lines_updates_after_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE param_count = 2",
+    "name": "RWTE17_param_count_updates_after_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE return_count = 1",
+    "name": "RWTE18_return_count_updates_after_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE goto_count = 1",
+    "name": "RWTE19_goto_count_updates_after_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE string_count = 7",
+    "name": "RWTE20_string_count_updates_after_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE is_static = 'true'",
+    "name": "RWTE21_is_static_updates_after_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE is_inline = 'true'",
+    "name": "RWTE22_is_inline_updates_after_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE has_todo = 'true'",
+    "name": "RWTE23_has_todo_updates_after_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE is_recursive = 'true'",
+    "name": "RWTE24_is_recursive_updates_after_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE has_cast = 'true'",
+    "name": "RWTE25_has_cast_updates_after_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE has_unused_param = 'true'",
+    "name": "RWTE26_has_unused_param_updates_after_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE branch_count >= 1",
+    "name": "RWTE27_branch_count_updates_after_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE max_condition_tests >= 1",
+    "name": "RWTE28_max_condition_tests_updates_after_mutation"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'rw-enrich-stale'",
+    "name": "RWTE29_rollback_enrichment_stale_transaction"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE lines = 22",
+    "name": "RWTE30_lines_restored_after_rollback"
   }
 ]

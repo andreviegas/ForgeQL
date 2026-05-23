@@ -1609,6 +1609,12 @@ impl StorageEngine for ColumnarStorage {
                     None,
                     None,
                 );
+                // Run post_pass enrichers on the single-file table so that
+                // post-pass fields (branch_count, max_condition_tests, etc.)
+                // are written before the segment is serialised.
+                for enricher in &enrichers {
+                    enricher.post_pass(&mut table, None);
+                }
 
                 let mut builder = SegmentBuilder::new("git-sha1", &content_id_bytes);
                 for row in &table.rows {

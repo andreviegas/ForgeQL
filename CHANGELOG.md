@@ -6,6 +6,29 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.53.4] — 2026-05-23 — Fix enrichment staleness in columnar storage after `CHANGE FILE`
+
+### Fixed
+
+- **RWTE / `ColumnarStorage::reindex_files`** (`columnar_storage.rs`) — After a `CHANGE FILE`
+  mutation, `branch_count` and `max_condition_tests` were always absent in the next query result
+  when the columnar backend was active (the default).  `reindex_files` was calling `index_file`
+  on a fresh per-file `SymbolTable` but never invoking `post_pass()`, so `ControlFlowEnricher`
+  never had a chance to compute and write its post-walk fields before the segment was serialised.
+  A `post_pass` loop is now executed immediately after `index_file` inside `reindex_files`,
+  mirroring what `SymbolTable::reindex_files` (legacy backend) already did correctly.
+
+### Tests
+
+- **RWTE00–RWTE30** — 31 new read/write transaction tests covering every enrichment field:
+  `lines`, `param_count`, `return_count`, `goto_count`, `string_count`, `branch_count`,
+  `max_condition_tests`, `has_todo`, `is_static`, `is_inline`, `is_recursive`, `has_cast`,
+  `has_unused_param`.  Each test records a numeric or boolean baseline before mutation,
+  applies two `CHANGE FILE` edits that trigger every enricher, asserts all 13 post-mutation
+  values, then rolls back and verifies the baseline is restored.  RWTE27 and RWTE28
+  (`branch_count` / `max_condition_tests`) were the TDD anchor tests that exposed the bug.
+  All 31 pass.
+
 ## [0.53.3] — 2026-05-23 — Four query-correctness fixes + `LanguageConfig`-driven AST checks
 
 ### Fixed
