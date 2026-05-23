@@ -7,38 +7,18 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 51,
-        "name": "thread_runq"
-      },
-      {
-        "line": 71,
-        "name": "curr_cpu_runq"
-      },
-      {
-        "line": 80,
-        "name": "runq_add"
-      },
-      {
-        "line": 88,
-        "name": "runq_remove"
-      },
-      {
-        "line": 96,
-        "name": "runq_yield"
-      }
+      {"line": 51, "name": "thread_runq"},
+      {"line": 71, "name": "curr_cpu_runq"},
+      {"line": 80, "name": "runq_add"},
+      {"line": 88, "name": "runq_remove"},
+      {"line": 96, "name": "runq_yield"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' IN 'kernel/sched.c' ORDER BY line ASC LIMIT 5",
     "name": "G2_kernel_sched_first_5_functions_by_line"
   },
   {
     "expect_rows": [
-      {
-        "kind": "field",
-        "line": 3525,
-        "name": "k_mutex_lock",
-        "path": "include/zephyr/kernel.h"
-      }
+      {"kind": "field", "line": 3525, "name": "k_mutex_lock", "path": "include/zephyr/kernel.h"}
     ],
     "expect_total": 1,
     "fql": "FIND symbols WHERE name = 'k_mutex_lock'",
@@ -46,11 +26,7 @@
   },
   {
     "expect_rows": [
-      {
-        "line": 64,
-        "name": "AGC_IRQHandler",
-        "path": "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c"
-      }
+      {"line": 64, "name": "AGC_IRQHandler", "path": "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' IN 'modules/hal_silabs/**' ORDER BY name ASC LIMIT 1",
     "name": "G4_first_function_alphabetically"
@@ -58,26 +34,11 @@
   {
     "expect_line_count": 5,
     "expect_lines": [
-      {
-        "line": 51,
-        "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"
-      },
-      {
-        "line": 52,
-        "text": "{"
-      },
-      {
-        "line": 53,
-        "text": "#ifdef CONFIG_SCHED_CPU_MASK_PIN_ONLY"
-      },
-      {
-        "line": 54,
-        "text": "\tint cpu, m = thread->base.cpu_mask;"
-      },
-      {
-        "line": 55,
-        "text": ""
-      }
+      {"line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"},
+      {"line": 52, "text": "{"},
+      {"line": 53, "text": "#ifdef CONFIG_SCHED_CPU_MASK_PIN_ONLY"},
+      {"line": 54, "text": "\tint cpu, m = thread->base.cpu_mask;"},
+      {"line": 55, "text": ""}
     ],
     "fql": "SHOW LINES 51-55 OF 'kernel/sched.c'",
     "name": "G5_show_lines_plain"
@@ -85,26 +46,11 @@
   {
     "expect_line_count": 5,
     "expect_lines": [
-      {
-        "line": 51,
-        "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"
-      },
-      {
-        "line": 64,
-        "text": "\treturn &_kernel.cpus[cpu].ready_q.runq;"
-      },
-      {
-        "line": 67,
-        "text": "\treturn &_kernel.ready_q.runq;"
-      },
-      {
-        "line": 71,
-        "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)"
-      },
-      {
-        "line": 74,
-        "text": "\treturn &arch_curr_cpu()->ready_q.runq;"
-      }
+      {"line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"},
+      {"line": 64, "text": "\treturn &_kernel.cpus[cpu].ready_q.runq;"},
+      {"line": 67, "text": "\treturn &_kernel.ready_q.runq;"},
+      {"line": 71, "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)"},
+      {"line": 74, "text": "\treturn &arch_curr_cpu()->ready_q.runq;"}
     ],
     "fql": "SHOW LINES 51-75 OF 'kernel/sched.c' WHERE text LIKE '%runq%'",
     "name": "G6_show_lines_like_filter"
@@ -112,14 +58,8 @@
   {
     "expect_line_count": 2,
     "expect_lines": [
-      {
-        "line": 51,
-        "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"
-      },
-      {
-        "line": 71,
-        "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)"
-      }
+      {"line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"},
+      {"line": 71, "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)"}
     ],
     "fql": "SHOW LINES 51-75 OF 'kernel/sched.c' WHERE text MATCHES 'void \\*\\w+_runq'",
     "name": "G7_show_lines_matches_filter"
@@ -127,31 +67,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 52,
-        "name": "__init__",
-        "path": "scripts/west_commands/runners/openocd.py"
-      },
-      {
-        "line": 50,
-        "name": "__init__",
-        "path": "scripts/west_commands/runners/jlink.py"
-      },
-      {
-        "line": 1463,
-        "name": "test_projectbuilder_process",
-        "path": "scripts/tests/twister/test_runner.py"
-      },
-      {
-        "line": 23,
-        "name": "__init__",
-        "path": "scripts/west_commands/runners/intel_cyclonev.py"
-      },
-      {
-        "line": 640,
-        "name": "test_filterbuilder_parse_generated",
-        "path": "scripts/tests/twister/test_runner.py"
-      }
+      {"line": 52,   "name": "__init__",                           "path": "scripts/west_commands/runners/openocd.py"},
+      {"line": 50,   "name": "__init__",                           "path": "scripts/west_commands/runners/jlink.py"},
+      {"line": 1463, "name": "test_projectbuilder_process",        "path": "scripts/tests/twister/test_runner.py"},
+      {"line": 23,   "name": "__init__",                           "path": "scripts/west_commands/runners/intel_cyclonev.py"},
+      {"line": 640,  "name": "test_filterbuilder_parse_generated", "path": "scripts/tests/twister/test_runner.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE param_count >= 5 IN 'scripts/**' ORDER BY param_count DESC LIMIT 5",
     "name": "G8_top5_functions_by_param_count"
@@ -159,21 +79,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "line": 70,
-        "name": "AddedProperty",
-        "path": "scripts/release/list_devicetree_bindings_changes.py"
-      },
-      {
-        "line": 96,
-        "name": "Board",
-        "path": "scripts/list_boards.py"
-      },
-      {
-        "line": 49,
-        "name": "Changes",
-        "path": "scripts/release/list_devicetree_bindings_changes.py"
-      }
+      {"line": 70, "name": "AddedProperty", "path": "scripts/release/list_devicetree_bindings_changes.py"},
+      {"line": 96, "name": "Board",         "path": "scripts/list_boards.py"},
+      {"line": 49, "name": "Changes",       "path": "scripts/release/list_devicetree_bindings_changes.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' IN 'scripts/**' ORDER BY name ASC LIMIT 3",
     "name": "G9_python_functions_alphabetical"
@@ -181,21 +89,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "line": 1116,
-        "name": "z_impl___ztest_set_test_phase",
-        "path": "subsys/testsuite/ztest/src/ztest.c"
-      },
-      {
-        "line": 1111,
-        "name": "z_impl___ztest_set_test_result",
-        "path": "subsys/testsuite/ztest/src/ztest.c"
-      },
-      {
-        "line": 18,
-        "name": "z_impl_llext_get_fn_table",
-        "path": "subsys/llext/llext_handlers.c"
-      }
+      {"line": 1116, "name": "z_impl___ztest_set_test_phase",  "path": "subsys/testsuite/ztest/src/ztest.c"},
+      {"line": 1111, "name": "z_impl___ztest_set_test_result", "path": "subsys/testsuite/ztest/src/ztest.c"},
+      {"line": 18,   "name": "z_impl_llext_get_fn_table",      "path": "subsys/llext/llext_handlers.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES '^z_impl_' IN 'subsys/**' ORDER BY name ASC LIMIT 3",
     "name": "G10_z_impl_functions_alphabetical"
@@ -203,18 +99,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "count": 810,
-        "kind": "variable"
-      },
-      {
-        "count": 524,
-        "kind": "macro_call"
-      },
-      {
-        "count": 504,
-        "kind": "comment"
-      }
+      {"count": 810, "kind": "variable"},
+      {"count": 524, "kind": "macro_call"},
+      {"count": 504, "kind": "comment"}
     ],
     "fql": "FIND symbols GROUP BY fql_kind IN 'arch/arc/**' ORDER BY count DESC LIMIT 3",
     "name": "G11_group_by_kind_top3"
@@ -222,18 +109,9 @@
   {
     "expect_row_count": 8,
     "expect_rows": [
-      {
-        "count": 810,
-        "kind": "variable"
-      },
-      {
-        "count": 524,
-        "kind": "macro_call"
-      },
-      {
-        "count": 504,
-        "kind": "comment"
-      }
+      {"count": 810, "kind": "variable"},
+      {"count": 524, "kind": "macro_call"},
+      {"count": 504, "kind": "comment"}
     ],
     "fql": "FIND symbols GROUP BY fql_kind IN 'arch/arc/**' HAVING count >= 100 ORDER BY count DESC",
     "name": "G12_group_by_kind_having_100"
@@ -241,18 +119,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "count": 251,
-        "path": "subsys/bluetooth/controller/hci/hci.c"
-      },
-      {
-        "count": 245,
-        "path": "subsys/tracing/ctf/ctf_top.c"
-      },
-      {
-        "count": 244,
-        "path": "subsys/tracing/ctf/ctf_top.h"
-      }
+      {"count": 251, "path": "subsys/bluetooth/controller/hci/hci.c"},
+      {"count": 245, "path": "subsys/tracing/ctf/ctf_top.c"},
+      {"count": 244, "path": "subsys/tracing/ctf/ctf_top.h"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' GROUP BY file IN 'subsys/**' ORDER BY count DESC LIMIT 3",
     "name": "G13_functions_group_by_file_top3"
@@ -260,15 +129,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "path": "tests/bluetooth/controller/ctrl_isoal/src/sub_sets/isoal_test_rx.c"
-      },
-      {
-        "path": "subsys/bluetooth/controller/hci/hci.c"
-      },
-      {
-        "path": "tests/bluetooth/controller/ctrl_isoal/src/sub_sets/isoal_test_tx.c"
-      }
+      {"path": "tests/bluetooth/controller/ctrl_isoal/src/sub_sets/isoal_test_rx.c"},
+      {"path": "subsys/bluetooth/controller/hci/hci.c"},
+      {"path": "tests/bluetooth/controller/ctrl_isoal/src/sub_sets/isoal_test_tx.c"}
     ],
     "fql": "FIND files WHERE extension = 'c' ORDER BY size DESC LIMIT 3",
     "name": "G14_largest_c_files"
@@ -276,26 +139,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "count": 869,
-        "path": "kernel/mmu.c"
-      },
-      {
-        "count": 829,
-        "path": "kernel/sched.c"
-      },
-      {
-        "count": 789,
-        "path": "kernel/thread.c"
-      },
-      {
-        "count": 605,
-        "path": "kernel/userspace.c"
-      },
-      {
-        "count": 604,
-        "path": "kernel/work.c"
-      }
+      {"count": 869, "path": "kernel/mmu.c"},
+      {"count": 829, "path": "kernel/sched.c"},
+      {"count": 789, "path": "kernel/thread.c"},
+      {"count": 605, "path": "kernel/userspace.c"},
+      {"count": 604, "path": "kernel/work.c"}
     ],
     "fql": "FIND symbols GROUP BY file IN 'kernel/**' ORDER BY count DESC LIMIT 5",
     "name": "G15_group_by_file_kernel_top5"
@@ -303,26 +151,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "count": 67587,
-        "path": "samples/modules/tflite-micro/tflm_ethosu/src/models/keyword_spotting_cnn_small_int8/model.h"
-      },
-      {
-        "count": 18796,
-        "path": "samples/boards/quicklogic/qomu/src/usb2serial_bit.c"
-      },
-      {
-        "count": 17329,
-        "path": "samples/modules/tflite-micro/magic_wand/src/magic_wand_model_data.cpp"
-      },
-      {
-        "count": 16394,
-        "path": "include/zephyr/sys/util_internal_is_eq.h"
-      },
-      {
-        "count": 9124,
-        "path": "subsys/fb/cfb_fonts.c"
-      }
+      {"count": 67587, "path": "samples/modules/tflite-micro/tflm_ethosu/src/models/keyword_spotting_cnn_small_int8/model.h"},
+      {"count": 18796, "path": "samples/boards/quicklogic/qomu/src/usb2serial_bit.c"},
+      {"count": 17329, "path": "samples/modules/tflite-micro/magic_wand/src/magic_wand_model_data.cpp"},
+      {"count": 16394, "path": "include/zephyr/sys/util_internal_is_eq.h"},
+      {"count": 9124,  "path": "subsys/fb/cfb_fonts.c"}
     ],
     "fql": "FIND symbols GROUP BY file ORDER BY count DESC LIMIT 5",
     "name": "G16_group_by_file_whole_repo_top5"
@@ -330,26 +163,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "count": 83,
-        "path": "kernel/sched.c"
-      },
-      {
-        "count": 52,
-        "path": "kernel/work.c"
-      },
-      {
-        "count": 51,
-        "path": "kernel/thread.c"
-      },
-      {
-        "count": 48,
-        "path": "kernel/userspace.c"
-      },
-      {
-        "count": 44,
-        "path": "kernel/mmu.c"
-      }
+      {"count": 83, "path": "kernel/sched.c"},
+      {"count": 52, "path": "kernel/work.c"},
+      {"count": 51, "path": "kernel/thread.c"},
+      {"count": 48, "path": "kernel/userspace.c"},
+      {"count": 44, "path": "kernel/mmu.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' GROUP BY file IN 'kernel/**' ORDER BY count DESC LIMIT 5",
     "name": "G17_group_by_file_functions_kernel_top5"
@@ -357,26 +175,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "count": 869,
-        "path": "kernel/mmu.c"
-      },
-      {
-        "count": 829,
-        "path": "kernel/sched.c"
-      },
-      {
-        "count": 789,
-        "path": "kernel/thread.c"
-      },
-      {
-        "count": 605,
-        "path": "kernel/userspace.c"
-      },
-      {
-        "count": 604,
-        "path": "kernel/work.c"
-      }
+      {"count": 869, "path": "kernel/mmu.c"},
+      {"count": 829, "path": "kernel/sched.c"},
+      {"count": 789, "path": "kernel/thread.c"},
+      {"count": 605, "path": "kernel/userspace.c"},
+      {"count": 604, "path": "kernel/work.c"}
     ],
     "fql": "FIND symbols GROUP BY file IN 'kernel/**' HAVING count >= 500 ORDER BY count DESC",
     "name": "G18_group_by_file_kernel_having_500"
@@ -384,14 +187,8 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "count": 41,
-        "path": "arch/arm/core/mpu/arm_mpu_v8_internal.h"
-      },
-      {
-        "count": 25,
-        "path": "arch/arm/core/mpu/nxp_mpu.c"
-      }
+      {"count": 41, "path": "arch/arm/core/mpu/arm_mpu_v8_internal.h"},
+      {"count": 25, "path": "arch/arm/core/mpu/nxp_mpu.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' GROUP BY file IN 'arch/arm/**' ORDER BY count DESC LIMIT 3",
     "name": "G19_group_by_file_functions_arm_top3"
@@ -399,31 +196,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 64,
-        "name": "AGC_IRQHandler",
-        "path": "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c"
-      },
-      {
-        "line": 82,
-        "name": "ARM_MPU_ClrRegion",
-        "path": "arch/arm/core/mpu/cortex_a_r/arm_mpu_internal.h"
-      },
-      {
-        "line": 70,
-        "name": "AddedProperty",
-        "path": "scripts/release/list_devicetree_bindings_changes.py"
-      },
-      {
-        "line": 1287,
-        "name": "AddressRegion",
-        "path": "modules/hal_nordic/ironside/se/scripts/periphconf/builder.py"
-      },
-      {
-        "line": 37,
-        "name": "Argus_Free",
-        "path": "modules/hal_afbr/platform_malloc.c"
-      }
+      {"line": 64,   "name": "AGC_IRQHandler",    "path": "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c"},
+      {"line": 82,   "name": "ARM_MPU_ClrRegion", "path": "arch/arm/core/mpu/cortex_a_r/arm_mpu_internal.h"},
+      {"line": 70,   "name": "AddedProperty",     "path": "scripts/release/list_devicetree_bindings_changes.py"},
+      {"line": 1287, "name": "AddressRegion",     "path": "modules/hal_nordic/ironside/se/scripts/periphconf/builder.py"},
+      {"line": 37,   "name": "Argus_Free",        "path": "modules/hal_afbr/platform_malloc.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 5",
     "name": "G20_functions_order_by_name_asc"
@@ -431,31 +208,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 47,
-        "name": "~xport",
-        "path": "modules/thrift/src/thrift/server/TFDServer.cpp"
-      },
-      {
-        "line": 49,
-        "name": "~make_unique_data",
-        "path": "tests/lib/cpp/libcxx/src/main.cpp"
-      },
-      {
-        "line": 55,
-        "name": "~cpp_semaphore",
-        "path": "samples/cpp/cpp_synchronization/src/main.cpp"
-      },
-      {
-        "line": 59,
-        "name": "~TServerEventHandler",
-        "path": "modules/thrift/src/thrift/server/TServer.h"
-      },
-      {
-        "line": 114,
-        "name": "~TServer",
-        "path": "modules/thrift/src/thrift/server/TServer.h"
-      }
+      {"line": 47,  "name": "~xport",               "path": "modules/thrift/src/thrift/server/TFDServer.cpp"},
+      {"line": 49,  "name": "~make_unique_data",    "path": "tests/lib/cpp/libcxx/src/main.cpp"},
+      {"line": 55,  "name": "~cpp_semaphore",       "path": "samples/cpp/cpp_synchronization/src/main.cpp"},
+      {"line": 59,  "name": "~TServerEventHandler", "path": "modules/thrift/src/thrift/server/TServer.h"},
+      {"line": 114, "name": "~TServer",             "path": "modules/thrift/src/thrift/server/TServer.h"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY name DESC LIMIT 5",
     "name": "G21_functions_order_by_name_desc"
@@ -463,21 +220,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "line": 13,
-        "name": "Argus_GetHandle",
-        "path": "modules/hal_afbr/platform_misc.c"
-      },
-      {
-        "line": 23,
-        "name": "Argus_Malloc",
-        "path": "modules/hal_afbr/platform_malloc.c"
-      },
-      {
-        "line": 63,
-        "name": "BENCH_START",
-        "path": "tests/benchmarks/sys_kernel/src/syskernel.h"
-      }
+      {"line": 13, "name": "Argus_GetHandle", "path": "modules/hal_afbr/platform_misc.c"},
+      {"line": 23, "name": "Argus_Malloc",    "path": "modules/hal_afbr/platform_malloc.c"},
+      {"line": 63, "name": "BENCH_START",     "path": "tests/benchmarks/sys_kernel/src/syskernel.h"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 3 OFFSET 5",
     "name": "G22_functions_order_by_name_asc_offset5"
@@ -485,34 +230,13 @@
   {
     "expect_row_count": 7,
     "expect_rows": [
-      {
-        "count": 534177,
-        "kind": "number"
-      },
-      {
-        "count": 444941,
-        "kind": "variable"
-      },
-      {
-        "count": 282718,
-        "kind": "comment"
-      },
-      {
-        "count": 279509,
-        "kind": "macro_call"
-      },
-      {
-        "count": 254172,
-        "kind": "macro"
-      },
-      {
-        "count": 214108,
-        "kind": "struct"
-      },
-      {
-        "count": 160701,
-        "kind": "if"
-      }
+      {"count": 534177, "kind": "number"},
+      {"count": 444941, "kind": "variable"},
+      {"count": 282718, "kind": "comment"},
+      {"count": 279509, "kind": "macro_call"},
+      {"count": 254172, "kind": "macro"},
+      {"count": 214108, "kind": "struct"},
+      {"count": 160701, "kind": "if"}
     ],
     "fql": "FIND symbols GROUP BY fql_kind ORDER BY count DESC LIMIT 7",
     "name": "G23_group_by_kind_whole_repo_top7"
@@ -520,26 +244,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "count": 168599,
-        "kind": "variable"
-      },
-      {
-        "count": 150135,
-        "kind": "number"
-      },
-      {
-        "count": 96900,
-        "kind": "struct"
-      },
-      {
-        "count": 85781,
-        "kind": "macro_call"
-      },
-      {
-        "count": 82733,
-        "kind": "comment"
-      }
+      {"count": 168599, "kind": "variable"},
+      {"count": 150135, "kind": "number"},
+      {"count": 96900,  "kind": "struct"},
+      {"count": 85781,  "kind": "macro_call"},
+      {"count": 82733,  "kind": "comment"}
     ],
     "fql": "FIND symbols GROUP BY fql_kind IN 'drivers/**' ORDER BY count DESC LIMIT 5",
     "name": "G24_group_by_kind_drivers_top5"
@@ -547,34 +256,13 @@
   {
     "expect_row_count": 11,
     "expect_rows": [
-      {
-        "count": 2541,
-        "kind": "variable"
-      },
-      {
-        "count": 1591,
-        "kind": "comment"
-      },
-      {
-        "count": 1569,
-        "kind": "macro_call"
-      },
-      {
-        "count": 1004,
-        "kind": "struct"
-      },
-      {
-        "count": 825,
-        "kind": "function"
-      },
-      {
-        "count": 784,
-        "kind": "number"
-      },
-      {
-        "count": 746,
-        "kind": "if"
-      }
+      {"count": 2541, "kind": "variable"},
+      {"count": 1591, "kind": "comment"},
+      {"count": 1569, "kind": "macro_call"},
+      {"count": 1004, "kind": "struct"},
+      {"count": 825,  "kind": "function"},
+      {"count": 784,  "kind": "number"},
+      {"count": 746,  "kind": "if"}
     ],
     "fql": "FIND symbols GROUP BY fql_kind IN 'kernel/**' HAVING count >= 100 ORDER BY count DESC",
     "name": "G25_group_by_kind_kernel_having_100"
@@ -582,31 +270,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 1518,
-        "name": "addrinfo_from_nsos_mid",
-        "path": "drivers/net/nsos_sockets.c"
-      },
-      {
-        "line": 973,
-        "name": "addrinfo_to_nsos_mid",
-        "path": "drivers/net/nsos_adapt.c"
-      },
-      {
-        "line": 759,
-        "name": "calc_fcs",
-        "path": "drivers/net/ppp.c"
-      },
-      {
-        "line": 64,
-        "name": "eai_from_nsos_mid",
-        "path": "drivers/net/nsos_netdb.c"
-      },
-      {
-        "line": 53,
-        "name": "eai_to_nsos_mid",
-        "path": "drivers/net/nsos_netdb.c"
-      }
+      {"line": 1518, "name": "addrinfo_from_nsos_mid", "path": "drivers/net/nsos_sockets.c"},
+      {"line": 973,  "name": "addrinfo_to_nsos_mid",   "path": "drivers/net/nsos_adapt.c"},
+      {"line": 759,  "name": "calc_fcs",               "path": "drivers/net/ppp.c"},
+      {"line": 64,   "name": "eai_from_nsos_mid",      "path": "drivers/net/nsos_netdb.c"},
+      {"line": 53,   "name": "eai_to_nsos_mid",        "path": "drivers/net/nsos_netdb.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' IN 'drivers/net/**' ORDER BY name ASC LIMIT 5",
     "name": "G26_functions_in_drivers_net_name_asc"
@@ -614,21 +282,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "line": 271,
-        "name": "uart_recovery",
-        "path": "drivers/net/ppp.c"
-      },
-      {
-        "line": 132,
-        "name": "uart_callback",
-        "path": "drivers/net/ppp.c"
-      },
-      {
-        "line": 130,
-        "name": "socket_type_to_nsos_mid",
-        "path": "drivers/net/nsos_sockets.c"
-      }
+      {"line": 271, "name": "uart_recovery",           "path": "drivers/net/ppp.c"},
+      {"line": 132, "name": "uart_callback",           "path": "drivers/net/ppp.c"},
+      {"line": 130, "name": "socket_type_to_nsos_mid", "path": "drivers/net/nsos_sockets.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' IN 'drivers/net/**' ORDER BY name DESC LIMIT 3",
     "name": "G27_functions_in_drivers_net_name_desc"
@@ -636,31 +292,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 22,
-        "name": "CONTROL",
-        "path": "arch/arm/core/cortex_m/fpu.c"
-      },
-      {
-        "line": 381,
-        "name": "SCB_CFSR_LSPERR_Msk",
-        "path": "arch/arm/core/cortex_m/fault.c"
-      },
-      {
-        "line": 36,
-        "name": "__exidx_end",
-        "path": "arch/arm/core/stacktrace.c"
-      },
-      {
-        "line": 35,
-        "name": "__exidx_start",
-        "path": "arch/arm/core/stacktrace.c"
-      },
-      {
-        "line": 15,
-        "name": "__packed",
-        "path": "arch/arm/core/cortex_m/coredump.c"
-      }
+      {"line": 22,  "name": "CONTROL",             "path": "arch/arm/core/cortex_m/fpu.c"},
+      {"line": 381, "name": "SCB_CFSR_LSPERR_Msk", "path": "arch/arm/core/cortex_m/fault.c"},
+      {"line": 36,  "name": "__exidx_end",         "path": "arch/arm/core/stacktrace.c"},
+      {"line": 35,  "name": "__exidx_start",       "path": "arch/arm/core/stacktrace.c"},
+      {"line": 15,  "name": "__packed",            "path": "arch/arm/core/cortex_m/coredump.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'variable' IN 'arch/arm/**' ORDER BY name ASC LIMIT 5",
     "name": "G28_variables_in_arch_arm_name_asc"
@@ -668,31 +304,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 67,
-        "name": "__basic_sf",
-        "path": "include/zephyr/arch/arm/cortex_a_r/exception.h"
-      },
-      {
-        "line": 113,
-        "name": "__basic_sf",
-        "path": "include/zephyr/arch/arm/cortex_m/exception.h"
-      },
-      {
-        "line": 89,
-        "name": "__cpu_context",
-        "path": "include/zephyr/arch/arm/cortex_m/cpu.h"
-      },
-      {
-        "line": 109,
-        "name": "__cpu_context",
-        "path": "include/zephyr/arch/arm/cortex_m/cpu.h"
-      },
-      {
-        "line": 50,
-        "name": "__extra_esf_info",
-        "path": "include/zephyr/arch/arm/cortex_a_r/exception.h"
-      }
+      {"line": 67,  "name": "__basic_sf",       "path": "include/zephyr/arch/arm/cortex_a_r/exception.h"},
+      {"line": 113, "name": "__basic_sf",       "path": "include/zephyr/arch/arm/cortex_m/exception.h"},
+      {"line": 89,  "name": "__cpu_context",    "path": "include/zephyr/arch/arm/cortex_m/cpu.h"},
+      {"line": 109, "name": "__cpu_context",    "path": "include/zephyr/arch/arm/cortex_m/cpu.h"},
+      {"line": 50,  "name": "__extra_esf_info", "path": "include/zephyr/arch/arm/cortex_a_r/exception.h"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'struct' IN 'include/zephyr/**' ORDER BY name ASC LIMIT 5",
     "name": "G29_structs_in_include_zephyr_name_asc"
@@ -700,21 +316,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "line": 816,
-        "name": "copy_attribute",
-        "path": "subsys/bluetooth/host/classic/sdp.c"
-      },
-      {
-        "line": 497,
-        "name": "delete_blocks",
-        "path": "subsys/fs/ext2/ext2_diskops.c"
-      },
-      {
-        "line": 405,
-        "name": "fetch_level_blocks",
-        "path": "subsys/fs/ext2/ext2_diskops.c"
-      }
+      {"line": 816, "name": "copy_attribute",     "path": "subsys/bluetooth/host/classic/sdp.c"},
+      {"line": 497, "name": "delete_blocks",      "path": "subsys/fs/ext2/ext2_diskops.c"},
+      {"line": 405, "name": "fetch_level_blocks", "path": "subsys/fs/ext2/ext2_diskops.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE is_recursive = 'true' IN 'subsys/**' ORDER BY name ASC LIMIT 3",
     "name": "G30_recursive_functions_in_subsys"
@@ -722,21 +326,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "line": 320,
-        "name": "aes_ctr_op",
-        "path": "drivers/crypto/crypto_esp32_aes.c"
-      },
-      {
-        "line": 322,
-        "name": "biometrics_emul_template_store",
-        "path": "drivers/biometrics/biometrics_emul.c"
-      },
-      {
-        "line": 2054,
-        "name": "cdns_i3c_i2c_transfer",
-        "path": "drivers/i3c/i3c_cdns.c"
-      }
+      {"line": 320,  "name": "aes_ctr_op",                     "path": "drivers/crypto/crypto_esp32_aes.c"},
+      {"line": 322,  "name": "biometrics_emul_template_store", "path": "drivers/biometrics/biometrics_emul.c"},
+      {"line": 2054, "name": "cdns_i3c_i2c_transfer",          "path": "drivers/i3c/i3c_cdns.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_shadow = 'true' WHERE param_count >= 3 IN 'drivers/**' ORDER BY name ASC LIMIT 3",
     "name": "G31_shadow_param3_functions_in_drivers"
@@ -744,21 +336,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "line": 232,
-        "name": "_device_parse_and_link",
-        "path": "scripts/build/elf_parser.py"
-      },
-      {
-        "line": 319,
-        "name": "download_and_extract",
-        "path": "scripts/west_commands/sdk.py"
-      },
-      {
-        "line": 451,
-        "name": "exec_op",
-        "path": "scripts/west_commands/runners/nrf_common.py"
-      }
+      {"line": 232, "name": "_device_parse_and_link", "path": "scripts/build/elf_parser.py"},
+      {"line": 319, "name": "download_and_extract",   "path": "scripts/west_commands/sdk.py"},
+      {"line": 451, "name": "exec_op",                "path": "scripts/west_commands/runners/nrf_common.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE has_shadow = 'true' IN 'scripts/**' ORDER BY name ASC LIMIT 3",
     "name": "G32_python_shadow_functions_in_scripts"
@@ -766,21 +346,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "line": 319,
-        "name": "download_and_extract",
-        "path": "scripts/west_commands/sdk.py"
-      },
-      {
-        "line": 451,
-        "name": "exec_op",
-        "path": "scripts/west_commands/runners/nrf_common.py"
-      },
-      {
-        "line": 213,
-        "name": "test_allow_installed_plugin",
-        "path": "scripts/tests/twister_blackbox/test_addon.py"
-      }
+      {"line": 319, "name": "download_and_extract",        "path": "scripts/west_commands/sdk.py"},
+      {"line": 451, "name": "exec_op",                     "path": "scripts/west_commands/runners/nrf_common.py"},
+      {"line": 213, "name": "test_allow_installed_plugin", "path": "scripts/tests/twister_blackbox/test_addon.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE has_shadow = 'true' WHERE param_count >= 4 IN 'scripts/**' ORDER BY name ASC LIMIT 3",
     "name": "G33_python_shadow_param4_functions_in_scripts"
@@ -788,21 +356,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "line": 973,
-        "name": "dhcpv4_handle_discover",
-        "path": "subsys/net/lib/dhcpv4/dhcpv4_server.c"
-      },
-      {
-        "line": 958,
-        "name": "dhcpv4_parse_options",
-        "path": "subsys/net/lib/dhcpv4/dhcpv4.c"
-      },
-      {
-        "line": 93,
-        "name": "igmp_v3_create",
-        "path": "subsys/net/ip/igmp.c"
-      }
+      {"line": 973, "name": "dhcpv4_handle_discover", "path": "subsys/net/lib/dhcpv4/dhcpv4_server.c"},
+      {"line": 958, "name": "dhcpv4_parse_options",   "path": "subsys/net/lib/dhcpv4/dhcpv4.c"},
+      {"line": 93,  "name": "igmp_v3_create",         "path": "subsys/net/ip/igmp.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_shadow = 'true' WHERE param_count >= 3 IN 'subsys/net/**' ORDER BY name ASC LIMIT 3",
     "name": "G34_shadow_param3_functions_in_subsys_net"
@@ -816,52 +372,20 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 6706,
-        "name": "_check_dep_loop_sym",
-        "path": "scripts/kconfig/kconfiglib.py"
-      },
-      {
-        "line": 6458,
-        "name": "_depend_on",
-        "path": "scripts/kconfig/kconfiglib.py"
-      },
-      {
-        "line": 6586,
-        "name": "_expr_depends_on",
-        "path": "scripts/kconfig/kconfiglib.py"
-      },
-      {
-        "line": 2412,
-        "name": "_is_child",
-        "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"
-      },
-      {
-        "line": 3245,
-        "name": "_map",
-        "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"
-      }
+      {"line": 6706, "name": "_check_dep_loop_sym", "path": "scripts/kconfig/kconfiglib.py"},
+      {"line": 6458, "name": "_depend_on",          "path": "scripts/kconfig/kconfiglib.py"},
+      {"line": 6586, "name": "_expr_depends_on",    "path": "scripts/kconfig/kconfiglib.py"},
+      {"line": 2412, "name": "_is_child",           "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"},
+      {"line": 3245, "name": "_map",                "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE is_recursive = 'true' WHERE param_count >= 2 ORDER BY name ASC LIMIT 5",
     "name": "G36_recursive_param2_functions"
   },
   {
     "expect_rows": [
-      {
-        "line": 3245,
-        "name": "_map",
-        "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"
-      },
-      {
-        "line": 2887,
-        "name": "_merge_props",
-        "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"
-      },
-      {
-        "line": 816,
-        "name": "copy_attribute",
-        "path": "subsys/bluetooth/host/classic/sdp.c"
-      }
+      {"line": 3245, "name": "_map",           "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"},
+      {"line": 2887, "name": "_merge_props",   "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"},
+      {"line": 816,  "name": "copy_attribute", "path": "subsys/bluetooth/host/classic/sdp.c"}
     ],
     "expect_total": 3,
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE param_count >= 5 WHERE is_recursive = 'true' ORDER BY name ASC LIMIT 3",
@@ -869,21 +393,9 @@
   },
   {
     "expect_rows": [
-      {
-        "line": 3245,
-        "name": "_map",
-        "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"
-      },
-      {
-        "line": 2887,
-        "name": "_merge_props",
-        "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"
-      },
-      {
-        "line": 202,
-        "name": "ast_expr",
-        "path": "scripts/pylib/twister/expr_parser.py"
-      }
+      {"line": 3245, "name": "_map",         "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"},
+      {"line": 2887, "name": "_merge_props", "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"},
+      {"line": 202,  "name": "ast_expr",     "path": "scripts/pylib/twister/expr_parser.py"}
     ],
     "expect_total": 3,
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE is_recursive = 'true' WHERE param_count >= 3 IN 'scripts/**' ORDER BY name ASC LIMIT 3",
@@ -892,31 +404,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 100,
-        "name": "big_create",
-        "path": "subsys/bluetooth/controller/ll_sw/ull_adv_iso.c"
-      },
-      {
-        "line": 7113,
-        "name": "ext_adv_data_frag",
-        "path": "subsys/bluetooth/controller/hci/hci.c"
-      },
-      {
-        "line": 7077,
-        "name": "ext_adv_pdu_frag",
-        "path": "subsys/bluetooth/controller/hci/hci.c"
-      },
-      {
-        "line": 698,
-        "name": "ll_big_test_create",
-        "path": "subsys/bluetooth/controller/ll_sw/ull_adv_iso.c"
-      },
-      {
-        "line": 7015,
-        "name": "ext_adv_info_fill",
-        "path": "subsys/bluetooth/controller/hci/hci.c"
-      }
+      {"line": 100,  "name": "big_create",         "path": "subsys/bluetooth/controller/ll_sw/ull_adv_iso.c"},
+      {"line": 7113, "name": "ext_adv_data_frag",  "path": "subsys/bluetooth/controller/hci/hci.c"},
+      {"line": 7077, "name": "ext_adv_pdu_frag",   "path": "subsys/bluetooth/controller/hci/hci.c"},
+      {"line": 698,  "name": "ll_big_test_create", "path": "subsys/bluetooth/controller/ll_sw/ull_adv_iso.c"},
+      {"line": 7015, "name": "ext_adv_info_fill",  "path": "subsys/bluetooth/controller/hci/hci.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE param_count >= 6 IN 'subsys/**' ORDER BY param_count DESC LIMIT 5",
     "name": "G39_param6_functions_in_subsys_by_param"
@@ -924,36 +416,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "kind": "macro",
-        "line": 3798,
-        "name": "K_SEM_DEFINE",
-        "path": "include/zephyr/kernel.h"
-      },
-      {
-        "kind": "macro",
-        "line": 3705,
-        "name": "K_SEM_MAX_LIMIT",
-        "path": "include/zephyr/kernel.h"
-      },
-      {
-        "kind": "field",
-        "line": 3777,
-        "name": "k_sem_count_get",
-        "path": "include/zephyr/kernel.h"
-      },
-      {
-        "kind": "field",
-        "line": 3755,
-        "name": "k_sem_give",
-        "path": "include/zephyr/kernel.h"
-      },
-      {
-        "kind": "field",
-        "line": 3722,
-        "name": "k_sem_init",
-        "path": "include/zephyr/kernel.h"
-      }
+      {"kind": "macro", "line": 3798, "name": "K_SEM_DEFINE",    "path": "include/zephyr/kernel.h"},
+      {"kind": "macro", "line": 3705, "name": "K_SEM_MAX_LIMIT", "path": "include/zephyr/kernel.h"},
+      {"kind": "field", "line": 3777, "name": "k_sem_count_get", "path": "include/zephyr/kernel.h"},
+      {"kind": "field", "line": 3755, "name": "k_sem_give",      "path": "include/zephyr/kernel.h"},
+      {"kind": "field", "line": 3722, "name": "k_sem_init",      "path": "include/zephyr/kernel.h"}
     ],
     "fql": "FIND symbols WHERE name LIKE 'k_sem_%' IN 'include/**' ORDER BY name ASC LIMIT 5",
     "name": "G40_k_sem_family_in_include"
@@ -961,60 +428,20 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "kind": "function",
-        "line": 29,
-        "name": "z_impl_k_busy_wait",
-        "path": "kernel/busy_wait.c"
-      },
-      {
-        "kind": "function",
-        "line": 76,
-        "name": "z_impl_k_condvar_broadcast",
-        "path": "kernel/condvar.c"
-      },
-      {
-        "kind": "function",
-        "line": 21,
-        "name": "z_impl_k_condvar_init",
-        "path": "kernel/condvar.c"
-      },
-      {
-        "kind": "function",
-        "line": 44,
-        "name": "z_impl_k_condvar_signal",
-        "path": "kernel/condvar.c"
-      },
-      {
-        "kind": "function",
-        "line": 114,
-        "name": "z_impl_k_condvar_wait",
-        "path": "kernel/condvar.c"
-      }
+      {"kind": "function", "line": 29,  "name": "z_impl_k_busy_wait",         "path": "kernel/busy_wait.c"},
+      {"kind": "function", "line": 76,  "name": "z_impl_k_condvar_broadcast", "path": "kernel/condvar.c"},
+      {"kind": "function", "line": 21,  "name": "z_impl_k_condvar_init",      "path": "kernel/condvar.c"},
+      {"kind": "function", "line": 44,  "name": "z_impl_k_condvar_signal",    "path": "kernel/condvar.c"},
+      {"kind": "function", "line": 114, "name": "z_impl_k_condvar_wait",      "path": "kernel/condvar.c"}
     ],
     "fql": "FIND symbols WHERE name MATCHES '^z_impl_k_' ORDER BY name ASC LIMIT 5",
     "name": "G41_z_impl_k_regex"
   },
   {
     "expect_rows": [
-      {
-        "kind": "field",
-        "line": 3501,
-        "name": "k_mutex_init",
-        "path": "include/zephyr/kernel.h"
-      },
-      {
-        "kind": "field",
-        "line": 3525,
-        "name": "k_mutex_lock",
-        "path": "include/zephyr/kernel.h"
-      },
-      {
-        "kind": "field",
-        "line": 3547,
-        "name": "k_mutex_unlock",
-        "path": "include/zephyr/kernel.h"
-      }
+      {"kind": "field", "line": 3501, "name": "k_mutex_init",   "path": "include/zephyr/kernel.h"},
+      {"kind": "field", "line": 3525, "name": "k_mutex_lock",   "path": "include/zephyr/kernel.h"},
+      {"kind": "field", "line": 3547, "name": "k_mutex_unlock", "path": "include/zephyr/kernel.h"}
     ],
     "expect_total": 3,
     "fql": "FIND symbols WHERE name MATCHES '^k_mutex_' IN 'include/**' ORDER BY name ASC LIMIT 5",
@@ -1023,31 +450,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 11,
-        "name": "z_impl_k_float_disable",
-        "path": "kernel/float.c"
-      },
-      {
-        "line": 12,
-        "name": "z_impl_k_thread_stack_alloc",
-        "path": "kernel/dynamic_disabled.c"
-      },
-      {
-        "line": 20,
-        "name": "z_impl_k_thread_stack_free",
-        "path": "kernel/dynamic_disabled.c"
-      },
-      {
-        "line": 21,
-        "name": "z_impl_k_condvar_init",
-        "path": "kernel/condvar.c"
-      },
-      {
-        "line": 21,
-        "name": "z_impl_k_float_enable",
-        "path": "kernel/float.c"
-      }
+      {"line": 11, "name": "z_impl_k_float_disable",      "path": "kernel/float.c"},
+      {"line": 12, "name": "z_impl_k_thread_stack_alloc", "path": "kernel/dynamic_disabled.c"},
+      {"line": 20, "name": "z_impl_k_thread_stack_free",  "path": "kernel/dynamic_disabled.c"},
+      {"line": 21, "name": "z_impl_k_condvar_init",       "path": "kernel/condvar.c"},
+      {"line": 21, "name": "z_impl_k_float_enable",       "path": "kernel/float.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name LIKE 'z_impl_%' IN 'kernel/**' ORDER BY line ASC LIMIT 5",
     "name": "G43_z_impl_functions_in_kernel_by_line"
@@ -1055,31 +462,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 18,
-        "name": "bt_long_wq_schedule",
-        "path": "subsys/bluetooth/host/long_wq.c"
-      },
-      {
-        "line": 19,
-        "name": "bt_a2dp_sbc_get_channel_num",
-        "path": "subsys/bluetooth/host/classic/a2dp_codec_sbc.c"
-      },
-      {
-        "line": 19,
-        "name": "bt_hci_evt_create",
-        "path": "subsys/bluetooth/host/hci_common.c"
-      },
-      {
-        "line": 20,
-        "name": "bt_id_rpa_is_new",
-        "path": "subsys/bluetooth/host/id.h"
-      },
-      {
-        "line": 21,
-        "name": "bt_data_parse",
-        "path": "subsys/bluetooth/host/data.c"
-      }
+      {"line": 18, "name": "bt_long_wq_schedule",         "path": "subsys/bluetooth/host/long_wq.c"},
+      {"line": 19, "name": "bt_a2dp_sbc_get_channel_num", "path": "subsys/bluetooth/host/classic/a2dp_codec_sbc.c"},
+      {"line": 19, "name": "bt_hci_evt_create",           "path": "subsys/bluetooth/host/hci_common.c"},
+      {"line": 20, "name": "bt_id_rpa_is_new",            "path": "subsys/bluetooth/host/id.h"},
+      {"line": 21, "name": "bt_data_parse",               "path": "subsys/bluetooth/host/data.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name LIKE 'bt_%' IN 'subsys/bluetooth/host/**' ORDER BY line ASC LIMIT 5",
     "name": "G44_bt_functions_in_host_by_line"
@@ -1087,21 +474,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "line": 81,
-        "name": "net_byte_to_hex",
-        "path": "subsys/net/ip/utils.c"
-      },
-      {
-        "line": 1160,
-        "name": "net_bytes_from_str",
-        "path": "subsys/net/ip/utils.c"
-      },
-      {
-        "line": 269,
-        "name": "net_conn_change_callback",
-        "path": "subsys/net/ip/connection.c"
-      }
+      {"line": 81,   "name": "net_byte_to_hex",          "path": "subsys/net/ip/utils.c"},
+      {"line": 1160, "name": "net_bytes_from_str",       "path": "subsys/net/ip/utils.c"},
+      {"line": 269,  "name": "net_conn_change_callback", "path": "subsys/net/ip/connection.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name LIKE 'net_%' WHERE param_count >= 3 IN 'subsys/net/ip/**' ORDER BY name ASC LIMIT 3",
     "name": "G45_net_param3_functions_in_net_ip"
@@ -1109,56 +484,16 @@
   {
     "expect_row_count": 10,
     "expect_rows": [
-      {
-        "line": 64,
-        "name": "AGC_IRQHandler",
-        "path": "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c"
-      },
-      {
-        "line": 82,
-        "name": "ARM_MPU_ClrRegion",
-        "path": "arch/arm/core/mpu/cortex_a_r/arm_mpu_internal.h"
-      },
-      {
-        "line": 70,
-        "name": "AddedProperty",
-        "path": "scripts/release/list_devicetree_bindings_changes.py"
-      },
-      {
-        "line": 1287,
-        "name": "AddressRegion",
-        "path": "modules/hal_nordic/ironside/se/scripts/periphconf/builder.py"
-      },
-      {
-        "line": 37,
-        "name": "Argus_Free",
-        "path": "modules/hal_afbr/platform_malloc.c"
-      },
-      {
-        "line": 13,
-        "name": "Argus_GetHandle",
-        "path": "modules/hal_afbr/platform_misc.c"
-      },
-      {
-        "line": 23,
-        "name": "Argus_Malloc",
-        "path": "modules/hal_afbr/platform_malloc.c"
-      },
-      {
-        "line": 63,
-        "name": "BENCH_START",
-        "path": "tests/benchmarks/sys_kernel/src/syskernel.h"
-      },
-      {
-        "line": 615,
-        "name": "BICR",
-        "path": "soc/nordic/nrf54h/bicr/bicrgen.py"
-      },
-      {
-        "line": 183,
-        "name": "BL702_Delay_MS",
-        "path": "soc/bflb/bl70x/bflb_platform_shim.c"
-      }
+      {"line": 64,   "name": "AGC_IRQHandler",    "path": "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c"},
+      {"line": 82,   "name": "ARM_MPU_ClrRegion", "path": "arch/arm/core/mpu/cortex_a_r/arm_mpu_internal.h"},
+      {"line": 70,   "name": "AddedProperty",     "path": "scripts/release/list_devicetree_bindings_changes.py"},
+      {"line": 1287, "name": "AddressRegion",     "path": "modules/hal_nordic/ironside/se/scripts/periphconf/builder.py"},
+      {"line": 37,   "name": "Argus_Free",        "path": "modules/hal_afbr/platform_malloc.c"},
+      {"line": 13,   "name": "Argus_GetHandle",   "path": "modules/hal_afbr/platform_misc.c"},
+      {"line": 23,   "name": "Argus_Malloc",      "path": "modules/hal_afbr/platform_malloc.c"},
+      {"line": 63,   "name": "BENCH_START",       "path": "tests/benchmarks/sys_kernel/src/syskernel.h"},
+      {"line": 615,  "name": "BICR",              "path": "soc/nordic/nrf54h/bicr/bicrgen.py"},
+      {"line": 183,  "name": "BL702_Delay_MS",    "path": "soc/bflb/bl70x/bflb_platform_shim.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 10",
     "name": "GST1_function_alphabetic_asc_limit10"
@@ -1166,31 +501,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 76,
-        "name": "zperf_work_q",
-        "path": "subsys/net/lib/zperf/zperf_common.c"
-      },
-      {
-        "line": 106,
-        "name": "zperf_work_q",
-        "path": "subsys/net/lib/zperf/zperf_common.c"
-      },
-      {
-        "line": 279,
-        "name": "zperf",
-        "path": "subsys/net/lib/zperf/zperf_tcp_uploader.c"
-      },
-      {
-        "line": 510,
-        "name": "zperf",
-        "path": "subsys/net/lib/zperf/zperf_udp_uploader.c"
-      },
-      {
-        "line": 230,
-        "name": "zo",
-        "path": "subsys/net/lib/sockets/socketpair.c"
-      }
+      {"line": 76,  "name": "zperf_work_q", "path": "subsys/net/lib/zperf/zperf_common.c"},
+      {"line": 106, "name": "zperf_work_q", "path": "subsys/net/lib/zperf/zperf_common.c"},
+      {"line": 279, "name": "zperf",        "path": "subsys/net/lib/zperf/zperf_tcp_uploader.c"},
+      {"line": 510, "name": "zperf",        "path": "subsys/net/lib/zperf/zperf_udp_uploader.c"},
+      {"line": 230, "name": "zo",           "path": "subsys/net/lib/sockets/socketpair.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'variable' IN 'subsys/net/**' ORDER BY name DESC LIMIT 5",
     "name": "GST2_variable_subsys_net_desc_limit5"
@@ -1198,21 +513,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "count": 34,
-        "name": "bt_hci_cp_le_create_conn",
-        "path": "include/zephyr/bluetooth/hci_types.h"
-      },
-      {
-        "count": 8,
-        "name": "wifi_p2p_device_info",
-        "path": "include/zephyr/net/wifi_mgmt.h"
-      },
-      {
-        "count": 6,
-        "name": "bt_conn_le_cs_capabilities",
-        "path": "include/zephyr/bluetooth/conn.h"
-      }
+      {"count": 34, "name": "bt_hci_cp_le_create_conn",   "path": "include/zephyr/bluetooth/hci_types.h"},
+      {"count": 8,  "name": "wifi_p2p_device_info",       "path": "include/zephyr/net/wifi_mgmt.h"},
+      {"count": 6,  "name": "bt_conn_le_cs_capabilities", "path": "include/zephyr/bluetooth/conn.h"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'struct' WHERE member_count >= 10 IN 'include/zephyr/**' GROUP BY file ORDER BY count DESC LIMIT 3",
     "name": "GST3_struct_member_count_group_by_file_limit3"
@@ -1220,31 +523,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "count": 2,
-        "name": "_merge_props",
-        "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"
-      },
-      {
-        "count": 1,
-        "name": "adc_ad7124_read_reg",
-        "path": "drivers/adc/adc_ad7124.c"
-      },
-      {
-        "count": 1,
-        "name": "clock_get_rate_gclkgen",
-        "path": "drivers/clock_control/clock_control_mchp_pic32cm_pl.c"
-      },
-      {
-        "count": 1,
-        "name": "clock_get_rate_gclkgen",
-        "path": "drivers/clock_control/clock_control_mchp_pic32cz_ca.c"
-      },
-      {
-        "count": 1,
-        "name": "clock_get_rate_gclkgen",
-        "path": "drivers/clock_control/clock_control_mchp_pic32cm_jh.c"
-      }
+      {"count": 2, "name": "_merge_props",           "path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py"},
+      {"count": 1, "name": "adc_ad7124_read_reg",    "path": "drivers/adc/adc_ad7124.c"},
+      {"count": 1, "name": "clock_get_rate_gclkgen", "path": "drivers/clock_control/clock_control_mchp_pic32cm_pl.c"},
+      {"count": 1, "name": "clock_get_rate_gclkgen", "path": "drivers/clock_control/clock_control_mchp_pic32cz_ca.c"},
+      {"count": 1, "name": "clock_get_rate_gclkgen", "path": "drivers/clock_control/clock_control_mchp_pic32cm_jh.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE is_recursive = 'true' WHERE param_count >= 4 GROUP BY file LIMIT 5",
     "name": "GST4_recursive_functions_param_count_group_by_file_limit5"
@@ -1252,21 +535,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "line": 25,
-        "name": "AccessManager",
-        "path": "modules/thrift/src/thrift/transport/TSSLSocket.h"
-      },
-      {
-        "line": 390,
-        "name": "AccessManager",
-        "path": "modules/thrift/src/thrift/transport/TSSLSocket.h"
-      },
-      {
-        "line": 71,
-        "name": "AddedProperty",
-        "path": "scripts/release/list_devicetree_bindings_changes.py"
-      }
+      {"line": 25,  "name": "AccessManager", "path": "modules/thrift/src/thrift/transport/TSSLSocket.h"},
+      {"line": 390, "name": "AccessManager", "path": "modules/thrift/src/thrift/transport/TSSLSocket.h"},
+      {"line": 71,  "name": "AddedProperty", "path": "scripts/release/list_devicetree_bindings_changes.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'class' ORDER BY name ASC LIMIT 3",
     "name": "GST5_class_alphabetical_asc_limit3"
@@ -1274,31 +545,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 37,
-        "name": "z_impl_k_sem_give",
-        "path": "lib/libc/armstdc/src/threading_weak.c"
-      },
-      {
-        "line": 41,
-        "name": "z_impl_k_sem_init",
-        "path": "lib/libc/armstdc/src/threading_weak.c"
-      },
-      {
-        "line": 45,
-        "name": "z_impl_k_sem_init",
-        "path": "kernel/sem.c"
-      },
-      {
-        "line": 47,
-        "name": "z_impl_k_sem_take",
-        "path": "lib/libc/armstdc/src/threading_weak.c"
-      },
-      {
-        "line": 72,
-        "name": "sys_track_k_sem_init",
-        "path": "subsys/tracing/tracing_tracking.c"
-      }
+      {"line": 37, "name": "z_impl_k_sem_give",    "path": "lib/libc/armstdc/src/threading_weak.c"},
+      {"line": 41, "name": "z_impl_k_sem_init",    "path": "lib/libc/armstdc/src/threading_weak.c"},
+      {"line": 45, "name": "z_impl_k_sem_init",    "path": "kernel/sem.c"},
+      {"line": 47, "name": "z_impl_k_sem_take",    "path": "lib/libc/armstdc/src/threading_weak.c"},
+      {"line": 72, "name": "sys_track_k_sem_init", "path": "subsys/tracing/tracing_tracking.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES 'k_sem_' ORDER BY line ASC LIMIT 5",
     "name": "GST6_functions_regex_k_sem_order_by_line_limit5"
@@ -1306,31 +557,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 547,
-        "name": "get_dev",
-        "path": "drivers/gpio/gpio_nrfx.c"
-      },
-      {
-        "line": 135,
-        "name": "get_gpio_ctrl",
-        "path": "drivers/gpio/gpio_shell.c"
-      },
-      {
-        "line": 64,
-        "name": "get_port_cfg",
-        "path": "drivers/gpio/gpio_nrfx.c"
-      },
-      {
-        "line": 53,
-        "name": "npcx_get_gpio_dev",
-        "path": "drivers/gpio/gpio_npcx.c"
-      },
-      {
-        "line": 43,
-        "name": "query_irq_info",
-        "path": "drivers/gpio/gpio_renesas_ra_ioport.c"
-      }
+      {"line": 547, "name": "get_dev",           "path": "drivers/gpio/gpio_nrfx.c"},
+      {"line": 135, "name": "get_gpio_ctrl",     "path": "drivers/gpio/gpio_shell.c"},
+      {"line": 64,  "name": "get_port_cfg",      "path": "drivers/gpio/gpio_nrfx.c"},
+      {"line": 53,  "name": "npcx_get_gpio_dev", "path": "drivers/gpio/gpio_npcx.c"},
+      {"line": 43,  "name": "query_irq_info",    "path": "drivers/gpio/gpio_renesas_ra_ioport.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE is_const = 'true' IN 'drivers/gpio/**' LIMIT 5",
     "name": "GST7_const_functions_in_gpio_limit5"
@@ -1338,31 +569,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 1125,
-        "name": "z_arm_fault_init",
-        "path": "arch/arm/core/cortex_m/fault.c"
-      },
-      {
-        "line": 739,
-        "name": "z_arm_mmu_init",
-        "path": "arch/arm/core/mmu/arm_mmu.c"
-      },
-      {
-        "line": 670,
-        "name": "z_arm_mpu_init",
-        "path": "arch/arm/core/mpu/nxp_mpu.c"
-      },
-      {
-        "line": 502,
-        "name": "z_arm_mpu_init",
-        "path": "arch/arm/core/mpu/arm_mpu.c"
-      },
-      {
-        "line": 437,
-        "name": "z_arm_fault_init",
-        "path": "arch/arm/core/cortex_a_r/fault.c"
-      }
+      {"line": 1125, "name": "z_arm_fault_init", "path": "arch/arm/core/cortex_m/fault.c"},
+      {"line": 739,  "name": "z_arm_mmu_init",   "path": "arch/arm/core/mmu/arm_mmu.c"},
+      {"line": 670,  "name": "z_arm_mpu_init",   "path": "arch/arm/core/mpu/nxp_mpu.c"},
+      {"line": 502,  "name": "z_arm_mpu_init",   "path": "arch/arm/core/mpu/arm_mpu.c"},
+      {"line": 437,  "name": "z_arm_fault_init", "path": "arch/arm/core/cortex_a_r/fault.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES 'init' WHERE param_count >= 1 IN 'arch/arm/**' ORDER BY line DESC LIMIT 5",
     "name": "GST8_init_param_functions_in_arm_desc_limit5"
@@ -1370,26 +581,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "count": 43,
-        "path": "include/zephyr/drivers/modem/hl78xx_apis.h"
-      },
-      {
-        "count": 35,
-        "path": "include/zephyr/drivers/usb_c/usbc_tcpc.h"
-      },
-      {
-        "count": 33,
-        "path": "include/zephyr/drivers/mspi.h"
-      },
-      {
-        "count": 29,
-        "path": "include/zephyr/drivers/espi.h"
-      },
-      {
-        "count": 27,
-        "path": "include/zephyr/drivers/sensor.h"
-      }
+      {"count": 43, "path": "include/zephyr/drivers/modem/hl78xx_apis.h"},
+      {"count": 35, "path": "include/zephyr/drivers/usb_c/usbc_tcpc.h"},
+      {"count": 33, "path": "include/zephyr/drivers/mspi.h"},
+      {"count": 29, "path": "include/zephyr/drivers/espi.h"},
+      {"count": 27, "path": "include/zephyr/drivers/sensor.h"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'enum' IN 'include/zephyr/drivers/**' GROUP BY file ORDER BY count DESC LIMIT 5",
     "name": "GST9_enum_group_by_file_zephyr_drivers_limit5"
@@ -1397,21 +593,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "line": 30,
-        "name": "_ifx_cat1_irq_set_priority",
-        "path": "include/zephyr/drivers/serial/uart_ifx_cat1.h"
-      },
-      {
-        "line": 63,
-        "name": "gpio_mcux_lpc_configure",
-        "path": "drivers/gpio/gpio_mcux_lpc.c"
-      },
-      {
-        "line": 75,
-        "name": "verify_background_color",
-        "path": "tests/drivers/display/display_read_write/src/main.c"
-      }
+      {"line": 30, "name": "_ifx_cat1_irq_set_priority", "path": "include/zephyr/drivers/serial/uart_ifx_cat1.h"},
+      {"line": 63, "name": "gpio_mcux_lpc_configure",    "path": "drivers/gpio/gpio_mcux_lpc.c"},
+      {"line": 75, "name": "verify_background_color",    "path": "tests/drivers/display/display_read_write/src/main.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_shadow = 'true' WHERE shadow_count >= 2 ORDER BY line ASC LIMIT 3",
     "name": "GST10_shadow_functions_desc_limit3"
@@ -1419,31 +603,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 862,
-        "name": "parser_execute",
-        "path": "subsys/net/lib/http/http_parser.c"
-      },
-      {
-        "line": 572,
-        "name": "isr_rx",
-        "path": "subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync_iso.c"
-      },
-      {
-        "line": 170,
-        "name": "ull_scan_aux_setup",
-        "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"
-      },
-      {
-        "line": 2905,
-        "name": "tcp_in",
-        "path": "subsys/net/ip/tcp.c"
-      },
-      {
-        "line": 1612,
-        "name": "ull_scan_aux_setup",
-        "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"
-      }
+      {"line": 862,  "name": "parser_execute",     "path": "subsys/net/lib/http/http_parser.c"},
+      {"line": 572,  "name": "isr_rx",             "path": "subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync_iso.c"},
+      {"line": 170,  "name": "ull_scan_aux_setup", "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"},
+      {"line": 2905, "name": "tcp_in",             "path": "subsys/net/ip/tcp.c"},
+      {"line": 1612, "name": "ull_scan_aux_setup", "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE goto_count >= 1 WHERE lines >= 100 ORDER BY lines DESC LIMIT 5",
     "name": "GST11_goto_audit_functions_limit5"
@@ -1451,31 +615,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 170,
-        "name": "ull_scan_aux_setup",
-        "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"
-      },
-      {
-        "line": 7173,
-        "name": "le_ext_adv_report",
-        "path": "subsys/bluetooth/controller/hci/hci.c"
-      },
-      {
-        "line": 572,
-        "name": "isr_rx",
-        "path": "subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync_iso.c"
-      },
-      {
-        "line": 100,
-        "name": "big_create",
-        "path": "subsys/bluetooth/controller/ll_sw/ull_adv_iso.c"
-      },
-      {
-        "line": 1612,
-        "name": "ull_scan_aux_setup",
-        "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"
-      }
+      {"line": 170,  "name": "ull_scan_aux_setup", "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"},
+      {"line": 7173, "name": "le_ext_adv_report",  "path": "subsys/bluetooth/controller/hci/hci.c"},
+      {"line": 572,  "name": "isr_rx",             "path": "subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync_iso.c"},
+      {"line": 100,  "name": "big_create",         "path": "subsys/bluetooth/controller/ll_sw/ull_adv_iso.c"},
+      {"line": 1612, "name": "ull_scan_aux_setup", "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE decl_far_count >= 5 ORDER BY decl_distance DESC LIMIT 5",
     "name": "GST12_data_flow_decl_distance_limit5"
@@ -1483,27 +627,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {
-        "enclosing_fn": "z_check_thread_stack_fail",
-        "kind": "if",
-        "line": 65,
-        "name": "((a&b)!=c)",
-        "path": "arch/arc/core/fault.c"
-      },
-      {
-        "enclosing_fn": "z_check_thread_stack_fail",
-        "kind": "if",
-        "line": 66,
-        "name": "((a&b)!=c)",
-        "path": "arch/arc/core/fault.c"
-      },
-      {
-        "enclosing_fn": "arch_dcache_invd_range",
-        "kind": "if",
-        "line": 135,
-        "name": "(a&(b-c))",
-        "path": "arch/arm/core/cortex_a_r/cache.c"
-      }
+      {"enclosing_fn": "z_check_thread_stack_fail", "kind": "if", "line": 65,  "name": "((a&b)!=c)", "path": "arch/arc/core/fault.c"},
+      {"enclosing_fn": "z_check_thread_stack_fail", "kind": "if", "line": 66,  "name": "((a&b)!=c)", "path": "arch/arc/core/fault.c"},
+      {"enclosing_fn": "arch_dcache_invd_range",    "kind": "if", "line": 135, "name": "(a&(b-c))",  "path": "arch/arm/core/cortex_a_r/cache.c"}
     ],
     "fql": "FIND symbols WHERE duplicate_condition = 'true' LIMIT 3",
     "name": "GST13_duplicate_condition_limit3"
@@ -1511,31 +637,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 39,
-        "name": "tc_run",
-        "path": "subsys/usb/usb_c/usbc_tc_common.c"
-      },
-      {
-        "line": 152,
-        "name": "cdc_acm_class_handle_req",
-        "path": "subsys/usb/device/class/cdc_acm.c"
-      },
-      {
-        "line": 153,
-        "name": "pe_run",
-        "path": "subsys/usb/usb_c/usbc_pe_common.c"
-      },
-      {
-        "line": 293,
-        "name": "prl_run",
-        "path": "subsys/usb/usb_c/usbc_prl.c"
-      },
-      {
-        "line": 346,
-        "name": "dfu_dnload_idle_next",
-        "path": "subsys/usb/device_next/class/usbd_dfu.c"
-      }
+      {"line": 39,  "name": "tc_run",                   "path": "subsys/usb/usb_c/usbc_tc_common.c"},
+      {"line": 152, "name": "cdc_acm_class_handle_req", "path": "subsys/usb/device/class/cdc_acm.c"},
+      {"line": 153, "name": "pe_run",                   "path": "subsys/usb/usb_c/usbc_pe_common.c"},
+      {"line": 293, "name": "prl_run",                  "path": "subsys/usb/usb_c/usbc_prl.c"},
+      {"line": 346, "name": "dfu_dnload_idle_next",     "path": "subsys/usb/device_next/class/usbd_dfu.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_fallthrough = 'true' IN 'subsys/usb/**' ORDER BY line ASC LIMIT 5",
     "name": "GST14_fallthrough_functions_in_usb_limit5"
@@ -1543,31 +649,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {
-        "line": 538,
-        "name": "i3c_driver_api",
-        "path": "include/zephyr/drivers/i3c.h"
-      },
-      {
-        "line": 106,
-        "name": "frag_transport_package_callback",
-        "path": "subsys/lorawan/services/frag_transport.c"
-      },
-      {
-        "line": 153,
-        "name": "register_service",
-        "path": "tests/bluetooth/tester/src/btp_core.c"
-      },
-      {
-        "line": 321,
-        "name": "unregister_service",
-        "path": "tests/bluetooth/tester/src/btp_core.c"
-      },
-      {
-        "line": 4339,
-        "name": "tp_input",
-        "path": "subsys/net/ip/tcp.c"
-      }
+      {"line": 538,  "name": "i3c_driver_api",                  "path": "include/zephyr/drivers/i3c.h"},
+      {"line": 106,  "name": "frag_transport_package_callback", "path": "subsys/lorawan/services/frag_transport.c"},
+      {"line": 153,  "name": "register_service",                "path": "tests/bluetooth/tester/src/btp_core.c"},
+      {"line": 321,  "name": "unregister_service",              "path": "tests/bluetooth/tester/src/btp_core.c"},
+      {"line": 4339, "name": "tp_input",                        "path": "subsys/net/ip/tcp.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_unused_param = 'true' WHERE unused_param_count >= 3 ORDER BY lines DESC LIMIT 5",
     "name": "GST15_unused_param_metric_combos_limit5"
@@ -1599,9 +685,7 @@
   {
     "expect_row_count": 1,
     "expect_rows": [
-      {
-        "kind": "compound_assignment"
-      }
+      {"kind": "compound_assignment"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'compound_assignment' GROUP BY fql_kind LIMIT 1",
     "name": "GEXTBa_compound_assignment_not_indexed"
@@ -1609,9 +693,7 @@
   {
     "expect_row_count": 1,
     "expect_rows": [
-      {
-        "kind": "shift_expression"
-      }
+      {"kind": "shift_expression"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'shift_expression' GROUP BY fql_kind LIMIT 1",
     "name": "GEXTBb_shift_expression_not_indexed"
@@ -1623,10 +705,12 @@
     "name": "GBUG11a_usages_encode_node_call_at_679"
   },
   {
-    "expect_rows": [],
-    "expect_total": 0,
-    "fql": "FIND usages OF 'encode_node' IN 'subsys/bluetooth/controller/hci/hci_driver.c' WHERE line = 750 LIMIT 1",
-    "name": "GBUG11b_usages_encode_node_call_at_750"
+    "expect_rows": [
+      {"line": 536, "name": "encode_node", "path": "subsys/bluetooth/controller/hci/hci_driver.c"}
+    ],
+    "expect_total": 1,
+    "fql": "FIND usages OF 'encode_node' IN 'subsys/bluetooth/controller/hci/hci_driver.c' WHERE line = 536 LIMIT 1",
+    "name": "GBUG11b_usages_encode_node_real_call_at_536"
   },
   {
     "expect_row_count": 3,
@@ -1681,7 +765,7 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 36,  "name": "_StackCheckHandler",     "path": "kernel/compiler_stack_protect.c"},
+      {"line": 36,  "name": "_StackCheckHandler",      "path": "kernel/compiler_stack_protect.c"},
       {"line": 95,  "name": "are_wait_conditions_met", "path": "kernel/events.c"},
       {"line": 220, "name": "atomic_get",              "path": "kernel/atomic_c.c"}
     ],
@@ -1753,7 +837,7 @@
     "expect_rows": [
       {"line": 27, "name": "1 << 0",                "path": "arch/riscv/custom/thead/cache_xtheadcmo_e907.c"},
       {"line": 37, "name": "1 << (rasr_size + 1U)", "path": "arch/arm/core/mpu/cortex_m/arm_mpu_internal.h"},
-      {"line": 37, "name": "ST0_IP0 << irq",         "path": "arch/mips/core/irq_manage.c"}
+      {"line": 37, "name": "ST0_IP0 << irq",        "path": "arch/mips/core/irq_manage.c"}
     ],
     "fql": "FIND symbols WHERE shift_direction = 'left' IN 'arch/**' ORDER BY line ASC LIMIT 3",
     "name": "GST28_shift_direction_left_arch"
@@ -1761,9 +845,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"kind": "cast", "line": 21, "name": "c_style<char *>",  "path": "kernel/boot_args.c"},
-      {"kind": "cast", "line": 22, "name": "c_style<char **>", "path": "kernel/boot_args.c"},
-      {"kind": "cast", "line": 22, "name": "c_style<uint64_t>","path": "kernel/busy_wait.c"}
+      {"kind": "cast", "line": 21, "name": "c_style<char *>",   "path": "kernel/boot_args.c"},
+      {"kind": "cast", "line": 22, "name": "c_style<char **>",  "path": "kernel/boot_args.c"},
+      {"kind": "cast", "line": 22, "name": "c_style<uint64_t>", "path": "kernel/busy_wait.c"}
     ],
     "fql": "FIND symbols WHERE cast_style = 'c_style' IN 'kernel/**' ORDER BY line ASC LIMIT 3",
     "name": "GST29_cast_style_c_style_kernel"
@@ -1781,7 +865,7 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 15,  "metric_value": "2", "name": "k_heap_array_get",         "path": "kernel/kheap.c"},
+      {"line": 15,  "metric_value": "2", "name": "k_heap_array_get",          "path": "kernel/kheap.c"},
       {"line": 508, "metric_value": "2", "name": "k_object_wordlist_foreach", "path": "kernel/userspace.c"},
       {"line": 272, "metric_value": "2", "name": "sys_clock_tick_get",        "path": "kernel/timeout.c"}
     ],
@@ -1821,9 +905,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"enclosing_fn": "ipi_mask_create",   "kind": "if", "line": 61,  "metric_value": "5", "name": "((a!=b)&&(((c<d)&&(e))||f)&&g)",                       "path": "kernel/ipi.c"},
-      {"enclosing_fn": "mbox_message_match","kind": "if", "line": 118, "metric_value": "4", "name": "(((a==(b)c)||(a==d))&&((e==(b)c)||(e==f)))",           "path": "kernel/mailbox.c"},
-      {"enclosing_fn": "virt_region_free",  "kind": "if", "line": 273, "metric_value": "4", "name": "(((a>=b)&&(a<c))||(((a+d-e)>=b)&&((a+d-e)<c)))",       "path": "kernel/mmu.c"}
+      {"enclosing_fn": "ipi_mask_create",    "kind": "if", "line": 61,  "metric_value": "5", "name": "((a!=b)&&(((c<d)&&(e))||f)&&g)",                 "path": "kernel/ipi.c"},
+      {"enclosing_fn": "mbox_message_match", "kind": "if", "line": 118, "metric_value": "4", "name": "(((a==(b)c)||(a==d))&&((e==(b)c)||(e==f)))",     "path": "kernel/mailbox.c"},
+      {"enclosing_fn": "virt_region_free",   "kind": "if", "line": 273, "metric_value": "4", "name": "(((a>=b)&&(a<c))||(((a+d-e)>=b)&&((a+d-e)<c)))", "path": "kernel/mmu.c"}
     ],
     "fql": "FIND symbols WHERE condition_tests >= 3 WHERE fql_kind = 'if' IN 'kernel/**' ORDER BY condition_tests DESC LIMIT 3",
     "name": "GST35_condition_tests_gte3_kernel"
@@ -1831,17 +915,17 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"enclosing_fn": "reason_to_str", "kind": "switch", "line": 62, "name": "(a)", "path": "kernel/fatal.c"},
-      {"enclosing_fn": "is_condition_met","kind": "switch","line": 65, "name": "(a)", "path": "kernel/poll.c"},
-      {"enclosing_fn": "otype_to_str",   "kind": "switch", "line": 91, "name": "(a)", "path": "kernel/userspace.c"}
+      {"enclosing_fn": "reason_to_str",    "kind": "switch", "line": 62, "name": "(a)", "path": "kernel/fatal.c"},
+      {"enclosing_fn": "is_condition_met", "kind": "switch", "line": 65, "name": "(a)", "path": "kernel/poll.c"},
+      {"enclosing_fn": "otype_to_str",     "kind": "switch", "line": 91, "name": "(a)", "path": "kernel/userspace.c"}
     ],
     "fql": "FIND symbols WHERE has_catch_all = 'true' WHERE fql_kind = 'switch' IN 'kernel/**' ORDER BY line ASC LIMIT 3",
     "name": "GST36_has_catch_all_switch_kernel"
   },
   {
     "expect_rows": [
-      {"enclosing_fn": "read_virt",               "kind": "for", "line": 83,  "name": "", "path": "modules/thrift/src/thrift/server/TFDServer.cpp"},
-      {"enclosing_fn": "TFDServer::interruptChildren","kind": "for","line": 214, "name": "", "path": "modules/thrift/src/thrift/server/TFDServer.cpp"}
+      {"enclosing_fn": "read_virt",                    "kind": "for", "line": 83,  "name": "", "path": "modules/thrift/src/thrift/server/TFDServer.cpp"},
+      {"enclosing_fn": "TFDServer::interruptChildren", "kind": "for", "line": 214, "name": "", "path": "modules/thrift/src/thrift/server/TFDServer.cpp"}
     ],
     "expect_total": 2,
     "fql": "FIND symbols WHERE for_style = 'range' IN 'modules/thrift/**' ORDER BY line ASC LIMIT 2",
@@ -1850,9 +934,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"enclosing_fn": "mld_create_packet",        "kind": "if", "line": 104, "name": "(a||b||b)",                             "path": "subsys/net/ip/ipv6_mld.c"},
-      {"enclosing_fn": "pd_decode_command",         "kind": "if", "line": 417, "name": "(a>b||((c-d)<a)||a>b)",                "path": "subsys/mgmt/osdp/src/osdp_pd.c"},
-      {"enclosing_fn": "valid_conn_cte_tx_params",  "kind": "if", "line": 481, "name": "((a&b||a&b)&&(c<d||c>e||!f||!g))",    "path": "subsys/bluetooth/host/direction.c"}
+      {"enclosing_fn": "mld_create_packet",        "kind": "if", "line": 104, "name": "(a||b||b)",                        "path": "subsys/net/ip/ipv6_mld.c"},
+      {"enclosing_fn": "pd_decode_command",        "kind": "if", "line": 417, "name": "(a>b||((c-d)<a)||a>b)",            "path": "subsys/mgmt/osdp/src/osdp_pd.c"},
+      {"enclosing_fn": "valid_conn_cte_tx_params", "kind": "if", "line": 481, "name": "((a&b||a&b)&&(c<d||c>e||!f||!g))", "path": "subsys/bluetooth/host/direction.c"}
     ],
     "fql": "FIND symbols WHERE dup_logic = 'true' IN 'subsys/**' ORDER BY line ASC LIMIT 3",
     "name": "GST38_dup_logic_subsys"
@@ -1870,9 +954,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 562, "name": "CBWDecode",            "path": "subsys/usb/device/class/msc.c"},
-      {"line": 150, "name": "__l2cap_lookup_ident", "path": "subsys/bluetooth/host/l2cap.c"},
-      {"line": 625, "name": "__wifi_args_to_params","path": "subsys/net/l2/wifi/wifi_shell.c"}
+      {"line": 562, "name": "CBWDecode",             "path": "subsys/usb/device/class/msc.c"},
+      {"line": 150, "name": "__l2cap_lookup_ident",  "path": "subsys/bluetooth/host/l2cap.c"},
+      {"line": 625, "name": "__wifi_args_to_params", "path": "subsys/net/l2/wifi/wifi_shell.c"}
     ],
     "fql": "FIND symbols WHERE has_repeated_condition_calls = 'true' IN 'subsys/**' ORDER BY name ASC LIMIT 3",
     "name": "GST40_repeated_condition_calls_subsys"
@@ -1920,9 +1004,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 142, "name": "_is_valid_prio",           "path": "kernel/include/ksched.h"},
-      {"line": 111, "name": "add_event",                "path": "kernel/poll.c"},
-      {"line": 18,  "name": "busy_wait_us_to_cyc_ceil32","path": "kernel/busy_wait.c"}
+      {"line": 142, "name": "_is_valid_prio",             "path": "kernel/include/ksched.h"},
+      {"line": 111, "name": "add_event",                  "path": "kernel/poll.c"},
+      {"line": 18,  "name": "busy_wait_us_to_cyc_ceil32", "path": "kernel/busy_wait.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE is_inline = 'true' WHERE is_static = 'true' IN 'kernel/**' ORDER BY name ASC LIMIT 3",
     "name": "GST45_is_inline_and_static_kernel"
@@ -1932,7 +1016,7 @@
     "expect_rows": [
       {"line": 109, "metric_value": "12", "name": "TSSLSocket::openSecConnection", "path": "modules/thrift/src/thrift/transport/TSSLSocket.cpp"},
       {"line": 66,  "metric_value": "6",  "name": "TSSLServerSocket::listen",      "path": "modules/thrift/src/thrift/transport/TSSLServerSocket.cpp"},
-      {"line": 273, "metric_value": "4",  "name": "TSSLSocket::open",               "path": "modules/thrift/src/thrift/transport/TSSLSocket.cpp"}
+      {"line": 273, "metric_value": "4",  "name": "TSSLSocket::open",              "path": "modules/thrift/src/thrift/transport/TSSLSocket.cpp"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE throw_count >= 1 IN 'modules/thrift/**' ORDER BY throw_count DESC LIMIT 3",
     "name": "GST46_throw_count_gte1_thrift"
@@ -1940,9 +1024,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 69,  "metric_value": "1", "name": "handle_flush",            "path": "kernel/work.c"},
-      {"line": 545, "metric_value": "3", "name": "k_object_wordlist_foreach","path": "kernel/userspace.c"},
-      {"line": 22,  "metric_value": "3", "name": "k_sys_work_q_init",        "path": "kernel/system_work_q.c"}
+      {"line": 69,  "metric_value": "1", "name": "handle_flush",              "path": "kernel/work.c"},
+      {"line": 545, "metric_value": "3", "name": "k_object_wordlist_foreach", "path": "kernel/userspace.c"},
+      {"line": 22,  "metric_value": "3", "name": "k_sys_work_q_init",         "path": "kernel/system_work_q.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines <= 3 IN 'kernel/**' ORDER BY lines ASC LIMIT 3",
     "name": "GST47_lines_lte3_kernel"
@@ -1960,9 +1044,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 497, "metric_value": "2", "name": "delete_blocks",        "path": "subsys/fs/ext2/ext2_diskops.c"},
-      {"line": 445, "metric_value": "2", "name": "filter_set",           "path": "subsys/logging/log_mgmt.c"},
-      {"line": 269, "metric_value": "2", "name": "receive_state_machine","path": "subsys/canbus/isotp/isotp.c"}
+      {"line": 497, "metric_value": "2", "name": "delete_blocks",         "path": "subsys/fs/ext2/ext2_diskops.c"},
+      {"line": 445, "metric_value": "2", "name": "filter_set",            "path": "subsys/logging/log_mgmt.c"},
+      {"line": 269, "metric_value": "2", "name": "receive_state_machine", "path": "subsys/canbus/isotp/isotp.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE recursion_count >= 2 IN 'subsys/**' ORDER BY recursion_count DESC LIMIT 3",
     "name": "GST49_recursion_count_gte2_subsys"
@@ -1970,9 +1054,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 96,   "metric_value": "16", "name": "mspi_set_freq",                          "path": "drivers/mspi/mspi_ambiq_ap5.c"},
-      {"line": 228,  "metric_value": "14", "name": "is_valid_gatt_packet_len",               "path": "tests/bsim/bluetooth/tester/src/bsim_btp.c"},
-      {"line": 1508, "metric_value": "9",  "name": "_add_instance_testcases_to_status_counts","path": "scripts/pylib/twister/twisterlib/runner.py"}
+      {"line": 96,   "metric_value": "16", "name": "mspi_set_freq",                            "path": "drivers/mspi/mspi_ambiq_ap5.c"},
+      {"line": 228,  "metric_value": "14", "name": "is_valid_gatt_packet_len",                 "path": "tests/bsim/bluetooth/tester/src/bsim_btp.c"},
+      {"line": 1508, "metric_value": "9",  "name": "_add_instance_testcases_to_status_counts", "path": "scripts/pylib/twister/twisterlib/runner.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_fallthrough = 'true' WHERE fallthrough_count >= 2 ORDER BY fallthrough_count DESC LIMIT 3",
     "name": "GST50_fallthrough_count_gte2"
@@ -1980,11 +1064,23 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 69,  "metric_value": "1", "name": "handle_flush",        "path": "kernel/work.c"},
-      {"line": 540, "metric_value": "1", "name": "k_object_find",       "path": "kernel/userspace.c"},
-      {"line": 601, "metric_value": "1", "name": "signal_triggered_work","path": "kernel/poll.c"}
+      {"line": 69,  "metric_value": "1", "name": "handle_flush",          "path": "kernel/work.c"},
+      {"line": 540, "metric_value": "1", "name": "k_object_find",         "path": "kernel/userspace.c"},
+      {"line": 601, "metric_value": "1", "name": "signal_triggered_work", "path": "kernel/poll.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_unused_param = 'true' WHERE unused_param_count = 1 IN 'kernel/**' ORDER BY name ASC LIMIT 3",
     "name": "GST51_unused_param_count_eq1_kernel"
+  },
+  {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"line": 7,  "name": "len:54",  "path": "arch/arc/core/arc_connect.c"},
+      {"line": 10, "name": "len:117", "path": "arch/arc/core/cache.c"},
+      {"line": 7,  "name": "len:87",  "path": "arch/arc/core/dsp/dsp_offsets.c"},
+      {"line": 7,  "name": "len:76",  "path": "arch/arc/core/dsp/swap_dsp_macros.h"},
+      {"line": 25, "name": "len:480", "path": "arch/arc/core/elf.c"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE comment_style = 'doc_block' ORDER BY path ASC LIMIT 5",
+    "name": "GST52_comment_doc_block_compact_name"
   }
 ]

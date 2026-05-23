@@ -62,6 +62,7 @@
     clippy::too_many_lines
 )]
 
+use std::fmt::Write as FmtWrite;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -251,6 +252,120 @@ impl Drop for McpClient {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+// ── golden.json serialisation helpers ────────────────────────────────────────
+
+/// Serialise a row/line array as compact single-line objects with column
+/// alignment.  Each row becomes one line; values in the same column position
+/// are padded so the next key starts at the same offset across all rows.
+///
+/// Example output (6-space indent):
+/// ```text
+///       {"line": 52, "name": "elapsed", "path": "kernel/timeout.c"},
+///       {"line": 29, "name": "first",   "path": "kernel/timeout.c"},
+///       {"line": 22, "name": "idle",    "path": "kernel/idle.c"}
+/// ```
+fn format_row_array(rows: &[Value]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    // Union of all keys, sorted (BTreeSet).
+    let all_keys: Vec<String> = {
+        let mut set = std::collections::BTreeSet::new();
+        for row in rows {
+            if let Some(obj) = row.as_object() {
+                set.extend(obj.keys().cloned());
+            }
+        }
+        set.into_iter().collect()
+    };
+    // Per-key max serialised value length (drives column padding).
+    let max_lens: Vec<usize> = all_keys
+        .iter()
+        .map(|k| {
+            rows.iter()
+                .filter_map(|r| r.get(k))
+                .map(|v| serde_json::to_string(v).unwrap_or_default().len())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+
+    let mut out = String::new();
+    for (ri, row) in rows.iter().enumerate() {
+        let last_row = ri + 1 == rows.len();
+        // Collect keys present in this row (maintains sorted order).
+        let present: Vec<(usize, &str)> = all_keys
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| row.get(k.as_str()).is_some())
+            .map(|(i, k)| (i, k.as_str()))
+            .collect();
+        let last_key = present.len().saturating_sub(1);
+        let mut line = String::from("      {");
+        for (ki, (idx, key)) in present.iter().enumerate() {
+            let val = row.get(*key).unwrap();
+            let val_json = serde_json::to_string(val).unwrap_or_else(|_| "null".to_owned());
+            let _ = write!(line, "\"{key}\": {val_json}");
+            if ki < last_key {
+                let padding = max_lens[*idx].saturating_sub(val_json.len());
+                line.push(',');
+                // At least one space after the comma, then alignment padding.
+                line.push_str(&" ".repeat(padding + 1));
+            }
+        }
+        line.push('}');
+        if !last_row {
+            line.push(',');
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Write the golden fixture array to a JSON string.
+///
+/// The outer structure uses pretty-printing (2-space indent) but
+/// `expect_rows` / `expect_lines` elements are serialised as compact
+/// single-line objects via [`format_row_array`].
+fn write_golden_json(entries: &[Value]) -> String {
+    let mut out = String::with_capacity(65_536);
+    out.push_str("[\n");
+    for (ei, entry) in entries.iter().enumerate() {
+        out.push_str("  {\n");
+        if let Some(obj) = entry.as_object() {
+            let count = obj.len();
+            for (fi, (key, val)) in obj.iter().enumerate() {
+                let sep = if fi + 1 < count { "," } else { "" };
+                match key.as_str() {
+                    "expect_rows" | "expect_lines" => {
+                        let rows = val.as_array().map_or(&[][..], Vec::as_slice);
+                        if rows.is_empty() {
+                            let _ = writeln!(out, "    \"{key}\": []{sep}");
+                        } else {
+                            let _ = writeln!(out, "    \"{key}\": [");
+                            out.push_str(&format_row_array(rows));
+                            let _ = writeln!(out, "    ]{sep}");
+                        }
+                    }
+                    _ => {
+                        let s = serde_json::to_string(val).unwrap_or_else(|_| "null".to_owned());
+                        let _ = writeln!(out, "    \"{key}\": {s}{sep}");
+                    }
+                }
+            }
+        }
+        let end = if ei + 1 < entries.len() {
+            "  },\n"
+        } else {
+            "  }\n"
+        };
+        out.push_str(end);
+    }
+    out.push_str("]\n");
+    out
 }
 
 // ── test ─────────────────────────────────────────────────────────────────────
@@ -517,9 +632,8 @@ fn golden_values() {
 
     // ── Write-back (update mode) ───────────────────────────────────────────
     if update_mode {
-        let json_str = serde_json::to_string_pretty(&raw_entries)
-            .unwrap_or_else(|e| panic!("[golden] cannot serialize updated entries: {e}"));
-        std::fs::write(&fixture_path, json_str + "\n")
+        let json_str = write_golden_json(&raw_entries);
+        std::fs::write(&fixture_path, json_str)
             .unwrap_or_else(|e| panic!("[golden] cannot write {}: {e}", fixture_path.display()));
         eprintln!(
             "[golden] golden.json rewritten ({} entries, {} assertions updated)",
