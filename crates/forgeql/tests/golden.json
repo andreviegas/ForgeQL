@@ -1259,19 +1259,112 @@
     "name": "GSCX1_show_context_handle_flush"
   },
   {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"fql_kind": "function", "line": 24, "name": "flag_clear"},
+      {"fql_kind": "function", "line": 30, "name": "flag_set"},
+      {"fql_kind": "function", "line": 36, "name": "flag_test"},
+      {"fql_kind": "function", "line": 42, "name": "flag_test_and_clear"},
+      {"fql_kind": "function", "line": 52, "name": "flags_set"}
+    ],
     "fql": "SHOW outline OF 'kernel/work.c' WHERE fql_kind = 'function' ORDER BY line ASC LIMIT 5",
-    "name": "GSO1_show_outline_work_functions_smoke"
+    "name": "GSO1_show_outline_work_functions"
   },
   {
+    "expect_row_count": 0,
     "fql": "SHOW callees OF 'handle_flush'",
-    "name": "GSC1_show_callees_handle_flush_smoke"
+    "name": "GSC1_show_callees_handle_flush_empty"
   },
   {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"fql_kind": "field", "line": 47, "text": "bool invoke_sched"},
+      {"fql_kind": "field", "line": 41, "text": "smp_init_fn fn"},
+      {"fql_kind": "field", "line": 44, "text": "void *arg"}
+    ],
     "fql": "SHOW members OF 'cpu_start_cb'",
-    "name": "GSMB1_show_members_cpu_start_cb_smoke"
+    "name": "GSMB1_show_members_cpu_start_cb"
   },
   {
     "fql": "SHOW signature OF 'k_sys_work_q_init'",
     "name": "GSS1_show_signature_k_sys_work_q_init_smoke"
+  },
+  {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"path": "kernel/atomic_c.c"},
+      {"path": "kernel/banner.c"},
+      {"path": "kernel/boot_args.c"},
+      {"path": "kernel/busy_wait.c"},
+      {"path": "kernel/compiler_stack_protect.c"}
+    ],
+    "fql": "FIND files WHERE depth = 1 WHERE extension = 'c' IN 'kernel/**' ORDER BY path ASC LIMIT 5",
+    "name": "GFF8_find_files_depth1_bug4"
+  },
+  {
+    "expect_line_count": 15,
+    "expect_lines": [
+      {"line": 22, "text": "static int k_sys_work_q_init(void)"},
+      {"line": 23, "text": "{"},
+      {"line": 24, "text": "\tstatic const struct k_work_queue_config cfg = {"},
+      {"line": 25, "text": "\t\t.name = \"sysworkq\","},
+      {"line": 26, "text": "\t\t.no_yield = IS_ENABLED(CONFIG_SYSTEM_WORKQUEUE_NO_YIELD),"},
+      {"line": 27, "text": "\t\t.essential = true,"},
+      {"line": 28, "text": "\t\t.work_timeout_ms = CONFIG_SYSTEM_WORKQUEUE_WORK_TIMEOUT_MS,"},
+      {"line": 29, "text": "\t};"},
+      {"line": 30, "text": ""},
+      {"line": 31, "text": "\tk_work_queue_start(&k_sys_work_q,"},
+      {"line": 32, "text": "\t\t\t    sys_work_q_stack,"},
+      {"line": 33, "text": "\t\t\t    K_KERNEL_STACK_SIZEOF(sys_work_q_stack),"},
+      {"line": 34, "text": "\t\t\t    CONFIG_SYSTEM_WORKQUEUE_PRIORITY, &cfg);"},
+      {"line": 35, "text": "\treturn 0;"},
+      {"line": 36, "text": "}"}
+    ],
+    "fql": "SHOW body OF 'k_sys_work_q_init' DEPTH 99",
+    "name": "GSB4_show_body_k_sys_work_q_init_full_bug1"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 26, "name": "IS_ENABLED",            "path": "kernel/system_work_q.c"},
+      {"line": 31, "name": "k_work_queue_start",    "path": "kernel/system_work_q.c"},
+      {"line": 33, "name": "K_KERNEL_STACK_SIZEOF", "path": "kernel/system_work_q.c"}
+    ],
+    "fql": "SHOW callees OF 'k_sys_work_q_init'",
+    "name": "GSC2_show_callees_k_sys_work_q_init_bug3"
+  },
+  {
+    "expect_row_count": 27,
+    "expect_rows": [
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "field"},
+      {"fql_kind": "field"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "field"},
+      {"fql_kind": "field"},
+      {"fql_kind": "field"},
+      {"fql_kind": "field"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"},
+      {"fql_kind": "method"}
+    ],
+    "fql": "SHOW members OF 'TSSLSocket'",
+    "name": "GSMB2_show_members_TSSLSocket_fql_kind_bug2"
   }
 ]

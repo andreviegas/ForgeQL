@@ -480,10 +480,14 @@ fn golden_values() {
                 }
 
                 // FIND symbols / globals → "results"
-                // FIND files            → "content/files"
+                // FIND files            → "/content/files"
+                // SHOW callees / outline → "/content/entries"
+                // SHOW members          → "/content/members"
                 let rows: &[Value] = result
                     .get("results")
                     .or_else(|| result.pointer("/content/files"))
+                    .or_else(|| result.pointer("/content/entries"))
+                    .or_else(|| result.pointer("/content/members"))
                     .and_then(Value::as_array)
                     .map_or(&[], Vec::as_slice);
 
