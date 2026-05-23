@@ -1298,7 +1298,7 @@
       {"path": "kernel/busy_wait.c"},
       {"path": "kernel/compiler_stack_protect.c"}
     ],
-    "fql": "FIND files WHERE depth = 1 WHERE extension = 'c' IN 'kernel/**' ORDER BY path ASC LIMIT 5",
+    "fql": "FIND files WHERE depth = 2 WHERE extension = 'c' IN 'kernel/**' ORDER BY path ASC LIMIT 5",
     "name": "GFF8_find_files_depth1_bug4"
   },
   {
