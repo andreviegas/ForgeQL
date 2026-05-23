@@ -1082,5 +1082,196 @@
     ],
     "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE comment_style = 'doc_block' ORDER BY path ASC LIMIT 5",
     "name": "GST52_comment_doc_block_compact_name"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"path": "scripts/kconfig/kconfiglib.py", "size": 265708},
+      {"path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py", "size": 135186},
+      {"path": "scripts/ci/check_compliance.py", "size": 106031}
+    ],
+    "fql": "FIND files WHERE extension = 'py' IN 'scripts/**' ORDER BY size DESC LIMIT 3",
+    "name": "GFF1_find_files_py_scripts_by_size"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"path": "kernel/include/kernel_arch_interface.h", "size": 25212},
+      {"path": "kernel/include/mmu.h", "size": 13098},
+      {"path": "kernel/include/ksched.h", "size": 12830}
+    ],
+    "fql": "FIND files WHERE extension = 'h' IN 'kernel/**' ORDER BY size DESC LIMIT 3",
+    "name": "GFF2_find_files_h_kernel_by_size"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"path": "modules/thrift/src/thrift/transport/TSSLSocket.cpp", "size": 17356},
+      {"path": "modules/thrift/src/thrift/server/TServerFramework.cpp", "size": 8028},
+      {"path": "modules/thrift/src/thrift/transport/TSSLServerSocket.cpp", "size": 7052}
+    ],
+    "fql": "FIND files WHERE extension = 'cpp' IN 'modules/thrift/**' ORDER BY size DESC LIMIT 3",
+    "name": "GFF3_find_files_cpp_thrift_by_size"
+  },
+  {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"path": "tests/lib/cmsis_dsp/transform/src/cf64.pat", "size": 1609359},
+      {"path": "tests/lib/cmsis_dsp/transform/src/cq31.pat", "size": 1278339},
+      {"path": "doc/connectivity/bluetooth/autopts/devices_2.png", "size": 1101077},
+      {"path": "tests/lib/cmsis_dsp/transform/src/cf32.pat", "size": 1020831},
+      {"path": "doc/connectivity/bluetooth/autopts/devices_1.png", "size": 994343}
+    ],
+    "fql": "FIND files WHERE size > 50000 ORDER BY size DESC LIMIT 5",
+    "name": "GFF4_find_files_size_gt_50000"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [
+      {"path": "kernel/system_work_q.c", "size": 861}
+    ],
+    "fql": "FIND files WHERE path = 'kernel/system_work_q.c'",
+    "name": "GFF5_find_files_exact_path"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"path": "doc/releases/release-notes-3.3.rst", "size": 208357},
+      {"path": "doc/releases/release-notes-1.14.rst", "size": 156859},
+      {"path": "doc/releases/release-notes-3.2.rst", "size": 150273}
+    ],
+    "fql": "FIND files WHERE extension = 'rst' ORDER BY size DESC LIMIT 3",
+    "name": "GFF6_find_files_rst_docs_by_size"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"path": "kernel/dynamic_disabled.c", "size": 393},
+      {"path": "kernel/version.c", "size": 476},
+      {"path": "kernel/irq_offload.c", "size": 588}
+    ],
+    "fql": "FIND files WHERE extension = 'c' IN 'kernel/**' ORDER BY size ASC LIMIT 3",
+    "name": "GFF7_find_files_c_kernel_smallest"
+  },
+  {
+    "expect_line_count": 5,
+    "expect_lines": [
+      {"line": 1, "text": "/*"},
+      {"line": 2, "text": " * Copyright (c) 2020 Nordic Semiconductor ASA"},
+      {"line": 3, "text": " *"},
+      {"line": 4, "text": " * SPDX-License-Identifier: Apache-2.0"},
+      {"line": 5, "text": " */"}
+    ],
+    "fql": "SHOW LINES 1-5 OF 'kernel/work.c'",
+    "name": "GSL1_show_lines_first5_work_c"
+  },
+  {
+    "expect_line_count": 5,
+    "expect_lines": [
+      {"line": 1, "text": "/*"},
+      {"line": 2, "text": " * Copyright (c) 2016 Wind River Systems, Inc."},
+      {"line": 3, "text": " *"},
+      {"line": 4, "text": " * SPDX-License-Identifier: Apache-2.0"},
+      {"line": 5, "text": " */"}
+    ],
+    "fql": "SHOW LINES 1-5 OF 'kernel/idle.c'",
+    "name": "GSL2_show_lines_first5_idle_c"
+  },
+  {
+    "expect_line_count": 5,
+    "expect_lines": [
+      {"line": 33, "text": "\t\t\t    K_KERNEL_STACK_SIZEOF(sys_work_q_stack),"},
+      {"line": 34, "text": "\t\t\t    CONFIG_SYSTEM_WORKQUEUE_PRIORITY, &cfg);"},
+      {"line": 35, "text": "\treturn 0;"},
+      {"line": 36, "text": "}"},
+      {"line": 37, "text": ""}
+    ],
+    "fql": "SHOW LINES 33-37 OF 'kernel/system_work_q.c'",
+    "name": "GSL3_show_lines_last5_system_work_q"
+  },
+  {
+    "expect_line_count": 5,
+    "expect_lines": [
+      {"line": 1, "text": "/*"},
+      {"line": 2, "text": " * Copyright (c) 2018 Intel Corporation"},
+      {"line": 3, "text": " *"},
+      {"line": 4, "text": " * SPDX-License-Identifier: Apache-2.0"},
+      {"line": 5, "text": " */"}
+    ],
+    "fql": "SHOW LINES 1-5 OF 'kernel/sched.c'",
+    "name": "GSL4_show_lines_first5_sched_c"
+  },
+  {
+    "expect_line_count": 3,
+    "expect_lines": [
+      {"line": 1, "text": "/*"},
+      {"line": 2, "text": " * Copyright (c) 2016 Wind River Systems, Inc."},
+      {"line": 3, "text": " * Copyright (c) 2016 Intel Corporation"}
+    ],
+    "fql": "SHOW LINES 1-3 OF 'kernel/system_work_q.c'",
+    "name": "GSL5_show_lines_first3_system_work_q"
+  },
+  {
+    "expect_line_count": 5,
+    "expect_lines": [
+      {"line": 24, "text": "static inline void flag_clear(uint32_t *flagp,"},
+      {"line": 25, "text": "\t\t\t      uint32_t bit)"},
+      {"line": 26, "text": "{"},
+      {"line": 27, "text": "\t*flagp &= ~BIT(bit);"},
+      {"line": 28, "text": "}"}
+    ],
+    "fql": "SHOW body OF 'flag_clear' DEPTH 99",
+    "name": "GSB1_show_body_flag_clear_depth99"
+  },
+  {
+    "expect_line_count": 2,
+    "expect_lines": [
+      {"line": 24, "text": "static inline void flag_clear(uint32_t *flagp,"},
+      {"line": 25, "text": "\t\t\t      uint32_t bit)"}
+    ],
+    "fql": "SHOW body OF 'flag_clear' DEPTH 0",
+    "name": "GSB2_show_body_flag_clear_depth0"
+  },
+  {
+    "expect_line_count": 1,
+    "expect_lines": [
+      {"line": 69, "text": "static void handle_flush(struct k_work *work) { }"}
+    ],
+    "fql": "SHOW body OF 'handle_flush' DEPTH 99",
+    "name": "GSB3_show_body_handle_flush_depth99"
+  },
+  {
+    "expect_line_count": 11,
+    "expect_lines": [
+      {"line": 64, "marker": "   ", "text": " * and pending_cancels."},
+      {"line": 65, "marker": "   ", "text": " */"},
+      {"line": 66, "marker": "   ", "text": "static struct k_spinlock lock;"},
+      {"line": 67, "marker": "   ", "text": ""},
+      {"line": 68, "marker": "   ", "text": "/* Invoked by work thread */"},
+      {"line": 69, "marker": ">>>", "text": "static void handle_flush(struct k_work *work) { }"},
+      {"line": 70, "marker": "   ", "text": ""},
+      {"line": 71, "marker": "   ", "text": "static inline void init_flusher(struct z_work_flusher *flusher)"},
+      {"line": 72, "marker": "   ", "text": "{"},
+      {"line": 73, "marker": "   ", "text": "\tstruct k_work *work = &flusher->work;"},
+      {"line": 74, "marker": "   ", "text": "\tk_sem_init(&flusher->sem, 0, 1);"}
+    ],
+    "fql": "SHOW context OF 'handle_flush'",
+    "name": "GSCX1_show_context_handle_flush"
+  },
+  {
+    "fql": "SHOW outline OF 'kernel/work.c' WHERE fql_kind = 'function' ORDER BY line ASC LIMIT 5",
+    "name": "GSO1_show_outline_work_functions_smoke"
+  },
+  {
+    "fql": "SHOW callees OF 'handle_flush'",
+    "name": "GSC1_show_callees_handle_flush_smoke"
+  },
+  {
+    "fql": "SHOW members OF 'cpu_start_cb'",
+    "name": "GSMB1_show_members_cpu_start_cb_smoke"
+  },
+  {
+    "fql": "SHOW signature OF 'k_sys_work_q_init'",
+    "name": "GSS1_show_signature_k_sys_work_q_init_smoke"
   }
 ]
