@@ -1169,7 +1169,6 @@ fn columnar_show_callees_matches_legacy() {
         &workspace,
         "caller",
         &registry,
-        |_| None,
     )
     .expect("columnar show_callees");
 
@@ -1183,7 +1182,6 @@ fn columnar_show_callees_matches_legacy() {
         &workspace,
         "caller",
         &registry,
-        |_| None,
     )
     .expect("legacy show_callees");
 

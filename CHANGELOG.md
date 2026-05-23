@@ -6,6 +6,49 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.53.3] — 2026-05-23 — Four query-correctness fixes + `LanguageConfig`-driven AST checks
+
+### Fixed
+
+- **GSB4 / SHOW body** (`body.rs`) — Body was clipped at the wrong end-line when the stored
+  `enrichment["lines"]` value was stale (e.g. `k_sys_work_q_init` truncated to 3 lines instead of 15).
+  `body.rs` now calls `first_absorbed_toplevel_in_compound()` live on the already-parsed AST node
+  instead of trusting the indexed value.
+
+- **GSMB2 / SHOW members** (`members.rs`) — Member classification for structs and classes was
+  mis-labelling methods as fields and missing enumerators. Extracted `classify_member()` helper;
+  `is_method_declaration` now uses `config.function_declarator()` instead of a hardcoded string.
+
+- **GSC2 / SHOW callees** (`exec_show.rs`, `callees.rs`, `show.rs`) — Callee results were sorted
+  lexicographically by default (`K_KERNEL_STACK_SIZEOF` before `k_work_queue_start`). The engine
+  now injects `ORDER BY line ASC` when no explicit `ORDER BY` is given for `SHOW callees`, matching
+  natural call-site order. `collect_callees_walk` returns `Vec<(String, usize)>` (name + 1-based
+  call-site line) so each result carries its source location.
+
+- **GFF8 / FIND files depth** (`exec_show.rs`) — `FileEntry.depth` was computed relative to the
+  `IN` glob path instead of the repository root. It is now derived from
+  `path.components().count()`, making `WHERE depth = N` consistent with the root-relative depth
+  shown in results.
+
+### Changed
+
+- **`LanguageConfig`-driven kind checks** (`metrics.rs`, `members.rs`, `body.rs`) — Hardcoded
+  tree-sitter node-kind strings (`"function_definition"`, `"compound_statement"`,
+  `"field_declaration"`, `"function_declarator"`, `"init_declarator"`, `"declaration"`) replaced
+  with `config.is_function_kind()`, `config.is_block_kind()`, `config.is_field_kind()`,
+  `config.function_declarator()`, `config.is_init_declarator_kind()`, and
+  `config.is_declaration_kind()`. C-specific literals (`"initializer_list"`,
+  `"field_designator"`, `"storage_class_specifier"`) are retained with explanatory comments where
+  no language-agnostic config equivalent exists.
+
+### Tests
+
+- Golden test suite expanded to 129 tests: `GFF1–GFF8` (FIND files), `GSL1–GSL5` (SHOW LINES),
+  `GSB1–GSB4` (SHOW body), `GSCX1` (SHOW context), `GSO1` (SHOW outline), `GSC1–GSC2`
+  (SHOW callees), `GSMB1–GSMB2` (SHOW members), `GSS1` (SHOW signature), `GST42–GST52`
+  (enrichment / triage flags). All 129 pass.
+- Bug-exercise regression tests added for the four query-correctness bugs above.
+
 ## [0.53.2] — 2026-05-23 — `forgeql-lang-c`: dedicated C language crate with `tree-sitter-c`
 
 ### Added

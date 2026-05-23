@@ -38,7 +38,7 @@ impl NodeEnricher for MetricsEnricher {
         // tree-sitter-c/C++ misparsed bodies caused by #if/#elif brace imbalances.
         if config.is_definition_kind(kind) {
             let end_row = if config.is_function_kind(kind) {
-                first_absorbed_toplevel_in_compound(ctx.node)
+                first_absorbed_toplevel_in_compound(ctx.node, config)
                     .unwrap_or_else(|| ctx.node.end_position().row)
             } else {
                 ctx.node.end_position().row
@@ -112,65 +112,75 @@ impl NodeEnricher for MetricsEnricher {
     }
 }
 
+/// Returns `true` if `compound` contains at least one clearly-executable
+/// statement child whose start byte is strictly greater than `after_byte`.
+///
+/// This guards against false-positive absorbed-sibling detection: a legitimate
+/// local variable declaration with field-designator initializers
+/// (`static const struct cfg = { .field = val, ... };`) is ALWAYS followed by
+/// executable code within the same function body, whereas a truly absorbed
+/// file-scope declaration is the last meaningful node in the `compound_statement`.
+fn has_executable_after(
+    compound: tree_sitter::Node<'_>,
+    after_byte: usize,
+    config: &crate::ast::lang::LanguageConfig,
+) -> bool {
+    // Uses `statement_boundary_kinds` from the language config so the check is
+    // not tied to C/C++ grammar strings.  `compound_statement` (block) is
+    // added via `config.block_kind()` to cover nested blocks (e.g. bare `{}`
+    // inside a function body).
+    let mut cursor = compound.walk();
+    for child in compound.children(&mut cursor) {
+        if child.start_byte() > after_byte
+            && (config.is_statement_boundary_kind(child.kind())
+                || config.is_block_kind(child.kind()))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Find the start row of the earliest **absorbed top-level declaration** within
 /// `node`'s subtree — either a `function_definition` or a multi-line
 /// `declaration` containing a struct/array `initializer_list`.
 ///
-/// ## Why this detects misparsed bodies
-///
-/// When tree-sitter-c/C++ encounters a brace imbalance caused by a preprocessor
-/// `#if`/`#elif`/`#else` spanning a brace boundary, a `function_definition`
-/// body absorbs subsequent file-scope declarations.  Those absorbed declarations
-/// appear as **direct children of a `compound_statement`** — a structure
-/// impossible in correctly-parsed C/C++.  Two patterns are detected:
-///
-/// - **Absorbed sibling functions**: appear as `function_definition` direct
-///   children.  Struct/class inline methods are immune because they reside in
-///   `field_declaration_list`, not `compound_statement`.
-///
-/// - **Absorbed struct initializers** (e.g. `DEVICE_API(...)` driver-API
-///   tables, `static const struct foo_driver_api = { .fn = bar, ... };`):
-///   appear as `declaration` direct children that contain an `initializer_list`
-///   and span more than one line.  Single-line local variable declarations
-///   (`int arr[] = {1, 2};`) are excluded by the multi-line guard.
-/// - `ERROR` nodes whose first named child is `storage_class_specifier` — tree-sitter-cpp
-///   0.23.x cannot parse macro-as-type declarations such as
-///   `static DEVICE_API(gpio, name) = { … }` and emits an `ERROR` node instead of a
-///   `declaration`.  The reliable signal is: the node spans multiple lines and its first
-///   named child is `storage_class_specifier` (`static`, `extern`, etc.).
-///
-/// Recursion descends into all child nodes, including `preproc_ifdef` blocks, but
-/// does NOT enter `function_definition` descendants (their bodies are their own scope).
-/// When a `function_definition` or matching `ERROR` is encountered anywhere in the
-/// subtree it is recorded as an absorbed sibling (its row contributed to the minimum)
-/// without further descent.
-///
-/// Returns `None` when the function body is correctly parsed.
-fn first_absorbed_toplevel_in_compound(node: tree_sitter::Node<'_>) -> Option<usize> {
+/// `pub(crate)` so `show_body` can call it at query time rather than trusting
+/// the potentially-stale `enrichment["lines"]` value from an older index.
+pub(crate) fn first_absorbed_toplevel_in_compound(
+    node: tree_sitter::Node<'_>,
+    config: &crate::ast::lang::LanguageConfig,
+) -> Option<usize> {
     let mut min_row: Option<usize> = None;
 
-    if node.kind() == "compound_statement" {
+    if config.is_block_kind(node.kind()) {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            let is_absorbed = match child.kind() {
-                "function_definition" => true,
+            let is_absorbed = if config.is_function_kind(child.kind()) {
+                true
+            } else if config.is_declaration_kind(child.kind()) {
                 // Multi-line declaration with struct/array initializer — the
                 // canonical shape of absorbed file-scope driver tables.
                 // Single-line local declarations (`int x = 5;`) are excluded.
-                "declaration" => {
-                    child.start_position().row != child.end_position().row
-                        && declaration_has_initializer_list(child)
-                }
+                // Legitimate local variables are also excluded: they are always
+                // followed by executable statements (calls, returns, etc.) in
+                // the same compound_statement, whereas absorbed file-scope
+                // globals are the last meaningful node in the function body.
+                child.start_position().row != child.end_position().row
+                    && declaration_has_initializer_list(child, config)
+                    && !has_executable_after(node, child.end_byte(), config)
+            } else if child.kind() == "ERROR" {
                 // tree-sitter-cpp 0.23.x fails on `static DEVICE_API(gpio, name) = {…}`
                 // (macro in type position) and emits ERROR instead of `declaration`.
                 // Guard: multi-line AND first named child is storage_class_specifier.
-                "ERROR" => {
-                    child.start_position().row != child.end_position().row
-                        && child
-                            .named_child(0)
-                            .is_some_and(|c| c.kind() == "storage_class_specifier")
-                }
-                _ => false,
+                // `"ERROR"` and `"storage_class_specifier"` are tree-sitter built-ins
+                // with no language-config equivalent — kept as literals intentionally.
+                child.start_position().row != child.end_position().row
+                    && child
+                        .named_child(0)
+                        .is_some_and(|c| c.kind() == "storage_class_specifier")
+            } else {
+                false
             };
             if is_absorbed {
                 let row = child.start_position().row;
@@ -182,16 +192,16 @@ fn first_absorbed_toplevel_in_compound(node: tree_sitter::Node<'_>) -> Option<us
     // Recurse into children to find nested compound_statements (inside for/while/if
     // bodies and preprocessor blocks such as preproc_ifdef).
     //
-    // - `function_definition` children: an absorbed sibling found inside a preprocessor
-    //   block or nested control-flow body — record its start row and skip its body to
-    //   avoid false positives from the sibling's own content.
+    // - function_kind children: an absorbed sibling found inside a preprocessor
+    //   block or nested control-flow body — record its start row and skip its
+    //   body to avoid false positives from the sibling's own content.
     // - matching `ERROR` children: same treatment as above.
     // - everything else: recurse normally.
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "function_definition" {
+        if config.is_function_kind(child.kind()) {
             // Absorbed sibling inside a preproc_ifdef / for / if body — record row,
-            // do NOT descend into its compound_statement body.
+            // do NOT descend into its block body.
             let row = child.start_position().row;
             min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
             continue;
@@ -206,7 +216,7 @@ fn first_absorbed_toplevel_in_compound(node: tree_sitter::Node<'_>) -> Option<us
             min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
             continue;
         }
-        if let Some(row) = first_absorbed_toplevel_in_compound(child) {
+        if let Some(row) = first_absorbed_toplevel_in_compound(child, config) {
             min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
         }
     }
@@ -228,13 +238,19 @@ fn first_absorbed_toplevel_in_compound(node: tree_sitter::Node<'_>) -> Option<us
 ///
 /// Checks both a direct `initializer_list` child and the idiomatic two-level
 /// path `init_declarator → initializer_list`.
-fn declaration_has_initializer_list(node: tree_sitter::Node<'_>) -> bool {
+fn declaration_has_initializer_list(
+    node: tree_sitter::Node<'_>,
+    config: &crate::ast::lang::LanguageConfig,
+) -> bool {
+    // `"initializer_list"` and `"field_designator"` are C/C++ grammar nodes with
+    // no language-agnostic equivalent in the current config schema; they are kept
+    // as literals intentionally.  `init_declarator` is routed through the config.
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "initializer_list" {
             return initializer_list_has_field_designator(child);
         }
-        if child.kind() == "init_declarator" {
+        if config.is_init_declarator_kind(child.kind()) {
             let mut c2 = child.walk();
             for gc in child.children(&mut c2) {
                 if gc.kind() == "initializer_list" {

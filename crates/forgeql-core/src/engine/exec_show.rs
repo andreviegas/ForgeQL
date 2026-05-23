@@ -163,7 +163,6 @@ impl ForgeQLEngine {
                         &workspace,
                         symbol,
                         &self.lang_registry,
-                        |name| engine.locate_definition(name),
                     )
                 })
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
@@ -194,11 +193,13 @@ impl ForgeQLEngine {
                             .get("size")
                             .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0);
+                        // Depth = number of path components (e.g. "kernel/foo.c" → 2).
+                        let depth = Some(path.components().count());
                         Some(FileEntry {
                             path,
                             extension,
                             size,
-                            depth: None,
+                            depth,
                             count: None,
                         })
                     })
@@ -273,7 +274,19 @@ impl ForgeQLEngine {
                 crate::filter::apply_clauses(members, clauses);
             }
             (ShowContent::CallGraph { entries, .. }, ForgeQLIR::ShowCallees { clauses, .. }) => {
-                crate::filter::apply_clauses(entries, clauses);
+                // Default sort for callees is by call-site line (ascending) so
+                // the output reflects call order.  If the user supplied an
+                // explicit ORDER BY, respect it instead.
+                if clauses.order_by.is_none() {
+                    let mut effective = clauses.clone();
+                    effective.order_by = Some(crate::ir::OrderBy {
+                        field: "line".to_string(),
+                        direction: crate::ir::SortDirection::Asc,
+                    });
+                    crate::filter::apply_clauses(entries, &effective);
+                } else {
+                    crate::filter::apply_clauses(entries, clauses);
+                }
             }
             _ => {}
         }

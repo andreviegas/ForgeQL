@@ -53,7 +53,10 @@ pub fn show_callers(index: &SymbolTable, workspace: &Workspace, symbol: &str) ->
 /// Re-parses the file containing `symbol`, locates the `function_definition`
 /// node, then walks its body collecting `call_expression` targets.
 ///
-/// Results are sorted and deduplicated.
+/// Each result entry carries the callee name, the **caller's** file path, and
+/// the **call-site** 1-based line number within that file.  Results are sorted
+/// by line then deduplicated on `(name, line)` so repeated calls on the same
+/// line are collapsed.
 ///
 /// # Errors
 /// Returns an error if the file cannot be parsed or the AST node for the
@@ -66,7 +69,6 @@ pub fn show_callees(
     workspace: &Workspace,
     symbol: &str,
     lang_registry: &LanguageRegistry,
-    callee_lookup: impl Fn(&str) -> Option<(std::path::PathBuf, usize)>,
 ) -> Result<Value> {
     let lang = lang_registry
         .language_for_path(path)
@@ -77,26 +79,22 @@ pub fn show_callees(
         find_function_node_for_symbol(cached.tree.root_node(), byte_range_start, hint_line, config)
             .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
 
-    let mut callees: Vec<String> = Vec::new();
+    let mut callees: Vec<(String, usize)> = Vec::new();
     collect_callees_walk(source, fn_node, &mut callees, config.call_expression_kind());
-    callees.sort();
+    // Sort by call-site line, then deduplicate on (name, line) to collapse
+    // repeated calls to the same function on the same line.
+    callees.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
     callees.dedup();
 
     let path_str = workspace.relative(path).display().to_string();
     let results: Vec<Value> = callees
         .iter()
-        .map(|name| {
-            callee_lookup(name).map_or_else(
-                || serde_json::json!({ "name": name }),
-                |(callee_path, callee_line)| {
-                    let callee_path_str = workspace.relative(&callee_path).display().to_string();
-                    serde_json::json!({
-                        "name": name,
-                        "path": callee_path_str,
-                        "line": callee_line,
-                    })
-                },
-            )
+        .map(|(name, line)| {
+            serde_json::json!({
+                "name": name,
+                "path": path_str,
+                "line": line,
+            })
         })
         .collect();
 

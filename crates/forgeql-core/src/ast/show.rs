@@ -344,15 +344,15 @@ pub(super) fn emit_body_lines(
     result
 }
 
-/// Recursively collect function/method names from `call_expression` nodes
-/// within `node`.  Results are appended to `out`.
+/// Recursively collect `(callee_name, call_site_1based_line)` pairs from
+/// `call_expression` nodes within `node`.  Results are appended to `out`.
 ///
 /// Uses `child_count()` / `child(i)` instead of a `TreeCursor` to avoid
 /// any cursor-state issues when starting from a non-root node.
 pub(super) fn collect_callees_walk(
     source: &[u8],
     node: tree_sitter::Node<'_>,
-    out: &mut Vec<String>,
+    out: &mut Vec<(String, usize)>,
     call_kind: &str,
 ) {
     if node.kind() == call_kind
@@ -369,7 +369,8 @@ pub(super) fn collect_callees_walk(
             .trim()
             .to_string();
         if !callee.is_empty() {
-            out.push(callee);
+            let call_line = byte_to_line(source, node.start_byte()) + 1;
+            out.push((callee, call_line));
         }
     }
     // Visit every child (named and unnamed) to catch all nested call sites.
@@ -659,17 +660,17 @@ mod tests {
             .expect("load cpp language");
         let tree = parser.parse(source, None).expect("parse");
 
-        let mut callees: Vec<String> = Vec::new();
+        let mut callees: Vec<(String, usize)> = Vec::new();
         collect_callees_walk(source, tree.root_node(), &mut callees, "call_expression");
         callees.sort();
         callees.dedup();
 
         assert!(
-            callees.contains(&"Serial_begin".to_string()),
+            callees.iter().any(|(n, _)| n == "Serial_begin"),
             "expected Serial_begin in {callees:?}"
         );
         assert!(
-            callees.contains(&"digitalWrite".to_string()),
+            callees.iter().any(|(n, _)| n == "digitalWrite"),
             "expected digitalWrite in {callees:?}"
         );
     }
@@ -684,17 +685,17 @@ mod tests {
             .expect("load cpp language");
         let tree = parser.parse(source, None).expect("parse");
 
-        let mut callees: Vec<String> = Vec::new();
+        let mut callees: Vec<(String, usize)> = Vec::new();
         collect_callees_walk(source, tree.root_node(), &mut callees, "call_expression");
         callees.sort();
         callees.dedup();
 
         assert!(
-            callees.contains(&"method1".to_string()),
+            callees.iter().any(|(n, _)| n == "method1"),
             "expected method1 in {callees:?}"
         );
         assert!(
-            callees.contains(&"method2".to_string()),
+            callees.iter().any(|(n, _)| n == "method2"),
             "expected method2 in {callees:?}"
         );
     }
@@ -708,7 +709,7 @@ mod tests {
             .expect("load cpp language");
         let tree = parser.parse(source, None).expect("parse");
 
-        let mut callees: Vec<String> = Vec::new();
+        let mut callees: Vec<(String, usize)> = Vec::new();
         collect_callees_walk(source, tree.root_node(), &mut callees, "call_expression");
         assert!(callees.is_empty(), "expected no callees, got {callees:?}");
     }
