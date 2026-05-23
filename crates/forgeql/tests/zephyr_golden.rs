@@ -121,6 +121,15 @@ struct QueryEntry {
     /// Line `i` must contain every field listed; unlisted fields are ignored.
     #[serde(default)]
     expect_lines: Vec<Value>,
+    /// Arbitrary top-level field assertions on any response.  Useful for
+    /// mutation and transaction commands where row/line extractors don't apply,
+    /// e.g. `{"type": "mutation", "applied": true, "edit_count": 1}`.
+    #[serde(default)]
+    expect_field: serde_json::Map<String, Value>,
+    /// Substring assertions on string-valued top-level fields.  Useful when
+    /// the full value is large (e.g. `diff`) but a key marker must be present.
+    #[serde(default)]
+    expect_field_contains: serde_json::Map<String, Value>,
 }
 
 // ── minimal MCP JSON-RPC client ──────────────────────────────────────────────
@@ -557,6 +566,34 @@ fn golden_values() {
                     }
                 }
 
+                // ── expect_field: top-level field assertions ──────────────────
+                for (field, expected_val) in &q.expect_field {
+                    let actual_val = result.get(field.as_str()).unwrap_or(&Value::Null);
+                    if actual_val != expected_val {
+                        entry_failures.push(format!(
+                            "field[{field}]: expected {expected_val}, got {actual_val}"
+                        ));
+                    }
+                }
+
+                // ── expect_field_contains: substring assertions ──────────────
+                for (field, expected_substr) in &q.expect_field_contains {
+                    let actual_val = result.get(field.as_str()).unwrap_or(&Value::Null);
+                    match (actual_val.as_str(), expected_substr.as_str()) {
+                        (Some(actual_str), Some(substr)) => {
+                            if !actual_str.contains(substr) {
+                                entry_failures.push(format!(
+                                    "field_contains[{field}]: expected to contain {substr:?}, got {actual_str:?}"
+                                ));
+                            }
+                        }
+                        _ => {
+                            entry_failures.push(format!(
+                                "field_contains[{field}]: expected string values, got actual={actual_val}, expected_substr={expected_substr}"
+                            ));
+                        }
+                    }
+                }
                 // Print execution context details (tokens_approx, results count)
                 let tokens = result
                     .get("tokens_approx")

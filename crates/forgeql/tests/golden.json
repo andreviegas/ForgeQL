@@ -1366,5 +1366,229 @@
     ],
     "fql": "SHOW members OF 'TSSLSocket'",
     "name": "GSMB2_show_members_TSSLSocket_fql_kind_bug2"
+  },
+  {
+    "alias": "rw-tests",
+    "expect_symbols_indexed": 2710729,
+    "use": "zephyr-andre.zephyr-main"
+  },
+  {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'rw-outer'",
+    "name": "RWT00_begin_outer_transaction"
+  },
+  {
+    "expect_field": {"applied": true, "edit_count": 1, "type": "mutation"},
+    "fql": "CHANGE FILE 'kernel/banner.c' MATCHING 'boot_banner' WITH 'boot_banner_v2'",
+    "name": "RWT01_change_file_rename_boot_banner"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [{"name": "boot_banner_v2", "path": "kernel/banner.c"}],
+    "fql": "FIND symbols WHERE name = 'boot_banner_v2' IN 'kernel/banner.c'",
+    "name": "RWT02_find_renamed_symbol_visible"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c'",
+    "name": "RWT03_find_old_name_gone"
+  },
+  {
+    "expect_line_count": 1,
+    "expect_lines": [{"text": "void boot_banner_v2(void)"}],
+    "fql": "SHOW signature OF 'boot_banner_v2'",
+    "name": "RWT04_show_signature_reflects_rename_bug6"
+  },
+  {
+    "expect_row_count": 4,
+    "fql": "SHOW callees OF 'boot_banner_v2'",
+    "name": "RWT05_show_callees_boot_banner_v2"
+  },
+  {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'rw-inner'",
+    "name": "RWT06_begin_inner_transaction"
+  },
+  {
+    "expect_field": {"applied": true, "edit_count": 1, "type": "mutation"},
+    "fql": "CHANGE FILE 'kernel/banner.c' MATCHING 'boot_banner_v2' WITH 'boot_banner_v3'",
+    "name": "RWT07_inner_rename_v2_to_v3"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [{"name": "boot_banner_v3", "path": "kernel/banner.c"}],
+    "fql": "FIND symbols WHERE name = 'boot_banner_v3' IN 'kernel/banner.c'",
+    "name": "RWT08_find_v3_visible_inside_inner_tx"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'rw-inner'",
+    "name": "RWT09_rollback_inner_transaction"
+  },
+  {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'rw-diff-tests'",
+    "name": "RWTDIFF00_begin_diff_tests_transaction"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE FILE 'kernel/rw_diff_multi_hunk.c' WITH <<BODY\n/* rw test: multi-hunk diff fixture */\nvoid func_a(void) { old_api(); }\n/* 3 */\n/* 4 */\n/* 5 */\nvoid func_b(void) { old_api(); }\n/* 7 */\n/* 8 */\n/* 9 */\nvoid func_c(void) { old_api(); }\n/* 11 */\n/* 12 */\n/* 13 */\nvoid func_d(void) { old_api(); }\n/* 15 */\n/* 16 */\n/* 17 */\nvoid func_e(void) { old_api(); }\n/* 19 */\n/* 20 */\nBODY",
+    "name": "RWTDIFF01_create_multi_hunk_fixture"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field_contains": {"diff": "kernel/banner.c"},
+    "fql": "CHANGE FILE 'kernel/banner.c' MATCHING 'boot_banner_v2' WITH 'boot_banner_v2_x'",
+    "name": "RWTDIFF02_diff_branch1_normal_single_hunk"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field_contains": {"diff": "lines elided"},
+    "fql": "CHANGE FILE 'kernel/system_work_q.c' LINES 22-36 WITH 'static int k_sys_work_q_init(void) { return 0; }'",
+    "name": "RWTDIFF03_diff_branch2_single_oversized_hunk"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field_contains": {"diff": "hunks,"},
+    "fql": "CHANGE FILE 'kernel/rw_diff_multi_hunk.c' MATCHING 'old_api' WITH 'new_api'",
+    "name": "RWTDIFF04_diff_branch3_multiple_oversized_hunks"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'rw-diff-tests'",
+    "name": "RWTDIFF05_rollback_diff_tests"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [{"name": "boot_banner_v2", "path": "kernel/banner.c"}],
+    "fql": "FIND symbols WHERE name = 'boot_banner_v2' IN 'kernel/banner.c'",
+    "name": "RWT10_outer_rename_preserved_after_inner_rollback"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'boot_banner_v3' IN 'kernel/banner.c'",
+    "name": "RWT11_inner_rename_gone_after_rollback"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "COPY LINES 22-36 OF 'kernel/system_work_q.c' TO 'kernel/rw_copy_test.c'",
+    "name": "RWT12_copy_lines_to_new_file"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [{"name": "k_sys_work_q_init", "path": "kernel/rw_copy_test.c"}],
+    "fql": "FIND symbols WHERE name = 'k_sys_work_q_init' IN 'kernel/rw_copy_test.c'",
+    "name": "RWT13_copied_function_visible_in_dest"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [{"name": "k_sys_work_q_init", "path": "kernel/system_work_q.c"}],
+    "fql": "FIND symbols WHERE name = 'k_sys_work_q_init' IN 'kernel/system_work_q.c'",
+    "name": "RWT14_source_function_untouched_after_copy"
+  },
+  {
+    "expect_line_count": 15,
+    "expect_lines": [{"text": "static int k_sys_work_q_init(void)"}],
+    "fql": "SHOW LINES 1-15 OF 'kernel/rw_copy_test.c'",
+    "name": "RWT15_show_lines_copied_content"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "COPY LINES 1-5 OF 'kernel/banner.c' TO 'kernel/rw_copy_test.c' AT LINE 1",
+    "name": "RWT16_copy_lines_at_line_prepend"
+  },
+  {
+    "expect_line_count": 5,
+    "expect_lines": [
+      {"text": "/*"},
+      {"text": " * Copyright (c) 2020 Intel Corporation"}
+    ],
+    "fql": "SHOW LINES 1-5 OF 'kernel/rw_copy_test.c'",
+    "name": "RWT17_show_lines_after_prepend_copy"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "MOVE LINES 27-48 OF 'kernel/banner.c' TO 'kernel/rw_move_test.c'",
+    "name": "RWT18_move_function_to_new_file"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'boot_banner_v2' IN 'kernel/banner.c'",
+    "name": "RWT19_moved_function_gone_from_source"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [{"name": "boot_banner_v2", "path": "kernel/rw_move_test.c"}],
+    "fql": "FIND symbols WHERE name = 'boot_banner_v2' IN 'kernel/rw_move_test.c'",
+    "name": "RWT20_moved_function_present_in_dest"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE FILE 'lib/rw_golden_test/new_module/placeholder.c' WITH 'void rw_test_placeholder(void) {}'",
+    "name": "RWT21_create_file_in_new_folder"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [{"name": "rw_test_placeholder", "path": "lib/rw_golden_test/new_module/placeholder.c"}],
+    "fql": "FIND symbols WHERE name = 'rw_test_placeholder'",
+    "name": "RWT22_new_file_symbol_indexed"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND files IN 'lib/rw_golden_test/**'",
+    "name": "RWT23_new_folder_contains_one_file"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE FILES 'kernel/rw_copy_test.c', 'kernel/system_work_q.c' MATCHING 'k_sys_work_q_init' WITH 'k_sys_work_q_init_renamed'",
+    "name": "RWT24_change_files_multi_explicit"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [{"name": "k_sys_work_q_init_renamed", "path": "kernel/rw_copy_test.c"}],
+    "fql": "FIND symbols WHERE name = 'k_sys_work_q_init_renamed' IN 'kernel/rw_copy_test.c'",
+    "name": "RWT25_multi_change_reflected_in_first_file"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [{"name": "k_sys_work_q_init_renamed", "path": "kernel/system_work_q.c"}],
+    "fql": "FIND symbols WHERE name = 'k_sys_work_q_init_renamed' IN 'kernel/system_work_q.c'",
+    "name": "RWT26_multi_change_reflected_in_second_file"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'k_sys_work_q_init' IN 'kernel/system_work_q.c'",
+    "name": "RWT27_old_name_gone_after_multi_change"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'rw-outer'",
+    "name": "RWT28_final_rollback_outer"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [{"name": "boot_banner", "path": "kernel/banner.c"}],
+    "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c'",
+    "name": "RWT29_boot_banner_restored_after_final_rollback"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'boot_banner_v2'",
+    "name": "RWT30_boot_banner_v2_fully_gone"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND files WHERE path = 'kernel/rw_copy_test.c'",
+    "name": "RWT31_copy_file_not_cleaned_up_by_rollback"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND files WHERE path = 'kernel/rw_move_test.c'",
+    "name": "RWT32_move_file_not_cleaned_up_by_rollback"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND files IN 'lib/rw_golden_test/**'",
+    "name": "RWT33_new_folder_not_cleaned_up_by_rollback"
   }
 ]
