@@ -1773,5 +1773,272 @@
     "expect_row_count": 1,
     "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c' WHERE lines = 22",
     "name": "RWTE30_lines_restored_after_rollback"
+  },
+  {
+    "alias": "golden-python",
+    "expect_symbols_indexed": 2953280,
+    "use": "pytorch-andre.pytorch-frozen"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"count": 136, "path": "torch/nn/functional.py"},
+      {"count": 113, "path": "torch/nn/modules/container.py"},
+      {"count": 102, "path": "torch/nn/modules/module.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' GROUP BY file IN 'torch/nn/**' ORDER BY count DESC LIMIT 3",
+    "name": "GP1_functions_group_by_file_top3"
+  },
+  {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"kind": "variable"},
+      {"kind": "comment"},
+      {"kind": "number"},
+      {"kind": "if"},
+      {"kind": "function"}
+    ],
+    "fql": "FIND symbols GROUP BY fql_kind IN 'torch/nn/**' ORDER BY count DESC LIMIT 5",
+    "name": "GP2_group_by_kind_torch_nn_top5"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 6435, "name": "multi_head_attention_forward", "path": "torch/nn/functional.py"},
+      {"line": 391,  "name": "_fa3_flash_attention_forward_impl", "path": "torch/nn/attention/_fa3.py"},
+      {"line": 816,  "name": "__init__", "path": "torch/nn/parallel/distributed.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE param_count >= 21 IN 'torch/nn/**' ORDER BY param_count DESC LIMIT 3",
+    "name": "GP3_top3_functions_by_param_count"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 6435, "name": "multi_head_attention_forward", "path": "torch/nn/functional.py"},
+      {"line": 4775, "name": "interpolate",                  "path": "torch/nn/functional.py"},
+      {"line": 816,  "name": "__init__",                    "path": "torch/nn/parallel/distributed.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE lines >= 340 IN 'torch/nn/**' ORDER BY lines DESC LIMIT 3",
+    "name": "GP4_top3_functions_by_line_span"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 4775, "name": "interpolate",                   "path": "torch/nn/functional.py"},
+      {"line": 6435, "name": "multi_head_attention_forward",  "path": "torch/nn/functional.py"},
+      {"line": 118,  "name": "replicate",                     "path": "torch/nn/parallel/replicate.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE branch_count >= 33 IN 'torch/nn/**' ORDER BY branch_count DESC LIMIT 3",
+    "name": "GP5_top3_functions_by_branch_count"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 4775, "name": "interpolate",                      "path": "torch/nn/functional.py"},
+      {"line": 304,  "name": "_dump_DDP_relevant_env_vars",      "path": "torch/nn/parallel/distributed.py"},
+      {"line": 1945, "name": "flex_attention",                   "path": "torch/nn/attention/flex_attention.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE string_count >= 50 IN 'torch/nn/**' ORDER BY string_count DESC LIMIT 3",
+    "name": "GP6_top3_functions_by_string_count"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 1036, "name": "meta_tensor",                      "path": "torch/_subclasses/meta_utils.py"},
+      {"line": 1396, "name": "insert_observers_for_model",       "path": "torch/ao/quantization/fx/prepare.py"},
+      {"line": 883,  "name": "_get_handlers",                    "path": "torch/_dynamo/variables/torch.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE todo_count >= 7 IN 'torch/**' ORDER BY todo_count DESC LIMIT 3",
+    "name": "GP7_top3_functions_by_todo_count"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 6,  "name": "__init__",   "path": "torch/nn/parameter.pyi"},
+      {"line": 13, "name": "__init__",   "path": "torch/nn/parameter.pyi"},
+      {"line": 14, "name": "materialize","path": "torch/nn/parameter.pyi"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE unused_param_count >= 2 IN 'torch/nn/**' ORDER BY line ASC LIMIT 3",
+    "name": "GP8_functions_with_unused_params"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 118,  "name": "replicate", "path": "torch/nn/parallel/replicate.py"},
+      {"line": 186,  "name": "forward",   "path": "torch/nn/modules/adaptive.py"},
+      {"line": 1081, "name": "forward",   "path": "torch/nn/modules/rnn.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE decl_far_count >= 10 IN 'torch/nn/**' ORDER BY decl_far_count DESC LIMIT 3",
+    "name": "GP9_functions_with_far_declarations"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 376, "name": "__getitem__", "path": "torch/nn/modules/container.py"},
+      {"line": 379, "name": "__getitem__", "path": "torch/nn/modules/container.py"},
+      {"line": 692, "name": "__getitem__", "path": "torch/nn/modules/container.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE lines <= 3 IN 'torch/nn/**' ORDER BY lines ASC LIMIT 3",
+    "name": "GP10_short_functions"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 686, "name": "_fa3_scaled_dot_product_flash_attention_forward_impl_default", "path": "torch/nn/attention/_fa3.py"},
+      {"line": 710, "name": "_fa3_scaled_dot_product_flash_attention_backward_impl",       "path": "torch/nn/attention/_fa3.py"},
+      {"line": 487, "name": "_fa4_scaled_dot_product_flash_attention_backward_impl",       "path": "torch/nn/attention/_fa4.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE name_length >= 40 IN 'torch/nn/**' ORDER BY name_length DESC LIMIT 3",
+    "name": "GP11_longest_function_names"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 4775, "name": "interpolate",                   "path": "torch/nn/functional.py"},
+      {"line": 115,  "name": "_fa4_forward_support_error",   "path": "torch/nn/attention/_fa4.py"},
+      {"line": 158,  "name": "_fa3_forward_support_error",   "path": "torch/nn/attention/_fa3.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE return_count >= 9 IN 'torch/nn/**' ORDER BY return_count DESC LIMIT 3",
+    "name": "GP12_top3_functions_by_return_count"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 273, "name": "walk",          "path": "torch/fx/_graph_pickler.py"},
+      {"line": 487, "name": "go",            "path": "torch/fx/passes/runtime_assert.py"},
+      {"line": 404, "name": "try_ann_to_type","path": "torch/jit/annotations.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE recursion_count >= 9 IN 'torch/**' ORDER BY recursion_count DESC LIMIT 3",
+    "name": "GP13_top3_recursive_functions"
+  },
+  {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"line": 5, "name": "_get_thnn_function_backend", "path": "torch/nn/backends/thnn.py"},
+      {"line": 6, "name": "__init__",                   "path": "torch/nn/parameter.pyi"},
+      {"line": 6, "name": "parameters_to_vector",       "path": "torch/nn/utils/convert_parameters.py"},
+      {"line": 7, "name": "get_enum",                   "path": "torch/nn/_reduction.py"},
+      {"line": 7, "name": "skip_init",                  "path": "torch/nn/utils/init.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' IN 'torch/nn/**' ORDER BY line ASC LIMIT 5",
+    "name": "GP14_first_5_functions_by_line"
+  },
+  {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"line": 161, "name": "__add__",  "path": "torch/nn/modules/container.py"},
+      {"line": 415, "name": "__add__",  "path": "torch/nn/modules/container.py"},
+      {"line": 20,  "name": "__call__", "path": "torch/nn/utils/prune.py"},
+      {"line": 77,  "name": "__call__", "path": "torch/nn/utils/weight_norm.py"},
+      {"line": 85,  "name": "__call__", "path": "torch/nn/modules/module.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE name MATCHES '^__.*__$' WHERE param_count >= 2 IN 'torch/nn/**' ORDER BY name ASC LIMIT 5",
+    "name": "GP15_dunder_methods_by_name"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 816, "name": "__init__", "path": "torch/nn/parallel/distributed.py"},
+      {"line": 100, "name": "__init__", "path": "torch/nn/modules/transformer.py"},
+      {"line": 87,  "name": "__init__", "path": "torch/nn/modules/conv.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE name LIKE '__init__' WHERE param_count >= 14 IN 'torch/nn/**' ORDER BY param_count DESC LIMIT 3",
+    "name": "GP16_init_methods_by_param_count"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"enclosing_fn": "_call_impl",                "line": 1786, "path": "torch/nn/modules/module.py"},
+      {"enclosing_fn": "__init__",                  "line": 138,  "path": "torch/nn/modules/adaptive.py"},
+      {"enclosing_fn": "_validate_pruning_amount_init","line": 1277,"path": "torch/nn/utils/prune.py"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'if' WHERE condition_tests >= 5 IN 'torch/nn/**' ORDER BY condition_tests DESC LIMIT 3",
+    "name": "GP17_complex_if_conditions"
+  },
+  {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"line": 46, "name": "__repr__"},
+      {"line": 54, "name": "_addindent"},
+      {"line": 75, "name": "__init__"},
+      {"line": 85, "name": "__call__"},
+      {"line": 93, "name": "__getstate__"}
+    ],
+    "fql": "SHOW outline OF 'torch/nn/modules/module.py' WHERE fql_kind = 'function' ORDER BY line ASC LIMIT 5",
+    "name": "GP18_outline_module_py_functions"
+  },
+  {
+    "expect_line_count": 5,
+    "expect_lines": [
+      {"line": 1, "text": "# mypy: allow-untyped-defs"},
+      {"line": 2, "text": ""},
+      {"line": 3, "text": "import functools"},
+      {"line": 4, "text": "import inspect"},
+      {"line": 5, "text": "import itertools"}
+    ],
+    "fql": "SHOW LINES 1-5 OF 'torch/nn/modules/module.py'",
+    "name": "GP19_show_lines_torch_module"
+  },
+  {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"text": "def __add__(self, other) -> Sequential:", "line": 161},
+      {"text": "def __delitem__(self, idx: slice | int) -> None:", "line": 144},
+      {"text": "def __iadd__(self, other) -> Self:", "line": 183},
+      {"text": "def __imul__(self, other: int) -> Self:", "line": 216},
+      {"text": "def __init__(self, *args):", "line": 115}
+    ],
+    "fql": "SHOW members OF 'Sequential' ORDER BY name ASC LIMIT 5",
+    "name": "GP20_show_members_sequential"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [
+      {"line": 54, "name": "_addindent", "path": "torch/nn/modules/module.py"}
+    ],
+    "fql": "FIND symbols WHERE name = '_addindent' WHERE fql_kind = 'function' IN 'torch/nn/modules/module.py'",
+    "name": "GP21_find_symbol_exact_name"
+  },
+  {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"line": 55, "name": "split"},
+      {"line": 57, "name": "len"},
+      {"line": 59, "name": "pop"},
+      {"line": 61, "name": "strip"},
+      {"line": 62, "name": "join"}
+    ],
+    "fql": "SHOW callees OF '_addindent'",
+    "name": "GP22_callees_addindent"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 11, "path": "torch/utils/_cpp_extension_versioner.py"},
+      {"line": 13, "path": "torch/onnx/_internal/exporter/_type_casting.py"},
+      {"line": 13, "path": "torch/_inductor/runtime/halide_helpers.py"}
+    ],
+    "fql": "FIND symbols WHERE num_format = 'hex' WHERE is_magic = 'true' WHERE language = 'python' IN 'torch/**' ORDER BY line ASC LIMIT 3",
+    "name": "GP23_magic_hex_numbers_python"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 11, "path": "torch/ao/nn/quantized/modules/batchnorm.py"},
+      {"line": 11, "path": "torch/utils/throughput_benchmark.py"},
+      {"line": 12, "path": "torch/utils/throughput_benchmark.py"}
+    ],
+    "fql": "FIND symbols WHERE num_format = 'scientific' WHERE language = 'python' IN 'torch/**' ORDER BY line ASC LIMIT 3",
+    "name": "GP24_scientific_notation_numbers_python"
+  },
+  {
+    "expect_row_count": 3,
+    "expect_rows": [
+      {"line": 9,  "path": "torch/utils/_sympy/printers.py"},
+      {"line": 10, "path": "torch/utils/_sympy/printers.py"},
+      {"line": 11, "path": "torch/utils/_cpp_extension_versioner.py"}
+    ],
+    "fql": "FIND symbols WHERE shift_direction = 'left' WHERE language = 'python' IN 'torch/**' ORDER BY line ASC LIMIT 3",
+    "name": "GP25_left_shifts_python"
   }
 ]

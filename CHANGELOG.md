@@ -6,6 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.2] — 2026-05-24 — Python (PyTorch) golden test suite GP1–GP25
+
+### Tests
+
+- **Added Python/PyTorch golden test suite GP1–GP25** (`tests/golden.json`) — 25 new
+  data-driven tests against a new `pytorch-andre.pytorch-frozen` source
+  (2 953 280 symbols indexed).  Coverage includes:
+  - Enrichment metrics on Python functions: `param_count`, `lines`, `branch_count`,
+    `string_count`, `todo_count`, `unused_param_count`, `decl_far_count`,
+    `return_count`, `recursion_count`, `name_length`, `condition_tests`
+  - Pattern predicates: `MATCHES`, `LIKE` on function names (dunder methods,
+    `__init__` family)
+  - Numeric enrichments for Python: `num_format = 'hex'` / `'scientific'`,
+    `shift_direction = 'left'`
+  - Navigation: `SHOW outline`, `SHOW LINES`, `SHOW members`, `SHOW callees`
+  - Aggregate queries: `GROUP BY file`, `GROUP BY fql_kind` within `torch/nn/**`
+    and `torch/**` subtrees
+
 ## [0.54.1] — 2026-05-24 — `FIND files DEPTH` pipeline fix & MATCHES performance
 
 ### Fixed
