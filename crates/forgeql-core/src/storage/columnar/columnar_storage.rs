@@ -127,8 +127,7 @@ impl ColumnarStorage {
     ///
     /// Sums `SegmentMeta.row_count` per source path in O(segments) time.
     /// No individual symbol rows are materialised.
-    #[allow(clippy::unnecessary_wraps)]
-    fn fast_group_by_file(&self, clauses: &Clauses) -> Result<Vec<SymbolMatch>> {
+    fn fast_group_by_file(&self, clauses: &Clauses) -> Vec<SymbolMatch> {
         let mut counts: HashMap<PathBuf, usize> = HashMap::new();
 
         let path_floor = clauses
@@ -156,9 +155,7 @@ impl ColumnarStorage {
                 .as_ref()
                 .map_or(meta.dedup_row_count as usize, |cand| {
                     let range = self.overlay.segment_row_range(idx);
-                    #[allow(clippy::cast_possible_truncation)]
-                    let val = cand.range_cardinality(range) as usize;
-                    val
+                    usize::try_from(cand.range_cardinality(range)).unwrap_or(usize::MAX)
                 });
             if count > 0 {
                 *counts.entry(meta.source_path.clone()).or_insert(0) += count;
@@ -183,7 +180,7 @@ impl ColumnarStorage {
         no_group.exclude_glob = None;
         no_group.where_predicates.clear();
         apply_clauses(&mut results, &no_group);
-        Ok(results)
+        results
     }
 
     /// Fast-path for `FIND symbols GROUP BY fql_kind ORDER BY count DESC LIMIT N`
@@ -191,8 +188,7 @@ impl ColumnarStorage {
     ///
     /// Deserialises each kind bitmap and reads its cardinality in O(n_kinds) time.
     /// For IN-glob queries, intersects each kind bitmap with the path range bitmap.
-    #[allow(clippy::unnecessary_wraps)]
-    fn fast_group_by_kind(&self, clauses: &Clauses) -> Result<Vec<SymbolMatch>> {
+    fn fast_group_by_kind(&self, clauses: &Clauses) -> Vec<SymbolMatch> {
         // Build an optional path mask for IN/EXCLUDE glob filtering.
         let path_mask: Option<RoaringBitmap> =
             if clauses.in_glob.is_some() || clauses.exclude_glob.is_some() {
@@ -229,7 +225,7 @@ impl ColumnarStorage {
         no_group.in_glob = None;
         no_group.exclude_glob = None;
         apply_clauses(&mut results, &no_group);
-        Ok(results)
+        results
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -916,7 +912,10 @@ impl ColumnarStorage {
     ///    (candidates whose `fql_kind` is in `prefer_kinds`, if given).
     /// 5. Pick: last preferred candidate → last definition candidate → last overall.
     /// 6. Convert the chosen row to a [`SymbolLocation`].
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Three-phase resolution: dirty-overlay scan, persistent-overlay scan with zone-map pruning, and best-candidate selection"
+    )]
     fn resolve_impl(
         &self,
         name: &str,
@@ -1160,7 +1159,10 @@ impl StorageEngine for ColumnarStorage {
         "columnar"
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Multiple indexed fast-paths plus a general materialise pipeline; splitting further would obscure the query plan structure"
+    )]
     fn find_symbols(&self, clauses: &Clauses, _root: &Path) -> Result<Vec<SymbolMatch>> {
         // ── Query plan (Phase 06d + fast-path) ──────────────────────────────
         // Stage 1  — prefilter_global: intersect indexed predicates
@@ -1196,10 +1198,10 @@ impl StorageEngine for ColumnarStorage {
         // lengths overcount; fall through to the normal pipeline which deduplicates.
         let no_dup_paths = !self.overlay.has_duplicate_paths();
         if group_by_kind_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
-            return self.fast_group_by_kind(clauses);
+            return Ok(self.fast_group_by_kind(clauses));
         }
         if group_by_file_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
-            return self.fast_group_by_file(clauses);
+            return Ok(self.fast_group_by_file(clauses));
         }
         // ── ORDER BY name ASC LIMIT N fast-path ──────────────────────────────
         // Stream the first (limit + offset) rows directly from the name FST in
@@ -1630,7 +1632,6 @@ impl StorageEngine for ColumnarStorage {
         ))
     }
 
-    #[allow(clippy::too_many_lines)]
     fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
         std::fs::create_dir_all(&self.staging_dir)?;
         let mut parser = tree_sitter::Parser::new();
@@ -1697,14 +1698,13 @@ impl StorageEngine for ColumnarStorage {
 
                 let mut builder = SegmentBuilder::new("git-sha1", &content_id_bytes);
                 for row in &table.rows {
-                    #[allow(clippy::cast_possible_truncation)]
                     let row_id = builder.emit_row(
                         table.name_of(row),
                         table.fql_kind_of(row),
                         table.language_of(row),
-                        row.line as u32,
-                        row.byte_range.start as u32,
-                        row.byte_range.end as u32,
+                        u32::try_from(row.line).unwrap_or(u32::MAX),
+                        u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
+                        u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
                         row.usages_count,
                     );
                     for (key, val) in table.resolve_fields(&row.fields) {
@@ -1855,7 +1855,10 @@ impl ColumnarStorage {
     /// Returns `Err` only for hard failures (lock file I/O, final
     /// `Overlay::open` after a successful build). Shadow-write failures
     /// are treated as non-fatal and logged.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Three phases: fast overlay open, lock-guarded slow-path build, and final open; collapsing phases would obscure the retry/lock logic"
+    )]
     pub fn warm_or_open(
         ctx: &crate::storage::ColumnarBuildContext,
         legacy: Option<&LegacyMemoryStorage>,
