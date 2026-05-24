@@ -29,12 +29,18 @@ const BLOB_INDEX_FILES: &[u8] = b"index_files";
 const BLOB_ENRICH_BITMAPS: &[u8] = b"enrich_bitmaps";
 const BLOB_FILE_ENTRIES: &[u8] = b"file_entries";
 
-// Type-narrowed copies of usize constants — used in the on-disk header.
-// Const-context casts are compile-time validated; overflow is a compile error.
-#[allow(clippy::cast_possible_truncation)]
-const HEADER_V3_LEN_U32: u32 = HEADER_V3_LEN as u32;
-#[allow(clippy::cast_possible_truncation)]
-const TOC_COUNT_U32: u32 = TOC_COUNT as u32;
+// On-disk header constants as u32, expressed with u32 literals to avoid usize→u32 casts.
+// Compile-time assertions below keep these in sync with the usize originals in overlay.rs.
+const HEADER_V3_LEN_U32: u32 = 24_u32 + 12_u32 * 64_u32; // = HEADER_LEN + TOC_COUNT * TOC_ENTRY_SIZE
+const TOC_COUNT_U32: u32 = 12_u32; // = TOC_COUNT
+const _: () = assert!(
+    HEADER_V3_LEN_U32 as usize == HEADER_V3_LEN,
+    "HEADER_V3_LEN_U32 out of sync with overlay.rs"
+);
+const _: () = assert!(
+    TOC_COUNT_U32 as usize == TOC_COUNT,
+    "TOC_COUNT_U32 out of sync with overlay.rs"
+);
 
 /// Input parameters for [`write_v3`].
 ///
@@ -66,11 +72,22 @@ struct ComputedBlobs {
     segment_strings: Vec<u8>,
 }
 
+/// Casts `v: usize` to `u32`, returning an `InvalidData` I/O error on overflow.
+#[inline]
+fn to_u32(v: usize, ctx: &'static str) -> io::Result<u32> {
+    u32::try_from(v).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, ctx))
+}
+
+/// Casts `v: usize` to `u16`, returning an `InvalidData` I/O error on overflow.
+#[inline]
+fn to_u16(v: usize, ctx: &'static str) -> io::Result<u16> {
+    u16::try_from(v).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, ctx))
+}
 /// Build the six variable-length blobs that require sorting/layout work.
 ///
 /// The three pass-through blobs (`row_table`, `name_fst`, `name_postings`)
 /// are slices of the input data and are assembled in [`write_v3`].
-fn compute_blobs(params: &WriteV3Params<'_>) -> ComputedBlobs {
+fn compute_blobs(params: &WriteV3Params<'_>) -> io::Result<ComputedBlobs> {
     // kind_strings + kind_index + bitmap_data (kind portion).
     // Entries are sorted by kind name for binary-search at query time.
     let mut kind_strings: Vec<u8> = Vec::new();
@@ -81,12 +98,11 @@ fn compute_blobs(params: &WriteV3Params<'_>) -> ComputedBlobs {
     sorted_kinds.sort_by_key(|(k, _)| k.as_str());
 
     for (kind_str, bm_bytes) in &sorted_kinds {
-        #[allow(clippy::cast_possible_truncation)]
         let kind_entry = KindEntry {
-            kind_offset: kind_strings.len() as u32,
-            kind_len: kind_str.len() as u32,
-            bitmap_offset: bitmap_data.len() as u32,
-            bitmap_len: bm_bytes.len() as u32,
+            kind_offset: to_u32(kind_strings.len(), "kind strings offset exceeds u32::MAX")?,
+            kind_len: to_u32(kind_str.len(), "kind name too long for u32")?,
+            bitmap_offset: to_u32(bitmap_data.len(), "bitmap data offset exceeds u32::MAX")?,
+            bitmap_len: to_u32(bm_bytes.len(), "kind bitmap too large for u32")?,
         };
         kind_strings.extend_from_slice(kind_str.as_bytes());
         bitmap_data.extend_from_slice(bm_bytes);
@@ -102,11 +118,10 @@ fn compute_blobs(params: &WriteV3Params<'_>) -> ComputedBlobs {
     for (tg, bm_bytes) in &sorted_trigs {
         let mut tg4 = [0u8; 4];
         tg4[..3].copy_from_slice(tg.as_ref());
-        #[allow(clippy::cast_possible_truncation)]
         trig_entries.push(TrigramEntry {
             trigram: tg4,
-            bitmap_offset: bitmap_data.len() as u32,
-            bitmap_len: bm_bytes.len() as u32,
+            bitmap_offset: to_u32(bitmap_data.len(), "bitmap data offset exceeds u32::MAX")?,
+            bitmap_len: to_u32(bm_bytes.len(), "trigram bitmap too large for u32")?,
         });
         bitmap_data.extend_from_slice(bm_bytes);
     }
@@ -117,14 +132,19 @@ fn compute_blobs(params: &WriteV3Params<'_>) -> ComputedBlobs {
     let mut seg_records: Vec<SegmentRecord> = Vec::new();
     for meta in params.segment_metas {
         let path_bytes = meta.source_path.to_string_lossy();
-        #[allow(clippy::cast_possible_truncation)]
         let rec = SegmentRecord {
             row_count: meta.row_count,
-            path_offset: segment_strings.len() as u32,
-            hex_id_offset: (segment_strings.len() + path_bytes.len()) as u32,
+            path_offset: to_u32(
+                segment_strings.len(),
+                "segment path offset exceeds u32::MAX",
+            )?,
+            hex_id_offset: to_u32(
+                segment_strings.len() + path_bytes.len(),
+                "segment hex-id offset exceeds u32::MAX",
+            )?,
             dedup_row_count: meta.dedup_row_count,
-            path_len: path_bytes.len() as u16,
-            hex_id_len: meta.hex_content_id.len() as u16,
+            path_len: to_u16(path_bytes.len(), "segment source path too long for u16")?,
+            hex_id_len: to_u16(meta.hex_content_id.len(), "hex content ID too long for u16")?,
         };
         segment_strings.extend_from_slice(path_bytes.as_bytes());
         segment_strings.extend_from_slice(meta.hex_content_id.as_bytes());
@@ -132,14 +152,14 @@ fn compute_blobs(params: &WriteV3Params<'_>) -> ComputedBlobs {
     }
     let segments: Vec<u8> = cast_slice(seg_records.as_slice()).to_vec();
 
-    ComputedBlobs {
+    Ok(ComputedBlobs {
         kind_strings,
         kind_index,
         bitmap_data,
         trigram_index,
         segments,
         segment_strings,
-    }
+    })
 }
 
 /// Write a complete FQOV v3 overlay file to `out`.
@@ -152,7 +172,7 @@ fn compute_blobs(params: &WriteV3Params<'_>) -> ComputedBlobs {
 /// # Errors
 /// Propagates I/O errors from `out`.
 pub(super) fn write_v3(out: &mut impl Write, params: &WriteV3Params<'_>) -> io::Result<()> {
-    let blobs = compute_blobs(params);
+    let blobs = compute_blobs(params)?;
 
     let row_table_blob: &[u8] = cast_slice(params.global_row_table);
     // Blobs read via `cast_slice` require 4-byte alignment within the mmap;
