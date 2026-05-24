@@ -129,6 +129,9 @@ pub fn group_files_by_depth(
     for (dir, (count, total_size)) in &dir_counts {
         result.push(serde_json::json!({
             "path":       format!("{dir}/"),
+            // "size" mirrors "total_size" so ORDER BY size works uniformly
+            // across individual files and directory summary entries.
+            "size":       total_size,
             "file_count": count,
             "total_size": total_size,
             "kind":       "directory_summary",

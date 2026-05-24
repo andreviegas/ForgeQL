@@ -273,6 +273,18 @@ where
     items
 }
 
+/// Extract the minimum length `N` from a bare `.{N,}` pattern (no anchors,
+/// no max bound, no other content).  When matched, a simple `len >= N` check
+/// is equivalent to the regex and avoids compiling and running the regex
+/// engine entirely.
+///
+/// Examples: `".{150,}"` → `Some(150)`, `".{90,}"` → `Some(90)`.
+/// Non-matching: `".{N,M}"`, `"^.{N,}$"`, `"foo.{N,}"` → `None`.
+fn dot_brace_min_len(pattern: &str) -> Option<usize> {
+    let inner = pattern.strip_prefix(".{")?.strip_suffix(",}")?;
+    inner.parse::<usize>().ok()
+}
+
 // -----------------------------------------------------------------------
 // Apply clauses — universal pipeline
 // -----------------------------------------------------------------------
@@ -300,9 +312,49 @@ pub fn apply_clauses<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
     }
 
     // 3. WHERE predicates
+    // MATCHES / NOT MATCHES are handled with two optimisations:
+    //   a) ".{N,}" → simple `len >= N` check (no regex engine at all).
+    //   b) All other patterns: compile the regex once per predicate, not
+    //      once per item, avoiding millions of redundant compilations on
+    //      large symbol tables (e.g. Linux kernel with 29 M+ symbols).
     for predicate in &clauses.where_predicates {
-        let pred = predicate.clone();
-        results.retain(|item| eval_predicate(item, &pred));
+        if let (CompareOp::Matches | CompareOp::NotMatches, PredicateValue::String(pat)) =
+            (&predicate.op, &predicate.value)
+        {
+            let is_matches = predicate.op == CompareOp::Matches;
+            let field = predicate.field.clone();
+
+            // Fast path: ".{N,}" ↔ len >= N  (no newlines assumed in the
+            // target field, which holds for structural enrichment values
+            // such as condition_text, signature, and name).
+            if let Some(min_len) = dot_brace_min_len(pat) {
+                results.retain(|item| {
+                    let ok = item.field_str(&field).is_some_and(|v| v.len() >= min_len);
+                    ok == is_matches
+                });
+                continue;
+            }
+
+            // General path: compile once, apply to all remaining items.
+            match Regex::new(pat) {
+                Ok(re) => {
+                    results.retain(|item| {
+                        let ok = item.field_str(&field).is_some_and(|v| re.is_match(v));
+                        ok == is_matches
+                    });
+                }
+                Err(_) => {
+                    // Invalid regex: MATCHES → nothing passes; NOT MATCHES → all pass.
+                    if is_matches {
+                        results.clear();
+                    }
+                    // NOT MATCHES with invalid regex: retain all (no-op).
+                }
+            }
+        } else {
+            let pred = predicate.clone();
+            results.retain(|item| eval_predicate(item, &pred));
+        }
     }
 
     // 4. GROUP BY — deduplicate by group key and store per-group count in .count

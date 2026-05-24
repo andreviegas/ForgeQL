@@ -6,6 +6,37 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.1] — 2026-05-24 — `FIND files DEPTH` pipeline fix & MATCHES performance
+
+### Fixed
+
+- **`FIND files DEPTH N ORDER BY size DESC` returned wrong results** (`exec_show.rs`,
+  `ast/query.rs`) — `ORDER BY` + `LIMIT` were applied *before* `group_files_by_depth`,
+  so the pipeline selected a handful of large individual files from a single deep
+  directory, computed `common_prefix_depth` on that tiny set, and then showed them all
+  as shallow individual files instead of collapsing them into directory summaries.
+  The fix moves `ORDER BY` / `OFFSET` / `LIMIT` to run on the already-grouped result.
+  Directory summary JSON entries now also carry a `"size"` field (mirroring
+  `total_size`) so numeric sort applies uniformly to both individual files and
+  directory summaries.
+
+- **`WHERE condition_text MATCHES '.{150,}'` (and similar `MATCHES` / `NOT MATCHES`
+  predicates) caused severe CPU saturation** (`filter.rs`) — the regex was compiled
+  inside the per-item retain closure, triggering millions of redundant compilations
+  on large symbol tables (e.g. Linux kernel with 29 M+ symbols, 849 s wall time).
+  The fix compiles the regex once per predicate before the retain loop.
+  Pure min-length patterns (`.{N,}`) additionally bypass the regex engine entirely
+  with a cheap `len >= N` byte-count check, yielding a further ~10× speedup for
+  that common pattern class.
+
+### Tests
+
+- Added golden tests **`GFF8_depth1_top5_dirs_by_size`** and
+  **`GFF9_depth2_top5_dirs_by_size`** (`tests/golden.json`) — assert that
+  `FIND files DEPTH 1 ORDER BY size DESC LIMIT 5` and the DEPTH 2 variant return
+  directory summaries (paths ending with `/`) with correct sizes, directly
+  exercising the regression that was fixed above.
+
 ## [0.54.0] — 2026-05-23 — `FIND files` overlay fast path (all workspace files)
 
 ### Added

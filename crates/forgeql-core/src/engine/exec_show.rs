@@ -8,7 +8,7 @@ use crate::{
         parse_cache::{CachedParse, sha1_of_bytes},
         query, show,
     },
-    ir::{Backend, Clauses, ForgeQLIR},
+    ir::{Backend, Clauses, ForgeQLIR, SortDirection},
     result::{FileEntry, ForgeQLResult, ShowContent},
     session::Session,
     storage::SymbolLocation,
@@ -252,43 +252,113 @@ impl ForgeQLEngine {
                 // Apply the full clause pipeline (IN, EXCLUDE, WHERE, GROUP BY,
                 // ORDER BY, LIMIT, OFFSET).  For the filesystem walk fallback,
                 // IN/EXCLUDE were already applied by find_files() and become no-ops.
-                crate::filter::apply_clauses(&mut entries, clauses);
-                // Always show individual files — the LIMIT clause (default 20)
-                // already caps how many entries are returned.  Previously, when
-                // no IN was specified the depth was set to DEFAULT_BODY_DEPTH (0)
-                // which collapsed everything into a single '/' directory entry.
+                //
+                // When DEPTH is requested (and no GROUP BY), we must apply ORDER BY
+                // and LIMIT *after* depth-grouping, not before.  Running ORDER BY
+                // size DESC + LIMIT N first would select N deeply-nested files that
+                // all share a long common prefix; common_prefix_depth() would then
+                // report a high prefix depth, making every file appear shallower
+                // than it really is and defeating the depth filter entirely.
+                // The correct pipeline is: filter (WHERE) → group by depth → sort →
+                // limit.
                 let max_depth = clauses.depth.unwrap_or(usize::MAX);
-                // When GROUP BY was requested the pipeline has already
-                // aggregated entries and stored per-group counts; skip the
-                // depth-grouping step so those results are not disturbed.
-                let results: Vec<serde_json::Value> = if clauses.group_by.is_some() {
-                    entries
-                        .iter()
-                        .map(|fe| {
-                            let mut obj = serde_json::json!({
-                                "path":      fe.path.display().to_string(),
-                                "extension": fe.extension,
-                                "size":      fe.size,
-                            });
-                            if let Some(n) = fe.count {
-                                obj["count"] = serde_json::Value::from(n);
-                            }
-                            obj
-                        })
-                        .collect()
-                } else {
-                    let file_json: Vec<serde_json::Value> = entries
-                        .iter()
-                        .map(|fe| {
-                            serde_json::json!({
-                                "path":      fe.path.display().to_string(),
-                                "extension": fe.extension,
-                                "size":      fe.size,
+                let results: Vec<serde_json::Value> =
+                    if clauses.depth.is_some() && clauses.group_by.is_none() {
+                        // Step 1: apply IN/EXCLUDE/WHERE on the full entry set —
+                        // deliberately skip ORDER BY, OFFSET, and LIMIT so every
+                        // matching file reaches the depth-grouping step.
+                        let mut filter_clauses = clauses.clone();
+                        filter_clauses.order_by = None;
+                        filter_clauses.limit = None;
+                        filter_clauses.offset = None;
+                        crate::filter::apply_clauses(&mut entries, &filter_clauses);
+
+                        // Step 2: group the complete filtered set by depth.
+                        let file_json: Vec<serde_json::Value> = entries
+                            .iter()
+                            .map(|fe| {
+                                serde_json::json!({
+                                    "path":      fe.path.display().to_string(),
+                                    "extension": fe.extension,
+                                    "size":      fe.size,
+                                })
                             })
-                        })
-                        .collect();
-                    query::group_files_by_depth(&file_json, max_depth)
-                };
+                            .collect();
+                        let mut grouped = query::group_files_by_depth(&file_json, max_depth);
+
+                        // Step 3: sort the grouped results (individual files and
+                        // directory summaries both carry a "size" field).
+                        if let Some(ref order_by) = clauses.order_by {
+                            let dir = order_by.direction;
+                            let field = order_by.field.clone();
+                            grouped.sort_by(|a, b| {
+                                let cmp = if let (Some(va), Some(vb)) = (
+                                    a.get(&field).and_then(serde_json::Value::as_u64),
+                                    b.get(&field).and_then(serde_json::Value::as_u64),
+                                ) {
+                                    va.cmp(&vb)
+                                } else {
+                                    let sa = a
+                                        .get(&field)
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or("");
+                                    let sb = b
+                                        .get(&field)
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or("");
+                                    sa.cmp(sb)
+                                };
+                                match dir {
+                                    SortDirection::Desc => cmp.reverse(),
+                                    SortDirection::Asc => cmp,
+                                }
+                            });
+                        }
+
+                        // Step 4: apply OFFSET then LIMIT.
+                        let skip = clauses.offset.unwrap_or(0);
+                        if skip > 0 {
+                            drop(grouped.drain(..skip.min(grouped.len())));
+                        }
+                        if let Some(max) = clauses.limit {
+                            grouped.truncate(max);
+                        }
+                        grouped
+                    } else if clauses.group_by.is_some() {
+                        // When GROUP BY was requested the pipeline has already
+                        // aggregated entries and stored per-group counts; skip the
+                        // depth-grouping step so those results are not disturbed.
+                        crate::filter::apply_clauses(&mut entries, clauses);
+                        entries
+                            .iter()
+                            .map(|fe| {
+                                let mut obj = serde_json::json!({
+                                    "path":      fe.path.display().to_string(),
+                                    "extension": fe.extension,
+                                    "size":      fe.size,
+                                });
+                                if let Some(n) = fe.count {
+                                    obj["count"] = serde_json::Value::from(n);
+                                }
+                                obj
+                            })
+                            .collect()
+                    } else {
+                        // No DEPTH, no GROUP BY: standard apply_clauses pipeline.
+                        // Always show individual files — the LIMIT clause (default 20)
+                        // already caps how many entries are returned.
+                        crate::filter::apply_clauses(&mut entries, clauses);
+                        entries
+                            .iter()
+                            .map(|fe| {
+                                serde_json::json!({
+                                    "path":      fe.path.display().to_string(),
+                                    "extension": fe.extension,
+                                    "size":      fe.size,
+                                })
+                            })
+                            .collect()
+                    };
                 let count = results.len();
                 serde_json::json!({
                     "op":      "find_files",

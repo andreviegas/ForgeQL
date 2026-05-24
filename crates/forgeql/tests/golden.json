@@ -1154,6 +1154,30 @@
     "name": "GFF7_find_files_c_kernel_smallest"
   },
   {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"path": "boards/",   "size": 80008892},
+      {"path": "drivers/",  "size": 42648123},
+      {"path": "tests/",    "size": 40047912},
+      {"path": "doc/",      "size": 23790713},
+      {"path": "subsys/",   "size": 23301428}
+    ],
+    "fql": "FIND files DEPTH 1 ORDER BY size DESC LIMIT 5",
+    "name": "GFF8_depth1_top5_dirs_by_size"
+  },
+  {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"path": "include/zephyr/",    "size": 18650304},
+      {"path": "tests/lib/",         "size": 17081917},
+      {"path": "boards/st/",         "size": 12595192},
+      {"path": "subsys/bluetooth/",  "size": 11163960},
+      {"path": "doc/connectivity/",  "size":  9466200}
+    ],
+    "fql": "FIND files DEPTH 2 ORDER BY size DESC LIMIT 5",
+    "name": "GFF9_depth2_top5_dirs_by_size"
+  },
+  {
     "expect_line_count": 5,
     "expect_lines": [
       {"line": 1, "text": "/*"},
