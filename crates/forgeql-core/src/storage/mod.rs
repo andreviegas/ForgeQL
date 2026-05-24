@@ -49,7 +49,7 @@ use anyhow::Result;
 
 use crate::ast::index::{IndexRow, IndexStats, SymbolTable};
 use crate::ir::Clauses;
-use crate::result::SymbolMatch;
+use crate::result::{FileEntry, SymbolMatch};
 use crate::workspace::Workspace;
 
 // -----------------------------------------------------------------------
@@ -122,6 +122,19 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// Applies glob filtering and the remaining clause pipeline internally.
     /// Returns the full result set (no truncation).
     fn find_usages(&self, name: &str, clauses: &Clauses, root: &Path) -> Result<Vec<SymbolMatch>>;
+
+    /// Return all indexed source files as typed [`FileEntry`] rows.
+    ///
+    /// When `Some` is returned, `FIND files` skips the filesystem walk and
+    /// feeds the entries directly into `filter::apply_clauses`.  The paths
+    /// are **relative** to the worktree root; the `depth` field is
+    /// pre-populated from `path.components().count()`.
+    ///
+    /// Returns `None` when this backend does not maintain an indexed file
+    /// list — the caller falls back to a workspace filesystem walk.
+    fn indexed_files(&self) -> Option<Vec<FileEntry>> {
+        None
+    }
 
     // -------- symbol resolution (for SHOW) --------------------------------
 

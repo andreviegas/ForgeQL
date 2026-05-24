@@ -1453,6 +1453,85 @@ impl StorageEngine for ColumnarStorage {
         Ok(results)
     }
 
+    fn indexed_files(&self) -> Option<Vec<crate::result::FileEntry>> {
+        let segs = self.overlay.segments();
+        let file_only = self.overlay.file_entries();
+        let mut entries = Vec::with_capacity(
+            segs.len()
+                .saturating_add(file_only.len())
+                .saturating_add(self.dirty.added.len()),
+        );
+
+        // Base: persistent overlay segments with mmap-cached sizes.
+        // Skip any segment shadowed (replaced or deleted) by the dirty overlay.
+        for (idx, seg) in segs.iter().enumerate() {
+            if self.dirty.shadows(&seg.hex_content_id) {
+                continue;
+            }
+            let ext = seg
+                .source_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_string();
+            let size = u64::from(self.overlay.file_size(idx));
+            let depth = Some(seg.source_path.components().count());
+            entries.push(crate::result::FileEntry {
+                path: seg.source_path.clone(),
+                extension: ext,
+                size,
+                depth,
+                count: None,
+            });
+        }
+
+        // File-only entries (FQOV v8+): non-indexed workspace files tracked
+        // only for path + size.  These are never shadowed by the dirty overlay
+        // because the dirty overlay only holds symbol segments.
+        for (rel_path, size) in file_only {
+            let ext = rel_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_string();
+            let depth = Some(rel_path.components().count());
+            entries.push(crate::result::FileEntry {
+                path: rel_path.clone(),
+                extension: ext,
+                size: u64::from(*size),
+                depth,
+                count: None,
+            });
+        }
+
+        // Overlay: dirty segments (files changed in this session).
+        // Read actual on-disk size — only 1 syscall per mutated file.
+        for ds in &self.dirty.added {
+            let ext = ds
+                .source_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_string();
+            let size = self
+                .worktree_root
+                .join(&ds.source_path)
+                .metadata()
+                .map(|m| m.len())
+                .unwrap_or(0);
+            let depth = Some(ds.source_path.components().count());
+            entries.push(crate::result::FileEntry {
+                path: ds.source_path.clone(),
+                extension: ext,
+                size,
+                depth,
+                count: None,
+            });
+        }
+
+        Some(entries)
+    }
+
     fn resolve_symbol(
         &self,
         name: &str,

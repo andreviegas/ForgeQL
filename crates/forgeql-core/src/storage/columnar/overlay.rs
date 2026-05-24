@@ -64,7 +64,11 @@ pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 /// - **6**: `index_files` blob added; file sizes cached for `FIND files` fast-path.
 /// - **7**: `enrich_bitmaps` blob added; per-(field,value) global bitmaps for
 ///   O(1) enrichment-predicate prefiltering (Phase 5).
-pub(crate) const SCHEMA_VERSION: u32 = 7;
+/// - **8**: `file_entries` blob added; all non-indexed workspace files (images,
+///   docs, build artefacts, …) are tracked as path+size pairs so that
+///   `FIND files WHERE extension = 'cmake'` (and any other type) can use the
+///   overlay fast path without a filesystem walk.
+pub(crate) const SCHEMA_VERSION: u32 = 8;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;
@@ -75,10 +79,10 @@ pub(crate) const TOC_ENTRY_SIZE: usize = 64;
 /// Max byte length of a blob name within a `TocEntry`.
 pub(crate) const TOC_ENTRY_NAME_LEN: usize = 56;
 
-/// Number of named blobs in an FQOV v7 file (10 original + `enrich_bitmaps`).
-pub(super) const TOC_COUNT: usize = 11;
+/// Number of named blobs in an FQOV v8 file (11 original + `file_entries`).
+pub(super) const TOC_COUNT: usize = 12;
 
-/// Total byte size of the header + TOC region (= 24 + 11 * 64 = 728).
+/// Total byte size of the header + TOC region (= 24 + 12 * 64 = 792).
 pub(super) const HEADER_V3_LEN: usize = HEADER_LEN + TOC_COUNT * TOC_ENTRY_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -257,6 +261,11 @@ pub struct Overlay {
     /// key = `"field=value"` (byte-lexicographic order).
     /// The mmap range refers to the serialised `RoaringBitmap` within `mmap`.
     enrich_index: Vec<(String, Range<usize>)>,
+    /// All non-indexed workspace files tracked for `FIND files` fast-path.
+    ///
+    /// Parsed at `open()` time from the `file_entries` blob (FQOV v8+).
+    /// Each entry is `(relative_path, file_size_bytes)`.
+    file_entries: Vec<(PathBuf, u32)>,
 
     /// True when the segment list contains two or more entries with the same
     /// `source_path`.  When true, row-count-based fast-paths (GROUP BY file,
@@ -333,6 +342,7 @@ impl Overlay {
             segment_strings_range,
             index_files_range,
             enrich_bitmaps_range,
+            file_entries_range,
         ] = blobs;
 
         let row_count = u32::try_from(row_table_range.len() / std::mem::size_of::<RowPtr>())
@@ -370,6 +380,41 @@ impl Overlay {
             let mut seen = std::collections::HashSet::with_capacity(segments.len());
             segments.iter().any(|s| !seen.insert(&s.source_path))
         };
+
+        // Parse file_entries blob (FQOV v8): non-indexed workspace files.
+        // Format: [u32 count][repeated: [u32 size][u16 path_len][u8; path_len]]
+        let mut file_entries: Vec<(PathBuf, u32)> = Vec::new();
+        {
+            #[allow(clippy::indexing_slicing)]
+            let blob = &mmap[file_entries_range];
+            if blob.len() >= 4 {
+                #[allow(clippy::indexing_slicing)]
+                let count = u32::from_le_bytes(blob[0..4].try_into().unwrap_or_default()) as usize;
+                let mut pos = 4usize;
+                for _ in 0..count {
+                    if pos + 6 > blob.len() {
+                        break;
+                    }
+                    #[allow(clippy::indexing_slicing)]
+                    let size =
+                        u32::from_le_bytes(blob[pos..pos + 4].try_into().unwrap_or_default());
+                    #[allow(clippy::indexing_slicing)]
+                    let path_len =
+                        u16::from_le_bytes(blob[pos + 4..pos + 6].try_into().unwrap_or_default())
+                            as usize;
+                    pos += 6;
+                    if pos + path_len > blob.len() {
+                        break;
+                    }
+                    #[allow(clippy::indexing_slicing)]
+                    let path_bytes = &blob[pos..pos + path_len];
+                    pos += path_len;
+                    if let Ok(s) = std::str::from_utf8(path_bytes) {
+                        file_entries.push((PathBuf::from(s), size));
+                    }
+                }
+            }
+        }
 
         // Parse enrichment bitmaps blob (Phase 5 / FQOV v7).
         // Build enrich_index: sorted (key, bitmap_mmap_range) pairs.
@@ -424,6 +469,7 @@ impl Overlay {
             index_files_range,
             enrich_bitmaps_range,
             enrich_index,
+            file_entries,
             has_duplicate_paths,
             name_fst,
         }))
@@ -448,6 +494,19 @@ impl Overlay {
     #[must_use]
     pub fn segments(&self) -> &[SegmentMeta] {
         &self.segments
+    }
+
+    /// Non-indexed workspace files tracked in this overlay (FQOV v8+).
+    ///
+    /// Each entry is `(relative_path, file_size_bytes)`.  These are workspace
+    /// files that have no symbol segment (images, docs, scripts, build outputs,
+    /// …).  They carry only path + size information and complement
+    /// [`Self::segments`] for `FIND files` queries.
+    ///
+    /// Returns an empty slice for overlays built before FQOV v8.
+    #[must_use]
+    pub fn file_entries(&self) -> &[(PathBuf, u32)] {
+        &self.file_entries
     }
 
     /// Retrieve the cached file size for segment `idx`.
@@ -1082,7 +1141,7 @@ fn parse_toc_entries(mmap: &[u8], toc_count: usize) -> Result<Vec<TocEntry>> {
 }
 
 /// Locate all ten named blobs and return their byte ranges in TOC order.
-fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; 11]> {
+fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; 12]> {
     let find_one = |name: &[u8]| -> Result<Range<usize>> {
         for entry in toc {
             let stored = entry
@@ -1112,6 +1171,7 @@ fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; 11]> {
         find_one(b"segment_strings")?,
         find_one(b"index_files")?,
         find_one(b"enrich_bitmaps")?,
+        find_one(b"file_entries")?,
     ])
 }
 
@@ -1161,6 +1221,7 @@ fn validate_blob_layout(mmap_len: usize, blobs: &[Range<usize>; TOC_COUNT]) -> R
         _,
         index_files_r,
         _, // enrich_bitmaps: no size constraint
+        _, // file_entries: variable-length, validated during parse
     ] = blobs;
     let max_end = blobs.iter().map(|r| r.end).max().unwrap_or(0);
     ensure!(
@@ -1276,6 +1337,7 @@ mod tests {
                     segment_metas: &[],
                     index_files_bytes: &[],
                     enrich_bitmaps_bytes: &[],
+                    file_entries_bytes: &[],
                 },
             )
             .expect("write_v3");

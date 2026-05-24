@@ -27,6 +27,7 @@ const BLOB_SEGMENTS: &[u8] = b"segments";
 const BLOB_SEGMENT_STRINGS: &[u8] = b"segment_strings";
 const BLOB_INDEX_FILES: &[u8] = b"index_files";
 const BLOB_ENRICH_BITMAPS: &[u8] = b"enrich_bitmaps";
+const BLOB_FILE_ENTRIES: &[u8] = b"file_entries";
 
 // Type-narrowed copies of usize constants — used in the on-disk header.
 // Const-context casts are compile-time validated; overflow is a compile error.
@@ -51,6 +52,10 @@ pub(super) struct WriteV3Params<'a> {
     /// Serialised enrichment bitmaps blob (Phase 5 / FQOV v7).
     /// Pass `&[]` for older overlays or when no enrichment data is available.
     pub(super) enrich_bitmaps_bytes: &'a [u8],
+    /// Serialised file-only entries blob (FQOV v8).
+    /// Format: `[u32 count][repeated: [u32 size][u16 path_len][u8; path_len]]`.
+    /// Pass `&[]` when no file-only entries are present.
+    pub(super) file_entries_bytes: &'a [u8],
 }
 struct ComputedBlobs {
     kind_strings: Vec<u8>,
@@ -164,6 +169,7 @@ pub(super) fn write_v3(out: &mut impl Write, params: &WriteV3Params<'_>) -> io::
         (BLOB_SEGMENT_STRINGS, &blobs.segment_strings),
         (BLOB_INDEX_FILES, params.index_files_bytes),
         (BLOB_ENRICH_BITMAPS, params.enrich_bitmaps_bytes),
+        (BLOB_FILE_ENTRIES, params.file_entries_bytes),
     ];
 
     // ── Compute TOC offsets ───────────────────────────────────────────────

@@ -176,37 +176,82 @@ impl ForgeQLEngine {
             ForgeQLIR::FindFiles { clauses, .. } => {
                 reject_text_filter(clauses)?;
                 let glob = clauses.in_glob.as_deref().unwrap_or("**");
-                // IN / EXCLUDE are applied by find_files(); build typed entries
-                // so the full clause pipeline (WHERE, GROUP BY, HAVING, ORDER BY,
-                // LIMIT, OFFSET) can run against individual file rows.
-                let raw = query::find_files(&workspace, glob, clauses.exclude_glob.as_deref());
-                let mut entries: Vec<FileEntry> = raw
-                    .iter()
-                    .filter_map(|v| {
-                        let path = v.get("path").and_then(|p| p.as_str()).map(PathBuf::from)?;
-                        let extension = v
-                            .get("extension")
-                            .and_then(|e| e.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let size = v
-                            .get("size")
-                            .and_then(serde_json::Value::as_u64)
-                            .unwrap_or(0);
-                        // Depth = number of path components (e.g. "kernel/foo.c" → 2).
-                        let depth = Some(path.components().count());
-                        Some(FileEntry {
-                            path,
-                            extension,
-                            size,
-                            depth,
-                            count: None,
+                // Fast path: when the columnar backend is active, use the
+                // mmap-backed overlay segment list instead of walking the
+                // filesystem.  On Zephyr (~35 K files) this avoids ~35 000
+                // stat(2) syscalls and reduces latency from ~1–2 s to < 5 ms.
+                //
+                // Guard: only engage the fast path when the query has a
+                // `WHERE extension = 'X'` equality predicate AND the overlay
+                // already contains files with that extension.
+                //
+                // Overlays built with this version of ForgeQL track ALL
+                // workspace files (source, docs, images, build artefacts) with
+                // path + size information, so the fast path naturally covers
+                // extensions like `.cmake`, `.rst`, `.png`, and `.elf` once the
+                // overlay is rebuilt for the current commit.
+                //
+                // Overlays built with older code only contain source files;
+                // for those, the `.filter(|ext| indexed.iter().any(...))` guard
+                // below correctly falls back to the filesystem walk for any
+                // extension that is absent from the overlay.
+                //
+                // Queries with no extension predicate (e.g. ORDER BY size DESC)
+                // always use the filesystem walk since we cannot assert that
+                // an old overlay covers every file type.
+                let indexed_opt = engine.indexed_files();
+                let fast_path_ext: Option<&str> = indexed_opt.as_ref().and_then(|indexed| {
+                    use crate::ir::{CompareOp, PredicateValue};
+                    // Find the first equality extension predicate.
+                    clauses
+                        .where_predicates
+                        .iter()
+                        .find_map(|p| {
+                            if (p.field == "extension" || p.field == "ext")
+                                && p.op == CompareOp::Eq
+                                && let PredicateValue::String(s) = &p.value
+                            {
+                                return Some(s.as_str());
+                            }
+                            None
                         })
-                    })
-                    .collect();
-                // Apply the full clause pipeline.  IN / EXCLUDE are already
-                // handled above so they become no-ops here; GROUP BY, HAVING,
-                // WHERE, ORDER BY, LIMIT, OFFSET all run normally.
+                        // Only use the fast path if the extension is in the overlay.
+                        .filter(|ext| indexed.iter().any(|fe| fe.extension == *ext))
+                });
+                let mut entries: Vec<FileEntry> = if fast_path_ext.is_some() {
+                    // SAFETY: fast_path_ext.is_some() implies indexed_opt.is_some().
+                    #[allow(clippy::unwrap_used)]
+                    indexed_opt.unwrap()
+                } else {
+                    // Filesystem walk fallback — used for non-indexed extensions
+                    // (e.g. `.rst`, `.png`, `.pat`) and for size-only queries.
+                    let raw = query::find_files(&workspace, glob, clauses.exclude_glob.as_deref());
+                    raw.iter()
+                        .filter_map(|v| {
+                            let path = v.get("path").and_then(|p| p.as_str()).map(PathBuf::from)?;
+                            let extension = v
+                                .get("extension")
+                                .and_then(|e| e.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let size = v
+                                .get("size")
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0);
+                            let depth = Some(path.components().count());
+                            Some(FileEntry {
+                                path,
+                                extension,
+                                size,
+                                depth,
+                                count: None,
+                            })
+                        })
+                        .collect()
+                };
+                // Apply the full clause pipeline (IN, EXCLUDE, WHERE, GROUP BY,
+                // ORDER BY, LIMIT, OFFSET).  For the filesystem walk fallback,
+                // IN/EXCLUDE were already applied by find_files() and become no-ops.
                 crate::filter::apply_clauses(&mut entries, clauses);
                 // Always show individual files — the LIMIT clause (default 20)
                 // already caps how many entries are returned.  Previously, when

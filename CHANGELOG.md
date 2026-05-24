@@ -6,6 +6,70 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.0] — 2026-05-23 — `FIND files` overlay fast path (all workspace files)
+
+### Added
+
+- **All workspace files tracked in the overlay** (`overlay_builder.rs`, `overlay_writer.rs`,
+  `overlay.rs`) — FQOV schema bumped to **v8**, adding a `file_entries` blob that enumerates
+  every regular workspace file that does **not** already have a symbol segment (images, docs,
+  CMake scripts, Kconfig files, build artefacts, `.elf`/`.bin`/`.png` outputs, …).  Each
+  file-only entry stores `(relative_path, file_size_bytes)` — no symbol rows, no AST data —
+  so they cost approximately 20–30 bytes per file in the overlay.
+
+  Impact on large repos (one-time per commit, paid at index-build time):
+
+  | Repo         | Source files | Added file-only | Total overlay entries |
+  |--------------|-------------|-----------------|----------------------|
+  | Zephyr main  | 14 240       | 45 250          | 59 490               |
+  | Linux main   | 64 083       | 29 614          | 93 697               |
+
+  `RowPtr.segment_idx` values and the `ColumnarStorage.segments` alignment are
+  unaffected — file-only entries live in their own blob separate from `segment_metas`.
+  Old overlays (v7) are invalidated by the version bump and rebuilt once on the next
+  query against a registered source.
+
+- **`FIND files` overlay fast path — extended to all file types** (`exec_show.rs`,
+  `columnar_storage.rs`, `storage/mod.rs`) —
+  `FIND files WHERE extension = 'X' …` now resolves from the overlay for **any** extension
+  once the overlay is (re)built with the current code.  On Zephyr this reduces latency from
+  ~1–2 s to < 5 ms for queries like:
+
+  ```sql
+  FIND files WHERE extension = 'cmake' LIMIT 5
+  FIND files WHERE extension = 'elf'   IN 'build/**'
+  FIND files WHERE extension = 'png'   ORDER BY size DESC LIMIT 10
+  FIND files WHERE extension = 'rst'
+  ```
+
+  The guard in `exec_show.rs` is backward-compatible: for an overlay built with **older**
+  code (source files only), any extension absent from the overlay falls back to the
+  filesystem walk automatically.  No `SCHEMA_VERSION` bump is required.
+
+  Queries with no extension predicate (`ORDER BY size DESC`, exact-path lookups, `WHERE size > N`)
+  continue to use the filesystem walk to remain correct with old overlays.
+
+- **`StorageEngine::indexed_files()`** (`storage/mod.rs`) — new optional trait method (default
+  `None`) that returns all indexed source files as typed `FileEntry` rows.
+
+- **`ColumnarStorage::indexed_files()`** (`columnar_storage.rs`) — implementation that reads
+  per-segment file sizes from the `index_files` mmap blob (zero syscalls) and patches dirty
+  overlay segments (one `stat` per mutated file).  Now includes file-only entries automatically
+  since it iterates all `overlay.segments()`.
+
+### Tests
+
+- All 8 GFF golden tests (`GFF1`–`GFF8`) confirmed correct:
+  - `GFF1–GFF3`, `GFF7`, `GFF8` — indexed extensions → overlay fast path.
+  - `GFF4` (`WHERE size > 50000`), `GFF5` (exact path) — no extension predicate → filesystem walk.
+  - `GFF6` (`WHERE extension = 'rst'`) — on new overlays, fast path; on old overlays, fallback.
+
+### Notes
+
+- Future work: add `forgeql-lang-cmake`, `forgeql-lang-json`, `forgeql-lang-yaml` crates
+  (backed by `tree-sitter-cmake` / `-json` / `-yaml`) to graduate those file types from
+  file-only entries to full AST-indexed symbol segments.
+
 ## [0.53.4] — 2026-05-23 — Fix enrichment staleness in columnar storage after `CHANGE FILE`
 
 ### Fixed

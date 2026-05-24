@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use bytemuck::cast_slice;
 use fst::{MapBuilder, Streamer as _};
+use ignore::WalkBuilder;
 use rayon::prelude::*;
 use roaring::RoaringBitmap;
 use tracing::{debug, info, warn};
@@ -134,6 +135,21 @@ impl OverlayBuilder {
             debug!("overlay: no segments found — skipping overlay build");
             return Ok(());
         }
+
+        // 2.5. Collect all workspace files not covered by a symbol segment.
+        //      These become file-only entries written to the `file_entries`
+        //      overlay blob (FQOV v8) so that `FIND files WHERE extension = 'X'`
+        //      can use the overlay fast path for ANY file type without a
+        //      filesystem walk.
+        let t_step = std::time::Instant::now();
+        let indexed_rel_paths: HashSet<PathBuf> =
+            segs.iter().map(|(rel, _, _)| rel.clone()).collect();
+        let file_only = collect_file_only(&self.worktree_root, &indexed_rel_paths);
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            n = file_only.len(),
+            "TIMING step2.5: collect file-only entries"
+        );
 
         // 3. Compute cumulative row offsets.
         let t_step = std::time::Instant::now();
@@ -446,7 +462,8 @@ impl OverlayBuilder {
             "TIMING step6: name FST + trigrams"
         );
 
-        // 7. Build SegmentMeta list.
+        // 7. Build SegmentMeta list (source segments only — file-only entries
+        //    go into the separate `file_entries` blob, not segment_metas).
         let segment_metas: Vec<SegmentMeta> = segs
             .iter()
             .enumerate()
@@ -458,7 +475,7 @@ impl OverlayBuilder {
             })
             .collect();
 
-        // 7.5. Build cached file sizes array.
+        // 7.5. Build cached file sizes array (one u32 per source segment).
         let mut index_files_u32 = Vec::with_capacity(segs.len());
         for (rel_path, _, _) in &segs {
             let full_path = self.worktree_root.join(rel_path);
@@ -469,6 +486,31 @@ impl OverlayBuilder {
             index_files_u32.push(size);
         }
         let index_files_bytes: &[u8] = cast_slice(&index_files_u32);
+
+        // 7.6. Serialize file-only entries to the `file_entries` blob.
+        //      Format: [u32 count][repeated: [u32 size][u16 path_len][u8; path_len]]
+        //      These are workspace files without a symbol segment; they are
+        //      tracked so FIND files can answer extension queries from the
+        //      overlay fast path without a filesystem walk.
+        let mut file_entries_bytes: Vec<u8> = Vec::new();
+        {
+            #[allow(clippy::cast_possible_truncation)]
+            file_entries_bytes.extend_from_slice(&(file_only.len() as u32).to_le_bytes());
+            for (rel_path, _hex) in &file_only {
+                let full_path = self.worktree_root.join(rel_path);
+                #[allow(clippy::cast_possible_truncation)]
+                let size = std::fs::metadata(&full_path)
+                    .map(|m| m.len() as u32)
+                    .unwrap_or(0);
+                let path_str = rel_path.to_string_lossy();
+                let path_bytes = path_str.as_bytes();
+                #[allow(clippy::cast_possible_truncation)]
+                let path_len = path_bytes.len() as u16;
+                file_entries_bytes.extend_from_slice(&size.to_le_bytes());
+                file_entries_bytes.extend_from_slice(&path_len.to_le_bytes());
+                file_entries_bytes.extend_from_slice(path_bytes);
+            }
+        }
 
         // 8. Write the FQOV v3 overlay atomically (temp file → fsync → rename).
         let t_step = std::time::Instant::now();
@@ -497,6 +539,7 @@ impl OverlayBuilder {
                     segment_metas: &segment_metas,
                     index_files_bytes,
                     enrich_bitmaps_bytes: &enrich_bitmaps_bytes,
+                    file_entries_bytes: &file_entries_bytes,
                 },
             )
             .context("writing v3 overlay")?;
@@ -516,6 +559,7 @@ impl OverlayBuilder {
             ms = t_total.elapsed().as_millis(),
             path = %overlay_path.display(),
             segments = segs.len(),
+            file_only = file_only.len(),
             rows = total_rows,
             "TIMING total: build_and_persist"
         );
@@ -580,6 +624,47 @@ impl OverlayBuilder {
 // ─────────────────────────────────────────────────────────────────────────────
 // Private helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Enumerate every regular workspace file under `worktree_root` that is not
+/// already in `indexed` (which contains the relative paths of source files
+/// that have a full symbol segment).  Returns `(relative_path, hex_id)` pairs
+/// sorted by path, using a deterministic path-derived hex ID.
+///
+/// Uses the same [`WalkBuilder`] configuration as [`Workspace::files`] so the
+/// set of tracked files is consistent with what `FIND files` returns via the
+/// filesystem-walk fallback.
+fn collect_file_only(worktree_root: &Path, indexed: &HashSet<PathBuf>) -> Vec<(PathBuf, String)> {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut entries: Vec<(PathBuf, String)> = WalkBuilder::new(worktree_root)
+        .add_custom_ignore_filename(".forgeql-ignore")
+        .hidden(false) // include dot-files (matches Workspace::files)
+        .git_ignore(true)
+        .build()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            if !entry.file_type()?.is_file() {
+                return None;
+            }
+            let rel = entry.path().strip_prefix(worktree_root).ok()?.to_path_buf();
+            if indexed.contains(&rel) {
+                return None; // already has a symbol segment
+            }
+            // Derive a stable 32-char hex ID from the relative path.
+            // These entries have no .fqsf file on disk; the ID only needs
+            // to be unique and never clash with a real content hash.
+            let mut h1 = std::collections::hash_map::DefaultHasher::new();
+            let mut h2 = std::collections::hash_map::DefaultHasher::new();
+            rel.hash(&mut h1);
+            // Different seed so h1 ≠ h2 for all inputs.
+            0xdead_beef_cafe_u64.hash(&mut h2);
+            rel.hash(&mut h2);
+            let hex = format!("{:016x}{:016x}", h1.finish(), h2.finish());
+            Some((rel, hex))
+        })
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
 
 /// Decode the raw `(offset, count)` pair embedded in a name FST value into
 /// a list of row IDs from the postings array.
