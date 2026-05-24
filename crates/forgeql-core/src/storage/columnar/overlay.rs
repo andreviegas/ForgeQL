@@ -232,8 +232,6 @@ pub struct Overlay {
     segments: Vec<SegmentMeta>,
     /// Total row count (= row_table blob size / sizeof(RowPtr)).
     row_count: u32,
-    generation: u64,
-
     /// Inclusive-start global row-ID for each segment (length = segments.len() + 1).
     ///
     /// `segment_offsets[i]` is the first global row ID belonging to segment `i`.
@@ -252,10 +250,6 @@ pub struct Overlay {
     trigram_index_range: Range<usize>,
     name_postings_range: Range<usize>,
     index_files_range: Range<usize>,
-    /// Byte range of the `enrich_bitmaps` blob within `mmap` (Phase 5 / FQOV v7).
-    /// Retained for potential future re-parsing; not read after `open()`.
-    #[allow(dead_code)]
-    enrich_bitmaps_range: Range<usize>,
     /// Pre-parsed enrichment index: sorted `(key, bitmap_mmap_range)` pairs.
     ///
     /// key = `"field=value"` (byte-lexicographic order).
@@ -286,50 +280,21 @@ impl Overlay {
     /// # Errors
     /// Returns `Err` for missing/truncated files, wrong magic, unsupported
     /// schema version, misaligned blobs, or a corrupt name FST.
-    #[allow(clippy::too_many_lines)]
     pub fn open(path: &Path) -> Result<Arc<Self>> {
         let file = std::fs::File::open(path)
             .with_context(|| format!("opening overlay {}", path.display()))?;
-        #[allow(unsafe_code)] // read-only mmap of immutable overlay file
+        #[expect(unsafe_code, reason = "read-only mmap of an immutable overlay file")]
         let mmap: Arc<Mmap> = Arc::new(
             unsafe { MmapOptions::new().map(&file) }
                 .with_context(|| format!("mmap overlay {}", path.display()))?,
         );
         drop(file);
 
-        ensure!(mmap.len() >= HEADER_LEN, "overlay file too short");
-        ensure!(
-            mmap[..4] == MAGIC,
-            "invalid overlay magic in {}",
-            path.display()
-        );
+        let toc_count = parse_header(&mmap)
+            .with_context(|| format!("invalid overlay header in {}", path.display()))?;
 
-        #[allow(clippy::indexing_slicing)]
-        let schema_version =
-            u32::from_le_bytes(mmap[4..8].try_into().context("schema_version bytes")?);
-        ensure!(
-            schema_version == SCHEMA_VERSION,
-            "overlay schema version mismatch in {}: expected {SCHEMA_VERSION}, got {schema_version}",
-            path.display()
-        );
-
-        #[allow(clippy::indexing_slicing)]
-        let generation = u64::from_le_bytes(mmap[8..16].try_into().context("generation bytes")?);
-        #[allow(clippy::indexing_slicing)]
-        let toc_count =
-            u32::from_le_bytes(mmap[16..20].try_into().context("toc_count bytes")?) as usize;
-
-        let toc_end = HEADER_LEN + toc_count * TOC_ENTRY_SIZE;
-        ensure!(
-            mmap.len() >= toc_end,
-            "overlay TOC truncated: need {toc_end} bytes, file is {} bytes",
-            mmap.len()
-        );
-
-        let toc = parse_toc_entries(&mmap, toc_count)?;
-
-        let blobs = find_blob_ranges(&toc)?;
-        validate_blob_layout(mmap.len(), &blobs)?;
+        let blobs = open_blobs(&mmap, toc_count)
+            .with_context(|| format!("parsing overlay TOC in {}", path.display()))?;
         let [
             row_table_range,
             kind_strings_range,
@@ -349,21 +314,17 @@ impl Overlay {
             .context("row count overflow")?;
 
         // Decode segment metadata at open time.
-        #[allow(clippy::indexing_slicing)]
-        let seg_records: &[SegmentRecord] = cast_slice(&mmap[segments_range]);
-        #[allow(clippy::indexing_slicing)]
-        #[allow(clippy::indexing_slicing)]
-        let segments = decode_segment_metas(seg_records, &mmap[segment_strings_range])?;
+        let seg_records: &[SegmentRecord] =
+            cast_slice(mmap.get(segments_range).context("segments blob")?);
+        let segments = decode_segment_metas(
+            seg_records,
+            mmap.get(segment_strings_range)
+                .context("segment_strings blob")?,
+        )?;
 
         // Build prefix-sum table: segment_offsets[i] = first global row ID for
         // segment i; segment_offsets[n] = row_count (one-past-the-end sentinel).
-        let mut segment_offsets: Vec<u32> = Vec::with_capacity(segments.len() + 1);
-        let mut running = 0u32;
-        for seg in &segments {
-            segment_offsets.push(running);
-            running = running.saturating_add(seg.row_count);
-        }
-        segment_offsets.push(running);
+        let segment_offsets = build_segment_offsets(&segments);
 
         // Build the zero-copy name FST backed by a mmap slice.
         let name_fst = FstMap::new(MmapSlice::new(
@@ -383,82 +344,19 @@ impl Overlay {
 
         // Parse file_entries blob (FQOV v8): non-indexed workspace files.
         // Format: [u32 count][repeated: [u32 size][u16 path_len][u8; path_len]]
-        let mut file_entries: Vec<(PathBuf, u32)> = Vec::new();
-        {
-            #[allow(clippy::indexing_slicing)]
-            let blob = &mmap[file_entries_range];
-            if blob.len() >= 4 {
-                #[allow(clippy::indexing_slicing)]
-                let count = u32::from_le_bytes(blob[0..4].try_into().unwrap_or_default()) as usize;
-                let mut pos = 4usize;
-                for _ in 0..count {
-                    if pos + 6 > blob.len() {
-                        break;
-                    }
-                    #[allow(clippy::indexing_slicing)]
-                    let size =
-                        u32::from_le_bytes(blob[pos..pos + 4].try_into().unwrap_or_default());
-                    #[allow(clippy::indexing_slicing)]
-                    let path_len =
-                        u16::from_le_bytes(blob[pos + 4..pos + 6].try_into().unwrap_or_default())
-                            as usize;
-                    pos += 6;
-                    if pos + path_len > blob.len() {
-                        break;
-                    }
-                    #[allow(clippy::indexing_slicing)]
-                    let path_bytes = &blob[pos..pos + path_len];
-                    pos += path_len;
-                    if let Ok(s) = std::str::from_utf8(path_bytes) {
-                        file_entries.push((PathBuf::from(s), size));
-                    }
-                }
-            }
-        }
+        let file_entries = parse_file_entries(mmap.get(file_entries_range).unwrap_or(&[]));
 
         // Parse enrichment bitmaps blob (Phase 5 / FQOV v7).
         // Build enrich_index: sorted (key, bitmap_mmap_range) pairs.
-        let mut enrich_index: Vec<(String, Range<usize>)> = Vec::new();
-        {
-            #[allow(clippy::indexing_slicing)]
-            let blob = &mmap[enrich_bitmaps_range.clone()];
-            if blob.len() >= 8 {
-                #[allow(clippy::indexing_slicing)]
-                let entry_count =
-                    u32::from_le_bytes(blob[0..4].try_into().unwrap_or_default()) as usize;
-                #[allow(clippy::indexing_slicing)]
-                let key_data_len =
-                    u32::from_le_bytes(blob[4..8].try_into().unwrap_or_default()) as usize;
-                let entry_bytes = std::mem::size_of::<EnrichEntry>();
-                let entries_end = 8 + entry_count * entry_bytes;
-                if blob.len() >= entries_end + key_data_len {
-                    #[allow(clippy::indexing_slicing)]
-                    let entries: &[EnrichEntry] = cast_slice(&blob[8..entries_end]);
-                    #[allow(clippy::indexing_slicing)]
-                    let key_data = &blob[entries_end..entries_end + key_data_len];
-                    let bitmap_base = enrich_bitmaps_range.start + entries_end + key_data_len;
-                    for e in entries {
-                        let k_start = e.key_offset as usize;
-                        let k_end = k_start + e.key_len as usize;
-                        if k_end > key_data.len() {
-                            continue;
-                        }
-                        #[allow(clippy::indexing_slicing)]
-                        if let Ok(key) = std::str::from_utf8(&key_data[k_start..k_end]) {
-                            let b_start = bitmap_base + e.bitmap_offset as usize;
-                            let b_end = b_start + e.bitmap_len as usize;
-                            enrich_index.push((key.to_owned(), b_start..b_end));
-                        }
-                    }
-                }
-            }
-        }
+        let enrich_index = parse_enrich_index(
+            mmap.get(enrich_bitmaps_range.clone()).unwrap_or(&[]),
+            enrich_bitmaps_range.start,
+        );
 
         Ok(Arc::new(Self {
             mmap,
             segments,
             row_count,
-            generation,
             segment_offsets,
             row_table_range,
             kind_strings_range,
@@ -467,19 +365,11 @@ impl Overlay {
             trigram_index_range,
             name_postings_range,
             index_files_range,
-            enrich_bitmaps_range,
             enrich_index,
             file_entries,
             has_duplicate_paths,
             name_fst,
         }))
-    }
-
-    /// Monotonic generation counter — bumped by every reindex.
-    #[allow(dead_code)]
-    #[must_use]
-    pub const fn generation(&self) -> u64 {
-        self.generation
     }
 
     /// Returns `true` if the overlay contains two or more segments with the
@@ -512,8 +402,8 @@ impl Overlay {
     /// Retrieve the cached file size for segment `idx`.
     #[must_use]
     pub fn file_size(&self, idx: usize) -> u32 {
-        #[allow(clippy::indexing_slicing)]
-        let slice: &[u32] = cast_slice(&self.mmap[self.index_files_range.clone()]);
+        let slice: &[u32] =
+            cast_slice(self.mmap.get(self.index_files_range.clone()).unwrap_or(&[]));
         slice.get(idx).copied().unwrap_or(0)
     }
 
@@ -548,8 +438,7 @@ impl Overlay {
         if key != &target {
             return None;
         }
-        #[allow(clippy::indexing_slicing)]
-        RoaringBitmap::deserialize_from(&self.mmap[range.clone()]).ok()
+        RoaringBitmap::deserialize_from(self.mmap.get(range.clone())?).ok()
     }
 
     /// Union global row bitmaps for `field >= threshold` (numeric enrichment fields).
@@ -562,18 +451,18 @@ impl Overlay {
             .enrich_index
             .partition_point(|(k, _)| k.as_str() < prefix.as_str());
         let mut result: Option<RoaringBitmap> = None;
-        #[allow(clippy::indexing_slicing)]
-        for (key, range) in &self.enrich_index[pos..] {
+        for (key, range) in self.enrich_index.get(pos..).unwrap_or(&[]) {
             if !key.starts_with(&prefix) {
                 break;
             }
-            #[allow(clippy::indexing_slicing)]
-            let value_str = &key[prefix.len()..];
+            let value_str = key.get(prefix.len()..).unwrap_or("");
             if let Ok(v) = value_str.parse::<i64>()
                 && v >= threshold
             {
-                #[allow(clippy::indexing_slicing)]
-                if let Ok(bm) = RoaringBitmap::deserialize_from(&self.mmap[range.clone()]) {
+                let Some(bm_bytes) = self.mmap.get(range.clone()) else {
+                    continue;
+                };
+                if let Ok(bm) = RoaringBitmap::deserialize_from(bm_bytes) {
                     result = Some(match result {
                         Some(prev) => prev | bm,
                         None => bm,
@@ -594,18 +483,18 @@ impl Overlay {
             .enrich_index
             .partition_point(|(k, _)| k.as_str() < prefix.as_str());
         let mut result: Option<RoaringBitmap> = None;
-        #[allow(clippy::indexing_slicing)]
-        for (key, range) in &self.enrich_index[pos..] {
+        for (key, range) in self.enrich_index.get(pos..).unwrap_or(&[]) {
             if !key.starts_with(&prefix) {
                 break;
             }
-            #[allow(clippy::indexing_slicing)]
-            let value_str = &key[prefix.len()..];
+            let value_str = key.get(prefix.len()..).unwrap_or("");
             if let Ok(v) = value_str.parse::<i64>()
                 && v <= threshold
             {
-                #[allow(clippy::indexing_slicing)]
-                if let Ok(bm) = RoaringBitmap::deserialize_from(&self.mmap[range.clone()]) {
+                let Some(bm_bytes) = self.mmap.get(range.clone()) else {
+                    continue;
+                };
+                if let Ok(bm) = RoaringBitmap::deserialize_from(bm_bytes) {
                     result = Some(match result {
                         Some(prev) => prev | bm,
                         None => bm,
@@ -635,10 +524,8 @@ impl Overlay {
             return 0..0;
         }
         // segment_offsets has length segments.len() + 1, so both indices exist.
-        #[allow(clippy::indexing_slicing)]
-        let start = self.segment_offsets[seg_idx];
-        #[allow(clippy::indexing_slicing)]
-        let end = self.segment_offsets[seg_idx + 1];
+        let start = self.segment_offsets.get(seg_idx).copied().unwrap_or(0);
+        let end = self.segment_offsets.get(seg_idx + 1).copied().unwrap_or(0);
         start..end
     }
 
@@ -693,10 +580,16 @@ impl Overlay {
         if seg_range.is_empty() {
             return 0..0;
         }
-        #[allow(clippy::indexing_slicing)]
-        let start = self.segment_offsets[seg_range.start];
-        #[allow(clippy::indexing_slicing)]
-        let end = self.segment_offsets[seg_range.end];
+        let start = self
+            .segment_offsets
+            .get(seg_range.start)
+            .copied()
+            .unwrap_or(0);
+        let end = self
+            .segment_offsets
+            .get(seg_range.end)
+            .copied()
+            .unwrap_or(0);
         start..end
     }
 
@@ -707,17 +600,18 @@ impl Overlay {
     /// Returns `None` if the kind is absent from the overlay.
     #[must_use]
     pub fn prefilter_kind(&self, kind: &str) -> Option<RoaringBitmap> {
-        #[allow(clippy::indexing_slicing)]
-        let entries: &[KindEntry] = cast_slice(&self.mmap[self.kind_index_range.clone()]);
-        #[allow(clippy::indexing_slicing)]
-        let kind_strings = &self.mmap[self.kind_strings_range.clone()];
+        let entries: &[KindEntry] =
+            cast_slice(self.mmap.get(self.kind_index_range.clone()).unwrap_or(&[]));
+        let kind_strings = self
+            .mmap
+            .get(self.kind_strings_range.clone())
+            .unwrap_or(&[]);
         let kind_bytes = kind.as_bytes();
 
         // Binary search: entries are sorted by kind string (established at build time).
         let idx = entries.partition_point(|e| {
             let s_start = e.kind_offset as usize;
             let s_end = s_start + e.kind_len as usize;
-            #[allow(clippy::indexing_slicing)]
             kind_strings
                 .get(s_start..s_end)
                 .is_none_or(|s| s < kind_bytes)
@@ -726,14 +620,12 @@ impl Overlay {
         let e = entries.get(idx)?;
         let s_start = e.kind_offset as usize;
         let s_end = s_start + e.kind_len as usize;
-        #[allow(clippy::indexing_slicing)]
         let s = kind_strings.get(s_start..s_end)?;
         if s != kind_bytes {
             return None;
         }
 
-        #[allow(clippy::indexing_slicing)]
-        let bitmap_data = &self.mmap[self.bitmap_data_range.clone()];
+        let bitmap_data = self.mmap.get(self.bitmap_data_range.clone()).unwrap_or(&[]);
         let bm_start = e.bitmap_offset as usize;
         let bm_end = bm_start + e.bitmap_len as usize;
         let bm_bytes = bitmap_data.get(bm_start..bm_end)?;
@@ -752,12 +644,13 @@ impl Overlay {
         &self,
         path_mask: Option<&RoaringBitmap>,
     ) -> Vec<(String, usize)> {
-        #[allow(clippy::indexing_slicing)]
-        let entries: &[KindEntry] = cast_slice(&self.mmap[self.kind_index_range.clone()]);
-        #[allow(clippy::indexing_slicing)]
-        let kind_strings = &self.mmap[self.kind_strings_range.clone()];
-        #[allow(clippy::indexing_slicing)]
-        let bitmap_data = &self.mmap[self.bitmap_data_range.clone()];
+        let entries: &[KindEntry] =
+            cast_slice(self.mmap.get(self.kind_index_range.clone()).unwrap_or(&[]));
+        let kind_strings = self
+            .mmap
+            .get(self.kind_strings_range.clone())
+            .unwrap_or(&[]);
+        let bitmap_data = self.mmap.get(self.bitmap_data_range.clone()).unwrap_or(&[]);
 
         let mut out = Vec::with_capacity(entries.len());
         for e in entries {
@@ -815,14 +708,16 @@ impl Overlay {
             return None;
         }
 
-        #[allow(clippy::indexing_slicing)]
-        let entries: &[TrigramEntry] = cast_slice(&self.mmap[self.trigram_index_range.clone()]);
+        let entries: &[TrigramEntry] = cast_slice(
+            self.mmap
+                .get(self.trigram_index_range.clone())
+                .unwrap_or(&[]),
+        );
         if entries.is_empty() {
             return None;
         }
 
-        #[allow(clippy::indexing_slicing)]
-        let bitmap_data = &self.mmap[self.bitmap_data_range.clone()];
+        let bitmap_data = self.mmap.get(self.bitmap_data_range.clone()).unwrap_or(&[]);
 
         // Collect unique trigrams (ASCII-lowercased).
         let mut trigrams: Vec<[u8; 3]> = Vec::new();
@@ -879,8 +774,8 @@ impl Overlay {
     /// Returns `None` if `global_id` is out of range (defensive check).
     #[must_use]
     pub fn resolve_global(&self, global_id: u32) -> Option<RowPtr> {
-        #[allow(clippy::indexing_slicing)]
-        let row_ptrs: &[RowPtr] = cast_slice(&self.mmap[self.row_table_range.clone()]);
+        let row_ptrs: &[RowPtr] =
+            cast_slice(self.mmap.get(self.row_table_range.clone()).unwrap_or(&[]));
         row_ptrs.get(global_id as usize).copied()
     }
 
@@ -1084,18 +979,20 @@ impl Overlay {
         matched_symbols
     }
     fn decode_postings_slice(&self, encoded: u64) -> &[u32] {
-        #[allow(clippy::cast_possible_truncation)]
-        let count = (encoded & 0xFFFF_FFFF) as usize;
-        #[allow(clippy::cast_possible_truncation)]
-        let byte_offset = ((encoded >> 32) & 0xFFFF_FFFF) as usize;
-        #[allow(clippy::indexing_slicing)]
-        let postings = &self.mmap[self.name_postings_range.clone()];
+        let count = u32::try_from(encoded & u64::from(u32::MAX)).unwrap_or(0) as usize;
+        let byte_offset =
+            u32::try_from((encoded >> 32) & u64::from(u32::MAX)).unwrap_or(0) as usize;
+        let postings = self
+            .mmap
+            .get(self.name_postings_range.clone())
+            .unwrap_or(&[]);
         let end = byte_offset + count * 4;
         if end > postings.len() {
             return &[];
         }
-        #[allow(clippy::indexing_slicing)]
-        cast_slice::<u8, u32>(&postings[byte_offset..end])
+        postings
+            .get(byte_offset..end)
+            .map_or(&[], cast_slice::<u8, u32>)
     }
 
     fn decode_postings(&self, encoded: u64) -> RoaringBitmap {
@@ -1109,6 +1006,140 @@ impl Overlay {
 // Private helpers (extracted from Overlay::open to keep the function ≤ 100 lines)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Parse the fixed-size FQOV v3 file header; return the TOC entry count.
+fn parse_header(mmap: &[u8]) -> Result<usize> {
+    ensure!(mmap.len() >= HEADER_LEN, "overlay file too short");
+    ensure!(
+        mmap.get(..4).is_some_and(|b| b == MAGIC),
+        "invalid overlay magic"
+    );
+    let schema_version = u32::from_le_bytes(
+        mmap.get(4..8)
+            .context("header too short for schema_version")?
+            .try_into()
+            .context("schema_version bytes")?,
+    );
+    ensure!(
+        schema_version == SCHEMA_VERSION,
+        "overlay schema version mismatch: expected {SCHEMA_VERSION}, got {schema_version}"
+    );
+    let toc_count = u32::from_le_bytes(
+        mmap.get(16..20)
+            .context("header too short for toc_count")?
+            .try_into()
+            .context("toc_count bytes")?,
+    ) as usize;
+    Ok(toc_count)
+}
+
+/// Validate the TOC and return the 12 named blob ranges.
+fn open_blobs(mmap: &[u8], toc_count: usize) -> Result<[Range<usize>; TOC_COUNT]> {
+    let toc_end = HEADER_LEN + toc_count * TOC_ENTRY_SIZE;
+    ensure!(
+        mmap.len() >= toc_end,
+        "overlay TOC truncated: need {toc_end} bytes, file is {} bytes",
+        mmap.len()
+    );
+    let toc = parse_toc_entries(mmap, toc_count)?;
+    let blobs = find_blob_ranges(&toc)?;
+    validate_blob_layout(mmap.len(), &blobs)?;
+    Ok(blobs)
+}
+
+/// Build the segment-to-global-row prefix-sum table.
+///
+/// `offsets[i]` is the first global row ID for segment `i`.
+/// `offsets[segments.len()]` is one-past-the-end (equals total row count).
+fn build_segment_offsets(segments: &[SegmentMeta]) -> Vec<u32> {
+    let mut offsets = Vec::with_capacity(segments.len() + 1);
+    let mut running = 0u32;
+    for seg in segments {
+        offsets.push(running);
+        running = running.saturating_add(seg.row_count);
+    }
+    offsets.push(running);
+    offsets
+}
+
+/// Parse the `file_entries` blob into a list of `(relative_path, file_size)` pairs.
+///
+/// Format: `[u32 count][repeated: [u32 size][u16 path_len][u8; path_len]]`
+///
+/// Gracefully skips malformed entries rather than failing.
+fn parse_file_entries(blob: &[u8]) -> Vec<(PathBuf, u32)> {
+    let mut result: Vec<(PathBuf, u32)> = Vec::new();
+    let Some(count_bytes) = blob.get(0..4) else {
+        return result;
+    };
+    let count = u32::from_le_bytes(count_bytes.try_into().unwrap_or_default()) as usize;
+    let mut pos = 4usize;
+    for _ in 0..count {
+        let Some(size_bytes) = blob.get(pos..pos + 4) else {
+            break;
+        };
+        let size = u32::from_le_bytes(size_bytes.try_into().unwrap_or_default());
+        let Some(len_bytes) = blob.get(pos + 4..pos + 6) else {
+            break;
+        };
+        let path_len = u16::from_le_bytes(len_bytes.try_into().unwrap_or_default()) as usize;
+        pos += 6;
+        let Some(path_bytes) = blob.get(pos..pos + path_len) else {
+            break;
+        };
+        pos += path_len;
+        if let Ok(s) = std::str::from_utf8(path_bytes) {
+            result.push((PathBuf::from(s), size));
+        }
+    }
+    result
+}
+
+/// Parse the `enrich_bitmaps` blob into sorted `(key, mmap_range)` pairs.
+///
+/// `blob_base` is the absolute byte offset of `blob` within the mmap, used to
+/// compute absolute ranges for the serialised `RoaringBitmap` data.
+///
+/// Gracefully skips malformed entries rather than failing.
+fn parse_enrich_index(blob: &[u8], blob_base: usize) -> Vec<(String, Range<usize>)> {
+    let mut result: Vec<(String, Range<usize>)> = Vec::new();
+    if blob.len() < 8 {
+        return result;
+    }
+    let entry_count = blob
+        .get(0..4)
+        .and_then(|b| b.try_into().ok())
+        .map_or(0, u32::from_le_bytes) as usize;
+    let key_data_len = blob
+        .get(4..8)
+        .and_then(|b| b.try_into().ok())
+        .map_or(0, u32::from_le_bytes) as usize;
+    let entry_bytes = std::mem::size_of::<EnrichEntry>();
+    let entries_end = 8 + entry_count * entry_bytes;
+    if blob.len() < entries_end + key_data_len {
+        return result;
+    }
+    let Some(entries_slice) = blob.get(8..entries_end) else {
+        return result;
+    };
+    let entries: &[EnrichEntry] = cast_slice(entries_slice);
+    let Some(key_data) = blob.get(entries_end..entries_end + key_data_len) else {
+        return result;
+    };
+    let bitmap_base = blob_base + entries_end + key_data_len;
+    for e in entries {
+        let k_start = e.key_offset as usize;
+        let k_end = k_start + e.key_len as usize;
+        let Some(key_bytes) = key_data.get(k_start..k_end) else {
+            continue;
+        };
+        if let Ok(key) = std::str::from_utf8(key_bytes) {
+            let b_start = bitmap_base + e.bitmap_offset as usize;
+            let b_end = b_start + e.bitmap_len as usize;
+            result.push((key.to_owned(), b_start..b_end));
+        }
+    }
+    result
+}
 /// Parse TOC entries field-by-field from the mmap.
 ///
 /// `TocEntry` is not `Pod` due to `[u8; 56]` conflicting with
@@ -1121,8 +1152,9 @@ fn parse_toc_entries(mmap: &[u8], toc_count: usize) -> Result<Vec<TocEntry>> {
             base + TOC_ENTRY_SIZE <= mmap.len(),
             "TOC entry {i} out of bounds"
         );
-        #[allow(clippy::indexing_slicing)]
-        let entry_bytes = &mmap[base..base + TOC_ENTRY_SIZE];
+        let entry_bytes = mmap
+            .get(base..base + TOC_ENTRY_SIZE)
+            .context("TOC entry slice")?;
         let mut name = [0u8; TOC_ENTRY_NAME_LEN];
         name.copy_from_slice(&entry_bytes[..TOC_ENTRY_NAME_LEN]);
         let offset = u32::from_le_bytes(
@@ -1190,12 +1222,18 @@ fn decode_segment_metas(
             path_end <= seg_strings.len() && hex_end <= seg_strings.len(),
             "segment string index out of bounds"
         );
-        #[allow(clippy::indexing_slicing)]
-        let path_str = std::str::from_utf8(&seg_strings[path_start..path_end])
-            .context("segment source path not valid UTF-8")?;
-        #[allow(clippy::indexing_slicing)]
-        let hex_str = std::str::from_utf8(&seg_strings[hex_start..hex_end])
-            .context("segment hex_content_id not valid UTF-8")?;
+        let path_str = std::str::from_utf8(
+            seg_strings
+                .get(path_start..path_end)
+                .context("segment path slice")?,
+        )
+        .context("segment source path not valid UTF-8")?;
+        let hex_str = std::str::from_utf8(
+            seg_strings
+                .get(hex_start..hex_end)
+                .context("segment hex slice")?,
+        )
+        .context("segment hex_content_id not valid UTF-8")?;
         segments.push(SegmentMeta {
             hex_content_id: hex_str.to_owned(),
             source_path: PathBuf::from(path_str),
@@ -1294,7 +1332,6 @@ impl PartialOrd for HeapEntry {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::collections::HashMap;
     use std::io::{BufWriter, Write};
@@ -1363,7 +1400,7 @@ mod tests {
         match Overlay::open(tmp.path()) {
             Ok(_) => panic!("expected Err for wrong magic, but got Ok"),
             Err(e) => {
-                let msg = format!("{e}");
+                let msg = format!("{e:#}");
                 assert!(msg.contains("magic"), "error should mention magic: {msg}");
             }
         }
