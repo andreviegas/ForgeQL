@@ -64,7 +64,10 @@ const fn backend_for_show_op(op: &ForgeQLIR) -> &Backend {
 }
 
 impl ForgeQLEngine {
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "dispatches all SHOW variants; splitting would require significant restructuring"
+    )]
     pub(super) fn exec_show(
         &self,
         session_id: Option<&str>,
@@ -220,7 +223,10 @@ impl ForgeQLEngine {
                 });
                 let mut entries: Vec<FileEntry> = if fast_path_ext.is_some() {
                     // SAFETY: fast_path_ext.is_some() implies indexed_opt.is_some().
-                    #[allow(clippy::unwrap_used)]
+                    #[expect(
+                        clippy::unwrap_used,
+                        reason = "fast_path_ext.is_some() implies indexed_opt.is_some() — invariant established above"
+                    )]
                     indexed_opt.unwrap()
                 } else {
                     // Filesystem walk fallback — used for non-indexed extensions

@@ -63,7 +63,6 @@ fn split_qualified_name(name: &str) -> Option<(&str, &str)> {
 ///    `IN '*.ext'`.
 /// 4. Returns the last matching row (preserving v1 last-write-wins semantics
 ///    within a single language).
-#[allow(clippy::too_many_lines)]
 pub(super) fn resolve_symbol<'a>(
     index: &'a SymbolTable,
     name: &str,
@@ -85,7 +84,10 @@ pub(super) fn resolve_symbol<'a>(
             })
             .collect();
         if !matched.is_empty() {
-            #[allow(clippy::expect_used)]
+            #[expect(
+                clippy::expect_used,
+                reason = "non-empty guaranteed by the is_empty check above"
+            )]
             return Ok(matched.last().expect("matched is non-empty"));
         }
         // Fall through: the qualified name may be resolved via body_symbol
@@ -179,7 +181,7 @@ pub(super) fn resolve_symbol<'a>(
 
     // Last match — preserves v1 last-write-wins within a single language.
     // SAFETY: `best` is guaranteed non-empty by the bail above.
-    #[allow(clippy::expect_used)]
+    #[expect(clippy::expect_used, reason = "non-empty guaranteed by the bail above")]
     Ok(best.last().expect("filtered is non-empty"))
 }
 

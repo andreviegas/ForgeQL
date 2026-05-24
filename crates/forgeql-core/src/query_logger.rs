@@ -139,8 +139,14 @@ fn iso_timestamp() -> String {
 /// Decompose a Unix epoch timestamp into `(year, month, day, hour, minute, second)`.
 ///
 /// Algorithm: <https://howardhinnant.github.io/date_algorithms.html>
-#[allow(clippy::many_single_char_names)]
-#[allow(clippy::cast_possible_truncation)]
+#[expect(
+    clippy::many_single_char_names,
+    reason = "Howard Hinnant date algorithm — uses mathematical notation from the reference implementation"
+)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "all intermediate values are bounded (seconds 0–59, minutes 0–59, hours 0–23, year fits u32)"
+)]
 const fn epoch_to_datetime(secs: u64) -> (u32, u32, u32, u32, u32, u32) {
     let s = (secs % 60) as u32;
     let mi = ((secs / 60) % 60) as u32;

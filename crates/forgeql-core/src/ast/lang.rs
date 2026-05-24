@@ -51,7 +51,10 @@ pub const FQL_DO: &str = "do";
 ///
 /// Each language crate constructs this via JSON deserialization
 /// ([`super::lang_json::LanguageConfigJson::from_json_bytes`]).
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "LanguageConfig describes language properties; each bool is semantically distinct"
+)]
 pub struct LanguageConfig {
     // -- identity --
     /// Root node kind produced by the tree-sitter grammar (e.g.

@@ -87,7 +87,10 @@ impl<O: Eq + Hash> InternPool<O> {
     /// assert_eq!(pool.get(id), "hello");
     /// ```
     #[must_use]
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "InternPool overflow is a programming error that cannot be recovered from"
+    )]
     pub fn intern<B>(&mut self, value: &B) -> u32
     where
         B: ToOwned<Owned = O> + Hash + Eq + ?Sized,
@@ -155,9 +158,10 @@ impl InternPool<String> {
     /// for IDs produced by this pool).
     #[must_use]
     #[inline]
-    #[allow(clippy::cast_possible_truncation)]
     pub fn get(&self, id: u32) -> &str {
-        self.items.get(id as usize).map_or("", String::as_str)
+        self.items
+            .get(usize::try_from(id).unwrap_or(usize::MAX))
+            .map_or("", String::as_str)
     }
 
     /// Iterate all interned strings in insertion order as `&str` slices.
@@ -172,10 +176,9 @@ impl InternPool<PathBuf> {
     /// Returns `Path::new("")` for any out-of-range ID (defensive).
     #[must_use]
     #[inline]
-    #[allow(clippy::cast_possible_truncation)]
     pub fn get(&self, id: u32) -> &Path {
         self.items
-            .get(id as usize)
+            .get(usize::try_from(id).unwrap_or(usize::MAX))
             .map_or_else(|| Path::new(""), PathBuf::as_path)
     }
 

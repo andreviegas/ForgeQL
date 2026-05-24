@@ -218,7 +218,10 @@ fn parse_value(s: &str, format: &str) -> i64 {
         )
         .unwrap_or(0),
         "oct" => i64::from_str_radix(s.trim_start_matches('0'), 8).unwrap_or(0),
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "f64 to i64 for numeric value analysis; truncation is intentional for integer-based comparisons"
+        )]
         "float" | "scientific" => s.parse::<f64>().map(|f| f as i64).unwrap_or(0),
         _ => s.parse::<i64>().unwrap_or(0),
     }
