@@ -1,4 +1,3 @@
-#![allow(clippy::redundant_pub_crate)]
 //! [`OverlayBuilder`] — assembles and persists a workspace overlay file.
 //!
 //! An overlay merges all per-file segments for a given commit SHA into a
@@ -33,6 +32,10 @@ use super::overlay::{EnrichEntry, RowPtr, SegmentMeta};
 use super::overlay_writer;
 use super::segment_builder::POSTING_ENRICHMENT_FIELDS;
 use super::segment_reader::SegmentReader;
+
+/// Maximum number of distinct values tracked per enrichment field before the
+/// field is pruned from the overlay to keep the blob size manageable.
+const MAX_ENRICH_BUCKETS: usize = 64;
 
 /// Builds a workspace overlay from a set of per-file segments.
 pub struct OverlayBuilder {
@@ -75,7 +78,10 @@ impl OverlayBuilder {
     ///
     /// # Errors
     /// Returns `Err` if writing or renaming the overlay file fails fatally.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "multi-step overlay build pipeline; sub-steps are documented with inline comments"
+    )]
     pub fn build_and_persist(&self, overlay_path: &Path) -> Result<()> {
         let t_total = std::time::Instant::now();
 
@@ -167,8 +173,7 @@ impl OverlayBuilder {
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
             for local_row in 0..reader.row_count {
                 global_row_table.push(RowPtr {
-                    #[allow(clippy::cast_possible_truncation)]
-                    segment_idx: seg_idx as u32,
+                    segment_idx: u32::try_from(seg_idx).unwrap_or(u32::MAX),
                     local_row_idx: local_row,
                 });
             }
@@ -200,8 +205,7 @@ impl OverlayBuilder {
                         let _ = canonical.insert(local_row);
                     }
                 }
-                #[allow(clippy::cast_possible_truncation)]
-                let cnt = canonical.len() as u32;
+                let cnt = u32::try_from(canonical.len()).unwrap_or(u32::MAX);
                 (canonical, cnt)
             })
             .collect();
@@ -259,8 +263,6 @@ impl OverlayBuilder {
         //                (sparse path; avoids iterating every row).
         //   Category 2 — numeric/other fields: iterate canonical rows via
         //                enrichment_for_row (only for fields not in category 1).
-        #[allow(clippy::items_after_statements)]
-        const MAX_ENRICH_BUCKETS: usize = 64;
         let t_step = std::time::Instant::now();
         let mut enrich_raw: HashMap<String, RoaringBitmap> = HashMap::new();
         let mut field_seen: HashMap<String, HashSet<String>> = HashMap::new();
@@ -350,21 +352,22 @@ impl OverlayBuilder {
             bitmap
                 .serialize_into(&mut bm_bytes)
                 .with_context(|| format!("serialising enrich bitmap '{key}'"))?;
-            #[allow(clippy::cast_possible_truncation)]
             enrich_entries.push(EnrichEntry {
-                key_offset: enrich_key_bytes.len() as u32,
-                key_len: key.len() as u16,
+                key_offset: u32::try_from(enrich_key_bytes.len()).unwrap_or(u32::MAX),
+                key_len: u16::try_from(key.len()).unwrap_or(u16::MAX),
                 _pad: 0,
-                bitmap_offset: enrich_bitmap_data.len() as u32,
-                bitmap_len: bm_bytes.len() as u32,
+                bitmap_offset: u32::try_from(enrich_bitmap_data.len()).unwrap_or(u32::MAX),
+                bitmap_len: u32::try_from(bm_bytes.len()).unwrap_or(u32::MAX),
             });
             enrich_key_bytes.extend_from_slice(key.as_bytes());
             enrich_bitmap_data.extend_from_slice(&bm_bytes);
         }
-        #[allow(clippy::cast_possible_truncation)]
-        let entry_count_le = (enrich_entries.len() as u32).to_le_bytes();
-        #[allow(clippy::cast_possible_truncation)]
-        let key_data_len_le = (enrich_key_bytes.len() as u32).to_le_bytes();
+        let entry_count_le = u32::try_from(enrich_entries.len())
+            .unwrap_or(u32::MAX)
+            .to_le_bytes();
+        let key_data_len_le = u32::try_from(enrich_key_bytes.len())
+            .unwrap_or(u32::MAX)
+            .to_le_bytes();
         let mut enrich_bitmaps_bytes: Vec<u8> = Vec::with_capacity(
             8 + enrich_entries.len() * std::mem::size_of::<EnrichEntry>()
                 + enrich_key_bytes.len()
@@ -436,7 +439,6 @@ impl OverlayBuilder {
             for r in &rows {
                 name_postings_bytes.extend_from_slice(&r.to_le_bytes());
             }
-            #[allow(clippy::cast_possible_truncation)]
             let packed = ((byte_offset as u64) << 32) | (count as u64);
             fst_builder
                 .insert(&name_bytes, packed)
@@ -479,9 +481,8 @@ impl OverlayBuilder {
         let mut index_files_u32 = Vec::with_capacity(segs.len());
         for (rel_path, _, _) in &segs {
             let full_path = self.worktree_root.join(rel_path);
-            #[allow(clippy::cast_possible_truncation)]
             let size = std::fs::metadata(&full_path)
-                .map(|m| m.len() as u32)
+                .map(|m| u32::try_from(m.len()).unwrap_or(u32::MAX))
                 .unwrap_or(0);
             index_files_u32.push(size);
         }
@@ -494,18 +495,19 @@ impl OverlayBuilder {
         //      overlay fast path without a filesystem walk.
         let mut file_entries_bytes: Vec<u8> = Vec::new();
         {
-            #[allow(clippy::cast_possible_truncation)]
-            file_entries_bytes.extend_from_slice(&(file_only.len() as u32).to_le_bytes());
+            file_entries_bytes.extend_from_slice(
+                &u32::try_from(file_only.len())
+                    .unwrap_or(u32::MAX)
+                    .to_le_bytes(),
+            );
             for (rel_path, _hex) in &file_only {
                 let full_path = self.worktree_root.join(rel_path);
-                #[allow(clippy::cast_possible_truncation)]
                 let size = std::fs::metadata(&full_path)
-                    .map(|m| m.len() as u32)
+                    .map(|m| u32::try_from(m.len()).unwrap_or(u32::MAX))
                     .unwrap_or(0);
                 let path_str = rel_path.to_string_lossy();
                 let path_bytes = path_str.as_bytes();
-                #[allow(clippy::cast_possible_truncation)]
-                let path_len = path_bytes.len() as u16;
+                let path_len = u16::try_from(path_bytes.len()).unwrap_or(u16::MAX);
                 file_entries_bytes.extend_from_slice(&size.to_le_bytes());
                 file_entries_bytes.extend_from_slice(&path_len.to_le_bytes());
                 file_entries_bytes.extend_from_slice(path_bytes);
@@ -671,15 +673,13 @@ fn collect_file_only(worktree_root: &Path, indexed: &HashSet<PathBuf>) -> Vec<(P
 ///
 /// This mirrors `decode_name_postings` in `segment_reader.rs`.
 fn decode_name_postings_raw(encoded: u64, name_postings: &[u8]) -> Vec<u32> {
-    #[allow(clippy::cast_possible_truncation)]
-    let count = (encoded & 0xFFFF_FFFF) as usize;
-    #[allow(clippy::cast_possible_truncation)]
-    let byte_offset = ((encoded >> 32) & 0xFFFF_FFFF) as usize;
+    let count = usize::try_from(encoded & 0xFFFF_FFFF).unwrap_or(usize::MAX);
+    let byte_offset = usize::try_from((encoded >> 32) & 0xFFFF_FFFF).unwrap_or(usize::MAX);
     let end = byte_offset + count * 4;
     if end > name_postings.len() {
         return Vec::new();
     }
-    #[allow(clippy::indexing_slicing)] // bounds checked above
+    #[expect(clippy::indexing_slicing, reason = "bounds checked above")]
     cast_slice::<u8, u32>(&name_postings[byte_offset..end]).to_vec()
 }
 

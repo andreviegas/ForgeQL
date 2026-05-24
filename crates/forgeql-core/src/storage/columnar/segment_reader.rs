@@ -242,7 +242,7 @@ impl SegmentReader {
             "segment {} is only {file_len} bytes (need ≥ 12 for FQSF header)",
             path.display()
         );
-        #[allow(unsafe_code)] // single mmap of immutable segment file
+        #[expect(unsafe_code, reason = "single mmap of immutable segment file")]
         let mmap = Arc::new(
             unsafe { MmapOptions::new().map(&file) }
                 .with_context(|| format!("mmap {}", path.display()))?,
@@ -957,16 +957,14 @@ fn load_zone_maps(
 /// `byte_offset` is a byte index into `name_postings.bin` pointing to
 /// `count` consecutive `u32 LE` row IDs.
 fn decode_name_postings(encoded: u64, name_postings: &[u8]) -> Vec<u32> {
-    #[allow(clippy::cast_possible_truncation)]
-    let count = (encoded & 0xFFFF_FFFF) as usize;
-    #[allow(clippy::cast_possible_truncation)]
-    let byte_offset = ((encoded >> 32) & 0xFFFF_FFFF) as usize;
+    let count = usize::try_from(encoded & 0xFFFF_FFFF).unwrap_or(usize::MAX);
+    let byte_offset = usize::try_from((encoded >> 32) & 0xFFFF_FFFF).unwrap_or(usize::MAX);
 
     let end = byte_offset + count * 4;
     if end > name_postings.len() {
         return Vec::new();
     }
-    #[allow(clippy::indexing_slicing)] // bounds checked above
+    #[expect(clippy::indexing_slicing, reason = "bounds checked above")]
     cast_slice::<u8, u32>(&name_postings[byte_offset..end]).to_vec()
 }
 
@@ -1029,13 +1027,7 @@ fn load_name_prefix(data: &[u8]) -> Result<HashMap<Vec<u8>, RoaringBitmap>> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::items_after_statements,
-    clippy::wildcard_imports
-)]
+#[expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 mod tests {
     use std::path::PathBuf;
 

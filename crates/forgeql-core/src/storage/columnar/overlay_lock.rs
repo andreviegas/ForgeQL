@@ -32,7 +32,7 @@ use fd_lock::RwLock as FdRwLock;
 /// the lock immediately.
 pub struct OverlayLock {
     /// Path to the on-disk lock file (kept for diagnostics).
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "retained as metadata for diagnostics")]
     lock_path: PathBuf,
     /// Owns the locked file descriptor.  Dropping the `RwLock` drops the
     /// inner `File`, closes the fd, and releases the OS-level lock.
@@ -85,7 +85,7 @@ impl OverlayLock {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
