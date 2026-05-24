@@ -171,8 +171,7 @@ impl ColumnDraft {
     }
 
     /// Current length (number of entries, including `None` slots).
-    #[allow(clippy::missing_const_for_fn)] // match on &self enum is not const in stable Rust
-    fn len(&self) -> usize {
+    const fn len(&self) -> usize {
         match self {
             Self::Str(v) => v.len(),
             Self::Bit(v) => v.len(),
@@ -231,8 +230,7 @@ impl SegmentBuilder {
         pid[..pid_len].copy_from_slice(&pid_bytes[..pid_len]);
 
         // len().min(32) is ≤ 32, which always fits in u8.
-        #[allow(clippy::cast_possible_truncation)]
-        let cid_len = content_id.len().min(32) as u8;
+        let cid_len = u8::try_from(content_id.len().min(32)).unwrap_or(32u8);
         let mut cid = [0u8; 32];
         cid[..cid_len as usize].copy_from_slice(&content_id[..cid_len as usize]);
 
@@ -257,7 +255,10 @@ impl SegmentBuilder {
 
     /// Number of rows added so far.
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)] // row counts fit in u32
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "row count will never exceed u32::MAX (4 billion rows) in a real index"
+    )]
     pub const fn row_count(&self) -> u32 {
         self.col_name_id.len() as u32
     }
@@ -267,7 +268,10 @@ impl SegmentBuilder {
     ///
     /// This is the canonical row-insertion method.  [`add_row`](Self::add_row)
     /// is a convenience wrapper that discards the returned [`RowId`].
-    #[allow(clippy::too_many_arguments)] // 7 physical columns is intentional
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "7 arguments map directly to the 7 fixed physical columns in the segment schema"
+    )]
     pub fn emit_row(
         &mut self,
         name: &str,
@@ -315,7 +319,10 @@ impl SegmentBuilder {
     ///
     /// Use [`emit_row`](Self::emit_row) when you need to attach enrichment
     /// fields via [`set_field`](Self::set_field).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors emit_row; 7 arguments map to the 7 fixed physical columns"
+    )]
     pub fn add_row(
         &mut self,
         name: &str,
@@ -381,7 +388,10 @@ impl SegmentBuilder {
     ///
     /// # Errors
     /// Propagates I/O errors from file creation / renaming.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Linear encoding pipeline: string-table, fixed columns, enrichment columns, posting indices, and CRC; splitting would fragment the write-ordering logic"
+    )]
     pub fn flush(mut self, target_path: &Path) -> Result<()> {
         if is_valid_segment(target_path) {
             return Ok(());
@@ -512,7 +522,10 @@ impl SegmentBuilder {
 
     // --- private ---
 
-    #[allow(clippy::expect_used)]
+    #[expect(
+        clippy::expect_used,
+        reason = "string pool overflow (> 4 billion unique strings) indicates a corrupt index; panic is the correct response"
+    )]
     fn intern(&mut self, s: &str) -> u32 {
         if let Some(&id) = self.string_map.get(s) {
             return id;
