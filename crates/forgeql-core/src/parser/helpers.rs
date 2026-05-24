@@ -1,15 +1,46 @@
 //! Shared parser utilities: string extraction, unquoting, heredoc parsing, error enrichment.
 use super::Rule;
 use crate::error::ForgeError;
+/// Extract a string from an `any_value` pair, handling heredoc, quoted, or bare tokens.
+///
+/// This is the single canonical extractor for any position that accepts `any_value`
+/// in the grammar.  It covers all three variants:
+/// - `heredoc_literal` — extracts the body between the open/close tags
+/// - `string_literal`  — strips surrounding single or double quotes
+/// - `bare_value`      — returns the token as-is
+pub(super) fn unwrap_any_value(
+    pair: pest::iterators::Pair<'_, Rule>,
+) -> Result<String, ForgeError> {
+    // any_value is a compound rule — drill to its single inner child.
+    let inner = match pair.as_rule() {
+        Rule::any_value => pair
+            .into_inner()
+            .next()
+            .ok_or_else(|| ForgeError::DslParse("any_value: empty".into()))?,
+        // Already the inner rule (bare_value, string_literal, heredoc_literal).
+        _ => pair,
+    };
+    match inner.as_rule() {
+        Rule::heredoc_literal => extract_heredoc(inner),
+        Rule::string_literal => Ok(unquote(inner.as_str())),
+        Rule::bare_value => Ok(inner.as_str().to_owned()),
+        r => Err(ForgeError::DslParse(format!(
+            "unwrap_any_value: unexpected {r:?}"
+        ))),
+    }
+}
+
 /// Advance `pairs` and return the next item as an unquoted `String`.
+///
+/// Handles heredoc, quoted, and bare tokens via [`unwrap_any_value`].
 pub(super) fn next_str(
     pairs: &mut pest::iterators::Pairs<'_, Rule>,
     msg: &'static str,
 ) -> Result<String, ForgeError> {
     pairs
         .next()
-        .map(|p| unquote(p.as_str()))
         .ok_or_else(|| ForgeError::DslParse(msg.into()))
+        .and_then(unwrap_any_value)
 }
 /// Strip the surrounding single-quotes from a `string_literal` token.
 pub(super) fn unquote(s: &str) -> String {

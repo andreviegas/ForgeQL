@@ -6,6 +6,64 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.3] — 2026-05-24 — Heredoc in all string positions; overlay safety hardening
+
+### Added
+
+- **Heredoc syntax now accepted in every `any_value` position** — previously
+  `<<TAG...TAG` blocks were only valid on the `WITH` (replacement) side of
+  `CHANGE` commands.  After this change heredoc works anywhere a string is
+  accepted: `MATCHING` patterns, `WHERE`/`HAVING` predicate values, `IN` /
+  `EXCLUDE` globs, `OF` symbol targets, aliases, etc.
+
+  Example — match a multi-line pattern:
+  ```sql
+  CHANGE FILE 'src/lib.rs' MATCHING <<OLD
+  fn foo() {
+      todo!()
+  }
+  OLD WITH <<NEW
+  fn foo() -> u32 { 42 }
+  NEW
+  ```
+
+  Example — complex regex predicate without escaping:
+  ```sql
+  FIND symbols WHERE name MATCHES <<RE
+  ^(get|set)_[a-z_]{3,}
+  RE
+  ```
+
+### Fixed
+
+- **`overlay_writer.rs`: silent `as` casts replaced with checked conversions**
+  — removed all 5 `#[allow(clippy::cast_possible_truncation)]` suppressions.
+  Added private `to_u32()`/`to_u16()` helpers that use `u{32,16}::try_from()`
+  and return `io::Error(InvalidData)` on overflow, so corrupt or oversized data
+  is rejected at write time instead of silently truncating.  `compute_blobs()`
+  now returns `io::Result<ComputedBlobs>` and all callers propagate errors with
+  `?`.  On-disk header constants are expressed as `u32` literals backed by
+  compile-time `assert!` macros to keep them in sync with the `usize` originals
+  in `overlay.rs`.
+
+- **`overlay.rs`: removed 52 `#[allow]` suppressions** — replaced every blanket
+  lint suppression with proper safe code:
+  - 43 `indexing_slicing` → bounds-checked `.get()` with explicit error handling
+  - 2 `cast_possible_truncation` → `u32::try_from()`
+  - 2 `dead_code` → items removed or actually used
+  - 1 `unsafe_code` → narrowed to `#[expect(unsafe_code)]` on the one call site
+  - 1 `too_many_lines` → helper functions extracted
+  - 1 `unwrap_used`/`expect_used` in test module → safe alternatives
+
+### Implementation
+
+- Grammar (`forgeql.pest`): `any_value` rule extended to
+  `heredoc_literal | string_literal | bare_value`.
+- Parser (`helpers.rs`): new `unwrap_any_value()` helper dispatches all three
+  variants; `next_str()` delegates to it (one canonical extraction path).
+- Parser (`clauses.rs`): `parse_predicate`, `in_clause`, and `exclude_clause`
+  updated to use `unwrap_any_value` instead of the raw `unquote` call.
+
 ## [0.54.2] — 2026-05-24 — Python (PyTorch) golden test suite GP1–GP25
 
 ### Tests

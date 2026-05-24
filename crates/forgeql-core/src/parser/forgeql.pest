@@ -53,9 +53,11 @@ source_name = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_" | "-")* }
 /// Stops at any whitespace. Use quoted forms when the value contains spaces or wildcards (*).
 bare_value = @{ (ASCII_ALPHANUMERIC | "_" | ":" | "-" | "." | "/")+ }
 
-/// Any value: a quoted literal (single or double) or a bare (unquoted) token.
+/// Any value: a heredoc block, a quoted literal (single or double), or a bare (unquoted) token.
 /// Use this in contexts where quoting is optional (predicates, OF targets, IN/EXCLUDE paths).
-any_value = { string_literal | bare_value }
+/// Heredoc is accepted in all positions so that multiline patterns and regex values can be
+/// written without escaping (e.g. `MATCHING <<PAT\nold block\nPAT`).
+any_value = { heredoc_literal | string_literal | bare_value }
 
 // -----------------------------------------------------------------------
 // Optional backend selector — USING 'backend'

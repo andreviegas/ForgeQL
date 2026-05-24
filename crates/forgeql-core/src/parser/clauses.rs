@@ -1,6 +1,6 @@
 //! `parse_clauses`, `parse_predicate`, `parse_compare_op`.
 use super::Rule;
-use super::helpers::unquote;
+use super::helpers::unwrap_any_value;
 use crate::ir::{Clauses, CompareOp, GroupBy, OrderBy, Predicate, PredicateValue, SortDirection};
 pub(super) fn parse_clauses(pairs: pest::iterators::Pairs<'_, Rule>) -> Clauses {
     let mut clauses = Clauses::default();
@@ -21,10 +21,16 @@ pub(super) fn parse_clauses(pairs: pest::iterators::Pairs<'_, Rule>) -> Clauses 
                 }
             }
             Rule::in_clause => {
-                clauses.in_glob = pair.into_inner().next().map(|p| unquote(p.as_str()));
+                clauses.in_glob = pair
+                    .into_inner()
+                    .next()
+                    .and_then(|p| unwrap_any_value(p).ok());
             }
             Rule::exclude_clause => {
-                clauses.exclude_glob = pair.into_inner().next().map(|p| unquote(p.as_str()));
+                clauses.exclude_glob = pair
+                    .into_inner()
+                    .next()
+                    .and_then(|p| unwrap_any_value(p).ok());
             }
             Rule::order_clause => {
                 // order_clause = { "ORDER" ~ "BY" ~ field_name ~ sort_dir? }
@@ -83,7 +89,7 @@ pub(super) fn parse_predicate(pair: pest::iterators::Pair<'_, Rule>) -> Option<P
     let val_pair = parts.next()?;
     let inner = val_pair.into_inner().next()?;
     let value = match inner.as_rule() {
-        Rule::any_value => PredicateValue::String(unquote(inner.as_str())),
+        Rule::any_value => PredicateValue::String(unwrap_any_value(inner).ok()?),
         Rule::signed_number => PredicateValue::Number(inner.as_str().parse().unwrap_or(0)),
         Rule::boolean_literal => PredicateValue::Bool(inner.as_str() == "true"),
         _ => return None,

@@ -1178,6 +1178,35 @@
     "name": "GFF9_depth2_top5_dirs_by_size"
   },
   {
+    "expect_total": 1,
+    "expect_rows": [
+      {"name": "k_mutex_lock"}
+    ],
+    "fql": "FIND symbols WHERE name = <<SYM\nk_mutex_lock\nSYM",
+    "name": "GHD1_heredoc_where_eq_predicate"
+  },
+  {
+    "expect_line_count": 2,
+    "expect_lines": [
+      {"line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"},
+      {"line": 71, "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)"}
+    ],
+    "fql": "SHOW LINES 51-75 OF 'kernel/sched.c' WHERE text MATCHES <<RE\nvoid \\*\\w+_runq\nRE",
+    "name": "GHD2_heredoc_where_matches_predicate"
+  },
+  {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"line": 51, "name": "thread_runq"},
+      {"line": 71, "name": "curr_cpu_runq"},
+      {"line": 80, "name": "runq_add"},
+      {"line": 88, "name": "runq_remove"},
+      {"line": 96, "name": "runq_yield"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY line ASC LIMIT 5 IN <<GLOB\nkernel/sched.c\nGLOB",
+    "name": "GHD3_heredoc_in_glob"
+  },
+  {
     "expect_line_count": 5,
     "expect_lines": [
       {"line": 1, "text": "/*"},
