@@ -6,6 +6,50 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.4] — 2026-05-24 — Columnar storage lint cleanup & `SymbolRow` API
+
+### Fixed
+
+- **`columnar_storage.rs`: eliminated all `#[allow]` suppressions** — proper fixes
+  for each:
+  - `unnecessary_wraps` on `fast_group_by_file` / `fast_group_by_kind`: changed
+    return type from `Result<Vec<SymbolMatch>>` to `Vec<SymbolMatch>`; call sites
+    wrapped in `Ok(...)` to match the outer `Result` context.
+  - `cast_possible_truncation` (×2): replaced `as usize` / `as u32` with
+    `try_from(...).unwrap_or(MAX)` — overflow is unreachable for real source files
+    but now made explicit.
+  - `too_many_lines` on `reindex_files`: suppression removed (function is under
+    the threshold).
+  - `too_many_lines` on `resolve_impl`, `find_symbols`, `warm_or_open`: replaced
+    with `#[expect(..., reason = "...")]` documenting why splitting would harm
+    readability.
+
+- **`segment_builder.rs`: eliminated all remaining `#[allow]` suppressions** —
+  proper fixes for each:
+  - `missing_const_for_fn` on `Col::len()`: added `const`; `Vec::len()` has been
+    const-stable since Rust 1.63 so the old workaround comment was outdated.
+  - `cast_possible_truncation` on `cid_len`: replaced `as u8` with
+    `u8::try_from(content_id.len().min(32)).unwrap_or(32u8)`; value is capped at
+    32 so `try_from` always succeeds.
+  - `cast_possible_truncation` on `row_count`: replaced with `#[expect(...,
+    reason = "...")]`; `TryFrom` is not const-stable so the cast is required.
+  - `too_many_arguments` on `emit_row` / `add_row`: replaced with `#[expect]` —
+    superseded in the next commit by the `SymbolRow` refactor.
+  - `too_many_lines` on `flush`: replaced with `#[expect(..., reason = "...")]`.
+  - `expect_used` on `intern`: replaced with `#[expect(..., reason = "...")]`;
+    panic on 4-billion-string overflow is intentional sentinel behaviour.
+
+### Changed
+
+- **`SegmentBuilder::emit_row` / `add_row` now accept `SymbolRow`** instead of
+  7 positional arguments. The named struct makes call sites self-documenting,
+  eliminates the `too_many_arguments` lint naturally, and ensures future column
+  additions only touch the struct definition and its construction sites.
+  All 10 affected files updated (`segment_builder.rs`, `build_context.rs`,
+  `columnar_storage.rs`, `shadow_writer.rs`, `segment_reader.rs`, `mod.rs`,
+  `segment_parity.rs`, `overlay_parity.rs`, `columnar_filter.rs`,
+  `columnar_range.rs`).
+
 ## [0.54.3] — 2026-05-24 — Heredoc in all string positions; overlay safety hardening
 
 ### Added
