@@ -110,6 +110,33 @@ pub(crate) const TOC_ENTRY_SIZE: usize = 64; // ENTRY_NAME_LEN + 4 + 4
 pub struct RowId(u32);
 
 // ---------------------------------------------------------------------------
+// SymbolRow — the seven fixed columns for one row insertion
+// ---------------------------------------------------------------------------
+
+/// Describes one symbol row for insertion into a [`SegmentBuilder`].
+///
+/// Using a named struct rather than 7 positional arguments makes call sites
+/// self-documenting and ensures that adding or reordering columns only
+/// requires changing this struct and its construction sites.
+#[derive(Debug, Clone, Copy)]
+pub struct SymbolRow<'a> {
+    /// Symbol name (e.g. `"my_function"`).
+    pub name: &'a str,
+    /// ForgeQL kind tag (e.g. `"function"`, `"class"`).
+    pub fql_kind: &'a str,
+    /// Source language (e.g. `"rust"`, `"cpp"`).
+    pub language: &'a str,
+    /// 1-based source line number.
+    pub line: u32,
+    /// Byte offset of the symbol's start in the source file.
+    pub byte_start: u32,
+    /// Byte offset of the symbol's end in the source file.
+    pub byte_end: u32,
+    /// Number of usages / references detected.
+    pub usages_count: u32,
+}
+
+// ---------------------------------------------------------------------------
 // FieldValue — polymorphic enrichment value
 // ---------------------------------------------------------------------------
 
@@ -268,32 +295,19 @@ impl SegmentBuilder {
     ///
     /// This is the canonical row-insertion method.  [`add_row`](Self::add_row)
     /// is a convenience wrapper that discards the returned [`RowId`].
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "7 arguments map directly to the 7 fixed physical columns in the segment schema"
-    )]
-    pub fn emit_row(
-        &mut self,
-        name: &str,
-        fql_kind: &str,
-        language: &str,
-        line: u32,
-        byte_start: u32,
-        byte_end: u32,
-        usages_count: u32,
-    ) -> RowId {
+    pub fn emit_row(&mut self, row: SymbolRow<'_>) -> RowId {
         let row_id = self.row_count();
 
-        let name_id = self.intern(name);
-        let kind_id = self.intern(fql_kind);
-        let lang_id = self.intern(language);
+        let name_id = self.intern(row.name);
+        let kind_id = self.intern(row.fql_kind);
+        let lang_id = self.intern(row.language);
 
         self.col_name_id.push(name_id);
         self.col_fql_kind_id.push(kind_id);
-        self.col_line.push(line);
-        self.col_byte_start.push(byte_start);
-        self.col_byte_end.push(byte_end);
-        self.col_usages_count.push(usages_count);
+        self.col_line.push(row.line);
+        self.col_byte_start.push(row.byte_start);
+        self.col_byte_end.push(row.byte_end);
+        self.col_usages_count.push(row.usages_count);
         self.col_language_id.push(lang_id);
 
         let _inserted = self
@@ -302,7 +316,7 @@ impl SegmentBuilder {
             .or_default()
             .insert(row_id);
         self.name_to_rows
-            .entry(name.to_owned())
+            .entry(row.name.to_owned())
             .or_default()
             .push(row_id);
 
@@ -319,29 +333,8 @@ impl SegmentBuilder {
     ///
     /// Use [`emit_row`](Self::emit_row) when you need to attach enrichment
     /// fields via [`set_field`](Self::set_field).
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "mirrors emit_row; 7 arguments map to the 7 fixed physical columns"
-    )]
-    pub fn add_row(
-        &mut self,
-        name: &str,
-        fql_kind: &str,
-        language: &str,
-        line: u32,
-        byte_start: u32,
-        byte_end: u32,
-        usages_count: u32,
-    ) {
-        let _ = self.emit_row(
-            name,
-            fql_kind,
-            language,
-            line,
-            byte_start,
-            byte_end,
-            usages_count,
-        );
+    pub fn add_row(&mut self, row: SymbolRow<'_>) {
+        let _ = self.emit_row(row);
     }
 
     /// Attach an enrichment field value to the row identified by `row`.
@@ -968,9 +961,33 @@ mod tests {
         let target = dir.path().join("seg.fqsf");
 
         let mut builder = make_builder();
-        builder.add_row("foo", "function", "rust", 10, 0, 100, 3);
-        builder.add_row("bar", "struct", "rust", 20, 200, 350, 1);
-        builder.add_row("foo", "function", "rust", 30, 400, 500, 3);
+        builder.add_row(SymbolRow {
+            name: "foo",
+            fql_kind: "function",
+            language: "rust",
+            line: 10,
+            byte_start: 0,
+            byte_end: 100,
+            usages_count: 3,
+        });
+        builder.add_row(SymbolRow {
+            name: "bar",
+            fql_kind: "struct",
+            language: "rust",
+            line: 20,
+            byte_start: 200,
+            byte_end: 350,
+            usages_count: 1,
+        });
+        builder.add_row(SymbolRow {
+            name: "foo",
+            fql_kind: "function",
+            language: "rust",
+            line: 30,
+            byte_start: 400,
+            byte_end: 500,
+            usages_count: 3,
+        });
         builder.flush(&target).expect("flush");
 
         assert!(is_valid_segment(&target), "not a valid .fqsf segment");
@@ -989,7 +1006,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let target = dir.path().join("seg.fqsf");
         let mut builder = make_builder();
-        builder.add_row("x", "variable", "cpp", 1, 0, 10, 0);
+        builder.add_row(SymbolRow {
+            name: "x",
+            fql_kind: "variable",
+            language: "cpp",
+            line: 1,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
         builder.flush(&target).expect("first flush");
 
         let first_size = std::fs::metadata(&target).expect("metadata").len();

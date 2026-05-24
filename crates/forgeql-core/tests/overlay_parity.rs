@@ -34,7 +34,7 @@ use forgeql_core::ast::lang::{
 };
 use forgeql_core::ir::Clauses;
 use forgeql_core::result::SymbolMatch;
-use forgeql_core::storage::columnar::{OverlayBuilder, SegmentBuilder, SegmentReader};
+use forgeql_core::storage::columnar::{OverlayBuilder, SegmentBuilder, SegmentReader, SymbolRow};
 use tempfile::TempDir;
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -117,16 +117,15 @@ fn build_segment(
 
     let mut builder = SegmentBuilder::new("test", &content_id);
     for row in &table.rows {
-        #[allow(clippy::cast_possible_truncation)]
-        let row_id = builder.emit_row(
-            table.name_of(row),
-            table.fql_kind_of(row),
-            table.language_of(row),
-            row.line as u32,
-            row.byte_range.start as u32,
-            row.byte_range.end as u32,
-            row.usages_count,
-        );
+        let row_id = builder.emit_row(SymbolRow {
+            name: table.name_of(row),
+            fql_kind: table.fql_kind_of(row),
+            language: table.language_of(row),
+            line: u32::try_from(row.line).unwrap_or(u32::MAX),
+            byte_start: u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
+            byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
+            usages_count: row.usages_count,
+        });
         for (key, val) in table.resolve_fields(&row.fields) {
             builder.set_field(row_id, &key, val.as_str());
         }
@@ -1894,7 +1893,15 @@ fn build_dirty_segment(
 ) -> SegmentReader {
     let mut builder = SegmentBuilder::new("test", content_id_bytes);
     for &(name, kind, line) in rows {
-        let _ = builder.emit_row(name, kind, "rust", line, 0, 10, 0);
+        let _ = builder.emit_row(SymbolRow {
+            name,
+            fql_kind: kind,
+            language: "rust",
+            line,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
     }
     builder.flush(dir).expect("dirty segment flush");
     SegmentReader::open(dir).expect("dirty SegmentReader::open")
@@ -1934,8 +1941,24 @@ fn dirty_overlay_shadows_and_unions() {
     });
     {
         let mut builder = SegmentBuilder::new("test", &file1_cid);
-        let _ = builder.emit_row("SymbolA", "function", "cpp", 10, 0, 20, 0);
-        let _ = builder.emit_row("SymbolB", "function", "cpp", 20, 0, 40, 0);
+        let _ = builder.emit_row(SymbolRow {
+            name: "SymbolA",
+            fql_kind: "function",
+            language: "cpp",
+            line: 10,
+            byte_start: 0,
+            byte_end: 20,
+            usages_count: 0,
+        });
+        let _ = builder.emit_row(SymbolRow {
+            name: "SymbolB",
+            fql_kind: "function",
+            language: "cpp",
+            line: 20,
+            byte_start: 0,
+            byte_end: 40,
+            usages_count: 0,
+        });
         builder
             .flush(
                 &seg_dir
@@ -1954,7 +1977,15 @@ fn dirty_overlay_shadows_and_unions() {
     });
     {
         let mut builder = SegmentBuilder::new("test", &file2_cid);
-        let _ = builder.emit_row("SymbolC", "function", "rust", 5, 0, 10, 0);
+        let _ = builder.emit_row(SymbolRow {
+            name: "SymbolC",
+            fql_kind: "function",
+            language: "rust",
+            line: 5,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
         builder
             .flush(
                 &seg_dir
@@ -2090,7 +2121,15 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
     });
     {
         let mut builder = SegmentBuilder::new("test", &file1_cid);
-        let _ = builder.emit_row("SymbolA", "function", "cpp", 1, 0, 10, 0);
+        let _ = builder.emit_row(SymbolRow {
+            name: "SymbolA",
+            fql_kind: "function",
+            language: "cpp",
+            line: 1,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
         builder
             .flush(
                 &seg_dir
@@ -2193,8 +2232,24 @@ fn dirty_overlay_resolve_symbol_shadows_and_unions() {
     });
     {
         let mut builder = SegmentBuilder::new("test", &file1_cid);
-        let _ = builder.emit_row("SymbolA", "function", "cpp", 10, 0, 20, 0);
-        let _ = builder.emit_row("SymbolB", "function", "cpp", 20, 0, 40, 0);
+        let _ = builder.emit_row(SymbolRow {
+            name: "SymbolA",
+            fql_kind: "function",
+            language: "cpp",
+            line: 10,
+            byte_start: 0,
+            byte_end: 20,
+            usages_count: 0,
+        });
+        let _ = builder.emit_row(SymbolRow {
+            name: "SymbolB",
+            fql_kind: "function",
+            language: "cpp",
+            line: 20,
+            byte_start: 0,
+            byte_end: 40,
+            usages_count: 0,
+        });
         builder
             .flush(
                 &seg_dir

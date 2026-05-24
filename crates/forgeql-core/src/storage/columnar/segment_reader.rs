@@ -1043,7 +1043,7 @@ mod tests {
     use crate::ir::{
         Clauses, CompareOp, GroupBy, OrderBy, Predicate, PredicateValue, SortDirection,
     };
-    use crate::storage::columnar::segment_builder::SegmentBuilder;
+    use crate::storage::columnar::segment_builder::{SegmentBuilder, SymbolRow};
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -1055,7 +1055,15 @@ mod tests {
         let content_id = [0xAB_u8; 20];
         let mut b = SegmentBuilder::new("test", &content_id);
         for &(name, kind, line) in rows {
-            b.add_row(name, kind, "rust", line, 0, 10, 0);
+            b.add_row(SymbolRow {
+                name,
+                fql_kind: kind,
+                language: "rust",
+                line,
+                byte_start: 0,
+                byte_end: 10,
+                usages_count: 0,
+            });
         }
         b.flush(&seg).expect("flush");
         (tmp, seg)
@@ -1118,9 +1126,25 @@ mod tests {
         let seg = tmp.path().join("seg.fqsf");
         let content_id = [0x11_u8; 20];
         let mut b = SegmentBuilder::new("test", &content_id);
-        let row = b.emit_row("foo", "function", "rust", 1, 0, 50, 0);
+        let row = b.emit_row(SymbolRow {
+            name: "foo",
+            fql_kind: "function",
+            language: "rust",
+            line: 1,
+            byte_start: 0,
+            byte_end: 50,
+            usages_count: 0,
+        });
         b.set_field(row, "param_count", "2");
-        let row2 = b.emit_row("bar", "function", "rust", 5, 51, 100, 0);
+        let row2 = b.emit_row(SymbolRow {
+            name: "bar",
+            fql_kind: "function",
+            language: "rust",
+            line: 5,
+            byte_start: 51,
+            byte_end: 100,
+            usages_count: 0,
+        });
         b.set_field(row2, "param_count", "0");
         b.flush(&seg).expect("flush");
 
@@ -1262,9 +1286,25 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let seg = tmp.path().join("seg.fqsf");
         let mut b = SegmentBuilder::new("test", &[0xFFu8; 20]);
-        let r0 = b.emit_row("alpha", "function", "rust", 1, 0, 50, 3);
+        let r0 = b.emit_row(SymbolRow {
+            name: "alpha",
+            fql_kind: "function",
+            language: "rust",
+            line: 1,
+            byte_start: 0,
+            byte_end: 50,
+            usages_count: 3,
+        });
         b.set_field(r0, "is_const", "false");
-        let r1 = b.emit_row("beta", "struct", "rust", 10, 51, 200, 0);
+        let r1 = b.emit_row(SymbolRow {
+            name: "beta",
+            fql_kind: "struct",
+            language: "rust",
+            line: 10,
+            byte_start: 51,
+            byte_end: 200,
+            usages_count: 0,
+        });
         b.set_field(r1, "member_count", "4");
         b.flush(&seg).expect("flush");
 

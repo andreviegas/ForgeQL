@@ -50,7 +50,7 @@ pub use delta_file::{DeltaFile, StagedEntry};
 pub use dirty_overlay::DirtyOverlay;
 pub use manifest::Manifest;
 pub use overlay_builder::OverlayBuilder;
-pub use segment_builder::SegmentBuilder;
+pub use segment_builder::{SegmentBuilder, SymbolRow};
 pub use segment_reader::SegmentReader;
 pub use shadow_writer::ShadowWriter;
 

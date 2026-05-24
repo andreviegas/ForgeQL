@@ -42,7 +42,7 @@ use crate::ast::index::SymbolTable;
 
 use super::bytes_to_hex;
 use super::manifest::Manifest;
-use super::segment_builder::{SegmentBuilder, is_valid_segment};
+use super::segment_builder::{SegmentBuilder, SymbolRow, is_valid_segment};
 
 /// Iterates a [`SymbolTable`] and writes one columnar segment per source file.
 pub struct ShadowWriter<'a> {
@@ -192,16 +192,15 @@ impl<'a> ShadowWriter<'a> {
                 let mut local_columns: BTreeSet<String> = BTreeSet::new();
                 for &idx in row_indices {
                     let row = &table.rows[idx];
-                    #[allow(clippy::cast_possible_truncation)]
-                    let row_id = builder.emit_row(
-                        table.name_of(row),
-                        table.fql_kind_of(row),
-                        table.language_of(row),
-                        row.line as u32,
-                        row.byte_range.start as u32,
-                        row.byte_range.end as u32,
-                        row.usages_count,
-                    );
+                    let row_id = builder.emit_row(SymbolRow {
+                        name: table.name_of(row),
+                        fql_kind: table.fql_kind_of(row),
+                        language: table.language_of(row),
+                        line: u32::try_from(row.line).unwrap_or(u32::MAX),
+                        byte_start: u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
+                        byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
+                        usages_count: row.usages_count,
+                    });
                     for (key, value) in table.resolve_fields(&row.fields) {
                         let _ = local_columns.insert(key.clone());
                         builder.set_field(row_id, &key, value);

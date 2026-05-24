@@ -39,7 +39,7 @@ use super::delta_file::DeltaFile;
 use super::dirty_overlay::DirtyOverlay;
 use super::overlay::{Overlay, RowPtr};
 use super::overlay_lock::OverlayLock;
-use super::segment_builder::{SegmentBuilder, ZONEMAP_NUMERIC_FIELDS, is_valid_segment};
+use super::segment_builder::{SegmentBuilder, SymbolRow, ZONEMAP_NUMERIC_FIELDS, is_valid_segment};
 use super::segment_reader::SegmentReader;
 use crate::storage::git_sha1_provider::git_blob_sha1;
 use crate::storage::{LegacyMemoryStorage, StorageEngine, SymbolLocation};
@@ -1698,15 +1698,15 @@ impl StorageEngine for ColumnarStorage {
 
                 let mut builder = SegmentBuilder::new("git-sha1", &content_id_bytes);
                 for row in &table.rows {
-                    let row_id = builder.emit_row(
-                        table.name_of(row),
-                        table.fql_kind_of(row),
-                        table.language_of(row),
-                        u32::try_from(row.line).unwrap_or(u32::MAX),
-                        u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
-                        u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
-                        row.usages_count,
-                    );
+                    let row_id = builder.emit_row(SymbolRow {
+                        name: table.name_of(row),
+                        fql_kind: table.fql_kind_of(row),
+                        language: table.language_of(row),
+                        line: u32::try_from(row.line).unwrap_or(u32::MAX),
+                        byte_start: u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
+                        byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
+                        usages_count: row.usages_count,
+                    });
                     for (key, val) in table.resolve_fields(&row.fields) {
                         builder.set_field(row_id, &key, val.as_str());
                     }

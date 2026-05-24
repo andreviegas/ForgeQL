@@ -36,7 +36,7 @@ use forgeql_core::ast::index::{SymbolTable, index_file};
 use forgeql_core::ast::lang::{CppLanguageInline, LanguageSupport, RustLanguageInline};
 use forgeql_core::ir::Clauses;
 use forgeql_core::result::SymbolMatch;
-use forgeql_core::storage::columnar::{SegmentBuilder, SegmentReader};
+use forgeql_core::storage::columnar::{SegmentBuilder, SegmentReader, SymbolRow};
 use tempfile::TempDir;
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -78,16 +78,15 @@ fn build_segment_from_table(table: &SymbolTable) -> (TempDir, PathBuf) {
     let mut builder = SegmentBuilder::new("test", &content_id);
 
     for row in &table.rows {
-        #[allow(clippy::cast_possible_truncation)]
-        let row_id = builder.emit_row(
-            table.name_of(row),
-            table.fql_kind_of(row),
-            table.language_of(row),
-            row.line as u32,
-            row.byte_range.start as u32,
-            row.byte_range.end as u32,
-            row.usages_count,
-        );
+        let row_id = builder.emit_row(SymbolRow {
+            name: table.name_of(row),
+            fql_kind: table.fql_kind_of(row),
+            language: table.language_of(row),
+            line: u32::try_from(row.line).unwrap_or(u32::MAX),
+            byte_start: u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
+            byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
+            usages_count: row.usages_count,
+        });
         for (key, val) in table.resolve_fields(&row.fields) {
             builder.set_field(row_id, &key, val.as_str());
         }

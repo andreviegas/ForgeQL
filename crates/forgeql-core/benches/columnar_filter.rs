@@ -36,7 +36,7 @@ use forgeql_core::ir::{Clauses, CompareOp, Predicate, PredicateValue};
 use forgeql_core::storage::StorageEngine;
 use forgeql_core::storage::columnar::overlay::Overlay;
 use forgeql_core::storage::columnar::{
-    ColumnarStorage, OverlayBuilder, SegmentBuilder, SegmentReader,
+    ColumnarStorage, OverlayBuilder, SegmentBuilder, SegmentReader, SymbolRow,
 };
 use tempfile::TempDir;
 
@@ -80,16 +80,15 @@ fn build_segment(
     let seg_dir = segments_dir.join("bench").join(&hex);
     let mut builder = SegmentBuilder::new("bench", &content_id);
     for row in &table.rows {
-        #[allow(clippy::cast_possible_truncation)]
-        let row_id = builder.emit_row(
-            table.name_of(row),
-            table.fql_kind_of(row),
-            table.language_of(row),
-            row.line as u32,
-            row.byte_range.start as u32,
-            row.byte_range.end as u32,
-            row.usages_count,
-        );
+        let row_id = builder.emit_row(SymbolRow {
+            name: table.name_of(row),
+            fql_kind: table.fql_kind_of(row),
+            language: table.language_of(row),
+            line: u32::try_from(row.line).unwrap_or(u32::MAX),
+            byte_start: u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
+            byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
+            usages_count: row.usages_count,
+        });
         for (k, v) in table.resolve_fields(&row.fields) {
             builder.set_field(row_id, &k, v.as_str());
         }
