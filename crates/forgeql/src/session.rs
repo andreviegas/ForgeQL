@@ -167,7 +167,7 @@ pub(crate) fn session_try_resume(engine: &mut ForgeQLEngine, session: &mut Sessi
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::unwrap_in_result)]
+#[expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 mod tests {
     use super::*;
     use std::path::Path;

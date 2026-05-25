@@ -24,7 +24,10 @@ use forgeql_core::ast::lang::{LanguageConfig, MacroDef, MacroExpander};
 // -----------------------------------------------------------------------
 // RustMacroExpander
 /// [`MacroExpander`] implementation for Rust `macro_rules!` macros.
-#[allow(clippy::redundant_pub_crate)]
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "pub(crate) is required by the MacroExpander trait dispatch; suppressing is clearer than changing visibility"
+)]
 pub(crate) struct RustMacroExpander;
 
 impl MacroExpander for RustMacroExpander {
@@ -258,7 +261,7 @@ fn replace_whole_word(haystack: &str, needle: &str, replacement: &str) -> String
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 mod tests {
     use super::*;
     use crate::rust_config;

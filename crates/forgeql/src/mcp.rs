@@ -41,7 +41,10 @@ use forgeql_core::session::SessionCoords;
 /// a long-running `USE` is cancelled by the client.
 pub(crate) struct ForgeQlMcp {
     engine: Arc<TokioMutex<ForgeQLEngine>>,
-    #[allow(dead_code)] // populated and read by the rmcp ToolRouter derive macro
+    #[expect(
+        dead_code,
+        reason = "populated and read by the rmcp ToolRouter derive macro"
+    )]
     tool_router: ToolRouter<Self>,
     logger: Mutex<Option<QueryLogger>>,
 }
@@ -125,7 +128,10 @@ pub(crate) struct RunFqlParams {
 /// Convert a `ForgeError` (from the parser) to an `rmcp` `ErrorData`.
 ///
 /// Takes ownership because `map_err` passes the error by value.
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "map_err requires taking ownership; the value cannot be passed by reference"
+)]
 fn parse_error(err: ForgeError) -> ErrorData {
     ErrorData::internal_error(format!("{err:#}"), None)
 }
@@ -133,7 +139,10 @@ fn parse_error(err: ForgeError) -> ErrorData {
 /// Convert an `anyhow::Error` (from the engine) to an `rmcp` `ErrorData`.
 ///
 /// Takes ownership because `map_err` passes the error by value.
-#[allow(clippy::needless_pass_by_value)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "map_err requires taking ownership; the value cannot be passed by reference"
+)]
 fn engine_error(err: anyhow::Error) -> ErrorData {
     ErrorData::internal_error(format!("{err:#}"), None)
 }
@@ -412,7 +421,7 @@ impl ServerHandler for ForgeQlMcp {
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::unwrap_in_result)]
+#[expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 mod tests {
     use super::*;
     use std::fs;

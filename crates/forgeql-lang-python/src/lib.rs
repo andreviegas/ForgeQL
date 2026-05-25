@@ -32,7 +32,10 @@ static PYTHON_CONFIG: OnceLock<LanguageConfig> = OnceLock::new();
 ///
 /// Panics if the embedded `python.json` is malformed (should never happen —
 /// the file is validated at test time).
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "embedded JSON is validated at test time; a parse failure is a programming error"
+)]
 pub fn python_config() -> &'static LanguageConfig {
     PYTHON_CONFIG.get_or_init(|| {
         let json_bytes = include_bytes!("../config/python.json");
@@ -147,7 +150,7 @@ pub fn python_registry() -> LanguageRegistry {
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::unwrap_used, reason = "test code")]
 mod tests {
     use super::*;
 

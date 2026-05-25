@@ -43,7 +43,10 @@ static CPP_CONFIG: OnceLock<LanguageConfig> = OnceLock::new();
 ///
 /// Panics if the embedded `cpp.json` is malformed (should never happen —
 /// the file is validated at test time).
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "embedded JSON is validated at test time; a parse failure is a programming error"
+)]
 pub fn cpp_config() -> &'static LanguageConfig {
     CPP_CONFIG.get_or_init(|| {
         let json_bytes = include_bytes!("../config/cpp.json");
@@ -206,7 +209,7 @@ pub fn cpp_registry() -> LanguageRegistry {
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::expect_used, reason = "test code")]
 mod tests {
     use super::*;
 

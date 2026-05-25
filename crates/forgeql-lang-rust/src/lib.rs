@@ -35,7 +35,10 @@ static RUST_CONFIG: OnceLock<LanguageConfig> = OnceLock::new();
 ///
 /// Panics if the embedded `rust.json` is malformed (should never happen —
 /// the file is validated at test time).
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "embedded JSON is validated at test time; a parse failure is a programming error"
+)]
 pub fn rust_config() -> &'static LanguageConfig {
     RUST_CONFIG.get_or_init(|| {
         let json_bytes = include_bytes!("../config/rust.json");
@@ -141,7 +144,7 @@ pub fn rust_registry() -> LanguageRegistry {
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 mod tests {
     use super::*;
 

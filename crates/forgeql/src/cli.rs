@@ -124,7 +124,7 @@ pub(crate) fn detect_mode_impl(cli: &Cli, stdin_is_terminal: bool) -> Mode {
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::panic)]
+#[expect(clippy::panic, reason = "test code")]
 mod tests {
     use super::*;
 

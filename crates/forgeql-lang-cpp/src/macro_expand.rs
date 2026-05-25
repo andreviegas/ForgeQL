@@ -11,7 +11,10 @@ use forgeql_core::ast::lang::{LanguageConfig, MacroDef, MacroExpander};
 // -----------------------------------------------------------------------
 // CppMacroExpander
 /// [`MacroExpander`] implementation for C/C++.
-#[allow(clippy::redundant_pub_crate)]
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "pub(crate) is required by the MacroExpander trait dispatch; suppressing is clearer than changing visibility"
+)]
 pub(crate) struct CppMacroExpander;
 impl MacroExpander for CppMacroExpander {
     /// Extract a macro definition from a `preproc_def` or
@@ -159,7 +162,7 @@ fn replace_whole_word(haystack: &str, needle: &str, replacement: &str) -> String
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 mod tests {
     use super::*;
     use crate::cpp_config;

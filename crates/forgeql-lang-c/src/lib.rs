@@ -39,7 +39,10 @@ static C_CONFIG: OnceLock<LanguageConfig> = OnceLock::new();
 ///
 /// Panics if the embedded `c.json` is malformed (should never happen —
 /// the file is validated at test time).
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "embedded JSON is validated at test time; a parse failure is a programming error"
+)]
 pub fn c_config() -> &'static LanguageConfig {
     C_CONFIG.get_or_init(|| {
         let json_bytes = include_bytes!("../config/c.json");
@@ -181,7 +184,6 @@ pub fn c_registry() -> LanguageRegistry {
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
