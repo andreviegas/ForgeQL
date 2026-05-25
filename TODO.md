@@ -261,7 +261,7 @@ Do these before Phase 2 — moved functions carry smaller signatures.
   and their call sites in `exec_show.rs`.
 - [x] **P1-B** `IndexContext<'_>` struct — `collect_nodes` (8p) and `index_file` (7p) share
   `path`, `language`, `enrichers`, `macro_table`, `table`, `source`. Create in `ast/index.rs`.
-- [ ] **P1-C** `SecondaryIndexBuilder` struct — `index_row_into_secondaries` (8p) passes 5 separate
+- [x] **P1-C** `SecondaryIndexBuilder` struct — `index_row_into_secondaries` (8p) passes 5 separate
   mutable maps/stats. Replace with a `builder.insert(row, idx)` method.
 - [ ] **P1-D** `EscapeLocals<'_>` + `EscapeAccumulator` — `check_expr_escape` (9p) mixes 4 read-only
   input sets with 3 mutable accumulator outputs. Split into two structs in `ast/enrich/escape.rs`.

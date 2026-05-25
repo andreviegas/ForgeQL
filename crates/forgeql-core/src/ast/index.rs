@@ -330,45 +330,43 @@ fn reassign_intern_ids(src: &ColumnarTable, dst: &mut ColumnarTable, row: &mut I
         .collect();
 }
 
-/// Update all secondary indexes and stats for one newly-interned row.
+/// Builder that holds disjoint borrows of all secondary-index fields in
+/// `SymbolTable`, enabling `insert` to read `strings` (immutable borrow) while
+/// simultaneously mutating the index maps, stats, and trigram index.
 ///
-/// # Why a free function?
-///
-/// The three call sites (`push_row`, `merge`, `rebuild_indexes_from_rows`) all
-/// need to read `strings` (immutable) while simultaneously mutating the index
-/// maps, stats, and trigram fields.  A `&mut self` method would hold a mutable
-/// borrow over the entire struct, preventing the read of `self.strings`.
-/// A free function with explicit field borrows lets the borrow checker track
-/// the disjoint accesses and allows zero-allocation access to the string pool.
-///
-/// # Option B — `IndexStats` uses `u32` keys
-///
-/// Because `stats.by_fql_kind` and `stats.by_language` now key by interned ID,
-/// this function never calls `.to_owned()` on `fql_kind` or `language` strings.
-/// The only remaining string read is `strings.names.get(row.name_id)` for the
-/// trigram insert — a `&str` borrow from the pool, no allocation.
-#[allow(clippy::too_many_arguments)]
-fn index_row_into_secondaries(
-    name_index: &mut HashMap<u32, Vec<u32>>,
-    kind_index: &mut HashMap<u32, Vec<u32>>,
-    fql_kind_index: &mut HashMap<u32, Vec<u32>>,
-    stats: &mut IndexStats,
-    trigram_index: &mut crate::ast::trigram::TrigramIndex,
-    strings: &ColumnarTable,
-    row: &IndexRow,
-    idx: u32,
-) {
-    name_index.entry(row.name_id).or_default().push(idx);
-    kind_index.entry(row.node_kind_id).or_default().push(idx);
-    if !strings.fql_kinds.get(row.fql_kind_id).is_empty() {
-        fql_kind_index.entry(row.fql_kind_id).or_default().push(idx);
-        *stats.by_fql_kind.entry(row.fql_kind_id).or_insert(0) += 1;
+/// Constructing the builder from individual field borrows (rather than `&mut self`)
+/// lets the borrow checker track the accesses as disjoint, which a `&mut self`
+/// method cannot do.
+struct SecondaryIndexBuilder<'a> {
+    name_index: &'a mut HashMap<u32, Vec<u32>>,
+    kind_index: &'a mut HashMap<u32, Vec<u32>>,
+    fql_kind_index: &'a mut HashMap<u32, Vec<u32>>,
+    stats: &'a mut IndexStats,
+    trigram_index: &'a mut TrigramIndex,
+    strings: &'a ColumnarTable,
+}
+
+impl SecondaryIndexBuilder<'_> {
+    fn insert(&mut self, row: &IndexRow, idx: u32) {
+        self.name_index.entry(row.name_id).or_default().push(idx);
+        self.kind_index
+            .entry(row.node_kind_id)
+            .or_default()
+            .push(idx);
+        if !self.strings.fql_kinds.get(row.fql_kind_id).is_empty() {
+            self.fql_kind_index
+                .entry(row.fql_kind_id)
+                .or_default()
+                .push(idx);
+            *self.stats.by_fql_kind.entry(row.fql_kind_id).or_insert(0) += 1;
+        }
+        if !self.strings.languages.get(row.language_id).is_empty() {
+            *self.stats.by_language.entry(row.language_id).or_insert(0) += 1;
+        }
+        // `get` returns a `&str` borrowed from the pool — zero allocation.
+        self.trigram_index
+            .insert(idx as usize, self.strings.names.get(row.name_id));
     }
-    if !strings.languages.get(row.language_id).is_empty() {
-        *stats.by_language.entry(row.language_id).or_insert(0) += 1;
-    }
-    // `get` returns a `&str` borrowed from the pool — zero allocation.
-    trigram_index.insert(idx as usize, strings.names.get(row.name_id));
 }
 
 impl SymbolTable {
@@ -565,16 +563,15 @@ impl SymbolTable {
             let abs_u32 = u32::try_from(abs).unwrap_or(u32::MAX);
             // Remap IDs: values from `other.strings` are not valid in `self.strings`.
             reassign_intern_ids(&other.strings, &mut self.strings, &mut row);
-            index_row_into_secondaries(
-                &mut self.name_index,
-                &mut self.kind_index,
-                &mut self.fql_kind_index,
-                &mut self.stats,
-                &mut self.trigram_index,
-                &self.strings,
-                &row,
-                abs_u32,
-            );
+            SecondaryIndexBuilder {
+                name_index: &mut self.name_index,
+                kind_index: &mut self.kind_index,
+                fql_kind_index: &mut self.fql_kind_index,
+                stats: &mut self.stats,
+                trigram_index: &mut self.trigram_index,
+                strings: &self.strings,
+            }
+            .insert(&row, abs_u32);
             self.rows.push(row);
         }
 
@@ -604,16 +601,15 @@ impl SymbolTable {
             "row index exceeds u32::MAX in push_row"
         );
         let index_u32 = u32::try_from(index).unwrap_or(u32::MAX);
-        index_row_into_secondaries(
-            &mut self.name_index,
-            &mut self.kind_index,
-            &mut self.fql_kind_index,
-            &mut self.stats,
-            &mut self.trigram_index,
-            &self.strings,
-            &row,
-            index_u32,
-        );
+        SecondaryIndexBuilder {
+            name_index: &mut self.name_index,
+            kind_index: &mut self.kind_index,
+            fql_kind_index: &mut self.fql_kind_index,
+            stats: &mut self.stats,
+            trigram_index: &mut self.trigram_index,
+            strings: &self.strings,
+        }
+        .insert(&row, index_u32);
         self.rows.push(row);
     }
 
@@ -630,16 +626,15 @@ impl SymbolTable {
         self.stats.by_language.clear();
         for (index, row) in self.rows.iter().enumerate() {
             let index_u32 = u32::try_from(index).unwrap_or(u32::MAX);
-            index_row_into_secondaries(
-                &mut self.name_index,
-                &mut self.kind_index,
-                &mut self.fql_kind_index,
-                &mut self.stats,
-                &mut self.trigram_index,
-                &self.strings,
-                row,
-                index_u32,
-            );
+            SecondaryIndexBuilder {
+                name_index: &mut self.name_index,
+                kind_index: &mut self.kind_index,
+                fql_kind_index: &mut self.fql_kind_index,
+                stats: &mut self.stats,
+                trigram_index: &mut self.trigram_index,
+                strings: &self.strings,
+            }
+            .insert(row, index_u32);
         }
     }
 

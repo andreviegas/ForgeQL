@@ -6,6 +6,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.10] — 2026-05-25 — P1-C: introduce SecondaryIndexBuilder struct
+
+### Changed
+
+- **`crates/forgeql-core/src/ast/index.rs`** — `SecondaryIndexBuilder<'a>` struct
+  replaces the 8-parameter free function `index_row_into_secondaries`. Holds disjoint
+  `&mut` borrows of the five secondary-index fields plus an immutable `&ColumnarTable`
+  borrow; exposes a single `insert(&mut self, row: &IndexRow, idx: u32)` method.
+- **`merge`**, **`push_row`**, **`rebuild_indexes_from_rows`** — the three call sites
+  now construct a `SecondaryIndexBuilder` inline and call `.insert()`.
+- `#[allow(clippy::too_many_arguments)]` on `index_row_into_secondaries` removed.
 ## [0.54.9] — 2026-05-25 — P1-B: introduce IndexContext struct
 
 ### Changed
