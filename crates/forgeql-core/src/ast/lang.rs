@@ -1564,7 +1564,11 @@ use std::sync::OnceLock;
 static CPP_CONFIG: OnceLock<LanguageConfig> = OnceLock::new();
 
 #[cfg(any(test, feature = "test-helpers"))]
-#[allow(clippy::expect_used, clippy::missing_panics_doc)]
+#[expect(
+    clippy::expect_used,
+    reason = "test-helper: embedded cpp.json is always valid"
+)]
+#[allow(clippy::missing_panics_doc)]
 pub fn cpp_config() -> &'static LanguageConfig {
     CPP_CONFIG.get_or_init(|| {
         let json_bytes = include_bytes!("../../../forgeql-lang-cpp/config/cpp.json");
@@ -1737,7 +1741,11 @@ fn cpp_contains_function_declarator(node: tree_sitter::Node<'_>) -> bool {
 static RUST_CONFIG: OnceLock<LanguageConfig> = OnceLock::new();
 
 #[cfg(any(test, feature = "test-helpers"))]
-#[allow(clippy::expect_used, clippy::missing_panics_doc)]
+#[expect(
+    clippy::expect_used,
+    reason = "test-helper: embedded rust.json is always valid"
+)]
+#[allow(clippy::missing_panics_doc)]
 pub fn rust_config() -> &'static LanguageConfig {
     RUST_CONFIG.get_or_init(|| {
         let json_bytes = include_bytes!("../../../forgeql-lang-rust/config/rust.json");
@@ -1840,7 +1848,11 @@ fn rust_node_text(source: &[u8], node: tree_sitter::Node<'_>) -> String {
 static PYTHON_CONFIG: OnceLock<LanguageConfig> = OnceLock::new();
 
 #[cfg(any(test, feature = "test-helpers"))]
-#[allow(clippy::expect_used, clippy::missing_panics_doc)]
+#[expect(
+    clippy::expect_used,
+    reason = "test-helper: embedded python.json is always valid"
+)]
+#[allow(clippy::missing_panics_doc)]
 pub fn python_config() -> &'static LanguageConfig {
     PYTHON_CONFIG.get_or_init(|| {
         let json_bytes = include_bytes!("../../../forgeql-lang-python/config/python.json");

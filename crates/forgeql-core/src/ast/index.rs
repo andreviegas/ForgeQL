@@ -1408,8 +1408,7 @@ fn extract_fields(
     let mut fields = HashMap::new();
     let field_count = language.field_count();
 
-    #[allow(clippy::cast_possible_truncation)]
-    for field_id in 1..=(field_count as u16) {
+    for field_id in 1..=u16::try_from(field_count).unwrap_or(u16::MAX) {
         if let Some(child) = node.child_by_field_id(field_id)
             && let Some(field_name) = language.field_name_for_id(field_id)
         {
@@ -1473,7 +1472,7 @@ impl SymbolTable {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
     use super::*;
     use crate::ast::lang::CppLanguageInline;

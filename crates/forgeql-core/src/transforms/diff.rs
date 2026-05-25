@@ -322,11 +322,11 @@ fn edit_based_change_ranges(
         };
 
         // Map to new-file lines via the cumulative byte shift.
-        #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
-        let new_byte_start = (edit.start as isize + byte_shift).max(0) as usize;
-        #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+        let start_isize = isize::try_from(edit.start).unwrap_or(isize::MAX);
+        let repl_len_isize = isize::try_from(edit.replacement.len()).unwrap_or(isize::MAX);
+        let new_byte_start = usize::try_from((start_isize + byte_shift).max(0)).unwrap_or(0);
         let new_byte_end =
-            (edit.start as isize + byte_shift + edit.replacement.len() as isize).max(0) as usize;
+            usize::try_from((start_isize + byte_shift + repl_len_isize).max(0)).unwrap_or(0);
 
         let new_start_line = byte_offset_to_line(&new_offsets, new_byte_start);
         let new_end_line = byte_offset_to_line(&new_offsets, new_byte_end);
@@ -340,10 +340,8 @@ fn edit_based_change_ranges(
         };
 
         // Update cumulative shift: replacement_len - original_span_len.
-        #[allow(clippy::cast_possible_wrap)]
-        {
-            byte_shift += edit.replacement.len() as isize - (edit.end - edit.start) as isize;
-        }
+        let edit_span_isize = isize::try_from(edit.end - edit.start).unwrap_or(isize::MAX);
+        byte_shift += repl_len_isize - edit_span_isize;
 
         ranges.push(ChangeRange {
             old_start: old_start_line,

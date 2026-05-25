@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.5] — 2026-05-25 — Columnar/AST/engine/transforms lint cleanup
+
+### Fixed
+
+- **`manifest.rs`** — test module `#![allow(unwrap_used, expect_used)]` → `#![expect(unwrap_used)]` (expect_used lint never fires in that test module).
+- **`overlay_lock.rs`** — `lock_path` field `#[allow(dead_code)]` → `#[expect(dead_code, reason=...)]`; test module `#[allow(unwrap_used, expect_used)]` → `#[expect(unwrap_used, expect_used)]`.
+- **`segment_reader.rs`** — `#[allow(unsafe_code)]` → `#[expect(unsafe_code, reason=...)]`; two `#[allow(cast_possible_truncation)]` on masked `u64→usize` casts → `usize::try_from(...).unwrap_or(usize::MAX)`; `#[allow(indexing_slicing)]` → `#[expect(indexing_slicing, reason=...)]`; test module allow-list pruned (panic/items_after_statements/wildcard_imports never fire).
+- **`overlay_builder.rs`** — dead `#![allow(redundant_pub_crate)]` removed; `#[allow(too_many_lines)]` → `#[expect(..., reason=...)]`; inline `const` moved to module scope (removes `items_after_statements`); all `#[allow(cast_possible_truncation)]` replaced with `try_from().unwrap_or()`; `#[allow(indexing_slicing)]` → `#[expect(indexing_slicing, reason=...)]`.
+- **`query_logger.rs`** — `#[allow(many_single_char_names)]` and `#[allow(cast_possible_truncation)]` → `#[expect(...)]` with documented reasons (Howard Hinnant date algorithm; bounded values).
+- **`storage/legacy/resolve.rs`** — spurious `#[allow(too_many_lines)]` removed (lint never fired); `#[allow(expect_used)]` × 2 → `#[expect(...)]` with invariant reasons; remaining `expect()` on non-empty slice replaced with `.ok_or_else(|| anyhow!(...))` for proper error propagation.
+- **`engine/exec_show.rs`** — `#[allow(too_many_lines)]` → `#[expect(...)]`; `#[allow(unwrap_used)]` → `#[expect(...)]` (fast_path_ext invariant documented).
+- **`ast/lang.rs`** — `#[allow(struct_excessive_bools)]` → `#[expect(...)]` on `LanguageConfig`; three test-helper functions' `#[allow(expect_used)]` → `#[expect(expect_used, reason = "embedded JSON is always valid")]`.
+- **`ast/intern.rs`** — `#[allow(expect_used)]` → `#[expect(...)]` (overflow = programming error); two `#[allow(cast_possible_truncation)]` on `id as usize` → `usize::try_from(id).unwrap_or(usize::MAX)`.
+- **`ast/enrich/numbers.rs`** — `#[allow(cast_possible_truncation)]` → `#[expect(...)]` (intentional `f64→i64` truncation documented).
+- **`ast/index.rs`** — `#[allow(cast_possible_truncation)]` on `field_count as u16` → `u16::try_from(field_count).unwrap_or(u16::MAX)`; test module `#![allow(unwrap_used, expect_used)]` → `#![expect(unwrap_used, expect_used, reason = "test code")]`.
+- **`transforms/diff.rs`** — four `#[allow(cast_possible_wrap, cast_sign_loss)]` blocks on byte-shift arithmetic → `isize::try_from(...).unwrap_or(isize::MAX)` / `usize::try_from(...).unwrap_or(0)` with named temporaries for clarity.
+
 ## [0.54.4] — 2026-05-24 — Columnar storage lint cleanup & `SymbolRow` API
 
 ### Fixed

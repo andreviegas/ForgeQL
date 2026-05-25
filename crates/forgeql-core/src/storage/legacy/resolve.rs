@@ -332,8 +332,10 @@ pub(super) fn resolve_body_symbol<'a>(
     }
 
     // Last match — preserves v1 last-write-wins within a single language.
-    #[allow(clippy::expect_used)]
-    let def = filtered.last().expect("filtered is non-empty");
+    // Safety: `filtered.is_empty()` check above returns early, so this is always Some.
+    let def = filtered
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("internal: filtered non-empty but last() returned None"))?;
 
     // Follow body_symbol redirect (C++ out-of-line member definitions).
     if let Some(target) = index.strings.field_str(&def.fields, "body_symbol")
