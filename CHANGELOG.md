@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.6] — 2026-05-25 — Lang crates, CLI, MCP, session lint cleanup
+
+### Fixed
+
+- **`forgeql-lang-{python,cpp,rust,c}/src/lib.rs`** — `#[allow(expect_used)]` on `*_config()` → `#[expect(..., reason = "embedded JSON validated at test time")]`; test module allow-lists replaced with precise `#[expect(...)]` per-crate (python: `unwrap_used` only; cpp: `expect_used` only; rust: both; c: removed entirely).
+- **`forgeql-lang-{cpp,rust}/src/macro_expand.rs`** — `#[allow(redundant_pub_crate)]` on struct → `#[expect(...)]` (lint fires); test module `#[allow(unwrap_used, expect_used)]` → `#[expect(...)]` (both fire).
+- **`forgeql/src/cli.rs`** — test module `#[allow(clippy::panic)]` → `#[expect(...)]` (`panic!` is used in tests).
+- **`forgeql/src/mcp.rs`** — `#[allow(dead_code)]` on `tool_router` field → `#[expect(dead_code, reason = "rmcp ToolRouter macro")]`; two `#[allow(needless_pass_by_value)]` → `#[expect(...)]` (`map_err` requires ownership); test module `unwrap_in_result` suppression removed (lint never fires).
+- **`forgeql/src/session.rs`** — test module `unwrap_in_result` suppression removed (lint never fires).
+
 ## [0.54.5] — 2026-05-25 — Columnar/AST/engine/transforms lint cleanup
 
 ### Fixed
