@@ -78,51 +78,18 @@ impl OverlayBuilder {
     ///
     /// # Errors
     /// Returns `Err` if writing or renaming the overlay file fails fatally.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "multi-step overlay build pipeline; sub-steps are documented with inline comments"
-    )]
+    /// Build the overlay and write it atomically to `overlay_path`.
+    ///
+    /// Segments that are missing or unreadable are silently skipped with a
+    /// warning; an overlay with zero segments is not written (returns `Ok`).
+    ///
+    /// # Errors
+    /// Returns `Err` if writing or renaming the overlay file fails fatally.
     pub fn build_and_persist(&self, overlay_path: &Path) -> Result<()> {
         let t_total = std::time::Instant::now();
 
-        // 1. Collect valid (relative_source_path, hex, SegmentReader) triples.
-        //    Opening each segment is independent mmap I/O — run in parallel.
-        let t_step = std::time::Instant::now();
-        let provider_ver_dir =
-            self.segments_dir
-                .join(format!("{}-v{}", &self.provider_id, super::ENRICH_VER));
-        let mut segs: Vec<(PathBuf, String, SegmentReader)> = self
-            .segment_map
-            .par_iter()
-            .filter_map(|(abs_path, content_id)| {
-                let hex = bytes_to_hex(content_id);
-                let seg_path = provider_ver_dir.join(&hex[..2]).join(format!("{}.fqsf", &hex[2..]));
-
-                if !seg_path.exists() {
-                    return None;
-                }
-
-                match SegmentReader::open(&seg_path) {
-                    Ok(reader) => {
-                        let rel_path = abs_path
-                            .strip_prefix(&self.worktree_root)
-                            .unwrap_or(abs_path)
-                            .to_path_buf();
-                        Some((rel_path, hex, reader))
-                    }
-                    Err(e) => {
-                        warn!(path = %seg_path.display(), "overlay: skipping unreadable segment: {e:#}");
-                        None
-                    }
-                }
-            })
-            .collect();
-
-        info!(
-            ms = t_step.elapsed().as_millis(),
-            n = segs.len(),
-            "TIMING step1: open segments (parallel)"
-        );
+        // 1. Open segments (parallel mmap I/O).
+        let mut segs = self.step1_open_segments();
 
         // 2. Sort by source_path for deterministic, path-ordered global row IDs.
         //    After this sort, all rows from "arch/" occupy a contiguous range,
@@ -142,33 +109,206 @@ impl OverlayBuilder {
             return Ok(());
         }
 
-        // 2.5. Collect all workspace files not covered by a symbol segment.
-        //      These become file-only entries written to the `file_entries`
-        //      overlay blob (FQOV v8) so that `FIND files WHERE extension = 'X'`
-        //      can use the overlay fast path for ANY file type without a
-        //      filesystem walk.
+        // 2.5. Workspace files without a symbol segment.
+        let file_only = self.step25_collect_file_only(&segs);
+
+        // 3+4. Row offsets and global row table.
+        let (row_offsets, total_rows, global_row_table) = Self::step34_build_row_index(&segs)?;
+
+        // 4.5. Per-segment canonical row sets (dedup by name_id + fql_kind_id + line).
+        let seg_dedup = Self::step45_dedup_segments(&segs);
+
+        // 5. Merged kind postings.
+        let kind_postings = Self::step5_build_kind_postings(&segs, &row_offsets, &seg_dedup)?;
+
+        // 5.5. Enrichment attribute bitmaps.
+        let enrich_bitmaps_bytes =
+            Self::step55_build_enrich_bitmaps(&segs, &row_offsets, &seg_dedup)?;
+
+        // 6. Merged name FST, postings, and trigrams.
+        let (name_fst_bytes, name_postings_bytes, name_trigram_postings) =
+            Self::step6_build_name_fst(&segs, &row_offsets)?;
+
+        // 7. Segment metadata list (source segments only — file-only entries
+        //    go into the separate `file_entries` blob, not segment_metas).
+        let segment_metas: Vec<SegmentMeta> = segs
+            .iter()
+            .enumerate()
+            .map(|(seg_idx, (rel_path, hex, reader))| SegmentMeta {
+                hex_content_id: hex.clone(),
+                source_path: rel_path.clone(),
+                row_count: reader.row_count,
+                dedup_row_count: seg_dedup[seg_idx].1,
+            })
+            .collect();
+
+        // 7.5. Cached file sizes per source segment.
+        let index_files_u32 = self.step75_build_index_files(&segs);
+        let index_files_bytes: &[u8] = cast_slice(&index_files_u32);
+
+        // 7.6. File-only entries blob.
+        let file_entries_bytes = self.step76_build_file_entries(&file_only);
+
+        // 8. Atomic overlay write.
+        Self::step8_write_overlay(
+            overlay_path,
+            &overlay_writer::WriteV3Params {
+                generation: 1,
+                global_row_table: &global_row_table,
+                kind_postings: &kind_postings,
+                trigram_postings: &name_trigram_postings,
+                name_fst_bytes: &name_fst_bytes,
+                name_postings_bytes: &name_postings_bytes,
+                segment_metas: &segment_metas,
+                index_files_bytes,
+                enrich_bitmaps_bytes: &enrich_bitmaps_bytes,
+                file_entries_bytes: &file_entries_bytes,
+            },
+        )?;
+
+        info!(
+            ms = t_total.elapsed().as_millis(),
+            path = %overlay_path.display(),
+            segments = segs.len(),
+            file_only = file_only.len(),
+            rows = total_rows,
+            "TIMING total: build_and_persist",
+        );
+
+        Ok(())
+    }
+
+    /// Build an `OverlayBuilder` for a post-commit merge of the persistent
+    /// overlay and the session's dirty overlay.
+    ///
+    /// After `promote_segment` moves all staging segments to the bare repo,
+    /// this method assembles the complete `segment_map` needed by
+    /// `build_and_persist`:
+    ///
+    /// - All persistent `SegmentMeta` entries whose `hex_content_id` is **not**
+    ///   shadowed by `dirty` (i.e. not in `dirty.removed_hex_ids`).
+    /// - All newly promoted dirty segments from `dirty.added`.
+    ///
+    /// Both sets are re-opened fresh from `ctx.segment_path_for(hex)` (the
+    /// canonical bare-repo location after promotion).  The `source_path` on
+    /// each `SegmentMeta` / `DirtySegment` is already workspace-relative, so
+    /// we reconstruct the `abs_path` key as `worktree_root.join(rel_path)`,
+    /// which `build_and_persist` then strips back to a relative path.
+    ///
+    /// Returns `None` when no segments survive (empty repo or all removed).
+    #[must_use]
+    pub fn from_merge(
+        base_overlay: &super::overlay::Overlay,
+        dirty: &super::dirty_overlay::DirtyOverlay,
+        ctx: &super::build_context::ColumnarBuildContext,
+        worktree_root: &std::path::Path,
+    ) -> Self {
+        let mut segment_map = std::collections::HashMap::new();
+
+        // Base segments that are not shadowed by the dirty overlay.
+        for meta in base_overlay.segments() {
+            if dirty.shadows(&meta.hex_content_id) {
+                continue;
+            }
+            let abs_path = worktree_root.join(&meta.source_path);
+            let hex_bytes = hex_to_bytes(&meta.hex_content_id);
+            let _ = segment_map.insert(abs_path, hex_bytes);
+        }
+
+        // Newly promoted dirty segments.
+        for ds in &dirty.added {
+            let hex = ds.reader.content_id_hex();
+            let abs_path = worktree_root.join(&ds.source_path);
+            let hex_bytes = hex_to_bytes(&hex);
+            let _ = segment_map.insert(abs_path, hex_bytes);
+        }
+
+        Self {
+            provider_id: ctx.provider_id.clone(),
+            segments_dir: ctx.segments_dir.clone(),
+            worktree_root: worktree_root.to_path_buf(),
+            segment_map,
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+    // Private step implementations extracted from `build_and_persist`.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Step 1 ───────────────────────────────────────────────────────────────
+
+    fn step1_open_segments(&self) -> Vec<(PathBuf, String, SegmentReader)> {
         let t_step = std::time::Instant::now();
-        let indexed_rel_paths: HashSet<PathBuf> =
-            segs.iter().map(|(rel, _, _)| rel.clone()).collect();
-        let file_only = collect_file_only(&self.worktree_root, &indexed_rel_paths);
+        let provider_ver_dir =
+            self.segments_dir
+                .join(format!("{}-v{}", &self.provider_id, super::ENRICH_VER));
+        let segs: Vec<(PathBuf, String, SegmentReader)> = self
+            .segment_map
+            .par_iter()
+            .filter_map(|(abs_path, content_id)| {
+                let hex = bytes_to_hex(content_id);
+                let seg_path = provider_ver_dir
+                    .join(&hex[..2])
+                    .join(format!("{}.fqsf", &hex[2..]));
+                if !seg_path.exists() {
+                    return None;
+                }
+                match SegmentReader::open(&seg_path) {
+                    Ok(reader) => {
+                        let rel_path = abs_path
+                            .strip_prefix(&self.worktree_root)
+                            .unwrap_or(abs_path)
+                            .to_path_buf();
+                        Some((rel_path, hex, reader))
+                    }
+                    Err(e) => {
+                        warn!(
+                            path = %seg_path.display(),
+                            "overlay: skipping unreadable segment: {e:#}",
+                        );
+                        None
+                    }
+                }
+            })
+            .collect();
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            n = segs.len(),
+            "TIMING step1: open segments (parallel)",
+        );
+        segs
+    }
+
+    // ── Step 2.5 ─────────────────────────────────────────────────────────────
+
+    fn step25_collect_file_only(
+        &self,
+        segs: &[(PathBuf, String, SegmentReader)],
+    ) -> Vec<(PathBuf, String)> {
+        let t_step = std::time::Instant::now();
+        let indexed: HashSet<PathBuf> = segs.iter().map(|(rel, _, _)| rel.clone()).collect();
+        let file_only = collect_file_only(&self.worktree_root, &indexed);
         info!(
             ms = t_step.elapsed().as_millis(),
             n = file_only.len(),
-            "TIMING step2.5: collect file-only entries"
+            "TIMING step2.5: collect file-only entries",
         );
+        file_only
+    }
 
-        // 3. Compute cumulative row offsets.
+    // ── Steps 3 + 4 ──────────────────────────────────────────────────────────
+
+    fn step34_build_row_index(
+        segs: &[(PathBuf, String, SegmentReader)],
+    ) -> Result<(Vec<u32>, u32, Vec<RowPtr>)> {
         let t_step = std::time::Instant::now();
         let mut row_offsets: Vec<u32> = Vec::with_capacity(segs.len());
         let mut total_rows: u32 = 0;
-        for (_, _, reader) in &segs {
+        for (_, _, reader) in segs {
             row_offsets.push(total_rows);
             total_rows = total_rows
                 .checked_add(reader.row_count)
                 .context("overflow: too many rows for u32 row count")?;
         }
-
-        // 4. Build global_row_table.
         let mut global_row_table: Vec<RowPtr> = Vec::with_capacity(total_rows as usize);
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
             for local_row in 0..reader.row_count {
@@ -181,14 +321,16 @@ impl OverlayBuilder {
         info!(
             ms = t_step.elapsed().as_millis(),
             rows = total_rows,
-            "TIMING step3-4: row offsets + global_row_table"
+            "TIMING step3-4: row offsets + global_row_table",
         );
+        Ok((row_offsets, total_rows, global_row_table))
+    }
 
-        // 4.5. Compute per-segment canonical row sets: for each segment, keep only
-        //      the first occurrence of each (name_id, fql_kind_id, line) triple.
-        //      This deduplicates tree-sitter AST nodes that map to the same symbol.
-        //      `dedup_counts[seg_idx]` is stored in the overlay for the GROUP BY
-        //      file fast-path; `canonical_bms[seg_idx]` gates kind bitmap merging.
+    // ── Step 4.5 ─────────────────────────────────────────────────────────────
+
+    fn step45_dedup_segments(
+        segs: &[(PathBuf, String, SegmentReader)],
+    ) -> Vec<(RoaringBitmap, u32)> {
         let t_step = std::time::Instant::now();
         let seg_dedup: Vec<(RoaringBitmap, u32)> = segs
             .par_iter()
@@ -212,13 +354,18 @@ impl OverlayBuilder {
         info!(
             ms = t_step.elapsed().as_millis(),
             segs = segs.len(),
-            "TIMING step4.5: per-segment dedup canonical row sets"
+            "TIMING step4.5: per-segment dedup canonical row sets",
         );
-        // 5. Build kind postings by merging per-segment kind bitmaps.
-        //    Only canonical rows (deduplicated by name_id+fql_kind_id+line) are
-        //    inserted so that kind-bitmap cardinalities match the query pipeline
-        //    dedup output.  Each segment uses its own string-pool IDs; resolve
-        //    to strings via `segment_reader.string_of_id`.
+        seg_dedup
+    }
+
+    // ── Step 5 ───────────────────────────────────────────────────────────────
+
+    fn step5_build_kind_postings(
+        segs: &[(PathBuf, String, SegmentReader)],
+        row_offsets: &[u32],
+        seg_dedup: &[(RoaringBitmap, u32)],
+    ) -> Result<HashMap<String, Vec<u8>>> {
         let t_step = std::time::Instant::now();
         let mut kind_merged: HashMap<String, RoaringBitmap> = HashMap::new();
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
@@ -236,8 +383,6 @@ impl OverlayBuilder {
                 }
             }
         }
-
-        // Serialise the merged kind bitmaps.
         let mut kind_postings: HashMap<String, Vec<u8>> = HashMap::with_capacity(kind_merged.len());
         for (kind_str, bitmap) in &kind_merged {
             let mut bytes = Vec::new();
@@ -249,28 +394,28 @@ impl OverlayBuilder {
         info!(
             ms = t_step.elapsed().as_millis(),
             kinds = kind_postings.len(),
-            "TIMING step5: kind postings merge"
+            "TIMING step5: kind postings merge",
         );
+        Ok(kind_postings)
+    }
 
-        // 5.5. Build enrichment attribute bitmaps (Phase 5 / FQOV v7).
-        //
-        // For each (field, value) pair across all canonical rows, build a global
-        // RoaringBitmap keyed as "field=value".  Fields with more than
-        // MAX_ENRICH_BUCKETS distinct values are pruned to keep the blob small.
-        //
-        // Two categories:
-        //   Category 1 — fields in POSTING_ENRICHMENT_FIELDS: use field_postings
-        //                (sparse path; avoids iterating every row).
-        //   Category 2 — numeric/other fields: iterate canonical rows via
-        //                enrichment_for_row (only for fields not in category 1).
+    // ── Step 5.5 ─────────────────────────────────────────────────────────────
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "three-phase enrich-bitmap pipeline; splitting would require threading more state"
+    )]
+    fn step55_build_enrich_bitmaps(
+        segs: &[(PathBuf, String, SegmentReader)],
+        row_offsets: &[u32],
+        seg_dedup: &[(RoaringBitmap, u32)],
+    ) -> Result<Vec<u8>> {
         let t_step = std::time::Instant::now();
         let mut enrich_raw: HashMap<String, RoaringBitmap> = HashMap::new();
         let mut field_seen: HashMap<String, HashSet<String>> = HashMap::new();
         let mut pruned_fields: HashSet<String> = HashSet::new();
-
         let posting_field_set: HashSet<&str> = POSTING_ENRICHMENT_FIELDS.iter().copied().collect();
 
-        // Category 1: boolean flags + string enums via field_postings.
         // Category 1: boolean flags + string enums via field_postings.
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
             let row_offset = row_offsets[seg_idx];
@@ -383,12 +528,21 @@ impl OverlayBuilder {
             entries = enrich_entries.len(),
             pruned = pruned_fields.len(),
             bytes = enrich_bitmaps_bytes.len(),
-            "TIMING step5.5: enrichment bitmaps"
+            "TIMING step5.5: enrichment bitmaps",
         );
+        Ok(enrich_bitmaps_bytes)
+    }
 
-        // 6. Build merged name FST + postings.
-        //    Accumulate (name_bytes → Vec<global_row_id>) in a BTreeMap so
-        //    we can insert into the FST in sorted order (FST requires it).
+    // ── Step 6 ───────────────────────────────────────────────────────────────
+
+    #[expect(
+        clippy::type_complexity,
+        reason = "triple return (fst_bytes, postings_bytes, trigram_map) is self-documenting at the call site"
+    )]
+    fn step6_build_name_fst(
+        segs: &[(PathBuf, String, SegmentReader)],
+        row_offsets: &[u32],
+    ) -> Result<(Vec<u8>, Vec<u8>, HashMap<[u8; 3], Vec<u8>>)> {
         let t_step = std::time::Instant::now();
         let mut merged_names: BTreeMap<Vec<u8>, Vec<u32>> = BTreeMap::new();
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
@@ -405,7 +559,6 @@ impl OverlayBuilder {
                     .extend(global_rows);
             }
         }
-
         let merged_names_len = merged_names.len();
         let mut name_postings_bytes: Vec<u8> = Vec::new();
         let mut fst_builder = MapBuilder::memory();
@@ -416,10 +569,8 @@ impl OverlayBuilder {
         for (name_bytes, mut rows) in merged_names {
             rows.sort_unstable();
             rows.dedup();
-            // Trigram inserts: every distinct 3-byte window of the lower-cased
-            // name maps to all global row IDs that share that name.
             if name_bytes.len() >= 3 {
-                let mut seen: std::collections::HashSet<[u8; 3]> = std::collections::HashSet::new();
+                let mut seen: HashSet<[u8; 3]> = HashSet::new();
                 for w in name_bytes.windows(3) {
                     let t = [
                         w[0].to_ascii_lowercase(),
@@ -445,8 +596,6 @@ impl OverlayBuilder {
                 .context("inserting name into overlay FST")?;
         }
         let name_fst_bytes = fst_builder.into_inner().context("finalising overlay FST")?;
-
-        // Serialise per-trigram bitmaps for storage in the payload.
         let mut name_trigram_postings: HashMap<[u8; 3], Vec<u8>> =
             HashMap::with_capacity(trigram_merged.len());
         for (trigram, bitmap) in &trigram_merged {
@@ -461,165 +610,75 @@ impl OverlayBuilder {
             unique_names = merged_names_len,
             trigrams = name_trigram_postings.len(),
             fst_bytes = name_fst_bytes.len(),
-            "TIMING step6: name FST + trigrams"
+            "TIMING step6: name FST + trigrams",
         );
+        Ok((name_fst_bytes, name_postings_bytes, name_trigram_postings))
+    }
 
-        // 7. Build SegmentMeta list (source segments only — file-only entries
-        //    go into the separate `file_entries` blob, not segment_metas).
-        let segment_metas: Vec<SegmentMeta> = segs
-            .iter()
-            .enumerate()
-            .map(|(seg_idx, (rel_path, hex, reader))| SegmentMeta {
-                hex_content_id: hex.clone(),
-                source_path: rel_path.clone(),
-                row_count: reader.row_count,
-                dedup_row_count: seg_dedup[seg_idx].1,
+    // ── Steps 7.5 + 7.6 ─────────────────────────────────────────────────────
+
+    fn step75_build_index_files(&self, segs: &[(PathBuf, String, SegmentReader)]) -> Vec<u32> {
+        segs.iter()
+            .map(|(rel_path, _, _)| {
+                let full_path = self.worktree_root.join(rel_path);
+                std::fs::metadata(&full_path)
+                    .map(|m| u32::try_from(m.len()).unwrap_or(u32::MAX))
+                    .unwrap_or(0)
             })
-            .collect();
+            .collect()
+    }
 
-        // 7.5. Build cached file sizes array (one u32 per source segment).
-        let mut index_files_u32 = Vec::with_capacity(segs.len());
-        for (rel_path, _, _) in &segs {
+    fn step76_build_file_entries(&self, file_only: &[(PathBuf, String)]) -> Vec<u8> {
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(
+            &u32::try_from(file_only.len())
+                .unwrap_or(u32::MAX)
+                .to_le_bytes(),
+        );
+        for (rel_path, _) in file_only {
             let full_path = self.worktree_root.join(rel_path);
             let size = std::fs::metadata(&full_path)
                 .map(|m| u32::try_from(m.len()).unwrap_or(u32::MAX))
                 .unwrap_or(0);
-            index_files_u32.push(size);
+            let path_str = rel_path.to_string_lossy();
+            let path_bytes = path_str.as_bytes();
+            let path_len = u16::try_from(path_bytes.len()).unwrap_or(u16::MAX);
+            bytes.extend_from_slice(&size.to_le_bytes());
+            bytes.extend_from_slice(&path_len.to_le_bytes());
+            bytes.extend_from_slice(path_bytes);
         }
-        let index_files_bytes: &[u8] = cast_slice(&index_files_u32);
+        bytes
+    }
 
-        // 7.6. Serialize file-only entries to the `file_entries` blob.
-        //      Format: [u32 count][repeated: [u32 size][u16 path_len][u8; path_len]]
-        //      These are workspace files without a symbol segment; they are
-        //      tracked so FIND files can answer extension queries from the
-        //      overlay fast path without a filesystem walk.
-        let mut file_entries_bytes: Vec<u8> = Vec::new();
-        {
-            file_entries_bytes.extend_from_slice(
-                &u32::try_from(file_only.len())
-                    .unwrap_or(u32::MAX)
-                    .to_le_bytes(),
-            );
-            for (rel_path, _hex) in &file_only {
-                let full_path = self.worktree_root.join(rel_path);
-                let size = std::fs::metadata(&full_path)
-                    .map(|m| u32::try_from(m.len()).unwrap_or(u32::MAX))
-                    .unwrap_or(0);
-                let path_str = rel_path.to_string_lossy();
-                let path_bytes = path_str.as_bytes();
-                let path_len = u16::try_from(path_bytes.len()).unwrap_or(u16::MAX);
-                file_entries_bytes.extend_from_slice(&size.to_le_bytes());
-                file_entries_bytes.extend_from_slice(&path_len.to_le_bytes());
-                file_entries_bytes.extend_from_slice(path_bytes);
-            }
-        }
+    // ── Step 8 ───────────────────────────────────────────────────────────────
 
-        // 8. Write the FQOV v3 overlay atomically (temp file → fsync → rename).
+    fn step8_write_overlay(
+        overlay_path: &Path,
+        params: &overlay_writer::WriteV3Params<'_>,
+    ) -> Result<()> {
         let t_step = std::time::Instant::now();
         if let Some(parent) = overlay_path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating overlay dir {}", parent.display()))?;
         }
-
         let tmp = tempfile::NamedTempFile::new_in(
             overlay_path.parent().unwrap_or_else(|| Path::new(".")),
         )
         .context("creating temp overlay file")?;
-
         {
             let mut f = std::io::BufWriter::new(tmp.as_file());
-            let generation: u64 = 1;
-            overlay_writer::write_v3(
-                &mut f,
-                &overlay_writer::WriteV3Params {
-                    generation,
-                    global_row_table: &global_row_table,
-                    kind_postings: &kind_postings,
-                    trigram_postings: &name_trigram_postings,
-                    name_fst_bytes: &name_fst_bytes,
-                    name_postings_bytes: &name_postings_bytes,
-                    segment_metas: &segment_metas,
-                    index_files_bytes,
-                    enrich_bitmaps_bytes: &enrich_bitmaps_bytes,
-                    file_entries_bytes: &file_entries_bytes,
-                },
-            )
-            .context("writing v3 overlay")?;
+            overlay_writer::write_v3(&mut f, params).context("writing v3 overlay")?;
             f.flush().context("flushing overlay buffer")?;
             tmp.as_file().sync_all().context("fsyncing overlay file")?;
         }
-
         let _ = tmp
             .persist(overlay_path)
             .with_context(|| format!("persisting overlay to {}", overlay_path.display()))?;
         info!(
             ms = t_step.elapsed().as_millis(),
-            "TIMING step8: write v3 overlay (atomic)"
+            "TIMING step8: write v3 overlay (atomic)",
         );
-
-        info!(
-            ms = t_total.elapsed().as_millis(),
-            path = %overlay_path.display(),
-            segments = segs.len(),
-            file_only = file_only.len(),
-            rows = total_rows,
-            "TIMING total: build_and_persist"
-        );
-
         Ok(())
-    }
-
-    /// Build an `OverlayBuilder` for a post-commit merge of the persistent
-    /// overlay and the session's dirty overlay.
-    ///
-    /// After `promote_segment` moves all staging segments to the bare repo,
-    /// this method assembles the complete `segment_map` needed by
-    /// `build_and_persist`:
-    ///
-    /// - All persistent `SegmentMeta` entries whose `hex_content_id` is **not**
-    ///   shadowed by `dirty` (i.e. not in `dirty.removed_hex_ids`).
-    /// - All newly promoted dirty segments from `dirty.added`.
-    ///
-    /// Both sets are re-opened fresh from `ctx.segment_path_for(hex)` (the
-    /// canonical bare-repo location after promotion).  The `source_path` on
-    /// each `SegmentMeta` / `DirtySegment` is already workspace-relative, so
-    /// we reconstruct the `abs_path` key as `worktree_root.join(rel_path)`,
-    /// which `build_and_persist` then strips back to a relative path.
-    ///
-    /// Returns `None` when no segments survive (empty repo or all removed).
-    #[must_use]
-    pub fn from_merge(
-        base_overlay: &super::overlay::Overlay,
-        dirty: &super::dirty_overlay::DirtyOverlay,
-        ctx: &super::build_context::ColumnarBuildContext,
-        worktree_root: &std::path::Path,
-    ) -> Self {
-        let mut segment_map = std::collections::HashMap::new();
-
-        // Base segments that are not shadowed by the dirty overlay.
-        for meta in base_overlay.segments() {
-            if dirty.shadows(&meta.hex_content_id) {
-                continue;
-            }
-            let abs_path = worktree_root.join(&meta.source_path);
-            let hex_bytes = hex_to_bytes(&meta.hex_content_id);
-            let _ = segment_map.insert(abs_path, hex_bytes);
-        }
-
-        // Newly promoted dirty segments.
-        for ds in &dirty.added {
-            let hex = ds.reader.content_id_hex();
-            let abs_path = worktree_root.join(&ds.source_path);
-            let hex_bytes = hex_to_bytes(&hex);
-            let _ = segment_map.insert(abs_path, hex_bytes);
-        }
-
-        Self {
-            provider_id: ctx.provider_id.clone(),
-            segments_dir: ctx.segments_dir.clone(),
-            worktree_root: worktree_root.to_path_buf(),
-            segment_map,
-        }
     }
 }
 

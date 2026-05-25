@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.15] — 2026-05-25 — P2-B: split build_and_persist into private step methods
+
+### Changed
+
+- **`crates/forgeql-core/src/storage/columnar/overlay_builder.rs`** — extracted the 486-line,
+  12-step `build_and_persist` body into 10 private methods; orchestrator is now 89 lines.
+  Methods without `self` access are associated functions (`Self::`) to avoid `unused_self`:
+  - `step1_open_segments` — parallel mmap open of all segments (uses `self`)
+  - `step25_collect_file_only` — workspace files not in any segment (uses `self`)
+  - `step34_build_row_index` — cumulative row offsets + `global_row_table`
+  - `step45_dedup_segments` — per-segment canonical row sets (parallel dedup)
+  - `step5_build_kind_postings` — merge kind bitmaps across segments
+  - `step55_build_enrich_bitmaps` — three-phase enrichment bitmap pipeline
+  - `step6_build_name_fst` — merge name FST, postings, and trigram index
+  - `step75_build_index_files` — cached file sizes array (uses `self`)
+  - `step76_build_file_entries` — file-only entries blob (uses `self`)
+  - `step8_write_overlay` — atomic temp-file → fsync → rename write
+  - `#[expect(clippy::too_many_lines)]` moved from `build_and_persist` to `step55_build_enrich_bitmaps`
+  - `#[expect(clippy::type_complexity)]` added to `step6_build_name_fst` for its triple return
 ## [0.54.14] — 2026-05-25 — P2-A: split exec_show match arms into private methods
 
 ### Changed
