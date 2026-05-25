@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.16] — 2026-05-25 — P2-C: split columnar_storage.rs into module folder
+
+### Changed
+
+- `crates/forgeql-core/src/storage/columnar/columnar_storage.rs` trimmed to root
+  module file (struct + `new()` + `mod` declarations + tests).
+- `columnar_storage/fast_paths.rs` — fast-path `impl ColumnarStorage` methods
+  and module-level helper free functions (18 items made `pub(super)`).
+- `columnar_storage/query.rs` — resolve helpers + `StorageEngine` trait impl;
+  imports fast-path symbols via `use super::fast_paths::…`.
+- `columnar_storage/commit.rs` — overlay orchestration, dirty/delta helpers,
+  and commit logic (3 methods made `pub(super)`).
+
 ## [0.54.15] — 2026-05-25 — P2-B: split build_and_persist into private step methods
 
 ### Changed

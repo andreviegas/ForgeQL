@@ -279,8 +279,8 @@ Break monolith files into module folders. One commit per item.
   `fn exec_show_<variant>` method; `exec_show` shrinks to ~30-line dispatcher.
 - [x] **P2-B** Split `build_and_persist` (486 lines, 44 branches) — each numbered comment step
   (// 1. // 2. // 2.5. …) becomes a private `&self → Result<T>` method; orchestrator ~40 lines.
-- [ ] **P2-C** Split `columnar_storage.rs` (100 KB) into module folder:
-  `mod.rs` / `query.rs` / `fast_paths.rs` / `commit.rs` / `resolve.rs`.
+- [x] **P2-C** Split `columnar_storage.rs` (100 KB) into module folder:
+  `columnar_storage.rs` (root) / `fast_paths.rs` / `query.rs` / `commit.rs`.
 - [ ] **P2-D** Split `lang.rs` (81 KB) into per-language submodules:
   `lang/mod.rs` / `lang/cpp.rs` / `lang/rust.rs` / `lang/python.rs`.
 - [ ] **P2-E** Split `ast/index.rs` (77 KB) into module folder:
