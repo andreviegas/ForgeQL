@@ -275,7 +275,7 @@ Do these before Phase 2 — moved functions carry smaller signatures.
 
 Break monolith files into module folders. One commit per item.
 
-- [ ] **P2-A** Split `exec_show.rs` (383 lines) — extract each match arm into a private
+- [x] **P2-A** Split `exec_show.rs` (383 lines) — extract each match arm into a private
   `fn exec_show_<variant>` method; `exec_show` shrinks to ~30-line dispatcher.
 - [ ] **P2-B** Split `build_and_persist` (486 lines, 44 branches) — each numbered comment step
   (// 1. // 2. // 2.5. …) becomes a private `&self → Result<T>` method; orchestrator ~40 lines.

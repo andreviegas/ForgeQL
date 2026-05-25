@@ -11,7 +11,7 @@ use crate::{
     ir::{Backend, Clauses, ForgeQLIR, SortDirection},
     result::{FileEntry, ForgeQLResult, ShowContent},
     session::Session,
-    storage::SymbolLocation,
+    storage::{StorageEngine, SymbolLocation},
     workspace::Workspace,
 };
 
@@ -64,10 +64,6 @@ const fn backend_for_show_op(op: &ForgeQLIR) -> &Backend {
 }
 
 impl ForgeQLEngine {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "dispatches all SHOW variants; splitting would require significant restructuring"
-    )]
     pub(super) fn exec_show(
         &self,
         session_id: Option<&str>,
@@ -75,318 +71,34 @@ impl ForgeQLEngine {
     ) -> Result<ForgeQLResult> {
         let backend = backend_for_show_op(op);
         let (workspace, engine) = self.require_workspace_and_engine_for(session_id, backend)?;
-        let root = workspace.root();
 
         let json = match op {
             ForgeQLIR::ShowContext {
                 symbol, clauses, ..
-            } => {
-                let context_lines = clauses.depth.unwrap_or(DEFAULT_CONTEXT_LINES);
-                engine
-                    .resolve_symbol(symbol, clauses, root)
-                    .and_then(|opt| {
-                        opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found"))
-                    })
-                    .and_then(|loc| {
-                        let bytes = read_bytes_for_show(&workspace, &loc)?;
-                        show::show_context(
-                            &bytes,
-                            &loc.path,
-                            loc.byte_range.start,
-                            &workspace,
-                            symbol,
-                            context_lines,
-                        )
-                    })
-                    .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
-            }
+            } => Self::exec_show_context(&workspace, engine, symbol, clauses),
             ForgeQLIR::ShowSignature {
                 symbol, clauses, ..
-            } => engine
-                .resolve_symbol(symbol, clauses, root)
-                .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
-                .and_then(|loc| {
-                    let cached = self.get_or_parse_for_show(session_id, &workspace, &loc)?;
-                    let req = show::ShowRequest {
-                        cached: &cached,
-                        path: &loc.path,
-                        byte_range_start: loc.byte_range.start,
-                        hint_line: Some(loc.line).filter(|&l| l > 0),
-                        workspace: &workspace,
-                        symbol,
-                        lang_registry: &self.lang_registry,
-                    };
-                    show::show_signature(&req, &loc.node_kind)
-                })
-                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
-            ForgeQLIR::ShowOutline { file, .. } => engine
-                .show_outline_for_file(&workspace, file)
-                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+            } => self.exec_show_signature(session_id, &workspace, engine, symbol, clauses),
+            ForgeQLIR::ShowOutline { file, .. } => {
+                Self::exec_show_outline(&workspace, engine, file)
+            }
             ForgeQLIR::ShowMembers {
                 symbol, clauses, ..
-            } => engine
-                .resolve_type_symbol(symbol, clauses, root)
-                .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
-                .and_then(|loc| {
-                    let cached = self.get_or_parse_for_show(session_id, &workspace, &loc)?;
-                    let req = show::ShowRequest {
-                        cached: &cached,
-                        path: &loc.path,
-                        byte_range_start: loc.byte_range.start,
-                        hint_line: Some(loc.line).filter(|&l| l > 0),
-                        workspace: &workspace,
-                        symbol,
-                        lang_registry: &self.lang_registry,
-                    };
-                    show::show_members(&req)
-                })
-                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+            } => self.exec_show_members(session_id, &workspace, engine, symbol, clauses),
             ForgeQLIR::ShowBody {
                 symbol, clauses, ..
-            } => engine
-                .resolve_body_symbol(symbol, clauses, root)
-                .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
-                .and_then(|loc| {
-                    let cached = self.get_or_parse_for_show(session_id, &workspace, &loc)?;
-                    let req = show::ShowRequest {
-                        cached: &cached,
-                        path: &loc.path,
-                        byte_range_start: loc.byte_range.start,
-                        hint_line: Some(loc.line).filter(|&l| l > 0),
-                        workspace: &workspace,
-                        symbol,
-                        lang_registry: &self.lang_registry,
-                    };
-                    show::show_body(
-                        &req,
-                        Some(clauses.depth.unwrap_or(DEFAULT_BODY_DEPTH)),
-                        &loc.enrichment,
-                    )
-                })
-                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+            } => self.exec_show_body(session_id, &workspace, engine, symbol, clauses),
             ForgeQLIR::ShowCallees {
                 symbol, clauses, ..
-            } => engine
-                .resolve_body_symbol(symbol, clauses, root)
-                .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
-                .and_then(|loc| {
-                    let cached = self.get_or_parse_for_show(session_id, &workspace, &loc)?;
-                    let req = show::ShowRequest {
-                        cached: &cached,
-                        path: &loc.path,
-                        byte_range_start: loc.byte_range.start,
-                        hint_line: Some(loc.line).filter(|&l| l > 0),
-                        workspace: &workspace,
-                        symbol,
-                        lang_registry: &self.lang_registry,
-                    };
-                    show::show_callees(&req)
-                })
-                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+            } => self.exec_show_callees(session_id, &workspace, engine, symbol, clauses),
             ForgeQLIR::ShowLines {
                 file,
                 start_line,
                 end_line,
                 ..
-            } => show::show_lines(&workspace, file, *start_line, *end_line)
-                .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
+            } => Self::exec_show_lines(&workspace, file, *start_line, *end_line),
             ForgeQLIR::FindFiles { clauses, .. } => {
-                reject_text_filter(clauses)?;
-                let glob = clauses.in_glob.as_deref().unwrap_or("**");
-                // Fast path: when the columnar backend is active, use the
-                // mmap-backed overlay segment list instead of walking the
-                // filesystem.  On Zephyr (~35 K files) this avoids ~35 000
-                // stat(2) syscalls and reduces latency from ~1–2 s to < 5 ms.
-                //
-                // Guard: only engage the fast path when the query has a
-                // `WHERE extension = 'X'` equality predicate AND the overlay
-                // already contains files with that extension.
-                //
-                // Overlays built with this version of ForgeQL track ALL
-                // workspace files (source, docs, images, build artefacts) with
-                // path + size information, so the fast path naturally covers
-                // extensions like `.cmake`, `.rst`, `.png`, and `.elf` once the
-                // overlay is rebuilt for the current commit.
-                //
-                // Overlays built with older code only contain source files;
-                // for those, the `.filter(|ext| indexed.iter().any(...))` guard
-                // below correctly falls back to the filesystem walk for any
-                // extension that is absent from the overlay.
-                //
-                // Queries with no extension predicate (e.g. ORDER BY size DESC)
-                // always use the filesystem walk since we cannot assert that
-                // an old overlay covers every file type.
-                let indexed_opt = engine.indexed_files();
-                let fast_path_ext: Option<&str> = indexed_opt.as_ref().and_then(|indexed| {
-                    use crate::ir::{CompareOp, PredicateValue};
-                    // Find the first equality extension predicate.
-                    clauses
-                        .where_predicates
-                        .iter()
-                        .find_map(|p| {
-                            if (p.field == "extension" || p.field == "ext")
-                                && p.op == CompareOp::Eq
-                                && let PredicateValue::String(s) = &p.value
-                            {
-                                return Some(s.as_str());
-                            }
-                            None
-                        })
-                        // Only use the fast path if the extension is in the overlay.
-                        .filter(|ext| indexed.iter().any(|fe| fe.extension == *ext))
-                });
-                let mut entries: Vec<FileEntry> = if fast_path_ext.is_some() {
-                    // SAFETY: fast_path_ext.is_some() implies indexed_opt.is_some().
-                    #[expect(
-                        clippy::unwrap_used,
-                        reason = "fast_path_ext.is_some() implies indexed_opt.is_some() — invariant established above"
-                    )]
-                    indexed_opt.unwrap()
-                } else {
-                    // Filesystem walk fallback — used for non-indexed extensions
-                    // (e.g. `.rst`, `.png`, `.pat`) and for size-only queries.
-                    let raw = query::find_files(&workspace, glob, clauses.exclude_glob.as_deref());
-                    raw.iter()
-                        .filter_map(|v| {
-                            let path = v.get("path").and_then(|p| p.as_str()).map(PathBuf::from)?;
-                            let extension = v
-                                .get("extension")
-                                .and_then(|e| e.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let size = v
-                                .get("size")
-                                .and_then(serde_json::Value::as_u64)
-                                .unwrap_or(0);
-                            let depth = Some(path.components().count());
-                            Some(FileEntry {
-                                path,
-                                extension,
-                                size,
-                                depth,
-                                count: None,
-                            })
-                        })
-                        .collect()
-                };
-                // Apply the full clause pipeline (IN, EXCLUDE, WHERE, GROUP BY,
-                // ORDER BY, LIMIT, OFFSET).  For the filesystem walk fallback,
-                // IN/EXCLUDE were already applied by find_files() and become no-ops.
-                //
-                // When DEPTH is requested (and no GROUP BY), we must apply ORDER BY
-                // and LIMIT *after* depth-grouping, not before.  Running ORDER BY
-                // size DESC + LIMIT N first would select N deeply-nested files that
-                // all share a long common prefix; common_prefix_depth() would then
-                // report a high prefix depth, making every file appear shallower
-                // than it really is and defeating the depth filter entirely.
-                // The correct pipeline is: filter (WHERE) → group by depth → sort →
-                // limit.
-                let max_depth = clauses.depth.unwrap_or(usize::MAX);
-                let results: Vec<serde_json::Value> =
-                    if clauses.depth.is_some() && clauses.group_by.is_none() {
-                        // Step 1: apply IN/EXCLUDE/WHERE on the full entry set —
-                        // deliberately skip ORDER BY, OFFSET, and LIMIT so every
-                        // matching file reaches the depth-grouping step.
-                        let mut filter_clauses = clauses.clone();
-                        filter_clauses.order_by = None;
-                        filter_clauses.limit = None;
-                        filter_clauses.offset = None;
-                        crate::filter::apply_clauses(&mut entries, &filter_clauses);
-
-                        // Step 2: group the complete filtered set by depth.
-                        let file_json: Vec<serde_json::Value> = entries
-                            .iter()
-                            .map(|fe| {
-                                serde_json::json!({
-                                    "path":      fe.path.display().to_string(),
-                                    "extension": fe.extension,
-                                    "size":      fe.size,
-                                })
-                            })
-                            .collect();
-                        let mut grouped = query::group_files_by_depth(&file_json, max_depth);
-
-                        // Step 3: sort the grouped results (individual files and
-                        // directory summaries both carry a "size" field).
-                        if let Some(ref order_by) = clauses.order_by {
-                            let dir = order_by.direction;
-                            let field = order_by.field.clone();
-                            grouped.sort_by(|a, b| {
-                                let cmp = if let (Some(va), Some(vb)) = (
-                                    a.get(&field).and_then(serde_json::Value::as_u64),
-                                    b.get(&field).and_then(serde_json::Value::as_u64),
-                                ) {
-                                    va.cmp(&vb)
-                                } else {
-                                    let sa = a
-                                        .get(&field)
-                                        .and_then(serde_json::Value::as_str)
-                                        .unwrap_or("");
-                                    let sb = b
-                                        .get(&field)
-                                        .and_then(serde_json::Value::as_str)
-                                        .unwrap_or("");
-                                    sa.cmp(sb)
-                                };
-                                match dir {
-                                    SortDirection::Desc => cmp.reverse(),
-                                    SortDirection::Asc => cmp,
-                                }
-                            });
-                        }
-
-                        // Step 4: apply OFFSET then LIMIT.
-                        let skip = clauses.offset.unwrap_or(0);
-                        if skip > 0 {
-                            drop(grouped.drain(..skip.min(grouped.len())));
-                        }
-                        if let Some(max) = clauses.limit {
-                            grouped.truncate(max);
-                        }
-                        grouped
-                    } else if clauses.group_by.is_some() {
-                        // When GROUP BY was requested the pipeline has already
-                        // aggregated entries and stored per-group counts; skip the
-                        // depth-grouping step so those results are not disturbed.
-                        crate::filter::apply_clauses(&mut entries, clauses);
-                        entries
-                            .iter()
-                            .map(|fe| {
-                                let mut obj = serde_json::json!({
-                                    "path":      fe.path.display().to_string(),
-                                    "extension": fe.extension,
-                                    "size":      fe.size,
-                                });
-                                if let Some(n) = fe.count {
-                                    obj["count"] = serde_json::Value::from(n);
-                                }
-                                obj
-                            })
-                            .collect()
-                    } else {
-                        // No DEPTH, no GROUP BY: standard apply_clauses pipeline.
-                        // Always show individual files — the LIMIT clause (default 20)
-                        // already caps how many entries are returned.
-                        crate::filter::apply_clauses(&mut entries, clauses);
-                        entries
-                            .iter()
-                            .map(|fe| {
-                                serde_json::json!({
-                                    "path":      fe.path.display().to_string(),
-                                    "extension": fe.extension,
-                                    "size":      fe.size,
-                                })
-                            })
-                            .collect()
-                    };
-                let count = results.len();
-                serde_json::json!({
-                    "op":      "find_files",
-                    "glob":    glob,
-                    "depth":   max_depth,
-                    "results": results,
-                    "count":   count,
-                })
+                Self::exec_show_find_files(&workspace, engine, clauses)?
             }
             other => serde_json::json!({ "error": format!("not a show op: {other:?}") }),
         };
@@ -516,5 +228,315 @@ impl ForgeQLEngine {
             bytes,
             &self.lang_registry,
         )
+    }
+
+    fn exec_show_context(
+        workspace: &Workspace,
+        engine: &dyn StorageEngine,
+        symbol: &str,
+        clauses: &Clauses,
+    ) -> serde_json::Value {
+        let context_lines = clauses.depth.unwrap_or(DEFAULT_CONTEXT_LINES);
+        engine
+            .resolve_symbol(symbol, clauses, workspace.root())
+            .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
+            .and_then(|loc| {
+                let bytes = read_bytes_for_show(workspace, &loc)?;
+                show::show_context(
+                    &bytes,
+                    &loc.path,
+                    loc.byte_range.start,
+                    workspace,
+                    symbol,
+                    context_lines,
+                )
+            })
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+    }
+
+    fn exec_show_signature(
+        &self,
+        session_id: Option<&str>,
+        workspace: &Workspace,
+        engine: &dyn StorageEngine,
+        symbol: &str,
+        clauses: &Clauses,
+    ) -> serde_json::Value {
+        engine
+            .resolve_symbol(symbol, clauses, workspace.root())
+            .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
+            .and_then(|loc| {
+                let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
+                let req = show::ShowRequest {
+                    cached: &cached,
+                    path: &loc.path,
+                    byte_range_start: loc.byte_range.start,
+                    hint_line: Some(loc.line).filter(|&l| l > 0),
+                    workspace,
+                    symbol,
+                    lang_registry: &self.lang_registry,
+                };
+                show::show_signature(&req, &loc.node_kind)
+            })
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+    }
+
+    fn exec_show_outline(
+        workspace: &Workspace,
+        engine: &dyn StorageEngine,
+        file: &str,
+    ) -> serde_json::Value {
+        engine
+            .show_outline_for_file(workspace, file)
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+    }
+
+    fn exec_show_members(
+        &self,
+        session_id: Option<&str>,
+        workspace: &Workspace,
+        engine: &dyn StorageEngine,
+        symbol: &str,
+        clauses: &Clauses,
+    ) -> serde_json::Value {
+        engine
+            .resolve_type_symbol(symbol, clauses, workspace.root())
+            .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
+            .and_then(|loc| {
+                let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
+                let req = show::ShowRequest {
+                    cached: &cached,
+                    path: &loc.path,
+                    byte_range_start: loc.byte_range.start,
+                    hint_line: Some(loc.line).filter(|&l| l > 0),
+                    workspace,
+                    symbol,
+                    lang_registry: &self.lang_registry,
+                };
+                show::show_members(&req)
+            })
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+    }
+
+    fn exec_show_body(
+        &self,
+        session_id: Option<&str>,
+        workspace: &Workspace,
+        engine: &dyn StorageEngine,
+        symbol: &str,
+        clauses: &Clauses,
+    ) -> serde_json::Value {
+        engine
+            .resolve_body_symbol(symbol, clauses, workspace.root())
+            .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
+            .and_then(|loc| {
+                let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
+                let req = show::ShowRequest {
+                    cached: &cached,
+                    path: &loc.path,
+                    byte_range_start: loc.byte_range.start,
+                    hint_line: Some(loc.line).filter(|&l| l > 0),
+                    workspace,
+                    symbol,
+                    lang_registry: &self.lang_registry,
+                };
+                show::show_body(
+                    &req,
+                    Some(clauses.depth.unwrap_or(DEFAULT_BODY_DEPTH)),
+                    &loc.enrichment,
+                )
+            })
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+    }
+
+    fn exec_show_callees(
+        &self,
+        session_id: Option<&str>,
+        workspace: &Workspace,
+        engine: &dyn StorageEngine,
+        symbol: &str,
+        clauses: &Clauses,
+    ) -> serde_json::Value {
+        engine
+            .resolve_body_symbol(symbol, clauses, workspace.root())
+            .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
+            .and_then(|loc| {
+                let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
+                let req = show::ShowRequest {
+                    cached: &cached,
+                    path: &loc.path,
+                    byte_range_start: loc.byte_range.start,
+                    hint_line: Some(loc.line).filter(|&l| l > 0),
+                    workspace,
+                    symbol,
+                    lang_registry: &self.lang_registry,
+                };
+                show::show_callees(&req)
+            })
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+    }
+
+    fn exec_show_lines(
+        workspace: &Workspace,
+        file: &str,
+        start_line: usize,
+        end_line: usize,
+    ) -> serde_json::Value {
+        show::show_lines(workspace, file, start_line, end_line)
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "FindFiles clause pipeline; splitting would scatter tightly-coupled logic"
+    )]
+    fn exec_show_find_files(
+        workspace: &Workspace,
+        engine: &dyn StorageEngine,
+        clauses: &Clauses,
+    ) -> Result<serde_json::Value> {
+        reject_text_filter(clauses)?;
+        let glob = clauses.in_glob.as_deref().unwrap_or("**");
+        let indexed_opt = engine.indexed_files();
+        let fast_path_ext: Option<&str> = indexed_opt.as_ref().and_then(|indexed| {
+            use crate::ir::{CompareOp, PredicateValue};
+            clauses
+                .where_predicates
+                .iter()
+                .find_map(|p| {
+                    if (p.field == "extension" || p.field == "ext")
+                        && p.op == CompareOp::Eq
+                        && let PredicateValue::String(s) = &p.value
+                    {
+                        return Some(s.as_str());
+                    }
+                    None
+                })
+                .filter(|ext| indexed.iter().any(|fe| fe.extension == *ext))
+        });
+        let mut entries: Vec<FileEntry> = if fast_path_ext.is_some() {
+            #[expect(
+                clippy::unwrap_used,
+                reason = "fast_path_ext.is_some() implies indexed_opt.is_some() — invariant established above"
+            )]
+            indexed_opt.unwrap()
+        } else {
+            let raw = query::find_files(workspace, glob, clauses.exclude_glob.as_deref());
+            raw.iter()
+                .filter_map(|v| {
+                    let path = v.get("path").and_then(|p| p.as_str()).map(PathBuf::from)?;
+                    let extension = v
+                        .get("extension")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let size = v
+                        .get("size")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                    let depth = Some(path.components().count());
+                    Some(FileEntry {
+                        path,
+                        extension,
+                        size,
+                        depth,
+                        count: None,
+                    })
+                })
+                .collect()
+        };
+        let max_depth = clauses.depth.unwrap_or(usize::MAX);
+        let results: Vec<serde_json::Value> =
+            if clauses.depth.is_some() && clauses.group_by.is_none() {
+                let mut filter_clauses = clauses.clone();
+                filter_clauses.order_by = None;
+                filter_clauses.limit = None;
+                filter_clauses.offset = None;
+                crate::filter::apply_clauses(&mut entries, &filter_clauses);
+
+                let file_json: Vec<serde_json::Value> = entries
+                    .iter()
+                    .map(|fe| {
+                        serde_json::json!({
+                            "path":      fe.path.display().to_string(),
+                            "extension": fe.extension,
+                            "size":      fe.size,
+                        })
+                    })
+                    .collect();
+                let mut grouped = query::group_files_by_depth(&file_json, max_depth);
+
+                if let Some(ref order_by) = clauses.order_by {
+                    let dir = order_by.direction;
+                    let field = order_by.field.clone();
+                    grouped.sort_by(|a, b| {
+                        let cmp = if let (Some(va), Some(vb)) = (
+                            a.get(&field).and_then(serde_json::Value::as_u64),
+                            b.get(&field).and_then(serde_json::Value::as_u64),
+                        ) {
+                            va.cmp(&vb)
+                        } else {
+                            let sa = a
+                                .get(&field)
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            let sb = b
+                                .get(&field)
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("");
+                            sa.cmp(sb)
+                        };
+                        match dir {
+                            SortDirection::Desc => cmp.reverse(),
+                            SortDirection::Asc => cmp,
+                        }
+                    });
+                }
+
+                let skip = clauses.offset.unwrap_or(0);
+                if skip > 0 {
+                    drop(grouped.drain(..skip.min(grouped.len())));
+                }
+                if let Some(max) = clauses.limit {
+                    grouped.truncate(max);
+                }
+                grouped
+            } else if clauses.group_by.is_some() {
+                crate::filter::apply_clauses(&mut entries, clauses);
+                entries
+                    .iter()
+                    .map(|fe| {
+                        let mut obj = serde_json::json!({
+                            "path":      fe.path.display().to_string(),
+                            "extension": fe.extension,
+                            "size":      fe.size,
+                        });
+                        if let Some(n) = fe.count {
+                            obj["count"] = serde_json::Value::from(n);
+                        }
+                        obj
+                    })
+                    .collect()
+            } else {
+                crate::filter::apply_clauses(&mut entries, clauses);
+                entries
+                    .iter()
+                    .map(|fe| {
+                        serde_json::json!({
+                            "path":      fe.path.display().to_string(),
+                            "extension": fe.extension,
+                            "size":      fe.size,
+                        })
+                    })
+                    .collect()
+            };
+        let count = results.len();
+        Ok(serde_json::json!({
+            "op":      "find_files",
+            "glob":    glob,
+            "depth":   max_depth,
+            "results": results,
+            "count":   count,
+        }))
     }
 }

@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.14] — 2026-05-25 — P2-A: split exec_show match arms into private methods
+
+### Changed
+
+- **`crates/forgeql-core/src/engine/exec_show.rs`** — extracted every `match op { … }` arm
+  of `exec_show` (397 lines) into a dedicated private method:
+  - `exec_show_context` — resolves symbol + calls `show::show_context`
+  - `exec_show_signature` — resolves symbol + calls `show::show_signature`
+  - `exec_show_outline` — delegates to `engine.show_outline_for_file`
+  - `exec_show_members` — resolves type symbol + calls `show::show_members`
+  - `exec_show_body` — resolves body symbol + calls `show::show_body`
+  - `exec_show_callees` — resolves body symbol + calls `show::show_callees`
+  - `exec_show_lines` — delegates to `show::show_lines`
+  - `exec_show_find_files` — full FindFiles clause pipeline (fast-path + filesystem walk);
+    returns `Result<serde_json::Value>`; annotated `#[expect(clippy::too_many_lines)]`
+  - Four methods that do not access `self` are associated functions (`Self::` call sites);
+    four that call `get_or_parse_for_show` / `lang_registry` remain `&self` methods.
+  - `exec_show` itself is now a 27-line dispatcher; `#[expect(clippy::too_many_lines)]`
+    attribute and unused `let root = workspace.root()` binding removed.
+  - Added `storage::StorageEngine` to imports for parameter typing in the new methods.
+
 ## [0.54.13] — 2026-05-25 — P1-F: replace field_to_kinds_for_config match with OnceLock HashMap
 
 ### Changed
@@ -3032,6 +3053,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`test-all-before-commit.sh` script**: Pre-commit gate that runs `cargo fmt --all` → fmt check → clippy → release build → tests → SMS regression (budget=5000 with CSV). Designed for `VERIFY build` with compact output (`tail -40` per step).
 
 ## [Unreleased]
+
+## [0.54.14] — 2026-05-25 — P2-A: split exec_show match arms into private methods
+
+### Changed
+
+- **`crates/forgeql-core/src/engine/exec_show.rs`** — extracted every `match op { … }` arm
+  of `exec_show` (397 lines) into a dedicated private method:
+  - `exec_show_context` — resolves symbol + calls `show::show_context`
+  - `exec_show_signature` — resolves symbol + calls `show::show_signature`
+  - `exec_show_outline` — delegates to `engine.show_outline_for_file`
+  - `exec_show_members` — resolves type symbol + calls `show::show_members`
+  - `exec_show_body` — resolves body symbol + calls `show::show_body`
+  - `exec_show_callees` — resolves body symbol + calls `show::show_callees`
+  - `exec_show_lines` — delegates to `show::show_lines`
+  - `exec_show_find_files` — full FindFiles clause pipeline (fast-path + filesystem walk);
+    returns `Result<serde_json::Value>`; annotated `#[expect(clippy::too_many_lines)]`
+  - Four methods that do not access `self` are associated functions (`Self::` call sites);
+    four that call `get_or_parse_for_show` / `lang_registry` remain `&self` methods.
+  - `exec_show` itself is now a 27-line dispatcher; `#[expect(clippy::too_many_lines)]`
+    attribute and unused `let root = workspace.root()` binding removed.
+  - Added `storage::StorageEngine` to imports for parameter typing in the new methods.
 
 ### Added
 
