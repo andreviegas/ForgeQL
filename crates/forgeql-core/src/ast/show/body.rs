@@ -1,12 +1,10 @@
 //! `SHOW body` implementation.
 use std::collections::HashMap;
-use std::path::Path;
 
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
-use super::{byte_to_line, emit_body_lines, find_function_node_for_symbol};
-use crate::{ast::lang::LanguageRegistry, workspace::Workspace};
+use super::{ShowRequest, byte_to_line, emit_body_lines, find_function_node_for_symbol};
 
 /// `SHOW body OF 'func' [DEPTH n]`
 ///
@@ -17,27 +15,25 @@ use crate::{ast::lang::LanguageRegistry, workspace::Workspace};
 /// # Errors
 /// Returns an error if the symbol is not indexed, the file cannot be parsed,
 /// or the AST node for the function is not found.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(clippy::too_many_lines)]
 pub fn show_body<S: ::std::hash::BuildHasher>(
-    cached: &crate::ast::parse_cache::CachedParse,
-    path: &Path,
-    byte_range_start: usize,
-    // 1-based line number from the index; used to detect misparsed AST nodes.
-    hint_line: Option<usize>,
-    enrichment: &HashMap<String, String, S>,
-    workspace: &Workspace,
-    symbol: &str,
+    req: &ShowRequest<'_>,
     depth: Option<usize>,
-    lang_registry: &LanguageRegistry,
+    enrichment: &HashMap<String, String, S>,
 ) -> Result<Value> {
-    let lang = lang_registry
-        .language_for_path(path)
-        .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
+    let lang = req
+        .lang_registry
+        .language_for_path(req.path)
+        .ok_or_else(|| anyhow!("no language for {}", req.path.display()))?;
     let config = lang.config();
-    let source = &*cached.source;
-    let fn_node =
-        find_function_node_for_symbol(cached.tree.root_node(), byte_range_start, hint_line, config)
-            .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
+    let source = &*req.cached.source;
+    let fn_node = find_function_node_for_symbol(
+        req.cached.tree.root_node(),
+        req.byte_range_start,
+        req.hint_line,
+        config,
+    )
+    .ok_or_else(|| anyhow!("function definition for '{}' not found in AST", req.symbol))?;
 
     let fn_start = fn_node.start_byte();
     let fn_start_line = byte_to_line(source, fn_start); // 0-based
@@ -106,7 +102,7 @@ pub fn show_body<S: ::std::hash::BuildHasher>(
         })
         .collect();
 
-    let path_str = workspace.relative(path).display().to_string();
+    let path_str = req.workspace.relative(req.path).display().to_string();
 
     // When DEPTH 0, include enrichment metadata so the agent can make
     // informed decisions (e.g. how many lines, params, branches) without
@@ -140,7 +136,7 @@ pub fn show_body<S: ::std::hash::BuildHasher>(
 
     let mut result = serde_json::json!({
         "op":         "show_body",
-        "symbol":     symbol,
+        "symbol":     req.symbol,
         "path":       path_str,
         "start_line": fn_start_line + 1,
         "end_line":   fn_end_line,

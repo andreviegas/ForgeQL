@@ -5,12 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
-use super::{byte_to_line, find_type_node_by_name, path_matches};
+use super::{ShowRequest, byte_to_line, find_type_node_by_name, path_matches};
 use crate::{
-    ast::{
-        index::SymbolTable,
-        lang::{LanguageConfig, LanguageRegistry},
-    },
+    ast::{index::SymbolTable, lang::LanguageConfig},
     workspace::Workspace,
 };
 
@@ -168,22 +165,17 @@ pub fn show_outline(index: &SymbolTable, workspace: &Workspace, file: &str) -> R
 /// # Errors
 /// Returns an error if the file cannot be read or the AST node for the
 /// type is not found.
-pub fn show_members(
-    cached: &crate::ast::parse_cache::CachedParse,
-    path: &Path,
-    workspace: &Workspace,
-    symbol: &str,
-    lang_registry: &LanguageRegistry,
-) -> Result<Value> {
-    let lang = lang_registry
-        .language_for_path(path)
-        .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
+pub fn show_members(req: &ShowRequest<'_>) -> Result<Value> {
+    let lang = req
+        .lang_registry
+        .language_for_path(req.path)
+        .ok_or_else(|| anyhow!("no language for {}", req.path.display()))?;
     let config = lang.config();
-    let source = &*cached.source;
-    let root = cached.tree.root_node();
+    let source = &*req.cached.source;
+    let root = req.cached.tree.root_node();
 
-    let type_node = find_type_node_by_name(root, source, symbol, config)
-        .ok_or_else(|| anyhow!("AST node for '{symbol}' not found in file"))?;
+    let type_node = find_type_node_by_name(root, source, req.symbol, config)
+        .ok_or_else(|| anyhow!("AST node for '{}' not found in file", req.symbol))?;
 
     let mut members: Vec<Value> = Vec::new();
 
@@ -204,10 +196,10 @@ pub fn show_members(
     let byte_start = type_node.start_byte();
     let start_line = type_node.start_position().row + 1;
     let end_line = type_node.end_position().row + 1;
-    let path_str = workspace.relative(path).display().to_string();
+    let path_str = req.workspace.relative(req.path).display().to_string();
     Ok(serde_json::json!({
         "op":         "show_members",
-        "symbol":     symbol,
+        "symbol":     req.symbol,
         "path":       path_str,
         "start_line": start_line,
         "end_line":   end_line,

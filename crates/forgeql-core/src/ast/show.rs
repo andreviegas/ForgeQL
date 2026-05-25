@@ -13,10 +13,7 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
-use crate::{
-    ast::lang::{LanguageConfig, LanguageRegistry},
-    workspace::Workspace,
-};
+use crate::{ast::lang::LanguageConfig, workspace::Workspace};
 
 // -----------------------------------------------------------------------
 // Internal utilities
@@ -416,10 +413,12 @@ pub(super) fn path_matches(root: &Path, path: &Path, pattern: &str) -> bool {
 mod body;
 mod callees;
 mod members;
+mod request;
 
 pub use body::show_body;
 pub use callees::{show_callees, show_callers, show_lines};
 pub use members::{show_members, show_outline};
+pub use request::ShowRequest;
 
 // -----------------------------------------------------------------------
 // Public API
@@ -479,23 +478,16 @@ pub fn show_context(
 ///
 /// # Errors
 /// Returns an error if the file cannot be read.
-pub fn show_signature(
-    cached: &crate::ast::parse_cache::CachedParse,
-    path: &std::path::Path,
-    byte_range_start: usize,
-    node_kind: &str,
-    workspace: &Workspace,
-    symbol: &str,
-    lang_registry: &LanguageRegistry,
-) -> Result<Value> {
-    let lang = lang_registry
-        .language_for_path(path)
-        .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
+pub fn show_signature(req: &ShowRequest<'_>, node_kind: &str) -> Result<Value> {
+    let lang = req
+        .lang_registry
+        .language_for_path(req.path)
+        .ok_or_else(|| anyhow!("no language for {}", req.path.display()))?;
     let config = lang.config();
-    let source = &*cached.source;
-    let root = cached.tree.root_node();
+    let source = &*req.cached.source;
+    let root = req.cached.tree.root_node();
 
-    let start_line = byte_to_line(source, byte_range_start) + 1;
+    let start_line = byte_to_line(source, req.byte_range_start) + 1;
     // Also accept universal fql_kind names so the columnar backend (which stores
     // fql_kind rather than the raw tree-sitter node kind) gets the body-stripping
     // path rather than the single-line fallback.
@@ -503,40 +495,41 @@ pub fn show_signature(
         || config.is_template_declaration_kind(node_kind)
         || matches!(node_kind, "function" | "method");
     let (signature, end_line) = if is_func_or_template {
-        find_function_node_for_symbol(root, byte_range_start, Some(start_line), config).map_or_else(
-            || {
-                let sig = extract_line_at(source, byte_range_start);
-                (sig, start_line)
-            },
-            |fn_node| {
-                // Emit text up to (not including) the body compound_statement.
-                let body_start = fn_node
-                    .child_by_field_name("body")
-                    .map_or_else(|| fn_node.end_byte(), |b| b.start_byte());
-                let sig = std::str::from_utf8(&source[fn_node.start_byte()..body_start])
-                    .unwrap_or("")
-                    .trim_end()
-                    .to_string();
-                // The signature ends on the line just before the opening `{`.
-                let sig_end_line = byte_to_line(source, body_start.saturating_sub(1)) + 1;
-                (sig, sig_end_line)
-            },
-        )
+        find_function_node_for_symbol(root, req.byte_range_start, Some(start_line), config)
+            .map_or_else(
+                || {
+                    let sig = extract_line_at(source, req.byte_range_start);
+                    (sig, start_line)
+                },
+                |fn_node| {
+                    // Emit text up to (not including) the body compound_statement.
+                    let body_start = fn_node
+                        .child_by_field_name("body")
+                        .map_or_else(|| fn_node.end_byte(), |b| b.start_byte());
+                    let sig = std::str::from_utf8(&source[fn_node.start_byte()..body_start])
+                        .unwrap_or("")
+                        .trim_end()
+                        .to_string();
+                    // The signature ends on the line just before the opening `{`.
+                    let sig_end_line = byte_to_line(source, body_start.saturating_sub(1)) + 1;
+                    (sig, sig_end_line)
+                },
+            )
     } else {
         // For types/variables: one line of context is sufficient.
-        let sig = extract_line_at(source, byte_range_start);
+        let sig = extract_line_at(source, req.byte_range_start);
         (sig, start_line)
     };
 
-    let path_str = workspace.relative(path).display().to_string();
+    let path_str = req.workspace.relative(req.path).display().to_string();
     Ok(serde_json::json!({
         "op":         "show_signature",
-        "symbol":     symbol,
+        "symbol":     req.symbol,
         "path":       path_str,
         "start_line": start_line,
         "end_line":   end_line,
         "line":       start_line,
-        "byte_start": byte_range_start,
+        "byte_start": req.byte_range_start,
         "signature":  signature,
     }))
 }

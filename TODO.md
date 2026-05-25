@@ -255,7 +255,7 @@ See CHANGELOG [0.54.7] for the analysis that generated this list.
 Eliminate functions with 6+ parameters by grouping related arguments into structs.
 Do these before Phase 2 — moved functions carry smaller signatures.
 
-- [ ] **P1-A** `ShowRequest<'_>` struct — `show_body` (9p), `show_callees` (7p), `show_signature` (7p),
+- [x] **P1-A** `ShowRequest<'_>` struct — `show_body` (9p), `show_callees` (7p), `show_signature` (7p),
   `show_members` (7p) all pass the same 7 args (`cached`, `path`, `byte_range_start`, `hint_line`,
   `workspace`, `symbol`, `lang_registry`). Create `ast/show/request.rs`; update all four functions
   and their call sites in `exec_show.rs`.

@@ -107,15 +107,16 @@ impl ForgeQLEngine {
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
                     let cached = self.get_or_parse_for_show(session_id, &workspace, &loc)?;
-                    show::show_signature(
-                        &cached,
-                        &loc.path,
-                        loc.byte_range.start,
-                        &loc.node_kind,
-                        &workspace,
+                    let req = show::ShowRequest {
+                        cached: &cached,
+                        path: &loc.path,
+                        byte_range_start: loc.byte_range.start,
+                        hint_line: Some(loc.line).filter(|&l| l > 0),
+                        workspace: &workspace,
                         symbol,
-                        &self.lang_registry,
-                    )
+                        lang_registry: &self.lang_registry,
+                    };
+                    show::show_signature(&req, &loc.node_kind)
                 })
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
             ForgeQLIR::ShowOutline { file, .. } => engine
@@ -128,7 +129,16 @@ impl ForgeQLEngine {
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
                     let cached = self.get_or_parse_for_show(session_id, &workspace, &loc)?;
-                    show::show_members(&cached, &loc.path, &workspace, symbol, &self.lang_registry)
+                    let req = show::ShowRequest {
+                        cached: &cached,
+                        path: &loc.path,
+                        byte_range_start: loc.byte_range.start,
+                        hint_line: Some(loc.line).filter(|&l| l > 0),
+                        workspace: &workspace,
+                        symbol,
+                        lang_registry: &self.lang_registry,
+                    };
+                    show::show_members(&req)
                 })
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
             ForgeQLIR::ShowBody {
@@ -138,16 +148,19 @@ impl ForgeQLEngine {
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
                     let cached = self.get_or_parse_for_show(session_id, &workspace, &loc)?;
-                    show::show_body(
-                        &cached,
-                        &loc.path,
-                        loc.byte_range.start,
-                        Some(loc.line).filter(|&l| l > 0),
-                        &loc.enrichment,
-                        &workspace,
+                    let req = show::ShowRequest {
+                        cached: &cached,
+                        path: &loc.path,
+                        byte_range_start: loc.byte_range.start,
+                        hint_line: Some(loc.line).filter(|&l| l > 0),
+                        workspace: &workspace,
                         symbol,
+                        lang_registry: &self.lang_registry,
+                    };
+                    show::show_body(
+                        &req,
                         Some(clauses.depth.unwrap_or(DEFAULT_BODY_DEPTH)),
-                        &self.lang_registry,
+                        &loc.enrichment,
                     )
                 })
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
@@ -158,15 +171,16 @@ impl ForgeQLEngine {
                 .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
                 .and_then(|loc| {
                     let cached = self.get_or_parse_for_show(session_id, &workspace, &loc)?;
-                    show::show_callees(
-                        &cached,
-                        &loc.path,
-                        loc.byte_range.start,
-                        Some(loc.line).filter(|&l| l > 0),
-                        &workspace,
+                    let req = show::ShowRequest {
+                        cached: &cached,
+                        path: &loc.path,
+                        byte_range_start: loc.byte_range.start,
+                        hint_line: Some(loc.line).filter(|&l| l > 0),
+                        workspace: &workspace,
                         symbol,
-                        &self.lang_registry,
-                    )
+                        lang_registry: &self.lang_registry,
+                    };
+                    show::show_callees(&req)
                 })
                 .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })),
             ForgeQLIR::ShowLines {

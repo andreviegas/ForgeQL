@@ -904,7 +904,7 @@ fn cpp_cached_parse() -> std::sync::Arc<forgeql_core::ast::parse_cache::CachedPa
 #[test]
 fn columnar_show_body_matches_legacy() {
     use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
-    use forgeql_core::ast::show::show_body;
+    use forgeql_core::ast::show::{ShowRequest, show_body};
     use forgeql_core::storage::StorageEngine;
     use forgeql_core::workspace::Workspace;
 
@@ -921,36 +921,32 @@ fn columnar_show_body_matches_legacy() {
         .resolve_body_symbol("process", &clauses, &fixtures_dir())
         .expect("columnar resolve")
         .expect("process not found (columnar)");
-    let col_json = show_body(
-        &cached,
-        &col_loc.path,
-        col_loc.byte_range.start,
-        None,
-        &col_loc.enrichment,
-        &workspace,
-        "process",
-        Some(0),
-        &registry,
-    )
-    .expect("columnar show_body");
+    let col_req = ShowRequest {
+        cached: &cached,
+        path: &col_loc.path,
+        byte_range_start: col_loc.byte_range.start,
+        hint_line: None,
+        workspace: &workspace,
+        symbol: "process",
+        lang_registry: &registry,
+    };
+    let col_json = show_body(&col_req, Some(0), &col_loc.enrichment).expect("columnar show_body");
 
     // Legacy path
     let leg_row = table
         .find_def("process")
         .expect("process not found (legacy)");
     let leg_enrichment = table.resolve_fields(&leg_row.fields);
-    let leg_json = show_body(
-        &cached,
-        &cpp_path,
-        leg_row.byte_range.start,
-        None,
-        &leg_enrichment,
-        &workspace,
-        "process",
-        Some(0),
-        &registry,
-    )
-    .expect("legacy show_body");
+    let leg_req = ShowRequest {
+        cached: &cached,
+        path: &cpp_path,
+        byte_range_start: leg_row.byte_range.start,
+        hint_line: None,
+        workspace: &workspace,
+        symbol: "process",
+        lang_registry: &registry,
+    };
+    let leg_json = show_body(&leg_req, Some(0), &leg_enrichment).expect("legacy show_body");
 
     assert_eq!(
         col_json["start_line"], leg_json["start_line"],
@@ -972,7 +968,7 @@ fn columnar_show_body_matches_legacy() {
 #[test]
 fn columnar_show_signature_matches_legacy() {
     use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
-    use forgeql_core::ast::show::show_signature;
+    use forgeql_core::ast::show::{ShowRequest, show_signature};
     use forgeql_core::storage::StorageEngine;
     use forgeql_core::workspace::Workspace;
 
@@ -989,31 +985,32 @@ fn columnar_show_signature_matches_legacy() {
         .resolve_symbol("process", &clauses, &fixtures_dir())
         .expect("columnar resolve")
         .expect("process not found (columnar)");
-    let col_json = show_signature(
-        &cached,
-        &col_loc.path,
-        col_loc.byte_range.start,
-        &col_loc.node_kind,
-        &workspace,
-        "process",
-        &registry,
-    )
-    .expect("columnar show_signature");
+    let col_req = ShowRequest {
+        cached: &cached,
+        path: &col_loc.path,
+        byte_range_start: col_loc.byte_range.start,
+        hint_line: None,
+        workspace: &workspace,
+        symbol: "process",
+        lang_registry: &registry,
+    };
+    let col_json = show_signature(&col_req, &col_loc.node_kind).expect("columnar show_signature");
 
     // Legacy
     let leg_row = table
         .find_def("process")
         .expect("process not found (legacy)");
-    let leg_json = show_signature(
-        &cached,
-        &cpp_path,
-        leg_row.byte_range.start,
-        table.node_kind_of(leg_row),
-        &workspace,
-        "process",
-        &registry,
-    )
-    .expect("legacy show_signature");
+    let leg_req = ShowRequest {
+        cached: &cached,
+        path: &cpp_path,
+        byte_range_start: leg_row.byte_range.start,
+        hint_line: None,
+        workspace: &workspace,
+        symbol: "process",
+        lang_registry: &registry,
+    };
+    let leg_json =
+        show_signature(&leg_req, table.node_kind_of(leg_row)).expect("legacy show_signature");
 
     assert_eq!(
         col_json["signature"], leg_json["signature"],
@@ -1031,7 +1028,7 @@ fn columnar_show_signature_matches_legacy() {
 #[test]
 fn columnar_show_members_matches_legacy() {
     use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
-    use forgeql_core::ast::show::show_members;
+    use forgeql_core::ast::show::{ShowRequest, show_members};
     use forgeql_core::storage::StorageEngine;
     use forgeql_core::workspace::Workspace;
 
@@ -1047,13 +1044,29 @@ fn columnar_show_members_matches_legacy() {
         .resolve_type_symbol("Motor", &clauses, &fixtures_dir())
         .expect("columnar resolve")
         .expect("Motor not found (columnar)");
-    let col_json = show_members(&cached, &col_loc.path, &workspace, "Motor", &registry)
-        .expect("columnar show_members");
+    let col_req = ShowRequest {
+        cached: &cached,
+        path: &col_loc.path,
+        byte_range_start: col_loc.byte_range.start,
+        hint_line: None,
+        workspace: &workspace,
+        symbol: "Motor",
+        lang_registry: &registry,
+    };
+    let col_json = show_members(&col_req).expect("columnar show_members");
 
     // Legacy — call the same show_members with the same cached parse + path
     let cpp_path = fixture_path("canonical.cpp");
-    let leg_json = show_members(&cached, &cpp_path, &workspace, "Motor", &registry)
-        .expect("legacy show_members");
+    let leg_req = ShowRequest {
+        cached: &cached,
+        path: &cpp_path,
+        byte_range_start: 0,
+        hint_line: None,
+        workspace: &workspace,
+        symbol: "Motor",
+        lang_registry: &registry,
+    };
+    let leg_json = show_members(&leg_req).expect("legacy show_members");
 
     fn extract_members(json: &serde_json::Value) -> Vec<(String, String)> {
         let mut v: Vec<_> = json["members"]
@@ -1143,7 +1156,7 @@ fn columnar_show_context_matches_legacy() {
 #[test]
 fn columnar_show_callees_matches_legacy() {
     use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
-    use forgeql_core::ast::show::show_callees;
+    use forgeql_core::ast::show::{ShowRequest, show_callees};
     use forgeql_core::storage::StorageEngine;
     use forgeql_core::workspace::Workspace;
 
@@ -1160,29 +1173,29 @@ fn columnar_show_callees_matches_legacy() {
         .resolve_body_symbol("caller", &clauses, &fixtures_dir())
         .expect("columnar resolve")
         .expect("caller not found (columnar)");
-    let col_json = show_callees(
-        &cached,
-        &col_loc.path,
-        col_loc.byte_range.start,
-        None,
-        &workspace,
-        "caller",
-        &registry,
-    )
-    .expect("columnar show_callees");
+    let col_req = ShowRequest {
+        cached: &cached,
+        path: &col_loc.path,
+        byte_range_start: col_loc.byte_range.start,
+        hint_line: None,
+        workspace: &workspace,
+        symbol: "caller",
+        lang_registry: &registry,
+    };
+    let col_json = show_callees(&col_req).expect("columnar show_callees");
 
     // Legacy
     let leg_row = table.find_def("caller").expect("caller not found (legacy)");
-    let leg_json = show_callees(
-        &cached,
-        &cpp_path,
-        leg_row.byte_range.start,
-        None,
-        &workspace,
-        "caller",
-        &registry,
-    )
-    .expect("legacy show_callees");
+    let leg_req = ShowRequest {
+        cached: &cached,
+        path: &cpp_path,
+        byte_range_start: leg_row.byte_range.start,
+        hint_line: None,
+        workspace: &workspace,
+        symbol: "caller",
+        lang_registry: &registry,
+    };
+    let leg_json = show_callees(&leg_req).expect("legacy show_callees");
 
     fn callee_names(json: &serde_json::Value) -> std::collections::BTreeSet<String> {
         json["results"]
@@ -1337,7 +1350,7 @@ fn bare_repo_show_reads_bytes_from_git() {
 
     use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
     use forgeql_core::ast::parse_cache::{ParseCache, sha1_of_bytes};
-    use forgeql_core::ast::show::{show_body, show_context};
+    use forgeql_core::ast::show::{ShowRequest, show_body, show_context};
     use forgeql_core::workspace::Workspace;
 
     // ── 1. Init a bare git repository ────────────────────────────────────────
@@ -1410,18 +1423,17 @@ fn bare_repo_show_reads_bytes_from_git() {
     // callee-redirect hints.  Empty map = no body_symbol redirect, which is
     // fine for this test (we just need the SHOW path to complete without error).
     let no_enrichment: StdHashMap<String, String> = StdHashMap::new();
-    let body = show_body(
-        &cached,
-        &phantom_path,
-        row.byte_range.start,
-        None,
-        &no_enrichment,
-        &workspace,
-        "bar",
-        Some(0),
-        &registry,
-    )
-    .expect("show_body on git-fetched CachedParse");
+    let bare_req = ShowRequest {
+        cached: &cached,
+        path: &phantom_path,
+        byte_range_start: row.byte_range.start,
+        hint_line: None,
+        workspace: &workspace,
+        symbol: "bar",
+        lang_registry: &registry,
+    };
+    let body = show_body(&bare_req, Some(0), &no_enrichment)
+        .expect("show_body on git-fetched CachedParse");
     assert_eq!(body["op"], "show_body", "show_body op field");
     assert!(body["error"].is_null(), "show_body must not error");
     assert!(

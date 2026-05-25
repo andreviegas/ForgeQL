@@ -4,11 +4,9 @@ use std::collections::HashMap;
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 
-use super::{byte_to_line, collect_callees_walk, find_function_node_for_symbol};
-use crate::{
-    ast::{index::SymbolTable, lang::LanguageRegistry},
-    workspace::Workspace,
-};
+use super::{ShowRequest, byte_to_line, collect_callees_walk, find_function_node_for_symbol};
+use crate::ast::index::SymbolTable;
+use crate::workspace::Workspace;
 /// `SHOW callers OF 'func'`
 ///
 /// Returns all reference sites for `symbol` from the usage index, with their
@@ -60,24 +58,23 @@ pub fn show_callers(index: &SymbolTable, workspace: &Workspace, symbol: &str) ->
 ///
 /// # Errors
 /// Returns an error if the file cannot be parsed or the AST node for the
-#[allow(clippy::too_many_arguments)]
-pub fn show_callees(
-    cached: &crate::ast::parse_cache::CachedParse,
-    path: &std::path::Path,
-    byte_range_start: usize,
-    hint_line: Option<usize>,
-    workspace: &Workspace,
-    symbol: &str,
-    lang_registry: &LanguageRegistry,
-) -> Result<Value> {
-    let lang = lang_registry
-        .language_for_path(path)
-        .ok_or_else(|| anyhow!("no language for {}", path.display()))?;
+/// # Errors
+/// Returns an error if the file cannot be parsed or the AST node for the
+/// symbol is not found.
+pub fn show_callees(req: &ShowRequest<'_>) -> Result<Value> {
+    let lang = req
+        .lang_registry
+        .language_for_path(req.path)
+        .ok_or_else(|| anyhow!("no language for {}", req.path.display()))?;
     let config = lang.config();
-    let source = &*cached.source;
-    let fn_node =
-        find_function_node_for_symbol(cached.tree.root_node(), byte_range_start, hint_line, config)
-            .ok_or_else(|| anyhow!("function definition for '{symbol}' not found in AST"))?;
+    let source = &*req.cached.source;
+    let fn_node = find_function_node_for_symbol(
+        req.cached.tree.root_node(),
+        req.byte_range_start,
+        req.hint_line,
+        config,
+    )
+    .ok_or_else(|| anyhow!("function definition for '{}' not found in AST", req.symbol))?;
 
     let mut callees: Vec<(String, usize)> = Vec::new();
     collect_callees_walk(source, fn_node, &mut callees, config.call_expression_kind());
@@ -86,7 +83,7 @@ pub fn show_callees(
     callees.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
     callees.dedup();
 
-    let path_str = workspace.relative(path).display().to_string();
+    let path_str = req.workspace.relative(req.path).display().to_string();
     let results: Vec<Value> = callees
         .iter()
         .map(|(name, line)| {
@@ -100,7 +97,7 @@ pub fn show_callees(
 
     Ok(serde_json::json!({
         "op":      "show_callees",
-        "symbol":  symbol,
+        "symbol":  req.symbol,
         "path":    path_str,
         "results": results,
     }))

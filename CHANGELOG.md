@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.8] — 2026-05-25 — P1-A: introduce ShowRequest struct
+
+### Changed
+
+- **`crates/forgeql-core/src/ast/show/request.rs`** (new) — `ShowRequest<'a>` struct
+  bundles the 7 parameters shared by all four `show_*` symbol functions.
+- **`show_body`**, **`show_callees`**, **`show_signature`**, **`show_members`** —
+  signatures reduced from 5–9 individual parameters to `req: &ShowRequest<'_>`
+  (plus function-specific extras); `#[allow(clippy::too_many_arguments)]` removed.
+- **`exec_show.rs`** — each call site now builds one `ShowRequest` from the resolved
+  `SymbolLocation` and passes it by reference, eliminating 28 duplicate parameter lines.
+- **`overlay_parity.rs`** — all direct `show_*` test call sites updated to the new API.
+
 ## [0.54.7] — 2026-05-25 — Refactoring roadmap: parameter clustering + file splitting
 
 ### Added
