@@ -26,7 +26,7 @@ use tracing::{debug, info};
 
 use crate::ast::enrich::default_enrichers;
 use crate::ast::index::IndexStats;
-use crate::ast::index::{SymbolTable, index_file};
+use crate::ast::index::{IndexContext, SymbolTable, index_file};
 use crate::ast::lang::LanguageRegistry;
 use crate::ast::query::glob_matches;
 use crate::filter::{TOPK_THRESHOLD, apply_clauses, collect_top_k, eval_predicate, order_cmp};
@@ -1680,16 +1680,16 @@ impl StorageEngine for ColumnarStorage {
 
                 let mut table = SymbolTable::default();
                 // index_file re-reads from disk; acceptable for the mutation path.
-                let _ = index_file(
-                    &mut parser,
-                    path,
-                    &mut table,
-                    &enrichers,
-                    lang.as_ref(),
-                    None,
-                    None,
-                );
-                // Run post_pass enrichers on the single-file table so that
+                {
+                    let mut ctx = IndexContext {
+                        path,
+                        language: lang.as_ref(),
+                        enrichers: &enrichers,
+                        macro_table: None,
+                        table: &mut table,
+                    };
+                    let _ = index_file(&mut parser, &mut ctx, None);
+                }
                 // post-pass fields (branch_count, max_condition_tests, etc.)
                 // are written before the segment is serialised.
                 for enricher in &enrichers {

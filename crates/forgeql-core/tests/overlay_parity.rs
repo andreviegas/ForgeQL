@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use forgeql_core::ast::enrich::default_enrichers;
-use forgeql_core::ast::index::{SymbolTable, index_file};
+use forgeql_core::ast::index::{IndexContext, SymbolTable, index_file};
 use forgeql_core::ast::lang::{
     CppLanguageInline, LanguageRegistry, LanguageSupport, RustLanguageInline,
 };
@@ -59,11 +59,18 @@ fn index_at_path(lang: &dyn LanguageSupport, path: &std::path::Path) -> SymbolTa
         .expect("set_language");
     let enrichers = default_enrichers();
     let mut table = SymbolTable::default();
-    let _ = index_file(&mut parser, path, &mut table, &enrichers, lang, None, None)
-        .expect("index_file should succeed");
+    {
+        let mut ctx = IndexContext {
+            path,
+            language: lang,
+            enrichers: &enrichers,
+            macro_table: None,
+            table: &mut table,
+        };
+        let _ = index_file(&mut parser, &mut ctx, None).expect("index_file should succeed");
+    }
     table
 }
-
 /// Index a fixture file with the given language and return the `SymbolTable`.
 fn index_fixture(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
     let path = fixture_path(filename);
@@ -73,9 +80,17 @@ fn index_fixture(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
         .expect("set_language");
     let enrichers = default_enrichers();
     let mut table = SymbolTable::default();
-    let count = index_file(&mut parser, &path, &mut table, &enrichers, lang, None, None)
-        .expect("index_file should succeed");
-    assert!(count > 0, "expected at least one row in {filename}");
+    {
+        let mut ctx = IndexContext {
+            path: &path,
+            language: lang,
+            enrichers: &enrichers,
+            macro_table: None,
+            table: &mut table,
+        };
+        let count = index_file(&mut parser, &mut ctx, None).expect("index_file should succeed");
+        assert!(count > 0, "expected at least one row in {filename}");
+    }
     table
 }
 

@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use forgeql_core::ast::enrich::default_enrichers;
-use forgeql_core::ast::index::{SymbolTable, index_file};
+use forgeql_core::ast::index::{IndexContext, SymbolTable, index_file};
 use forgeql_core::ast::lang::{
     CppLanguageInline, LanguageRegistry, LanguageSupport, RustLanguageInline,
 };
@@ -58,7 +58,16 @@ fn index_fixture(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
         .expect("set_language");
     let enrichers = default_enrichers();
     let mut table = SymbolTable::default();
-    index_file(&mut parser, &path, &mut table, &enrichers, lang, None, None).expect("index_file");
+    {
+        let mut ctx = IndexContext {
+            path: &path,
+            language: lang,
+            enrichers: &enrichers,
+            macro_table: None,
+            table: &mut table,
+        };
+        index_file(&mut parser, &mut ctx, None).expect("index_file");
+    }
     table
 }
 

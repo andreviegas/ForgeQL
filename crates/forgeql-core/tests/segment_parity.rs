@@ -32,7 +32,7 @@
 use std::path::{Path, PathBuf};
 
 use forgeql_core::ast::enrich::default_enrichers;
-use forgeql_core::ast::index::{SymbolTable, index_file};
+use forgeql_core::ast::index::{IndexContext, SymbolTable, index_file};
 use forgeql_core::ast::lang::{CppLanguageInline, LanguageSupport, RustLanguageInline};
 use forgeql_core::ir::Clauses;
 use forgeql_core::result::SymbolMatch;
@@ -59,10 +59,17 @@ fn index_canonical(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
 
     let enrichers = default_enrichers();
     let mut table = SymbolTable::default();
-
-    let count = index_file(&mut parser, &path, &mut table, &enrichers, lang, None, None)
-        .expect("index_file should succeed");
-    assert!(count > 0, "expected at least one indexed row");
+    {
+        let mut ctx = IndexContext {
+            path: &path,
+            language: lang,
+            enrichers: &enrichers,
+            macro_table: None,
+            table: &mut table,
+        };
+        let count = index_file(&mut parser, &mut ctx, None).expect("index_file should succeed");
+        assert!(count > 0, "expected at least one indexed row");
+    }
     table
 }
 

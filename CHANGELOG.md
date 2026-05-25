@@ -6,6 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.9] — 2026-05-25 — P1-B: introduce IndexContext struct
+
+### Changed
+
+- **`crates/forgeql-core/src/ast/index.rs`** — `IndexContext<'a>` struct bundles
+  `path`, `language`, `enrichers`, `macro_table`, and `table`; the five parameters
+  shared by `collect_nodes` and `index_file`.
+- **`collect_nodes`** — signature reduced from 8 parameters to 4
+  (`source`, `ctx: &mut IndexContext<'_>`, `cursor`, `ts_language`);
+  `#[allow(clippy::too_many_arguments)]` removed.
+- **`index_file`** — signature reduced from 7 parameters to 3
+  (`parser`, `ctx: &mut IndexContext<'_>`, `seg_ctx`);
+  `#[allow(clippy::too_many_arguments)]` removed.
+- **`SymbolTable::build`** (×2) and **`reindex_files`** — call sites updated to construct
+  `IndexContext` before calling `index_file`.
+- **`columnar_storage.rs`**, **`columnar_filter.rs`**, **`columnar_range.rs`**,
+  **`segment_parity.rs`**, **`overlay_parity.rs`**, **`lang_coverage_integration.rs`** —
+  all external call sites updated to the new `IndexContext` API.
 ## [0.54.8] — 2026-05-25 — P1-A: introduce ShowRequest struct
 
 ### Changed

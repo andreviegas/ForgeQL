@@ -447,19 +447,20 @@ impl SymbolTable {
                 }
                 let enrichers = default_enrichers();
                 let mut file_table = Self::default();
-                match index_file(
-                    &mut parser,
-                    path,
-                    &mut file_table,
-                    &enrichers,
-                    lang.as_ref(),
-                    Some(&macro_table),
-                    seg_ctx,
-                ) {
-                    Ok(count) => {
-                        debug!(path = %path.display(), rows = count, "indexed (columnar fast-path)");
+                {
+                    let mut ctx = IndexContext {
+                        path,
+                        language: lang.as_ref(),
+                        enrichers: &enrichers,
+                        macro_table: Some(&macro_table),
+                        table: &mut file_table,
+                    };
+                    match index_file(&mut parser, &mut ctx, seg_ctx) {
+                        Ok(count) => {
+                            debug!(path = %path.display(), rows = count, "indexed (columnar fast-path)");
+                        }
+                        Err(e) => warn!(path = %path.display(), "skipping file: {e}"),
                     }
-                    Err(e) => warn!(path = %path.display(), "skipping file: {e}"),
                 }
                 // file_table dropped here — no merge needed for columnar.
             });
@@ -486,25 +487,26 @@ impl SymbolTable {
                 let enrichers = default_enrichers();
                 let mut file_table = Self::default();
 
-                match index_file(
-                    &mut parser,
-                    path,
-                    &mut file_table,
-                    &enrichers,
-                    lang.as_ref(),
-                    Some(&macro_table),
-                    seg_ctx,
-                ) {
-                    Ok(count) => {
-                        debug!(
-                            path = %workspace.relative(path).display(),
-                            rows = count,
-                            "indexed"
-                        );
-                    }
-                    Err(err) => {
-                        warn!(path = %path.display(), error = %err, "skipping file");
-                        return None;
+                {
+                    let mut ctx = IndexContext {
+                        path,
+                        language: lang.as_ref(),
+                        enrichers: &enrichers,
+                        macro_table: Some(&macro_table),
+                        table: &mut file_table,
+                    };
+                    match index_file(&mut parser, &mut ctx, seg_ctx) {
+                        Ok(count) => {
+                            debug!(
+                                path = %workspace.relative(path).display(),
+                                rows = count,
+                                "indexed"
+                            );
+                        }
+                        Err(err) => {
+                            warn!(path = %path.display(), error = %err, "skipping file");
+                            return None;
+                        }
                     }
                 }
                 Some(file_table)
@@ -976,15 +978,14 @@ impl SymbolTable {
                     parser
                         .set_language(&lang.tree_sitter_language())
                         .map_err(|e| ForgeError::TreeSitterLanguage(e.to_string()))?;
-                    match index_file(
-                        &mut parser,
+                    let mut ctx = IndexContext {
                         path,
-                        self,
-                        &enrichers,
-                        lang.as_ref(),
-                        None,
-                        None,
-                    ) {
+                        language: lang.as_ref(),
+                        enrichers: &enrichers,
+                        macro_table: None,
+                        table: &mut *self,
+                    };
+                    match index_file(&mut parser, &mut ctx, None) {
                         Ok(count) => {
                             debug!(path = %path.display(), rows = count, "reindexed");
                         }
@@ -1064,6 +1065,24 @@ fn collect_macro_defs_for_file(
 }
 
 // -----------------------------------------------------------------------
+// Per-file indexing context
+// -----------------------------------------------------------------------
+
+/// Bundles the parameters shared between [`index_file`] and [`collect_nodes`]
+/// to reduce their argument lists.
+pub struct IndexContext<'a> {
+    /// The file being indexed.
+    pub path: &'a Path,
+    /// Language-specific AST support.
+    pub language: &'a dyn LanguageSupport,
+    /// Active enrichers applied to every node.
+    pub enrichers: &'a [Box<dyn NodeEnricher>],
+    /// Macro definitions from the first pass, if available.
+    pub macro_table: Option<&'a MacroTable>,
+    /// The symbol table being populated.
+    pub table: &'a mut SymbolTable,
+}
+// -----------------------------------------------------------------------
 // Index one file (second pass)
 // -----------------------------------------------------------------------
 
@@ -1076,35 +1095,22 @@ fn collect_macro_defs_for_file(
 /// Returns an error if the file cannot be read or tree-sitter parsing fails.
 pub fn index_file(
     parser: &mut tree_sitter::Parser,
-    path: &Path,
-    table: &mut SymbolTable,
-    enrichers: &[Box<dyn NodeEnricher>],
-    language: &dyn LanguageSupport,
-    macro_table: Option<&MacroTable>,
+    ctx: &mut IndexContext<'_>,
     seg_ctx: Option<&SegmentBuildCtx>,
 ) -> Result<usize> {
-    let source = crate::workspace::file_io::read_bytes(path)?;
+    let source = crate::workspace::file_io::read_bytes(ctx.path)?;
 
     let tree = parser
         .parse(&source, None)
         .ok_or_else(|| ForgeError::AstParse {
-            path: path.to_path_buf(),
+            path: ctx.path.to_path_buf(),
         })?;
 
-    let ts_lang = language.tree_sitter_language();
-    let before = table.rows.len();
+    let ts_lang = ctx.language.tree_sitter_language();
+    let before = ctx.table.rows.len();
 
     let mut cursor = tree.root_node().walk();
-    collect_nodes(
-        &source,
-        path,
-        &mut cursor,
-        &ts_lang,
-        language,
-        table,
-        enrichers,
-        macro_table,
-    );
+    collect_nodes(&source, ctx, &mut cursor, &ts_lang);
 
     // Per-file columnar shadow-write: hash the already-read source bytes and
     // emit a SegmentBuilder for the rows added to this per-file table.
@@ -1114,15 +1120,15 @@ pub fn index_file(
     // ControlFlowEnricher and RedundancyEnricher both group rows by file path
     // and work entirely intra-file, so per-file post_pass produces identical
     // enrichment results to full-table post_pass — without the sequential merge.
-    if let Some(ctx) = seg_ctx {
-        for enricher in enrichers {
-            enricher.post_pass(table, None);
+    if let Some(seg) = seg_ctx {
+        for enricher in ctx.enrichers {
+            enricher.post_pass(ctx.table, None);
         }
-        let content_id = (ctx.hash_fn)(&source);
-        (ctx.emit_fn)(&content_id, table, before);
+        let content_id = (seg.hash_fn)(&source);
+        (seg.emit_fn)(&content_id, ctx.table, before);
     }
 
-    Ok(table.rows.len() - before)
+    Ok(ctx.table.rows.len() - before)
 }
 
 // -----------------------------------------------------------------------
@@ -1142,19 +1148,14 @@ pub fn index_file(
 /// Uses iterative depth-first traversal via `TreeCursor` navigation to
 /// avoid stack overflow on large codebases (e.g. Zephyr RTOS).
 #[allow(clippy::too_many_lines)]
-#[allow(clippy::too_many_arguments)]
 fn collect_nodes(
     source: &[u8],
-    path: &Path,
+    ctx: &mut IndexContext<'_>,
     cursor: &mut tree_sitter::TreeCursor<'_>,
     ts_language: &tree_sitter::Language,
-    language: &dyn LanguageSupport,
-    table: &mut SymbolTable,
-    enrichers: &[Box<dyn NodeEnricher>],
-    macro_table: Option<&MacroTable>,
 ) {
-    let config = language.config();
-    let lang_name = language.name();
+    let config = ctx.language.config();
+    let lang_name = ctx.language.name();
     let mut guard_stack: Vec<GuardFrame> = Vec::new();
     // Tracks the kind of the parent node at each level of the DFS, updated
     // O(1) by the cursor navigation below.  Avoids calling node.parent()
@@ -1204,7 +1205,7 @@ fn collect_nodes(
         // Push a heuristic guard frame for env-guarded `if` nodes
         // (e.g. Python `if TYPE_CHECKING:` or `if sys.platform == "linux":`).
         if let Some(regex_set) = &env_guard_regex
-            && language.map_kind(node.kind()) == Some("if")
+            && ctx.language.map_kind(node.kind()) == Some("if")
             && let Some(frame) = build_env_guard_frame(node, source, config, regex_set)
         {
             guard_stack.push(frame);
@@ -1216,22 +1217,22 @@ fn collect_nodes(
 
         if !skip {
             // Build the enrichment context once for this node.
-            let ctx = EnrichContext {
+            let enrich_ctx = EnrichContext {
                 node,
                 source,
-                path,
+                path: ctx.path,
                 language_name: lang_name,
                 language_config: config,
-                language_support: language,
+                language_support: ctx.language,
                 guard_stack: &guard_stack,
-                macro_table,
+                macro_table: ctx.macro_table,
                 parent_kind: parent_kind_stack.last().copied().unwrap_or(""),
                 inside_string: string_depth > 0,
                 inside_error: error_depth > 0,
             };
 
             // Every named node becomes a row.
-            if let Some(name) = language.extract_name(node, source) {
+            if let Some(name) = ctx.language.extract_name(node, source) {
                 let mut fields = extract_fields(node, source, ts_language);
 
                 // Inject guard fields from the current block-guard stack.
@@ -1249,18 +1250,19 @@ fn collect_nodes(
                 }
 
                 // Run all enrichers on this row.
-                for enricher in enrichers {
-                    enricher.enrich_row(&ctx, &name, &mut fields);
+                for enricher in ctx.enrichers {
+                    enricher.enrich_row(&enrich_ctx, &name, &mut fields);
                 }
 
-                let fql_kind_val = language.map_kind(node.kind()).unwrap_or("");
-                let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = table
+                let fql_kind_val = ctx.language.map_kind(node.kind()).unwrap_or("");
+                let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = ctx
+                    .table
                     .strings
-                    .intern_row(&name, node.kind(), fql_kind_val, lang_name, path);
+                    .intern_row(&name, node.kind(), fql_kind_val, lang_name, ctx.path);
                 // Intern field keys+values before storing — converts the temporary
                 // HashMap<String,String> enricher buffer into HashMap<u32,u32>.
-                let fields = table.strings.intern_fields(fields);
-                table.push_row(IndexRow {
+                let fields = ctx.table.strings.intern_fields(fields);
+                ctx.table.push_row(IndexRow {
                     name_id,
                     node_kind_id,
                     fql_kind_id,
@@ -1271,7 +1273,7 @@ fn collect_nodes(
                     usages_count: 0,
                     fields,
                 });
-            } else if let Some(mtable) = macro_table {
+            } else if let Some(mtable) = ctx.macro_table {
                 // Re-tag: tree-sitter-cpp parses C macro calls as
                 // call_expression, not macro_invocation.  When extract_name
                 // returns None for a call_expression whose function name is
@@ -1297,15 +1299,16 @@ fn collect_nodes(
                             }
                         }
 
-                        for enricher in enrichers {
-                            enricher.enrich_row(&ctx, &func_name, &mut fields);
+                        for enricher in ctx.enrichers {
+                            enricher.enrich_row(&enrich_ctx, &func_name, &mut fields);
                         }
 
-                        let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = table
+                        let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = ctx
+                            .table
                             .strings
-                            .intern_row(&func_name, node.kind(), "macro_call", lang_name, path);
-                        let fields = table.strings.intern_fields(fields);
-                        table.push_row(IndexRow {
+                            .intern_row(&func_name, node.kind(), "macro_call", lang_name, ctx.path);
+                        let fields = ctx.table.strings.intern_fields(fields);
+                        ctx.table.push_row(IndexRow {
                             name_id,
                             node_kind_id,
                             fql_kind_id,
@@ -1320,18 +1323,18 @@ fn collect_nodes(
                 }
             }
             // Run extra_rows() for every node (even if extract_name returned None).
-            for enricher in enrichers {
-                for extra in enricher.extra_rows(&ctx) {
-                    let extra_path = extra.path_override.as_deref().unwrap_or(path);
-                    let (eni, enk, enf, enl, enp) = table.strings.intern_row(
+            for enricher in ctx.enrichers {
+                for extra in enricher.extra_rows(&enrich_ctx) {
+                    let extra_path = extra.path_override.as_deref().unwrap_or(ctx.path);
+                    let (eni, enk, enf, enl, enp) = ctx.table.strings.intern_row(
                         &extra.name,
                         &extra.node_kind,
                         &extra.fql_kind,
                         lang_name,
                         extra_path,
                     );
-                    let fields = table.strings.intern_fields(extra.fields);
-                    table.push_row(IndexRow {
+                    let fields = ctx.table.strings.intern_fields(extra.fields);
+                    ctx.table.push_row(IndexRow {
                         name_id: eni,
                         node_kind_id: enk,
                         fql_kind_id: enf,
@@ -1350,7 +1353,7 @@ fn collect_nodes(
                 let name = node_text(source, node);
                 if name.len() > 1 {
                     let line = node.start_position().row + 1;
-                    table.add_usage(name, path, node.byte_range(), line);
+                    ctx.table.add_usage(name, ctx.path, node.byte_range(), line);
                 }
             }
 
@@ -1656,16 +1659,17 @@ mod tests {
         parser
             .set_language(&tree_sitter_cpp::LANGUAGE.into())
             .unwrap();
-        index_file(
-            &mut parser,
-            &file,
-            &mut table,
-            &default_enrichers(),
-            &CppLanguageInline,
-            None,
-            None,
-        )
-        .unwrap();
+        let enrichers = default_enrichers();
+        {
+            let mut ctx = IndexContext {
+                path: &file,
+                language: &CppLanguageInline,
+                enrichers: &enrichers,
+                macro_table: None,
+                table: &mut table,
+            };
+            index_file(&mut parser, &mut ctx, None).unwrap();
+        }
         assert!(table.find_def("alpha").is_some());
 
         std::fs::write(&file, "void beta() {}").unwrap();
@@ -1688,16 +1692,17 @@ mod tests {
         parser
             .set_language(&tree_sitter_cpp::LANGUAGE.into())
             .unwrap();
-        index_file(
-            &mut parser,
-            &file,
-            &mut table,
-            &default_enrichers(),
-            &CppLanguageInline,
-            None,
-            None,
-        )
-        .unwrap();
+        let enrichers = default_enrichers();
+        {
+            let mut ctx = IndexContext {
+                path: &file,
+                language: &CppLanguageInline,
+                enrichers: &enrichers,
+                macro_table: None,
+                table: &mut table,
+            };
+            index_file(&mut parser, &mut ctx, None).unwrap();
+        }
         table
     }
 
