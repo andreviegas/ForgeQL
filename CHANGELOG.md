@@ -6,6 +6,15 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.7] — 2026-05-25 — Refactoring roadmap: parameter clustering + file splitting
+
+### Added
+
+- **`TODO.md`** — comprehensive refactoring roadmap covering all 13 steps across
+  three phases: parameter clustering (P1-A through P1-F), file splitting
+  (P2-A through P2-F), and regression prevention (P3-A).  Each step is a
+  self-contained commit on the `code-refactore` branch.
+
 ## [0.54.6] — 2026-05-25 — Lang crates, CLI, MCP, session lint cleanup
 
 ### Fixed
