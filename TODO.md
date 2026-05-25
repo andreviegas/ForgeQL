@@ -283,8 +283,8 @@ Break monolith files into module folders. One commit per item.
   `columnar_storage.rs` (root) / `fast_paths.rs` / `query.rs` / `commit.rs`.
 - [x] **P2-D** Split `lang.rs` (81 KB) into module folder:
   `lang.rs` (root, structs + traits + registry) / `lang/config.rs` (impl LanguageConfig) / `lang/inline.rs` (test-only inline impls).
-- [ ] **P2-E** Split `ast/index.rs` (77 KB) into module folder:
-  `mod.rs` / `build.rs` / `secondaries.rs` / `query.rs`.
+- [x] **P2-E** Split `ast/index.rs` (77 KB) into module folder:
+  `index.rs` (root) / `index/build.rs` (SymbolTable impl, build/query/update) / `index/file_indexer.rs` (per-file parse pass).
 - [ ] **P2-F** Move test data out of code — `corpus()` (616 lines), `golden_values()` (321 lines),
   `sms_combinatorial()` (203 lines) → external TOML files loaded with `include_str!`.
 

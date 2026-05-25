@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.18] — 2026-05-25 — P2-E: split ast/index.rs into module folder
+
+### Changed
+
+- `crates/forgeql-core/src/ast/index.rs` trimmed to root file: type aliases, structs
+  (`SegmentBuildCtx`, `IndexRow`, `UsageSite`, `IndexStats`, `MemEstimate`, `SymbolTable`,
+  `RowRef`), `reassign_intern_ids`, `node_text`, module declarations, tests.
+- `crates/forgeql-core/src/ast/index/build.rs` **(new)**: `SecondaryIndexBuilder` and full
+  `impl SymbolTable` block (build, merge, incremental reindex, query, purge methods, ~730 lines).
+- `crates/forgeql-core/src/ast/index/file_indexer.rs` **(new)**: per-file parse pass —
+  `collect_macro_defs_for_file`, `IndexContext`, `index_file`, `collect_nodes`,
+  `extract_fields` (~430 lines).
+
 ## [0.54.17] — 2026-05-25 — P2-C fix + P2-D: split lang.rs into module folder
 
 ### Changed
