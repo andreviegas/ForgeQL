@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.17] — 2026-05-25 — P2-C fix + P2-D: split lang.rs into module folder
+
+### Changed
+
+- `columnar_storage.rs`: removed stale `#![allow(clippy::redundant_pub_crate)]` (all
+  `pub(super)` items live in sub-modules, lint never fires in root).
+- `crates/forgeql-core/src/ast/lang.rs` trimmed to root file (constants, `LanguageConfig`
+  struct, `MacroDef`, traits, `LanguageRegistry`, module declarations, tests).
+- `crates/forgeql-core/src/ast/lang/config.rs` **(new)**: `impl LanguageConfig` block
+  (923-line query/accessor methods).
+- `crates/forgeql-core/src/ast/lang/inline.rs` **(new, cfg-gated)**: test-only inline
+  C++, Rust, and Python implementations; `include_bytes!` paths corrected for new depth.
 ## [0.54.16] — 2026-05-25 — P2-C: split columnar_storage.rs into module folder
 
 ### Changed

@@ -1,4 +1,3 @@
-#![allow(clippy::redundant_pub_crate)]
 //! [`ColumnarStorage`] — the columnar disk-backed [`StorageEngine`].
 //!
 //! Implements the `StorageEngine` trait using the workspace overlay index

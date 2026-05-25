@@ -281,8 +281,8 @@ Break monolith files into module folders. One commit per item.
   (// 1. // 2. // 2.5. …) becomes a private `&self → Result<T>` method; orchestrator ~40 lines.
 - [x] **P2-C** Split `columnar_storage.rs` (100 KB) into module folder:
   `columnar_storage.rs` (root) / `fast_paths.rs` / `query.rs` / `commit.rs`.
-- [ ] **P2-D** Split `lang.rs` (81 KB) into per-language submodules:
-  `lang/mod.rs` / `lang/cpp.rs` / `lang/rust.rs` / `lang/python.rs`.
+- [x] **P2-D** Split `lang.rs` (81 KB) into module folder:
+  `lang.rs` (root, structs + traits + registry) / `lang/config.rs` (impl LanguageConfig) / `lang/inline.rs` (test-only inline impls).
 - [ ] **P2-E** Split `ast/index.rs` (77 KB) into module folder:
   `mod.rs` / `build.rs` / `secondaries.rs` / `query.rs`.
 - [ ] **P2-F** Move test data out of code — `corpus()` (616 lines), `golden_values()` (321 lines),
