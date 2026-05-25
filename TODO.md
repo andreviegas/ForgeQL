@@ -268,7 +268,7 @@ Do these before Phase 2 — moved functions carry smaller signatures.
 - [x] **P1-E** `Session::from_coords` — `Session::new` (6p) takes `id`, `user_id`, `source_name`,
   `branch` separately; `SessionCoords` already holds those four. Add `Session::from_coords` and
   update `use_source`.
-- [ ] **P1-F** `field_to_kinds_for_config` lookup map — 214-line match with 72 string literals.
+- [x] **P1-F** `field_to_kinds_for_config` lookup map — 214-line match with 72 string literals.
   Replace with a `HashMap<&'static str, fn(&LanguageConfig) -> Vec<String>>` built via `OnceLock`.
 
 ### Phase 2 — File Splitting

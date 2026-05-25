@@ -6,6 +6,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.13] — 2026-05-25 — P1-F: replace field_to_kinds_for_config match with OnceLock HashMap
+
+### Changed
+
+- **`crates/forgeql-core/src/storage/legacy/prefilter.rs`** — eliminated the
+  214-line `match field { … }` in `field_to_kinds_for_config`. Replaced by:
+  - `type FieldKindFn` / `type FieldKindMap` type aliases
+  - `cast_kinds` and `qualifier_kinds` named helpers for the two non-trivial arms
+  - `FIELD_KIND_MAP: OnceLock<FieldKindMap>` static populated once by `get_field_kind_map()`
+  - `field_to_kinds_for_config` reduced to a single `HashMap::get` + `map` call
+
 ## [0.54.12] — 2026-05-25 — P1-E: add Session::from_coords factory
 
 ### Changed

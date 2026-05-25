@@ -6,8 +6,9 @@
 //! - [`find_symbols_prefilter`] — fast-path index shortcuts before full scan
 //! - [`validate_order_by_field`] — validate ORDER BY against known fields
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::OnceLock;
 
 use anyhow::{Result, bail};
 
@@ -81,104 +82,160 @@ fn find_pred_string<'a>(
 // Private helpers — enrichment field → node_kind inference
 // -----------------------------------------------------------------------
 
+/// Complex cast-kind getter — needed because named-cast keywords may also
+/// appear under `call_expression` nodes.
+fn cast_kinds(c: &LanguageConfig) -> Vec<String> {
+    let mut kinds: Vec<String> = c
+        .cast_kind_triples()
+        .iter()
+        .map(|(raw_kind, _, _)| raw_kind.clone())
+        .collect();
+    // Named casts (e.g. static_cast<T>()) are indexed under the
+    // call_expression node kind — include it when configured.
+    if !c.named_cast_keywords.is_empty() && !c.call_expression_kind().is_empty() {
+        let ce = c.call_expression_kind().to_owned();
+        if !kinds.contains(&ce) {
+            kinds.push(ce);
+        }
+    }
+    kinds
+}
+
+/// Qualifier-flag / is_exported getter — combines declaration_kinds + function_kinds.
+fn qualifier_kinds(c: &LanguageConfig) -> Vec<String> {
+    let mut kinds = c.declaration_kinds().to_vec();
+    kinds.extend_from_slice(c.function_kinds());
+    kinds
+}
+
+type FieldKindFn = fn(&LanguageConfig) -> Vec<String>;
+type FieldKindMap = HashMap<&'static str, FieldKindFn>;
+
+static FIELD_KIND_MAP: OnceLock<FieldKindMap> = OnceLock::new();
+
+#[allow(clippy::too_many_lines)]
+fn get_field_kind_map() -> &'static FieldKindMap {
+    FIELD_KIND_MAP.get_or_init(|| {
+        let mut m: FieldKindMap = HashMap::new();
+        // function_definition only — metrics, redundancy, escape, shadow,
+        // unused_param, fallthrough, recursion, todo, decl_distance
+        for &field in &[
+            "param_count",
+            "return_count",
+            "goto_count",
+            "string_count",
+            "throw_count",
+            "is_inline",
+            "branch_count",
+            "max_condition_tests",
+            "max_paren_depth",
+            "has_repeated_condition_calls",
+            "repeated_condition_calls",
+            "null_check_count",
+            "has_escape",
+            "escape_tier",
+            "escape_vars",
+            "escape_count",
+            "escape_kinds",
+            "has_shadow",
+            "shadow_count",
+            "shadow_vars",
+            "has_unused_param",
+            "unused_param_count",
+            "unused_params",
+            "has_fallthrough",
+            "fallthrough_count",
+            "is_recursive",
+            "recursion_count",
+            "has_todo",
+            "todo_count",
+            "todo_tags",
+            "decl_distance",
+            "decl_far_count",
+            "has_unused_reassign",
+        ] {
+            let _ = m.insert(field, |c: &LanguageConfig| c.function_kinds().to_vec());
+        }
+        // comments.rs
+        let _ = m.insert("comment_style", |c: &LanguageConfig| {
+            vec![c.comment_kind().to_owned()]
+        });
+        // numbers.rs
+        for &field in &[
+            "num_format",
+            "is_magic",
+            "num_suffix",
+            "has_separator",
+            "num_value",
+            "num_sign",
+        ] {
+            let _ = m.insert(field, |c: &LanguageConfig| {
+                c.number_literal_kinds().to_vec()
+            });
+        }
+        // operators.rs
+        for &field in &["increment_style", "increment_op"] {
+            let _ = m.insert(field, |c: &LanguageConfig| c.update_kinds().to_vec());
+        }
+        for &field in &["compound_op", "operand"] {
+            let _ = m.insert(field, |c: &LanguageConfig| {
+                vec![c.compound_assignment_kind().to_owned()]
+            });
+        }
+        for &field in &["shift_direction", "shift_operand", "shift_amount"] {
+            let _ = m.insert(field, |c: &LanguageConfig| {
+                c.shift_expression_kinds().to_vec()
+            });
+        }
+        // casts.rs — per-cast-node fields
+        for &field in &["cast_style", "cast_target_type", "cast_safety"] {
+            let _ = m.insert(field, cast_kinds);
+        }
+        // casts.rs — per-function fields
+        for &field in &["has_cast", "cast_count"] {
+            let _ = m.insert(field, |c: &LanguageConfig| c.function_raw_kinds.clone());
+        }
+        // control_flow.rs
+        for &field in &[
+            "condition_tests",
+            "paren_depth",
+            "condition_text",
+            "has_assignment_in_condition",
+            "mixed_logic",
+            "dup_logic",
+            "for_style",
+            "enclosing_fn",
+            "duplicate_condition",
+        ] {
+            let _ = m.insert(field, |c: &LanguageConfig| c.control_flow_kinds().to_vec());
+        }
+        let _ = m.insert("has_catch_all", |c: &LanguageConfig| {
+            c.switch_kinds().to_vec()
+        });
+        // metrics.rs — multiple definition kinds
+        for &field in &["lines", "member_count", "has_doc"] {
+            let _ = m.insert(field, |c: &LanguageConfig| c.definition_kinds().to_vec());
+        }
+        // metrics.rs — qualifier flags / scope.rs — is_exported
+        for &field in &["is_const", "is_volatile", "is_static", "is_exported"] {
+            let _ = m.insert(field, qualifier_kinds);
+        }
+        // metrics.rs — visibility
+        let _ = m.insert("visibility", |c: &LanguageConfig| c.field_kinds().to_vec());
+        // scope.rs — declaration only
+        for &field in &["scope", "storage"] {
+            let _ = m.insert(field, |c: &LanguageConfig| c.declaration_kinds().to_vec());
+        }
+        m
+    })
+}
+
 /// Map an enrichment field name to the `node_kind`(s) that carry it.
 ///
 /// Returns `None` for universal fields (`naming`, `name_length`) or
 /// built-in fields (`name`, `node_kind`, `path`, `line`, `usages`).
 fn field_to_kinds_for_config(config: &LanguageConfig, field: &str) -> Option<Vec<String>> {
-    match field {
-        // function_definition only — metrics, redundancy, escape, shadow,
-        // unused_param, fallthrough, recursion, todo, decl_distance
-        "param_count"
-        | "return_count"
-        | "goto_count"
-        | "string_count"
-        | "throw_count"
-        | "is_inline"
-        | "branch_count"
-        | "max_condition_tests"
-        | "max_paren_depth"
-        | "has_repeated_condition_calls"
-        | "repeated_condition_calls"
-        | "null_check_count"
-        | "has_escape"
-        | "escape_tier"
-        | "escape_vars"
-        | "escape_count"
-        | "escape_kinds"
-        | "has_shadow"
-        | "shadow_count"
-        | "shadow_vars"
-        | "has_unused_param"
-        | "unused_param_count"
-        | "unused_params"
-        | "has_fallthrough"
-        | "fallthrough_count"
-        | "is_recursive"
-        | "recursion_count"
-        | "has_todo"
-        | "todo_count"
-        | "todo_tags"
-        | "decl_distance"
-        | "decl_far_count"
-        | "has_unused_reassign" => Some(config.function_kinds().to_vec()),
-        // comments.rs
-        "comment_style" => Some(vec![config.comment_kind().to_owned()]),
-        // numbers.rs
-        "num_format" | "is_magic" | "num_suffix" | "has_separator" | "num_value" | "num_sign" => {
-            Some(config.number_literal_kinds().to_vec())
-        }
-        // operators.rs
-        "increment_style" | "increment_op" => Some(config.update_kinds().to_vec()),
-        "compound_op" | "operand" => Some(vec![config.compound_assignment_kind().to_owned()]),
-        "shift_direction" | "shift_operand" | "shift_amount" => {
-            Some(config.shift_expression_kinds().to_vec())
-        }
-        // casts.rs — per-cast-node fields
-        "cast_style" | "cast_target_type" | "cast_safety" => {
-            let mut kinds: Vec<String> = config
-                .cast_kind_triples()
-                .iter()
-                .map(|(raw_kind, _, _)| raw_kind.clone())
-                .collect();
-            // Named casts (e.g. static_cast<T>()) are indexed under the
-            // call_expression node kind — include it when configured.
-            if !config.named_cast_keywords.is_empty() && !config.call_expression_kind().is_empty() {
-                let ce = config.call_expression_kind().to_owned();
-                if !kinds.contains(&ce) {
-                    kinds.push(ce);
-                }
-            }
-            Some(kinds)
-        }
-        // casts.rs — per-function fields
-        "has_cast" | "cast_count" => Some(config.function_raw_kinds.clone()),
-        // control_flow.rs
-        "condition_tests"
-        | "paren_depth"
-        | "condition_text"
-        | "has_assignment_in_condition"
-        | "mixed_logic"
-        | "dup_logic"
-        | "for_style"
-        | "enclosing_fn"
-        | "duplicate_condition" => Some(config.control_flow_kinds().to_vec()),
-        "has_catch_all" => Some(config.switch_kinds().to_vec()),
-        // metrics.rs — multiple definition kinds
-        "lines" | "member_count" | "has_doc" => Some(config.definition_kinds().to_vec()),
-        // metrics.rs — qualifier flags / scope.rs — is_exported
-        "is_const" | "is_volatile" | "is_static" | "is_exported" => {
-            let mut kinds = config.declaration_kinds().to_vec();
-            kinds.extend_from_slice(config.function_kinds());
-            Some(kinds)
-        }
-        // metrics.rs — visibility
-        "visibility" => Some(config.field_kinds().to_vec()),
-        // scope.rs — declaration only
-        "scope" | "storage" => Some(config.declaration_kinds().to_vec()),
-        // Universal / built-in → no shortcut
-        _ => None,
-    }
+    get_field_kind_map().get(field).map(|f| f(config))
 }
 
 /// Aggregate `field_to_kinds_for_config` across all registered language configs.
