@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.11] — 2026-05-25 — P1-D: introduce EscapeLocals + EscapeAccumulator structs
+
+### Changed
+
+- **`crates/forgeql-core/src/ast/enrich/escape.rs`** — `check_expr_escape` reduced
+  from 9 parameters to 4 by bundling the read-only inputs into `EscapeLocals<'a>`
+  and the three mutable accumulation fields (`escaping`, `best_tier`, `kinds_seen`)
+  into `EscapeAccumulator`. `EscapeAccumulator::new()` initialises the accumulator.
+- `#[allow(clippy::too_many_arguments)]` on `check_expr_escape` removed.
+- Phase 5 walk in `enrich_row` and Phase 5b macro-expansion closure updated to
+  use `acc.*` fields in place of the three separate `mut` variables.
+
 ## [0.54.10] — 2026-05-25 — P1-C: introduce SecondaryIndexBuilder struct
 
 ### Changed

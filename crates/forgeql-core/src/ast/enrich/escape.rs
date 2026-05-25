@@ -67,9 +67,13 @@ impl NodeEnricher for EscapeEnricher {
         let alias_map = build_alias_map(ctx, &local_names, &static_locals);
 
         // Phase 5: Walk all return statements and detect escaping patterns.
-        let mut escaping: Vec<String> = Vec::new();
-        let mut best_tier: u8 = 0;
-        let mut kinds_seen: HashSet<&str> = HashSet::new();
+        let escape_locals = EscapeLocals {
+            local_names: &local_names,
+            array_locals: &array_locals,
+            static_locals: &static_locals,
+            alias_map: &alias_map,
+        };
+        let mut acc = EscapeAccumulator::new();
 
         walk_dfs(ctx.node, |node| {
             if !config.is_return_statement_kind(node.kind()) {
@@ -84,17 +88,7 @@ impl NodeEnricher for EscapeEnricher {
             // Recurse into the expression to find escaping patterns even
             // inside ternary/conditional expressions, casts, parenthesised
             // expressions, etc.
-            check_expr_escape(
-                ret_expr,
-                ctx,
-                &local_names,
-                &array_locals,
-                &static_locals,
-                &alias_map,
-                &mut escaping,
-                &mut best_tier,
-                &mut kinds_seen,
-            );
+            check_expr_escape(ret_expr, ctx, &escape_locals, &mut acc);
         });
 
         // Phase 5b: Macro expansion — check if any macro call in the
@@ -129,10 +123,10 @@ impl NodeEnricher for EscapeEnricher {
                         for &local_name in &local_names {
                             let pattern = format!("&{local_name}");
                             if result.expanded.contains(&pattern) {
-                                escaping.push(local_name.to_string());
-                                let _ = kinds_seen.insert("address_of");
-                                if best_tier == 0 || best_tier > 2 {
-                                    best_tier = 2;
+                                acc.escaping.push(local_name.to_string());
+                                let _ = acc.kinds_seen.insert("address_of");
+                                if acc.best_tier == 0 || acc.best_tier > 2 {
+                                    acc.best_tier = 2;
                                 }
                             }
                         }
@@ -141,21 +135,21 @@ impl NodeEnricher for EscapeEnricher {
             }
         }
 
-        if escaping.is_empty() {
+        if acc.escaping.is_empty() {
             return;
         }
 
         // Deduplicate while preserving order.
         let mut seen = HashSet::new();
-        escaping.retain(|v| seen.insert(v.clone()));
+        acc.escaping.retain(|v| seen.insert(v.clone()));
 
         drop(fields.insert("has_escape".to_string(), "true".to_string()));
-        drop(fields.insert("escape_tier".to_string(), best_tier.to_string()));
-        drop(fields.insert("escape_vars".to_string(), escaping.join(",")));
-        drop(fields.insert("escape_count".to_string(), escaping.len().to_string()));
+        drop(fields.insert("escape_tier".to_string(), acc.best_tier.to_string()));
+        drop(fields.insert("escape_vars".to_string(), acc.escaping.join(",")));
+        drop(fields.insert("escape_count".to_string(), acc.escaping.len().to_string()));
 
         // Build sorted, deterministic escape_kinds.
-        let mut kinds: Vec<&str> = kinds_seen.into_iter().collect();
+        let mut kinds: Vec<&str> = acc.kinds_seen.iter().copied().collect();
         kinds.sort_unstable();
         drop(fields.insert("escape_kinds".to_string(), kinds.join(",")));
     }
@@ -165,18 +159,38 @@ impl NodeEnricher for EscapeEnricher {
 // Helpers
 // -----------------------------------------------------------------------
 
+/// The four read-only input sets shared across all nodes in one escape-check walk.
+struct EscapeLocals<'a> {
+    local_names: &'a HashSet<&'a str>,
+    array_locals: &'a HashSet<String>,
+    static_locals: &'a HashSet<String>,
+    alias_map: &'a HashMap<String, String>,
+}
+
+/// Mutable accumulator that collects escape detections during the walk.
+struct EscapeAccumulator {
+    escaping: Vec<String>,
+    best_tier: u8,
+    kinds_seen: HashSet<&'static str>,
+}
+
+impl EscapeAccumulator {
+    fn new() -> Self {
+        Self {
+            escaping: Vec::new(),
+            best_tier: 0,
+            kinds_seen: HashSet::new(),
+        }
+    }
+}
+
 /// Recursively check an expression for escaping patterns.
-#[allow(clippy::too_many_arguments, clippy::collapsible_if)]
+#[allow(clippy::collapsible_if)]
 fn check_expr_escape(
     node: tree_sitter::Node<'_>,
     ctx: &EnrichContext<'_>,
-    local_names: &HashSet<&str>,
-    array_locals: &HashSet<String>,
-    static_locals: &HashSet<String>,
-    alias_map: &HashMap<String, String>,
-    escaping: &mut Vec<String>,
-    best_tier: &mut u8,
-    kinds_seen: &mut HashSet<&str>,
+    locals: &EscapeLocals<'_>,
+    acc: &mut EscapeAccumulator,
 ) {
     let config = ctx.language_config;
     let source = ctx.source;
@@ -189,11 +203,13 @@ fn check_expr_escape(
                 if let Some(operand) = node.child(1) {
                     let name = resolve_identifier(operand, source, config);
                     if let Some(name) = name {
-                        if local_names.contains(name.as_str()) && !static_locals.contains(&name) {
-                            escaping.push(name);
-                            let _ = kinds_seen.insert("address_of");
-                            if *best_tier == 0 || *best_tier > 1 {
-                                *best_tier = 1;
+                        if locals.local_names.contains(name.as_str())
+                            && !locals.static_locals.contains(&name)
+                        {
+                            acc.escaping.push(name);
+                            let _ = acc.kinds_seen.insert("address_of");
+                            if acc.best_tier == 0 || acc.best_tier > 1 {
+                                acc.best_tier = 1;
                             }
                             return;
                         }
@@ -206,14 +222,14 @@ fn check_expr_escape(
     // Tier 2: array decay  →  return local_array
     if config.is_identifier_kind(node.kind()) {
         let name = node_text(source, node);
-        if array_locals.contains(&name)
-            && !static_locals.contains(&name)
+        if locals.array_locals.contains(&name)
+            && !locals.static_locals.contains(&name)
             && !is_in_declaration(node, config)
         {
-            escaping.push(name);
-            let _ = kinds_seen.insert("array_decay");
-            if *best_tier == 0 || *best_tier > 2 {
-                *best_tier = 2;
+            acc.escaping.push(name);
+            let _ = acc.kinds_seen.insert("array_decay");
+            if acc.best_tier == 0 || acc.best_tier > 2 {
+                acc.best_tier = 2;
             }
             return;
         }
@@ -222,12 +238,12 @@ fn check_expr_escape(
     // Tier 3: indirect alias  →  return ptr  where ptr was assigned &local
     if config.is_identifier_kind(node.kind()) {
         let name = node_text(source, node);
-        if let Some(target) = alias_map.get(&name) {
+        if let Some(target) = locals.alias_map.get(&name) {
             if !is_in_declaration(node, config) {
-                escaping.push(target.clone());
-                let _ = kinds_seen.insert("alias");
-                if *best_tier == 0 {
-                    *best_tier = 3;
+                acc.escaping.push(target.clone());
+                let _ = acc.kinds_seen.insert("alias");
+                if acc.best_tier == 0 {
+                    acc.best_tier = 3;
                 }
                 return;
             }
@@ -237,17 +253,7 @@ fn check_expr_escape(
     // Recurse into child expressions (ternary, casts, parenthesised, etc.)
     for i in 0..node.named_child_count() {
         if let Some(child) = node.named_child(i) {
-            check_expr_escape(
-                child,
-                ctx,
-                local_names,
-                array_locals,
-                static_locals,
-                alias_map,
-                escaping,
-                best_tier,
-                kinds_seen,
-            );
+            check_expr_escape(child, ctx, locals, acc);
         }
     }
 }

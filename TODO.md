@@ -263,7 +263,7 @@ Do these before Phase 2 — moved functions carry smaller signatures.
   `path`, `language`, `enrichers`, `macro_table`, `table`, `source`. Create in `ast/index.rs`.
 - [x] **P1-C** `SecondaryIndexBuilder` struct — `index_row_into_secondaries` (8p) passes 5 separate
   mutable maps/stats. Replace with a `builder.insert(row, idx)` method.
-- [ ] **P1-D** `EscapeLocals<'_>` + `EscapeAccumulator` — `check_expr_escape` (9p) mixes 4 read-only
+- [x] **P1-D** `EscapeLocals<'_>` + `EscapeAccumulator` — `check_expr_escape` (9p) mixes 4 read-only
   input sets with 3 mutable accumulator outputs. Split into two structs in `ast/enrich/escape.rs`.
 - [ ] **P1-E** `Session::from_coords` — `Session::new` (6p) takes `id`, `user_id`, `source_name`,
   `branch` separately; `SessionCoords` already holds those four. Add `Session::from_coords` and
