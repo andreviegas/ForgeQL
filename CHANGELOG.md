@@ -6,6 +6,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.12] — 2026-05-25 — P1-E: add Session::from_coords factory
+
+### Changed
+
+- **`crates/forgeql-core/src/session/mod.rs`** — `Session::from_coords` convenience
+  constructor added: takes `&SessionCoords`, `PathBuf`, and `&Arc<LanguageRegistry>`,
+  delegates to `Session::new` mapping `coords.alias→id`, `coords.user→user_id`,
+  `coords.source→source_name`, `coords.branch→branch`.
+- **`crates/forgeql-core/src/engine/exec_source.rs`** — `use_source` call site updated:
+  7-line `Session::new(…)` block replaced by single `Session::from_coords(&coords, …)` call.
+
 ## [0.54.11] — 2026-05-25 — P1-D: introduce EscapeLocals + EscapeAccumulator structs
 
 ### Changed

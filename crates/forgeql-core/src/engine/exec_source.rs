@@ -287,14 +287,7 @@ impl ForgeQLEngine {
             Some(&git_branch),
         )?);
 
-        let mut session = Session::new(
-            as_branch, // bare alias used as the internal session handle
-            &coords.user,
-            wt_path,
-            source_name,
-            branch,
-            &Arc::clone(&self.lang_registry),
-        );
+        let mut session = Session::from_coords(&coords, wt_path, &Arc::clone(&self.lang_registry));
         session.custom_branch = Some(git_branch);
         session.worktree_name = wt_name;
 

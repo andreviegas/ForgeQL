@@ -252,6 +252,24 @@ impl Session {
         }
     }
 
+    /// Construct a `Session` from a `SessionCoords` — convenience factory that
+    /// avoids threading `id`, `user_id`, `source_name`, and `branch` separately
+    /// when a `SessionCoords` is already available.
+    #[must_use]
+    pub fn from_coords(
+        coords: &SessionCoords,
+        worktree_path: PathBuf,
+        lang_registry: &Arc<LanguageRegistry>,
+    ) -> Self {
+        Self::new(
+            &coords.alias,
+            &coords.user,
+            worktree_path,
+            &coords.source,
+            &coords.branch,
+            lang_registry,
+        )
+    }
     /// Configure columnar shadow-write.
     ///
     /// Must be called **before** `build_index` / `resume_index`.  When set,

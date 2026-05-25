@@ -265,7 +265,7 @@ Do these before Phase 2 — moved functions carry smaller signatures.
   mutable maps/stats. Replace with a `builder.insert(row, idx)` method.
 - [x] **P1-D** `EscapeLocals<'_>` + `EscapeAccumulator` — `check_expr_escape` (9p) mixes 4 read-only
   input sets with 3 mutable accumulator outputs. Split into two structs in `ast/enrich/escape.rs`.
-- [ ] **P1-E** `Session::from_coords` — `Session::new` (6p) takes `id`, `user_id`, `source_name`,
+- [x] **P1-E** `Session::from_coords` — `Session::new` (6p) takes `id`, `user_id`, `source_name`,
   `branch` separately; `SessionCoords` already holds those four. Add `Session::from_coords` and
   update `use_source`.
 - [ ] **P1-F** `field_to_kinds_for_config` lookup map — 214-line match with 72 string literals.
