@@ -154,9 +154,8 @@ struct ResultTypeSpec {
 }
 
 fn load_syntax() -> SyntaxSpec {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/syntax.json");
-    let text = fs::read_to_string(&path).expect("read syntax.json");
-    let root: Value = serde_json::from_str(&text).expect("parse syntax.json");
+    let root: Value = serde_json::from_str(include_str!("../../../tests/fixtures/syntax.json",))
+        .expect("parse syntax.json");
 
     let meta = &root["meta"];
     let seed = meta["seed"].as_u64().unwrap_or(42);

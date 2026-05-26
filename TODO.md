@@ -285,8 +285,8 @@ Break monolith files into module folders. One commit per item.
   `lang.rs` (root, structs + traits + registry) / `lang/config.rs` (impl LanguageConfig) / `lang/inline.rs` (test-only inline impls).
 - [x] **P2-E** Split `ast/index.rs` (77 KB) into module folder:
   `index.rs` (root) / `index/build.rs` (SymbolTable impl, build/query/update) / `index/file_indexer.rs` (per-file parse pass).
-- [ ] **P2-F** Move test data out of code — `corpus()` (616 lines), `golden_values()` (321 lines),
-  `sms_combinatorial()` (203 lines) → external TOML files loaded with `include_str!`.
+- [x] **P2-F** Move test data out of code — `corpus()` (616 lines), `golden_values()` (321 lines),
+  `sms_combinatorial()` (203 lines) → external JSON files loaded with `include_str!`.
 
 ### Phase 3 — Enforce Limits
 

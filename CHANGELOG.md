@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.54.19] — 2026-05-25 — P2-F: externalize corpus/golden/syntax test data
+
+### Changed
+
+- `crates/forgeql/tests/corpus.json` **(new)**: 201-entry JSON array extracted from the
+  616-line inline `corpus()` function in `parity_find.rs`. Loaded at compile-time with
+  `include_str!`; `corpus()` reduced to a 5-line JSON loader.
+- `crates/forgeql/tests/zephyr_golden.rs`: `golden_values()` switches read path from
+  `std::fs::read_to_string` to `include_str!("golden.json")` — `fixture_path` kept for
+  update-mode write-back; both `from_str` call-sites fixed for `needless_borrow`.
+- `crates/forgeql-core/tests/sms_integration.rs`: `load_syntax()` switches read path from
+  `fs::read_to_string` to `include_str!("../../../tests/fixtures/syntax.json")`.
+
 ## [0.54.18] — 2026-05-25 — P2-E: split ast/index.rs into module folder
 
 ### Changed

@@ -402,9 +402,8 @@ fn golden_values() {
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("golden.json");
-    let fixture_str = std::fs::read_to_string(&fixture_path)
-        .unwrap_or_else(|e| panic!("[golden] cannot read {}: {e}", fixture_path.display()));
-    let entries: Vec<GoldenEntry> = serde_json::from_str(&fixture_str)
+    let fixture_str = include_str!("golden.json");
+    let entries: Vec<GoldenEntry> = serde_json::from_str(fixture_str)
         .unwrap_or_else(|e| panic!("[golden] cannot parse {}: {e}", fixture_path.display()));
 
     // ── Update mode ───────────────────────────────────────────────────────────
@@ -413,7 +412,7 @@ fn golden_values() {
     // Only the fields already declared in each entry are updated; the shape
     // of the file is preserved.
     let update_mode = std::env::var("GOLDEN_UPDATE").as_deref() == Ok("1");
-    let mut raw_entries: Vec<Value> = serde_json::from_str(&fixture_str)
+    let mut raw_entries: Vec<Value> = serde_json::from_str(fixture_str)
         .unwrap_or_else(|e| panic!("[golden] cannot parse raw {}: {e}", fixture_path.display()));
     if update_mode {
         eprintln!("[golden] UPDATE MODE — will rewrite golden.json with actual values");
