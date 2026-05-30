@@ -80,7 +80,7 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///   9 — `POSTING_ENRICHMENT_FIELDS` expansion: string-enum and boolean enrichment
 ///       fields now stored as per-field posting blobs in segments, enabling fast
 ///       WHERE/ORDER BY without full row materialization (v0.50.12)
-pub const ENRICH_VER: u32 = 9;
+pub const ENRICH_VER: u32 = 10;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

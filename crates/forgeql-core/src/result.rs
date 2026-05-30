@@ -190,6 +190,10 @@ pub(crate) struct SymbolRow {
     /// Value of the custom GROUP BY field (e.g. `guard_kind = "preprocessor"`).
     /// Used as the row label/group key when GROUP BY targets an enrichment field.
     pub group_key: Option<String>,
+    /// Stable node handle computed from the file path and per-file DFS ordinal.
+    /// Format: `n{12-hex segment_id}.{ordinal:04}`.
+    /// `None` for rows from legacy segments that have not been reindexed.
+    pub node_id: Option<String>,
 }
 
 impl SymbolRow {
@@ -223,6 +227,17 @@ impl SymbolRow {
                 "path" => row.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
                 _ => row.fields.get(field).cloned(),
             }),
+            node_id: {
+                let path_str = row.path.as_ref().map(|p| p.to_string_lossy().into_owned());
+                let ordinal = row
+                    .fields
+                    .get("ordinal")
+                    .and_then(|s| s.parse::<u32>().ok());
+                match (path_str, ordinal) {
+                    (Some(p), Some(ord)) => Some(crate::node_id::make_node_id(&p, ord)),
+                    _ => None,
+                }
+            },
         }
     }
 
@@ -336,6 +351,9 @@ pub struct OutlineEntry {
     pub fql_kind: String,
     pub path: PathBuf,
     pub line: usize,
+    /// Stable node handle — `None` for entries from legacy segments without reindex.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
 }
 
 /// An entry in a SHOW members result.
@@ -1392,6 +1410,7 @@ mod tests {
                     fql_kind: "class".to_string(),
                     path: PathBuf::from("src/api.h"),
                     line: 5,
+                    node_id: None,
                 }],
             },
             start_line: None,

@@ -144,6 +144,10 @@ fn convert_show_content(op: &ForgeQLIR, json: &serde_json::Value) -> Result<Show
                                 fql_kind: entry.get("fql_kind")?.as_str()?.to_string(),
                                 path: PathBuf::from(entry.get("path")?.as_str()?),
                                 line: entry.get("line")?.as_u64()? as usize,
+                                node_id: entry
+                                    .get("node_id")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from),
                             })
                         })
                         .collect()

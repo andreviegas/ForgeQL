@@ -182,9 +182,18 @@ fn collect_nodes(
     } else {
         regex::RegexSet::new(config.env_guard_patterns()).ok()
     };
+    // Per-file DFS ordinal counter — each named row gets the next value so
+    // callers can compute a stable node_id handle without re-parsing.
+    let mut row_ordinal_counter: u32 = 0;
+    // Parallel to parent_kind_stack: propagates the enclosing row's ordinal
+    // to unnamed descendant nodes so they inherit their nearest named ancestor.
+    let mut parent_ordinal_stack: Vec<u32> = Vec::new();
 
     loop {
         let node = cursor.node();
+        // Tracks whether this iteration produced a named row (and its ordinal),
+        // so goto_first_child can push the correct parent ordinal.
+        let mut current_node_ordinal: Option<u32> = None;
 
         // --- Guard stack management ---
         // Pop frames whose byte scope we've left.
@@ -261,6 +270,13 @@ fn collect_nodes(
                     .table
                     .strings
                     .intern_row(&name, node.kind(), fql_kind_val, lang_name, ctx.path);
+                // Assign a stable per-file DFS ordinal for node addressing.
+                // Stored as an enrichment field so it flows through the segment
+                // pipeline automatically and is queryable as WHERE ordinal = 'N'.
+                let ordinal = row_ordinal_counter;
+                row_ordinal_counter += 1;
+                current_node_ordinal = Some(ordinal);
+                let _ = fields.insert("ordinal".to_string(), ordinal.to_string());
                 // Intern field keys+values before storing — converts the temporary
                 // HashMap<String,String> enricher buffer into HashMap<u32,u32>.
                 let fields = ctx.table.strings.intern_fields(fields);
@@ -371,7 +387,11 @@ fn collect_nodes(
                 if node.is_error() {
                     error_depth += 1;
                 }
-                // Record this node as the parent for the child level.
+                // Record this node as the parent for the child level; mirror
+                // with the ordinal stack so unnamed descendants can inherit it.
+                let parent_ord = current_node_ordinal
+                    .unwrap_or_else(|| parent_ordinal_stack.last().copied().unwrap_or(u32::MAX));
+                parent_ordinal_stack.push(parent_ord);
                 parent_kind_stack.push(node.kind());
                 continue;
             }
@@ -385,6 +405,7 @@ fn collect_nodes(
         }
         let mut found_sibling = false;
         while cursor.goto_parent() {
+            let _ = parent_ordinal_stack.pop();
             if let Some(popped) = parent_kind_stack.pop() {
                 if config.is_opaque_string_kind(popped) || config.is_comment_kind(popped) {
                     string_depth = string_depth.saturating_sub(1);

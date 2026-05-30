@@ -973,6 +973,14 @@ impl StorageEngine for ColumnarStorage {
                 } else {
                     &fql_kind
                 };
+                let node_id = seg.extra_field_str("ordinal", row).and_then(|s| {
+                    s.parse::<u32>().ok().map(|ord| {
+                        crate::node_id::make_node_id(
+                            seg_meta.source_path.to_str().unwrap_or(""),
+                            ord,
+                        )
+                    })
+                });
                 entries.push((
                     line,
                     serde_json::json!({
@@ -980,6 +988,7 @@ impl StorageEngine for ColumnarStorage {
                         "fql_kind": kind,
                         "path": rel_path,
                         "line": line,
+                        "node_id": node_id,
                     }),
                 ));
             }

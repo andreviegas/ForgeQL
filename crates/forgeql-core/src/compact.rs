@@ -161,20 +161,31 @@ fn compact_outline(s: &ShowResult, entries: &[OutlineEntry]) -> String {
         .first()
         .map_or(String::new(), |e| q(&e.path.to_string_lossy()));
     row(&mut out, &[&op, &file]);
+    // Include node_id only when at least one entry carries it (post-reindex).
+    let has_node_id = entries.iter().any(|e| e.node_id.is_some());
     // Schema hint.
-    row(&mut out, &[&q("fql_kind"), &q("[name,line]")]);
+    let schema = if has_node_id {
+        "[name,line,node_id]"
+    } else {
+        "[name,line]"
+    };
+    row(&mut out, &[&q("fql_kind"), &q(schema)]);
     // Group by fql_kind.
     let groups = group_outline(entries);
     for (kind, items) in &groups {
         let brackets: Vec<String> = items
             .iter()
-            .map(|(name, line)| {
+            .map(|(name, line, node_id)| {
                 let display_name = if kind == "comment" {
                     format!("len:{}", name.len())
                 } else {
                     (*name).to_string()
                 };
-                bracket(&[&display_name, &line.to_string()])
+                if has_node_id {
+                    bracket(&[&display_name, &line.to_string(), node_id.unwrap_or("")])
+                } else {
+                    bracket(&[&display_name, &line.to_string()])
+                }
             })
             .collect();
         let val = q(&brackets.join(","));
@@ -421,6 +432,8 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
     };
     // Include enclosing_fn in the schema when at least one result carries it.
     let has_enclosing_fn = rows.iter().any(|sr| sr.enclosing_fn.is_some());
+    // Include node_id in the schema when at least one result carries it (post-reindex).
+    let has_node_id = rows.iter().any(|sr| sr.node_id.is_some());
 
     // When GROUP BY uses a custom field (not fql_kind/file), show the group
     // key value as the row label instead of fql_kind.
@@ -433,10 +446,11 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
             row(&mut out, &[&q(key), &count.to_string()]);
         }
     } else {
-        let schema = if has_enclosing_fn {
-            format!("[name,path,line,enclosing_fn,{metric_label}]")
-        } else {
-            format!("[name,path,line,{metric_label}]")
+        let schema = match (has_enclosing_fn, has_node_id) {
+            (true, true) => format!("[name,path,line,enclosing_fn,node_id,{metric_label}]"),
+            (true, false) => format!("[name,path,line,enclosing_fn,{metric_label}]"),
+            (false, true) => format!("[name,path,line,node_id,{metric_label}]"),
+            (false, false) => format!("[name,path,line,{metric_label}]"),
         };
         row(&mut out, &[&q("fql_kind"), &q(&schema)]);
         // Group by fql_kind.
@@ -444,16 +458,30 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
         for (kind, items) in &groups {
             let brackets: Vec<String> = items
                 .iter()
-                .map(|sr| {
-                    if has_enclosing_fn {
-                        bracket(&[
-                            &sr.name,
-                            &sr.path,
-                            &sr.line.to_string(),
-                            sr.enclosing_fn.as_deref().unwrap_or(""),
-                            &sr.metric_str(),
-                        ])
-                    } else {
+                .map(|sr| match (has_enclosing_fn, has_node_id) {
+                    (true, true) => bracket(&[
+                        &sr.name,
+                        &sr.path,
+                        &sr.line.to_string(),
+                        sr.enclosing_fn.as_deref().unwrap_or(""),
+                        sr.node_id.as_deref().unwrap_or(""),
+                        &sr.metric_str(),
+                    ]),
+                    (true, false) => bracket(&[
+                        &sr.name,
+                        &sr.path,
+                        &sr.line.to_string(),
+                        sr.enclosing_fn.as_deref().unwrap_or(""),
+                        &sr.metric_str(),
+                    ]),
+                    (false, true) => bracket(&[
+                        &sr.name,
+                        &sr.path,
+                        &sr.line.to_string(),
+                        sr.node_id.as_deref().unwrap_or(""),
+                        &sr.metric_str(),
+                    ]),
+                    (false, false) => {
                         bracket(&[&sr.name, &sr.path, &sr.line.to_string(), &sr.metric_str()])
                     }
                 })
@@ -503,14 +531,20 @@ fn group_rows_by_kind<'a>(rows: &'a [SymbolRow]) -> Vec<(String, Vec<&'a SymbolR
     groups
 }
 
-/// Group outline entries by kind → Vec<(kind, Vec<(name, line)>)>.
-fn group_outline(entries: &[OutlineEntry]) -> Vec<(String, Vec<(&str, usize)>)> {
-    let mut groups: Vec<(String, Vec<(&str, usize)>)> = Vec::new();
+/// `(name, 1-based-line, node_id)` tuple stored per kind group in `group_outline`.
+type OutlineItem<'a> = (&'a str, usize, Option<&'a str>);
+
+/// Group outline entries by kind → Vec<(kind, Vec<OutlineItem>)>.
+fn group_outline(entries: &[OutlineEntry]) -> Vec<(String, Vec<OutlineItem<'_>>)> {
+    let mut groups: Vec<(String, Vec<OutlineItem<'_>>)> = Vec::new();
     for e in entries {
         if let Some(g) = groups.iter_mut().find(|(k, _)| k == &e.fql_kind) {
-            g.1.push((&e.name, e.line));
+            g.1.push((&e.name, e.line, e.node_id.as_deref()));
         } else {
-            groups.push((e.fql_kind.clone(), vec![(&e.name, e.line)]));
+            groups.push((
+                e.fql_kind.clone(),
+                vec![(&e.name, e.line, e.node_id.as_deref())],
+            ));
         }
     }
     groups
@@ -600,18 +634,21 @@ mod tests {
                         fql_kind: "type_alias".into(),
                         path: PathBuf::from("include/types.hpp"),
                         line: 17,
+                        node_id: None,
                     },
                     OutlineEntry {
                         name: "int32_t".into(),
                         fql_kind: "type_alias".into(),
                         path: PathBuf::from("include/types.hpp"),
                         line: 18,
+                        node_id: None,
                     },
                     OutlineEntry {
                         name: "Pid".into(),
                         fql_kind: "class_specifier".into(),
                         path: PathBuf::from("include/types.hpp"),
                         line: 22,
+                        node_id: None,
                     },
                 ],
             },
@@ -643,12 +680,14 @@ mod tests {
                         fql_kind: "comment".into(),
                         path: PathBuf::from("src/adc.cpp"),
                         line: 1,
+                        node_id: None,
                     },
                     OutlineEntry {
                         name: "convertByte2Volts".into(),
                         fql_kind: "function_definition".into(),
                         path: PathBuf::from("src/adc.cpp"),
                         line: 5,
+                        node_id: None,
                     },
                 ],
             },

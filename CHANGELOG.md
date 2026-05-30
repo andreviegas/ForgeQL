@@ -6,6 +6,33 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.55.2] — 2026-05-30 — Addressable node IDs in results
+
+### Added
+
+- `crates/forgeql-core/src/node_id.rs` **(new)**:
+  - Stable node-handle helpers for `segment_id(path)` and `make_node_id(path, ordinal)`.
+
+### Changed
+
+- `crates/forgeql-core/src/ast/index/file_indexer.rs`:
+  - Added per-file DFS ordinal assignment (`ordinal`) for named indexed rows.
+  - Added `parent_ordinal_stack` traversal state to mirror parent ancestry during DFS walk.
+- `crates/forgeql-core/src/result.rs`:
+  - Added optional `node_id` to `SymbolRow` and `OutlineEntry`.
+- Outline paths now emit `node_id` when available:
+  - `crates/forgeql-core/src/storage/columnar/columnar_storage/query.rs`
+  - `crates/forgeql-core/src/ast/show/members.rs`
+  - `crates/forgeql-core/src/engine/convert.rs`
+  - `crates/forgeql-core/src/compact.rs` (compact schema/rows updated for node_id-aware output)
+- `crates/forgeql-core/src/storage/columnar/mod.rs`:
+  - `ENRICH_VER` bumped to `10` to force reindex and populate ordinal-enriched rows.
+
+### Notes
+
+- This release introduces stable `node_id` values in existing query and outline outputs, with automatic reindex migration (`ENRICH_VER = 10`).
+- Additional robustness and coverage improvements for node addressing will ship in follow-up releases.
+
 ## [0.55.1] — 2026-05-30 — Golden expectations updated after frozen-branch reindex
 
 ### Changed
