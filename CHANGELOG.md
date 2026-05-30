@@ -6,6 +6,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.55.1] — 2026-05-30 — Golden expectations updated after frozen-branch reindex
+
+### Changed
+
+- Golden test baselines were adapted after reindexing the two frozen golden sources:
+  - `zephyr-andre.zephyr-main`
+  - `pytorch-andre.pytorch-frozen`
+- `crates/forgeql/tests/golden.json`:
+  - Refreshed affected expected rows/counts to match post-reindex canonical ordering and metrics.
+  - Kept markdown paragraph probes (`LIKE`/`MATCHES`) in place as regression coverage for `.md` content queries.
+
 ## [0.55.0] — 2026-05-30 — Markdown language support + golden session isolation
 
 ### Added

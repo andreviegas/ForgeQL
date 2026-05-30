@@ -1,7 +1,7 @@
 [
   {
     "alias": "golden",
-    "expect_symbols_indexed": 2710729,
+    "expect_symbols_indexed": 2711516,
     "use": "zephyr-andre.zephyr-main"
   },
   {
@@ -604,10 +604,10 @@
     "expect_row_count": 5,
     "expect_rows": [
       {"line": 862,  "name": "parser_execute",     "path": "subsys/net/lib/http/http_parser.c"},
+      {"line": 170,  "name": "test_advx_main",     "path": "tests/bsim/bluetooth/ll/advx/src/main.c"},
       {"line": 572,  "name": "isr_rx",             "path": "subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync_iso.c"},
       {"line": 170,  "name": "ull_scan_aux_setup", "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"},
-      {"line": 2905, "name": "tcp_in",             "path": "subsys/net/ip/tcp.c"},
-      {"line": 1612, "name": "ull_scan_aux_setup", "path": "subsys/bluetooth/controller/ll_sw/ull_scan_aux.c"}
+      {"line": 2905, "name": "tcp_in",             "path": "subsys/net/ip/tcp.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE goto_count >= 1 WHERE lines >= 100 ORDER BY lines DESC LIMIT 5",
     "name": "GST11_goto_audit_functions_limit5"
@@ -653,7 +653,7 @@
       {"line": 106,  "name": "frag_transport_package_callback", "path": "subsys/lorawan/services/frag_transport.c"},
       {"line": 153,  "name": "register_service",                "path": "tests/bluetooth/tester/src/btp_core.c"},
       {"line": 321,  "name": "unregister_service",              "path": "tests/bluetooth/tester/src/btp_core.c"},
-      {"line": 4339, "name": "tp_input",                        "path": "subsys/net/ip/tcp.c"}
+      {"line": 110,  "name": "multicast_package_callback",      "path": "subsys/lorawan/services/multicast.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_unused_param = 'true' WHERE unused_param_count >= 3 ORDER BY lines DESC LIMIT 5",
     "name": "GST15_unused_param_metric_combos_limit5"
@@ -1026,7 +1026,7 @@
     "expect_rows": [
       {"line": 69,  "metric_value": "1", "name": "handle_flush",              "path": "kernel/work.c"},
       {"line": 545, "metric_value": "3", "name": "k_object_wordlist_foreach", "path": "kernel/userspace.c"},
-      {"line": 22,  "metric_value": "3", "name": "k_sys_work_q_init",         "path": "kernel/system_work_q.c"}
+      {"line": 535, "metric_value": "3", "name": "z_object_gperf_wordlist_foreach", "path": "kernel/userspace.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines <= 3 IN 'kernel/**' ORDER BY lines ASC LIMIT 3",
     "name": "GST47_lines_lte3_kernel"
@@ -1446,7 +1446,7 @@
   },
   {
     "alias": "rw-tests",
-    "expect_symbols_indexed": 2710729,
+    "expect_symbols_indexed": 2711516,
     "use": "zephyr-andre.zephyr-main"
   },
   {
@@ -1669,7 +1669,7 @@
   },
   {
     "alias": "enrich-stale-tests",
-    "expect_symbols_indexed": 2710729,
+    "expect_symbols_indexed": 2711516,
     "use": "zephyr-andre.zephyr-main"
   },
   {
@@ -1829,7 +1829,7 @@
   },
   {
     "alias": "golden-python",
-    "expect_symbols_indexed": 2953280,
+    "expect_symbols_indexed": 3063558,
     "use": "pytorch-andre.pytorch-frozen"
   },
   {
