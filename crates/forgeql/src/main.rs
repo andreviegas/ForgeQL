@@ -39,6 +39,7 @@ use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::query_logger::QueryLogger;
 use forgeql_lang_c::CLanguage;
 use forgeql_lang_cpp::CppLanguage;
+use forgeql_lang_markdown::MarkdownLanguage;
 use forgeql_lang_python::PythonLanguage;
 use forgeql_lang_rust::RustLanguage;
 
@@ -69,6 +70,7 @@ async fn main() -> Result<()> {
     let lang_registry = Arc::new(LanguageRegistry::new(vec![
         Arc::new(CLanguage),
         Arc::new(CppLanguage),
+        Arc::new(MarkdownLanguage),
         Arc::new(PythonLanguage),
         Arc::new(RustLanguage),
     ]));

@@ -423,6 +423,9 @@ fn golden_values() {
         .unwrap_or_else(|e| panic!("[golden] failed to spawn MCP server: {e}"));
 
     let mut session_id: Option<String> = None;
+    // Force per-run session aliases so mutation-heavy golden tests never
+    // resume a dirty prior session after an interrupted run.
+    let run_alias_suffix = format!("g{}", std::process::id());
     let mut failures: Vec<String> = Vec::new();
     let mut pass = 0usize;
 
@@ -431,7 +434,8 @@ fn golden_values() {
         match entry {
             // ── USE step ──────────────────────────────────────────────────────
             GoldenEntry::Use(u) => {
-                let fql = format!("USE {} AS '{}'", u.use_str, u.alias);
+                let run_alias = format!("{}-{}", u.alias, run_alias_suffix);
+                let fql = format!("USE {} AS '{}'", u.use_str, run_alias);
                 let result = client.run_fql(None, &fql).unwrap_or_else(|e| {
                     panic!(
                         "[golden] '{fql}' failed: {e}\n\
@@ -444,12 +448,13 @@ fn golden_values() {
                     result
                         .get("session_id")
                         .and_then(Value::as_str)
-                        .unwrap_or(&u.alias)
+                        .unwrap_or(&run_alias)
                         .to_owned(),
                 );
                 eprintln!(
-                    "[golden] USE {} — sid={}",
+                    "[golden] USE {} AS '{}' — sid={}",
                     u.use_str,
+                    run_alias,
                     session_id.as_deref().unwrap_or("?")
                 );
                 let got_indexed = usize::try_from(

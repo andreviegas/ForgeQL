@@ -17,6 +17,7 @@ workspace = true
 forgeql-core        = { workspace = true }
 forgeql-lang-c      = { workspace = true }
 forgeql-lang-cpp    = { workspace = true }
+forgeql-lang-markdown = { workspace = true }
 forgeql-lang-python = { workspace = true }
 forgeql-lang-rust   = { workspace = true }
 

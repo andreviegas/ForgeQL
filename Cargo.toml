@@ -4,6 +4,7 @@ members = [
     "crates/forgeql-core",
     "crates/forgeql-lang-c",
     "crates/forgeql-lang-cpp",
+    "crates/forgeql-lang-markdown",
     "crates/forgeql-lang-python",
     "crates/forgeql-lang-rust",
     "crates/forgeql",
@@ -16,13 +17,14 @@ default-members = [
     "crates/forgeql-core",
     "crates/forgeql-lang-c",
     "crates/forgeql-lang-cpp",
+    "crates/forgeql-lang-markdown",
     "crates/forgeql-lang-python",
     "crates/forgeql-lang-rust",
     "crates/forgeql",
 ]
 
 [workspace.package]
-version   = "0.54.19"
+version   = "0.55.0"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"
@@ -78,6 +80,7 @@ serde_yml        = "0.0.12"
 tree-sitter      = "0.25"
 tree-sitter-c    = "0.23"
 tree-sitter-cpp  = "0.23"
+tree-sitter-md     = "0.3"
 tree-sitter-python = "0.23"
 tree-sitter-rust = "0.24"
 
@@ -131,6 +134,7 @@ dirs             = "5"
 forgeql-core        = { path = "crates/forgeql-core" }
 forgeql-lang-c      = { path = "crates/forgeql-lang-c" }
 forgeql-lang-cpp    = { path = "crates/forgeql-lang-cpp" }
+forgeql-lang-markdown = { path = "crates/forgeql-lang-markdown" }
 forgeql-lang-python = { path = "crates/forgeql-lang-python" }
 forgeql-lang-rust   = { path = "crates/forgeql-lang-rust" }
 

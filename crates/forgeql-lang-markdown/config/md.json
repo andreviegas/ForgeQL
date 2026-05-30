@@ -1,0 +1,32 @@
+{
+  "language": {
+    "name": "markdown",
+    "extensions": ["md", "mdx"],
+    "tree_sitter_grammar": "tree-sitter-md"
+  },
+
+  "syntax": {
+    "root_node": "document",
+    "skip_node_kinds": []
+  },
+
+  "capabilities": {
+    "has_goto": false,
+    "has_increment_decrement": false,
+    "has_implicit_truthiness": false,
+    "params_share_body_scope": false
+  },
+
+  "kind_map": {
+    "section":             "section",
+    "atx_heading":         "heading",
+    "setext_heading":      "heading",
+    "fenced_code_block":   "code_block",
+    "indented_code_block": "code_block",
+    "list_item":           "list_item",
+    "paragraph":           "paragraph",
+    "pipe_table":          "table",
+    "block_quote":         "block_quote",
+    "link_definition":     "import"
+  }
+}

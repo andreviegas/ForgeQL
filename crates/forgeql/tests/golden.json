@@ -1144,6 +1144,30 @@
     "name": "GFF6_find_files_rst_docs_by_size"
   },
   {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'md-probe-zephyr'",
+    "name": "GFF10a_begin_md_probe_transaction_zephyr"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE FILE 'doc/md_probe_content.md' WITH <<MD\n# Markdown Probe\n\nThis paragraph includes token mdprobealpha and mdprobebeta.\n\nAnother paragraph includes mdprobealpha again for LIKE and MATCHES verification.\nMD",
+    "name": "GFF10b_create_md_probe_file_zephyr"
+  },
+  {
+    "expect_row_count": 2,
+    "expect_rows": [
+      {"kind": "paragraph", "path": "doc/md_probe_content.md"},
+      {"kind": "paragraph", "path": "doc/md_probe_content.md"}
+    ],
+    "fql": "FIND symbols WHERE path = 'doc/md_probe_content.md' WHERE name LIKE '%mdprobealpha%' ORDER BY line ASC LIMIT 5",
+    "name": "GFF11_find_md_paragraph_like_zephyr"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'md-probe-zephyr'",
+    "name": "GFF11b_rollback_md_probe_transaction_zephyr"
+  },
+  {
     "expect_row_count": 3,
     "expect_rows": [
       {"path": "kernel/dynamic_disabled.c", "size": 393},
@@ -1807,6 +1831,30 @@
     "alias": "golden-python",
     "expect_symbols_indexed": 2953280,
     "use": "pytorch-andre.pytorch-frozen"
+  },
+  {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'md-probe-pytorch'",
+    "name": "GP0a_begin_md_probe_transaction_pytorch"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE FILE 'docs/md_probe_content.md' WITH <<MD\n# Markdown Probe PT\n\nThis paragraph includes token mdprobealpha and mdprobegamma.\n\nAnother paragraph includes mdprobealpha again for LIKE and MATCHES verification.\nMD",
+    "name": "GP0b_create_md_probe_file_pytorch"
+  },
+  {
+    "expect_row_count": 2,
+    "expect_rows": [
+      {"kind": "paragraph", "path": "docs/md_probe_content.md"},
+      {"kind": "paragraph", "path": "docs/md_probe_content.md"}
+    ],
+    "fql": "FIND symbols WHERE path = 'docs/md_probe_content.md' WHERE name MATCHES '.*mdprobe(alpha|gamma).*' ORDER BY line ASC LIMIT 5",
+    "name": "GP0c_find_md_paragraph_matches_pytorch"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'md-probe-pytorch'",
+    "name": "GP0d_rollback_md_probe_transaction_pytorch"
   },
   {
     "expect_row_count": 3,

@@ -6,6 +6,26 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.55.0] — 2026-05-30 — Markdown language support + golden session isolation
+
+### Added
+
+- `crates/forgeql-lang-markdown` **(new crate)**:
+  - Markdown `LanguageSupport` implementation backed by `tree-sitter-md`
+  - Embedded config at `crates/forgeql-lang-markdown/config/md.json`
+  - Kind mappings for `heading`, `section`, `code_block`, `list_item`, `paragraph`,
+    `table`, `block_quote`, and `import` (`link_definition`)
+  - `.md` and `.mdx` extension support
+
+### Changed
+
+- Workspace wiring:
+  - Added `crates/forgeql-lang-markdown` to workspace members and dependencies
+  - Registered `MarkdownLanguage` in `forgeql` binary startup registry
+- `crates/forgeql/tests/zephyr_golden.rs`:
+  - USE aliases are now run-scoped (`<alias>-g<pid>`) to avoid resuming stale/dirty
+    sessions from interrupted prior runs in mutation-heavy golden tests.
+
 ## [0.54.19] — 2026-05-25 — P2-F: externalize corpus/golden/syntax test data
 
 ### Changed
