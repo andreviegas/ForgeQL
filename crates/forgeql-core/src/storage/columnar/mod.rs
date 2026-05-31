@@ -80,7 +80,10 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///   9 — `POSTING_ENRICHMENT_FIELDS` expansion: string-enum and boolean enrichment
 ///       fields now stored as per-field posting blobs in segments, enabling fast
 ///       WHERE/ORDER BY without full row materialization (v0.50.12)
-pub const ENRICH_VER: u32 = 11;
+///  10 — stable `node_id` handles introduced via persisted ordinals
+///  11 — ordinal remapper improvements for reindex stability
+///  12 — Phase A node_id policy gate: only addressable `fql_kind`s receive ordinals
+pub const ENRICH_VER: u32 = 12;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

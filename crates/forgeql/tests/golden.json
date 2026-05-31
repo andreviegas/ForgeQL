@@ -1445,6 +1445,125 @@
     "name": "GSMB2_show_members_TSSLSocket_fql_kind_bug2"
   },
   {
+    "alias": "nid-tests",
+    "expect_symbols_indexed": 2711516,
+    "use": "zephyr-andre.zephyr-main"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [
+      {
+        "line": 12,
+        "name": "z_priq_rb_lessthan",
+        "node_id": "nd8d2f5532cd6.0005",
+        "path": "kernel/priority_queues.c"
+      }
+    ],
+    "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'function' WHERE name = 'z_priq_rb_lessthan'",
+    "name": "NID01_function_has_expected_node_id"
+  },
+  {
+    "expect_row_count": 2,
+    "expect_rows": [
+      {"line": 22, "name": "(a>b)", "node_id": "nd8d2f5532cd6.0015"},
+      {"line": 24, "name": "(a<b)", "node_id": "nd8d2f5532cd6.0016"}
+    ],
+    "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'if' ORDER BY line ASC",
+    "name": "NID02_if_rows_are_addressable_and_have_node_id"
+  },
+  {
+    "expect_row_count": 4,
+    "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'number'",
+    "name": "NID03_number_rows_exist_for_analysis"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE fql_kind = 'number' IN 'kernel/priority_queues.c' WHERE node_id LIKE 'n%.%'",
+    "name": "NID04_number_rows_do_not_surface_node_id_in_find_symbols"
+  },
+  {
+    "expect_field": {
+      "type": "begin_transaction"
+    },
+    "fql": "BEGIN TRANSACTION 'node-id-regression'",
+    "name": "NID05_begin_node_id_regression_transaction"
+  },
+  {
+    "expect_field": {
+      "applied": true,
+      "edit_count": 1,
+      "type": "mutation"
+    },
+    "fql": "CHANGE FILE 'kernel/priority_queues.c' MATCHING 'bool z_priq_rb_lessthan(struct rbnode *a, struct rbnode *b)' WITH '/* node-id drift marker */\nbool z_priq_rb_lessthan(struct rbnode *a, struct rbnode *b)'",
+    "name": "NID06_insert_line_drift_marker_before_function"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [
+      {"line": 12, "name": "z_priq_rb_lessthan", "node_id": "nd8d2f5532cd6.0005"}
+    ],
+    "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'function' WHERE name = 'z_priq_rb_lessthan'",
+    "name": "NID07_function_node_id_survives_line_drift"
+  },
+  {
+    "expect_row_count": 2,
+    "expect_rows": [
+      {"line": 22, "name": "(a>b)", "node_id": "nd8d2f5532cd6.0015"},
+      {"line": 24, "name": "(a<b)", "node_id": "nd8d2f5532cd6.0016"}
+    ],
+    "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'if' ORDER BY line ASC",
+    "name": "NID08_if_node_ids_survive_line_drift"
+  },
+  {
+    "expect_row_count": 4,
+    "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'number'",
+    "name": "NID09_number_rows_count_stable_after_line_drift"
+  },
+  {
+    "expect_field": {
+      "applied": true,
+      "edit_count": 1,
+      "type": "mutation"
+    },
+    "fql": "CHANGE FILE 'kernel/priority_queues.c' MATCHING 'bool z_priq_rb_lessthan(struct rbnode *a, struct rbnode *b)' WITH 'bool z_priq_rb_lessthan_renamed(struct rbnode *a, struct rbnode *b)'",
+    "name": "NID10_rename_function_through_forgeql"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'z_priq_rb_lessthan_renamed' IN 'kernel/priority_queues.c'",
+    "name": "NID11_renamed_function_visible_after_change"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'z_priq_rb_lessthan' IN 'kernel/priority_queues.c'",
+    "name": "NID12_old_function_name_removed_after_rename"
+  },
+  {
+    "expect_row_count": 4,
+    "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'number'",
+    "name": "NID13_number_rows_count_stable_after_rename"
+  },
+  {
+    "expect_field": {
+      "type": "rollback"
+    },
+    "fql": "ROLLBACK TRANSACTION 'node-id-regression'",
+    "name": "NID14_rollback_node_id_regression_transaction"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [
+      {"line": 12, "name": "z_priq_rb_lessthan", "node_id": "nd8d2f5532cd6.0005"}
+    ],
+    "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'function' WHERE name = 'z_priq_rb_lessthan'",
+    "name": "NID15_original_function_restored_after_rollback"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'z_priq_rb_lessthan_renamed' IN 'kernel/priority_queues.c'",
+    "name": "NID16_renamed_function_removed_after_rollback"
+  },
+  {
     "alias": "rw-tests",
     "expect_symbols_indexed": 2711516,
     "use": "zephyr-andre.zephyr-main"

@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.55.4] — 2026-05-31 — Addressable node_id policy and regression coverage
+
+### Changed
+
+- Restricted ordinal and `node_id` assignment to addressable `fql_kind` rows so analysis-only rows (such as number literals) no longer surface stable node handles.
+- Preserved stable ordinals for addressable extra rows such as control-flow nodes, fixing missing `node_id` values on `if`/`while` outline entries.
+- Bumped `ENRICH_VER` from `11` to `12` to force rebuilds onto the updated addressable-only node-id policy.
+
+### Tests
+
+- Added focused integration coverage for addressable-vs-analysis-only `node_id` behavior in `engine_integration`.
+- Added a new `NID*` golden test block covering baseline node-id projection, addressable policy enforcement, mutation stability, rename visibility, and rollback restoration.
+
 ## [0.55.3] — 2026-05-31 — Stable node addressing improvements
 
 ### Changed

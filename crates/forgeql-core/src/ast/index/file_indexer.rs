@@ -115,6 +115,49 @@ struct OrdinalMatchKey<'a> {
     content_hash: Option<&'a str>,
 }
 
+/// Returns true when a row kind should receive a stable node `ordinal/node_id`.
+///
+/// Phase A policy: only addressable semantic nodes get `node_ids`; analysis-only
+/// fragments (number/cast/operators/etc.) must not.
+fn is_addressable_fql_kind(fql_kind: &str) -> bool {
+    matches!(
+        fql_kind,
+        "function"
+            | "struct"
+            | "class"
+            | "interface"
+            | "enum"
+            | "field"
+            | "method"
+            | "import"
+            | "macro"
+            | "include_group"
+            | "variable"
+            | "global_variable"
+            | "local_declaration"
+            | "if"
+            | "for"
+            | "while"
+            | "switch"
+            | "do"
+            | "do_while"
+            | "call_statement"
+            | "return_expression"
+            | "comment"
+            | "comment_block"
+            | "section"
+            | "heading"
+            | "list_item"
+            | "paragraph"
+            | "code_block"
+            | "table"
+            | "block_quote"
+            | "preprocessor_region"
+            | "preprocessor_directive"
+            | "macro_call"
+    )
+}
+
 impl OrdinalRemapper {
     #[must_use]
     pub fn from_previous(previous: Vec<OrdinalHint>) -> Self {
@@ -414,26 +457,31 @@ fn collect_nodes(
                     .strings
                     .intern_row(&name, node.kind(), fql_kind_val, lang_name, ctx.path);
                 // Reuse prior ordinals when possible to keep node_id stable across re-indexes.
-                let ordinal = ctx.ordinal_remapper.as_mut().map_or_else(
-                    || {
-                        let next = row_ordinal_counter;
-                        row_ordinal_counter = row_ordinal_counter.saturating_add(1);
-                        next
-                    },
-                    |remapper| {
-                        remapper.assign(&OrdinalMatchKey {
-                            name: &name,
-                            fql_kind: fql_kind_val,
-                            parent_ordinal,
-                            guard_group_id: guard_group_id.as_deref(),
-                            guard_branch: guard_branch.as_deref(),
-                            first_body_statement_fingerprint: first_body_statement_fingerprint
-                                .as_deref(),
-                            content_hash: Some(content_hash.as_str()),
-                        })
-                    },
-                );
-                current_node_ordinal = Some(ordinal);
+                let ordinal = if is_addressable_fql_kind(fql_kind_val) {
+                    let ord = ctx.ordinal_remapper.as_mut().map_or_else(
+                        || {
+                            let next = row_ordinal_counter;
+                            row_ordinal_counter = row_ordinal_counter.saturating_add(1);
+                            next
+                        },
+                        |remapper| {
+                            remapper.assign(&OrdinalMatchKey {
+                                name: &name,
+                                fql_kind: fql_kind_val,
+                                parent_ordinal,
+                                guard_group_id: guard_group_id.as_deref(),
+                                guard_branch: guard_branch.as_deref(),
+                                first_body_statement_fingerprint: first_body_statement_fingerprint
+                                    .as_deref(),
+                                content_hash: Some(content_hash.as_str()),
+                            })
+                        },
+                    );
+                    current_node_ordinal = Some(ord);
+                    Some(ord)
+                } else {
+                    None
+                };
                 // Intern field keys+values before storing — converts the temporary
                 // HashMap<String,String> enricher buffer into HashMap<u32,u32>.
                 let fields = ctx.table.strings.intern_fields(fields);
@@ -446,7 +494,7 @@ fn collect_nodes(
                     byte_range: node.byte_range(),
                     line: node.start_position().row + 1,
                     usages_count: 0,
-                    ordinal: Some(ordinal),
+                    ordinal,
                     fields,
                 });
             } else if let Some(mtable) = ctx.macro_table {
@@ -501,26 +549,31 @@ fn collect_nodes(
                             .table
                             .strings
                             .intern_row(&func_name, node.kind(), "macro_call", lang_name, ctx.path);
-                        let ordinal = ctx.ordinal_remapper.as_mut().map_or_else(
-                            || {
-                                let next = row_ordinal_counter;
-                                row_ordinal_counter = row_ordinal_counter.saturating_add(1);
-                                next
-                            },
-                            |remapper| {
-                                remapper.assign(&OrdinalMatchKey {
-                                    name: &func_name,
-                                    fql_kind: "macro_call",
-                                    parent_ordinal,
-                                    guard_group_id: guard_group_id.as_deref(),
-                                    guard_branch: guard_branch.as_deref(),
-                                    first_body_statement_fingerprint:
-                                        first_body_statement_fingerprint.as_deref(),
-                                    content_hash: Some(content_hash.as_str()),
-                                })
-                            },
-                        );
-                        current_node_ordinal = Some(ordinal);
+                        let ordinal = if is_addressable_fql_kind("macro_call") {
+                            let ord = ctx.ordinal_remapper.as_mut().map_or_else(
+                                || {
+                                    let next = row_ordinal_counter;
+                                    row_ordinal_counter = row_ordinal_counter.saturating_add(1);
+                                    next
+                                },
+                                |remapper| {
+                                    remapper.assign(&OrdinalMatchKey {
+                                        name: &func_name,
+                                        fql_kind: "macro_call",
+                                        parent_ordinal,
+                                        guard_group_id: guard_group_id.as_deref(),
+                                        guard_branch: guard_branch.as_deref(),
+                                        first_body_statement_fingerprint:
+                                            first_body_statement_fingerprint.as_deref(),
+                                        content_hash: Some(content_hash.as_str()),
+                                    })
+                                },
+                            );
+                            current_node_ordinal = Some(ord);
+                            Some(ord)
+                        } else {
+                            None
+                        };
                         let fields = ctx.table.strings.intern_fields(fields);
                         ctx.table.push_row(IndexRow {
                             name_id,
@@ -531,7 +584,7 @@ fn collect_nodes(
                             byte_range: node.byte_range(),
                             line: node.start_position().row + 1,
                             usages_count: 0,
-                            ordinal: Some(ordinal),
+                            ordinal,
                             fields,
                         });
                     }
@@ -540,6 +593,10 @@ fn collect_nodes(
             // Run extra_rows() for every node (even if extract_name returned None).
             for enricher in ctx.enrichers {
                 for extra in enricher.extra_rows(&enrich_ctx) {
+                    let parent_ordinal = parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
+                    let guard_group_id = extra.fields.get("guard_group_id").map(String::as_str);
+                    let guard_branch = extra.fields.get("guard_branch").map(String::as_str);
+                    let content_hash = node_content_hash(node, source);
                     let extra_path = extra.path_override.as_deref().unwrap_or(ctx.path);
                     let (eni, enk, enf, enl, enp) = ctx.table.strings.intern_row(
                         &extra.name,
@@ -548,6 +605,28 @@ fn collect_nodes(
                         lang_name,
                         extra_path,
                     );
+                    let ordinal = if is_addressable_fql_kind(&extra.fql_kind) {
+                        Some(ctx.ordinal_remapper.as_mut().map_or_else(
+                            || {
+                                let next = row_ordinal_counter;
+                                row_ordinal_counter = row_ordinal_counter.saturating_add(1);
+                                next
+                            },
+                            |remapper| {
+                                remapper.assign(&OrdinalMatchKey {
+                                    name: &extra.name,
+                                    fql_kind: &extra.fql_kind,
+                                    parent_ordinal,
+                                    guard_group_id,
+                                    guard_branch,
+                                    first_body_statement_fingerprint: None,
+                                    content_hash: Some(content_hash.as_str()),
+                                })
+                            },
+                        ))
+                    } else {
+                        None
+                    };
                     let fields = ctx.table.strings.intern_fields(extra.fields);
                     ctx.table.push_row(IndexRow {
                         name_id: eni,
@@ -558,7 +637,7 @@ fn collect_nodes(
                         byte_range: extra.byte_range,
                         line: extra.line,
                         usages_count: 0,
-                        ordinal: None,
+                        ordinal,
                         fields,
                     });
                 }

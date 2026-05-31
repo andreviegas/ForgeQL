@@ -46,7 +46,9 @@ fn fixtures_dir() -> PathBuf {
 /// with a local session pointing at that workspace.
 ///
 /// Returns `(engine, session_id, TempDir)`.  `TempDir` must stay alive.
-fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
+fn engine_with_session_with_extra_files(
+    extra_files: &[&str],
+) -> (ForgeQLEngine, String, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");
     let src = fixtures_dir();
 
@@ -61,6 +63,9 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
         dir.path().join("motor_control.cpp"),
     )
     .expect("copy .cpp");
+    for file in extra_files {
+        let _ = fs::copy(src.join(file), dir.path().join(file)).expect("copy extra fixture");
+    }
 
     // Create an engine with a data_dir inside the temp dir.
     let data_dir = dir.path().join("data");
@@ -73,6 +78,10 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
         .expect("register session");
 
     (engine, session_id, dir)
+}
+
+fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
+    engine_with_session_with_extra_files(&[])
 }
 
 /// Parse FQL and execute the first op against the engine.
@@ -320,6 +329,64 @@ fn show_outline_returns_entries() {
     match result {
         ForgeQLResult::Show(sr) => {
             assert_eq!(sr.op, "show_outline");
+        }
+        other => panic!("expected Show, got: {other:?}"),
+    }
+}
+
+#[test]
+fn show_outline_while_entries_include_node_id() {
+    let (mut engine, sid, _dir) =
+        engine_with_session_with_extra_files(&["enrichment_patterns.cpp"]);
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "SHOW outline OF 'enrichment_patterns.cpp' WHERE fql_kind = 'while'",
+    );
+
+    match result {
+        ForgeQLResult::Show(sr) => {
+            assert_eq!(sr.op, "show_outline");
+            let ShowContent::Outline { entries } = sr.content else {
+                panic!("expected outline content");
+            };
+            assert!(
+                !entries.is_empty(),
+                "expected at least one while entry in enrichment_patterns.cpp"
+            );
+            assert!(
+                entries.iter().all(|entry| entry.node_id.is_some()),
+                "all while entries should carry node_id after reindex"
+            );
+        }
+        other => panic!("expected Show, got: {other:?}"),
+    }
+}
+
+#[test]
+fn show_outline_number_entries_do_not_include_node_id() {
+    let (mut engine, sid, _dir) =
+        engine_with_session_with_extra_files(&["enrichment_patterns.cpp"]);
+    let result = execute_fql(
+        &mut engine,
+        &sid,
+        "SHOW outline OF 'enrichment_patterns.cpp' WHERE fql_kind = 'number'",
+    );
+
+    match result {
+        ForgeQLResult::Show(sr) => {
+            assert_eq!(sr.op, "show_outline");
+            let ShowContent::Outline { entries } = sr.content else {
+                panic!("expected outline content");
+            };
+            assert!(
+                !entries.is_empty(),
+                "expected at least one number entry in enrichment_patterns.cpp"
+            );
+            assert!(
+                entries.iter().all(|entry| entry.node_id.is_none()),
+                "analysis-only number entries must not carry node_id"
+            );
         }
         other => panic!("expected Show, got: {other:?}"),
     }
