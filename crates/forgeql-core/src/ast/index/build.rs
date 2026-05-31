@@ -15,7 +15,9 @@ use crate::ast::trigram::TrigramIndex;
 use crate::error::ForgeError;
 use crate::workspace::Workspace;
 
-use super::file_indexer::{IndexContext, collect_macro_defs_for_file, index_file};
+use super::file_indexer::{
+    IndexContext, OrdinalHint, OrdinalRemapper, collect_macro_defs_for_file, index_file,
+};
 use super::{
     IndexRow, IndexStats, MemEstimate, SegmentBuildCtx, SymbolTable, UsageSite, reassign_intern_ids,
 };
@@ -140,6 +142,7 @@ impl SymbolTable {
                         language: lang.as_ref(),
                         enrichers: &enrichers,
                         macro_table: Some(&macro_table),
+                        ordinal_remapper: None,
                         table: &mut file_table,
                     };
                     match index_file(&mut parser, &mut ctx, seg_ctx) {
@@ -180,6 +183,7 @@ impl SymbolTable {
                         language: lang.as_ref(),
                         enrichers: &enrichers,
                         macro_table: Some(&macro_table),
+                        ordinal_remapper: None,
                         table: &mut file_table,
                     };
                     match index_file(&mut parser, &mut ctx, seg_ctx) {
@@ -656,6 +660,35 @@ impl SymbolTable {
         let enrichers = default_enrichers();
 
         for path in paths {
+            let remapper = {
+                let mut hints = Vec::new();
+                if let Some(pid) = self.strings.paths.get_id(path) {
+                    for row in self.rows.iter().filter(|row| row.path_id == pid) {
+                        let Some(ordinal) = row.ordinal else {
+                            continue;
+                        };
+                        let fields = self.resolve_fields(&row.fields);
+                        let parent_ordinal = fields
+                            .get("parent_ordinal")
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .unwrap_or(u32::MAX);
+                        hints.push(OrdinalHint {
+                            name: self.name_of(row).to_string(),
+                            fql_kind: self.fql_kind_of(row).to_string(),
+                            parent_ordinal,
+                            guard_group_id: fields.get("guard_group_id").cloned(),
+                            guard_branch: fields.get("guard_branch").cloned(),
+                            first_body_statement_fingerprint: fields
+                                .get("first_body_statement_fingerprint")
+                                .cloned(),
+                            content_hash: fields.get("content_hash").cloned(),
+                            ordinal,
+                        });
+                    }
+                }
+                OrdinalRemapper::from_previous(hints)
+            };
+
             self.purge_file(path);
             if path.exists() {
                 if let Some(lang) = lang_registry.language_for_path(path) {
@@ -667,6 +700,7 @@ impl SymbolTable {
                         language: lang.as_ref(),
                         enrichers: &enrichers,
                         macro_table: None,
+                        ordinal_remapper: Some(remapper),
                         table: &mut *self,
                     };
                     match index_file(&mut parser, &mut ctx, None) {
@@ -723,6 +757,7 @@ impl SymbolTable {
             byte_range,
             line,
             usages_count: 0,
+            ordinal: None,
             fields,
         });
     }

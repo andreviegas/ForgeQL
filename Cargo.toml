@@ -24,7 +24,7 @@ default-members = [
 ]
 
 [workspace.package]
-version   = "0.55.2"
+version   = "0.55.3"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"
@@ -108,9 +108,9 @@ regex            = "1"
 # --- index serialization ---
 bincode          = "1"
 
-# --- sha1 hashing (for GitSha1Provider blob addressing) ---
+# --- hashing ---
 sha1             = { version = "0.10", features = ["oid"] }
-
+sha2             = "0.10"
 # --- columnar storage engine (Phase 03+) ---
 memmap2  = "0.9"
 roaring  = "0.10"

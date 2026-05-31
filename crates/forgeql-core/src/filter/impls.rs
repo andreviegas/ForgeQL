@@ -152,6 +152,7 @@ impl ClauseTarget for crate::result::SourceLine {
         match field {
             "text" | "content" => Some(&self.text),
             "marker" => self.marker.as_deref(),
+            "node_id" => self.node_id.as_deref(),
             _ => None,
         }
     }

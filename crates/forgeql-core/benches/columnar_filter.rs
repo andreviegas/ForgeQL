@@ -64,6 +64,7 @@ fn index_fixture(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
             language: lang,
             enrichers: &enrichers,
             macro_table: None,
+            ordinal_remapper: None,
             table: &mut table,
         };
         index_file(&mut parser, &mut ctx, None).expect("index_file");

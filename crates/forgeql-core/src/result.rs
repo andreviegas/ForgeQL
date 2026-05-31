@@ -342,6 +342,9 @@ pub struct SourceLine {
     /// Optional marker for context display (e.g. `">>>"` for the target line).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marker: Option<String>,
+    /// Stable node handle for lines that start an addressable node.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
 }
 
 /// An entry in a SHOW outline result.
@@ -914,11 +917,13 @@ mod tests {
                         line: 42,
                         text: "float convertByte2Volts(uint8_t raw) {".to_string(),
                         marker: None,
+                        node_id: None,
                     },
                     SourceLine {
                         line: 43,
                         text: "    return raw * 3.3f / 255.0f;".to_string(),
                         marker: None,
+                        node_id: None,
                     },
                 ],
                 byte_start: Some(1024),
@@ -1207,6 +1212,7 @@ mod tests {
                         line: i,
                         text: format!("line {i}"),
                         marker: None,
+                        node_id: None,
                     })
                     .collect(),
                 byte_start: None,
@@ -1350,6 +1356,7 @@ mod tests {
                     line: 10,
                     text: "void myFunc() {}".to_string(),
                     marker: None,
+                    node_id: None,
                 }],
                 byte_start: None,
                 depth: None,

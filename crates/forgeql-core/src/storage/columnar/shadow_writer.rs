@@ -201,6 +201,9 @@ impl<'a> ShadowWriter<'a> {
                         byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
                         usages_count: row.usages_count,
                     });
+                    if let Some(ordinal) = row.ordinal {
+                        builder.set_ordinal(row_id, ordinal);
+                    }
                     for (key, value) in table.resolve_fields(&row.fields) {
                         let _ = local_columns.insert(key.clone());
                         builder.set_field(row_id, &key, value);
@@ -318,6 +321,7 @@ mod tests {
             byte_range: 0..content.len(),
             line: 1,
             usages_count: 0,
+            ordinal: None,
             fields,
             name_id,
             node_kind_id,
@@ -478,6 +482,7 @@ mod tests {
             byte_range: 0..content.len(),
             line: 1,
             usages_count: 0,
+            ordinal: None,
             fields: HashMap::new(),
             name_id,
             node_kind_id,

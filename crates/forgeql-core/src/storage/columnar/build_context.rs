@@ -164,6 +164,9 @@ impl ColumnarBuildContext {
                         byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
                         usages_count: row.usages_count,
                     });
+                    if let Some(ordinal) = row.ordinal {
+                        builder.set_ordinal(row_id, ordinal);
+                    }
                     for (key, value) in table.resolve_fields(&row.fields) {
                         let _ = local_cols.insert(key.clone());
                         builder.set_field(row_id, &key, value);

@@ -213,28 +213,34 @@ impl CachedIndex {
             strings: table.strings.clone(),
         };
         let bytes = bincode::serialize(&snapshot)?;
-        crate::workspace::file_io::write_atomic(path, &bytes)?;
+        let mut file = std::fs::File::create(path)?;
+        std::io::Write::write_all(&mut file, &bytes)?;
+        file.sync_all()?;
         Ok(())
     }
 
-    /// Serialize and write to `path` atomically.
+    /// Serialize and write to `path`.
     ///
     /// # Errors
-    /// Returns `Err` if serialization fails or the atomic write fails.
+    /// Returns `Err` if serialization fails or the write fails.
     pub fn save(&self, path: &Path) -> Result<()> {
         let bytes = bincode::serialize(self)?;
-        crate::workspace::file_io::write_atomic(path, &bytes)?;
+        let mut file = std::fs::File::create(path)?;
+        std::io::Write::write_all(&mut file, &bytes)?;
+        file.sync_all()?;
         Ok(())
     }
 
     /// Load and deserialize from `path`.
     ///
     /// # Errors
-    /// Returns `Err` if the file does not exist, is corrupt, or has an
-    /// incompatible version number.
+    /// Returns `Err` if the file cannot be read, the bytes cannot be deserialised,
+    /// or the cached version number is incompatible.
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = crate::workspace::file_io::read_bytes(path)?;
-        let index: Self = bincode::deserialize(&bytes)?;
+        let bytes = crate::workspace::file_io::read_bytes(path)
+            .map_err(|e| anyhow::anyhow!("reading cache at {}: {e}", path.display()))?;
+        let index: Self = bincode::deserialize(&bytes)
+            .map_err(|e| anyhow::anyhow!("deserializing cache at {}: {e}", path.display()))?;
 
         if index.version != CURRENT_VERSION {
             bail!(
@@ -284,9 +290,16 @@ mod tests {
 
         let original = sample_table();
         let cached = CachedIndex::from_table(original, "abc123", "test-source");
+        let expected_bytes = bincode::serialize(&cached).expect("serialize");
 
         cached.save(&path).expect("save");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            expected_bytes.len() as u64,
+        );
+
         let loaded = CachedIndex::load(&path).expect("load");
+        let _keep_dir_alive = dir;
         let recovered = loaded.into_table();
 
         assert_eq!(recovered.strings.names.len(), 1);

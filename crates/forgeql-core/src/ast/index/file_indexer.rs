@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 
 use crate::ast::enrich::guard_utils::{
     GuardFrame, build_env_guard_frame, build_guard_frame, collect_attribute_guard_frames,
@@ -14,7 +15,6 @@ use crate::ast::lang::LanguageSupport;
 use crate::error::ForgeError;
 
 use super::{IndexRow, SegmentBuildCtx, SymbolTable, node_text};
-// -----------------------------------------------------------------------
 // First-pass macro collector
 // -----------------------------------------------------------------------
 
@@ -81,9 +81,141 @@ pub struct IndexContext<'a> {
     pub enrichers: &'a [Box<dyn NodeEnricher>],
     /// Macro definitions from the first pass, if available.
     pub macro_table: Option<&'a MacroTable>,
+    /// Optional remapper used to preserve node ordinals across re-indexes.
+    pub ordinal_remapper: Option<OrdinalRemapper>,
     /// The symbol table being populated.
     pub table: &'a mut SymbolTable,
 }
+
+#[derive(Clone)]
+pub struct OrdinalHint {
+    pub name: String,
+    pub fql_kind: String,
+    pub parent_ordinal: u32,
+    pub guard_group_id: Option<String>,
+    pub guard_branch: Option<String>,
+    pub first_body_statement_fingerprint: Option<String>,
+    pub content_hash: Option<String>,
+    pub ordinal: u32,
+}
+
+pub struct OrdinalRemapper {
+    previous: Vec<OrdinalHint>,
+    used: Vec<bool>,
+    next_ordinal: u32,
+}
+
+struct OrdinalMatchKey<'a> {
+    name: &'a str,
+    fql_kind: &'a str,
+    parent_ordinal: u32,
+    guard_group_id: Option<&'a str>,
+    guard_branch: Option<&'a str>,
+    first_body_statement_fingerprint: Option<&'a str>,
+    content_hash: Option<&'a str>,
+}
+
+impl OrdinalRemapper {
+    #[must_use]
+    pub fn from_previous(previous: Vec<OrdinalHint>) -> Self {
+        let next_ordinal = previous
+            .iter()
+            .map(|h| h.ordinal)
+            .max()
+            .map_or(0, |m| m.saturating_add(1));
+        let used = vec![false; previous.len()];
+        Self {
+            previous,
+            used,
+            next_ordinal,
+        }
+    }
+
+    fn primary_matches(
+        hint: &OrdinalHint,
+        name: &str,
+        fql_kind: &str,
+        parent_ordinal: u32,
+    ) -> bool {
+        hint.name == name && hint.fql_kind == fql_kind && hint.parent_ordinal == parent_ordinal
+    }
+
+    fn guard_matches(
+        hint: &OrdinalHint,
+        guard_group_id: Option<&str>,
+        guard_branch: Option<&str>,
+    ) -> bool {
+        hint.guard_group_id.as_deref() == guard_group_id
+            && hint.guard_branch.as_deref() == guard_branch
+    }
+
+    fn assign(&mut self, key: &OrdinalMatchKey<'_>) -> u32 {
+        let mut candidates: Vec<usize> = self
+            .previous
+            .iter()
+            .enumerate()
+            .filter(|(idx, hint)| {
+                !self.used[*idx]
+                    && Self::primary_matches(hint, key.name, key.fql_kind, key.parent_ordinal)
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+
+        if candidates.len() > 1 {
+            let guard_filtered: Vec<usize> = candidates
+                .iter()
+                .copied()
+                .filter(|idx| {
+                    Self::guard_matches(&self.previous[*idx], key.guard_group_id, key.guard_branch)
+                })
+                .collect();
+            if !guard_filtered.is_empty() {
+                candidates = guard_filtered;
+            }
+        }
+
+        if candidates.len() > 1 && key.first_body_statement_fingerprint.is_some() {
+            let fp_filtered: Vec<usize> = candidates
+                .iter()
+                .copied()
+                .filter(|idx| {
+                    self.previous[*idx]
+                        .first_body_statement_fingerprint
+                        .as_deref()
+                        == key.first_body_statement_fingerprint
+                })
+                .collect();
+            if !fp_filtered.is_empty() {
+                candidates = fp_filtered;
+            }
+        }
+
+        if candidates.len() > 1 && key.content_hash.is_some() {
+            let hash_filtered: Vec<usize> = candidates
+                .iter()
+                .copied()
+                .filter(|idx| self.previous[*idx].content_hash.as_deref() == key.content_hash)
+                .collect();
+            if !hash_filtered.is_empty() {
+                candidates = hash_filtered;
+            }
+        }
+
+        if let Some(best_idx) = candidates
+            .into_iter()
+            .min_by_key(|idx| self.previous[*idx].ordinal)
+        {
+            self.used[best_idx] = true;
+            return self.previous[best_idx].ordinal;
+        }
+
+        let ordinal = self.next_ordinal;
+        self.next_ordinal = self.next_ordinal.saturating_add(1);
+        ordinal
+    }
+}
+// -----------------------------------------------------------------------
+// Index one file (second pass)
 // -----------------------------------------------------------------------
 // Index one file (second pass)
 // -----------------------------------------------------------------------
@@ -184,11 +316,10 @@ fn collect_nodes(
     };
     // Per-file DFS ordinal counter — each named row gets the next value so
     // callers can compute a stable node_id handle without re-parsing.
-    let mut row_ordinal_counter: u32 = 0;
+    let mut row_ordinal_counter: u32 = ctx.ordinal_remapper.as_ref().map_or(0, |r| r.next_ordinal);
     // Parallel to parent_kind_stack: propagates the enclosing row's ordinal
     // to unnamed descendant nodes so they inherit their nearest named ancestor.
     let mut parent_ordinal_stack: Vec<u32> = Vec::new();
-
     loop {
         let node = cursor.node();
         // Tracks whether this iteration produced a named row (and its ordinal),
@@ -245,6 +376,7 @@ fn collect_nodes(
             // Every named node becomes a row.
             if let Some(name) = ctx.language.extract_name(node, source) {
                 let mut fields = extract_fields(node, source, ts_language);
+                let parent_ordinal = parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
 
                 // Inject guard fields from the current block-guard stack.
                 if !guard_stack.is_empty() {
@@ -260,6 +392,17 @@ fn collect_nodes(
                     }
                 }
 
+                let first_body_statement_fingerprint =
+                    first_body_statement_fingerprint(node, source);
+                let content_hash = node_content_hash(node, source);
+                let guard_group_id = fields.get("guard_group_id").cloned();
+                let guard_branch = fields.get("guard_branch").cloned();
+                drop(fields.insert("parent_ordinal".to_string(), parent_ordinal.to_string()));
+                if let Some(fp) = &first_body_statement_fingerprint {
+                    drop(fields.insert("first_body_statement_fingerprint".to_string(), fp.clone()));
+                }
+                drop(fields.insert("content_hash".to_string(), content_hash.clone()));
+
                 // Run all enrichers on this row.
                 for enricher in ctx.enrichers {
                     enricher.enrich_row(&enrich_ctx, &name, &mut fields);
@@ -270,13 +413,27 @@ fn collect_nodes(
                     .table
                     .strings
                     .intern_row(&name, node.kind(), fql_kind_val, lang_name, ctx.path);
-                // Assign a stable per-file DFS ordinal for node addressing.
-                // Stored as an enrichment field so it flows through the segment
-                // pipeline automatically and is queryable as WHERE ordinal = 'N'.
-                let ordinal = row_ordinal_counter;
-                row_ordinal_counter += 1;
+                // Reuse prior ordinals when possible to keep node_id stable across re-indexes.
+                let ordinal = ctx.ordinal_remapper.as_mut().map_or_else(
+                    || {
+                        let next = row_ordinal_counter;
+                        row_ordinal_counter = row_ordinal_counter.saturating_add(1);
+                        next
+                    },
+                    |remapper| {
+                        remapper.assign(&OrdinalMatchKey {
+                            name: &name,
+                            fql_kind: fql_kind_val,
+                            parent_ordinal,
+                            guard_group_id: guard_group_id.as_deref(),
+                            guard_branch: guard_branch.as_deref(),
+                            first_body_statement_fingerprint: first_body_statement_fingerprint
+                                .as_deref(),
+                            content_hash: Some(content_hash.as_str()),
+                        })
+                    },
+                );
                 current_node_ordinal = Some(ordinal);
-                let _ = fields.insert("ordinal".to_string(), ordinal.to_string());
                 // Intern field keys+values before storing — converts the temporary
                 // HashMap<String,String> enricher buffer into HashMap<u32,u32>.
                 let fields = ctx.table.strings.intern_fields(fields);
@@ -289,6 +446,7 @@ fn collect_nodes(
                     byte_range: node.byte_range(),
                     line: node.start_position().row + 1,
                     usages_count: 0,
+                    ordinal: Some(ordinal),
                     fields,
                 });
             } else if let Some(mtable) = ctx.macro_table {
@@ -304,6 +462,8 @@ fn collect_nodes(
                     let func_name = node_text(source, func_node);
                     if !func_name.is_empty() && mtable.contains(&func_name) {
                         let mut fields = extract_fields(node, source, ts_language);
+                        let parent_ordinal =
+                            parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
 
                         if !guard_stack.is_empty() {
                             inject_guard_fields(&guard_stack, &mut fields);
@@ -317,6 +477,22 @@ fn collect_nodes(
                             }
                         }
 
+                        let first_body_statement_fingerprint =
+                            first_body_statement_fingerprint(node, source);
+                        let content_hash = node_content_hash(node, source);
+                        let guard_group_id = fields.get("guard_group_id").cloned();
+                        let guard_branch = fields.get("guard_branch").cloned();
+                        drop(
+                            fields.insert("parent_ordinal".to_string(), parent_ordinal.to_string()),
+                        );
+                        if let Some(fp) = &first_body_statement_fingerprint {
+                            drop(fields.insert(
+                                "first_body_statement_fingerprint".to_string(),
+                                fp.clone(),
+                            ));
+                        }
+                        drop(fields.insert("content_hash".to_string(), content_hash.clone()));
+
                         for enricher in ctx.enrichers {
                             enricher.enrich_row(&enrich_ctx, &func_name, &mut fields);
                         }
@@ -325,6 +501,26 @@ fn collect_nodes(
                             .table
                             .strings
                             .intern_row(&func_name, node.kind(), "macro_call", lang_name, ctx.path);
+                        let ordinal = ctx.ordinal_remapper.as_mut().map_or_else(
+                            || {
+                                let next = row_ordinal_counter;
+                                row_ordinal_counter = row_ordinal_counter.saturating_add(1);
+                                next
+                            },
+                            |remapper| {
+                                remapper.assign(&OrdinalMatchKey {
+                                    name: &func_name,
+                                    fql_kind: "macro_call",
+                                    parent_ordinal,
+                                    guard_group_id: guard_group_id.as_deref(),
+                                    guard_branch: guard_branch.as_deref(),
+                                    first_body_statement_fingerprint:
+                                        first_body_statement_fingerprint.as_deref(),
+                                    content_hash: Some(content_hash.as_str()),
+                                })
+                            },
+                        );
+                        current_node_ordinal = Some(ordinal);
                         let fields = ctx.table.strings.intern_fields(fields);
                         ctx.table.push_row(IndexRow {
                             name_id,
@@ -335,6 +531,7 @@ fn collect_nodes(
                             byte_range: node.byte_range(),
                             line: node.start_position().row + 1,
                             usages_count: 0,
+                            ordinal: Some(ordinal),
                             fields,
                         });
                     }
@@ -361,6 +558,7 @@ fn collect_nodes(
                         byte_range: extra.byte_range,
                         line: extra.line,
                         usages_count: 0,
+                        ordinal: None,
                         fields,
                     });
                 }
@@ -423,6 +621,33 @@ fn collect_nodes(
             break;
         }
     }
+}
+
+fn short_sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(16);
+    for byte in &digest[..8] {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
+fn first_body_statement_fingerprint(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let body = node.child_by_field_name("body")?;
+    let mut cursor = body.walk();
+    let first = body.named_children(&mut cursor).next()?;
+    let text = node_text(source, first);
+    if text.is_empty() {
+        return None;
+    }
+    Some(short_sha256_hex(text.as_bytes()))
+}
+
+fn node_content_hash(node: tree_sitter::Node<'_>, source: &[u8]) -> String {
+    let range = node.byte_range();
+    let slice = source.get(range).unwrap_or_default();
+    short_sha256_hex(slice)
 }
 
 /// Extract all grammar fields from a tree-sitter node into a string map.

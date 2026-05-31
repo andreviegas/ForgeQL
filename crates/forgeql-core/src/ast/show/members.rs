@@ -135,10 +135,8 @@ pub fn show_outline(index: &SymbolTable, workspace: &Workspace, file: &str) -> R
         let fql = index.fql_kind_of(row);
         let nk = index.node_kind_of(row);
         let kind = if fql.is_empty() { nk } else { fql };
-        let node_id = index
-            .strings
-            .field_str(&row.fields, "ordinal")
-            .and_then(|s| s.parse::<u32>().ok())
+        let node_id = row
+            .ordinal
             .map(|ord| crate::node_id::make_node_id(&rel, ord));
         entries.push((
             row.byte_range.start,

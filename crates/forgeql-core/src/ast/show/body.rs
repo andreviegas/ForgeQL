@@ -93,7 +93,7 @@ pub fn show_body<S: ::std::hash::BuildHasher>(
             .map_or(fn_end_line_raw, |absorbed_row| absorbed_row + 1);
 
     // Clip emitted lines to the true boundary (no-op for clean functions).
-    let lines: Vec<Value> = lines
+    let mut lines: Vec<Value> = lines
         .into_iter()
         .filter(|l| {
             l["line"]
@@ -103,6 +103,16 @@ pub fn show_body<S: ::std::hash::BuildHasher>(
         .collect();
 
     let path_str = req.workspace.relative(req.path).display().to_string();
+    if let Some(node_id) = enrichment
+        .get("ordinal")
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|ord| crate::node_id::make_node_id(&path_str, ord))
+        && let Some(line) = lines
+            .iter_mut()
+            .find(|line| line["line"].as_u64() == Some((fn_start_line + 1) as u64))
+    {
+        line["node_id"] = serde_json::Value::String(node_id);
+    }
 
     // When DEPTH 0, include enrichment metadata so the agent can make
     // informed decisions (e.g. how many lines, params, branches) without

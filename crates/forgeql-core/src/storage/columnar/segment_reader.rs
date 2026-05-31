@@ -526,6 +526,22 @@ impl SegmentReader {
         self.u32_at("usages_count", row)
     }
 
+    /// Read the stable node ordinal for row `row`.
+    ///
+    /// Returns `None` when the column is absent or the slot is the null
+    /// sentinel (`u32::MAX`).
+    pub fn ordinal_of(&self, row: u32) -> Option<u32> {
+        let blob = self.blob_bytes("col_ordinal");
+        if blob.is_empty() {
+            return None;
+        }
+        let slice: &[u32] = cast_slice(blob);
+        match slice.get(row as usize).copied() {
+            Some(u32::MAX) | None => None,
+            Some(v) => Some(v),
+        }
+    }
+
     /// Read an enrichment field value for row `row`.
     ///
     /// Returns `None` when the column is absent or the row's slot is `NULL`

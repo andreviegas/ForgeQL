@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.55.3] — 2026-05-31 — Stable node addressing improvements
+
+### Changed
+
+- Migrated node ordinals from enrichment text to a dedicated `col_ordinal` `u32` column in `.fqsf` segments.
+- Added `IndexRow.ordinal: Option<u32>` and threaded ordinal writes through `file_indexer`, `build_context`, and `shadow_writer`.
+- Removed `skip_serializing_if` on `IndexRow.ordinal` to keep `CachedIndex` bincode round-trips stable.
+- Added `SegmentBuilder::set_ordinal` and `SegmentReader::ordinal_of`, and switched outline node-id projection to typed ordinal reads.
+- Added `node_id: Option<String>` to `SourceLine` and parser-side extraction in result conversion.
+- Updated `show_body` to emit `node_id` on the function start line when ordinal metadata is present.
+- Switched `segment_id()` to SHA-256 normalized-path hashing with minimum unambiguous hex-prefix expansion.
+- Added ordinal remapping support (`OrdinalRemapper`/`OrdinalHint`) so reindexing can preserve stable ordinals across edits.
+- Implemented layered rematch resolution using symbol identity, guard metadata, statement fingerprint, and content hash.
+- Bumped `ENRICH_VER` from `10` to `11` to force rebuilds that populate the new ordinal column.
 ## [0.55.2] — 2026-05-30 — Addressable node IDs in results
 
 ### Added

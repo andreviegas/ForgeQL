@@ -784,26 +784,31 @@ mod tests {
                 line: 10,
                 text: "void setup() {".into(),
                 marker: None,
+                node_id: None,
             },
             SourceLine {
                 line: 11,
                 text: "    // TODO: fix this".into(),
                 marker: None,
+                node_id: None,
             },
             SourceLine {
                 line: 12,
                 text: "    int x = 42;".into(),
                 marker: None,
+                node_id: None,
             },
             SourceLine {
                 line: 13,
                 text: "    // FIXME: needs review".into(),
                 marker: None,
+                node_id: None,
             },
             SourceLine {
                 line: 14,
                 text: "}".into(),
                 marker: None,
+                node_id: None,
             },
         ]
     }

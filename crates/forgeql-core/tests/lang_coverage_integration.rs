@@ -74,6 +74,7 @@ fn index_canonical(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
             language: lang,
             enrichers: &enrichers,
             macro_table: None,
+            ordinal_remapper: None,
             table: &mut table,
         };
         let count = index_file(&mut parser, &mut ctx, None).expect("index_file should succeed");
@@ -302,6 +303,7 @@ fn rust_cfg_attribute_guard_indexed() {
             language: &lang,
             enrichers: &enrichers,
             macro_table: None,
+            ordinal_remapper: None,
             table: &mut table,
         };
         let _count = index_file(&mut parser, &mut ctx, None).expect("index_file should succeed");

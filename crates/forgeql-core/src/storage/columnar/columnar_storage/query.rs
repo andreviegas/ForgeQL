@@ -849,6 +849,7 @@ impl StorageEngine for ColumnarStorage {
                         language: lang.as_ref(),
                         enrichers: &enrichers,
                         macro_table: None,
+                        ordinal_remapper: None,
                         table: &mut table,
                     };
                     let _ = index_file(&mut parser, &mut ctx, None);
@@ -860,6 +861,7 @@ impl StorageEngine for ColumnarStorage {
                 }
 
                 let mut builder = SegmentBuilder::new("git-sha1", &content_id_bytes);
+
                 for row in &table.rows {
                     let row_id = builder.emit_row(SymbolRow {
                         name: table.name_of(row),
@@ -870,6 +872,9 @@ impl StorageEngine for ColumnarStorage {
                         byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
                         usages_count: row.usages_count,
                     });
+                    if let Some(ordinal) = row.ordinal {
+                        builder.set_ordinal(row_id, ordinal);
+                    }
                     for (key, val) in table.resolve_fields(&row.fields) {
                         builder.set_field(row_id, &key, val.as_str());
                     }
@@ -973,13 +978,8 @@ impl StorageEngine for ColumnarStorage {
                 } else {
                     &fql_kind
                 };
-                let node_id = seg.extra_field_str("ordinal", row).and_then(|s| {
-                    s.parse::<u32>().ok().map(|ord| {
-                        crate::node_id::make_node_id(
-                            seg_meta.source_path.to_str().unwrap_or(""),
-                            ord,
-                        )
-                    })
+                let node_id = seg.ordinal_of(row).map(|ord| {
+                    crate::node_id::make_node_id(seg_meta.source_path.to_str().unwrap_or(""), ord)
                 });
                 entries.push((
                     line,

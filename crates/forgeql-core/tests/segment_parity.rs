@@ -65,6 +65,7 @@ fn index_canonical(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
             language: lang,
             enrichers: &enrichers,
             macro_table: None,
+            ordinal_remapper: None,
             table: &mut table,
         };
         let count = index_file(&mut parser, &mut ctx, None).expect("index_file should succeed");
@@ -94,6 +95,9 @@ fn build_segment_from_table(table: &SymbolTable) -> (TempDir, PathBuf) {
             byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
             usages_count: row.usages_count,
         });
+        if let Some(ordinal) = row.ordinal {
+            builder.set_ordinal(row_id, ordinal);
+        }
         for (key, val) in table.resolve_fields(&row.fields) {
             builder.set_field(row_id, &key, val.as_str());
         }

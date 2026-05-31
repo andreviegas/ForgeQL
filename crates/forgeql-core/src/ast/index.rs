@@ -72,6 +72,12 @@ pub struct IndexRow {
     /// can filter/sort by `usages` without a per-row `HashMap` lookup.
     #[serde(default)]
     pub usages_count: u32,
+    /// Stable per-file node ordinal used to build `node_id` handles.
+    ///
+    /// `None` means this row has no addressable ordinal (for example, synthetic
+    /// enrichment rows).
+    #[serde(default)]
+    pub ordinal: Option<u32>,
     /// Dynamic enrichment fields — interned from the raw `HashMap<String, String>`
     /// produced by enrichers.  Both keys and values are IDs into
     /// [`ColumnarTable::field_keys`] and [`ColumnarTable::field_values`].
@@ -80,7 +86,6 @@ pub struct IndexRow {
     /// (single-field lookup) or [`crate::ast::intern::ColumnarTable::resolve_fields`]
     /// (full map for serialisation).
     pub fields: HashMap<u32, u32>,
-    /// Interned symbol name — resolve via [`SymbolTable::name_of`].
     pub name_id: u32,
     /// Interned raw tree-sitter node kind — resolve via [`SymbolTable::node_kind_of`].
     pub node_kind_id: u32,
@@ -318,7 +323,7 @@ fn reassign_intern_ids(src: &ColumnarTable, dst: &mut ColumnarTable, row: &mut I
 mod build;
 mod file_indexer;
 
-pub use file_indexer::{IndexContext, index_file};
+pub use file_indexer::{IndexContext, OrdinalHint, OrdinalRemapper, index_file};
 
 // -----------------------------------------------------------------------
 // Shared utilities
@@ -527,6 +532,7 @@ mod tests {
                 language: &CppLanguageInline,
                 enrichers: &enrichers,
                 macro_table: None,
+                ordinal_remapper: None,
                 table: &mut table,
             };
             index_file(&mut parser, &mut ctx, None).unwrap();
@@ -560,6 +566,7 @@ mod tests {
                 language: &CppLanguageInline,
                 enrichers: &enrichers,
                 macro_table: None,
+                ordinal_remapper: None,
                 table: &mut table,
             };
             index_file(&mut parser, &mut ctx, None).unwrap();

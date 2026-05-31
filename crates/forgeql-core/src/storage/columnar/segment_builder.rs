@@ -110,7 +110,7 @@ pub(crate) const TOC_ENTRY_SIZE: usize = 64; // ENTRY_NAME_LEN + 4 + 4
 pub struct RowId(u32);
 
 // ---------------------------------------------------------------------------
-// SymbolRow — the seven fixed columns for one row insertion
+// SymbolRow — fixed columns for one row insertion
 // ---------------------------------------------------------------------------
 
 /// Describes one symbol row for insertion into a [`SegmentBuilder`].
@@ -230,11 +230,11 @@ pub struct SegmentBuilder {
     col_name_id: Vec<u32>,
     col_fql_kind_id: Vec<u32>,
     col_line: Vec<u32>,
+    col_ordinal: Vec<u32>,
     col_byte_start: Vec<u32>,
     col_byte_end: Vec<u32>,
     col_usages_count: Vec<u32>,
     col_language_id: Vec<u32>,
-    // fql_kind_id → set of row indices, for `postings_fql_kind.bin`.
     kind_postings: HashMap<u32, RoaringBitmap>,
     // symbol name → list of row indices, sorted by key for FST insertion.
     name_to_rows: BTreeMap<String, Vec<u32>>,
@@ -270,6 +270,7 @@ impl SegmentBuilder {
             col_name_id: Vec::new(),
             col_fql_kind_id: Vec::new(),
             col_line: Vec::new(),
+            col_ordinal: Vec::new(),
             col_byte_start: Vec::new(),
             col_byte_end: Vec::new(),
             col_usages_count: Vec::new(),
@@ -305,11 +306,11 @@ impl SegmentBuilder {
         self.col_name_id.push(name_id);
         self.col_fql_kind_id.push(kind_id);
         self.col_line.push(row.line);
+        self.col_ordinal.push(u32::MAX);
         self.col_byte_start.push(row.byte_start);
         self.col_byte_end.push(row.byte_end);
         self.col_usages_count.push(row.usages_count);
         self.col_language_id.push(lang_id);
-
         let _inserted = self
             .kind_postings
             .entry(kind_id)
@@ -335,6 +336,16 @@ impl SegmentBuilder {
     /// fields via [`set_field`](Self::set_field).
     pub fn add_row(&mut self, row: SymbolRow<'_>) {
         let _ = self.emit_row(row);
+    }
+
+    /// Attach the stable row ordinal for node-id projection.
+    ///
+    /// Ordinals are stored in a dedicated fixed-width column (`col_ordinal`).
+    pub fn set_ordinal(&mut self, row: RowId, ordinal: u32) {
+        let row_idx = row.0 as usize;
+        if let Some(slot) = self.col_ordinal.get_mut(row_idx) {
+            *slot = ordinal;
+        }
     }
 
     /// Attach an enrichment field value to the row identified by `row`.
@@ -438,6 +449,7 @@ impl SegmentBuilder {
                 encode_u32_col(&self.col_fql_kind_id),
             ),
             ("col_line".to_owned(), encode_u32_col(&self.col_line)),
+            ("col_ordinal".to_owned(), encode_u32_col(&self.col_ordinal)),
             (
                 "col_byte_start".to_owned(),
                 encode_u32_col(&self.col_byte_start),
@@ -475,6 +487,7 @@ impl SegmentBuilder {
         // Zone maps for numeric columns.
         let zone_cols: &[(&str, &[u32])] = &[
             ("line", &self.col_line),
+            ("ordinal", &self.col_ordinal),
             ("usages_count", &self.col_usages_count),
             ("byte_start", &self.col_byte_start),
             ("byte_end", &self.col_byte_end),
@@ -488,6 +501,7 @@ impl SegmentBuilder {
             ("name_id", TYPE_TAG_U32),
             ("fql_kind_id", TYPE_TAG_U32),
             ("line", TYPE_TAG_U32),
+            ("ordinal", TYPE_TAG_U32),
             ("byte_start", TYPE_TAG_U32),
             ("byte_end", TYPE_TAG_U32),
             ("usages_count", TYPE_TAG_U32),
