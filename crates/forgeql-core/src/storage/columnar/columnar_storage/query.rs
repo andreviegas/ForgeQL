@@ -95,6 +95,12 @@ impl ColumnarStorage {
             let mut dirty_all: Vec<SymbolLocation> = Vec::new();
             let mut dirty_preferred: Vec<SymbolLocation> = Vec::new();
             for ds in &self.dirty.added {
+                // Apply IN/EXCLUDE glob filter — mirrors segments_passing_path_filter
+                // from Stage 2.  Without this, `IN 'file'` clauses are silently
+                // ignored for dirty segments, causing wrong-file resolution.
+                if !passes_resolve_glob(&ds.source_path, clauses) {
+                    continue;
+                }
                 let row_ids = ds.reader.lookup_name(lookup_name);
                 if row_ids.is_empty() {
                     continue;
@@ -152,9 +158,14 @@ impl ColumnarStorage {
                     dirty_all.push(loc);
                 }
             }
+            // Sort by path (alphabetical ascending) so .pop() returns the
+            // alphabetically-last match — identical tie-breaking to Stage 2's
+            // seg_order sort.  Eliminates insertion-order (edit-order) dependency.
+            dirty_preferred.sort_by(|a, b| a.path.cmp(&b.path));
             if let Some(last) = dirty_preferred.pop() {
                 return Some(last);
             }
+            dirty_all.sort_by(|a, b| a.path.cmp(&b.path));
             if let Some(last) = dirty_all.pop() {
                 return Some(last);
             }

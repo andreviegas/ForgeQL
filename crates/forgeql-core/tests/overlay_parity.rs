@@ -2356,6 +2356,265 @@ fn dirty_overlay_resolve_symbol_shadows_and_unions() {
     );
 }
 
+/// Regression: `resolve_impl` Stage 1 must apply `in_glob` path filter to dirty
+/// segments.  Without the fix, `SHOW body OF 'open'` with `IN 'a.rs'` would
+/// return a match from `b.rs` when both are in the dirty overlay.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn dirty_overlay_resolve_respects_in_glob_filter() {
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let seg_dir = tmp.path().join("segments").join(vp());
+    let overlay_dir = tmp.path().join("overlays").join("test");
+    std::fs::create_dir_all(&seg_dir).unwrap();
+    std::fs::create_dir_all(&overlay_dir).unwrap();
+
+    let root = tmp.path().to_path_buf();
+
+    // Persistent: one file with a unique symbol so the overlay file is created.
+    let bg_cid: Vec<u8> = vec![0x77u8; 8];
+    let bg_hex = bg_cid.iter().fold(String::new(), |mut s, b| {
+        use std::fmt::Write as _;
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+    {
+        let mut builder = SegmentBuilder::new("test", &bg_cid);
+        let _ = builder.emit_row(SymbolRow {
+            name: "BgSymbol",
+            fql_kind: "function",
+            language: "rust",
+            line: 1,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
+        builder
+            .flush(
+                &seg_dir
+                    .join(&bg_hex[..2])
+                    .join(format!("{}.fqsf", &bg_hex[2..])),
+            )
+            .expect("bg flush");
+    }
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(root.join("other.rs"), bg_cid);
+    let overlay_path = overlay_dir.join("glob_filter.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        root.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(
+                SegmentReader::open(
+                    &seg_dir
+                        .join(&meta.hex_content_id[..2])
+                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
+                )
+                .expect("open bg seg"),
+            )
+        })
+        .collect();
+    let mut storage = ColumnarStorage::new(
+        root.clone(),
+        segments,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
+
+    // Dirty: two files both define `open`, at different lines.
+    let cid_a: Vec<u8> = vec![0xAAu8; 8];
+    let cid_b: Vec<u8> = vec![0xBBu8; 8];
+    let dir_a = tmp.path().join("staging").join("a");
+    let dir_b = tmp.path().join("staging").join("b");
+    let reader_a = build_dirty_segment(&[("open", "function", 10)], &cid_a, &dir_a);
+    let reader_b = build_dirty_segment(&[("open", "function", 99)], &cid_b, &dir_b);
+
+    // Add b first so insertion order would make b win without the fix.
+    storage.dirty_mut().add_segment(
+        Arc::new(reader_b),
+        std::path::PathBuf::from("b.rs"),
+        String::new(),
+    );
+    storage.dirty_mut().add_segment(
+        Arc::new(reader_a),
+        std::path::PathBuf::from("a.rs"),
+        String::new(),
+    );
+
+    // Without `IN` filter: both files match — alphabetically-last path (`b.rs`) wins.
+    let clauses_no_filter = Clauses::default();
+    let loc_any = storage
+        .resolve_symbol("open", &clauses_no_filter, &root)
+        .unwrap();
+    assert!(loc_any.is_some(), "open must resolve without filter");
+    assert_eq!(
+        loc_any.as_ref().unwrap().line,
+        99,
+        "without IN filter: alphabetically-last path (b.rs, line 99) must win; got {loc_any:?}"
+    );
+
+    // With `IN 'a.rs'` filter: only `a.rs` segment is considered.
+    let clauses_a = Clauses {
+        in_glob: Some("a.rs".to_string()),
+        ..Clauses::default()
+    };
+    let loc_a = storage.resolve_symbol("open", &clauses_a, &root).unwrap();
+    assert!(loc_a.is_some(), "open must resolve IN 'a.rs'");
+    assert_eq!(
+        loc_a.as_ref().unwrap().line,
+        10,
+        "IN 'a.rs' must restrict to a.rs (line 10); got {loc_a:?}"
+    );
+
+    // With `IN 'b.rs'` filter: only `b.rs` segment is considered.
+    let clauses_b = Clauses {
+        in_glob: Some("b.rs".to_string()),
+        ..Clauses::default()
+    };
+    let loc_b = storage.resolve_symbol("open", &clauses_b, &root).unwrap();
+    assert!(loc_b.is_some(), "open must resolve IN 'b.rs'");
+    assert_eq!(
+        loc_b.as_ref().unwrap().line,
+        99,
+        "IN 'b.rs' must restrict to b.rs (line 99); got {loc_b:?}"
+    );
+}
+
+/// Regression: `resolve_impl` Stage 1 tie-breaking must be alphabetical by path,
+/// not insertion-order.  Without the fix, mutating `b.rs` last made `SHOW body OF
+/// 'open'` return `b.rs:open` even when `a.rs:open` is the only dirty match.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn dirty_overlay_resolve_uses_alphabetical_not_insertion_order() {
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let seg_dir = tmp.path().join("segments").join(vp());
+    let overlay_dir = tmp.path().join("overlays").join("test");
+    std::fs::create_dir_all(&seg_dir).unwrap();
+    std::fs::create_dir_all(&overlay_dir).unwrap();
+
+    let root = tmp.path().to_path_buf();
+
+    // Persistent: one file with a unique symbol so the overlay file is created.
+    let bg_cid: Vec<u8> = vec![0x55u8; 8];
+    let bg_hex = bg_cid.iter().fold(String::new(), |mut s, b| {
+        use std::fmt::Write as _;
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+    {
+        let mut builder = SegmentBuilder::new("test", &bg_cid);
+        let _ = builder.emit_row(SymbolRow {
+            name: "BgSymbol2",
+            fql_kind: "function",
+            language: "rust",
+            line: 1,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
+        builder
+            .flush(
+                &seg_dir
+                    .join(&bg_hex[..2])
+                    .join(format!("{}.fqsf", &bg_hex[2..])),
+            )
+            .expect("bg flush");
+    }
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(root.join("other2.rs"), bg_cid);
+    let overlay_path = overlay_dir.join("alpha_order.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        root.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(
+                SegmentReader::open(
+                    &seg_dir
+                        .join(&meta.hex_content_id[..2])
+                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
+                )
+                .expect("open bg seg"),
+            )
+        })
+        .collect();
+    let mut storage = ColumnarStorage::new(
+        root.clone(),
+        segments,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
+
+    // Three dirty segments all defining `common_fn`, at different lines.
+    // Added in reverse-alphabetical order to verify sort overrides insertion order.
+    let cid_z: Vec<u8> = vec![0x11u8; 8];
+    let cid_m: Vec<u8> = vec![0x22u8; 8];
+    let cid_a: Vec<u8> = vec![0x33u8; 8];
+    let dir_z = tmp.path().join("staging").join("z");
+    let dir_m = tmp.path().join("staging").join("m");
+    let dir_a = tmp.path().join("staging").join("a2");
+    let reader_z = build_dirty_segment(&[("common_fn", "function", 300)], &cid_z, &dir_z);
+    let reader_m = build_dirty_segment(&[("common_fn", "function", 200)], &cid_m, &dir_m);
+    let reader_a = build_dirty_segment(&[("common_fn", "function", 100)], &cid_a, &dir_a);
+    // Insertion order: z (300), m (200), a (100) — reverse alphabetical.
+    // Insertion-order `.pop()` would return `a.rs` (last inserted = line 100).
+    // Alphabetical `.pop()` must return `z.rs` (alphabetically last = line 300).
+    storage.dirty_mut().add_segment(
+        Arc::new(reader_z),
+        std::path::PathBuf::from("z.rs"),
+        String::new(),
+    );
+    storage.dirty_mut().add_segment(
+        Arc::new(reader_m),
+        std::path::PathBuf::from("m.rs"),
+        String::new(),
+    );
+    storage.dirty_mut().add_segment(
+        Arc::new(reader_a),
+        std::path::PathBuf::from("a.rs"),
+        String::new(),
+    );
+
+    let clauses = Clauses::default();
+    let loc = storage
+        .resolve_symbol("common_fn", &clauses, &root)
+        .unwrap();
+    assert!(loc.is_some(), "common_fn must resolve");
+    assert_eq!(
+        loc.as_ref().unwrap().line,
+        300,
+        "alphabetically-last path (z.rs, line 300) must win regardless of insertion order; got {loc:?}"
+    );
+}
+
 // ── PhaseFT2 gate tests ────────────────────────────────────────────────────────
 
 /// `reindex_files` on `ColumnarStorage` must:

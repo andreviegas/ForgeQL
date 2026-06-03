@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.55.6] — 2026-06-03 — Fix dirty-overlay path disambiguation in resolve_impl
+
+### Fixed
+
+- `resolve_impl` Stage 1 (dirty overlay) now applies `IN`/`EXCLUDE` glob path
+  filters before considering dirty segments. Previously, `SHOW body OF 'name'
+  IN 'file.rs'` could return a symbol from an unrelated file if multiple files
+  in the dirty overlay contained functions with the same name. Mirrors the
+  `segments_passing_path_filter` logic already used in Stage 2.
+- `resolve_impl` Stage 1 now sorts dirty candidates by path alphabetically
+  before selecting the last entry, matching the deterministic tie-breaking used
+  by Stage 2 (persistent segments). Previously, the most-recently-edited file
+  in the transaction would win ambiguous name resolution instead of the
+  alphabetically-last path.
+- Bug was introduced in `baa983e` (PhaseFT1) which wired dirty segments into
+  `resolve_impl` for the first time but omitted path-filter propagation and
+  stable tie-breaking.
+- Added two regression tests:
+  `dirty_overlay_resolve_respects_in_glob_filter` and
+  `dirty_overlay_resolve_uses_alphabetical_not_insertion_order`.
+
 ## [0.55.5] — 2026-06-03 — Eliminate global lock from node_id computation
 
 ### Changed
