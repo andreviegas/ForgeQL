@@ -1,23 +1,18 @@
-//! Stable node-address helpers — `segment_id` and `node_id` computation.
+//! Stable node-address helpers — SHA-256 path hashing and `node_id` formatting.
 //!
 //! A `node_id` is a compact, stable handle for a named AST node:
 //!
 //!   `n{segment_id}.{ordinal:04}`
-
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+//!
+//! The `segment_id` portion is the shortest unambiguous prefix of the SHA-256
+//! of the normalized source file path.  All computation is performed **once**
+//! at [`crate::storage::columnar::overlay::Overlay`] open time and cached in
+//! [`crate::storage::columnar::overlay::SegmentMeta`].  Query paths call only
+//! string formatting — no SHA-256, no lock, no global state.
 
 use sha2::{Digest, Sha256};
 
-const DEFAULT_SEGMENT_PREFIX_HEX: usize = 12;
-
-#[derive(Default)]
-struct SegmentIdRegistry {
-    /// Normalized path -> full SHA-256 hex digest.
-    digests: HashMap<String, String>,
-}
-
-static SEGMENT_ID_REGISTRY: OnceLock<Mutex<SegmentIdRegistry>> = OnceLock::new();
+const DEFAULT_SEGMENT_PREFIX_HEX: u8 = 12;
 
 fn normalize_relative_path(path: &str) -> String {
     let mut p = path.replace('\\', "/");
@@ -27,59 +22,83 @@ fn normalize_relative_path(path: &str) -> String {
     p
 }
 
-fn sha256_hex(s: &str) -> String {
-    let digest = Sha256::digest(s.as_bytes());
-    let mut out = String::with_capacity(64);
-    for b in &digest {
-        use std::fmt::Write as _;
-        let _ = write!(out, "{b:02x}");
-    }
-    out
+/// Compute the raw SHA-256 bytes of a normalized source-file path.
+///
+/// Called once per file during [`crate::storage::columnar::overlay::Overlay`]
+/// open time inside `decode_segment_metas`.  Never called at query time.
+#[must_use]
+pub fn sha256_of_path(path: &str) -> [u8; 32] {
+    let normalized = normalize_relative_path(path);
+    Sha256::digest(normalized.as_bytes()).into()
 }
 
-fn shortest_unambiguous_prefix_hex(hash: &str, all_hashes: &[String]) -> usize {
-    let mut len = DEFAULT_SEGMENT_PREFIX_HEX;
-    while len < hash.len() {
-        let prefix = &hash[..len];
+/// Find the minimum hex-prefix length that makes `hash` unambiguous among
+/// `all_hashes`.
+///
+/// Starts at 12 hex characters (6 raw bytes) and grows by 2 on collision.
+/// Returns a count of hex characters (always even, range 12–64).
+///
+/// Called once per file during overlay open time.  Never called at query time.
+#[must_use]
+pub fn shortest_prefix_len(hash: &[u8; 32], all_hashes: &[[u8; 32]]) -> u8 {
+    let mut hex_len = DEFAULT_SEGMENT_PREFIX_HEX;
+    while hex_len < 64 {
+        let prefix_bytes = usize::from(hex_len) / 2;
         let collision = all_hashes
             .iter()
-            .any(|other| other.as_str() != hash && other.starts_with(prefix));
+            .any(|other| other != hash && other[..prefix_bytes] == hash[..prefix_bytes]);
         if !collision {
-            return len;
+            return hex_len;
         }
-        len += 2;
+        hex_len += 2;
     }
-    hash.len()
+    64
 }
 
-/// Compute the segment identifier for a source file path.
+/// Format a `segment_id` display string from raw SHA-256 bytes.
 ///
-/// Defined as SHA-256 of the normalized relative path, serialized as the
-/// minimum unambiguous lowercase-hex prefix. Prefix length starts at 12 chars
-/// and grows by 2 chars only when collisions are observed.
+/// Reads `prefix_len / 2` bytes from `sha256` and formats them as lowercase
+/// hex.  Pure formatting — no SHA-256, no lock, no allocation beyond the
+/// returned `String`.
+///
+/// Callers should prefer
+/// [`crate::storage::columnar::overlay::SegmentMeta::segment_id`]
+/// which reads directly from the pre-computed fields.
 #[must_use]
-pub fn segment_id(path: &str) -> String {
-    let normalized = normalize_relative_path(path);
-    let digest = sha256_hex(&normalized);
-
-    let registry = SEGMENT_ID_REGISTRY.get_or_init(|| Mutex::new(SegmentIdRegistry::default()));
-    let mut guard = registry
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    let _ = guard.digests.insert(normalized, digest.clone());
-    let all_hashes: Vec<String> = guard.digests.values().cloned().collect();
-    drop(guard);
-    let prefix_len = shortest_unambiguous_prefix_hex(&digest, &all_hashes);
-    digest[..prefix_len].to_owned()
+pub fn hex_prefix(sha256: &[u8; 32], prefix_len: u8) -> String {
+    let byte_count = (prefix_len as usize) / 2;
+    sha256[..byte_count]
+        .iter()
+        .fold(String::with_capacity(prefix_len as usize), |mut s, b| {
+            use std::fmt::Write as _;
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
-/// Format a node identifier from a file path and per-file ordinal.
+/// Format a `node_id` from raw SHA-256 prefix bytes and a per-file ordinal.
 ///
-/// Format: `n{segment_id}.{ordinal:04}`
+/// Format: `n{segment_id}.{ordinal:04}`.
+///
+/// Callers should prefer
+/// [`crate::storage::columnar::overlay::SegmentMeta::node_id`].
+#[must_use]
+pub fn format_node_id(sha256: &[u8; 32], prefix_len: u8, ordinal: u32) -> String {
+    format!("n{}.{ordinal:04}", hex_prefix(sha256, prefix_len))
+}
+
+/// Compute a `node_id` from a source file path and per-file ordinal.
+///
+/// Hashes `path` with SHA-256 and uses the default 12-hex-character prefix.
+/// Use this only when no
+/// [`crate::storage::columnar::overlay::SegmentMeta`] is available (e.g.
+/// `SHOW body`, `SHOW members`).  For columnar paths (`SHOW outline`)
+/// prefer [`crate::storage::columnar::overlay::SegmentMeta::node_id`]
+/// which reads a pre-computed, dedup-aware prefix from the overlay.
 #[must_use]
 pub fn make_node_id(path: &str, ordinal: u32) -> String {
-    format!("n{}.{ordinal:04}", segment_id(path))
+    let hash = sha256_of_path(path);
+    format_node_id(&hash, DEFAULT_SEGMENT_PREFIX_HEX, ordinal)
 }
 
 #[cfg(test)]
@@ -87,28 +106,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn segment_id_is_at_least_12_hex_chars() {
-        let s = segment_id("src/main.rs");
-        assert!(s.len() >= 12);
+    fn sha256_of_path_is_deterministic() {
+        assert_eq!(sha256_of_path("src/main.rs"), sha256_of_path("src/main.rs"));
+    }
+
+    #[test]
+    fn path_normalization_strips_dot_slash() {
+        assert_eq!(
+            sha256_of_path("./src/main.rs"),
+            sha256_of_path("src/main.rs")
+        );
+        assert_eq!(
+            sha256_of_path("src\\main.rs"),
+            sha256_of_path("src/main.rs")
+        );
+    }
+
+    #[test]
+    fn shortest_prefix_len_minimum_is_12() {
+        let h1 = sha256_of_path("src/main.rs");
+        let all = vec![h1];
+        assert_eq!(shortest_prefix_len(&h1, &all), 12);
+    }
+
+    #[test]
+    fn hex_prefix_length_matches_prefix_len() {
+        let h = sha256_of_path("src/lib.rs");
+        let s = hex_prefix(&h, 12);
+        assert_eq!(s.len(), 12);
         assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
-    fn make_node_id_format() {
-        let id = make_node_id("src/main.rs", 42);
+    fn format_node_id_shape() {
+        let h = sha256_of_path("src/main.rs");
+        let id = format_node_id(&h, 12, 42);
         assert!(id.starts_with('n'));
         assert!(id.contains('.'));
         assert!(id.ends_with(".0042"));
-    }
-
-    #[test]
-    fn segment_id_is_deterministic() {
-        assert_eq!(segment_id("foo/bar.rs"), segment_id("foo/bar.rs"));
-    }
-
-    #[test]
-    fn path_normalization_keeps_same_segment_id() {
-        assert_eq!(segment_id("./src/main.rs"), segment_id("src/main.rs"));
-        assert_eq!(segment_id("src\\main.rs"), segment_id("src/main.rs"));
     }
 }

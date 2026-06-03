@@ -978,9 +978,7 @@ impl StorageEngine for ColumnarStorage {
                 } else {
                     &fql_kind
                 };
-                let node_id = seg.ordinal_of(row).map(|ord| {
-                    crate::node_id::make_node_id(seg_meta.source_path.to_str().unwrap_or(""), ord)
-                });
+                let node_id = seg.ordinal_of(row).map(|ord| seg_meta.node_id(ord));
                 entries.push((
                     line,
                     serde_json::json!({

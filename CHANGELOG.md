@@ -6,6 +6,39 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.55.5] — 2026-06-03 — Eliminate global lock from node_id computation
+
+### Changed
+
+- Moved SHA-256 path hashing and shortest-prefix computation from query time to
+  `Overlay::open()` time. All segments in an overlay are hashed together in a
+  single pass, so each `node_id` emission at query time costs only a struct
+  field read and a string format — no SHA-256, no lock, no allocation beyond
+  the returned `String`.
+- Added `sha256: [u8; 32]` and `prefix_len: u8` to `SegmentMeta`, with
+  convenience methods `segment_id()` and `node_id(ordinal)` that read the
+  pre-computed values.
+- Added `seg_id_index` to `Overlay`: a `Vec<([u8; 32], u32)>` sorted by SHA-256
+  bytes, shared via `Arc<Overlay>` across all concurrent sessions. Enables O(log N)
+  reverse lookup from a `node_id` hex prefix to a segment index with zero heap
+  allocation — groundwork for node-addressed queries.
+- Restored `node_id::make_node_id(path, ordinal)` as a thin helper for call
+  sites (e.g. `SHOW body`, `SHOW members`) that have a path string but no
+  `SegmentMeta`. Uses a single SHA-256 + default 12-char prefix; no global state.
+
+### Fixed
+
+- Two syntax errors in `overlay.rs` introduced by the previous commit: a stray
+  closing brace that ended `impl Overlay` prematurely, and a duplicate
+  `start..end` expression in `row_range_for_path_range`.
+- Three call sites in `ast/show/body.rs`, `ast/show/members.rs`, and `result.rs`
+  that were left referencing the deleted `make_node_id` function, causing a
+  build failure.
+- Clippy lints in `node_id.rs` and `overlay.rs`: `cast_possible_truncation`
+  (changed constant type to `u8`, used `usize::from` for indexing,
+  `filter_map`+`try_from` for the index cast), `doc_markdown` (added backticks),
+  and `manual_is_multiple_of`.
+
 ## [0.55.4] — 2026-05-31 — Addressable node_id policy and regression coverage
 
 ### Changed

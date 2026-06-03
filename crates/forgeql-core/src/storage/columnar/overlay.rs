@@ -199,6 +199,9 @@ pub(super) struct EnrichEntry {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Per-segment metadata stored in the overlay's segment table.
+///
+/// Decoded from the overlay at open time.  `sha256` and `prefix_len` are
+/// derived from `source_path` — no extra on-disk storage required.
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
     /// Hex-encoded content ID — directory name under
@@ -212,8 +215,38 @@ pub struct SegmentMeta {
     ///
     /// This is the deduplicated symbol count used by the GROUP BY file fast-path.
     pub dedup_row_count: u32,
+    /// Full SHA-256 of the normalized `source_path` string.
+    ///
+    /// Computed once in `decode_segment_metas()` from the path already present
+    /// in the overlay.  Never recomputed at query time.
+    pub sha256: [u8; 32],
+    /// Number of lowercase-hex characters of `sha256` needed to uniquely
+    /// identify this segment among all segments in the overlay.
+    ///
+    /// Minimum 12, grows by 2 on collision.  Used by `segment_id()` and
+    /// `node_id()` without any further computation.
+    pub prefix_len: u8,
 }
 
+impl SegmentMeta {
+    /// The display `segment_id` string — the shortest unambiguous hex prefix
+    /// of this segment's SHA-256 path hash.
+    ///
+    /// Zero cost at query time: reads pre-computed fields, formats hex only.
+    /// No SHA-256, no lock, no global state.
+    #[must_use]
+    pub fn segment_id(&self) -> String {
+        crate::node_id::hex_prefix(&self.sha256, self.prefix_len)
+    }
+
+    /// Build a `node_id` for the symbol at `ordinal` within this segment.
+    ///
+    /// Format: `n{segment_id}.{ordinal:04}`.  Zero cost beyond string formatting.
+    #[must_use]
+    pub fn node_id(&self, ordinal: u32) -> String {
+        crate::node_id::format_node_id(&self.sha256, self.prefix_len, ordinal)
+    }
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // Overlay reader (v3 — mmap-backed, zero-copy for large blobs)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -269,6 +302,14 @@ pub struct Overlay {
 
     /// Zero-copy FST backed by a slice of the mmap.
     name_fst: FstMap<MmapSlice>,
+
+    /// Reverse-lookup index: `(sha256, seg_idx)` pairs sorted by `sha256`.
+    ///
+    /// Binary-search this array to find a segment by its node_id hex prefix
+    /// in O(log N) time with zero heap allocation.  Built at open time from
+    /// `segments[i].sha256`.  Shared across all concurrent sessions via
+    /// `Arc<Overlay>` — no per-session cost.
+    seg_id_index: Vec<([u8; 32], u32)>,
 }
 
 impl Overlay {
@@ -313,7 +354,8 @@ impl Overlay {
         let row_count = u32::try_from(row_table_range.len() / std::mem::size_of::<RowPtr>())
             .context("row count overflow")?;
 
-        // Decode segment metadata at open time.
+        // Decode segment metadata at open time.  SHA-256 and prefix lengths
+        // are computed here over all paths in one pass — no global lock.
         let seg_records: &[SegmentRecord] =
             cast_slice(mmap.get(segments_range).context("segments blob")?);
         let segments = decode_segment_metas(
@@ -321,6 +363,15 @@ impl Overlay {
             mmap.get(segment_strings_range)
                 .context("segment_strings blob")?,
         )?;
+
+        // Build the reverse-lookup index: (sha256, seg_idx) sorted by sha256.
+        // Shared via Arc<Overlay> — zero cost per concurrent session.
+        let mut seg_id_index: Vec<([u8; 32], u32)> = segments
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| u32::try_from(i).ok().map(|idx| (m.sha256, idx)))
+            .collect();
+        seg_id_index.sort_unstable_by_key(|(h, _)| *h);
 
         // Build prefix-sum table: segment_offsets[i] = first global row ID for
         // segment i; segment_offsets[n] = row_count (one-past-the-end sentinel).
@@ -369,6 +420,7 @@ impl Overlay {
             file_entries,
             has_duplicate_paths,
             name_fst,
+            seg_id_index,
         }))
     }
 
@@ -593,6 +645,34 @@ impl Overlay {
         start..end
     }
 
+    /// Find the segment index for a `node_id` hex prefix (e.g. `"39f52a1107c4"`).
+    ///
+    /// Decodes the hex string to raw bytes and binary-searches `seg_id_index`
+    /// in O(log N) time with zero heap allocation.  Returns `None` when the
+    /// prefix does not match any segment or when `hex_prefix` is malformed.
+    ///
+    /// Used by `FIND NODE` (Phase B) and future node-addressed mutation commands.
+    #[must_use]
+    pub fn seg_idx_for_node_id_prefix(&self, hex_prefix: &str) -> Option<u32> {
+        let byte_len = hex_prefix.len() / 2;
+        if byte_len == 0 || byte_len > 32 || !hex_prefix.len().is_multiple_of(2) {
+            return None;
+        }
+        let mut prefix_bytes = [0u8; 32];
+        for (i, chunk) in hex_prefix.as_bytes().chunks(2).enumerate() {
+            let s = std::str::from_utf8(chunk).ok()?;
+            prefix_bytes[i] = u8::from_str_radix(s, 16).ok()?;
+        }
+        let pos = self
+            .seg_id_index
+            .partition_point(|(h, _)| h[..byte_len] < prefix_bytes[..byte_len]);
+        let (h, idx) = self.seg_id_index.get(pos)?;
+        if h[..byte_len] == prefix_bytes[..byte_len] {
+            Some(*idx)
+        } else {
+            None
+        }
+    }
     /// Decode and return the global-row-id bitmap for a given `fql_kind`.
     ///
     /// Binary-searches the sorted `kind_index` blob and deserialises the
@@ -1239,8 +1319,22 @@ fn decode_segment_metas(
             source_path: PathBuf::from(path_str),
             row_count: rec.row_count,
             dedup_row_count: rec.dedup_row_count,
+            sha256: [0u8; 32], // filled below
+            prefix_len: 0,     // filled below
         });
     }
+
+    // Compute SHA-256 and shortest unambiguous prefix for every segment in one
+    // pass over all paths.  All data is local — no global registry, no lock.
+    let all_hashes: Vec<[u8; 32]> = segments
+        .iter()
+        .map(|m| crate::node_id::sha256_of_path(m.source_path.to_str().unwrap_or("")))
+        .collect();
+    for (meta, &hash) in segments.iter_mut().zip(&all_hashes) {
+        meta.sha256 = hash;
+        meta.prefix_len = crate::node_id::shortest_prefix_len(&hash, &all_hashes);
+    }
+
     Ok(segments)
 }
 

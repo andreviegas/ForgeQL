@@ -139,6 +139,8 @@ impl OverlayBuilder {
                 source_path: rel_path.clone(),
                 row_count: reader.row_count,
                 dedup_row_count: seg_dedup[seg_idx].1,
+                sha256: [0u8; 32], // not used by write_v3; computed at read time
+                prefix_len: 0,     // not used by write_v3; computed at read time
             })
             .collect();
 
