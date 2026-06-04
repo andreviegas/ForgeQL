@@ -15,6 +15,7 @@ impl ClauseTarget for crate::result::SymbolMatch {
             "fql_kind" => self.fql_kind.as_deref(),
             "language" | "lang" => self.language.as_deref(),
             "path" | "file" => self.path.as_deref().and_then(|p| p.to_str()),
+            "node_id" => self.node_id.as_deref(),
             other => self.fields.get(other).map(String::as_str),
         }
     }

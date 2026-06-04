@@ -32,4 +32,7 @@ pub struct ShowRequest<'a> {
     pub symbol: &'a str,
     /// Language registry used to look up grammar-specific configuration.
     pub lang_registry: &'a LanguageRegistry,
+    /// Ordinal from the index row; used to emit `node_id` on the function
+    /// start line without touching the enrichment map. None for legacy rows.
+    pub ordinal: Option<u32>,
 }

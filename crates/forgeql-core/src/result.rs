@@ -132,6 +132,9 @@ pub struct SymbolMatch {
     /// Per-file usage count (for COUNT USAGES ... GROUP BY file).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<usize>,
+    /// Stable node handle; `None` for analysis-only rows (numbers, operators, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
 }
 // -----------------------------------------------------------------------
 // Query context — carries query-level metadata for row projection
@@ -227,17 +230,7 @@ impl SymbolRow {
                 "path" => row.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
                 _ => row.fields.get(field).cloned(),
             }),
-            node_id: {
-                let path_str = row.path.as_ref().map(|p| p.to_string_lossy().into_owned());
-                let ordinal = row
-                    .fields
-                    .get("ordinal")
-                    .and_then(|s| s.parse::<u32>().ok());
-                match (path_str, ordinal) {
-                    (Some(p), Some(ord)) => Some(crate::node_id::make_node_id(&p, ord)),
-                    _ => None,
-                }
-            },
+            node_id: row.node_id.clone(),
         }
     }
 
@@ -762,6 +755,7 @@ mod tests {
                     "void setPeakLevel(int level)".to_string(),
                 )]),
                 count: None,
+                node_id: None,
             }],
             total: 1,
             metric_hint: None,
@@ -799,6 +793,7 @@ mod tests {
                 usages_count: Some(7),
                 fields: HashMap::new(),
                 count: None,
+                node_id: None,
             }],
             total: 1,
             metric_hint: None,
@@ -835,6 +830,7 @@ mod tests {
                 usages_count: Some(3),
                 fields,
                 count: None,
+                node_id: None,
             }],
             total: 1,
             metric_hint: None,
@@ -874,6 +870,7 @@ mod tests {
                 usages_count: None,
                 fields: HashMap::new(),
                 count: Some(4),
+                node_id: None,
             }],
             total: 1,
             metric_hint: None,
@@ -1098,6 +1095,7 @@ mod tests {
                 usages_count: Some(3),
                 fields: HashMap::new(),
                 count: None,
+                node_id: None,
             }],
             total: 1,
             metric_hint: None,
@@ -1126,6 +1124,7 @@ mod tests {
                 usages_count: Some(0),
                 fields,
                 count: None,
+                node_id: None,
             }],
             total: 1,
             metric_hint: None,
@@ -1150,6 +1149,7 @@ mod tests {
                 usages_count: None,
                 fields: HashMap::new(),
                 count: None,
+                node_id: None,
             }],
             total: 100,
             metric_hint: None,

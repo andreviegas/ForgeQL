@@ -62,6 +62,7 @@ impl ColumnarStorage {
             node_kind,
             enrichment,
             blob_sha,
+            ordinal: seg.ordinal_of(local_row),
         }
     }
 
@@ -132,6 +133,9 @@ impl ColumnarStorage {
                         usages_count: Some(ds.reader.usages_count_of(local_row) as usize),
                         fields: ds.reader.enrichment_for_row(local_row),
                         count: None,
+                        node_id: ds.reader.ordinal_of(local_row).map(|ord| {
+                            crate::node_id::make_node_id(&ds.source_path.to_string_lossy(), ord)
+                        }),
                     };
                     if clauses
                         .where_predicates
@@ -151,6 +155,7 @@ impl ColumnarStorage {
                         node_kind: fql_kind_str.to_owned(),
                         enrichment,
                         blob_sha,
+                        ordinal: ds.reader.ordinal_of(local_row),
                     };
                     if prefer_kinds.is_some_and(|kinds| kinds.contains(&fql_kind_str)) {
                         dirty_preferred.push(loc.clone());
@@ -284,6 +289,9 @@ impl ColumnarStorage {
                     usages_count: Some(seg.usages_count_of(local_row) as usize),
                     fields: seg.enrichment_for_row(local_row),
                     count: None,
+                    node_id: seg.ordinal_of(local_row).map(|ord| {
+                        crate::node_id::make_node_id(&relative_path.to_string_lossy(), ord)
+                    }),
                 };
                 if clauses
                     .where_predicates

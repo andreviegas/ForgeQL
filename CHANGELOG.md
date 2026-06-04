@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.55.7] — 2026-06-04 — Thread node_id through SymbolMatch and ordinal through SymbolLocation/ShowRequest
+
+### Changed
+
+- **AC-1**: Added `node_id: Option<String>` field to `SymbolMatch`; populated it in `materialize_rows`, `materialize_one_row`, and both `resolve_impl` symbol match constructions from `ordinal_of(row)` + `make_node_id`. Replaced the broken `fields.get("ordinal")` block in `SymbolRow::from_match_with_ctx` with `row.node_id.clone()`.
+
+- **AC-2**: Added `ordinal: Option<u32>` field to `SymbolLocation`; populated it in `location_for_row` (seg.ordinal_of), the dirty-overlay `SymbolLocation` in `resolve_impl` (ds.reader.ordinal_of), and `row_to_location` (row.ordinal).
+
+- **AC-3**: Added `ordinal: Option<u32>` field to `ShowRequest`; passed `loc.ordinal` in `exec_show_body` and `None` in the three other `ShowRequest` constructors. Replaced the broken `enrichment.get("ordinal")` block in `show_body` with `req.ordinal.map(|ord| make_node_id(&path_str, ord))`.
+
+- Every `SymbolMatch` construction in legacy, test, and compact code updated with `node_id: None`.
+- Every `ShowRequest` construction in tests updated with `ordinal: None`.
+- Restored accidentally trimmed `show_outline_for_file` trait method in `storage/mod.rs`.
+
 ## [0.55.6] — 2026-06-03 — Fix dirty-overlay path disambiguation in resolve_impl
 
 ### Fixed

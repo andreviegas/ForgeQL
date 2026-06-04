@@ -85,8 +85,17 @@ pub struct SymbolLocation {
     /// Populated by the columnar backend from `SegmentMeta::content_id`.
     /// The legacy backend always leaves this as `None`.
     /// When `Some`, `get_or_parse_for_show` can skip `read_bytes` on a cache
+    /// Content SHA-1 of the source file at resolve time, when known.
+    ///
+    /// Populated by the columnar backend from `SegmentMeta::content_id`.
+    /// The legacy backend always leaves this as `None`.
+    /// When `Some`, `get_or_parse_for_show` can skip `read_bytes` on a cache
     /// hit and skip `sha1_of_bytes` on a miss.
     pub blob_sha: Option<[u8; 20]>,
+    /// Per-file DFS ordinal used to build `node_id` handles.
+    ///
+    /// `None` for legacy segments and rows without an assigned ordinal.
+    pub ordinal: Option<u32>,
 }
 
 // -----------------------------------------------------------------------
@@ -262,13 +271,14 @@ pub trait StorageEngine: Send + Sync + 'static {
         None
     }
 
-    /// Render `SHOW outline OF 'file'` as a JSON value.
+    /// Render `SHOW outline OF file` as a JSON value.
     ///
-    /// Delegates to the backend's symbol rows so `exec_show` does not need to
-    /// hold a `&SymbolTable` reference for outline queries.
+    /// Delegates to the backend symbol rows so `exec_show` does not need to
+    /// hold a `&SymbolTable` reference and can work across all backends.
     fn show_outline_for_file(&self, workspace: &Workspace, file: &str)
     -> Result<serde_json::Value>;
 }
+
 pub(crate) fn row_to_location(row: &IndexRow, table: &SymbolTable) -> SymbolLocation {
     SymbolLocation {
         path: table.path_of(row).to_path_buf(),
@@ -278,6 +288,7 @@ pub(crate) fn row_to_location(row: &IndexRow, table: &SymbolTable) -> SymbolLoca
         node_kind: table.node_kind_of(row).to_string(),
         enrichment: table.strings.resolve_fields(&row.fields),
         blob_sha: None,
+        ordinal: row.ordinal,
     }
 }
 // -----------------------------------------------------------------------

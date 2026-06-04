@@ -925,6 +925,7 @@ mod tests {
                     usages_count: Some(7),
                     fields: HashMap::new(),
                     count: None,
+                    node_id: None,
                 },
                 SymbolMatch {
                     name: "apagarMotor".into(),
@@ -936,6 +937,7 @@ mod tests {
                     usages_count: Some(5),
                     fields: HashMap::new(),
                     count: None,
+                    node_id: None,
                 },
                 SymbolMatch {
                     name: "MotorControl".into(),
@@ -947,6 +949,7 @@ mod tests {
                     usages_count: Some(2),
                     fields: HashMap::new(),
                     count: None,
+                    node_id: None,
                 },
             ],
         });
@@ -984,6 +987,7 @@ mod tests {
                 usages_count: Some(0),
                 fields,
                 count: None,
+                node_id: None,
             }],
         });
         let csv = to_compact(&result);
@@ -1018,6 +1022,7 @@ mod tests {
                     usages_count: None,
                     fields: HashMap::new(),
                     count: None,
+                    node_id: None,
                 },
                 SymbolMatch {
                     name: "encenderMotor".into(),
@@ -1029,6 +1034,7 @@ mod tests {
                     usages_count: None,
                     fields: HashMap::new(),
                     count: None,
+                    node_id: None,
                 },
                 SymbolMatch {
                     name: "encenderMotor".into(),
@@ -1040,6 +1046,7 @@ mod tests {
                     usages_count: None,
                     fields: HashMap::new(),
                     count: None,
+                    node_id: None,
                 },
             ],
         });
@@ -1071,6 +1078,7 @@ mod tests {
                     usages_count: None,
                     fields: HashMap::new(),
                     count: Some(4),
+                    node_id: None,
                 },
                 SymbolMatch {
                     name: "src/main.cpp".into(),
@@ -1082,6 +1090,7 @@ mod tests {
                     usages_count: None,
                     fields: HashMap::new(),
                     count: Some(1),
+                    node_id: None,
                 },
             ],
         });
@@ -1115,6 +1124,7 @@ mod tests {
                     usages_count: Some(8),
                     fields: HashMap::from([("member_count".into(), "17".into())]),
                     count: None,
+                    node_id: None,
                 },
                 SymbolMatch {
                     name: "MpptState".into(),
@@ -1126,6 +1136,7 @@ mod tests {
                     usages_count: Some(4),
                     fields: HashMap::from([("member_count".into(), "12".into())]),
                     count: None,
+                    node_id: None,
                 },
             ],
         });

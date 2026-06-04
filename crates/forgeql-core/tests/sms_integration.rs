@@ -1608,6 +1608,7 @@ mod invariant_tests {
             usages_count: None,
             fields: HashMap::new(),
             count: None,
+            node_id: None,
         }
     }
 

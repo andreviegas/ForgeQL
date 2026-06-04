@@ -474,6 +474,7 @@ impl ForgeQLEngine {
                         })
                         .unwrap_or_default(),
                     count: None,
+                    node_id: None,
                 })
             })
             .collect();

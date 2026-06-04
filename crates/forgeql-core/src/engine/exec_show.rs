@@ -275,6 +275,7 @@ impl ForgeQLEngine {
                     workspace,
                     symbol,
                     lang_registry: &self.lang_registry,
+                    ordinal: None,
                 };
                 show::show_signature(&req, &loc.node_kind)
             })
@@ -312,6 +313,7 @@ impl ForgeQLEngine {
                     workspace,
                     symbol,
                     lang_registry: &self.lang_registry,
+                    ordinal: None,
                 };
                 show::show_members(&req)
             })
@@ -339,6 +341,7 @@ impl ForgeQLEngine {
                     workspace,
                     symbol,
                     lang_registry: &self.lang_registry,
+                    ordinal: loc.ordinal,
                 };
                 show::show_body(
                     &req,
@@ -370,6 +373,7 @@ impl ForgeQLEngine {
                     workspace,
                     symbol,
                     lang_registry: &self.lang_registry,
+                    ordinal: None,
                 };
                 show::show_callees(&req)
             })

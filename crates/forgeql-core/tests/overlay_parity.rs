@@ -949,6 +949,7 @@ fn columnar_show_body_matches_legacy() {
         workspace: &workspace,
         symbol: "process",
         lang_registry: &registry,
+        ordinal: None,
     };
     let col_json = show_body(&col_req, Some(0), &col_loc.enrichment).expect("columnar show_body");
 
@@ -965,6 +966,7 @@ fn columnar_show_body_matches_legacy() {
         workspace: &workspace,
         symbol: "process",
         lang_registry: &registry,
+        ordinal: None,
     };
     let leg_json = show_body(&leg_req, Some(0), &leg_enrichment).expect("legacy show_body");
 
@@ -1013,6 +1015,7 @@ fn columnar_show_signature_matches_legacy() {
         workspace: &workspace,
         symbol: "process",
         lang_registry: &registry,
+        ordinal: None,
     };
     let col_json = show_signature(&col_req, &col_loc.node_kind).expect("columnar show_signature");
 
@@ -1028,6 +1031,7 @@ fn columnar_show_signature_matches_legacy() {
         workspace: &workspace,
         symbol: "process",
         lang_registry: &registry,
+        ordinal: None,
     };
     let leg_json =
         show_signature(&leg_req, table.node_kind_of(leg_row)).expect("legacy show_signature");
@@ -1072,6 +1076,7 @@ fn columnar_show_members_matches_legacy() {
         workspace: &workspace,
         symbol: "Motor",
         lang_registry: &registry,
+        ordinal: None,
     };
     let col_json = show_members(&col_req).expect("columnar show_members");
 
@@ -1085,6 +1090,7 @@ fn columnar_show_members_matches_legacy() {
         workspace: &workspace,
         symbol: "Motor",
         lang_registry: &registry,
+        ordinal: None,
     };
     let leg_json = show_members(&leg_req).expect("legacy show_members");
 
@@ -1201,6 +1207,7 @@ fn columnar_show_callees_matches_legacy() {
         workspace: &workspace,
         symbol: "caller",
         lang_registry: &registry,
+        ordinal: None,
     };
     let col_json = show_callees(&col_req).expect("columnar show_callees");
 
@@ -1214,6 +1221,7 @@ fn columnar_show_callees_matches_legacy() {
         workspace: &workspace,
         symbol: "caller",
         lang_registry: &registry,
+        ordinal: None,
     };
     let leg_json = show_callees(&leg_req).expect("legacy show_callees");
 
@@ -1451,6 +1459,7 @@ fn bare_repo_show_reads_bytes_from_git() {
         workspace: &workspace,
         symbol: "bar",
         lang_registry: &registry,
+        ordinal: None,
     };
     let body = show_body(&bare_req, Some(0), &no_enrichment)
         .expect("show_body on git-fetched CachedParse");

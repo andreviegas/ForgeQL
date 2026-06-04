@@ -445,6 +445,7 @@ mod tests {
             usages_count: Some(usages),
             fields: HashMap::new(),
             count: None,
+            node_id: None,
         }
     }
 
@@ -601,6 +602,7 @@ mod tests {
                 usages_count: None,
                 fields: HashMap::new(),
                 count: None,
+                node_id: None,
             },
             SymbolMatch {
                 name: "b".into(),
@@ -612,6 +614,7 @@ mod tests {
                 usages_count: None,
                 fields: HashMap::new(),
                 count: None,
+                node_id: None,
             },
         ];
         let clauses = Clauses {
@@ -636,6 +639,7 @@ mod tests {
                 usages_count: None,
                 fields: HashMap::new(),
                 count: None,
+                node_id: None,
             },
             SymbolMatch {
                 name: "b".into(),
@@ -647,6 +651,7 @@ mod tests {
                 usages_count: None,
                 fields: HashMap::new(),
                 count: None,
+                node_id: None,
             },
         ];
         let clauses = Clauses {
@@ -1166,6 +1171,7 @@ mod tests {
             usages_count: None, // absent numeric field
             fields: HashMap::new(),
             count: None,
+            node_id: None,
         };
         let pred = make_pred("usages", CompareOp::Gt, PredicateValue::Number(0));
         assert!(

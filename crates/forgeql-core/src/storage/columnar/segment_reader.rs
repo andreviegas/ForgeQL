@@ -747,6 +747,10 @@ impl SegmentReader {
                     usages_count: Some(usages as usize),
                     fields,
                     count: None,
+                    node_id: source_path.and_then(|p| {
+                        self.ordinal_of(row)
+                            .map(|ord| crate::node_id::make_node_id(&p.to_string_lossy(), ord))
+                    }),
                 }
             })
             .collect()
@@ -807,6 +811,9 @@ impl SegmentReader {
             usages_count: Some(usages as usize),
             fields,
             count: None,
+            node_id: self
+                .ordinal_of(row)
+                .map(|ord| crate::node_id::make_node_id(&source_path.to_string_lossy(), ord)),
         })
     }
 }

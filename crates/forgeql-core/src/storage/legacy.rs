@@ -163,6 +163,7 @@ fn try_group_by_stats_fast_path(
                 usages_count: None,
                 fields: HashMap::new(),
                 count: Some(count),
+                node_id: None,
             }
         })
         .collect();
@@ -237,6 +238,7 @@ impl StorageEngine for LegacyMemoryStorage {
                 usages_count: None,
                 fields: std::collections::HashMap::new(),
                 count: None,
+                node_id: None,
             })
             .collect();
 

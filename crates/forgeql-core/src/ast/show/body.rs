@@ -103,9 +103,8 @@ pub fn show_body<S: ::std::hash::BuildHasher>(
         .collect();
 
     let path_str = req.workspace.relative(req.path).display().to_string();
-    if let Some(node_id) = enrichment
-        .get("ordinal")
-        .and_then(|s| s.parse::<u32>().ok())
+    if let Some(node_id) = req
+        .ordinal
         .map(|ord| crate::node_id::make_node_id(&path_str, ord))
         && let Some(line) = lines
             .iter_mut()
