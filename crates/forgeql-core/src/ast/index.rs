@@ -78,6 +78,12 @@ pub struct IndexRow {
     /// enrichment rows).
     #[serde(default)]
     pub ordinal: Option<u32>,
+    /// Ordinal of the nearest indexed ancestor; `u32::MAX` for top-level nodes.
+    /// Typed field — replaces the `"parent_ordinal"` enrichment string.
+    pub parent_ordinal: u32,
+    /// First 8 bytes of SHA-256 of `source[byte_range]`, packed as a LE u64.
+    /// `0` sentinel for analysis-only (non-addressable) rows.
+    pub rev: u64,
     /// Dynamic enrichment fields — interned from the raw `HashMap<String, String>`
     /// produced by enrichers.  Both keys and values are IDs into
     /// [`ColumnarTable::field_keys`] and [`ColumnarTable::field_values`].

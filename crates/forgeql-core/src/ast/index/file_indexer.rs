@@ -440,7 +440,6 @@ fn collect_nodes(
                 let content_hash = node_content_hash(node, source);
                 let guard_group_id = fields.get("guard_group_id").cloned();
                 let guard_branch = fields.get("guard_branch").cloned();
-                drop(fields.insert("parent_ordinal".to_string(), parent_ordinal.to_string()));
                 if let Some(fp) = &first_body_statement_fingerprint {
                     drop(fields.insert("first_body_statement_fingerprint".to_string(), fp.clone()));
                 }
@@ -484,6 +483,10 @@ fn collect_nodes(
                 };
                 // Intern field keys+values before storing — converts the temporary
                 // HashMap<String,String> enricher buffer into HashMap<u32,u32>.
+                let rev = ordinal.map_or(0, |_| {
+                    let bytes = Sha256::digest(&source[node.byte_range()]);
+                    u64::from_le_bytes(bytes[..8].try_into().unwrap_or([0u8; 8]))
+                });
                 let fields = ctx.table.strings.intern_fields(fields);
                 ctx.table.push_row(IndexRow {
                     name_id,
@@ -495,6 +498,8 @@ fn collect_nodes(
                     line: node.start_position().row + 1,
                     usages_count: 0,
                     ordinal,
+                    parent_ordinal,
+                    rev,
                     fields,
                 });
             } else if let Some(mtable) = ctx.macro_table {
@@ -530,9 +535,6 @@ fn collect_nodes(
                         let content_hash = node_content_hash(node, source);
                         let guard_group_id = fields.get("guard_group_id").cloned();
                         let guard_branch = fields.get("guard_branch").cloned();
-                        drop(
-                            fields.insert("parent_ordinal".to_string(), parent_ordinal.to_string()),
-                        );
                         if let Some(fp) = &first_body_statement_fingerprint {
                             drop(fields.insert(
                                 "first_body_statement_fingerprint".to_string(),
@@ -574,6 +576,10 @@ fn collect_nodes(
                         } else {
                             None
                         };
+                        let rev = ordinal.map_or(0, |_| {
+                            let bytes = Sha256::digest(&source[node.byte_range()]);
+                            u64::from_le_bytes(bytes[..8].try_into().unwrap_or([0u8; 8]))
+                        });
                         let fields = ctx.table.strings.intern_fields(fields);
                         ctx.table.push_row(IndexRow {
                             name_id,
@@ -585,6 +591,8 @@ fn collect_nodes(
                             line: node.start_position().row + 1,
                             usages_count: 0,
                             ordinal,
+                            parent_ordinal,
+                            rev,
                             fields,
                         });
                     }
@@ -627,6 +635,10 @@ fn collect_nodes(
                     } else {
                         None
                     };
+                    let rev = ordinal.map_or(0, |_| {
+                        let bytes = Sha256::digest(&source[extra.byte_range.clone()]);
+                        u64::from_le_bytes(bytes[..8].try_into().unwrap_or([0u8; 8]))
+                    });
                     let fields = ctx.table.strings.intern_fields(extra.fields);
                     ctx.table.push_row(IndexRow {
                         name_id: eni,
@@ -638,6 +650,8 @@ fn collect_nodes(
                         line: extra.line,
                         usages_count: 0,
                         ordinal,
+                        parent_ordinal,
+                        rev,
                         fields,
                     });
                 }

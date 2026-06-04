@@ -101,6 +101,18 @@ pub fn make_node_id(path: &str, ordinal: u32) -> String {
     format_node_id(&hash, DEFAULT_SEGMENT_PREFIX_HEX, ordinal)
 }
 
+/// Format a `rev` handle from the packed u64 stored in `col_rev`.
+///
+/// Format: `h{:016x}` — 16 lowercase hex chars prefixed with `h`.
+/// The zero sentinel (analysis-only row) returns an empty string.
+#[must_use]
+pub fn format_rev(rev: u64) -> String {
+    if rev == 0 {
+        return String::new();
+    }
+    format!("h{rev:016x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -542,6 +542,58 @@ impl SegmentReader {
         }
     }
 
+    /// Read the parent ordinal for `row` (`u32::MAX` = top-level node).
+    pub fn parent_ordinal_of(&self, row: u32) -> u32 {
+        let blob = self.blob_bytes("col_parent_ordinal");
+        if blob.is_empty() {
+            return u32::MAX;
+        }
+        let slice: &[u32] = cast_slice(blob);
+        slice.get(row as usize).copied().unwrap_or(u32::MAX)
+    }
+
+    /// Read the rev handle for `row` (first 8 bytes of SHA-256 of node bytes, LE u64).
+    /// Returns `0` for analysis-only rows or when the column is absent.
+    pub fn rev_of(&self, row: u32) -> u64 {
+        let blob = self.blob_bytes("col_rev");
+        let start = row as usize * 8;
+        let end = start + 8;
+        if blob.len() < end {
+            return 0;
+        }
+        u64::from_le_bytes(blob[start..end].try_into().unwrap_or([0u8; 8]))
+    }
+
+    /// Read the first-child ordinal for `row` (`u32::MAX` = no children).
+    pub fn first_child_ordinal_of(&self, row: u32) -> u32 {
+        let blob = self.blob_bytes("col_first_child_ordinal");
+        if blob.is_empty() {
+            return u32::MAX;
+        }
+        let slice: &[u32] = cast_slice(blob);
+        slice.get(row as usize).copied().unwrap_or(u32::MAX)
+    }
+
+    /// Read the next-sibling ordinal for `row` (`u32::MAX` = no next sibling).
+    pub fn next_sibling_ordinal_of(&self, row: u32) -> u32 {
+        let blob = self.blob_bytes("col_next_sibling_ordinal");
+        if blob.is_empty() {
+            return u32::MAX;
+        }
+        let slice: &[u32] = cast_slice(blob);
+        slice.get(row as usize).copied().unwrap_or(u32::MAX)
+    }
+
+    /// Read the prev-sibling ordinal for `row` (`u32::MAX` = no prev sibling).
+    pub fn prev_sibling_ordinal_of(&self, row: u32) -> u32 {
+        let blob = self.blob_bytes("col_prev_sibling_ordinal");
+        if blob.is_empty() {
+            return u32::MAX;
+        }
+        let slice: &[u32] = cast_slice(blob);
+        slice.get(row as usize).copied().unwrap_or(u32::MAX)
+    }
+
     /// Read an enrichment field value for row `row`.
     ///
     /// Returns `None` when the column is absent or the row's slot is `NULL`

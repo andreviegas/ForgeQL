@@ -6,6 +6,37 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.56.0] — 2026-06-04 — B-prep: pre-computed navigation and rev columns in segment
+
+### Added
+
+- Five new typed segment columns computed at index time, zero heap at query time:
+  - `col_parent_ordinal` (u32): ordinal of the nearest indexed ancestor; `u32::MAX` for
+    top-level nodes. Replaces the `parent_ordinal` enrichment string field.
+  - `col_rev` (u64, raw 8-byte LE): first 8 bytes of SHA-256 of the node byte span.
+    Enables `IF REV` safety checks in node-addressed mutations without a file read.
+  - `col_first_child_ordinal` (u32): ordinal of the first addressable child, filled by a
+    post-DFS pass in `ShadowWriter`.
+  - `col_next_sibling_ordinal` (u32): ordinal of the next addressable sibling.
+  - `col_prev_sibling_ordinal` (u32): ordinal of the previous addressable sibling.
+- `SegmentReader` accessors: `parent_ordinal_of`, `rev_of`, `first_child_ordinal_of`,
+  `next_sibling_ordinal_of`, `prev_sibling_ordinal_of` — all `cast_slice` + index reads,
+  zero heap allocation.
+- `format_rev(u64) -> String` helper in `node_id.rs` (format: `h{:016x}`).
+
+### Changed
+
+- `IndexRow` gains two typed fields: `parent_ordinal: u32` and `rev: u64`, set directly
+  in the `file_indexer` DFS (SHA-256 computed inline from source bytes). The
+  `parent_ordinal` enrichment string is no longer written to the fields map.
+- `OrdinalHint` construction in the reindex path now reads `row.parent_ordinal` directly
+  instead of parsing from the enrichment string map.
+- `ShadowWriter` nav post-pass: after emitting all rows for a file, groups addressable
+  rows by parent ordinal, sorts by ordinal (DFS order), and fills first-child and sibling
+  links across the file in a single O(N) pass.
+- `RowId` inner field made `pub` to allow construction in `ShadowWriter` post-pass.
+- `ENRICH_VER` bumped to 13 to force reindex of all segments onto the new layout.
+
 ## [0.55.8] — 2026-06-04 — Fix misleading parse error for unterminated WITH strings
 
 ### Fixed

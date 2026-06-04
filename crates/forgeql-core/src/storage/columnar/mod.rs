@@ -83,7 +83,9 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///  10 — stable `node_id` handles introduced via persisted ordinals
 ///  11 — ordinal remapper improvements for reindex stability
 ///  12 — Phase A node_id policy gate: only addressable `fql_kind`s receive ordinals
-pub const ENRICH_VER: u32 = 12;
+///  13 — B-prep: col_parent_ordinal, col_rev, col_first/next/prev_sibling_ordinal as
+///          typed columns; parent_ordinal promoted from enrichment string to u32 field
+pub const ENRICH_VER: u32 = 13;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

@@ -88,6 +88,9 @@ const TYPE_TAG_U32: u8 = 3;
 /// Type-tag for optional string columns — dense `[u32]` array where
 /// `u32::MAX` encodes a missing value; IDs index into the segment string pool.
 const TYPE_TAG_STR_OPT: u8 = 5;
+/// Type-tag for dense `u64` columns stored as raw 8-byte LE sequences.
+/// Sentinel: `0` (used by `col_rev` for analysis-only rows).
+const TYPE_TAG_U64: u8 = 7;
 
 /// Magic bytes at the start of every `.fqsf` single-file segment.
 pub(crate) const FILE_MAGIC: [u8; 4] = *b"FQSF";
@@ -107,7 +110,7 @@ pub(crate) const TOC_ENTRY_SIZE: usize = 64; // ENTRY_NAME_LEN + 4 + 4
 /// Returned by [`SegmentBuilder::emit_row`] and passed to
 /// [`SegmentBuilder::set_field`] to attach enrichment fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RowId(u32);
+pub struct RowId(pub u32);
 
 // ---------------------------------------------------------------------------
 // SymbolRow — fixed columns for one row insertion
@@ -231,6 +234,16 @@ pub struct SegmentBuilder {
     col_fql_kind_id: Vec<u32>,
     col_line: Vec<u32>,
     col_ordinal: Vec<u32>,
+    /// Nearest indexed ancestor ordinal; `u32::MAX` = top-level.
+    col_parent_ordinal: Vec<u32>,
+    /// First 8 bytes of SHA-256 of the node byte span, as LE u64. 0 = n/a.
+    col_rev: Vec<u64>,
+    /// Ordinal of the first addressable child; `u32::MAX` = leaf.
+    col_first_child_ordinal: Vec<u32>,
+    /// Ordinal of the next addressable sibling; `u32::MAX` = last.
+    col_next_sibling_ordinal: Vec<u32>,
+    /// Ordinal of the previous addressable sibling; `u32::MAX` = first.
+    col_prev_sibling_ordinal: Vec<u32>,
     col_byte_start: Vec<u32>,
     col_byte_end: Vec<u32>,
     col_usages_count: Vec<u32>,
@@ -271,6 +284,11 @@ impl SegmentBuilder {
             col_fql_kind_id: Vec::new(),
             col_line: Vec::new(),
             col_ordinal: Vec::new(),
+            col_parent_ordinal: Vec::new(),
+            col_rev: Vec::new(),
+            col_first_child_ordinal: Vec::new(),
+            col_next_sibling_ordinal: Vec::new(),
+            col_prev_sibling_ordinal: Vec::new(),
             col_byte_start: Vec::new(),
             col_byte_end: Vec::new(),
             col_usages_count: Vec::new(),
@@ -307,6 +325,11 @@ impl SegmentBuilder {
         self.col_fql_kind_id.push(kind_id);
         self.col_line.push(row.line);
         self.col_ordinal.push(u32::MAX);
+        self.col_parent_ordinal.push(u32::MAX);
+        self.col_rev.push(0u64);
+        self.col_first_child_ordinal.push(u32::MAX);
+        self.col_next_sibling_ordinal.push(u32::MAX);
+        self.col_prev_sibling_ordinal.push(u32::MAX);
         self.col_byte_start.push(row.byte_start);
         self.col_byte_end.push(row.byte_end);
         self.col_usages_count.push(row.usages_count);
@@ -345,6 +368,41 @@ impl SegmentBuilder {
         let row_idx = row.0 as usize;
         if let Some(slot) = self.col_ordinal.get_mut(row_idx) {
             *slot = ordinal;
+        }
+    }
+
+    /// Set the parent-ordinal for `row` (nearest indexed ancestor; `u32::MAX` = top-level).
+    pub fn set_parent_ordinal(&mut self, row: RowId, parent_ordinal: u32) {
+        if let Some(s) = self.col_parent_ordinal.get_mut(row.0 as usize) {
+            *s = parent_ordinal;
+        }
+    }
+
+    /// Set the rev (first 8 bytes of SHA-256 of node bytes, LE u64) for `row`.
+    pub fn set_rev(&mut self, row: RowId, rev: u64) {
+        if let Some(s) = self.col_rev.get_mut(row.0 as usize) {
+            *s = rev;
+        }
+    }
+
+    /// Set the first-child ordinal for `row`.
+    pub fn set_first_child_ordinal(&mut self, row: RowId, child_ordinal: u32) {
+        if let Some(s) = self.col_first_child_ordinal.get_mut(row.0 as usize) {
+            *s = child_ordinal;
+        }
+    }
+
+    /// Set the next-sibling ordinal for `row`.
+    pub fn set_next_sibling_ordinal(&mut self, row: RowId, sibling_ordinal: u32) {
+        if let Some(s) = self.col_next_sibling_ordinal.get_mut(row.0 as usize) {
+            *s = sibling_ordinal;
+        }
+    }
+
+    /// Set the prev-sibling ordinal for `row`.
+    pub fn set_prev_sibling_ordinal(&mut self, row: RowId, sibling_ordinal: u32) {
+        if let Some(s) = self.col_prev_sibling_ordinal.get_mut(row.0 as usize) {
+            *s = sibling_ordinal;
         }
     }
 
@@ -451,6 +509,23 @@ impl SegmentBuilder {
             ("col_line".to_owned(), encode_u32_col(&self.col_line)),
             ("col_ordinal".to_owned(), encode_u32_col(&self.col_ordinal)),
             (
+                "col_parent_ordinal".to_owned(),
+                encode_u32_col(&self.col_parent_ordinal),
+            ),
+            ("col_rev".to_owned(), encode_u64_col(&self.col_rev)),
+            (
+                "col_first_child_ordinal".to_owned(),
+                encode_u32_col(&self.col_first_child_ordinal),
+            ),
+            (
+                "col_next_sibling_ordinal".to_owned(),
+                encode_u32_col(&self.col_next_sibling_ordinal),
+            ),
+            (
+                "col_prev_sibling_ordinal".to_owned(),
+                encode_u32_col(&self.col_prev_sibling_ordinal),
+            ),
+            (
                 "col_byte_start".to_owned(),
                 encode_u32_col(&self.col_byte_start),
             ),
@@ -502,6 +577,11 @@ impl SegmentBuilder {
             ("fql_kind_id", TYPE_TAG_U32),
             ("line", TYPE_TAG_U32),
             ("ordinal", TYPE_TAG_U32),
+            ("parent_ordinal", TYPE_TAG_U32),
+            ("rev", TYPE_TAG_U64),
+            ("first_child_ordinal", TYPE_TAG_U32),
+            ("next_sibling_ordinal", TYPE_TAG_U32),
+            ("prev_sibling_ordinal", TYPE_TAG_U32),
             ("byte_start", TYPE_TAG_U32),
             ("byte_end", TYPE_TAG_U32),
             ("usages_count", TYPE_TAG_U32),
@@ -568,6 +648,11 @@ pub(crate) fn is_valid_segment(path: &Path) -> bool {
 /// Encode a `[u32]` column as raw little-endian bytes.
 fn encode_u32_col(data: &[u32]) -> Vec<u8> {
     cast_slice::<u32, u8>(data).to_vec()
+}
+
+/// Encode a dense `u64` column as raw 8-byte LE sequences (zero-copy-safe on read).
+fn encode_u64_col(data: &[u64]) -> Vec<u8> {
+    data.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
 /// Encode the string intern table into `(offsets_bytes, data_bytes)`.

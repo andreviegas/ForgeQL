@@ -42,7 +42,7 @@ use crate::ast::index::SymbolTable;
 
 use super::bytes_to_hex;
 use super::manifest::Manifest;
-use super::segment_builder::{SegmentBuilder, SymbolRow, is_valid_segment};
+use super::segment_builder::{RowId, SegmentBuilder, SymbolRow, is_valid_segment};
 
 /// Iterates a [`SymbolTable`] and writes one columnar segment per source file.
 pub struct ShadowWriter<'a> {
@@ -190,6 +190,8 @@ impl<'a> ShadowWriter<'a> {
                 // Build segment: core columns + enrichment fields.
                 let mut builder = SegmentBuilder::new(provider_id, &content_id);
                 let mut local_columns: BTreeSet<String> = BTreeSet::new();
+                // ordinal → (segment row_id, parent_ordinal) for nav post-pass.
+                let mut ordinal_row: Vec<(u32, u32, u32)> = Vec::new(); // (ordinal, row_id, parent)
                 for &idx in row_indices {
                     let row = &table.rows[idx];
                     let row_id = builder.emit_row(SymbolRow {
@@ -203,10 +205,46 @@ impl<'a> ShadowWriter<'a> {
                     });
                     if let Some(ordinal) = row.ordinal {
                         builder.set_ordinal(row_id, ordinal);
+                        builder.set_parent_ordinal(row_id, row.parent_ordinal);
+                        builder.set_rev(row_id, row.rev);
+                        ordinal_row.push((ordinal, row_id.0, row.parent_ordinal));
                     }
                     for (key, value) in table.resolve_fields(&row.fields) {
+                        if key == "parent_ordinal" {
+                            continue;
+                        } // now a typed column
                         let _ = local_columns.insert(key.clone());
                         builder.set_field(row_id, &key, value);
+                    }
+                }
+
+                // Nav post-pass: fill first_child, next_sibling, prev_sibling.
+                // Group addressable rows by parent_ordinal, sort by ordinal (= DFS order).
+                {
+                    let mut by_parent: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
+                    let mut ord_to_row: HashMap<u32, u32> = HashMap::new();
+                    for &(ord, rid, parent) in &ordinal_row {
+                        by_parent.entry(parent).or_default().push((ord, rid));
+                        let _ = ord_to_row.insert(ord, rid);
+                    }
+                    for (parent_ord, mut children) in by_parent {
+                        children.sort_unstable_by_key(|&(ord, _)| ord);
+                        if let Some(&parent_rid) = ord_to_row.get(&parent_ord)
+                            && let Some(&(first_ord, _)) = children.first()
+                        {
+                            builder.set_first_child_ordinal(RowId(parent_rid), first_ord);
+                        }
+                        for i in 0..children.len() {
+                            let (_, this_rid) = children[i];
+                            if i > 0 {
+                                builder
+                                    .set_prev_sibling_ordinal(RowId(this_rid), children[i - 1].0);
+                            }
+                            if i + 1 < children.len() {
+                                builder
+                                    .set_next_sibling_ordinal(RowId(this_rid), children[i + 1].0);
+                            }
+                        }
                     }
                 }
 
@@ -322,6 +360,8 @@ mod tests {
             line: 1,
             usages_count: 0,
             ordinal: None,
+            parent_ordinal: u32::MAX,
+            rev: 0,
             fields,
             name_id,
             node_kind_id,
@@ -483,6 +523,8 @@ mod tests {
             line: 1,
             usages_count: 0,
             ordinal: None,
+            parent_ordinal: u32::MAX,
+            rev: 0,
             fields: HashMap::new(),
             name_id,
             node_kind_id,

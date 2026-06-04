@@ -668,14 +668,10 @@ impl SymbolTable {
                             continue;
                         };
                         let fields = self.resolve_fields(&row.fields);
-                        let parent_ordinal = fields
-                            .get("parent_ordinal")
-                            .and_then(|v| v.parse::<u32>().ok())
-                            .unwrap_or(u32::MAX);
                         hints.push(OrdinalHint {
                             name: self.name_of(row).to_string(),
                             fql_kind: self.fql_kind_of(row).to_string(),
-                            parent_ordinal,
+                            parent_ordinal: row.parent_ordinal,
                             guard_group_id: fields.get("guard_group_id").cloned(),
                             guard_branch: fields.get("guard_branch").cloned(),
                             first_body_statement_fingerprint: fields
@@ -758,6 +754,8 @@ impl SymbolTable {
             line,
             usages_count: 0,
             ordinal: None,
+            parent_ordinal: u32::MAX,
+            rev: 0,
             fields,
         });
     }
