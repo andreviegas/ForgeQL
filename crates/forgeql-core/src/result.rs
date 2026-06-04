@@ -48,6 +48,28 @@ pub enum ForgeQLResult {
     Rollback(RollbackResult),
     /// Standalone verify: VERIFY build 'step'
     VerifyBuild(VerifyBuildResult),
+    /// Node-addressed lookup: FIND NODE id
+    FindNode(FindNodeResult),
+}
+
+/// Result of FIND NODE id — resolved node details and navigation links.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FindNodeResult {
+    pub node_id: String,
+    pub fql_kind: String,
+    pub name: String,
+    pub path: PathBuf,
+    pub line: usize,
+    /// SHA-256 of node bytes as h{:016x}; empty for analysis-only rows.
+    pub rev: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_node_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_child_node_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_sibling_node_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_sibling_node_id: Option<String>,
 }
 
 // -----------------------------------------------------------------------
@@ -682,6 +704,7 @@ impl ForgeQLResult {
                     relativize(&mut s.path, worktree_root);
                 }
             }
+            Self::FindNode(r) => relativize(&mut r.path, worktree_root),
             Self::BeginTransaction(_)
             | Self::Commit(_)
             | Self::SourceOp(_)

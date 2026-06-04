@@ -1947,6 +1947,100 @@
     "name": "RWTE30_lines_restored_after_rollback"
   },
   {
+    "expect_field": {"type": "find_node"},
+    "expect_pointer": {
+      "/fql_kind": "function",
+      "/name": "thread_runq",
+      "/path": "kernel/sched.c",
+      "/line": 51
+    },
+    "fql": "FIND NODE 'n097e974b9c6e.0035'",
+    "name": "FN01_find_node_function_thread_runq"
+  },
+  {
+    "expect_field": {"type": "find_node"},
+    "expect_pointer": {
+      "/fql_kind": "function",
+      "/name": "curr_cpu_runq",
+      "/path": "kernel/sched.c",
+      "/line": 71,
+      "/node_id": "n097e974b9c6e.0042"
+    },
+    "fql": "FIND NODE 'n097e974b9c6e.0042'",
+    "name": "FN02_find_node_node_id_roundtrip"
+  },
+  {
+    "expect_field": {"type": "find_node"},
+    "expect_pointer": {
+      "/fql_kind": "function",
+      "/name": "runq_add",
+      "/path": "kernel/sched.c",
+      "/line": 80
+    },
+    "fql": "FIND NODE 'n097e974b9c6e.0044'",
+    "name": "FN03_find_node_runq_add"
+  },
+  {
+    "expect_field": {"type": "find_node"},
+    "expect_pointer": {
+      "/fql_kind": "field",
+      "/name": "k_mutex_lock",
+      "/path": "include/zephyr/kernel.h",
+      "/line": 3525,
+      "/node_id": "n6050e1e382ae.0824"
+    },
+    "fql": "FIND NODE 'n6050e1e382ae.0824'",
+    "name": "FN04_find_node_field_k_mutex_lock"
+  },
+  {
+    "expect_field": {"type": "find_node"},
+    "expect_pointer": {
+      "/fql_kind": "function",
+      "/name": "z_impl___ztest_set_test_result",
+      "/path": "subsys/testsuite/ztest/src/ztest.c",
+      "/line": 1111
+    },
+    "fql": "FIND NODE 'nb603fcd516ee.0462'",
+    "name": "FN05_find_node_ztest_function"
+  },
+  {
+    "expect_field": {"type": "find_node"},
+    "expect_pointer": {
+      "/node_id": "n097e974b9c6e.0035",
+      "/name": "thread_runq"
+    },
+    "fql": "FIND NODE 'n097e974b9c6e.0035'",
+    "name": "FN06_find_node_id_in_response"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [
+      {"kind": "function", "line": 51, "name": "thread_runq", "path": "kernel/sched.c"}
+    ],
+    "fql": "FIND symbols WHERE name = 'thread_runq' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
+    "name": "FN07_find_symbols_returns_node_id_in_results"
+  },
+  {
+    "expect_pointer": {
+      "/content/entries/0/node_id": "n097e974b9c6e.0035",
+      "/content/entries/0/name": "thread_runq"
+    },
+    "fql": "SHOW outline OF 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq'",
+    "name": "FN08_show_outline_node_id_present"
+  },
+  {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"line": 51, "name": "thread_runq"},
+      {"line": 71, "name": "curr_cpu_runq"},
+      {"line": 80, "name": "runq_add"},
+      {"line": 88, "name": "runq_remove"},
+      {"line": 96, "name": "runq_yield"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' IN 'kernel/sched.c' ORDER BY line ASC LIMIT 5",
+    "name": "FN09_find_node_id_five_sched_functions"
+  },
+  {
     "alias": "golden-python",
     "expect_symbols_indexed": 3063558,
     "use": "pytorch-andre.pytorch-frozen"

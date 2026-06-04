@@ -20,6 +20,16 @@ impl fmt::Display for ForgeQLResult {
             Self::Plan(result) => write!(formatter, "{result}"),
             Self::Rollback(result) => write!(formatter, "{result}"),
             Self::VerifyBuild(result) => write!(formatter, "{result}"),
+            Self::FindNode(r) => write!(
+                formatter,
+                "find_node {}\n  {} {} {}:{} rev={}",
+                r.node_id,
+                r.fql_kind,
+                r.name,
+                r.path.display(),
+                r.line,
+                r.rev
+            ),
         }
     }
 }

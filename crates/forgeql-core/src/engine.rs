@@ -328,6 +328,8 @@ impl ForgeQLEngine {
                 self.show_stats(for_session.as_deref())
             }
             // --- Read-only queries ---
+            ForgeQLIR::FindNode { node_id } => self.find_node(sid, node_id),
+
             ForgeQLIR::FindSymbols {
                 backend, clauses, ..
             } => self.find_symbols(sid, backend, clauses),

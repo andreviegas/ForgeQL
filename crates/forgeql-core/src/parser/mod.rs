@@ -226,6 +226,11 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
 
         Rule::find_stmt => parse_find(pair),
 
+        Rule::find_node_stmt => {
+            let node_id = next_str(&mut pair.into_inner(), "find_node: expected node_id")?;
+            Ok(ForgeQLIR::FindNode { node_id })
+        }
+
         // `statement` is a grammar wrapper — unwrap one level.
         Rule::statement => {
             let inner = pair

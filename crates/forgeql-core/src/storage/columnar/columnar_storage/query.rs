@@ -10,7 +10,7 @@ use crate::ast::enrich::default_enrichers;
 use crate::ast::index::{IndexContext, IndexStats, SymbolTable, index_file};
 use crate::filter::{apply_clauses, eval_predicate};
 use crate::ir::{Clauses, CompareOp, PredicateValue};
-use crate::result::SymbolMatch;
+use crate::result::{FindNodeResult, SymbolMatch};
 use crate::workspace::Workspace;
 
 use super::super::bytes_to_hex;
@@ -339,6 +339,60 @@ impl ColumnarStorage {
 impl StorageEngine for ColumnarStorage {
     fn backend_name(&self) -> &'static str {
         "columnar"
+    }
+
+    fn find_node(&self, node_id: &str, root: &Path) -> Result<Option<FindNodeResult>> {
+        let stripped = node_id.strip_prefix('n').unwrap_or(node_id);
+        let (hex_prefix, ord_str) = stripped
+            .split_once('.')
+            .ok_or_else(|| anyhow::anyhow!("invalid node_id format: {node_id}"))?;
+        let ordinal: u32 = ord_str
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid ordinal in node_id: {node_id}"))?;
+
+        let seg_idx = self
+            .overlay
+            .seg_idx_for_node_id_prefix(hex_prefix)
+            .ok_or_else(|| anyhow::anyhow!("node_id not found: {node_id}"))?
+            as usize;
+        let seg = self
+            .segments
+            .get(seg_idx)
+            .ok_or_else(|| anyhow::anyhow!("segment index OOB for {node_id}"))?;
+        let seg_meta = self
+            .overlay
+            .segments()
+            .get(seg_idx)
+            .ok_or_else(|| anyhow::anyhow!("segment meta OOB for {node_id}"))?;
+
+        let local_row = (0..seg.row_count)
+            .find(|&r| seg.ordinal_of(r) == Some(ordinal))
+            .ok_or_else(|| anyhow::anyhow!("node_id not found: {node_id}"))?;
+
+        let name = seg.name_of(local_row).to_owned();
+        let fql_kind = seg.fql_kind_of(local_row).to_owned();
+        let line = seg.line_of(local_row) as usize;
+        let rev = crate::node_id::format_rev(seg.rev_of(local_row));
+        let path = root.join(&seg_meta.source_path);
+        let opt_nav = |ord: u32| -> Option<String> {
+            if ord == u32::MAX {
+                None
+            } else {
+                Some(seg_meta.node_id(ord))
+            }
+        };
+        Ok(Some(FindNodeResult {
+            node_id: node_id.to_owned(),
+            fql_kind,
+            name,
+            path,
+            line,
+            rev,
+            parent_node_id: opt_nav(seg.parent_ordinal_of(local_row)),
+            first_child_node_id: opt_nav(seg.first_child_ordinal_of(local_row)),
+            next_sibling_node_id: opt_nav(seg.next_sibling_ordinal_of(local_row)),
+            prev_sibling_node_id: opt_nav(seg.prev_sibling_ordinal_of(local_row)),
+        }))
     }
 
     #[expect(

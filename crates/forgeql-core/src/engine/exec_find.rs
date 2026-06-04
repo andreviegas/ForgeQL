@@ -80,6 +80,32 @@ impl ForgeQLEngine {
         }))
     }
 
+    /// FIND NODE id — resolve a `node_id` to its location, rev, and nav links.
+    pub(super) fn find_node(
+        &self,
+        session_id: Option<&str>,
+        node_id: &str,
+    ) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let session = self.require_session(sid)?;
+        let root = &session.worktree_path;
+        match session
+            .engine_for(&crate::ir::Backend::Default)?
+            .find_node(node_id, root)?
+        {
+            Some(mut r) => {
+                // Relativize path so it matches what other commands return.
+                if let Ok(rel) = r.path.strip_prefix(root) {
+                    r.path = rel.to_path_buf();
+                }
+                Ok(ForgeQLResult::FindNode(r))
+            }
+            None => anyhow::bail!(
+                r#"{{"error":"node_not_found","node_id":"{node_id}","suggested_next":"SHOW outline OF file"}}"#
+            ),
+        }
+    }
+
     // -------------------------------------------------------------------
     // Show-line cap helper
     // -------------------------------------------------------------------

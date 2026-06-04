@@ -49,7 +49,7 @@ use anyhow::Result;
 
 use crate::ast::index::{IndexRow, IndexStats, SymbolTable};
 use crate::ir::Clauses;
-use crate::result::{FileEntry, SymbolMatch};
+use crate::result::{FileEntry, FindNodeResult, SymbolMatch};
 use crate::workspace::Workspace;
 
 // -----------------------------------------------------------------------
@@ -131,6 +131,15 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// Applies glob filtering and the remaining clause pipeline internally.
     /// Returns the full result set (no truncation).
     fn find_usages(&self, name: &str, clauses: &Clauses, root: &Path) -> Result<Vec<SymbolMatch>>;
+
+    /// Execute a FIND NODE id query.
+    ///
+    /// Resolves a node_id to its current location, rev, and nav links.
+    /// Returns `None` when the node cannot be matched (deleted or renamed).
+    fn find_node(&self, node_id: &str, root: &Path) -> Result<Option<FindNodeResult>> {
+        let _ = (node_id, root);
+        Ok(None)
+    }
 
     /// Return all indexed source files as typed [`FileEntry`] rows.
     ///

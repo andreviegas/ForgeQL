@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.57.0] — 2026-06-04 — Phase B: FIND NODE command
+
+### Added
+
+- `FIND NODE id` command — resolves a `node_id` to its current location,
+  `rev`, and navigation links:
+  - O(log N) segment lookup via `seg_idx_for_node_id_prefix` binary search
+  - Linear `col_ordinal` scan within the matched segment (zero heap)
+  - Returns `fql_kind`, `name`, `path`, `line`, `rev`, and four nav links:
+    `parent_node_id`, `first_child_node_id`, `next/prev_sibling_node_id`
+- `FindNodeResult` struct and `ForgeQLResult::FindNode` variant.
+- Compact output: header row, schema row, data row, `node_nav` footer row.
+- `node_not_found` error response with `suggested_next` hint.
+- `StorageEngine::find_node` trait method with `Ok(None)` default impl.
+
 ## [0.56.0] — 2026-06-04 — B-prep: pre-computed navigation and rev columns in segment
 
 ### Added

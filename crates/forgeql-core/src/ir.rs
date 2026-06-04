@@ -243,6 +243,9 @@ pub enum ForgeQLIR {
         clauses: Clauses,
     },
 
+    /// FIND NODE id — resolve a `node_id` to its current location, rev, and nav links.
+    FindNode { node_id: String },
+
     // ------------------------------------------------------------------
     // Code Exposure API (§1)
     // ------------------------------------------------------------------

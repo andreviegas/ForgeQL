@@ -57,6 +57,9 @@ impl super::QueryResult {
                 if let Some(ref gk) = sr.group_key {
                     obj["group_key"] = serde_json::json!(gk);
                 }
+                if let Some(ref nid) = sr.node_id {
+                    obj["node_id"] = serde_json::json!(nid);
+                }
                 obj
             })
             .collect();

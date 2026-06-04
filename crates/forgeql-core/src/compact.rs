@@ -16,8 +16,8 @@
 /// Result types that are already small (mutations, transactions, source ops)
 /// fall back to `to_json()`.
 use crate::result::{
-    CallDirection, FileEntry, ForgeQLResult, MemberEntry, OutlineEntry, QueryResult, SessionStats,
-    ShowContent, ShowResult, SourceLine, SymbolRow,
+    CallDirection, FileEntry, FindNodeResult, ForgeQLResult, MemberEntry, OutlineEntry,
+    QueryResult, SessionStats, ShowContent, ShowResult, SourceLine, SymbolRow,
 };
 
 // -----------------------------------------------------------------------
@@ -33,6 +33,7 @@ pub fn to_compact(result: &ForgeQLResult) -> String {
     match result {
         ForgeQLResult::Query(q) => compact_query(q),
         ForgeQLResult::Show(s) => compact_show(s),
+        ForgeQLResult::FindNode(r) => compact_find_node(r),
         // These are already small — keep JSON.
         _ => result.to_json(),
     }
@@ -359,6 +360,44 @@ fn compact_stats(sessions: &[SessionStats]) -> String {
         }
     }
     chomp(&mut out);
+    out
+}
+
+// -----------------------------------------------------------------------
+// FIND NODE result
+// -----------------------------------------------------------------------
+
+fn compact_find_node(r: &FindNodeResult) -> String {
+    let mut out = String::new();
+    row(&mut out, &[&q("find_node"), &q(&r.node_id)]);
+    row(&mut out, &[&q("fql_kind"), &q("[name,path,line,rev]")]);
+    let data = bracket(&[
+        &q(&r.name),
+        &q(&r.path.to_string_lossy()),
+        &r.line.to_string(),
+        &q(&r.rev),
+    ]);
+    row(&mut out, &[&q(&r.fql_kind), &data]);
+    // nav row
+    let mut nav: Vec<String> = Vec::new();
+    if let Some(p) = &r.parent_node_id {
+        nav.push(format!("parent={p}"));
+    } else {
+        nav.push("parent=null".to_string());
+    }
+    if let Some(fc) = &r.first_child_node_id {
+        nav.push(format!("first_child={fc}"));
+    }
+    if let Some(ns) = &r.next_sibling_node_id {
+        nav.push(format!("next_sibling={ns}"));
+    }
+    if let Some(ps) = &r.prev_sibling_node_id {
+        nav.push(format!("prev_sibling={ps}"));
+    }
+    row(
+        &mut out,
+        &[&q("node_nav"), &q(&r.node_id), &q(&nav.join(","))],
+    );
     out
 }
 
