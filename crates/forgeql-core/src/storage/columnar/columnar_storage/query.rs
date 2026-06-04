@@ -1,4 +1,4 @@
-//! Core query execution and `StorageEngine` implementation for [`super::ColumnarStorage`].
+//! Core query execution for [`super::ColumnarStorage`].
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

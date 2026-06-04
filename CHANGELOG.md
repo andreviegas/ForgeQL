@@ -6,6 +6,26 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.55.8] — 2026-06-04 — Fix misleading parse error for unterminated WITH strings
+
+### Fixed
+
+- `CHANGE FILE ... WITH '...'` now emits a targeted hint when the closing
+  quote is missing, instead of the cryptic `expected content_value` error
+  pointing at the opening quote. Root cause: pest reports the position where
+  a rule was attempted, not where the string ran out of input.
+- The hint also documents two already-supported alternatives for content
+  containing single quotes (e.g. Rust lifetimes): double-quoted strings
+  (`WITH "pub x: &'a T,"`) and HEREDOC blocks (`WITH <<TAG
+  content TAG`). Both were in the grammar but undocumented.
+
+### Added
+
+- `HINTS.md` at the repo root — documents the stable node_id ordinal
+
+   invariant, correct ordinal-access patterns for columnar and live-index
+  paths, key file locations, and CHANGE FILE quoting guidelines.
+
 ## [0.55.7] — 2026-06-04 — Thread node_id through SymbolMatch and ordinal through SymbolLocation/ShowRequest
 
 ### Changed

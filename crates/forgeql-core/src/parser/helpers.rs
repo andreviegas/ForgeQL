@@ -155,5 +155,19 @@ pub(super) fn enrich_parse_error(input: &str, mut msg: String) -> String {
              Example: USE source.branch AS 'my-session'",
         );
     }
+    // Unterminated string in WITH / MATCHING: odd single-quote count means the
+    // closing quote is missing; pest reports "expected content_value" at the
+    // opening quote, which is confusing. Emit a targeted hint.
+    if msg.contains("expected content_value") {
+        let sq = input.chars().filter(|&c| c == '\'').count();
+        if sq % 2 != 0 {
+            msg.push_str(concat!(
+                "\n\nHint: Unterminated string literal — closing quote is missing.\n",
+                "For content that contains single quotes (e.g. Rust lifetimes),\n",
+                "use double quotes: WITH \"pub x: &'a T,\"\n",
+                "or a HEREDOC:     WITH <<END\ncontent\nEND",
+            ));
+        }
+    }
     msg
 }
