@@ -98,6 +98,7 @@ statement = {
   | change_node_stmt
   | insert_node_stmt
   | delete_node_stmt
+  | show_node_stmt
 }
 
 /// FIND NODE id -- resolve a node_id to its current location, rev, and nav links.
@@ -116,6 +117,9 @@ delete_node_stmt = { "DELETE" ~ "NODE" ~ any_value ~ if_rev_clause? }
 /// `IF REV 'rev'` — optimistic concurrency guard (reject if stored rev differs).
 if_rev_clause = { "IF" ~ "REV" ~ any_value }
 
+/// `SHOW NODE 'id' [CONTENT | METADATA]`
+show_node_stmt = { "SHOW" ~ "NODE" ~ any_value ~ show_node_mode? ~ clauses }
+show_node_mode = { "CONTENT" | "METADATA" }
 // -----------------------------------------------------------------------
 // Source / session management
 // -----------------------------------------------------------------------

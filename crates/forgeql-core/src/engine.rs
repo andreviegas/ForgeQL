@@ -291,6 +291,8 @@ impl ForgeQLEngine {
                     | ForgeQLIR::ShowLines { .. }
                     | ForgeQLIR::FindFiles { .. }
                     | ForgeQLIR::ChangeContent { .. }
+                    | ForgeQLIR::FindNode { .. }
+                    | ForgeQLIR::ShowNode { .. }
                     | ForgeQLIR::ChangeNode { .. }
                     | ForgeQLIR::InsertNode { .. }
                     | ForgeQLIR::DeleteNode { .. }
@@ -344,6 +346,7 @@ impl ForgeQLEngine {
             } => self.find_usages(sid, of, backend, clauses),
 
             // --- Code exposure (SHOW) ---
+            ForgeQLIR::ShowNode { .. } => self.exec_show_node(sid, op),
             ForgeQLIR::ShowContext { .. }
             | ForgeQLIR::ShowSignature { .. }
             | ForgeQLIR::ShowOutline { .. }

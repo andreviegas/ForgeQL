@@ -16,7 +16,10 @@ use crate::{
 };
 
 use super::ForgeQLEngine;
-use super::{DEFAULT_BODY_DEPTH, DEFAULT_CONTEXT_LINES, convert_show_json, reject_text_filter};
+use super::{
+    DEFAULT_BODY_DEPTH, DEFAULT_CONTEXT_LINES, convert_show_json, reject_text_filter,
+    require_session_id,
+};
 
 /// Read the bytes for a symbol's source file, with a bare-repository fallback.
 ///
@@ -390,6 +393,57 @@ impl ForgeQLEngine {
             .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
     }
 
+    /// `SHOW NODE 'id' [CONTENT | METADATA]`
+    ///
+    /// Resolves `node_id` to its current location, then either:
+    /// - **CONTENT** (default): delegates to `exec_show(ShowLines)` so all
+    ///   line-cap, WHERE-predicate, and budget logic is reused unchanged.
+    /// - **METADATA**: returns `ForgeQLResult::FindNode` (same as `FIND NODE`).
+    pub(super) fn exec_show_node(
+        &self,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        let ForgeQLIR::ShowNode {
+            node_id,
+            metadata,
+            clauses,
+        } = op
+        else {
+            unreachable!("exec_show_node: wrong IR variant")
+        };
+        let sid = require_session_id(session_id)?;
+
+        // Resolve node_id in a block so the session borrow drops before exec_show.
+        let node = {
+            let session = self.require_session(sid)?;
+            let root = session.worktree_path.clone();
+            let mut r = session
+                .engine_for(&Backend::Default)?
+                .find_node(node_id, &root)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(r#"{{"error":"node_not_found","node_id":"{node_id}"}}"#)
+                })?;
+            if let Ok(rel) = r.path.strip_prefix(&root) {
+                r.path = rel.to_path_buf();
+            }
+            r
+        };
+
+        if *metadata {
+            return Ok(ForgeQLResult::FindNode(node));
+        }
+
+        // CONTENT: synthesize a ShowLines IR and delegate — reuses all caps/budget/WHERE.
+        let show_op = ForgeQLIR::ShowLines {
+            file: node.path.to_string_lossy().into_owned(),
+            start_line: node.line,
+            end_line: node.end_line,
+            backend: Backend::Default,
+            clauses: clauses.clone(),
+        };
+        self.exec_show(session_id, &show_op)
+    }
     #[expect(
         clippy::too_many_lines,
         reason = "FindFiles clause pipeline; splitting would scatter tightly-coupled logic"

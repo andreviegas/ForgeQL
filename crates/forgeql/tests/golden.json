@@ -2150,6 +2150,36 @@
     "name": "FCN21_curr_cpu_runq_line_restored_after_rollback"
   },
   {
+    "expect_field": {"type": "find_node"},
+    "expect_pointer": {"/line": 51, "/end_line": 69},
+    "fql": "FIND NODE 'n097e974b9c6e.0035'",
+    "name": "FSD00_find_node_csv_includes_end_line"
+  },
+  {
+    "expect_line_count": 19,
+    "expect_lines": [{"line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"}],
+    "fql": "SHOW NODE 'n097e974b9c6e.0035'",
+    "name": "FSD01_show_node_default_returns_source_lines"
+  },
+  {
+    "expect_line_count": 8,
+    "expect_lines": [{"line": 71, "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)"}],
+    "fql": "SHOW NODE 'n097e974b9c6e.0042' CONTENT",
+    "name": "FSD02_show_node_content_explicit_keyword"
+  },
+  {
+    "expect_field": {"type": "find_node"},
+    "expect_pointer": {"/line": 51, "/end_line": 69, "/fql_kind": "function", "/name": "thread_runq"},
+    "fql": "SHOW NODE 'n097e974b9c6e.0035' METADATA",
+    "name": "FSD03_show_node_metadata_returns_find_node_result"
+  },
+  {
+    "expect_line_count": 1,
+    "expect_lines": [{"line": 66, "text": "\tARG_UNUSED(thread);"}],
+    "fql": "SHOW NODE 'n097e974b9c6e.0035' WHERE text LIKE '%ARG_UNUSED%'",
+    "name": "FSD04_show_node_where_filter_on_source_lines"
+  },
+  {
     "alias": "golden-python",
     "expect_symbols_indexed": 3063558,
     "use": "pytorch-andre.pytorch-frozen"

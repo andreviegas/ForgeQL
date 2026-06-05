@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.59.0] — 2026-06-05 — Phase D: SHOW NODE command and CSV end_line fix
+
+### Added
+- `SHOW NODE 'id'` / `SHOW NODE 'id' CONTENT` — return the source lines of any
+  addressable node in one step, eliminating the two-query FIND NODE + SHOW LINES
+  workflow. All WHERE predicates, LIMIT, OFFSET, and budget caps apply normally.
+- `SHOW NODE 'id' METADATA` — return nav + location fields for a node (equivalent
+  to `FIND NODE` but consistent with the SHOW verb family).
+
+### Fixed
+- `FIND NODE` CSV output now includes the `end_line` field between `line` and `rev`
+  (header was `[name,path,line,rev]`, now `[name,path,line,end_line,rev]`).
 ## [0.58.0] — 2026-06-05 — Phase C: node-addressed mutations
 
 ### Added

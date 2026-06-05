@@ -269,6 +269,19 @@ pub enum ForgeQLIR {
         #[serde(skip_serializing_if = "Option::is_none")]
         if_rev: Option<String>,
     },
+
+    /// `SHOW NODE 'id' [CONTENT | METADATA]`
+    ///
+    /// * `CONTENT` (default) — return the source lines of the node.
+    /// * `METADATA` — return nav + location fields (same as `FIND NODE`).
+    ShowNode {
+        node_id: String,
+        /// `false` = CONTENT (source lines, default), `true` = METADATA.
+        metadata: bool,
+        #[serde(flatten)]
+        clauses: Clauses,
+    },
+
     // ------------------------------------------------------------------
     // Code Exposure API (§1)
     // ------------------------------------------------------------------

@@ -289,7 +289,29 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
                 .transpose()?;
             Ok(ForgeQLIR::DeleteNode { node_id, if_rev })
         }
-        // `statement` is a grammar wrapper — unwrap one level.
+
+        Rule::show_node_stmt => {
+            let mut inner = pair.into_inner();
+            let node_id = next_str(&mut inner, "show_node: expected node_id")?;
+            let mut metadata = false;
+            let mut clauses = crate::ir::Clauses::default();
+            for child in inner {
+                match child.as_rule() {
+                    Rule::show_node_mode => {
+                        metadata = child.as_str() == "METADATA";
+                    }
+                    Rule::clauses => {
+                        clauses = parse_clauses(child.into_inner());
+                    }
+                    _ => {}
+                }
+            }
+            Ok(ForgeQLIR::ShowNode {
+                node_id,
+                metadata,
+                clauses,
+            })
+        }
         Rule::statement => {
             let inner = pair
                 .into_inner()

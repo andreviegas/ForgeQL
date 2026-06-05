@@ -370,11 +370,16 @@ fn compact_stats(sessions: &[SessionStats]) -> String {
 fn compact_find_node(r: &FindNodeResult) -> String {
     let mut out = String::new();
     row(&mut out, &[&q("find_node"), &q(&r.node_id)]);
-    row(&mut out, &[&q("fql_kind"), &q("[name,path,line,rev]")]);
+    row(&mut out, &[&q("find_node"), &q(&r.node_id)]);
+    row(
+        &mut out,
+        &[&q("fql_kind"), &q("[name,path,line,end_line,rev]")],
+    );
     let data = bracket(&[
         &q(&r.name),
         &q(&r.path.to_string_lossy()),
         &r.line.to_string(),
+        &r.end_line.to_string(),
         &q(&r.rev),
     ]);
     row(&mut out, &[&q(&r.fql_kind), &data]);
