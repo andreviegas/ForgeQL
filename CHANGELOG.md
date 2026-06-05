@@ -13,6 +13,15 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `line_budget` row is emitted only when the session budget is in a warning or
   critical state, instead of on every response. This trims two rows of noise
   from the majority of responses with no loss of information when it matters.
+
+### Fixed
+- `CHANGE FILE … WITH '…'` no longer drops a trailing quote from the content. A
+  single-quoted payload whose text ended in a double-quote (e.g.
+  `WITH 'version = "0.60.4"'`) silently lost the closing `"` and applied the
+  malformed edit, because the unquoting step used a greedy trim that ate any
+  quote characters adjacent to the delimiter. It now strips exactly one
+  surrounding quote from each end, preserving content quotes. (BUG-005)
+
 ## [0.60.4] — 2026-06-05 — Fix: node operations never act on stale line numbers
 
 ### Fixed

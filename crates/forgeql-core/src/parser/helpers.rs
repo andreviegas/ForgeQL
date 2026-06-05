@@ -43,8 +43,21 @@ pub(super) fn next_str(
         .and_then(unwrap_any_value)
 }
 /// Strip the surrounding single-quotes from a `string_literal` token.
+/// Strip the single pair of surrounding quotes from a `string_literal` token.
+///
+/// The grammar guarantees exactly one matching delimiter pair — `'…'` or `"…"`
+/// — so strip exactly one quote from each end. Do **not** use `trim_matches`:
+/// it greedily eats content quotes adjacent to the delimiter, e.g. the token
+/// `'x = "v"'` would lose its closing `"` and yield `x = "v` (BUG-005).
 pub(super) fn unquote(s: &str) -> String {
-    s.trim_matches(|c: char| c == '\'' || c == '"').to_string()
+    let bytes = s.as_bytes();
+    if s.len() >= 2 {
+        let first = bytes[0];
+        if (first == b'\'' || first == b'"') && bytes[s.len() - 1] == first {
+            return s[1..s.len() - 1].to_string();
+        }
+    }
+    s.to_string()
 }
 
 /// Extract the string content from a `content_value` pair, handling both
@@ -170,4 +183,29 @@ pub(super) fn enrich_parse_error(input: &str, mut msg: String) -> String {
         }
     }
     msg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unquote;
+
+    #[test]
+    fn unquote_strips_one_delimiter_pair() {
+        assert_eq!(unquote("'hello'"), "hello");
+        assert_eq!(unquote("\"hello\""), "hello");
+    }
+
+    #[test]
+    fn unquote_preserves_content_quote_at_boundary() {
+        // BUG-005: single-quoted content ending in a double-quote must keep it.
+        assert_eq!(unquote("'version = \"0.60.4\"'"), "version = \"0.60.4\"");
+        // Double-quoted content keeping an inner single quote (Rust lifetime).
+        assert_eq!(unquote("\"pub x: &'a T,\""), "pub x: &'a T,");
+    }
+
+    #[test]
+    fn unquote_handles_empty_and_unquoted() {
+        assert_eq!(unquote("''"), "");
+        assert_eq!(unquote("bare"), "bare");
+    }
 }
