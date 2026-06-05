@@ -2731,6 +2731,80 @@ fn reindex_updates_dirty_overlay() {
     );
 }
 
+/// BUG-007: a `name MATCHES` regex with a top-level alternation (`A|B`) must
+/// return rows matching EITHER branch. The columnar trigram prefilter split the
+/// pattern at `|` and then *intersected* the per-branch candidate sets, so a
+/// name had to contain every branch literal at once — which nothing does —
+/// yielding zero results. Concatenation (`A.*B`) intersects correctly; only
+/// alternation must not.
+#[test]
+fn find_symbols_matches_regex_alternation() {
+    use forgeql_core::ir::ForgeQLIR;
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().to_path_buf();
+    let file = worktree.join("alt.cpp");
+    std::fs::write(
+        &file,
+        "void AlphaFn() {}\nvoid BetaFn() {}\nvoid GammaFn() {}\n",
+    )
+    .expect("write");
+
+    let seg_dir = tmp.path().join("segments").join(vp());
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).expect("seg_dir");
+    std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
+
+    let table = index_at_path(&CppLanguageInline, &file);
+    let cid = build_segment(&table, &file, seg_dir.parent().unwrap());
+    let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(file, cid);
+
+    let overlay_path = overlay_dir.join("alt.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        worktree.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(
+                SegmentReader::open(&seg_path(seg_dir.parent().unwrap(), &meta.hex_content_id))
+                    .expect("open seg"),
+            )
+        })
+        .collect();
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+
+    // Parse a real alternation query to obtain its clauses.
+    let ops = forgeql_core::parser::parse("FIND symbols WHERE name MATCHES 'AlphaFn|GammaFn'")
+        .expect("parse");
+    let ForgeQLIR::FindSymbols { clauses, .. } = ops.into_iter().next().expect("op") else {
+        panic!("expected FindSymbols");
+    };
+
+    let results = storage
+        .find_symbols(&clauses, &worktree)
+        .expect("find_symbols");
+    let mut names: Vec<String> = results.iter().map(|m| m.name.clone()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["AlphaFn".to_string(), "GammaFn".to_string()],
+        "MATCHES alternation must return rows matching EITHER branch; got {names:?}"
+    );
+}
+
 /// BUG-001 regression: a committed segment is content-addressed by git blob
 /// sha1, so `is_path_fresh` must report it stale the moment the file on disk
 /// diverges from the indexed content (HEAD advanced, file reverted while

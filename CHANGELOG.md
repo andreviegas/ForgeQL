@@ -21,6 +21,13 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   malformed edit, because the unquoting step used a greedy trim that ate any
   quote characters adjacent to the delimiter. It now strips exactly one
   surrounding quote from each end, preserving content quotes. (BUG-005)
+- `WHERE name MATCHES '<regex>'` with a top-level alternation (e.g.
+  `'foo|bar'`) now returns rows matching either branch. The columnar trigram
+  prefilter split the pattern at `|` and intersected the per-branch candidate
+  sets, requiring a name to contain every branch at once, so alternation
+  queries silently returned nothing. The prefilter now falls back to a full
+  scan when the pattern contains `|` (the real regex still filters the rows).
+  Other regex metacharacters were unaffected. (BUG-007)
 
 ## [0.60.4] — 2026-06-05 — Fix: node operations never act on stale line numbers
 

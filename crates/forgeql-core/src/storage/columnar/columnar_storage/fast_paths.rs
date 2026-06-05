@@ -230,6 +230,15 @@ impl ColumnarStorage {
         const META: &[char] = &[
             '\\', '.', '+', '*', '?', '(', ')', '[', ']', '{', '}', '|', '^', '$',
         ];
+        // Alternation makes literal-run intersection unsound: a match needs the
+        // literals of only ONE branch, not all of them. Splitting `A|B` at `|`
+        // and intersecting the per-branch candidate sets requires a name to
+        // contain every branch's text at once — which nothing does — so all
+        // real matches are dropped. Bail to a full scan here; the real regex
+        // still runs in `apply_clauses`. (BUG-007)
+        if pattern.contains('|') {
+            return None;
+        }
         let mut literals: Vec<String> = Vec::new();
         let mut cur = String::new();
         for ch in pattern.chars() {
