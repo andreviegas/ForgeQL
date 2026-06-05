@@ -7,7 +7,9 @@ use anyhow::Result;
 use roaring::RoaringBitmap;
 
 use crate::ast::enrich::default_enrichers;
-use crate::ast::index::{IndexContext, IndexStats, SymbolTable, index_file};
+use crate::ast::index::{
+    IndexContext, IndexStats, OrdinalHint, OrdinalRemapper, SymbolTable, index_file,
+};
 use crate::filter::{apply_clauses, eval_predicate};
 use crate::ir::{Clauses, CompareOp, PredicateValue};
 use crate::result::{FindNodeResult, SymbolMatch};
@@ -941,38 +943,79 @@ impl StorageEngine for ColumnarStorage {
         ))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
         std::fs::create_dir_all(&self.staging_dir)?;
         let mut parser = tree_sitter::Parser::new();
         let enrichers = default_enrichers();
 
         for path in paths {
-            // Strip worktree prefix to get the relative path stored in the overlay.
             let rel_path = path
                 .strip_prefix(&self.worktree_root)
                 .unwrap_or(path)
                 .to_path_buf();
 
-            // Shadow the persistent segment for this path so it is excluded from
-            // queries while the new dirty segment takes precedence.
-            // Capture old_hex now — it is the `replaces_hex` stored in the dirty
-            // segment, so the delta file correctly records which persistent segment
-            // this new entry supersedes.  (Bug: passing `hex_content_id` here would
-            // store the *new* hash as `replaces_hex`, corrupting FT4 promotion.)
+            // Build ordinal hints from the most-recent version of this segment:
+            // prefer an existing dirty entry (re-edit within a transaction) over
+            // the committed segment (first edit).  This keeps node_ids stable
+            // across every reindex — including the one triggered by COMMIT MESSAGE
+            // when dirty segments are promoted to committed.
+            let hints: Vec<OrdinalHint> = {
+                let seg: Option<&SegmentReader> = self
+                    .dirty
+                    .added
+                    .iter()
+                    .find(|ds| ds.source_path == rel_path)
+                    .map(|ds| ds.reader.as_ref())
+                    .or_else(|| {
+                        self.overlay
+                            .segments()
+                            .iter()
+                            .enumerate()
+                            .find(|(_, m)| m.source_path == rel_path)
+                            .and_then(|(idx, _)| self.segments.get(idx).map(Arc::as_ref))
+                    });
+                seg.map_or_else(Vec::new, |seg| {
+                    (0..seg.row_count)
+                        .filter_map(|row| {
+                            let ordinal = seg.ordinal_of(row)?;
+                            Some(OrdinalHint {
+                                name: seg.name_of(row).to_owned(),
+                                fql_kind: seg.fql_kind_of(row).to_owned(),
+                                parent_ordinal: seg.parent_ordinal_of(row),
+                                guard_group_id: seg
+                                    .extra_field_str("guard_group_id", row)
+                                    .map(str::to_owned),
+                                guard_branch: seg
+                                    .extra_field_str("guard_branch", row)
+                                    .map(str::to_owned),
+                                first_body_statement_fingerprint: seg
+                                    .extra_field_str("first_body_statement_fingerprint", row)
+                                    .map(str::to_owned),
+                                content_hash: seg
+                                    .extra_field_str("content_hash", row)
+                                    .map(str::to_owned),
+                                ordinal,
+                            })
+                        })
+                        .collect()
+                })
+            };
+            let remapper = OrdinalRemapper::from_previous(hints);
+
+            // Shadow the persistent segment and evict any stale dirty entry
+            // AFTER capturing hints so the remapper references valid data.
             let old_hex = self.path_to_hex_content_id(&rel_path).unwrap_or_default();
             if !old_hex.is_empty() {
                 self.dirty.remove_hex(old_hex.clone());
             }
-            // Also evict any previously-staged dirty segment for this path (re-edit).
             drop(self.dirty.remove_stale_for_path(&rel_path));
 
             if !path.exists() {
-                // Purge-only — removal already applied above.
                 continue;
             }
 
             let Some(lang) = self.lang_registry.language_for_path(path) else {
-                // Unknown language — skip silently; persistent rows remain shadowed.
                 continue;
             };
 
@@ -988,20 +1031,17 @@ impl StorageEngine for ColumnarStorage {
                     .map_err(|e| anyhow::anyhow!("tree-sitter language error: {e}"))?;
 
                 let mut table = SymbolTable::default();
-                // index_file re-reads from disk; acceptable for the mutation path.
                 {
                     let mut ctx = IndexContext {
                         path,
                         language: lang.as_ref(),
                         enrichers: &enrichers,
                         macro_table: None,
-                        ordinal_remapper: None,
+                        ordinal_remapper: Some(remapper),
                         table: &mut table,
                     };
                     let _ = index_file(&mut parser, &mut ctx, None);
                 }
-                // post-pass fields (branch_count, max_condition_tests, etc.)
-                // are written before the segment is serialised.
                 for enricher in &enrichers {
                     enricher.post_pass(&mut table, None);
                 }

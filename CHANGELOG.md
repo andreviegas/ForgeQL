@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.60.3] — 2026-06-05 — Fix: stable node_id ordinals across every reindex
+
+### Fixed
+- Node IDs are now stable across `COMMIT MESSAGE` and any subsequent edit.
+  Previously, `reindex_files` used `ordinal_remapper: None`, assigning fresh
+  sequential DFS ordinals on every reindex. After a commit promoted the dirty
+  segments to committed, the new committed segments had different ordinals,
+  so a node_id obtained before the commit resolved to a different (or wrong)
+  symbol after it.
+- The fix: `reindex_files` in the columnar path now builds an `OrdinalRemapper`
+  from the most-recent existing segment for each file (dirty-first, then
+  committed) before evicting it. This mirrors the existing `build.rs` incremental
+  reindex path, which has always used `OrdinalRemapper`. Symbols that survive
+  a reindex keep their ordinal; new symbols receive a fresh one beyond the
+  existing high-water mark. This makes `CHANGE NODE` safe to use across
+  transaction levels and after `COMMIT MESSAGE` without needing to re-query
+  node IDs.
 ## [0.60.2] — 2026-06-05 — Fix: find_node resolves dirty segment by name+kind, not ordinal
 
 ### Fixed
