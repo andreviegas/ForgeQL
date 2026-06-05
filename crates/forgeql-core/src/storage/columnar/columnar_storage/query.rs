@@ -369,20 +369,36 @@ impl StorageEngine for ColumnarStorage {
             .find(|&r| seg.ordinal_of(r) == Some(ordinal))
             .ok_or_else(|| anyhow::anyhow!("node_id not found: {node_id}"))?;
 
-        // When a dirty segment exists for this file (the file was modified and
-        // reindexed in this session), prefer its byte positions over the
-        // committed segment's.  The committed byte_end can be stale if a prior
-        // edit in the same transaction shifted bytes in the file, which causes
-        // end_line to land on the wrong line and CHANGE NODE to leave orphaned
-        // closing delimiters behind.
+        // When a dirty segment exists for this file (modified and reindexed in
+        // this session), prefer its byte positions over the committed segment's.
+        // The committed byte_end can be stale if a prior edit shifted bytes in
+        // the file.
+        //
+        // IMPORTANT: dirty segments are built without an ordinal remapper, so
+        // their DFS ordinals diverge from committed ordinals whenever an earlier
+        // edit adds or removes indexed nodes (e.g. new comment lines shift every
+        // subsequent ordinal up).  Look up by name + fql_kind instead, breaking
+        // ties by proximity to the committed start line so overloaded names
+        // (multiple functions with the same name in the file) resolve correctly.
+        let name_str = seg.name_of(local_row);
+        let fql_kind_str = seg.fql_kind_of(local_row);
+        let committed_line = seg.line_of(local_row);
+
         let live_lookup: Option<(&SegmentReader, u32)> = self
             .dirty
             .added
             .iter()
             .find(|ds| ds.source_path == seg_meta.source_path)
             .and_then(|ds| {
-                (0..ds.reader.row_count)
-                    .find(|&r| ds.reader.ordinal_of(r) == Some(ordinal))
+                let rows = ds.reader.lookup_name(name_str);
+                if rows.is_empty() {
+                    return None;
+                }
+                rows.into_iter()
+                    .filter(|&r| ds.reader.fql_kind_of(r) == fql_kind_str)
+                    .min_by_key(|&r| {
+                        u64::from(ds.reader.line_of(r)).abs_diff(u64::from(committed_line))
+                    })
                     .map(|row| (&*ds.reader, row))
             });
 
@@ -428,7 +444,6 @@ impl StorageEngine for ColumnarStorage {
             prev_sibling_node_id: opt_nav(seg.prev_sibling_ordinal_of(local_row)),
         }))
     }
-
     fn find_node_id_at_line(&self, rel_path: &str, line: usize) -> Option<String> {
         // Dirty overlay (post-mutation segments) takes priority over committed.
         if !self.dirty.is_empty() {

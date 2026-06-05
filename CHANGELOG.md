@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.60.2] — 2026-06-05 — Fix: find_node resolves dirty segment by name+kind, not ordinal
+
+### Fixed
+- Second (and subsequent) `CHANGE NODE` calls in the same transaction on the
+  same file now target the correct function even when an earlier edit added or
+  removed indexed nodes (e.g. comment lines) that shift DFS ordinals.
+  Root cause: dirty segments are built without an ordinal remapper, so their
+  DFS ordinals are raw sequential counters — any prior edit that adds/removes
+  indexed nodes shifts every subsequent ordinal, causing `find_node` to resolve
+  to a completely different symbol (e.g. a `// ---` comment instead of the
+  intended function).
+  Fix: dirty-segment lookup in `find_node` now uses `lookup_name(name) +
+  fql_kind filter + closest-line tie-breaking` instead of ordinal lookup,
+  making it robust to ordinal shifts from any prior in-transaction edit.
 ## [0.60.1] — 2026-06-05 — Fix: find_node end_line stale after in-transaction edits
 
 ### Fixed

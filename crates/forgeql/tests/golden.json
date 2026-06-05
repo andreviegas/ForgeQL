@@ -2222,6 +2222,41 @@
     "name": "FE08_inserted_symbol_absent_after_rollback"
   },
   {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'ff-sequential-change'",
+    "name": "FF01_begin_sequential_change_transaction"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE NODE 'n097e974b9c6e.0035' WITH 'static ALWAYS_INLINE void *thread_runq(struct k_thread *thread) { ARG_UNUSED(thread); return &_kernel.ready_q.runq; }'",
+    "name": "FF02_change_thread_runq_removes_internal_indexed_nodes"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'thread_runq' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
+    "name": "FF03_thread_runq_appears_exactly_once"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE NODE 'n097e974b9c6e.0044' WITH 'static ALWAYS_INLINE void runq_add(struct k_thread *thread) { _priq_run_add(thread_runq(thread), thread); }'",
+    "name": "FF04_change_runq_add_in_same_transaction_after_ordinal_shift"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'runq_add' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
+    "name": "FF05_runq_add_not_duplicated_regression_0_60_2"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'ff-sequential-change'",
+    "name": "FF06_rollback_sequential_change_transaction"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'runq_add' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
+    "name": "FF07_runq_add_restored_after_rollback"
+  },
+  {
     "alias": "golden-python",
     "expect_symbols_indexed": 3063558,
     "use": "pytorch-andre.pytorch-frozen"
