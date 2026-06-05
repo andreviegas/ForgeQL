@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.60.1] — 2026-06-05 — Fix: find_node end_line stale after in-transaction edits
+
+### Fixed
+- `CHANGE NODE` on the second or later edit in a transaction no longer leaves
+  orphaned closing delimiters (`}`, `)`, `}))`, etc.) after the replaced function.
+  Root cause: `find_node` read `byte_end` from the committed (pre-edit) segment
+  but counted newlines in the current (already-modified) file, producing an
+  `end_line` that was several lines too low whenever a prior edit in the same
+  transaction had shifted bytes in the same file.
+  Fix: `find_node` now prefers the dirty (post-reindex) segment's byte positions
+  when a dirty segment exists for the target file, ensuring `byte_end` and the
+  file bytes are always from the same version.
 ## [0.60.0] — 2026-06-05 — Phase E: post-mutation node_id tracking
 
 ### Added

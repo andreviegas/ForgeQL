@@ -369,14 +369,34 @@ impl StorageEngine for ColumnarStorage {
             .find(|&r| seg.ordinal_of(r) == Some(ordinal))
             .ok_or_else(|| anyhow::anyhow!("node_id not found: {node_id}"))?;
 
-        let name = seg.name_of(local_row).to_owned();
-        let fql_kind = seg.fql_kind_of(local_row).to_owned();
-        let line = seg.line_of(local_row) as usize;
-        let rev = crate::node_id::format_rev(seg.rev_of(local_row));
+        // When a dirty segment exists for this file (the file was modified and
+        // reindexed in this session), prefer its byte positions over the
+        // committed segment's.  The committed byte_end can be stale if a prior
+        // edit in the same transaction shifted bytes in the file, which causes
+        // end_line to land on the wrong line and CHANGE NODE to leave orphaned
+        // closing delimiters behind.
+        let live_lookup: Option<(&SegmentReader, u32)> = self
+            .dirty
+            .added
+            .iter()
+            .find(|ds| ds.source_path == seg_meta.source_path)
+            .and_then(|ds| {
+                (0..ds.reader.row_count)
+                    .find(|&r| ds.reader.ordinal_of(r) == Some(ordinal))
+                    .map(|row| (&*ds.reader, row))
+            });
+
+        let (data_seg, data_row): (&SegmentReader, u32) =
+            live_lookup.map_or((&**seg, local_row), |(s, r)| (s, r));
+
+        let name = data_seg.name_of(data_row).to_owned();
+        let fql_kind = data_seg.fql_kind_of(data_row).to_owned();
+        let line = data_seg.line_of(data_row) as usize;
+        let rev = crate::node_id::format_rev(data_seg.rev_of(data_row));
         let path = root.join(&seg_meta.source_path);
         #[allow(clippy::naive_bytecount)]
         let end_line = {
-            let byte_end = seg.byte_end_of(local_row) as usize;
+            let byte_end = data_seg.byte_end_of(data_row) as usize;
             if byte_end == 0 {
                 line
             } else {
@@ -392,6 +412,8 @@ impl StorageEngine for ColumnarStorage {
                 Some(seg_meta.node_id(ord))
             }
         };
+        // Nav pointers come from the committed segment — ordinals are layout-stable
+        // (DFS order doesn't change when a body is replaced).
         Ok(Some(FindNodeResult {
             node_id: node_id.to_owned(),
             fql_kind,
