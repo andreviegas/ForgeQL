@@ -6,6 +6,28 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.60.4] — 2026-06-05 — Fix: node operations never act on stale line numbers
+
+### Fixed
+- `FIND NODE`, `SHOW NODE`, `CHANGE NODE`, `INSERT … NODE`, and `DELETE NODE`
+  now confirm that a file's indexed content still matches what is on disk
+  before resolving a node's line range. Previously the persistent (committed)
+  segment stored absolute line numbers stamped at index-build time and trusted
+  them blindly; if the file had since changed in a way the session had not
+  re-indexed — HEAD advanced past the cached index, a file was reverted while
+  git-clean, or the file was edited outside ForgeQL — the stored line was stale.
+  A read then returned the wrong line, and `CHANGE NODE` computed its
+  replacement range from that stale line and could overwrite an adjacent
+  function instead of the intended one.
+- The fix adds a content-addressed freshness check. Each segment is already
+  identified by the git blob SHA-1 of the bytes it was indexed from, so a node
+  operation now compares that hash against the live file and, on a mismatch,
+  re-indexes just that one file before resolving. The check is scoped to the
+  single file a node operation targets, so broad `FIND` / `SHOW` scans are
+  unaffected — no measurable change in query latency or memory use.
+- As a consequence, a `node_id` returned by `FIND symbols` is now reliably
+  resolvable by a later `FIND NODE` / `CHANGE NODE` even when the file has
+  drifted out of sync with the cached index.
 ## [0.60.3] — 2026-06-05 — Fix: stable node_id ordinals across every reindex
 
 ### Fixed

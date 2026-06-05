@@ -2731,6 +2731,119 @@ fn reindex_updates_dirty_overlay() {
     );
 }
 
+/// BUG-001 regression: a committed segment is content-addressed by git blob
+/// sha1, so `is_path_fresh` must report it stale the moment the file on disk
+/// diverges from the indexed content (HEAD advanced, file reverted while
+/// git-clean, or edited outside ForgeQL) and fresh again after a reindex.
+/// This is the invariant that stops `CHANGE NODE` from computing a byte range
+/// off a stale line and corrupting the file.
+#[test]
+fn is_path_fresh_detects_external_edit() {
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_core::storage::git_sha1_provider::git_blob_sha1;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().to_path_buf();
+    let file = worktree.join("fresh.cpp");
+    std::fs::write(&file, "void Alpha() {}\nvoid Beta() {}\n").expect("write file");
+
+    let seg_dir = tmp.path().join("segments").join(vp());
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).expect("seg_dir");
+    std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
+
+    // Build a git-sha1 content-addressed committed segment, matching the
+    // production shadow-write hash, so the freshness compare is meaningful.
+    let table = index_at_path(&CppLanguageInline, &file);
+    let bytes = std::fs::read(&file).expect("read");
+    let content_id: Vec<u8> = git_blob_sha1(&bytes).to_vec();
+    let hex = content_id.iter().fold(String::new(), |mut acc, b| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
+    {
+        let mut builder = SegmentBuilder::new("test", &content_id);
+        for row in &table.rows {
+            let row_id = builder.emit_row(SymbolRow {
+                name: table.name_of(row),
+                fql_kind: table.fql_kind_of(row),
+                language: table.language_of(row),
+                line: u32::try_from(row.line).unwrap_or(u32::MAX),
+                byte_start: u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
+                byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
+                usages_count: row.usages_count,
+            });
+            if let Some(ordinal) = row.ordinal {
+                builder.set_ordinal(row_id, ordinal);
+            }
+            for (key, val) in table.resolve_fields(&row.fields) {
+                builder.set_field(row_id, &key, val.as_str());
+            }
+        }
+        builder
+            .flush(&seg_path(seg_dir.parent().unwrap(), &hex))
+            .expect("segment flush");
+    }
+
+    let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(file.clone(), content_id);
+
+    let overlay_path = overlay_dir.join("freshness.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        worktree.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(
+                SegmentReader::open(&seg_path(seg_dir.parent().unwrap(), &meta.hex_content_id))
+                    .expect("open seg"),
+            )
+        })
+        .collect();
+
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+
+    let rel = std::path::Path::new("fresh.cpp");
+
+    // 1. Clean state — committed hash matches disk.
+    assert!(
+        storage.is_path_fresh(rel, &worktree),
+        "freshly indexed file must be fresh"
+    );
+
+    // 2. External edit (bypassing ForgeQL) shifts symbols and changes content.
+    std::fs::write(
+        &file,
+        "// injected\n// injected\nvoid Alpha() {}\nvoid Beta() {}\n",
+    )
+    .expect("rewrite file");
+    assert!(
+        !storage.is_path_fresh(rel, &worktree),
+        "file edited outside ForgeQL must be detected as stale"
+    );
+
+    // 3. Reindex rebuilds the dirty segment from current disk content.
+    storage
+        .reindex_files(std::slice::from_ref(&file))
+        .expect("reindex_files");
+    assert!(
+        storage.is_path_fresh(rel, &worktree),
+        "reindexed file must be fresh again"
+    );
+}
+
 /// `purge_file` on `ColumnarStorage` must remove all symbols for the given
 /// file while leaving other files' symbols untouched.
 #[test]

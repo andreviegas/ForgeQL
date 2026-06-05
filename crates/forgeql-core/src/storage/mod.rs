@@ -151,6 +151,19 @@ pub trait StorageEngine: Send + Sync + 'static {
         None
     }
 
+    /// Whether the indexed segment for `rel_path` still matches the file on
+    /// disk (content-addressed freshness check).
+    ///
+    /// Returns `true` when this backend keeps no content-addressed index — it
+    /// has no stale absolute line data to serve — or when the stored segment
+    /// hash equals the live file's hash. A `false` result tells the caller to
+    /// reindex `rel_path` before trusting any line/byte offset for it, which is
+    /// what stops a stale committed segment from corrupting a file on
+    /// `CHANGE NODE` (BUG-001) or misresolving `FIND NODE` (BUG-002).
+    fn is_path_fresh(&self, _rel_path: &Path, _root: &Path) -> bool {
+        true
+    }
+
     /// Return all indexed source files as typed [`FileEntry`] rows.
     ///
     /// When `Some` is returned, `FIND files` skips the filesystem walk and

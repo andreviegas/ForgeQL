@@ -314,6 +314,24 @@ impl ForgeQLEngine {
             }
         }
 
+        // Content-addressed freshness gate (BUG-001/BUG-002): addressable-node
+        // operations resolve a node_id to an exact line range. Reindex the
+        // single target file first when its committed segment is stale vs disk,
+        // so we never serve or mutate a stale line. One file → O(1), so broad
+        // FIND/SHOW scans are unaffected.
+        if let Some(mk) = sid {
+            let target_node: Option<String> = match op {
+                ForgeQLIR::FindNode { node_id }
+                | ForgeQLIR::ChangeNode { node_id, .. }
+                | ForgeQLIR::InsertNode { node_id, .. }
+                | ForgeQLIR::DeleteNode { node_id, .. }
+                | ForgeQLIR::ShowNode { node_id, .. } => Some(node_id.clone()),
+                _ => None,
+            };
+            if let Some(node_id) = target_node {
+                self.ensure_node_file_fresh(mk, &node_id);
+            }
+        }
         let mut result = match op {
             // --- Source / session management ---
             ForgeQLIR::CreateSource { name, url } => self.create_source(name, url),
@@ -433,6 +451,46 @@ impl ForgeQLEngine {
         }
 
         Ok(result)
+    }
+
+    /// Content-addressed freshness gate for addressable-node operations.
+    ///
+    /// Resolves `node_id` to its file — the path is reliable even when the
+    /// segment's line data is stale — and, if the committed segment no longer
+    /// matches the file on disk, reindexes just that one file so the operation
+    /// resolves against fresh line/byte data. Best-effort: any failure falls
+    /// through to normal dispatch, which surfaces the proper error.
+    ///
+    /// Scope is a single file → one content hash, so broad FIND/SHOW scans are
+    /// never penalised. This is the structural guarantee that a node op never
+    /// serves or mutates a stale line — see BUG-001 (CHANGE NODE corruption)
+    /// and BUG-002 (FIND NODE misresolution).
+    fn ensure_node_file_fresh(&mut self, session_id: &str, node_id: &str) {
+        // Phase 1 (shared borrow): resolve the target file and check freshness.
+        let stale_abs_path = {
+            let Ok(session) = self.require_session(session_id) else {
+                return;
+            };
+            let root = session.worktree_path.clone();
+            let Ok(engine) = session.engine_for(&crate::ir::Backend::Default) else {
+                return;
+            };
+            let Ok(Some(node)) = engine.find_node(node_id, &root) else {
+                return;
+            };
+            let rel = node
+                .path
+                .strip_prefix(&root)
+                .unwrap_or(&node.path)
+                .to_path_buf();
+            if engine.is_path_fresh(&rel, &root) {
+                return;
+            }
+            root.join(&rel)
+        };
+        // Phase 2 (mutable borrow): reindex the single stale file so the next
+        // find_node resolves against fresh content. Best-effort (logs on error).
+        self.reindex_session(session_id, &[stale_abs_path]);
     }
 
     /// Number of commands served since engine creation.

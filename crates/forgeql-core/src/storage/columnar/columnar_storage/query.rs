@@ -1077,6 +1077,31 @@ impl StorageEngine for ColumnarStorage {
         Ok(())
     }
 
+    fn is_path_fresh(&self, rel_path: &Path, _root: &Path) -> bool {
+        // A dirty segment for this path was built from the current file on
+        // disk, so its line/byte data is authoritative — always fresh.
+        if self.dirty.added.iter().any(|ds| ds.source_path == rel_path) {
+            return true;
+        }
+        // No committed segment → nothing indexed for this path; there is no
+        // stale absolute line data to serve.
+        let Some(stored_hex) = self.path_to_hex_content_id(rel_path) else {
+            return true;
+        };
+        // Compare the committed segment's content hash against the live file.
+        // The committed overlay is git-sha1 content-addressed (see reindex_files
+        // and the shadow-write hash_fn), so any divergence — HEAD advanced past
+        // the cached overlay, a file reverted while git-clean, or an edit made
+        // outside ForgeQL — surfaces here as a hash mismatch.
+        let abs = self.worktree_root.join(rel_path);
+        let Ok(bytes) = std::fs::read(&abs) else {
+            // Unreadable (e.g. deleted): don't force a reindex loop — let the
+            // normal mutation/query path surface the I/O error.
+            return true;
+        };
+        bytes_to_hex(&git_blob_sha1(&bytes)) == stored_hex
+    }
+
     fn purge_file(&mut self, path: &Path) -> Result<()> {
         let rel_path = path
             .strip_prefix(&self.worktree_root)
