@@ -60,6 +60,7 @@ pub struct FindNodeResult {
     pub name: String,
     pub path: PathBuf,
     pub line: usize,
+    pub end_line: usize,
     /// SHA-256 of node bytes as h{:016x}; empty for analysis-only rows.
     pub rev: String,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -244,8 +244,31 @@ pub enum ForgeQLIR {
     },
 
     /// FIND NODE id — resolve a `node_id` to its current location, rev, and nav links.
+    /// `FIND NODE id` — resolve a `node_id` to its current location, rev, and nav links.
     FindNode { node_id: String },
 
+    /// `CHANGE NODE 'id' [IF REV 'rev'] WITH content` — replace node source lines.
+    ChangeNode {
+        node_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        if_rev: Option<String>,
+        content: String,
+    },
+
+    /// `INSERT BEFORE NODE 'id' WITH content` / `INSERT AFTER NODE 'id' WITH content`
+    InsertNode {
+        node_id: String,
+        /// `true` = INSERT BEFORE, `false` = INSERT AFTER.
+        before: bool,
+        content: String,
+    },
+
+    /// `DELETE NODE 'id' [IF REV 'rev']` — delete node source lines.
+    DeleteNode {
+        node_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        if_rev: Option<String>,
+    },
     // ------------------------------------------------------------------
     // Code Exposure API (§1)
     // ------------------------------------------------------------------

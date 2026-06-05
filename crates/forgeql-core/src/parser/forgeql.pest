@@ -95,10 +95,26 @@ statement = {
   | move_stmt
   | find_stmt
   | find_node_stmt
+  | change_node_stmt
+  | insert_node_stmt
+  | delete_node_stmt
 }
 
 /// FIND NODE id -- resolve a node_id to its current location, rev, and nav links.
 find_node_stmt = { "FIND" ~ "NODE" ~ any_value }
+
+/// `CHANGE NODE 'id' [IF REV 'rev'] WITH content` — replace node source lines.
+change_node_stmt = { "CHANGE" ~ "NODE" ~ any_value ~ if_rev_clause? ~ "WITH" ~ content_value }
+
+/// `INSERT BEFORE|AFTER NODE 'id' WITH content` — insert lines around a node.
+insert_node_stmt = { "INSERT" ~ insert_position ~ "NODE" ~ any_value ~ "WITH" ~ content_value }
+insert_position  = { "BEFORE" | "AFTER" }
+
+/// `DELETE NODE 'id' [IF REV 'rev']` — delete node source lines.
+delete_node_stmt = { "DELETE" ~ "NODE" ~ any_value ~ if_rev_clause? }
+
+/// `IF REV 'rev'` — optimistic concurrency guard (reject if stored rev differs).
+if_rev_clause = { "IF" ~ "REV" ~ any_value }
 
 // -----------------------------------------------------------------------
 // Source / session management

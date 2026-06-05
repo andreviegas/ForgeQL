@@ -374,6 +374,17 @@ impl StorageEngine for ColumnarStorage {
         let line = seg.line_of(local_row) as usize;
         let rev = crate::node_id::format_rev(seg.rev_of(local_row));
         let path = root.join(&seg_meta.source_path);
+        #[allow(clippy::naive_bytecount)]
+        let end_line = {
+            let byte_end = seg.byte_end_of(local_row) as usize;
+            if byte_end == 0 {
+                line
+            } else {
+                let file_bytes = std::fs::read(&path).unwrap_or_default();
+                let end = byte_end.min(file_bytes.len());
+                file_bytes[..end].iter().filter(|&&b| b == b'\n').count() + 1
+            }
+        };
         let opt_nav = |ord: u32| -> Option<String> {
             if ord == u32::MAX {
                 None
@@ -387,6 +398,7 @@ impl StorageEngine for ColumnarStorage {
             name,
             path,
             line,
+            end_line,
             rev,
             parent_node_id: opt_nav(seg.parent_ordinal_of(local_row)),
             first_child_node_id: opt_nav(seg.first_child_ordinal_of(local_row)),
@@ -394,7 +406,6 @@ impl StorageEngine for ColumnarStorage {
             prev_sibling_node_id: opt_nav(seg.prev_sibling_ordinal_of(local_row)),
         }))
     }
-
     #[expect(
         clippy::too_many_lines,
         reason = "Multiple indexed fast-paths plus a general materialise pipeline; splitting further would obscure the query plan structure"

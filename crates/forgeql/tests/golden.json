@@ -2041,6 +2041,115 @@
     "name": "FN09_find_node_id_five_sched_functions"
   },
   {
+    "expect_field": {"type": "find_node"},
+    "expect_pointer": {"/line": 51, "/end_line": 69},
+    "fql": "FIND NODE 'n097e974b9c6e.0035'",
+    "name": "FCN01_find_node_returns_end_line"
+  },
+  {
+    "expect_field": {"type": "find_node"},
+    "expect_pointer": {"/line": 71, "/end_line": 78},
+    "fql": "FIND NODE 'n097e974b9c6e.0042'",
+    "name": "FCN02_find_node_end_line_curr_cpu_runq"
+  },
+  {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'phc-change'",
+    "name": "FCN03_begin_change_node_transaction"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE NODE 'n097e974b9c6e.0035' WITH <<C\nstatic void thread_runq_golden(void) {}\nC",
+    "name": "FCN04_change_node_returns_mutation"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'thread_runq_golden' IN 'kernel/sched.c'",
+    "name": "FCN05_changed_symbol_indexable_after_change_node"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'phc-change'",
+    "name": "FCN06_rollback_change_node_transaction"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'thread_runq' IN 'kernel/sched.c'",
+    "name": "FCN07_thread_runq_restored_after_rollback"
+  },
+  {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'phc-delete'",
+    "name": "FCN08_begin_delete_node_transaction"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "DELETE NODE 'n097e974b9c6e.0044'",
+    "name": "FCN09_delete_node_returns_mutation"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'runq_add' IN 'kernel/sched.c'",
+    "name": "FCN10_symbol_absent_after_delete_node"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'phc-delete'",
+    "name": "FCN11_rollback_delete_node_transaction"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'runq_add' IN 'kernel/sched.c'",
+    "name": "FCN12_runq_add_restored_after_rollback"
+  },
+  {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'phc-insert-before'",
+    "name": "FCN13_begin_insert_before_transaction"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "INSERT BEFORE NODE 'n097e974b9c6e.0042' WITH '/* fcn14 before curr_cpu_runq */'",
+    "name": "FCN14_insert_before_node_returns_mutation"
+  },
+  {
+    "expect_line_count": 1,
+    "expect_lines": [{"line": 71, "text": "/* fcn14 before curr_cpu_runq */"}],
+    "fql": "SHOW LINES 71-71 OF 'kernel/sched.c'",
+    "name": "FCN15_insert_before_content_verified"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'phc-insert-before'",
+    "name": "FCN16_rollback_insert_before_transaction"
+  },
+  {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'phc-insert-after'",
+    "name": "FCN17_begin_insert_after_transaction"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "INSERT AFTER NODE 'n097e974b9c6e.0042' WITH '/* fcn18 after curr_cpu_runq */'",
+    "name": "FCN18_insert_after_node_returns_mutation"
+  },
+  {
+    "expect_line_count": 1,
+    "expect_lines": [{"line": 79, "text": "/* fcn18 after curr_cpu_runq */"}],
+    "fql": "SHOW LINES 79-79 OF 'kernel/sched.c'",
+    "name": "FCN19_insert_after_content_verified"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'phc-insert-after'",
+    "name": "FCN20_rollback_insert_after_transaction"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'curr_cpu_runq' IN 'kernel/sched.c' WHERE line = 71",
+    "name": "FCN21_curr_cpu_runq_line_restored_after_rollback"
+  },
+  {
     "alias": "golden-python",
     "expect_symbols_indexed": 3063558,
     "use": "pytorch-andre.pytorch-frozen"

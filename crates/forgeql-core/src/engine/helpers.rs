@@ -74,6 +74,9 @@ pub(crate) fn require_session_id(session_id: Option<&str>) -> Result<&str> {
 pub(crate) const fn mutation_op_name(op: &ForgeQLIR) -> &'static str {
     match op {
         ForgeQLIR::ChangeContent { .. } => "change_content",
+        ForgeQLIR::ChangeNode { .. } => "change_node",
+        ForgeQLIR::InsertNode { .. } => "insert_node",
+        ForgeQLIR::DeleteNode { .. } => "delete_node",
         _ => "unknown_mutation",
     }
 }

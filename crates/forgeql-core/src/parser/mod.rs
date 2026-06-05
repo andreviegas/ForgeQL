@@ -18,7 +18,9 @@ mod transaction;
 use change::{parse_change, parse_copy_or_move};
 use clauses::parse_clauses;
 use find::parse_find;
-use helpers::{enrich_parse_error, next_str, parse_using_clause, unquote};
+use helpers::{
+    enrich_parse_error, next_str, parse_using_clause, unquote, unwrap_any_value, unwrap_content,
+};
 use transaction::parse_transaction;
 /// The generated parser struct (`pest_derive` expands this at compile time).
 #[derive(Parser)]
@@ -231,6 +233,62 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
             Ok(ForgeQLIR::FindNode { node_id })
         }
 
+        Rule::change_node_stmt => {
+            let mut inner = pair.into_inner();
+            let node_id = next_str(&mut inner, "change_node: expected node_id")?;
+            let mut if_rev = None;
+            let mut content = None;
+            for child in inner {
+                match child.as_rule() {
+                    Rule::if_rev_clause => {
+                        if_rev = child
+                            .into_inner()
+                            .next()
+                            .map(unwrap_any_value)
+                            .transpose()?;
+                    }
+                    Rule::content_value => {
+                        content = Some(unwrap_content(child)?);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(ForgeQLIR::ChangeNode {
+                node_id,
+                if_rev,
+                content: content
+                    .ok_or_else(|| ForgeError::DslParse("change_node: missing content".into()))?,
+            })
+        }
+
+        Rule::insert_node_stmt => {
+            let mut inner = pair.into_inner();
+            let pos_pair = inner
+                .next()
+                .ok_or_else(|| ForgeError::DslParse("insert_node: expected position".into()))?;
+            let before = pos_pair.as_str() == "BEFORE";
+            let node_id = next_str(&mut inner, "insert_node: expected node_id")?;
+            let content = inner
+                .next()
+                .ok_or_else(|| ForgeError::DslParse("insert_node: expected content".into()))
+                .and_then(unwrap_content)?;
+            Ok(ForgeQLIR::InsertNode {
+                node_id,
+                before,
+                content,
+            })
+        }
+
+        Rule::delete_node_stmt => {
+            let mut inner = pair.into_inner();
+            let node_id = next_str(&mut inner, "delete_node: expected node_id")?;
+            let if_rev = inner
+                .find(|p| p.as_rule() == Rule::if_rev_clause)
+                .and_then(|p| p.into_inner().next())
+                .map(unwrap_any_value)
+                .transpose()?;
+            Ok(ForgeQLIR::DeleteNode { node_id, if_rev })
+        }
         // `statement` is a grammar wrapper — unwrap one level.
         Rule::statement => {
             let inner = pair

@@ -291,6 +291,9 @@ impl ForgeQLEngine {
                     | ForgeQLIR::ShowLines { .. }
                     | ForgeQLIR::FindFiles { .. }
                     | ForgeQLIR::ChangeContent { .. }
+                    | ForgeQLIR::ChangeNode { .. }
+                    | ForgeQLIR::InsertNode { .. }
+                    | ForgeQLIR::DeleteNode { .. }
                     | ForgeQLIR::BeginTransaction { .. }
                     | ForgeQLIR::Commit { .. }
                     | ForgeQLIR::Rollback { .. }
@@ -351,7 +354,11 @@ impl ForgeQLEngine {
             | ForgeQLIR::FindFiles { .. } => self.exec_show(sid, op),
 
             // --- Mutations ---
+            // --- Mutations ---
             ForgeQLIR::ChangeContent { .. } => self.exec_mutation(sid, op),
+            ForgeQLIR::ChangeNode { .. } => self.exec_change_node(sid, op),
+            ForgeQLIR::InsertNode { .. } => self.exec_insert_node(sid, op),
+            ForgeQLIR::DeleteNode { .. } => self.exec_delete_node(sid, op),
             ForgeQLIR::CopyLines { .. } => self.exec_copy_lines(sid, op),
             ForgeQLIR::MoveLines { .. } => self.exec_move_lines(sid, op),
 

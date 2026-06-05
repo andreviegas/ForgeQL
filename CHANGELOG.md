@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.58.0] — 2026-06-05 — Phase C: node-addressed mutations
+
+### Added
+- `CHANGE NODE 'id' [IF REV 'rev'] WITH content` — replace the source lines of any
+  addressable node by its stable `node_id`. The optional `IF REV` guard rejects the
+  edit if the stored revision differs from the caller's expected value (optimistic
+  concurrency).
+- `INSERT BEFORE NODE 'id' WITH content` — insert new source lines immediately before
+  the node's first line without touching any existing code.
+- `INSERT AFTER NODE 'id' WITH content` — insert new source lines immediately after
+  the node's last line.
+- `DELETE NODE 'id' [IF REV 'rev']` — delete the source lines occupied by a node.
+  The `IF REV` guard works identically to `CHANGE NODE`.
+- `FindNodeResult` now includes an `end_line` field (1-based, inclusive) so callers
+  can see the full line span of a node without a separate query.
+- 21 new golden regression tests covering all four Phase C commands, the `end_line`
+  field, and rollback/restore semantics.
 ## [0.57.0] — 2026-06-04 — Phase B: FIND NODE command
 
 ### Added

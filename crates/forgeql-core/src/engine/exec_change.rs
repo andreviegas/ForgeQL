@@ -3,11 +3,12 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 
 use crate::{
-    ir::ForgeQLIR,
+    ir::{ChangeTarget, ForgeQLIR},
     result::{ForgeQLResult, MutationResult},
+    transforms::change::lines_to_byte_range,
     transforms::copy_move::{plan_copy_lines, plan_copy_lines_at, plan_move_lines},
     transforms::diff::{CompactDiffConfig, compact_diff_plan},
-    transforms::{TransformPlan, plan_from_ir},
+    transforms::{ByteRangeEdit, FileEdit, TransformPlan, plan_from_ir},
 };
 
 use super::ForgeQLEngine;
@@ -155,6 +156,143 @@ impl ForgeQLEngine {
             suggestions: Vec::new(),
         }))
     }
-    // Checkpoint-based transactions
-    // ===================================================================
+
+    // =================================================================
+    // Node-addressed mutations (Phase C)
+    // =================================================================
+
+    pub(super) fn exec_change_node(
+        &mut self,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        let (node_id, if_rev, content) = match op {
+            ForgeQLIR::ChangeNode {
+                node_id,
+                if_rev,
+                content,
+            } => (node_id.as_str(), if_rev.as_deref(), content.as_str()),
+            _ => bail!("exec_change_node called with wrong IR variant"),
+        };
+        let node = self.resolve_node(session_id, node_id, if_rev)?;
+        let ir = ForgeQLIR::ChangeContent {
+            files: vec![node.rel_path],
+            target: ChangeTarget::Lines {
+                start: node.line,
+                end: node.end_line,
+                content: content.to_string(),
+            },
+            clauses: crate::ir::Clauses::default(),
+        };
+        self.exec_mutation(session_id, &ir)
+    }
+
+    pub(super) fn exec_insert_node(
+        &mut self,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        let (node_id, before, content) = match op {
+            ForgeQLIR::InsertNode {
+                node_id,
+                before,
+                content,
+            } => (node_id.as_str(), *before, content.as_str()),
+            _ => bail!("exec_insert_node called with wrong IR variant"),
+        };
+
+        let sid = require_session_id(session_id)?;
+        let node = self.resolve_node(session_id, node_id, None)?;
+        let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
+        let abs_path = workspace.safe_path(&node.rel_path)?;
+        let file_bytes = crate::workspace::file_io::read_bytes(&abs_path)?;
+
+        // Byte offset: BEFORE = start of the node's first line;
+        //              AFTER  = byte just past the node's last line (incl. '\n').
+        let insert_offset = if before {
+            lines_to_byte_range(&file_bytes, node.line, node.line)?.0
+        } else {
+            lines_to_byte_range(&file_bytes, node.end_line, node.end_line)?.1
+        };
+
+        let insertion = if content.ends_with('\n') {
+            content.to_string()
+        } else {
+            format!("{content}\n")
+        };
+
+        let plan = TransformPlan {
+            file_edits: vec![FileEdit {
+                path: abs_path,
+                edits: vec![ByteRangeEdit::new(insert_offset..insert_offset, insertion)],
+            }],
+            suggestions: Vec::new(),
+        };
+        self.apply_plan(sid, plan, "insert_node")
+    }
+
+    pub(super) fn exec_delete_node(
+        &mut self,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        let (node_id, if_rev) = match op {
+            ForgeQLIR::DeleteNode { node_id, if_rev } => (node_id.as_str(), if_rev.as_deref()),
+            _ => bail!("exec_delete_node called with wrong IR variant"),
+        };
+        let node = self.resolve_node(session_id, node_id, if_rev)?;
+        let ir = ForgeQLIR::ChangeContent {
+            files: vec![node.rel_path],
+            target: ChangeTarget::Lines {
+                start: node.line,
+                end: node.end_line,
+                content: String::new(),
+            },
+            clauses: crate::ir::Clauses::default(),
+        };
+        self.exec_mutation(session_id, &ir)
+    }
+
+    /// Resolve `node_id` → (`rel_path`, `line`, `end_line`) and optionally check IF REV guard.
+    fn resolve_node(
+        &self,
+        session_id: Option<&str>,
+        node_id: &str,
+        if_rev: Option<&str>,
+    ) -> Result<ResolvedNode> {
+        let session = self.require_session(require_session_id(session_id)?)?;
+        let root = session.worktree_path.clone();
+        let node = session
+            .engine_for(&crate::ir::Backend::Default)?
+            .find_node(node_id, &root)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(r#"{{"error":"node_not_found","node_id":"{node_id}"}}"#)
+            })?;
+        if let Some(expected) = if_rev
+            && node.rev != expected
+        {
+            bail!(
+                r#"{{"error":"rev_mismatch","node_id":"{node_id}","expected":"{expected}","actual":"{}"}}"#,
+                node.rev
+            );
+        }
+        let rel_path = node
+            .path
+            .strip_prefix(&root)
+            .unwrap_or(&node.path)
+            .to_string_lossy()
+            .into_owned();
+        Ok(ResolvedNode {
+            rel_path,
+            line: node.line,
+            end_line: node.end_line,
+        })
+    }
+}
+
+/// Scratch struct for resolved node location used by Phase C mutation helpers.
+struct ResolvedNode {
+    rel_path: String,
+    line: usize,
+    end_line: usize,
 }
