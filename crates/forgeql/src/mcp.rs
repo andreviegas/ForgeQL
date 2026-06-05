@@ -163,18 +163,37 @@ fn json_result(json: &str) -> CallToolResult {
 fn append_meta(output: &str, budget_line: Option<&str>) -> String {
     /// Approximate number of UTF-8 characters per LLM token.
     const CHARS_PER_TOKEN: usize = 4;
+    /// Below this estimate the agent never needs to narrow the query, so the
+    /// `tokens_approx` footer is pure noise and is omitted. `budget_line` is
+    /// already `None` unless the session budget is in a warning/critical state
+    /// (gated by the caller), so both footers now appear only when actionable.
+    const TOKENS_FOOTER_THRESHOLD: usize = 500;
+
     let tokens_approx = output.len().div_ceil(CHARS_PER_TOKEN);
+    let show_tokens = tokens_approx >= TOKENS_FOOTER_THRESHOLD;
+
     let budget_csv = budget_line
         .map(|b| format!("\n\"line_budget\",\"{b}\""))
         .unwrap_or_default();
+    let tokens_csv = if show_tokens {
+        format!("\n\"tokens_approx\",{tokens_approx}")
+    } else {
+        String::new()
+    };
     let budget_json = budget_line
         .map(|b| format!(",\"line_budget\":\"{b}\""))
         .unwrap_or_default();
+    let tokens_json = if show_tokens {
+        format!(",\"tokens_approx\":{tokens_approx}")
+    } else {
+        String::new()
+    };
+
     output.strip_suffix('}').map_or_else(
         // Compact CSV — append as final rows.
-        || format!("{output}{budget_csv}\n\"tokens_approx\",{tokens_approx}"),
+        || format!("{output}{budget_csv}{tokens_csv}"),
         // JSON object — splice fields before closing brace.
-        |prefix| format!("{prefix}{budget_json},\"tokens_approx\":{tokens_approx}}}"),
+        |prefix| format!("{prefix}{budget_json}{tokens_json}}}"),
     )
 }
 
@@ -317,8 +336,12 @@ impl ForgeQlMcp {
                 OutputFormat::Csv => compact::to_compact(&result),
                 OutputFormat::Json => result.to_json(),
             };
+            // Show line_budget to the agent only when the budget is actually
+            // low — an OK budget echoed on every response is noise (Phase 0).
+            // budget_fixed below is unaffected: logging always records it.
             let budget_line = budget_snap
                 .as_ref()
+                .filter(|b| b.warning || b.critical)
                 .map(forgeql_core::budget::BudgetSnapshot::status_line);
             let budget_fixed = budget_snap
                 .as_ref()
@@ -572,9 +595,41 @@ mod tests {
             text.contains("encenderMotor"),
             "compact output should contain symbol name: {text}"
         );
+        // tokens_approx is size-gated (Phase 0 noise reduction): a small result
+        // omits the footer. This query returns a handful of rows, well under the
+        // threshold, so the footer must be absent.
         assert!(
-            text.contains("tokens_approx"),
-            "compact output should have tokens_approx: {text}"
+            !text.contains("tokens_approx"),
+            "small compact output should omit the tokens_approx footer: {text}"
+        );
+    }
+
+    #[test]
+    fn append_meta_gates_footers_by_size() {
+        // Small CSV output, no budget, below the token threshold → no footers.
+        let small = super::append_meta("\"find_symbols\",0\n\"x\",1", None);
+        assert!(
+            !small.contains("tokens_approx"),
+            "small output must omit tokens_approx: {small}"
+        );
+        assert!(
+            !small.contains("line_budget"),
+            "no budget configured must omit line_budget: {small}"
+        );
+
+        // Large CSV output (> threshold): tokens_approx is restored as a hint.
+        let big = super::append_meta(&format!("\"find_symbols\",0\n{}", "x".repeat(4096)), None);
+        assert!(
+            big.contains("tokens_approx"),
+            "large output must keep tokens_approx as a narrowing hint"
+        );
+
+        // A budget line (the caller only passes Some when warning/critical) is
+        // shown regardless of size.
+        let budgeted = super::append_meta("\"x\",1", Some("12 (-5)"));
+        assert!(
+            budgeted.contains("line_budget"),
+            "a low-budget line must be shown regardless of size: {budgeted}"
         );
     }
 }

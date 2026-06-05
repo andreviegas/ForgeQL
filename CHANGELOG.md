@@ -6,6 +6,13 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Response footers are now shown only when they are actionable. The
+  `tokens_approx` row is emitted only when the response is large enough that an
+  agent might want to narrow it (≈500+ tokens); small responses omit it. The
+  `line_budget` row is emitted only when the session budget is in a warning or
+  critical state, instead of on every response. This trims two rows of noise
+  from the majority of responses with no loss of information when it matters.
 ## [0.60.4] — 2026-06-05 — Fix: node operations never act on stale line numbers
 
 ### Fixed
