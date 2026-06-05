@@ -492,9 +492,19 @@ pub struct MutationResult {
     /// Unified diff (populated for dry-run and explain modes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff: Option<String>,
-    /// Advisory notes (e.g. string literals containing the symbol name).
+    /// Advisory notes (e.g. string literals containing the symbol name)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<SuggestionEntry>,
+    /// New node ID of the mutated/inserted symbol after reindex.
+    ///
+    /// * `CHANGE NODE`: same as the input `node_id` (ordinal is stable after
+    ///   body replacement); confirmed by a post-reindex `find_node` lookup.
+    /// * `INSERT BEFORE|AFTER NODE`: `node_id` of the first symbol found at
+    ///   the insertion line after reindex, or `None` if the inserted content
+    ///   contained no addressable symbol at that line.
+    /// * `DELETE NODE`: always `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_node_id: Option<String>,
 }
 
 /// An advisory note about a potential issue found during planning.
@@ -915,6 +925,7 @@ mod tests {
             lines_written: 0,
             diff: None,
             suggestions: vec![],
+            new_node_id: None,
         });
         let output = result.to_json();
         // Must fall back to full serde JSON, not crash or return empty.
@@ -989,6 +1000,7 @@ mod tests {
                 snippet: r#"[[deprecated("Use setMaxIntensity()")]]"#.to_string(),
                 reason: "deprecated_attribute".to_string(),
             }],
+            new_node_id: None,
         });
 
         let json_string = result.to_json();
@@ -1193,6 +1205,7 @@ mod tests {
             lines_written: 0,
             diff: None,
             suggestions: vec![],
+            new_node_id: None,
         };
         let output = format!("{result}");
         assert!(output.contains("Applied"));

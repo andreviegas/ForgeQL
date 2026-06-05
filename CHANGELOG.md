@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.60.0] — 2026-06-05 — Phase E: post-mutation node_id tracking
+
+### Added
+- `MutationResult.new_node_id` — after `CHANGE NODE`, the response now includes
+  the node_id of the replaced symbol (confirmed stable via post-reindex lookup).
+  After `INSERT BEFORE|AFTER NODE`, returns the node_id of the first addressable
+  symbol found at the insertion line, or `null` if no symbol was defined there.
+- `compact_mutation` formatter — mutation results are now returned as compact CSV
+  instead of falling back to JSON, with `new_node_id` surfaced as a dedicated row.
+
+### Fixed
+- `end_line` computation undercount: `CHANGE NODE` on functions whose body closes
+  with `}))` or nested braces left orphaned closing delimiters. This was a
+  pre-existing `end_line` bug triggered by the Phase E edits; the orphaned lines
+  are now cleaned up and the duplicate-row bug in `compact_find_node` is resolved.
 ## [0.59.0] — 2026-06-05 — Phase D: SHOW NODE command and CSV end_line fix
 
 ### Added

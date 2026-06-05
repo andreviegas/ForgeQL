@@ -59,6 +59,7 @@ impl ForgeQLEngine {
             lines_written,
             diff,
             suggestions,
+            new_node_id: None,
         }))
     }
 
@@ -154,9 +155,9 @@ impl ForgeQLEngine {
             lines_written,
             diff,
             suggestions: Vec::new(),
+            new_node_id: None,
         }))
     }
-
     // =================================================================
     // Node-addressed mutations (Phase C)
     // =================================================================
@@ -184,7 +185,24 @@ impl ForgeQLEngine {
             },
             clauses: crate::ir::Clauses::default(),
         };
-        self.exec_mutation(session_id, &ir)
+        let mut result = self.exec_mutation(session_id, &ir)?;
+        // After reindex the ordinal is stable — confirm with a lookup and
+        // return the (unchanged) node_id so callers don't need a follow-up query.
+        let sid = require_session_id(session_id)?;
+        let new_node_id = {
+            let session = self.require_session(sid)?;
+            let root = session.worktree_path.clone();
+            session
+                .engine_for(&crate::ir::Backend::Default)?
+                .find_node(node_id, &root)
+                .ok()
+                .flatten()
+                .map(|n| n.node_id)
+        };
+        if let ForgeQLResult::Mutation(ref mut m) = result {
+            m.new_node_id = new_node_id;
+        }
+        Ok(result)
     }
 
     pub(super) fn exec_insert_node(
@@ -203,6 +221,9 @@ impl ForgeQLEngine {
 
         let sid = require_session_id(session_id)?;
         let node = self.resolve_node(session_id, node_id, None)?;
+        // Line where the inserted content will land after reindex.
+        let insert_line = if before { node.line } else { node.end_line + 1 };
+
         let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
         let abs_path = workspace.safe_path(&node.rel_path)?;
         let file_bytes = crate::workspace::file_io::read_bytes(&abs_path)?;
@@ -228,7 +249,19 @@ impl ForgeQLEngine {
             }],
             suggestions: Vec::new(),
         };
-        self.apply_plan(sid, plan, "insert_node")
+        let mut result = self.apply_plan(sid, plan, "insert_node")?;
+
+        // After reindex, find the first symbol at the insertion line.
+        let new_node_id = {
+            let session = self.require_session(sid)?;
+            session
+                .engine_for(&crate::ir::Backend::Default)?
+                .find_node_id_at_line(&node.rel_path, insert_line)
+        };
+        if let ForgeQLResult::Mutation(ref mut m) = result {
+            m.new_node_id = new_node_id;
+        }
+        Ok(result)
     }
 
     pub(super) fn exec_delete_node(

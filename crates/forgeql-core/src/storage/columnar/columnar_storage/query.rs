@@ -406,6 +406,31 @@ impl StorageEngine for ColumnarStorage {
             prev_sibling_node_id: opt_nav(seg.prev_sibling_ordinal_of(local_row)),
         }))
     }
+
+    fn find_node_id_at_line(&self, rel_path: &str, line: usize) -> Option<String> {
+        // Dirty overlay (post-mutation segments) takes priority over committed.
+        if !self.dirty.is_empty() {
+            for ds in &self.dirty.added {
+                if ds.source_path.to_str() == Some(rel_path) {
+                    let local_row = (0..ds.reader.row_count)
+                        .find(|&r| ds.reader.line_of(r) as usize == line)?;
+                    let ord = ds.reader.ordinal_of(local_row)?;
+                    return Some(crate::node_id::make_node_id(rel_path, ord));
+                }
+            }
+        }
+        // Fallback: committed overlay.
+        let seg_idx = self
+            .overlay
+            .segments()
+            .iter()
+            .position(|s| s.source_path.to_str() == Some(rel_path))?;
+        let seg = self.segments.get(seg_idx)?;
+        let seg_meta = self.overlay.segments().get(seg_idx)?;
+        let local_row = (0..seg.row_count).find(|&r| seg.line_of(r) as usize == line)?;
+        Some(seg_meta.node_id(seg.ordinal_of(local_row).unwrap_or(0)))
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "Multiple indexed fast-paths plus a general materialise pipeline; splitting further would obscure the query plan structure"

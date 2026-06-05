@@ -16,8 +16,8 @@
 /// Result types that are already small (mutations, transactions, source ops)
 /// fall back to `to_json()`.
 use crate::result::{
-    CallDirection, FileEntry, FindNodeResult, ForgeQLResult, MemberEntry, OutlineEntry,
-    QueryResult, SessionStats, ShowContent, ShowResult, SourceLine, SymbolRow,
+    CallDirection, FileEntry, FindNodeResult, ForgeQLResult, MemberEntry, MutationResult,
+    OutlineEntry, QueryResult, SessionStats, ShowContent, ShowResult, SourceLine, SymbolRow,
 };
 
 // -----------------------------------------------------------------------
@@ -34,11 +34,11 @@ pub fn to_compact(result: &ForgeQLResult) -> String {
         ForgeQLResult::Query(q) => compact_query(q),
         ForgeQLResult::Show(s) => compact_show(s),
         ForgeQLResult::FindNode(r) => compact_find_node(r),
+        ForgeQLResult::Mutation(m) => compact_mutation(m),
         // These are already small — keep JSON.
         _ => result.to_json(),
     }
 }
-
 // -----------------------------------------------------------------------
 // CSV helpers
 // -----------------------------------------------------------------------
@@ -370,7 +370,6 @@ fn compact_stats(sessions: &[SessionStats]) -> String {
 fn compact_find_node(r: &FindNodeResult) -> String {
     let mut out = String::new();
     row(&mut out, &[&q("find_node"), &q(&r.node_id)]);
-    row(&mut out, &[&q("find_node"), &q(&r.node_id)]);
     row(
         &mut out,
         &[&q("fql_kind"), &q("[name,path,line,end_line,rev]")],
@@ -405,7 +404,31 @@ fn compact_find_node(r: &FindNodeResult) -> String {
     );
     out
 }
-
+fn compact_mutation(r: &MutationResult) -> String {
+    let mut out = String::new();
+    row(&mut out, &[&q("mutation"), &q(&r.op)]);
+    row(&mut out, &[&q("applied"), &q(&r.applied.to_string())]);
+    let file_strs: Vec<String> = r
+        .files_changed
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let file_refs: Vec<&str> = file_strs.iter().map(String::as_str).collect();
+    row(&mut out, &[&q("files_changed"), &bracket(&file_refs)]);
+    row(&mut out, &[&q("edit_count"), &r.edit_count.to_string()]);
+    row(
+        &mut out,
+        &[&q("lines_written"), &r.lines_written.to_string()],
+    );
+    if let Some(ref id) = r.new_node_id {
+        row(&mut out, &[&q("new_node_id"), &q(id)]);
+    }
+    if let Some(ref d) = r.diff {
+        row(&mut out, &[&q("diff"), &q(d)]);
+    }
+    chomp(&mut out);
+    out
+}
 // -----------------------------------------------------------------------
 // Query results
 // -----------------------------------------------------------------------
@@ -1211,6 +1234,7 @@ mod tests {
             lines_written: 0,
             diff: None,
             suggestions: vec![],
+            new_node_id: None,
         });
         let output = to_compact(&result);
         assert!(output.contains("rename_symbol"));

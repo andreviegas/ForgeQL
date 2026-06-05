@@ -141,6 +141,16 @@ pub trait StorageEngine: Send + Sync + 'static {
         Ok(None)
     }
 
+    /// Find the node_id of the first symbol that starts at the given source line.
+    ///
+    /// Used to locate newly inserted symbols after `INSERT BEFORE|AFTER NODE`.
+    /// Returns `None` when no addressable symbol starts at that line, or when
+    /// this backend does not maintain a columnar index.
+    fn find_node_id_at_line(&self, rel_path: &str, line: usize) -> Option<String> {
+        let _ = (rel_path, line);
+        None
+    }
+
     /// Return all indexed source files as typed [`FileEntry`] rows.
     ///
     /// When `Some` is returned, `FIND files` skips the filesystem walk and

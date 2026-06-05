@@ -2180,6 +2180,48 @@
     "name": "FSD04_show_node_where_filter_on_source_lines"
   },
   {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'phe-change'",
+    "name": "FE01_begin_change_node_transaction"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_pointer": {"/new_node_id": "n097e974b9c6e.0035"},
+    "fql": "CHANGE NODE 'n097e974b9c6e.0035' WITH 'static ALWAYS_INLINE void *thread_runq(struct k_thread *t) { return NULL; }'",
+    "name": "FE02_change_node_response_includes_new_node_id"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'phe-change'",
+    "name": "FE03_rollback_change_node_transaction"
+  },
+  {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'phe-insert'",
+    "name": "FE04_begin_insert_after_transaction"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field_contains": {"new_node_id": "n097e974b9c6e"},
+    "fql": "INSERT AFTER NODE 'n097e974b9c6e.0042' WITH 'static void phe05_test(void) {}'",
+    "name": "FE05_insert_after_node_includes_new_node_id"
+  },
+  {
+    "expect_row_count": 1,
+    "fql": "FIND symbols WHERE name = 'phe05_test' IN 'kernel/sched.c'",
+    "name": "FE06_inserted_symbol_is_findable"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'phe-insert'",
+    "name": "FE07_rollback_insert_transaction"
+  },
+  {
+    "expect_row_count": 0,
+    "fql": "FIND symbols WHERE name = 'phe05_test' IN 'kernel/sched.c'",
+    "name": "FE08_inserted_symbol_absent_after_rollback"
+  },
+  {
     "alias": "golden-python",
     "expect_symbols_indexed": 3063558,
     "use": "pytorch-andre.pytorch-frozen"
