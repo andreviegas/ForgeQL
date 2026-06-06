@@ -99,7 +99,7 @@ impl ForgeQLEngine {
                 start_line,
                 end_line,
                 ..
-            } => Self::exec_show_lines(&workspace, file, *start_line, *end_line),
+            } => Self::exec_show_lines(&workspace, engine, file, *start_line, *end_line),
             ForgeQLIR::FindFiles { clauses, .. } => {
                 Self::exec_show_find_files(&workspace, engine, clauses)?
             }
@@ -237,6 +237,7 @@ impl ForgeQLEngine {
                 text: text.to_string(),
                 marker: None,
                 node_id: None,
+                node_offset: None,
             })
             .collect();
 
@@ -489,12 +490,55 @@ impl ForgeQLEngine {
 
     fn exec_show_lines(
         workspace: &Workspace,
+        engine: &dyn StorageEngine,
         file: &str,
         start_line: usize,
         end_line: usize,
     ) -> serde_json::Value {
-        show::show_lines(workspace, file, start_line, end_line)
-            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+        let mut json = show::show_lines(workspace, file, start_line, end_line)
+            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }));
+        if json.get("error").is_some() {
+            return json;
+        }
+        // Annotate each line with the innermost addressable node that contains
+        // it (+ a 1-based node-relative offset) so SHOW LINES renders node
+        // handles and offsets instead of absolute line numbers on parsed files.
+        // An empty result (unparsed file or stale index) leaves the lines with
+        // their absolute numbers untouched.
+        let Ok(abs) = workspace.safe_path(file) else {
+            return json;
+        };
+        let rel = workspace.relative(&abs);
+        let rel_str = rel.to_string_lossy();
+        let lo = json
+            .get("start_line")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(start_line);
+        let hi = json
+            .get("end_line")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(end_line);
+        let refs = engine.innermost_nodes_for_lines(&rel_str, workspace.root(), lo, hi);
+        if refs.is_empty() {
+            return json;
+        }
+        if let Some(arr) = json.get_mut("lines").and_then(|v| v.as_array_mut()) {
+            for (line_obj, node_ref) in arr.iter_mut().zip(refs) {
+                if let Some((node_id, node_start)) = node_ref {
+                    let abs_line = line_obj
+                        .get("line")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|n| usize::try_from(n).ok())
+                        .unwrap_or(0);
+                    let offset = abs_line.saturating_sub(node_start) + 1;
+                    line_obj["node_id"] = serde_json::Value::String(node_id);
+                    line_obj["offset"] = serde_json::json!(offset);
+                }
+            }
+        }
+        json
     }
 
     /// `SHOW NODE 'id' [CONTENT | METADATA]`

@@ -361,6 +361,11 @@ pub struct SourceLine {
     /// Stable node handle for lines that start an addressable node.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
+    /// 1-based offset of this line within its innermost containing node, when
+    /// `SHOW LINES` resolved one. Lets the agent target the line with
+    /// `CHANGE NODE 'id(offset)'` instead of an absolute, drift-prone number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_offset: Option<usize>,
 }
 
 /// An entry in a SHOW outline result.
@@ -962,12 +967,14 @@ mod tests {
                         text: "float convertByte2Volts(uint8_t raw) {".to_string(),
                         marker: None,
                         node_id: None,
+                        node_offset: None,
                     },
                     SourceLine {
                         line: 43,
                         text: "    return raw * 3.3f / 255.0f;".to_string(),
                         marker: None,
                         node_id: None,
+                        node_offset: None,
                     },
                 ],
                 byte_start: Some(1024),
@@ -1262,6 +1269,7 @@ mod tests {
                         text: format!("line {i}"),
                         marker: None,
                         node_id: None,
+                        node_offset: None,
                     })
                     .collect(),
                 byte_start: None,
@@ -1406,6 +1414,7 @@ mod tests {
                     text: "void myFunc() {}".to_string(),
                     marker: None,
                     node_id: None,
+                    node_offset: None,
                 }],
                 byte_start: None,
                 depth: None,

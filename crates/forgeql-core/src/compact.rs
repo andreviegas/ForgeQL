@@ -98,17 +98,43 @@ fn compact_lines(s: &ShowResult, lines: &[SourceLine]) -> String {
         (Some(start), None) => q(&start.to_string()),
         _ => String::new(),
     };
-    // Node-framed rendering: when the shown lines belong to a single addressable
-    // node (SHOW body emits the node's id on its first line), drop absolute line
-    // numbers in favour of a 1-based node-relative `off`set, so the agent edits
-    // with `CHANGE NODE 'id(off)'` / `'id(a-b)'`. The id is stated once in the
-    // header. Falls back to absolute line numbers when no node frame is present
-    // (SHOW LINES / SHOW context, or an unparsed symbol with no ordinal).
+    // Node-relative rendering replaces absolute line numbers with stable node
+    // handles + offsets so the agent edits with `CHANGE NODE 'id(off)'`:
+    //   * Per-line (SHOW LINES on a parsed file): every line carries its own
+    //     innermost containing node + a 1-based offset (`node_offset`). Render a
+    //     `node`,`off`,`text` table with the shared `n<segment-hex>` prefix
+    //     hoisted once into the header; gap lines (no containing node) show
+    //     empty handles, text only.
+    //   * Frame (SHOW body): the whole region is one node (its id sits on the
+    //     first line); show 1-based offsets within that single frame, id once.
+    // Falls back to absolute line numbers when neither applies (SHOW context,
+    // an unparsed file, or a symbol with no ordinal).
+    let per_line = lines.iter().any(|line| line.node_offset.is_some());
     let frame = lines
         .iter()
         .find_map(|line| line.node_id.clone())
         .zip(s.start_line);
-    if let Some((node_id, start)) = frame {
+    if per_line {
+        let prefix = lines
+            .iter()
+            .find_map(|line| line.node_id.as_deref())
+            .and_then(|id| id.split_once('.').map(|(p, _)| p))
+            .unwrap_or_default();
+        row(&mut out, &[&op, &sym, &file, &span, &q(prefix)]);
+        // Schema hint: `node` is the segment-relative ordinal, `off` the
+        // 1-based offset of the line within that node.
+        row(&mut out, &[&q("node"), &q("off"), &q("text")]);
+        for line in lines {
+            let (node, off) = match (line.node_id.as_deref(), line.node_offset) {
+                (Some(id), Some(o)) => {
+                    let ord = id.split_once('.').map_or(id, |(_, ord)| ord);
+                    (format!(".{ord}"), o.to_string())
+                }
+                _ => (String::new(), String::new()),
+            };
+            row(&mut out, &[&q(&node), &q(&off), &q(&line.text)]);
+        }
+    } else if let Some((node_id, start)) = frame {
         row(&mut out, &[&op, &sym, &file, &span, &q(&node_id)]);
         // Schema hint: `off` is the 1-based line offset within the node.
         row(&mut out, &[&q("off"), &q("text")]);
@@ -877,18 +903,21 @@ mod tests {
                         text: "float convert(uint8_t raw) {".into(),
                         marker: None,
                         node_id: None,
+                        node_offset: None,
                     },
                     SourceLine {
                         line: 43,
                         text: "    return raw * 3.3f / 255.0f;".into(),
                         marker: None,
                         node_id: None,
+                        node_offset: None,
                     },
                     SourceLine {
                         line: 44,
                         text: "}".into(),
                         marker: None,
                         node_id: None,
+                        node_offset: None,
                     },
                 ],
                 byte_start: Some(1024),
@@ -1388,18 +1417,21 @@ mod tests {
                 text: "fn foo() {".to_string(),
                 marker: None,
                 node_id: Some("nabc123def456.0007".to_string()),
+                node_offset: None,
             },
             SourceLine {
                 line: 11,
                 text: "    bar();".to_string(),
                 marker: None,
                 node_id: None,
+                node_offset: None,
             },
             SourceLine {
                 line: 12,
                 text: "}".to_string(),
                 marker: None,
                 node_id: None,
+                node_offset: None,
             },
         ];
         let s = lines_result("show_body", 10, lines.len());
@@ -1432,12 +1464,14 @@ mod tests {
                 text: "a".to_string(),
                 marker: None,
                 node_id: None,
+                node_offset: None,
             },
             SourceLine {
                 line: 11,
                 text: "b".to_string(),
                 marker: None,
                 node_id: None,
+                node_offset: None,
             },
         ];
         let s = lines_result("show_lines", 10, lines.len());
@@ -1455,5 +1489,58 @@ mod tests {
         let mut s = "\n".to_string();
         chomp(&mut s);
         assert_eq!(s, "");
+    }
+
+    #[test]
+    fn compact_lines_per_line_node_offsets_replace_absolute() {
+        // SHOW LINES on a parsed file: each line carries its own innermost
+        // containing node + a 1-based offset, so absolute line numbers give way
+        // to a hoisted `n<hex>` prefix (header) plus per-row `node`/`off`.
+        let lines = vec![
+            SourceLine {
+                line: 40,
+                text: "    let x = 1;".to_string(),
+                marker: None,
+                node_id: Some("nabc123def456.0264".to_string()),
+                node_offset: Some(1),
+            },
+            SourceLine {
+                line: 41,
+                text: "    if x > 0 {".to_string(),
+                marker: None,
+                node_id: Some("nabc123def456.0265".to_string()),
+                node_offset: Some(1),
+            },
+            SourceLine {
+                line: 42,
+                text: "        log();".to_string(),
+                marker: None,
+                node_id: Some("nabc123def456.0265".to_string()),
+                node_offset: Some(2),
+            },
+            // Gap line: no containing node (e.g. a top-level blank).
+            SourceLine {
+                line: 43,
+                text: String::new(),
+                marker: None,
+                node_id: None,
+                node_offset: None,
+            },
+        ];
+        let s = lines_result("show_lines", 40, lines.len());
+        let out = compact_lines(&s, &lines);
+        assert!(out.contains("nabc123def456"), "prefix hoisted: {out}");
+        assert!(
+            out.contains("\"node\",\"off\",\"text\""),
+            "schema is node/off/text: {out}"
+        );
+        assert!(out.contains("\".0264\",\"1\""), "ordinal + offset: {out}");
+        assert!(out.contains("\".0265\",\"1\""));
+        assert!(out.contains("\".0265\",\"2\""));
+        assert!(!out.contains("40,\""), "absolute lines dropped: {out}");
+        assert!(
+            out.contains("\"\",\"\",\"\""),
+            "gap line blank handle: {out}"
+        );
     }
 }

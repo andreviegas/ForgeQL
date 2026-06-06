@@ -6,6 +6,43 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.67.1] — 2026-06-06 — `SHOW LINES` end-line fix for Markdown nodes
+
+### Fixed
+- **`SHOW LINES` no longer mis-attributes a Markdown node's first line to a
+  preceding sibling.** A node whose tree-sitter byte range folds in the trailing
+  newline (common for Markdown headings and paragraphs) had its end line
+  computed one line too long, so a one-line heading could "contain" the next
+  line and win the innermost-node pick — hiding the following node's offset 1.
+  The end-line derivation now trims trailing newlines before resolving the line.
+  No effect on code, whose node ranges end at a closing token, not a newline.
+
+## [0.67.0] — 2026-06-06 — `SHOW LINES` per-line node handles & offsets
+
+### Changed
+- **`SHOW LINES` now renders each line by its innermost containing node and a
+  node-relative offset instead of an absolute line number** (CSV output, on
+  tree-sitter-parsed files). The shared segment handle (`n<hex>`) is hoisted
+  once into the header; each row carries that node's short ordinal (`.NNNN`)
+  and a 1-based `off`set within the node:
+  ```
+  "show_lines","","src/lib.rs","40-43","nabc123def456"
+  "node","off","text"
+  ".0264","1","    let x = 1;"
+  ".0265","1","    if x > 0 {"
+  ".0265","2","        log();"
+  ```
+  An agent can now edit straight from a `SHOW LINES` read — addressing the line
+  through its node handle — without a separate `FIND` to recover it. A line
+  covered by no indexed node (e.g. a blank line at file scope) shows an empty
+  handle and is reported text-only.
+- Files without a fresh tree-sitter index — unparsed formats, or a file changed
+  on disk but not re-indexed — keep absolute line numbers. This is the safe
+  fallback: a stale offset must never produce a wrong edit handle.
+- Absolute line numbers remain available via `format=JSON` (`SourceLine.line`
+  is unchanged); the resolved offset is also exposed there as
+  `SourceLine.node_offset`.
+
 ## [0.66.0] — 2026-06-06 — `SHOW body` node-relative line offsets
 
 ### Changed

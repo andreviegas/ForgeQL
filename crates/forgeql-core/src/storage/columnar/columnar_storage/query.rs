@@ -529,6 +529,132 @@ impl StorageEngine for ColumnarStorage {
 
     #[expect(
         clippy::too_many_lines,
+        reason = "Single linear resolver: build the newline index, fold the chosen segment's rows, pick the innermost-containing node per line — splitting scatters tightly-coupled state"
+    )]
+    fn innermost_nodes_for_lines(
+        &self,
+        rel_path: &str,
+        root: &Path,
+        start: usize,
+        end: usize,
+    ) -> Vec<Option<(String, usize)>> {
+        // Fold one segment's rows into `out`, keeping for each line the
+        // smallest-span node that contains it (ties resolve to the deeper/later
+        // DFS row, which `<=` selects because children follow parents in order).
+        fn fold_segment(
+            out: &mut [Option<(String, usize)>],
+            best_span: &mut [usize],
+            reader: &SegmentReader,
+            newlines: &[usize],
+            start: usize,
+            end: usize,
+            node_id_of: &dyn Fn(u32) -> Option<String>,
+        ) {
+            for r in 0..reader.row_count {
+                let Some(ord) = reader.ordinal_of(r) else {
+                    continue;
+                };
+                let node_start = reader.line_of(r) as usize;
+                if node_start == 0 || node_start > end {
+                    continue;
+                }
+                let byte_end = reader.byte_end_of(r) as usize;
+                let node_end = if byte_end == 0 {
+                    node_start
+                } else {
+                    content_end_line(newlines, byte_end)
+                };
+                if node_end < start {
+                    continue;
+                }
+                let node_span = node_end - node_start;
+                let lo = node_start.max(start);
+                let hi = node_end.min(end);
+                for line in lo..=hi {
+                    let idx = line - start;
+                    if node_span <= best_span[idx]
+                        && let Some(id) = node_id_of(ord)
+                    {
+                        out[idx] = Some((id, node_start));
+                        best_span[idx] = node_span;
+                    }
+                }
+            }
+        }
+
+        if start == 0 || end < start {
+            return Vec::new();
+        }
+        let span = end - start + 1;
+        let abs_path = root.join(rel_path);
+        let Ok(file_bytes) = std::fs::read(&abs_path) else {
+            return Vec::new();
+        };
+        // Byte offsets of every '\n', ascending, so a node ending at `byte_end`
+        // resolves to a 1-based end line via `partition_point` — the same
+        // newline-count rule `find_node` uses to derive `end_line`.
+        let newlines: Vec<usize> = file_bytes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &b)| (b == b'\n').then_some(i))
+            .collect();
+        let mut out: Vec<Option<(String, usize)>> = vec![None; span];
+        let mut best_span: Vec<usize> = vec![usize::MAX; span];
+
+        // Prefer a dirty (reindexed-this-session) segment: its byte offsets match
+        // the file on disk. Otherwise use the committed segment only when it is
+        // content-addressed-fresh — stale offsets must never fabricate handles.
+        if let Some(ds) = self
+            .dirty
+            .added
+            .iter()
+            .find(|ds| ds.source_path.to_str() == Some(rel_path))
+        {
+            let node_id_of = |ord: u32| Some(crate::node_id::make_node_id(rel_path, ord));
+            fold_segment(
+                &mut out,
+                &mut best_span,
+                &ds.reader,
+                &newlines,
+                start,
+                end,
+                &node_id_of,
+            );
+            return out;
+        }
+
+        let Some(seg_idx) = self
+            .overlay
+            .segments()
+            .iter()
+            .position(|s| s.source_path.to_str() == Some(rel_path))
+        else {
+            return Vec::new();
+        };
+        if !self.is_path_fresh(Path::new(rel_path), root) {
+            return Vec::new();
+        }
+        let (Some(seg), Some(seg_meta)) = (
+            self.segments.get(seg_idx),
+            self.overlay.segments().get(seg_idx),
+        ) else {
+            return Vec::new();
+        };
+        let node_id_of = |ord: u32| Some(seg_meta.node_id(ord));
+        fold_segment(
+            &mut out,
+            &mut best_span,
+            seg,
+            &newlines,
+            start,
+            end,
+            &node_id_of,
+        );
+        out
+    }
+
+    #[expect(
+        clippy::too_many_lines,
         reason = "Multiple indexed fast-paths plus a general materialise pipeline; splitting further would obscure the query plan structure"
     )]
     fn find_symbols(&self, clauses: &Clauses, _root: &Path) -> Result<Vec<SymbolMatch>> {
@@ -1268,5 +1394,41 @@ impl StorageEngine for ColumnarStorage {
             "file":    file,
             "results": results,
         }))
+    }
+}
+
+/// 1-based source line of a node's last content byte, from the file's sorted
+/// newline byte offsets and the node's exclusive `byte_end`.
+///
+/// Trailing newline bytes are trimmed first: tree-sitter often folds the
+/// terminating `\n` into a node's range (Markdown headings/paragraphs
+/// especially), which would push the end line one past the node's last content
+/// line and let a 1-line node spuriously "contain" the next line. Trimming is
+/// harmless for code, whose `byte_end` sits at a closing token, not a newline.
+fn content_end_line(newlines: &[usize], byte_end: usize) -> usize {
+    let mut end = byte_end;
+    while end > 0 && newlines.binary_search(&(end - 1)).is_ok() {
+        end -= 1;
+    }
+    newlines.partition_point(|&nl| nl < end) + 1
+}
+
+#[cfg(test)]
+mod innermost_resolver_tests {
+    use super::content_end_line;
+
+    #[test]
+    fn content_end_line_excludes_trailing_newline() {
+        // File "ab\ncd\n": newline bytes at indices 2 and 5.
+        let newlines = [2usize, 5];
+        // A node whose tree-sitter range folds in the terminating '\n'
+        // (byte_end just past line 1's '\n' = 3) must still end on line 1, not
+        // spill onto line 2 — otherwise a 1-line Markdown heading spuriously
+        // "contains" the next line and wins the innermost-node pick.
+        assert_eq!(content_end_line(&newlines, 3), 1);
+        // No trailing newline: byte_end at line 1's last content byte.
+        assert_eq!(content_end_line(&newlines, 2), 1);
+        // Ends on line 2's '\n' (byte 5) → line 2.
+        assert_eq!(content_end_line(&newlines, 5), 2);
     }
 }

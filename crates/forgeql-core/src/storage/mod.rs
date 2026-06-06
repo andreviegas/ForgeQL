@@ -151,6 +151,23 @@ pub trait StorageEngine: Send + Sync + 'static {
         None
     }
 
+    /// For each 1-based source line in `start..=end`, the innermost indexed node
+    /// that *contains* it, as `(node_id, node_start_line)` (`None` for a line
+    /// covered by no indexed node). An empty `Vec` means this backend keeps no
+    /// usable columnar index, so callers fall back to absolute line numbers.
+    /// Drives `SHOW LINES` node-relative offset rendering, where a line's offset
+    /// is `line - node_start_line + 1`.
+    fn innermost_nodes_for_lines(
+        &self,
+        rel_path: &str,
+        root: &Path,
+        start: usize,
+        end: usize,
+    ) -> Vec<Option<(String, usize)>> {
+        let _ = (rel_path, root, start, end);
+        Vec::new()
+    }
+
     /// Whether the indexed segment for `rel_path` still matches the file on
     /// disk (content-addressed freshness check).
     ///
