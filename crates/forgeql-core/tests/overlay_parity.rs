@@ -2805,6 +2805,85 @@ fn find_symbols_matches_regex_alternation() {
     );
 }
 
+/// BUG-008: a node created in this session (its ordinal is assigned beyond the
+/// committed high-water mark and lives only in the dirty segment) must be
+/// resolvable by the same `node_id` that `FIND symbols` returns — without a
+/// COMMIT. `find_node` previously resolved ordinals against the committed
+/// segment only, so a just-created node failed with "node_id not found".
+#[test]
+fn find_node_resolves_newly_created_dirty_node() {
+    use forgeql_core::ir::Clauses;
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().to_path_buf();
+    let file = worktree.join("newnode.cpp");
+    std::fs::write(&file, "void AlphaFn() {}\n").expect("write");
+
+    let seg_dir = tmp.path().join("segments").join(vp());
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).expect("seg_dir");
+    std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
+
+    let table = index_at_path(&CppLanguageInline, &file);
+    let cid = build_segment(&table, &file, seg_dir.parent().unwrap());
+    let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(file.clone(), cid);
+
+    let overlay_path = overlay_dir.join("newnode.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        worktree.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(
+                SegmentReader::open(&seg_path(seg_dir.parent().unwrap(), &meta.hex_content_id))
+                    .expect("open seg"),
+            )
+        })
+        .collect();
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+
+    // Add a brand-new function and reindex — ZetaFn lands only in the dirty
+    // segment with a fresh ordinal beyond AlphaFn.
+    std::fs::write(&file, "void AlphaFn() {}\nvoid ZetaFn() {}\n").expect("rewrite");
+    storage
+        .reindex_files(std::slice::from_ref(&file))
+        .expect("reindex");
+
+    // FIND symbols hands out a node_id for the new node.
+    let results = storage
+        .find_symbols(&Clauses::default(), &worktree)
+        .expect("find_symbols");
+    let zeta = results
+        .iter()
+        .find(|m| m.name == "ZetaFn")
+        .expect("ZetaFn must be indexed after reindex");
+    let node_id = zeta.node_id.clone().expect("ZetaFn must have a node_id");
+
+    // That exact node_id must resolve via find_node (failed pre-fix).
+    let resolved = storage.find_node(&node_id, &worktree);
+    assert!(
+        resolved.is_ok(),
+        "find_node must resolve a newly-created dirty node {node_id}; got {resolved:?}"
+    );
+    let resolved = resolved
+        .unwrap()
+        .expect("newly-created node should be found");
+    assert_eq!(resolved.name, "ZetaFn");
+}
+
 /// BUG-001 regression: a committed segment is content-addressed by git blob
 /// sha1, so `is_path_fresh` must report it stale the moment the file on disk
 /// diverges from the indexed content (HEAD advanced, file reverted while

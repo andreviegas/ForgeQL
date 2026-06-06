@@ -6,6 +6,8 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.61.0] — 2026-06-06 — Quieter output; parser, regex, and node-addressing fixes
+
 ### Changed
 - Response footers are now shown only when they are actionable. The
   `tokens_approx` row is emitted only when the response is large enough that an
@@ -28,6 +30,13 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   queries silently returned nothing. The prefilter now falls back to a full
   scan when the pattern contains `|` (the real regex still filters the rows).
   Other regex metacharacters were unaffected. (BUG-007)
+- A node created in the current session (via `INSERT … NODE`, or in a brand-new
+  file) is now resolvable by the `node_id` that `FIND symbols` returns, without
+  a `COMMIT`. `find_node` resolved ordinals against the committed segment only,
+  so a freshly-created node — whose ordinal lives only in the dirty segment —
+  failed with "node_id not found", even though `FIND symbols` had just handed
+  out that id. `find_node` now falls back to the dirty segment (rebuilding the
+  id exactly as the query path does) when the committed lookup misses. (BUG-008)
 
 ## [0.60.4] — 2026-06-05 — Fix: node operations never act on stale line numbers
 
