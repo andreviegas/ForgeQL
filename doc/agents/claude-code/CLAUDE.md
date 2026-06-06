@@ -44,6 +44,8 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | File list | `FIND files [IN 'path/**'] [WHERE extension = '...'] ORDER BY size DESC` |
 | Context around symbol | `SHOW context OF 'name'` |
 | Read + filter lines | `SHOW LINES n-m OF 'file' WHERE text LIKE '%pattern%'` |
+| Page a truncated/buffered output | `SHOW MORE [HEAD n \| TAIL n \| n-m] [WHERE text MATCHES '...']` |
+| Grep the last `VERIFY` log (no rebuild) | `SHOW MORE WHERE text MATCHES 'error\|warning'` |
 | Repo top-level dirs | `FIND files` (returns depth-1 entries) |
 | Copy lines between files | `COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]` |
 | Move lines between files | `MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]` |

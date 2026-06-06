@@ -9,7 +9,7 @@ use crate::{
         query, show,
     },
     ir::{Backend, Clauses, ForgeQLIR, SortDirection},
-    result::{FileEntry, ForgeQLResult, ShowContent},
+    result::{FileEntry, ForgeQLResult, ShowContent, ShowResult, SourceLine},
     session::Session,
     storage::{StorageEngine, SymbolLocation},
     workspace::Workspace,
@@ -189,6 +189,98 @@ impl ForgeQLEngine {
             is_explicit_range,
             show_limit,
         );
+
+        Ok(ForgeQLResult::Show(show_result))
+    }
+
+    /// `SHOW MORE [HEAD n | TAIL n | n-m] [WHERE …] [LIMIT n]`
+    ///
+    /// Pages the session's last buffered output (`.forgeql-showmore`). The
+    /// positional window is applied first, then `WHERE text` predicates and
+    /// `LIMIT`/`OFFSET` reuse the same line machinery as `SHOW LINES`. Each
+    /// returned line keeps its original buffer index so a precise follow-up
+    /// range can be requested. `SHOW MORE` is an explicit retrieval and is
+    /// never re-blocked by the inline cap.
+    pub(super) fn exec_show_more(
+        &self,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        let ForgeQLIR::ShowMore { window, clauses } = op else {
+            unreachable!("exec_show_more: wrong IR variant")
+        };
+        let sid = require_session_id(session_id)?;
+        let root = self.require_session(sid)?.worktree_path.clone();
+
+        let buffer = crate::showmore::read_buffer(&root)
+            .map_err(|e| anyhow::anyhow!("reading SHOW MORE buffer: {e}"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no SHOW MORE buffer for this session yet — run a command whose \
+                     output was truncated, then SHOW MORE to page the rest"
+                )
+            })?;
+
+        let selection = match *window {
+            crate::ir::ShowMoreWindow::Full => crate::showmore::Selection::Full,
+            crate::ir::ShowMoreWindow::Head(n) => crate::showmore::Selection::Head(n),
+            crate::ir::ShowMoreWindow::Tail(n) => crate::showmore::Selection::Tail(n),
+            crate::ir::ShowMoreWindow::Range(a, b) => crate::showmore::Selection::Range(a, b),
+        };
+
+        let total = buffer.total();
+        let mut lines: Vec<SourceLine> = buffer
+            .window(selection)
+            .into_iter()
+            .map(|(idx, text)| SourceLine {
+                line: idx,
+                text: text.to_string(),
+                marker: None,
+                node_id: None,
+            })
+            .collect();
+
+        // WHERE text predicates filter the windowed lines — free grep over the
+        // buffered output (e.g. `SHOW MORE WHERE text MATCHES 'error|fail'`).
+        for predicate in &clauses.where_predicates {
+            let pred = predicate.clone();
+            lines.retain(|line| crate::filter::eval_predicate(line, &pred));
+        }
+
+        let mut show_result = ShowResult {
+            op: "show_more".to_string(),
+            symbol: Some(buffer.label.clone()),
+            file: None,
+            content: ShowContent::Lines {
+                lines,
+                byte_start: None,
+                depth: None,
+            },
+            start_line: None,
+            end_line: None,
+            total_lines: None,
+            hint: None,
+            metadata: None,
+        };
+
+        // Honour an explicit LIMIT/OFFSET; is_explicit_range = true so the
+        // inline cap never blocks an explicit SHOW MORE retrieval.
+        Self::apply_show_lines_cap(&mut show_result, Some(clauses), None, true, usize::MAX);
+
+        // Tell the agent how much of the buffer it is seeing, so it can page on.
+        let shown = match &show_result.content {
+            ShowContent::Lines { lines, .. } => lines.len(),
+            _ => 0,
+        };
+        if shown < total {
+            show_result.total_lines = Some(total);
+            show_result.hint = Some(format!(
+                "buffer '{}' has {total} lines; showing {shown}. \
+                 Page with SHOW MORE HEAD n | TAIL n | n-m, or filter with \
+                 SHOW MORE WHERE text MATCHES '…'.",
+                buffer.label
+            ));
+        }
 
         Ok(ForgeQLResult::Show(show_result))
     }

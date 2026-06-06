@@ -99,7 +99,8 @@ const CLEAN_COMMIT_EXCLUDED: &[&str] = &[
     ".forgeql-index",
     ".forgeql-session",
     crate::storage::columnar::DELTA_FILE_NAME,
-    ".forgeql-checkpoints", // FT6: never in user-facing history
+    ".forgeql-checkpoints",              // FT6: never in user-facing history
+    crate::showmore::SHOWMORE_FILE_NAME, // SHOW MORE buffer: session-local, never published
 ];
 
 /// Files excluded from **internal checkpoint** commits (`BEGIN TRANSACTION`).

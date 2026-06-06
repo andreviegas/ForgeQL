@@ -362,6 +362,18 @@ pub enum ForgeQLIR {
         clauses: Clauses,
     },
 
+    /// `SHOW MORE [HEAD n | TAIL n | n-m]` — page the session's last buffered output.
+    ///
+    /// Reads the `.forgeql-showmore` buffer written when a command's output
+    /// exceeded the inline cap and returns the requested window. `WHERE text`
+    /// and `LIMIT` from `clauses` filter the buffered lines (e.g. grep a build
+    /// log with `SHOW MORE WHERE text MATCHES 'error'`).
+    ShowMore {
+        window: ShowMoreWindow,
+        #[serde(flatten)]
+        clauses: Clauses,
+    },
+
     // ------------------------------------------------------------------
     // Mutations
     // ------------------------------------------------------------------
@@ -438,6 +450,23 @@ pub enum ForgeQLIR {
 #[must_use]
 pub fn is_default_backend(b: &Backend) -> bool {
     *b == Backend::Default
+}
+
+/// Window selector for the `SHOW MORE` command.
+///
+/// `Full` (no window given) returns the whole buffer; the others bound it to a
+/// slice of the session's last buffered output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShowMoreWindow {
+    /// No window given — return the entire buffer.
+    Full,
+    /// `HEAD n` — the first `n` lines.
+    Head(usize),
+    /// `TAIL n` — the last `n` lines.
+    Tail(usize),
+    /// `n-m` — the 1-based inclusive line range.
+    Range(usize, usize),
 }
 
 /// Targeting mode for the `CHANGE FILE[S]` command.

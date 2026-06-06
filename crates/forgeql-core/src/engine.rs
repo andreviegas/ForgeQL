@@ -293,6 +293,7 @@ impl ForgeQLEngine {
                     | ForgeQLIR::ChangeContent { .. }
                     | ForgeQLIR::FindNode { .. }
                     | ForgeQLIR::ShowNode { .. }
+                    | ForgeQLIR::ShowMore { .. }
                     | ForgeQLIR::ChangeNode { .. }
                     | ForgeQLIR::InsertNode { .. }
                     | ForgeQLIR::DeleteNode { .. }
@@ -365,6 +366,7 @@ impl ForgeQLEngine {
 
             // --- Code exposure (SHOW) ---
             ForgeQLIR::ShowNode { .. } => self.exec_show_node(sid, op),
+            ForgeQLIR::ShowMore { .. } => self.exec_show_more(sid, op),
             ForgeQLIR::ShowContext { .. }
             | ForgeQLIR::ShowSignature { .. }
             | ForgeQLIR::ShowOutline { .. }
@@ -514,6 +516,15 @@ impl ForgeQLEngine {
         self.sessions
             .get(session_id)
             .and_then(Session::budget_snapshot)
+    }
+
+    /// Worktree root for a loaded session, used by transports to locate the
+    /// session's `SHOW MORE` buffer. `None` when the session is not in memory.
+    #[must_use]
+    pub fn session_worktree(&self, session_id: &str) -> Option<std::path::PathBuf> {
+        self.sessions
+            .get(session_id)
+            .map(|s| s.worktree_path.clone())
     }
 
     /// Return `Some(snapshot)` only for non-admin ops, `None` for admin-exempt commands.

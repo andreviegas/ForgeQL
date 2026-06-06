@@ -73,6 +73,71 @@ pub fn parse(input: &str) -> Result<Vec<ForgeQLIR>, ForgeError> {
     parse_with_source(input).map(|v| v.into_iter().map(|(_, ir)| ir).collect())
 }
 
+/// Parse a `show_more_window` rule into a [`crate::ir::ShowMoreWindow`].
+fn parse_show_more_window(
+    pair: pest::iterators::Pair<'_, Rule>,
+) -> Result<crate::ir::ShowMoreWindow, ForgeError> {
+    use crate::ir::ShowMoreWindow;
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| ForgeError::DslParse("show_more: empty window".into()))?;
+    let num = |p: &pest::iterators::Pair<'_, Rule>| -> Result<usize, ForgeError> {
+        p.as_str()
+            .parse()
+            .map_err(|e| ForgeError::DslParse(format!("show_more window number: {e}")))
+    };
+    let next = |i: &mut pest::iterators::Pairs<'_, Rule>,
+                msg: &'static str|
+     -> Result<usize, ForgeError> {
+        let p = i.next().ok_or_else(|| ForgeError::DslParse(msg.into()))?;
+        num(&p)
+    };
+    match inner.as_rule() {
+        Rule::show_more_head => {
+            let mut i = inner.into_inner();
+            Ok(ShowMoreWindow::Head(next(
+                &mut i,
+                "show_more HEAD: expected number",
+            )?))
+        }
+        Rule::show_more_tail => {
+            let mut i = inner.into_inner();
+            Ok(ShowMoreWindow::Tail(next(
+                &mut i,
+                "show_more TAIL: expected number",
+            )?))
+        }
+        Rule::show_more_range => {
+            let mut i = inner.into_inner();
+            let a = next(&mut i, "show_more range: expected start")?;
+            let b = next(&mut i, "show_more range: expected end")?;
+            Ok(ShowMoreWindow::Range(a, b))
+        }
+        r => Err(ForgeError::DslParse(format!(
+            "show_more: unexpected window rule {r:?}"
+        ))),
+    }
+}
+
+/// Parse a `show_more_stmt` rule into a [`ForgeQLIR::ShowMore`].
+fn parse_show_more_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
+    let mut window = crate::ir::ShowMoreWindow::Full;
+    let mut clauses = crate::ir::Clauses::default();
+    for child in pair.into_inner() {
+        match child.as_rule() {
+            Rule::show_more_window => {
+                window = parse_show_more_window(child)?;
+            }
+            Rule::clauses => {
+                clauses = parse_clauses(child.into_inner());
+            }
+            _ => {}
+        }
+    }
+    Ok(ForgeQLIR::ShowMore { window, clauses })
+}
+
 // parse_statement is inherently long: one match arm per grammar rule.
 #[allow(clippy::too_many_lines)]
 fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
@@ -312,6 +377,8 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
                 clauses,
             })
         }
+        Rule::show_more_stmt => parse_show_more_stmt(pair),
+
         Rule::statement => {
             let inner = pair
                 .into_inner()
@@ -922,6 +989,67 @@ mod tests {
     }
 
     // ── SHOW LINES / FIND files ──────────────────────────────────────────────
+
+    #[test]
+    fn parse_show_more_bare_is_full() {
+        let ops = parse("SHOW MORE").unwrap();
+        match &ops[0] {
+            ForgeQLIR::ShowMore { window, clauses } => {
+                assert_eq!(*window, crate::ir::ShowMoreWindow::Full);
+                assert!(clauses.where_predicates.is_empty());
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_show_more_head_tail_range() {
+        use crate::ir::ShowMoreWindow;
+        let head = parse("SHOW MORE HEAD 20").unwrap();
+        let tail = parse("SHOW MORE TAIL 15").unwrap();
+        let range = parse("SHOW MORE 120-240").unwrap();
+        match &head[0] {
+            ForgeQLIR::ShowMore { window, .. } => assert_eq!(*window, ShowMoreWindow::Head(20)),
+            _ => panic!("wrong variant"),
+        }
+        match &tail[0] {
+            ForgeQLIR::ShowMore { window, .. } => assert_eq!(*window, ShowMoreWindow::Tail(15)),
+            _ => panic!("wrong variant"),
+        }
+        match &range[0] {
+            ForgeQLIR::ShowMore { window, .. } => {
+                assert_eq!(*window, ShowMoreWindow::Range(120, 240));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_show_more_window_then_where_composes() {
+        // WHERE must apply after every window form, not just bare SHOW MORE.
+        let ops = parse("SHOW MORE TAIL 40 WHERE text MATCHES 'error|fail'").unwrap();
+        match &ops[0] {
+            ForgeQLIR::ShowMore { window, clauses } => {
+                assert_eq!(*window, crate::ir::ShowMoreWindow::Tail(40));
+                assert_eq!(clauses.where_predicates.len(), 1);
+                assert_eq!(clauses.where_predicates[0].field, "text");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parse_show_more_range_then_where_and_limit() {
+        let ops = parse("SHOW MORE 1-400 WHERE text LIKE '%warning%' LIMIT 10").unwrap();
+        match &ops[0] {
+            ForgeQLIR::ShowMore { window, clauses } => {
+                assert_eq!(*window, crate::ir::ShowMoreWindow::Range(1, 400));
+                assert_eq!(clauses.where_predicates.len(), 1);
+                assert_eq!(clauses.limit, Some(10));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
 
     #[test]
     fn parse_show_lines() {

@@ -192,6 +192,52 @@ pub struct VerifyStep {
     pub command: String,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
+    /// Inline summary window for this step's output.
+    ///
+    /// Build/test logs have no universal pass/fail grammar, so `ForgeQL` never
+    /// parses or summarizes them — it returns the last (or first) `lines` of
+    /// output inline and buffers the full log for `SHOW MORE`. Absent → the
+    /// default tail window (see [`SummaryConfig::default`]).
+    #[serde(default)]
+    pub summary: SummaryConfig,
+}
+
+/// Inline output window for a [`VerifyStep`].
+///
+/// `direction` chooses which end of the log is shown inline; `lines` is how
+/// many. The full log is always available via `SHOW MORE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SummaryConfig {
+    /// Which end of the output to show inline.
+    #[serde(default)]
+    pub direction: SummaryDirection,
+    /// Number of lines to show inline before buffering the rest.
+    #[serde(default = "default_summary_lines")]
+    pub lines: usize,
+}
+
+impl Default for SummaryConfig {
+    fn default() -> Self {
+        Self {
+            direction: SummaryDirection::default(),
+            lines: default_summary_lines(),
+        }
+    }
+}
+
+/// Which end of a [`VerifyStep`]'s output is shown inline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummaryDirection {
+    /// Show the last `lines` of output (default — verdicts/errors land last).
+    #[default]
+    Tail,
+    /// Show the first `lines` of output.
+    Head,
+}
+
+const fn default_summary_lines() -> usize {
+    40
 }
 
 fn default_workspace_root() -> PathBuf {

@@ -600,6 +600,18 @@ pub struct VerifyBuildResult {
     pub success: bool,
     /// Combined stdout + stderr output from the command.
     pub output: String,
+    /// Number of output lines to show inline before buffering the rest for
+    /// `SHOW MORE`. Resolved from the step's `summary` config at run time.
+    #[serde(default = "default_summary_lines")]
+    pub summary_lines: usize,
+    /// Which end of the output to show inline (tail by default).
+    #[serde(default)]
+    pub summary_direction: crate::config::SummaryDirection,
+}
+
+/// Serde default for [`VerifyBuildResult::summary_lines`].
+const fn default_summary_lines() -> usize {
+    40
 }
 
 // -----------------------------------------------------------------------

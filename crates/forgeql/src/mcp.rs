@@ -221,7 +221,14 @@ async fn exec_engine(
     user_id: &str,
     session_id: Option<&str>,
     op: &ForgeQLIR,
-) -> Result<(ForgeQLResult, Option<forgeql_core::budget::BudgetSnapshot>), ErrorData> {
+) -> Result<
+    (
+        ForgeQLResult,
+        Option<forgeql_core::budget::BudgetSnapshot>,
+        Option<std::path::PathBuf>,
+    ),
+    ErrorData,
+> {
     let mut guard = engine.lock().await;
 
     // Decode the opaque session token into full SessionCoords before entering
@@ -260,8 +267,55 @@ async fn exec_engine(
     // session_id is already the full map key ({user}:{source}:{branch}:{alias}).
     let budget_snap = session_id.and_then(|mk| guard.budget_status_for_op(mk, op));
 
+    // Locate the session worktree while the lock is held — the CSV transport
+    // uses it to write the SHOW MORE buffer for over-cap output.
+    let worktree = session_id.and_then(|mk| guard.session_worktree(mk));
+
     drop(guard);
-    Ok((result, budget_snap))
+    Ok((result, budget_snap, worktree))
+}
+
+/// Decide whether a result's rendered CSV output should be buffered for
+/// `SHOW MORE`, returning `(label, direction, inline-cap)` when so.
+///
+/// Enabled for `VERIFY build`, whose full log is the largest single output
+/// sink. The buffer mechanism is general — other result types roll in here
+/// without changing the call site.
+fn buffering_params(
+    result: &ForgeQLResult,
+) -> Option<(String, forgeql_core::showmore::Direction, usize)> {
+    use forgeql_core::config::SummaryDirection;
+    use forgeql_core::showmore::Direction;
+    match result {
+        ForgeQLResult::VerifyBuild(v) => {
+            let dir = match v.summary_direction {
+                SummaryDirection::Tail => Direction::Tail,
+                SummaryDirection::Head => Direction::Head,
+            };
+            Some((format!("verify_build '{}'", v.step), dir, v.summary_lines))
+        }
+        _ => None,
+    }
+}
+
+/// Apply the `SHOW MORE` buffering to a rendered CSV output when the result
+/// type opts in and exceeds its inline cap. Returns the (possibly windowed)
+/// text to display; the full output is written to the session buffer.
+fn finalize_csv(
+    rendered: String,
+    result: &ForgeQLResult,
+    worktree: Option<&std::path::Path>,
+) -> String {
+    let Some(root) = worktree else {
+        return rendered;
+    };
+    let Some((label, dir, cap)) = buffering_params(result) else {
+        return rendered;
+    };
+    match forgeql_core::showmore::finalize(root, &rendered, &label, dir, cap) {
+        Ok(fin) => fin.text,
+        Err(_) => rendered,
+    }
 }
 // Tool definitions — the `#[tool_router]` macro scans these
 // -----------------------------------------------------------------------
@@ -311,7 +365,7 @@ impl ForgeQlMcp {
         let mut outputs: Vec<String> = Vec::with_capacity(ops.len());
         for (source_text, op) in &ops {
             let t0 = std::time::Instant::now();
-            let (result, budget_snap) =
+            let (result, budget_snap, worktree) =
                 exec_engine(&self.engine, user_id, params.session_id.as_deref(), op).await?;
             let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
             if let ForgeQLIR::UseSource { source, .. } = op {
@@ -333,7 +387,9 @@ impl ForgeQlMcp {
                 ));
             }
             let output = match format {
-                OutputFormat::Csv => compact::to_compact(&result),
+                OutputFormat::Csv => {
+                    finalize_csv(compact::to_compact(&result), &result, worktree.as_deref())
+                }
                 OutputFormat::Json => result.to_json(),
             };
             // Show line_budget to the agent only when the budget is actually

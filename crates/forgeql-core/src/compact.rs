@@ -18,6 +18,7 @@
 use crate::result::{
     CallDirection, FileEntry, FindNodeResult, ForgeQLResult, MemberEntry, MutationResult,
     OutlineEntry, QueryResult, SessionStats, ShowContent, ShowResult, SourceLine, SymbolRow,
+    VerifyBuildResult,
 };
 
 // -----------------------------------------------------------------------
@@ -35,6 +36,7 @@ pub fn to_compact(result: &ForgeQLResult) -> String {
         ForgeQLResult::Show(s) => compact_show(s),
         ForgeQLResult::FindNode(r) => compact_find_node(r),
         ForgeQLResult::Mutation(m) => compact_mutation(m),
+        ForgeQLResult::VerifyBuild(v) => compact_verify(v),
         // These are already small — keep JSON.
         _ => result.to_json(),
     }
@@ -429,6 +431,23 @@ fn compact_mutation(r: &MutationResult) -> String {
     chomp(&mut out);
     out
 }
+// -----------------------------------------------------------------------
+// VERIFY results
+// -----------------------------------------------------------------------
+
+/// VERIFY build → a one-line header followed by the raw command output.
+///
+/// The output is emitted verbatim (not CSV-quoted) so each log line maps to one
+/// buffer line, letting `SHOW MORE TAIL n` / `SHOW MORE WHERE text MATCHES …`
+/// window and grep the build log without re-running it.
+fn compact_verify(v: &VerifyBuildResult) -> String {
+    let verdict = if v.success { "PASS" } else { "FAIL" };
+    let mut out = String::with_capacity(v.output.len() + 64);
+    row(&mut out, &[&q("verify_build"), &q(&v.step), &q(verdict)]);
+    out.push_str(v.output.trim_end_matches('\n'));
+    out
+}
+
 // -----------------------------------------------------------------------
 // Query results
 // -----------------------------------------------------------------------

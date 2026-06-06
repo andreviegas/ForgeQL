@@ -99,6 +99,7 @@ statement = {
   | insert_node_stmt
   | delete_node_stmt
   | show_node_stmt
+  | show_more_stmt
 }
 
 /// FIND NODE id -- resolve a node_id to its current location, rev, and nav links.
@@ -160,6 +161,15 @@ show_callees_stmt = { "SHOW" ~ "callees" ~ "OF" ~ any_value ~ using_clause? ~ cl
 
 /// `SHOW LINES n-m OF 'file'`
 show_lines_stmt = { "SHOW" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ any_value ~ using_clause? ~ clauses }
+
+/// `SHOW MORE [HEAD n | TAIL n | n-m] [WHERE …] [LIMIT n]`
+/// Pages the session's last buffered output. With no window the whole buffer
+/// is returned (bypassing the inline cap, like an explicit SHOW LINES range).
+show_more_stmt   = { "SHOW" ~ "MORE" ~ show_more_window? ~ clauses }
+show_more_window = { show_more_head | show_more_tail | show_more_range }
+show_more_head   = { "HEAD" ~ number }
+show_more_tail   = { "TAIL" ~ number }
+show_more_range  = { number ~ "-" ~ number }
 
 // -----------------------------------------------------------------------
 // Queries

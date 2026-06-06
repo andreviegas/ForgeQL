@@ -6,6 +6,51 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.65.0] — 2026-06-06 — `SHOW MORE` output buffer
+
+### Added
+- **`SHOW MORE` — paged retrieval of a command's full output.** When a
+  command's output is too large to return inline, ForgeQL now shows a bounded
+  window and buffers the full output server-side. Retrieve the rest without
+  re-running the command:
+  ```sql
+  SHOW MORE                -- the whole buffered output
+  SHOW MORE HEAD 40        -- the first 40 lines
+  SHOW MORE TAIL 40        -- the last 40 lines
+  SHOW MORE 120-240        -- an explicit line range
+  SHOW MORE WHERE text MATCHES 'error|fail'   -- grep the buffer
+  ```
+  Every window form composes with `WHERE text` (regex or `LIKE`) and `LIMIT`,
+  and each returned line keeps its original buffer index so a precise follow-up
+  range can be requested. The most valuable case is filtering a long
+  `VERIFY build` log (`SHOW MORE WHERE text MATCHES 'error'`) without paying for
+  another multi-minute build.
+- **`VERIFY build` output is now windowed and buffered.** Instead of dumping the
+  entire build/test log, `VERIFY` shows the last lines inline (where verdicts and
+  errors land) and buffers the rest for `SHOW MORE`. ForgeQL never parses or
+  summarizes the log — build output has no universal pass/fail grammar — it only
+  windows it. The window is configurable per step in `.forgeql.yaml`:
+  ```yaml
+  verify_steps:
+    - name: test
+      command: ./run-tests.sh
+      summary:
+        direction: tail   # tail (default) | head
+        lines: 40         # inline lines before buffering the rest
+  ```
+  `summary` is optional and defaults to the last 40 lines.
+
+### Changed
+- `VERIFY build` results now render as readable newline-delimited text in the
+  default CSV output mode (previously a single-line JSON blob), so the log can be
+  windowed and grep-filtered line by line.
+
+### Internal
+- New `.forgeql-showmore` buffer file, stored in the session worktree beside
+  `.forgeql-columnar-delta`. It is excluded from user-facing commits and included
+  in transaction checkpoints, so a `ROLLBACK` restores the pre-transaction buffer
+  exactly as it restores the columnar delta.
+
 ## [0.64.0] — 2026-06-06 — Configurable inline output caps
 
 ### Added

@@ -118,6 +118,8 @@ SHOW context OF 'symbol_name' [clauses]
 SHOW callees OF 'symbol_name' [clauses]
 
 SHOW LINES n-m OF 'file_path' [clauses]
+
+SHOW MORE [HEAD n | TAIL n | n-m] [clauses]
 ```
 
 | Command | Returns |
@@ -129,8 +131,33 @@ SHOW LINES n-m OF 'file_path' [clauses]
 | `SHOW context OF` | Surrounding lines of a symbol definition. `DEPTH N` controls how many context lines (default 5). |
 | `SHOW callees OF` | All symbols called from inside the named function body. |
 | `SHOW LINES n-m OF` | Verbatim line range from a file. |
+| `SHOW MORE` | Pages the session's last buffered output. When a command's output is too large to return inline (e.g. `VERIFY build`), ForgeQL returns a window and buffers the full output; `SHOW MORE` retrieves the rest without re-running the command. |
 
 Every `SHOW` response includes `start_line` and `end_line` — chain directly into `CHANGE LINES` without re-reading.
+
+#### SHOW MORE — paged output buffer
+
+Any command whose output exceeds its inline cap is windowed inline and the full
+output is buffered server-side (per session). Retrieve the remainder with:
+
+```sql
+SHOW MORE                -- the whole buffered output
+SHOW MORE HEAD 40        -- the first 40 lines
+SHOW MORE TAIL 40        -- the last 40 lines
+SHOW MORE 120-240        -- an explicit 1-based inclusive line range
+SHOW MORE WHERE text MATCHES 'error|fail'   -- grep the buffer (regex)
+SHOW MORE TAIL 80 WHERE text LIKE '%warning%' LIMIT 10
+```
+
+Every window form composes with `WHERE text` (`MATCHES` regex or `LIKE`) and
+`LIMIT`/`OFFSET`; filtering runs over the windowed lines. Each returned line
+keeps its **original buffer index** so a precise follow-up range can be
+requested. The buffer holds the most recent buffered output and is overwritten
+by the next over-cap command. It lives in the session worktree and is restored
+by `ROLLBACK` along with the rest of the worktree state.
+
+The highest-value use is filtering a long `VERIFY build` log without re-running
+the build: `SHOW MORE WHERE text MATCHES 'error|warning'`.
 
 > **Template limitation** — `SHOW callees OF` does not resolve C++ template functions. Use `FIND usages OF 'symbol'` instead.
 

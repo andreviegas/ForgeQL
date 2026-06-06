@@ -34,6 +34,7 @@ pub mod parser;
 pub mod query_logger;
 pub mod result;
 pub mod session;
+pub mod showmore;
 pub mod storage;
 pub mod transforms;
 pub mod verify;

@@ -333,11 +333,14 @@ impl ForgeQLEngine {
                     "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
                 )
             })?;
+        let summary = step.summary;
         let result = verify::run_standalone(&step, &workdir);
         Ok(ForgeQLResult::VerifyBuild(VerifyBuildResult {
             step: result.step,
             success: result.success,
             output: result.output,
+            summary_lines: summary.lines,
+            summary_direction: summary.direction,
         }))
     }
 }
