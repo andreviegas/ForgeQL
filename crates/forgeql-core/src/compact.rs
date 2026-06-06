@@ -98,14 +98,34 @@ fn compact_lines(s: &ShowResult, lines: &[SourceLine]) -> String {
         (Some(start), None) => q(&start.to_string()),
         _ => String::new(),
     };
-    row(&mut out, &[&op, &sym, &file, &span]);
-    // Schema hint.
-    row(&mut out, &[&q("line"), &q("text")]);
-    // Data rows.
-    for line in lines {
-        let lnum = line.line.to_string();
-        let text = q(&line.text);
-        row(&mut out, &[&lnum, &text]);
+    // Node-framed rendering: when the shown lines belong to a single addressable
+    // node (SHOW body emits the node's id on its first line), drop absolute line
+    // numbers in favour of a 1-based node-relative `off`set, so the agent edits
+    // with `CHANGE NODE 'id(off)'` / `'id(a-b)'`. The id is stated once in the
+    // header. Falls back to absolute line numbers when no node frame is present
+    // (SHOW LINES / SHOW context, or an unparsed symbol with no ordinal).
+    let frame = lines
+        .iter()
+        .find_map(|line| line.node_id.clone())
+        .zip(s.start_line);
+    if let Some((node_id, start)) = frame {
+        row(&mut out, &[&op, &sym, &file, &span, &q(&node_id)]);
+        // Schema hint: `off` is the 1-based line offset within the node.
+        row(&mut out, &[&q("off"), &q("text")]);
+        for line in lines {
+            let off = (line.line.saturating_sub(start) + 1).to_string();
+            row(&mut out, &[&off, &q(&line.text)]);
+        }
+    } else {
+        row(&mut out, &[&op, &sym, &file, &span]);
+        // Schema hint.
+        row(&mut out, &[&q("line"), &q("text")]);
+        // Data rows.
+        for line in lines {
+            let lnum = line.line.to_string();
+            let text = q(&line.text);
+            row(&mut out, &[&lnum, &text]);
+        }
     }
     // Truncation hint (when implicit line cap fired).
     if let Some(ref hint) = s.hint {
@@ -1338,6 +1358,96 @@ mod tests {
         let mut s = String::new();
         chomp(&mut s);
         assert_eq!(s, "");
+    }
+
+    fn lines_result(op: &str, start: usize, len: usize) -> ShowResult {
+        ShowResult {
+            op: op.to_string(),
+            symbol: Some("foo".to_string()),
+            file: None,
+            content: ShowContent::Lines {
+                lines: Vec::new(),
+                byte_start: None,
+                depth: None,
+            },
+            start_line: Some(start),
+            end_line: Some(start + len.saturating_sub(1)),
+            total_lines: None,
+            hint: None,
+            metadata: None,
+        }
+    }
+
+    #[test]
+    fn compact_lines_node_framed_drops_absolute_lines() {
+        // SHOW body emits the node's id on its first line; the renderer then
+        // shows 1-based node-relative offsets instead of absolute line numbers.
+        let lines = vec![
+            SourceLine {
+                line: 10,
+                text: "fn foo() {".to_string(),
+                marker: None,
+                node_id: Some("nabc123def456.0007".to_string()),
+            },
+            SourceLine {
+                line: 11,
+                text: "    bar();".to_string(),
+                marker: None,
+                node_id: None,
+            },
+            SourceLine {
+                line: 12,
+                text: "}".to_string(),
+                marker: None,
+                node_id: None,
+            },
+        ];
+        let s = lines_result("show_body", 10, lines.len());
+        let out = compact_lines(&s, &lines);
+        assert!(
+            out.contains("nabc123def456.0007"),
+            "header carries node_id: {out}"
+        );
+        assert!(
+            out.contains("\"off\",\"text\""),
+            "schema is off/text: {out}"
+        );
+        assert!(
+            out.contains("1,\"fn foo() {\""),
+            "offsets are 1-based: {out}"
+        );
+        assert!(out.contains("2,\"    bar();\""));
+        assert!(out.contains("3,\"}\""));
+        assert!(
+            !out.contains("10,\"fn foo() {\""),
+            "absolute lines dropped: {out}"
+        );
+    }
+
+    #[test]
+    fn compact_lines_without_node_id_keeps_absolute_lines() {
+        let lines = vec![
+            SourceLine {
+                line: 10,
+                text: "a".to_string(),
+                marker: None,
+                node_id: None,
+            },
+            SourceLine {
+                line: 11,
+                text: "b".to_string(),
+                marker: None,
+                node_id: None,
+            },
+        ];
+        let s = lines_result("show_lines", 10, lines.len());
+        let out = compact_lines(&s, &lines);
+        assert!(
+            out.contains("\"line\",\"text\""),
+            "schema stays line/text: {out}"
+        );
+        assert!(out.contains("10,\"a\""));
+        assert!(out.contains("11,\"b\""));
     }
 
     #[test]

@@ -124,7 +124,7 @@ SHOW MORE [HEAD n | TAIL n | n-m] [clauses]
 
 | Command | Returns |
 |---|---|
-| `SHOW body OF` | Source text of a symbol. **Default `DEPTH 0`**: signature only, body replaced by `{ ... }`. `DEPTH 1`+: progressively reveals nested structure. `DEPTH 99`: full source. |
+| `SHOW body OF` | Source text of a symbol. **Default `DEPTH 0`**: signature only, body replaced by `{ ... }`. `DEPTH 1`+: progressively reveals nested structure. `DEPTH 99`: full source. In CSV output the first column is a **node-relative 1-based `off`set** (not an absolute line) and the node's id is in the header — so you can `CHANGE NODE '<id>'` straight from the read. Absolute line numbers remain in `format=JSON` and in `SHOW LINES`. |
 | `SHOW signature OF` | Declaration line only (return type, name, parameters). |
 | `SHOW outline OF` | Structural outline of a file: all top-level symbols with fql_kind, name, line. Supports `WHERE fql_kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
 | `SHOW members OF` | Member declarations of a class/struct/enum: fields, methods, enumerators. Supports `WHERE fql_kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |

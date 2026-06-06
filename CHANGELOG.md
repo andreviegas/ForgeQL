@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.66.0] — 2026-06-06 — `SHOW body` node-relative line offsets
+
+### Changed
+- **`SHOW body` now addresses lines by node-relative offset, not absolute line
+  number** (CSV output). When the shown symbol is an addressable node, the
+  first column becomes a 1-based `off`set within the node and the node's id is
+  stated once in the header row:
+  ```
+  "show_body","compact_verify","crates/.../compact.rs","443-449","nf817bc7b334d.1237"
+  "off","text"
+  1,"fn compact_verify(v: &VerifyBuildResult) -> String {"
+  2,"    let verdict = if v.success { ""PASS"" } else { ""FAIL"" };"
+  ```
+  This lets an agent edit straight from the read it just did — `CHANGE NODE
+  '<id>'` for the whole symbol — without a separate `FIND` to recover the
+  handle, and prepares for node-relative sub-range edits (`CHANGE NODE
+  'id(a-b)'`, planned next). Absolute line numbers are still available via
+  `format=JSON` (the `SourceLine.line` field is unchanged) and via `SHOW LINES`,
+  which is unaffected. `SHOW body` of a symbol with no node ordinal (unparsed
+  source / legacy backend) falls back to absolute line numbers.
+
 ## [0.65.0] — 2026-06-06 — `SHOW MORE` output buffer
 
 ### Added
