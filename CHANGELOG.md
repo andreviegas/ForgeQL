@@ -6,6 +6,15 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.62.0] — 2026-06-06 — SHOW body returns a bounded symbol in full
+
+### Changed
+- `SHOW body OF '<symbol>'` is no longer blocked by the implicit 40-line cap. A
+  single addressable symbol is a bounded unit, so its full extent is returned
+  without requiring an explicit `LIMIT`. The cap still applies to unbounded
+  output (e.g. whole-file reads). `SHOW NODE [CONTENT]` was already exempt — it
+  resolves to the node's exact line range. This removes the most common reason
+  agents fell back to raw `SHOW LINES` just to read a function.
 ## [0.61.0] — 2026-06-06 — Quieter output; parser, regex, and node-addressing fixes
 
 ### Changed

@@ -149,10 +149,15 @@ impl ForgeQLEngine {
             _ => None,
         };
 
-        // SHOW LINES n-m has a user-specified range — the implicit 40-line cap
-        // should NOT block it.  Only SHOW body / SHOW context are subject to
-        // the implicit cap (they can produce unbounded output).
-        let is_explicit_range = matches!(op, ForgeQLIR::ShowLines { .. });
+        // The implicit 40-line cap blocks only UNBOUNDED source output. Two
+        // shapes are bounded and must never be blocked:
+        //   - SHOW LINES n-m       — a user-specified line range.
+        //   - SHOW body OF 'sym'   — a single addressable symbol's own extent.
+        // (SHOW NODE CONTENT is rewritten into a SHOW LINES range above, so it
+        // is already covered.) SHOW context can expand via DEPTH, so it stays
+        // capped.
+        let is_explicit_range =
+            matches!(op, ForgeQLIR::ShowLines { .. } | ForgeQLIR::ShowBody { .. });
 
         // Apply WHERE predicates BEFORE the line caps.
         // This lets queries like `SHOW body OF 'fn' WHERE text MATCHES 'TODO'`

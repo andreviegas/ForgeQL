@@ -1401,6 +1401,11 @@
     "name": "GSB4_show_body_k_sys_work_q_init_full_bug1"
   },
   {
+    "expect_line_count": 48,
+    "fql": "SHOW body OF 'k_work_flush_delayable' DEPTH 99",
+    "name": "GSB5_show_body_large_function_not_blocked_bug_noise"
+  },
+  {
     "expect_row_count": 3,
     "expect_rows": [
       {"line": 26, "name": "IS_ENABLED",            "path": "kernel/system_work_q.c"},
