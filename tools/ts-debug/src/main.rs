@@ -168,6 +168,7 @@ fn detect_language(path: &Path) -> Option<Language> {
         Some("cpp" | "cc" | "cxx" | "hpp" | "hxx") => Some(tree_sitter_cpp::LANGUAGE.into()),
         Some("rs") => Some(tree_sitter_rust::LANGUAGE.into()),
         Some("py") => Some(tree_sitter_python::LANGUAGE.into()),
+        Some("md" | "markdown") => Some(tree_sitter_md::LANGUAGE.into()),
         _ => None,
     }
 }
@@ -183,6 +184,7 @@ fn language_label(path: &Path) -> &'static str {
         Some("cpp" | "cc" | "cxx" | "hpp" | "hxx") => "tree-sitter-cpp",
         Some("rs") => "tree-sitter-rust",
         Some("py") => "tree-sitter-python",
+        Some("md" | "markdown") => "tree-sitter-md",
         _ => "unknown",
     }
 }

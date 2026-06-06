@@ -762,6 +762,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-cpp",
+ "tree-sitter-md",
  "tree-sitter-python",
  "tree-sitter-rust",
 ]
