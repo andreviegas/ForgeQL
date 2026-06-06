@@ -176,11 +176,18 @@ impl ForgeQLEngine {
         let budget_max = session_id
             .and_then(|sid| self.sessions.get(sid))
             .and_then(Session::budget_critical_max_lines);
+        let show_limit = session_id
+            .and_then(|sid| self.sessions.get(sid))
+            .map_or_else(
+                || crate::config::OutputConfig::default().show_lines,
+                |s| s.output_config().show_lines,
+            );
         Self::apply_show_lines_cap(
             &mut show_result,
             show_clauses,
             budget_max,
             is_explicit_range,
+            show_limit,
         );
 
         Ok(ForgeQLResult::Show(show_result))

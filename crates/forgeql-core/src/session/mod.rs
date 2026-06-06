@@ -184,6 +184,10 @@ pub struct Session {
     /// Working directory captured alongside `frozen_verify_steps` — the
     /// directory that contained `.forgeql.yaml` when the session was opened.
     pub frozen_workdir: Option<PathBuf>,
+    /// Inline output caps frozen from `.forgeql.yaml` at session start, mirroring
+    /// `frozen_verify_steps`.  `None` until the first `USE` that finds a config;
+    /// callers fall back to `OutputConfig::default()`.
+    pub frozen_output_config: Option<crate::config::OutputConfig>,
     /// Optional line-budget tracker.  `None` when the `.forgeql.yaml` does
     /// not contain a `line_budget` section.
     budget: Option<BudgetState>,
@@ -243,6 +247,7 @@ impl Session {
             last_clean_oid: None,
             frozen_verify_steps: None,
             frozen_workdir: None,
+            frozen_output_config: None,
             budget: None,
             budget_data_dir: None,
             budget_branch: None,
@@ -284,6 +289,14 @@ impl Session {
     #[must_use]
     pub const fn columnar_build(&self) -> Option<&crate::storage::ColumnarBuildContext> {
         self.columnar_build.as_ref()
+    }
+
+    /// Inline output caps for this session, frozen from `.forgeql.yaml` at
+    /// `USE` time.  Falls back to [`OutputConfig::default`] when no config was
+    /// found (`find_limit` = 20, `show_lines` = 40).
+    #[must_use]
+    pub fn output_config(&self) -> crate::config::OutputConfig {
+        self.frozen_output_config.unwrap_or_default()
     }
 
     /// Parse all source files in the worktree and build a fresh `SymbolTable`.

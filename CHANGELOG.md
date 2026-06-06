@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.64.0] — 2026-06-06 — Configurable inline output caps
+
+### Added
+- `.forgeql.yaml` now supports an `output` section to tune how many rows/lines
+  each query returns inline, replacing the previously hard-coded limits:
+  ```yaml
+  output:
+    find_limit: 20   # rows returned by FIND / list queries without an explicit LIMIT
+    show_lines: 40   # source lines returned by SHOW LINES / SHOW body / SHOW context
+  ```
+  Both keys are optional and default to their former built-in values (20 and 40),
+  so existing configurations are unaffected. The caps are frozen at `USE` time
+  alongside `verify_steps`, so a later `CHANGE` to the config file cannot alter
+  them mid-session.
 ## [0.63.0] — 2026-06-06 — `AND` as a synonym for `WHERE`
 
 ### Added

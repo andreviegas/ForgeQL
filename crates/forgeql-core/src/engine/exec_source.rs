@@ -417,6 +417,7 @@ impl ForgeQLEngine {
                 crate::budget::sweep_expired(&self.data_dir);
                 session.init_budget(budget_cfg, wt_existed, &self.data_dir, budget_branch);
             }
+            session.frozen_output_config = Some(config.output);
             session.frozen_verify_steps = Some(config.verify_steps);
         }
 

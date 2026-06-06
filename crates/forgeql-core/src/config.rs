@@ -42,6 +42,11 @@ pub struct ForgeConfig {
     /// Controls optional background warming policies.
     #[serde(default)]
     pub columnar: ColumnarConfig,
+
+    /// Inline output caps for non-VERIFY commands.  Full results are buffered
+    /// for `SHOW MORE`; these only bound the inline window.
+    #[serde(default)]
+    pub output: OutputConfig,
 }
 
 /// Configuration for the line-budget system that limits how many source
@@ -195,6 +200,39 @@ fn default_workspace_root() -> PathBuf {
 
 const fn default_timeout() -> u64 {
     120
+}
+
+/// Inline output caps for non-`VERIFY` commands.
+///
+/// Each value is the number of rows/lines returned inline before the full
+/// result is buffered for `SHOW MORE`.  Replaces the former hard-coded
+/// `DEFAULT_QUERY_LIMIT` / `DEFAULT_SHOW_LINE_LIMIT` constants so deployments
+/// can tune verbosity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputConfig {
+    /// Inline row cap for `FIND` / list results when no explicit `LIMIT` is given.
+    #[serde(default = "default_find_limit")]
+    pub find_limit: usize,
+    /// Inline source-line cap for `SHOW LINES` / `SHOW body` / `SHOW context`.
+    #[serde(default = "default_show_lines")]
+    pub show_lines: usize,
+}
+
+impl Default for OutputConfig {
+    fn default() -> Self {
+        Self {
+            find_limit: default_find_limit(),
+            show_lines: default_show_lines(),
+        }
+    }
+}
+
+const fn default_find_limit() -> usize {
+    20
+}
+
+const fn default_show_lines() -> usize {
+    40
 }
 
 impl ForgeConfig {

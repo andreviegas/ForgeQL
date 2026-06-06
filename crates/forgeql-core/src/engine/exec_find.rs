@@ -6,10 +6,7 @@ use crate::{
 };
 
 use super::ForgeQLEngine;
-use super::{
-    DEFAULT_QUERY_LIMIT, DEFAULT_SHOW_LINE_LIMIT, detect_metric_hint, reject_text_filter,
-    require_session_id,
-};
+use super::{detect_metric_hint, reject_text_filter, require_session_id};
 impl ForgeQLEngine {
     pub(super) fn find_symbols(
         &self,
@@ -31,7 +28,7 @@ impl ForgeQLEngine {
 
         let total = results.len();
         if clauses.limit.is_none() {
-            results.truncate(DEFAULT_QUERY_LIMIT);
+            results.truncate(session.output_config().find_limit);
         }
 
         let metric_hint = detect_metric_hint(clauses);
@@ -68,7 +65,7 @@ impl ForgeQLEngine {
 
         let total = results.len();
         if clauses.limit.is_none() {
-            results.truncate(DEFAULT_QUERY_LIMIT);
+            results.truncate(session.output_config().find_limit);
         }
 
         Ok(ForgeQLResult::Query(QueryResult {
@@ -126,6 +123,7 @@ impl ForgeQLEngine {
         clauses: Option<&Clauses>,
         budget_max: Option<usize>,
         is_explicit_range: bool,
+        show_limit: usize,
     ) {
         // Operates only on source-line outputs.
         let total = match &show_result.content {
@@ -149,7 +147,7 @@ impl ForgeQLEngine {
                         lines.truncate(limit);
                     }
                 }
-            } else if !is_explicit_range && total > DEFAULT_SHOW_LINE_LIMIT {
+            } else if !is_explicit_range && total > show_limit {
                 // No explicit LIMIT and output exceeds the cap.
                 // Block the output entirely — return zero lines + guidance.
                 if let ShowContent::Lines { lines, .. } = &mut show_result.content {
@@ -158,7 +156,7 @@ impl ForgeQLEngine {
                 show_result.total_lines = Some(total);
                 show_result.hint = Some(format!(
                     "Blocked: this SHOW command would return {total} lines \
-                     (limit is {DEFAULT_SHOW_LINE_LIMIT} without an explicit LIMIT clause). \
+                     (limit is {show_limit} without an explicit LIMIT clause). \
                      Use FIND symbols WHERE to locate the exact symbol you need — \
                      it returns file path and line numbers. \
                      Then use SHOW LINES n-m OF 'file' to read only those lines. \
