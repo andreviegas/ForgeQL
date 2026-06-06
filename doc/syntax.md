@@ -270,7 +270,7 @@ are auto-deleted on the next `USE` via `sweep_expired()`.
 ## Universal Clauses
 
 Every command accepts these clauses. Inapplicable clauses are silently ignored.
-Multiple `WHERE` clauses combine with implicit AND.
+Multiple `WHERE` clauses combine with implicit AND. `AND` is accepted as a synonym for a repeated `WHERE` (e.g. `WHERE a = 1 AND b > 2`).
 
 Engine applies clauses in this fixed pipeline order, regardless of written order:
 
@@ -292,7 +292,7 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 
 | Clause | Purpose |
 |---|---|
-| `WHERE` | Filter rows. Repeatable (implicit AND). Works on all field types including dynamic and enrichment fields. |
+| `WHERE` | Filter rows. Repeatable (implicit AND); `AND` is an accepted synonym for a repeated `WHERE`. Works on all field types including dynamic and enrichment fields. |
 | `HAVING` | Filter after `GROUP BY` aggregation. Operates on `count`. |
 | `IN` | Restrict to files matching glob pattern. |
 | `EXCLUDE` | Remove files matching glob pattern. |

@@ -247,7 +247,7 @@ clauses = {
   | lines_clause)*
 }
 
-where_clause  = { "WHERE"  ~ predicate }
+where_clause  = { ("WHERE" | "AND")  ~ predicate }
 having_clause = { "HAVING" ~ predicate }
 
 /// A single predicate: `field op value`.

@@ -17,6 +17,14 @@
     "name": "G2_kernel_sched_first_5_functions_by_line"
   },
   {
+    "expect_row_count": 1,
+    "expect_rows": [
+      {"line": 80, "name": "runq_add"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'function' AND name = 'runq_add' IN 'kernel/sched.c'",
+    "name": "GAND1_and_aliases_where_combines_predicates"
+  },
+  {
     "expect_rows": [
       {"kind": "field", "line": 3525, "name": "k_mutex_lock", "path": "include/zephyr/kernel.h"}
     ],

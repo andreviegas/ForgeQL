@@ -147,13 +147,6 @@ pub(super) fn parse_using_clause(
 /// hint to the pest parse error.
 pub(super) fn enrich_parse_error(input: &str, mut msg: String) -> String {
     let upper = input.to_uppercase();
-    if upper.contains(" AND ") {
-        msg.push_str(
-            "\n\nHint: ForgeQL does not support the AND keyword. \
-             Use multiple WHERE clauses instead.\n\
-             Example: WHERE node_kind = 'function_definition' WHERE is_static = 'true'",
-        );
-    }
     if upper.contains(" OR ") {
         msg.push_str(
             "\n\nHint: ForgeQL does not support the OR keyword. \

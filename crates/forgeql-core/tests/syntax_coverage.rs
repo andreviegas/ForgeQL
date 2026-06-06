@@ -2460,6 +2460,11 @@ fn parse_matches_operator() {
 }
 
 #[test]
+fn parse_and_clause_as_where_alias() {
+    parser::parse("FIND symbols WHERE fql_kind = 'function' AND lines > 10")
+        .expect("parse AND as a WHERE alias");
+}
+#[test]
 fn parse_not_matches_operator() {
     parser::parse("FIND symbols WHERE name NOT MATCHES '^init'").expect("parse NOT MATCHES");
 }
@@ -2479,6 +2484,30 @@ fn find_symbols_where_name_matches_regex() {
     }
 }
 
+#[test]
+fn and_is_alias_for_where_in_find_symbols() {
+    let (mut e, sid, _d) = engine_with_session();
+    // `AND` must be a pure synonym for a repeated `WHERE`: both predicates apply.
+    let with_where = as_query(&exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES '^encender'",
+    ))
+    .results
+    .len();
+    let with_and = as_query(&exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE fql_kind = 'function' AND name MATCHES '^encender'",
+    ))
+    .results
+    .len();
+    assert!(
+        with_and > 0,
+        "test corpus should contain matching functions"
+    );
+    assert_eq!(with_where, with_and, "AND must be a synonym for WHERE");
+}
 #[test]
 fn find_symbols_where_name_not_matches_regex() {
     let (mut e, sid, _d) = engine_with_session();

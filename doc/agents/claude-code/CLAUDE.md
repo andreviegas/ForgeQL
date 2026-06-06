@@ -63,7 +63,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 
 - All commands accept `WHERE`, `GROUP BY`, `ORDER BY`, `LIMIT`, `OFFSET` — combine freely.
 - `IN 'src'` and `IN 'crates/'` auto-expand to `IN 'src/**'` — bare directory paths are always safe.
-- Multiple `WHERE` clauses combine as AND.
+- Multiple `WHERE` clauses combine as AND. `AND` is an accepted synonym for a repeated `WHERE`, so `WHERE fql_kind = 'function' AND lines > 10` parses and runs identically to two `WHERE` clauses.
 - FIND defaults to 20 rows without LIMIT.
 - Format defaults to CSV (~60% fewer tokens). Use `format=JSON` only when parsing fields programmatically.
 - Every response includes `tokens_approx` — if large, narrow with WHERE, IN, EXCLUDE, or lower LIMIT.

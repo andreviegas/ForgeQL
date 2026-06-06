@@ -6,7 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.63.0] — 2026-06-07 — Networked server and terminal client (HTTP MCP)
+## [0.63.0] — 2026-06-06 — `AND` as a synonym for `WHERE`
+
+### Added
+- `AND` is now accepted anywhere a repeated `WHERE` clause is, as a pure
+  synonym. A query such as
+  `FIND symbols WHERE fql_kind = 'function' AND lines > 10` now parses and runs
+  identically to stacking two `WHERE` clauses. Predicates still combine with AND
+  semantics, so results are unchanged — this only removes a common failure mode
+  where a SQL-style `AND` produced a parse error. The alias lives in the shared
+  clause grammar, so it applies uniformly to every command (`FIND`, `SHOW`, and
+  mutations) with no per-command handling.
+## [0.62.0] — 2026-06-06 — SHOW body returns a bounded symbol in full
 
 ### Added
 - `forgeql-server`: a standalone HTTP daemon that exposes the ForgeQL engine over
