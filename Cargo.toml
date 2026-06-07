@@ -8,6 +8,8 @@ members = [
     "crates/forgeql-lang-python",
     "crates/forgeql-lang-rust",
     "crates/forgeql",
+    "crates/forgeql-server",
+    "crates/forgeql-client",
     "tools/ts-debug",
 ]
 # tools/ crates are workspace members (for Cargo.lock version parity) but are
@@ -21,10 +23,12 @@ default-members = [
     "crates/forgeql-lang-python",
     "crates/forgeql-lang-rust",
     "crates/forgeql",
+    "crates/forgeql-server",
+    "crates/forgeql-client",
 ]
 
 [workspace.package]
-version   = "0.62.0"
+version   = "0.63.0"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"

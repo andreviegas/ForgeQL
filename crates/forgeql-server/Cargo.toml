@@ -1,0 +1,39 @@
+[package]
+name        = "forgeql-server"
+description = "ForgeQL server — multi-tenant MCP daemon over HTTP/SSE"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "forgeql-server"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+forgeql-core          = { workspace = true }
+forgeql-lang-c        = { workspace = true }
+forgeql-lang-cpp      = { workspace = true }
+forgeql-lang-markdown = { workspace = true }
+forgeql-lang-python   = { workspace = true }
+forgeql-lang-rust     = { workspace = true }
+
+# async runtime + HTTP framework
+tokio = { workspace = true }
+axum  = "0.8"
+
+# serialization (MCP JSON-RPC envelope)
+serde_json = { workspace = true }
+
+# errors
+anyhow = { workspace = true }
+
+# logging
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# CLI args
+clap = { workspace = true }

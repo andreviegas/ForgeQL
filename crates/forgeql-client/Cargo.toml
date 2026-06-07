@@ -1,0 +1,29 @@
+[package]
+name        = "forgeql-client"
+description = "ForgeQL client — thin terminal REPL/pipe client for forgeql-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "forgeql-client"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# errors
+anyhow = { workspace = true }
+
+# CLI args + line editing
+clap      = { workspace = true }
+rustyline = { workspace = true }
+
+# MCP JSON-RPC envelope
+serde_json = { workspace = true }
+
+# HTTP transport (blocking — the REPL is a simple request/response loop).
+# rustls avoids a system OpenSSL dependency.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

@@ -6,8 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.62.0] — 2026-06-06 — SHOW body returns a bounded symbol in full
+## [0.63.0] — 2026-06-07 — Networked server and terminal client (HTTP MCP)
 
+### Added
+- `forgeql-server`: a standalone HTTP daemon that exposes the ForgeQL engine over
+  MCP JSON-RPC. `GET /health` is a liveness probe; `POST /mcp` accepts a
+  `tools/call` request for the `run_fql` tool and returns the same compact-CSV or
+  JSON output as the existing stdio server. The bind address and port are set with
+  `--host` and `--port` (default `0.0.0.0:8080`) and the index data directory with
+  `--data-dir`. Authentication is not yet enabled.
+- `forgeql-client`: a thin terminal client that talks to `forgeql-server` over
+  HTTP. It supports an interactive REPL, one-shot execution (`-e`), and piped
+  scripts on stdin. The connection target is set with `--host`/`--port` (or the
+  `FORGEQL_HOST`/`FORGEQL_PORT` environment variables). The session token issued by
+  `USE` is captured automatically and threaded into later statements, so `USE`
+  followed by `FIND`/`SHOW` works across REPL lines and piped scripts.
+  followed by `FIND`/`SHOW` works across REPL lines and piped scripts.
+
+## [0.62.0] — 2026-06-06 — SHOW body returns a bounded symbol in full
 ### Changed
 - `SHOW body OF '<symbol>'` is no longer blocked by the implicit 40-line cap. A
   single addressable symbol is a bounded unit, so its full extent is returned
