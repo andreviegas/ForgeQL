@@ -38,7 +38,8 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
 | Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` |
-| File structure | `SHOW outline OF 'file' [WHERE fql_kind = '...']` |
+| File structure (tree) | `SHOW outline OF 'file'` — structural decls only, `depth` per row; add `ALL` for every node, or `WHERE fql_kind = '...'` |
+| Subtree outline | `SHOW outline OF '<node_id>'` |
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
 | File list | `FIND files [IN 'path/**'] [WHERE extension = '...'] ORDER BY size DESC` |
@@ -105,11 +106,13 @@ FIND files [clauses]
 ```sql
 SHOW body OF 'name' [DEPTH N] [clauses]
 SHOW signature OF 'name' [clauses]
-SHOW outline OF 'file' [clauses]
+SHOW outline OF 'file' [ALL] [clauses]   -- structural tree (depth per row); ALL = every node
+SHOW outline OF '<node_id>' [clauses]    -- outline a node's subtree
 SHOW members OF 'type' [clauses]
 SHOW context OF 'name' [clauses]
 SHOW callees OF 'name' [clauses]
 SHOW LINES n-m OF 'file' [clauses]
+SHOW NODE '<node_id>' [CONTENT | METADATA] [clauses]   -- '<id>(n)' / '<id>(n-m)' narrows CONTENT
 ```
 
 ### CHANGE & Transactions
@@ -118,6 +121,10 @@ CHANGE FILE 'path' LINES n-m WITH 'text'
 CHANGE FILE 'path' LINES n-m WITH NOTHING
 CHANGE FILES 'glob1','glob2' MATCHING 'old' WITH 'new'
 CHANGE FILE 'path' WITH 'full_content'
+
+CHANGE NODE '<node_id>' [IF REV '<rev>'] WITH 'text'   -- '<id>(n)' / '<id>(n-m)' splices node lines
+INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'text'
+DELETE NODE '<node_id>' [IF REV '<rev>']
 
 COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]
 MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]

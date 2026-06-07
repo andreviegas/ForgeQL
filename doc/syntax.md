@@ -109,7 +109,8 @@ SHOW body OF 'symbol_name' [DEPTH N] [clauses]
 
 SHOW signature OF 'symbol_name' [clauses]
 
-SHOW outline OF 'file_path' [clauses]
+SHOW outline OF 'file_path' [ALL] [clauses]
+SHOW outline OF '<node_id>' [ALL] [clauses]
 
 SHOW members OF 'type_name' [clauses]
 
@@ -119,6 +120,8 @@ SHOW callees OF 'symbol_name' [clauses]
 
 SHOW LINES n-m OF 'file_path' [clauses]
 
+SHOW NODE '<node_id>' [CONTENT | METADATA] [clauses]
+
 SHOW MORE [HEAD n | TAIL n | n-m] [clauses]
 ```
 
@@ -126,11 +129,12 @@ SHOW MORE [HEAD n | TAIL n | n-m] [clauses]
 |---|---|
 | `SHOW body OF` | Source text of a symbol. **Default `DEPTH 0`**: signature only, body replaced by `{ ... }`. `DEPTH 1`+: progressively reveals nested structure. `DEPTH 99`: full source. In CSV output the first column is a **node-relative 1-based `off`set** (not an absolute line) and the node's id is in the header — so you can `CHANGE NODE '<id>'` straight from the read. Absolute line numbers remain in `format=JSON` and in `SHOW LINES`. |
 | `SHOW signature OF` | Declaration line only (return type, name, parameters). |
-| `SHOW outline OF` | Structural outline of a file: all top-level symbols with fql_kind, name, line. Supports `WHERE fql_kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
+| `SHOW outline OF` | Structural tree of a file. By default lists only **structural declarations** (functions, classes, structs, enums, traits, unions, namespaces, modules, type aliases, macros); each entry carries a **`depth`** so the compact output reads as an indented tree in source order. `ALL` includes every node; a `WHERE fql_kind = '...'` predicate implies `ALL`. Passing a `<node_id>` instead of a file path scopes the outline to that node's subtree. Supports `ORDER BY`, `LIMIT`, `OFFSET`. |
 | `SHOW members OF` | Member declarations of a class/struct/enum: fields, methods, enumerators. Supports `WHERE fql_kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
 | `SHOW context OF` | Surrounding lines of a symbol definition. `DEPTH N` controls how many context lines (default 5). |
 | `SHOW callees OF` | All symbols called from inside the named function body. |
 | `SHOW LINES n-m OF` | Verbatim line range from a file. |
+| `SHOW NODE '<id>'` | `CONTENT` (default) prints the node's source via `SHOW LINES`; `METADATA` returns its `FIND NODE` record. A node-relative line offset — `'<id>(n)'` or `'<id>(n-m)'` — narrows `CONTENT` to a single line or inclusive range within the node's own span (1-based). |
 | `SHOW MORE` | Pages the session's last buffered output. When a command's output is too large to return inline (e.g. `VERIFY build`), ForgeQL returns a window and buffers the full output; `SHOW MORE` retrieves the rest without re-running the command. |
 
 Every `SHOW` response includes `start_line` and `end_line` — chain directly into `CHANGE LINES` without re-reading.
@@ -223,6 +227,57 @@ END
 | Closing tag | Must appear on its **own line** with **no leading whitespace**, matching the opening tag exactly |
 | Body | May contain any characters — single quotes, double quotes, embedded ForgeQL keywords — without escaping |
 | Purpose | Prefer over `'…'` when the replacement contains single quotes (Rust char literals, lifetimes, C-style string escapes) |
+
+---
+
+### Node Addressing
+
+Every indexed symbol has a **stable node handle** — a `node_id` of the form
+`n<segment>.<ordinal>`. `<segment>` is a hash prefix of the file path; `<ordinal>`
+is a per-file counter assigned in source order. A node_id stays valid across edits
+that shift line numbers, so it is the drift-proof way to target code: read once,
+then mutate by handle instead of by absolute line.
+
+```sql
+FIND NODE '<node_id>'                      -- metadata: name, kind, line, end_line, rev, nav
+SHOW NODE '<node_id>' [CONTENT | METADATA] -- source (default) or the FIND NODE record
+CHANGE NODE '<node_id>' WITH '...'         -- replace the whole node
+INSERT (BEFORE | AFTER) NODE '<node_id>' WITH '...'
+DELETE NODE '<node_id>' [IF REV '<rev>']
+```
+
+`FIND symbols`, `SHOW outline`, and the CSV form of `SHOW body` all surface
+node_ids, so a handle is usually one read away.
+
+#### Node-relative line offsets
+
+A node_id may carry a 1-based line offset **inside the node's own span**, so you
+can target one line (or a range) of a node without computing absolute numbers:
+
+```sql
+SHOW NODE '<id>(2)'   CONTENT       -- the node's 2nd line
+SHOW NODE '<id>(2-4)' CONTENT       -- the node's 2nd–4th lines (inclusive)
+CHANGE NODE '<id>(2)'   WITH '...'  -- splice the node's 2nd line
+CHANGE NODE '<id>(2-4)' WITH '...'  -- splice the node's 2nd–4th lines
+```
+
+Offsets are inclusive and 1-based; an offset past the node's last line is a hard
+error. The CSV `off` column from `SHOW body` is exactly this offset, so you can
+copy `'<id>(off)'` straight into a `CHANGE NODE`. (Offsets apply to `CONTENT`
+only — `SHOW NODE '<id>(n)' METADATA` is rejected.)
+
+#### `rev` and optimistic concurrency (`IF REV`)
+
+Each node carries a content `rev` handle (`h<16-hex>`) reported by `FIND NODE`.
+Guard a mutation with `IF REV` to make it a no-op when the node changed since you
+read it:
+
+```sql
+CHANGE NODE '<node_id>' IF REV 'h0123456789abcdef' WITH '...'
+```
+
+The edit applies only when the node's current rev matches; otherwise it is
+rejected without touching the file.
 
 ---
 
@@ -383,6 +438,8 @@ Applies to: `SHOW outline OF`
 | `kind` | string | Universal kind (`fql_kind` value, e.g. `function`, `class`). Falls back to raw tree-sitter name for unmapped nodes. |
 | `path` / `file` | string | Relative file path |
 | `line` | integer | 1-based start line |
+| `depth` | integer | Nesting depth in the structural tree (0 = top-level). Filterable and sortable. |
+| `node_id` | string | Stable node handle (present once the file has been indexed/reindexed). |
 
 ### Member Fields
 

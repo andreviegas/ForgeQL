@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.69.0] — 2026-06-07 — Structural outline tree and `SHOW NODE` line offsets
+
+### Added
+- `SHOW outline` now returns a nesting-aware structural tree instead of a flat list. By default it
+  shows only structural declarations (functions, classes, structs, enums, traits, unions,
+  namespaces, modules, type aliases, macros), and each entry carries a `depth` so the compact
+  output reads as an indented tree in source order. The `depth` field is filterable and sortable.
+- `SHOW outline OF 'file' ALL` includes every node, not just structural declarations. A
+  `WHERE fql_kind = '...'` predicate also opts into the full node set so the kind filter sees
+  everything.
+- `SHOW outline OF '<node_id>'` scopes the outline to that node's subtree.
+- `SHOW NODE 'id(n)' CONTENT` and `SHOW NODE 'id(n-m)' CONTENT` narrow the output to a single
+  node-relative line or an inclusive range within the node's own span, mirroring the offset
+  addressing already supported by `CHANGE NODE`. Offsets are 1-based; an offset on `METADATA` is
+  rejected because metadata describes the whole node.
+
 ## [0.68.1] — 2026-06-07 — Stable `rev` and node identity across re-index
 
 ### Fixed
