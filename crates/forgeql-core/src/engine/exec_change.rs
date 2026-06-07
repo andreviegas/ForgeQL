@@ -175,12 +175,19 @@ impl ForgeQLEngine {
             } => (node_id.as_str(), if_rev.as_deref(), content.as_str()),
             _ => bail!("exec_change_node called with wrong IR variant"),
         };
-        let node = self.resolve_node(session_id, node_id, if_rev)?;
+        // A node_id may carry a node-relative line offset suffix — `id(n)` or
+        // `id(n-m)`. The `IF REV` guard always checks the whole node's rev, so
+        // resolve the base node first, then narrow the spliced line range.
+        let (base_id, offset) =
+            crate::node_id::split_node_offset(node_id).map_err(|e| anyhow::anyhow!(e))?;
+        let node = self.resolve_node(session_id, base_id, if_rev)?;
+        let (start, end) = crate::node_id::offset_lines(node.line, node.end_line, offset)
+            .map_err(|e| anyhow::anyhow!(e))?;
         let ir = ForgeQLIR::ChangeContent {
             files: vec![node.rel_path],
             target: ChangeTarget::Lines {
-                start: node.line,
-                end: node.end_line,
+                start,
+                end,
                 content: content.to_string(),
             },
             clauses: crate::ir::Clauses::default(),
@@ -194,7 +201,7 @@ impl ForgeQLEngine {
             let root = session.worktree_path.clone();
             session
                 .engine_for(&crate::ir::Backend::Default)?
-                .find_node(node_id, &root)
+                .find_node(base_id, &root)
                 .ok()
                 .flatten()
                 .map(|n| n.node_id)

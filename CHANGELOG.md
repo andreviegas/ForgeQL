@@ -6,6 +6,33 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.68.1] — 2026-06-07 — Stable `rev` and node identity across re-index
+
+### Fixed
+- `rev` is now populated on every node after a file is re-indexed. Previously the incremental
+  re-index path wrote only a node's ordinal and left `rev` empty (`FIND NODE` returned no `rev`),
+  which made `IF REV` optimistic-concurrency guards unusable. The re-index path now writes the
+  same `rev`, parent, and child/sibling navigation columns as the initial index build.
+- Node ids are now stable across re-index for Markdown and any nested node. Previously a Markdown
+  heading/paragraph/list item inside a section was renumbered on every edit because the re-index
+  path dropped the parent link the id-matcher relies on, so a memorised node id silently moved.
+  Code nodes were unaffected.
+- `FIND NODE` parent / first-child / sibling navigation now works on re-indexed files, not only on
+  freshly built ones.
+
+## [0.68.0] — 2026-06-07 — `CHANGE NODE` sub-node line addressing
+
+### Added
+- `CHANGE NODE 'id(n)' WITH content` and `CHANGE NODE 'id(n-m)' WITH content` — edit a single
+  node-relative line, or an inclusive range of lines, inside an addressable node without
+  re-emitting the whole node. Offsets are 1-based and inclusive, matching the per-line offsets
+  shown by `SHOW LINES`, so the offset an agent reads is the offset it edits. `CHANGE NODE 'id'`
+  with no `(…)` suffix still replaces the entire node, as before.
+- An out-of-bounds offset is rejected as a corruption guard; a content/size mismatch is spliced,
+  exactly like `CHANGE FILE LINES`. `IF REV` keeps checking the whole node's rev even when a
+  `(range)` is given, so any edit inside the node — including outside the targeted range —
+  safely invalidates a stale handle.
+
 ## [0.67.1] — 2026-06-06 — `SHOW LINES` end-line fix for Markdown nodes
 
 ### Fixed

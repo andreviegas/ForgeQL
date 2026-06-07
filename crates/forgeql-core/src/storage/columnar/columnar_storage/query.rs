@@ -17,7 +17,7 @@ use crate::workspace::Workspace;
 
 use super::super::bytes_to_hex;
 use super::super::segment_builder::{
-    SegmentBuilder, SymbolRow, ZONEMAP_NUMERIC_FIELDS, is_valid_segment,
+    RowId, SegmentBuilder, SymbolRow, ZONEMAP_NUMERIC_FIELDS, is_valid_segment,
 };
 use super::super::segment_reader::SegmentReader;
 use super::ColumnarStorage;
@@ -1231,6 +1231,7 @@ impl StorageEngine for ColumnarStorage {
 
                 let mut builder = SegmentBuilder::new("git-sha1", &content_id_bytes);
 
+                let mut ordinal_row: Vec<(u32, u32, u32)> = Vec::new();
                 for row in &table.rows {
                     let row_id = builder.emit_row(SymbolRow {
                         name: table.name_of(row),
@@ -1243,9 +1244,45 @@ impl StorageEngine for ColumnarStorage {
                     });
                     if let Some(ordinal) = row.ordinal {
                         builder.set_ordinal(row_id, ordinal);
+                        builder.set_parent_ordinal(row_id, row.parent_ordinal);
+                        builder.set_rev(row_id, row.rev);
+                        ordinal_row.push((ordinal, row_id.0, row.parent_ordinal));
                     }
                     for (key, val) in table.resolve_fields(&row.fields) {
+                        if key == "parent_ordinal" {
+                            continue;
+                        }
                         builder.set_field(row_id, &key, val.as_str());
+                    }
+                }
+                // Nav post-pass: fill first_child/next_sibling/prev_sibling and the
+                // typed parent_ordinal/rev columns so reindexed segments carry the
+                // same navigation + identity data as the initial shadow_writer build.
+                {
+                    let mut by_parent: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
+                    let mut ord_to_row: HashMap<u32, u32> = HashMap::new();
+                    for &(ord, rid, parent) in &ordinal_row {
+                        by_parent.entry(parent).or_default().push((ord, rid));
+                        let _ = ord_to_row.insert(ord, rid);
+                    }
+                    for (parent_ord, mut children) in by_parent {
+                        children.sort_unstable_by_key(|&(ord, _)| ord);
+                        if let Some(&parent_rid) = ord_to_row.get(&parent_ord)
+                            && let Some(&(first_ord, _)) = children.first()
+                        {
+                            builder.set_first_child_ordinal(RowId(parent_rid), first_ord);
+                        }
+                        for i in 0..children.len() {
+                            let (_, this_rid) = children[i];
+                            if i > 0 {
+                                builder
+                                    .set_prev_sibling_ordinal(RowId(this_rid), children[i - 1].0);
+                            }
+                            if i + 1 < children.len() {
+                                builder
+                                    .set_next_sibling_ordinal(RowId(this_rid), children[i + 1].0);
+                            }
+                        }
                     }
                 }
 

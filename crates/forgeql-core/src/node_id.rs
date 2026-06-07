@@ -113,6 +113,86 @@ pub fn format_rev(rev: u64) -> String {
     format!("h{rev:016x}")
 }
 
+/// `(base_id, Some((start, end)))` — the split form of a `node_id` that may
+/// carry a `(n)` / `(n-m)` line-offset suffix.
+type NodeOffsetSplit<'a> = (&'a str, Option<(u32, u32)>);
+
+/// Split a `node_id` that may carry a node-relative line offset suffix into its
+/// base id and the optional 1-based, inclusive `(start, end)` offsets.
+///
+/// Accepts three shapes:
+/// * `id` — no suffix, returns `(id, None)` (the whole node).
+/// * `id(n)` — single offset, returns `(id, Some((n, n)))`.
+/// * `id(n-m)` — inclusive range, returns `(id, Some((n, m)))`.
+///
+/// # Errors
+/// Returns an error string when the suffix is malformed: a `(` without a closing
+/// `)`, a non-numeric or empty offset, a `0` offset (offsets are 1-based), or an
+/// inverted range (`m < n`).
+pub fn split_node_offset(node_id: &str) -> Result<NodeOffsetSplit<'_>, String> {
+    let Some(open) = node_id.find('(') else {
+        return Ok((node_id, None));
+    };
+    if !node_id.ends_with(')') {
+        return Err(format!(
+            "malformed node offset in '{node_id}': '(' without closing ')'"
+        ));
+    }
+    let base = &node_id[..open];
+    let inner = &node_id[open + 1..node_id.len() - 1];
+    let (start, end) = if let Some((a, b)) = inner.split_once('-') {
+        (parse_offset(a, node_id)?, parse_offset(b, node_id)?)
+    } else {
+        let n = parse_offset(inner, node_id)?;
+        (n, n)
+    };
+    if start == 0 {
+        return Err(format!(
+            "node offset in '{node_id}' is 1-based; offset 0 is invalid"
+        ));
+    }
+    if end < start {
+        return Err(format!(
+            "node offset range in '{node_id}' is inverted ({start}-{end})"
+        ));
+    }
+    Ok((base, Some((start, end))))
+}
+
+fn parse_offset(s: &str, node_id: &str) -> Result<u32, String> {
+    s.trim()
+        .parse::<u32>()
+        .map_err(|_| format!("invalid node offset '{s}' in '{node_id}'"))
+}
+
+/// Resolve node-relative offsets to absolute, 1-based, inclusive source lines.
+///
+/// `node_line`/`node_end_line` are the addressed node's absolute span. With no
+/// offset the whole node span is returned; with `Some((a, b))` the range is
+/// `node_line + a - 1 ..= node_line + b - 1`.
+///
+/// # Errors
+/// Returns an error string when the offset runs past the node's last line
+/// (out-of-bounds — a corruption guard).
+pub fn offset_lines(
+    node_line: usize,
+    node_end_line: usize,
+    offset: Option<(u32, u32)>,
+) -> Result<(usize, usize), String> {
+    let Some((a, b)) = offset else {
+        return Ok((node_line, node_end_line));
+    };
+    let span = node_end_line - node_line + 1;
+    let off_start = usize::try_from(a).unwrap_or(usize::MAX);
+    let off_end = usize::try_from(b).unwrap_or(usize::MAX);
+    if off_end > span {
+        return Err(format!(
+            "node offset {a}-{b} runs past the node's {span} line(s)"
+        ));
+    }
+    Ok((node_line + off_start - 1, node_line + off_end - 1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,5 +236,71 @@ mod tests {
         assert!(id.starts_with('n'));
         assert!(id.contains('.'));
         assert!(id.ends_with(".0042"));
+    }
+
+    #[test]
+    fn split_node_offset_no_suffix() {
+        assert_eq!(split_node_offset("nabc.0042"), Ok(("nabc.0042", None)));
+    }
+
+    #[test]
+    fn split_node_offset_single() {
+        assert_eq!(
+            split_node_offset("nabc.0042(3)"),
+            Ok(("nabc.0042", Some((3, 3))))
+        );
+    }
+
+    #[test]
+    fn split_node_offset_inclusive_range() {
+        assert_eq!(
+            split_node_offset("nabc.0042(2-5)"),
+            Ok(("nabc.0042", Some((2, 5))))
+        );
+    }
+
+    #[test]
+    fn split_node_offset_rejects_zero() {
+        assert!(split_node_offset("nabc.0042(0)").is_err());
+    }
+
+    #[test]
+    fn split_node_offset_rejects_inverted_range() {
+        assert!(split_node_offset("nabc.0042(5-2)").is_err());
+    }
+
+    #[test]
+    fn split_node_offset_rejects_unclosed_paren() {
+        assert!(split_node_offset("nabc.0042(2").is_err());
+    }
+
+    #[test]
+    fn split_node_offset_rejects_non_numeric() {
+        assert!(split_node_offset("nabc.0042(x)").is_err());
+        assert!(split_node_offset("nabc.0042()").is_err());
+    }
+
+    #[test]
+    fn offset_lines_whole_node_when_none() {
+        assert_eq!(offset_lines(26, 29, None), Ok((26, 29)));
+    }
+
+    #[test]
+    fn offset_lines_single_offset_maps_to_one_line() {
+        // first line of the node, then the last line of a 4-line node
+        assert_eq!(offset_lines(26, 29, Some((1, 1))), Ok((26, 26)));
+        assert_eq!(offset_lines(26, 29, Some((4, 4))), Ok((29, 29)));
+    }
+
+    #[test]
+    fn offset_lines_inclusive_range_maps_interior() {
+        assert_eq!(offset_lines(26, 29, Some((2, 3))), Ok((27, 28)));
+    }
+
+    #[test]
+    fn offset_lines_rejects_out_of_bounds() {
+        // node spans 4 lines (26..=29); anything past line 4 is a corruption guard
+        assert!(offset_lines(26, 29, Some((5, 5))).is_err());
+        assert!(offset_lines(26, 29, Some((1, 9))).is_err());
     }
 }

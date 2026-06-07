@@ -2299,6 +2299,57 @@
     "name": "GP0d_rollback_md_probe_transaction_pytorch"
   },
   {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'slice3-offsets-pytorch'",
+    "name": "GS3a_begin_change_node_offsets_pytorch"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE FILE 'docs/zz_slice3_offsets.rs' WITH <<RUST\nfn sample() -> i32 {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    a + b + c\n}\nRUST",
+    "name": "GS3b_create_fixture_pytorch"
+  },
+  {
+    "expect_field": {"node_id": "n67ea16fed12f.0000", "name": "sample", "line": 1, "end_line": 6},
+    "expect_field_contains": {"rev": "h"},
+    "fql": "FIND NODE 'n67ea16fed12f.0000'",
+    "name": "GS3c_find_node_rev_populated_pytorch"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE NODE 'n67ea16fed12f.0000(2)' WITH '    let a = 100;'",
+    "name": "GS3d_change_node_single_offset_pytorch"
+  },
+  {
+    "expect_lines": [
+      {"line": 1, "text": "fn sample() -> i32 {"},
+      {"line": 2, "text": "    let a = 100;"},
+      {"line": 3, "text": "    let b = 2;"}
+    ],
+    "fql": "SHOW LINES 1-6 OF 'docs/zz_slice3_offsets.rs'",
+    "name": "GS3e_verify_single_offset_pytorch"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE NODE 'n67ea16fed12f.0000(3-4)' WITH <<RUST\n    let b = 20;\n    let c = 30;\nRUST",
+    "name": "GS3f_change_node_range_offset_pytorch"
+  },
+  {
+    "expect_lines": [
+      {},
+      {"line": 2, "text": "    let a = 100;"},
+      {"line": 3, "text": "    let b = 20;"},
+      {"line": 4, "text": "    let c = 30;"},
+      {"line": 5, "text": "    a + b + c"}
+    ],
+    "fql": "SHOW LINES 1-6 OF 'docs/zz_slice3_offsets.rs'",
+    "name": "GS3g_verify_range_offset_pytorch"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'slice3-offsets-pytorch'",
+    "name": "GS3h_rollback_pytorch"
+  },
+  {
     "expect_row_count": 3,
     "expect_rows": [
       {"count": 136, "path": "torch/nn/functional.py"},
