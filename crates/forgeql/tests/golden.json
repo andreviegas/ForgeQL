@@ -2350,6 +2350,47 @@
     "name": "GS3h_rollback_pytorch"
   },
   {
+    "expect_field": {"type": "begin_transaction"},
+    "fql": "BEGIN TRANSACTION 'slice4-shownode-pytorch'",
+    "name": "GS4a_begin_show_node_content_pytorch"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE FILE 'docs/zz_slice4_shownode.rs' WITH <<RUST\nfn greet() -> i32 {\n    let a = 1;\n    let b = 2;\n    a + b\n}\nRUST",
+    "name": "GS4b_create_fixture_pytorch"
+  },
+  {
+    "expect_lines": [
+      {"line": 1, "text": "fn greet() -> i32 {"},
+      {"line": 2, "text": "    let a = 1;"},
+      {"line": 3, "text": "    let b = 2;"},
+      {"line": 4, "text": "    a + b"},
+      {"line": 5, "text": "}"}
+    ],
+    "fql": "SHOW NODE 'nb3a1eca9df7c.0000' CONTENT",
+    "name": "GS4c_show_node_content_full_pytorch"
+  },
+  {
+    "expect_lines": [
+      {"line": 2, "text": "    let a = 1;"}
+    ],
+    "fql": "SHOW NODE 'nb3a1eca9df7c.0000(2)' CONTENT",
+    "name": "GS4d_show_node_content_single_offset_pytorch"
+  },
+  {
+    "expect_lines": [
+      {"line": 2, "text": "    let a = 1;"},
+      {"line": 3, "text": "    let b = 2;"}
+    ],
+    "fql": "SHOW NODE 'nb3a1eca9df7c.0000(2-3)' CONTENT",
+    "name": "GS4e_show_node_content_range_offset_pytorch"
+  },
+  {
+    "expect_field": {"type": "rollback"},
+    "fql": "ROLLBACK TRANSACTION 'slice4-shownode-pytorch'",
+    "name": "GS4f_rollback_pytorch"
+  },
+  {
     "expect_row_count": 3,
     "expect_rows": [
       {"count": 136, "path": "torch/nn/functional.py"},

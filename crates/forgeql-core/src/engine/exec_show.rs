@@ -543,7 +543,11 @@ impl ForgeQLEngine {
 
     /// `SHOW NODE 'id' [CONTENT | METADATA]`
     ///
-    /// Resolves `node_id` to its current location, then either:
+    /// `id` may carry a node-relative line offset suffix — `id(n)` for a single
+    /// line or `id(n-m)` for an inclusive range, both 1-based within the node's
+    /// own span. The offset narrows CONTENT; it is rejected with METADATA.
+    ///
+    /// Resolves the base `node_id` to its current location, then either:
     /// - **CONTENT** (default): delegates to `exec_show(ShowLines)` so all
     ///   line-cap, WHERE-predicate, and budget logic is reused unchanged.
     /// - **METADATA**: returns `ForgeQLResult::FindNode` (same as `FIND NODE`).
@@ -562,15 +566,21 @@ impl ForgeQLEngine {
         };
         let sid = require_session_id(session_id)?;
 
+        // A node_id may carry a node-relative line offset suffix — `id(n)` or
+        // `id(n-m)`. METADATA describes the whole node, so an offset is only
+        // meaningful for CONTENT; resolve the base node either way.
+        let (base_id, offset) =
+            crate::node_id::split_node_offset(node_id).map_err(|e| anyhow::anyhow!(e))?;
+
         // Resolve node_id in a block so the session borrow drops before exec_show.
         let node = {
             let session = self.require_session(sid)?;
             let root = session.worktree_path.clone();
             let mut r = session
                 .engine_for(&Backend::Default)?
-                .find_node(node_id, &root)?
+                .find_node(base_id, &root)?
                 .ok_or_else(|| {
-                    anyhow::anyhow!(r#"{{"error":"node_not_found","node_id":"{node_id}"}}"#)
+                    anyhow::anyhow!(r#"{{"error":"node_not_found","node_id":"{base_id}"}}"#)
                 })?;
             if let Ok(rel) = r.path.strip_prefix(&root) {
                 r.path = rel.to_path_buf();
@@ -579,14 +589,20 @@ impl ForgeQLEngine {
         };
 
         if *metadata {
+            if offset.is_some() {
+                bail!("line offset is not supported with METADATA; it applies to CONTENT only");
+            }
             return Ok(ForgeQLResult::FindNode(node));
         }
 
         // CONTENT: synthesize a ShowLines IR and delegate — reuses all caps/budget/WHERE.
+        // A node-relative offset narrows the range inside the node's own span.
+        let (start_line, end_line) = crate::node_id::offset_lines(node.line, node.end_line, offset)
+            .map_err(|e| anyhow::anyhow!(e))?;
         let show_op = ForgeQLIR::ShowLines {
             file: node.path.to_string_lossy().into_owned(),
-            start_line: node.line,
-            end_line: node.end_line,
+            start_line,
+            end_line,
             backend: Backend::Default,
             clauses: clauses.clone(),
         };
