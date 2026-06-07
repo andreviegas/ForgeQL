@@ -215,10 +215,18 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         Rule::show_outline_stmt => {
             let mut inner = pair.into_inner();
             let file = next_str(&mut inner, "show_outline: expected file path")?;
+            // Optional `ALL` keyword sits between the file and any USING / clauses.
+            let all = inner
+                .peek()
+                .is_some_and(|p| p.as_rule() == Rule::outline_all);
+            if all {
+                let _ = inner.next();
+            }
             let backend = parse_using_clause(&mut inner)?;
             let clauses = parse_clauses(inner);
             Ok(ForgeQLIR::ShowOutline {
                 file,
+                all,
                 backend,
                 clauses,
             })

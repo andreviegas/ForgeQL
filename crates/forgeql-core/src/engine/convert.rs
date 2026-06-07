@@ -148,6 +148,10 @@ fn convert_show_content(op: &ForgeQLIR, json: &serde_json::Value) -> Result<Show
                                     .get("node_id")
                                     .and_then(|v| v.as_str())
                                     .map(String::from),
+                                depth: entry
+                                    .get("depth")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0) as usize,
                             })
                         })
                         .collect()

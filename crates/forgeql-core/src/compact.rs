@@ -212,33 +212,32 @@ fn compact_outline(s: &ShowResult, entries: &[OutlineEntry]) -> String {
     row(&mut out, &[&op, &file]);
     // Include node_id only when at least one entry carries it (post-reindex).
     let has_node_id = entries.iter().any(|e| e.node_id.is_some());
-    // Schema hint.
+    // Schema hint. One row per node in pre-order; the first column is the
+    // nesting depth, so the structural tree is visible without re-grouping.
     let schema = if has_node_id {
-        "[name,line,node_id]"
+        "[fql_kind,name,line,node_id]"
     } else {
-        "[name,line]"
+        "[fql_kind,name,line]"
     };
-    row(&mut out, &[&q("fql_kind"), &q(schema)]);
-    // Group by fql_kind.
-    let groups = group_outline(entries);
-    for (kind, items) in &groups {
-        let brackets: Vec<String> = items
-            .iter()
-            .map(|(name, line, node_id)| {
-                let display_name = if kind == "comment" {
-                    format!("len:{}", name.len())
-                } else {
-                    (*name).to_string()
-                };
-                if has_node_id {
-                    bracket(&[&display_name, &line.to_string(), node_id.unwrap_or("")])
-                } else {
-                    bracket(&[&display_name, &line.to_string()])
-                }
-            })
-            .collect();
-        let val = q(&brackets.join(","));
-        row(&mut out, &[&q(kind), &val]);
+    row(&mut out, &[&q("depth"), &q(schema)]);
+    for e in entries {
+        let display_name = if e.fql_kind == "comment" {
+            format!("len:{}", e.name.len())
+        } else {
+            e.name.clone()
+        };
+        let line = e.line.to_string();
+        let val = if has_node_id {
+            bracket(&[
+                &e.fql_kind,
+                &display_name,
+                &line,
+                e.node_id.as_deref().unwrap_or(""),
+            ])
+        } else {
+            bracket(&[&e.fql_kind, &display_name, &line])
+        };
+        row(&mut out, &[&q(&e.depth.to_string()), &q(&val)]);
     }
     chomp(&mut out);
     out
@@ -663,25 +662,6 @@ fn group_rows_by_kind<'a>(rows: &'a [SymbolRow]) -> Vec<(String, Vec<&'a SymbolR
     groups
 }
 
-/// `(name, 1-based-line, node_id)` tuple stored per kind group in `group_outline`.
-type OutlineItem<'a> = (&'a str, usize, Option<&'a str>);
-
-/// Group outline entries by kind → Vec<(kind, Vec<OutlineItem>)>.
-fn group_outline(entries: &[OutlineEntry]) -> Vec<(String, Vec<OutlineItem<'_>>)> {
-    let mut groups: Vec<(String, Vec<OutlineItem<'_>>)> = Vec::new();
-    for e in entries {
-        if let Some(g) = groups.iter_mut().find(|(k, _)| k == &e.fql_kind) {
-            g.1.push((&e.name, e.line, e.node_id.as_deref()));
-        } else {
-            groups.push((
-                e.fql_kind.clone(),
-                vec![(&e.name, e.line, e.node_id.as_deref())],
-            ));
-        }
-    }
-    groups
-}
-
 /// Group member entries by kind → Vec<(kind, Vec<(text, line)>)>.
 fn group_members(members: &[MemberEntry]) -> Vec<(String, Vec<(&str, usize)>)> {
     let mut groups: Vec<(String, Vec<(&str, usize)>)> = Vec::new();
@@ -749,7 +729,7 @@ mod tests {
     // -- SHOW outline --------------------------------------------------
 
     #[test]
-    fn outline_groups_by_kind() {
+    fn outline_renders_pre_order_tree_with_depth() {
         let result = ForgeQLResult::Show(ShowResult {
             op: "show_outline".into(),
             symbol: None,
@@ -767,6 +747,7 @@ mod tests {
                         path: PathBuf::from("include/types.hpp"),
                         line: 17,
                         node_id: None,
+                        depth: 0,
                     },
                     OutlineEntry {
                         name: "int32_t".into(),
@@ -774,6 +755,7 @@ mod tests {
                         path: PathBuf::from("include/types.hpp"),
                         line: 18,
                         node_id: None,
+                        depth: 0,
                     },
                     OutlineEntry {
                         name: "Pid".into(),
@@ -781,6 +763,7 @@ mod tests {
                         path: PathBuf::from("include/types.hpp"),
                         line: 22,
                         node_id: None,
+                        depth: 1,
                     },
                 ],
             },
@@ -788,10 +771,11 @@ mod tests {
         let csv = to_compact(&result);
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines[0], r#""show_outline","include/types.hpp""#);
-        assert_eq!(lines[1], r#""fql_kind","[name,line]""#);
-        assert_eq!(lines[2], r#""type_alias","[int16_t,17],[int32_t,18]""#);
-        assert_eq!(lines[3], r#""class_specifier","[Pid,22]""#);
-        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[1], r#""depth","[fql_kind,name,line]""#);
+        assert_eq!(lines[2], r#""0","[type_alias,int16_t,17]""#);
+        assert_eq!(lines[3], r#""0","[type_alias,int32_t,18]""#);
+        assert_eq!(lines[4], r#""1","[class_specifier,Pid,22]""#);
+        assert_eq!(lines.len(), 5);
     }
 
     #[test]
@@ -813,6 +797,7 @@ mod tests {
                         path: PathBuf::from("src/adc.cpp"),
                         line: 1,
                         node_id: None,
+                        depth: 0,
                     },
                     OutlineEntry {
                         name: "convertByte2Volts".into(),
@@ -820,6 +805,7 @@ mod tests {
                         path: PathBuf::from("src/adc.cpp"),
                         line: 5,
                         node_id: None,
+                        depth: 0,
                     },
                 ],
             },

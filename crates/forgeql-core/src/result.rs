@@ -378,6 +378,10 @@ pub struct OutlineEntry {
     /// Stable node handle — `None` for entries from legacy segments without reindex.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
+    /// Nesting depth in the structural tree (0 = top-level declaration). Lets
+    /// the renderer indent children under their enclosing declaration.
+    #[serde(default)]
+    pub depth: usize,
 }
 
 /// An entry in a SHOW members result.
@@ -1476,6 +1480,7 @@ mod tests {
                     path: PathBuf::from("src/api.h"),
                     line: 5,
                     node_id: None,
+                    depth: 0,
                 }],
             },
             start_line: None,

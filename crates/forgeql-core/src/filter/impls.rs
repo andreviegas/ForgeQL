@@ -118,6 +118,7 @@ impl ClauseTarget for crate::result::OutlineEntry {
     fn field_num(&self, field: &str) -> Option<i64> {
         match field {
             "line" => Some(i64::try_from(self.line).unwrap_or(i64::MAX)),
+            "depth" => Some(i64::try_from(self.depth).unwrap_or(i64::MAX)),
             _ => None,
         }
     }

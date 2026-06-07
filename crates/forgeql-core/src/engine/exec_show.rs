@@ -82,8 +82,18 @@ impl ForgeQLEngine {
             ForgeQLIR::ShowSignature {
                 symbol, clauses, ..
             } => self.exec_show_signature(session_id, &workspace, engine, symbol, clauses),
-            ForgeQLIR::ShowOutline { file, .. } => {
-                Self::exec_show_outline(&workspace, engine, file)
+            ForgeQLIR::ShowOutline {
+                file, all, clauses, ..
+            } => {
+                // Default outline is structural-only. An explicit `ALL`, or a
+                // `WHERE fql_kind = …` predicate, opts back into every node so
+                // the post-hoc clause filter still has the full set to act on.
+                let show_all = *all
+                    || clauses
+                        .where_predicates
+                        .iter()
+                        .any(|p| p.field == "fql_kind" || p.field == "node_kind");
+                Self::exec_show_outline(&workspace, engine, file, show_all)
             }
             ForgeQLIR::ShowMembers {
                 symbol, clauses, ..
@@ -394,9 +404,10 @@ impl ForgeQLEngine {
         workspace: &Workspace,
         engine: &dyn StorageEngine,
         file: &str,
+        all: bool,
     ) -> serde_json::Value {
         engine
-            .show_outline_for_file(workspace, file)
+            .show_outline_for_file(workspace, file, all)
             .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
     }
 

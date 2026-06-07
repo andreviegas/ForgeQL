@@ -119,6 +119,7 @@ impl StorageEngine for StubColumnarStorage {
         &self,
         _workspace: &Workspace,
         file: &str,
+        _all: bool,
     ) -> Result<serde_json::Value> {
         Ok(serde_json::json!({ "op": "show_outline", "file": file, "results": [] }))
     }

@@ -856,7 +856,7 @@ fn show_outline_limit_is_respected() {
     let (mut engine, sid, _dir) = engine_with_session();
 
     // motor_control.h has many variables; full list should exceed 2.
-    let full = execute_fql(&mut engine, &sid, "SHOW outline OF 'motor_control.h'");
+    let full = execute_fql(&mut engine, &sid, "SHOW outline OF 'motor_control.h' ALL");
     let full_count = match &full {
         ForgeQLResult::Show(sr) => match &sr.content {
             ShowContent::Outline { entries } => entries.len(),
@@ -872,7 +872,7 @@ fn show_outline_limit_is_respected() {
     let limited = execute_fql(
         &mut engine,
         &sid,
-        "SHOW outline OF 'motor_control.h' LIMIT 2",
+        "SHOW outline OF 'motor_control.h' ALL LIMIT 2",
     );
     match &limited {
         ForgeQLResult::Show(sr) => match &sr.content {

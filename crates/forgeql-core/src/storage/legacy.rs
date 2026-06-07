@@ -404,6 +404,7 @@ impl StorageEngine for LegacyMemoryStorage {
         &self,
         workspace: &crate::workspace::Workspace,
         file: &str,
+        _all: bool,
     ) -> Result<serde_json::Value> {
         let table = self
             .table

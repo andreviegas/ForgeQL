@@ -861,7 +861,7 @@ fn columnar_show_outline_matches_legacy() {
 
     // -- columnar result
     let columnar_json = storage
-        .show_outline_for_file(&workspace, "canonical.cpp")
+        .show_outline_for_file(&workspace, "canonical.cpp", true)
         .expect("columnar show_outline");
 
     // -- legacy result

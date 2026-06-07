@@ -150,8 +150,9 @@ show_context_stmt = { "SHOW" ~ "context" ~ "OF" ~ any_value ~ using_clause? ~ cl
 /// `SHOW signature OF 'symbol'`
 show_signature_stmt = { "SHOW" ~ "signature" ~ "OF" ~ any_value ~ using_clause? ~ clauses }
 
-/// `SHOW outline OF 'file'`
-show_outline_stmt = { "SHOW" ~ "outline" ~ "OF" ~ any_value ~ using_clause? ~ clauses }
+/// `SHOW outline OF 'file' [ALL]`
+show_outline_stmt = { "SHOW" ~ "outline" ~ "OF" ~ any_value ~ outline_all? ~ using_clause? ~ clauses }
+outline_all = { "ALL" }
 
 /// `SHOW members OF 'ClassName'`
 show_members_stmt = { "SHOW" ~ "members" ~ "OF" ~ any_value ~ using_clause? ~ clauses }

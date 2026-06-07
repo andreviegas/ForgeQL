@@ -324,8 +324,15 @@ pub trait StorageEngine: Send + Sync + 'static {
     ///
     /// Delegates to the backend symbol rows so `exec_show` does not need to
     /// hold a `&SymbolTable` reference and can work across all backends.
-    fn show_outline_for_file(&self, workspace: &Workspace, file: &str)
-    -> Result<serde_json::Value>;
+    /// `all = false` returns only structural declarations (functions, types,
+    /// namespaces, …); `all = true` returns every node. A `node_id` passed as
+    /// `file` scopes the outline to that node's subtree.
+    fn show_outline_for_file(
+        &self,
+        workspace: &Workspace,
+        file: &str,
+        all: bool,
+    ) -> Result<serde_json::Value>;
 }
 
 pub(crate) fn row_to_location(row: &IndexRow, table: &SymbolTable) -> SymbolLocation {

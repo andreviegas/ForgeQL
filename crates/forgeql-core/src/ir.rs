@@ -311,6 +311,9 @@ pub enum ForgeQLIR {
     /// Returns all top-level declarations in the file in source order.
     ShowOutline {
         file: String,
+        /// `ALL` — include every node, not only structural declarations.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        all: bool,
         #[serde(default, skip_serializing_if = "crate::ir::is_default_backend")]
         backend: Backend,
         #[serde(flatten)]
