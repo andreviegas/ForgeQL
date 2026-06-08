@@ -24,6 +24,7 @@ pub mod auth;
 pub mod budget;
 pub mod compact;
 pub mod config;
+pub mod debug_log;
 pub mod engine;
 pub mod error;
 pub mod filter;

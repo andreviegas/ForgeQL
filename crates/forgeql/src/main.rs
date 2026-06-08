@@ -84,6 +84,11 @@ async fn main() -> Result<()> {
 
     let logger = cli.log_queries.then(|| QueryLogger::new(data_dir.clone()));
 
+    if let Some(debug_path) = &cli.debug {
+        forgeql_core::debug_log::init(debug_path)
+            .with_context(|| format!("opening debug log '{}'", debug_path.display()))?;
+    }
+
     match detect_mode(&cli) {
         Mode::Mcp => runner::mcp_stdio::run_mcp_stdio(engine, logger).await,
         Mode::Repl => runner::repl::run_repl(engine, logger, cli.format),

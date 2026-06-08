@@ -28,6 +28,14 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) log_queries: bool,
 
+    /// Write a verbose debug trace to `<FILE>` (diagnostic; off unless set).
+    ///
+    /// Installs the `debug_log!` sink in forgeql-core so instrumented internals
+    /// (e.g. ordinal reassignment during reindex) append to the file. Hidden by
+    /// default: inert unless this flag is passed at launch.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) debug: Option<PathBuf>,
+
     /// Increase verbosity (`-v` = info, `-vv` = debug, `-vvv` = trace).
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     pub(crate) verbose: u8,
@@ -134,6 +142,7 @@ mod tests {
             data_dir: PathBuf::from("./data"),
             mcp,
             log_queries: false,
+            debug: None,
             verbose: 0,
             format: CliFormat::Compact,
             command,

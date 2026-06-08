@@ -1184,6 +1184,19 @@ impl StorageEngine for ColumnarStorage {
                         .collect()
                 })
             };
+            if crate::debug_log::is_enabled() {
+                let base = hints
+                    .iter()
+                    .map(|h| h.ordinal)
+                    .max()
+                    .map_or(0, |m| m.saturating_add(1));
+                crate::debug_log!(
+                    "reindex file={} prior_hints={} next_ordinal_base={}",
+                    rel_path.display(),
+                    hints.len(),
+                    base
+                );
+            }
             let remapper = OrdinalRemapper::from_previous(hints);
 
             // Shadow the persistent segment and evict any stale dirty entry

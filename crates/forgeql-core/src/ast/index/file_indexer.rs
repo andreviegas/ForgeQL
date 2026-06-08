@@ -252,11 +252,39 @@ impl OrdinalRemapper {
             .min_by_key(|idx| self.previous[*idx].ordinal)
         {
             self.used[best_idx] = true;
-            return self.previous[best_idx].ordinal;
+            let ordinal = self.previous[best_idx].ordinal;
+            crate::debug_log!(
+                "assign MATCH name={:?} kind={:?} parent_ord={} -> ord={} (reused)",
+                key.name,
+                key.fql_kind,
+                key.parent_ordinal,
+                ordinal
+            );
+            return ordinal;
         }
 
         let ordinal = self.next_ordinal;
         self.next_ordinal = self.next_ordinal.saturating_add(1);
+        if crate::debug_log::is_enabled() {
+            // On a fresh allocation, surface any prior hints that matched on
+            // name+kind but were rejected — their parent_ordinal reveals whether
+            // the miss is a structural (flat vs nested) mismatch.
+            let rejected_parent_ords: Vec<u32> = self
+                .previous
+                .iter()
+                .filter(|h| h.name == key.name && h.fql_kind == key.fql_kind)
+                .map(|h| h.parent_ordinal)
+                .collect();
+            crate::debug_log!(
+                "assign NEW   name={:?} kind={:?} parent_ord={} -> ord={} (name+kind priors={}, their parent_ords={:?})",
+                key.name,
+                key.fql_kind,
+                key.parent_ordinal,
+                ordinal,
+                rejected_parent_ords.len(),
+                rejected_parent_ords
+            );
+        }
         ordinal
     }
 }

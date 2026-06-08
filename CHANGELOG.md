@@ -6,6 +6,11 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.75.0] — 2026-06-08 — Add a `--debug <file>` diagnostic trace log
+
+### Added
+
+- New `--debug <FILE>` server flag that installs a file-backed debug log. When set, instrumented internals append diagnostic lines to the file; when unset the logging is a cheap no-op, so instrumentation can stay in hot paths permanently. Output goes only to the file, never to query responses, so it never affects normal results. Initial instrumentation traces ordinal assignment during reindex (which node ids are reused versus newly allocated, and why).
 ## [0.74.0] — 2026-06-08 — JSON and YAML language support
 
 ### Added
