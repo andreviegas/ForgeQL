@@ -277,7 +277,20 @@ CHANGE NODE '<node_id>' IF REV 'h0123456789abcdef' WITH '...'
 ```
 
 The edit applies only when the node's current rev matches; otherwise it is
-rejected without touching the file.
+rejected without touching the file. A rejected guard returns a **self-healing
+payload** so you can re-target without another read:
+
+```json
+{
+  "error": "rev_mismatch",
+  "node_id": "<id>",
+  "expected": "<the rev you passed>",
+  "current_rev": "<the node's actual current rev>",
+  "line_start": 10,
+  "line_end": 14,
+  "current_content": "…the node's current source…"
+}
+```
 
 ---
 

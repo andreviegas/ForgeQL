@@ -6,21 +6,6 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.69.3] — 2026-06-08 — Land the outline order fix and consolidate golden tests
-
-### Fixed
-- `SHOW outline` without an explicit `ORDER BY` now actually preserves the
-  structural tree's pre-order. The 0.69.1 entry below described this fix, but the
-  code change was lost before that commit landed (only its CHANGELOG/version
-  shipped), so the default outline order was still alphabetical. This release
-  contains the real `apply_clauses_keep_order` change and the `SHOW outline`
-  wiring.
-
-### Changed
-- Golden suite: the slice-3/4/5 transactions are merged into a single
-  `BEGIN`/`ROLLBACK`, and the outline-tree tests now assert the default
-  (no `ORDER BY`) DFS order — so they fail if the order regresses again.
-
 ## [0.69.2] — 2026-06-08 — Self-healing `CHANGE NODE … IF REV` rejection
 
 ### Added

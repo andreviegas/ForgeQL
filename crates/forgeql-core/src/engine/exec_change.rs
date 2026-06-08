@@ -311,10 +311,22 @@ impl ForgeQLEngine {
         if let Some(expected) = if_rev
             && node.rev != expected
         {
-            bail!(
-                r#"{{"error":"rev_mismatch","node_id":"{node_id}","expected":"{expected}","actual":"{}"}}"#,
-                node.rev
+            // Self-healing rejection: hand back the node's current rev, line
+            // range, and source so the agent can re-target without a follow-up
+            // read. The guard always covers the whole node.
+            let current_content = std::fs::read_to_string(&node.path)
+                .ok()
+                .map(|src| node_span_text(&src, node.line, node.end_line))
+                .unwrap_or_default();
+            let payload = rev_mismatch_payload(
+                node_id,
+                expected,
+                &node.rev,
+                node.line,
+                node.end_line,
+                &current_content,
             );
+            bail!("{payload}");
         }
         let rel_path = node
             .path
@@ -335,4 +347,68 @@ struct ResolvedNode {
     rel_path: String,
     line: usize,
     end_line: usize,
+}
+
+/// Extract the inclusive 1-based line span `[line_start, line_end]` from `src`.
+fn node_span_text(src: &str, line_start: usize, line_end: usize) -> String {
+    src.lines()
+        .skip(line_start.saturating_sub(1))
+        .take(line_end.saturating_sub(line_start).saturating_add(1))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Build the self-healing rejection payload for a failed `CHANGE NODE … IF REV`
+/// guard. Carries the node's current rev, line range, and source so the agent
+/// can re-target the edit without a follow-up read.
+fn rev_mismatch_payload(
+    node_id: &str,
+    expected: &str,
+    current_rev: &str,
+    line_start: usize,
+    line_end: usize,
+    current_content: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "error": "rev_mismatch",
+        "node_id": node_id,
+        "expected": expected,
+        "current_rev": current_rev,
+        "line_start": line_start,
+        "line_end": line_end,
+        "current_content": current_content,
+    })
+}
+
+#[cfg(test)]
+mod rev_mismatch_tests {
+    use super::{node_span_text, rev_mismatch_payload};
+
+    #[test]
+    fn node_span_text_extracts_inclusive_1based_range() {
+        let src = "a\nb\nc\nd\ne";
+        assert_eq!(node_span_text(src, 2, 4), "b\nc\nd");
+        assert_eq!(node_span_text(src, 1, 1), "a");
+        assert_eq!(node_span_text(src, 5, 5), "e");
+        assert_eq!(node_span_text(src, 1, 5), src);
+    }
+
+    #[test]
+    fn rev_mismatch_payload_carries_self_healing_fields() {
+        let payload = rev_mismatch_payload(
+            "nabc123def456.0000",
+            "hdeadbeefdeadbeef",
+            "h0123456789abcdef",
+            10,
+            14,
+            "int add() { return 1; }",
+        );
+        assert_eq!(payload["error"], "rev_mismatch");
+        assert_eq!(payload["node_id"], "nabc123def456.0000");
+        assert_eq!(payload["expected"], "hdeadbeefdeadbeef");
+        assert_eq!(payload["current_rev"], "h0123456789abcdef");
+        assert_eq!(payload["line_start"], 10);
+        assert_eq!(payload["line_end"], 14);
+        assert_eq!(payload["current_content"], "int add() { return 1; }");
+    }
 }
