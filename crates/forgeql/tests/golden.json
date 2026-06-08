@@ -2410,6 +2410,36 @@
     "name": "GS5e_outline_explicit_kind_pytorch"
   },
   {
+    "expect_field": {"applied": true, "type": "mutation"},
+    "fql": "CHANGE FILE 'docs/zz_secd.md' WITH <<MD\n# Project Title\n\nIntro paragraph.\n\n## Alpha Section\n\nAlpha paragraph one.\n\n## Beta Section\n\nBeta paragraph one.\n\n## Gamma Section\n\nGamma paragraph one.\nMD",
+    "name": "MDID1_create_markdown_fixture"
+  },
+  {
+    "expect_field": {"type": "find_node", "name": "Beta Section", "line": 9, "node_id": "ne857f72d306c.0007"},
+    "fql": "FIND NODE 'ne857f72d306c.0007'",
+    "name": "MDID2_baseline_beta_heading_id"
+  },
+  {
+    "expect_field": {"type": "find_node", "name": "Gamma Section", "line": 13, "node_id": "ne857f72d306c.0010"},
+    "fql": "FIND NODE 'ne857f72d306c.0010'",
+    "name": "MDID3_baseline_gamma_heading_id"
+  },
+  {
+    "expect_field": {"applied": true, "type": "mutation", "new_node_id": "ne857f72d306c.0012"},
+    "fql": "INSERT BEFORE NODE 'ne857f72d306c.0006' WITH <<MD\n## Delta Section\n\nDelta paragraph one.\n\nMD",
+    "name": "MDID4_insert_before_beta_section"
+  },
+  {
+    "expect_field": {"type": "find_node", "name": "Beta Section", "line": 12, "node_id": "ne857f72d306c.0007"},
+    "fql": "FIND NODE 'ne857f72d306c.0007'",
+    "name": "MDID5_beta_node_id_survives_reparse_and_drift"
+  },
+  {
+    "expect_field": {"type": "find_node", "name": "Gamma Section", "line": 16, "node_id": "ne857f72d306c.0010"},
+    "fql": "FIND NODE 'ne857f72d306c.0010'",
+    "name": "MDID6_gamma_node_id_survives_reparse_and_drift"
+  },
+  {
     "expect_field": {"type": "rollback"},
     "fql": "ROLLBACK TRANSACTION 'reduce-noise-slices-pytorch'",
     "name": "GS5f_rollback_pytorch"
