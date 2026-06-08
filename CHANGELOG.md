@@ -6,27 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.69.4] — 2026-06-08 — Add node-stability regression tests for Markdown edits
+## [0.73.0] — 2026-06-08 — Add node-stability regression tests for Markdown edits
 
 ### Added
 
 - Golden regression tests confirming node identifiers stay stable when a Markdown document is edited. After a new section is inserted, the existing headings keep their original node identifiers even though their line numbers shift, so later edits that target those identifiers still resolve to the correct nodes.
-## [0.69.3] — 2026-06-08 — Land the outline order fix and consolidate golden tests
-
-### Fixed
-- `SHOW outline` without an explicit `ORDER BY` now actually preserves the
-  structural tree's pre-order. The 0.69.1 entry below described this fix, but the
-  code change was lost before that commit landed (only its CHANGELOG/version
-  shipped), so the default outline order was still alphabetical. This release
-  contains the real `apply_clauses_keep_order` change and the `SHOW outline`
-  wiring.
-
-### Changed
-- Golden suite: the slice-3/4/5 transactions are merged into a single
-  `BEGIN`/`ROLLBACK`, and the outline-tree tests now assert the default
-  (no `ORDER BY`) DFS order — so they fail if the order regresses again.
-
-## [0.69.2] — 2026-06-08 — Self-healing `CHANGE NODE … IF REV` rejection
+## [0.72.0] — 2026-06-08 — Self-healing `CHANGE NODE … IF REV` rejection
 
 ### Added
 - When a `CHANGE NODE … IF REV '<rev>'` (or `DELETE NODE … IF REV`) guard fails
@@ -36,7 +21,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   without a follow-up query. Mandatory `IF REV` on every `CHANGE NODE` remains a
   deferred, opt-in decision.
 
-## [0.69.1] — 2026-06-08 — Fix SHOW outline tree order
+## [0.71.0] — 2026-06-08 — Fix SHOW outline tree order
 
 ### Fixed
 - `SHOW outline` without an explicit `ORDER BY` now preserves the structural
@@ -45,7 +30,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the tree (e.g. a method sorted ahead of its own class). Outline now keeps its
   natural order unless an `ORDER BY` is given; all other commands are unchanged.
 
-## [0.69.0] — 2026-06-07 — Structural outline tree and `SHOW NODE` line offsets
+## [0.70.0] — 2026-06-07 — Structural outline tree and `SHOW NODE` line offsets
 
 ### Added
 - `SHOW outline` now returns a nesting-aware structural tree instead of a flat list. By default it
@@ -61,21 +46,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   addressing already supported by `CHANGE NODE`. Offsets are 1-based; an offset on `METADATA` is
   rejected because metadata describes the whole node.
 
-## [0.68.1] — 2026-06-07 — Stable `rev` and node identity across re-index
-
-### Fixed
-- `rev` is now populated on every node after a file is re-indexed. Previously the incremental
-  re-index path wrote only a node's ordinal and left `rev` empty (`FIND NODE` returned no `rev`),
-  which made `IF REV` optimistic-concurrency guards unusable. The re-index path now writes the
-  same `rev`, parent, and child/sibling navigation columns as the initial index build.
-- Node ids are now stable across re-index for Markdown and any nested node. Previously a Markdown
-  heading/paragraph/list item inside a section was renumbered on every edit because the re-index
-  path dropped the parent link the id-matcher relies on, so a memorised node id silently moved.
-  Code nodes were unaffected.
-- `FIND NODE` parent / first-child / sibling navigation now works on re-indexed files, not only on
-  freshly built ones.
-
-## [0.68.0] — 2026-06-07 — `CHANGE NODE` sub-node line addressing
+## [0.69.0] — 2026-06-07 — `CHANGE NODE` sub-node line addressing
 
 ### Added
 - `CHANGE NODE 'id(n)' WITH content` and `CHANGE NODE 'id(n-m)' WITH content` — edit a single
@@ -88,18 +59,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `(range)` is given, so any edit inside the node — including outside the targeted range —
   safely invalidates a stale handle.
 
-## [0.67.1] — 2026-06-06 — `SHOW LINES` end-line fix for Markdown nodes
-
-### Fixed
-- **`SHOW LINES` no longer mis-attributes a Markdown node's first line to a
-  preceding sibling.** A node whose tree-sitter byte range folds in the trailing
-  newline (common for Markdown headings and paragraphs) had its end line
-  computed one line too long, so a one-line heading could "contain" the next
-  line and win the innermost-node pick — hiding the following node's offset 1.
-  The end-line derivation now trims trailing newlines before resolving the line.
-  No effect on code, whose node ranges end at a closing token, not a newline.
-
-## [0.67.0] — 2026-06-06 — `SHOW LINES` per-line node handles & offsets
+## [0.68.0] — 2026-06-06 — `SHOW LINES` per-line node handles & offsets
 
 ### Changed
 - **`SHOW LINES` now renders each line by its innermost containing node and a
@@ -125,7 +85,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is unchanged); the resolved offset is also exposed there as
   `SourceLine.node_offset`.
 
-## [0.66.0] — 2026-06-06 — `SHOW body` node-relative line offsets
+## [0.67.0] — 2026-06-06 — `SHOW body` node-relative line offsets
 
 ### Changed
 - **`SHOW body` now addresses lines by node-relative offset, not absolute line
@@ -146,7 +106,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   which is unaffected. `SHOW body` of a symbol with no node ordinal (unparsed
   source / legacy backend) falls back to absolute line numbers.
 
-## [0.65.0] — 2026-06-06 — `SHOW MORE` output buffer
+## [0.66.0] — 2026-06-06 — `SHOW MORE` output buffer
 
 ### Added
 - **`SHOW MORE` — paged retrieval of a command's full output.** When a
@@ -191,7 +151,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in transaction checkpoints, so a `ROLLBACK` restores the pre-transaction buffer
   exactly as it restores the columnar delta.
 
-## [0.64.0] — 2026-06-06 — Configurable inline output caps
+## [0.65.0] — 2026-06-06 — Configurable inline output caps
 
 ### Added
 - `.forgeql.yaml` now supports an `output` section to tune how many rows/lines
@@ -205,7 +165,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so existing configurations are unaffected. The caps are frozen at `USE` time
   alongside `verify_steps`, so a later `CHANGE` to the config file cannot alter
   them mid-session.
-## [0.63.0] — 2026-06-06 — `AND` as a synonym for `WHERE`
+## [0.64.0] — 2026-06-06 — `AND` as a synonym for `WHERE`
 
 ### Added
 - `AND` is now accepted anywhere a repeated `WHERE` clause is, as a pure
@@ -216,7 +176,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   where a SQL-style `AND` produced a parse error. The alias lives in the shared
   clause grammar, so it applies uniformly to every command (`FIND`, `SHOW`, and
   mutations) with no per-command handling.
-## [0.62.0] — 2026-06-06 — SHOW body returns a bounded symbol in full
+## [0.63.0] — 2026-06-07 — Networked server and terminal client (HTTP MCP)
 
 ### Added
 - `forgeql-server`: a standalone HTTP daemon that exposes the ForgeQL engine over
@@ -230,7 +190,6 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   scripts on stdin. The connection target is set with `--host`/`--port` (or the
   `FORGEQL_HOST`/`FORGEQL_PORT` environment variables). The session token issued by
   `USE` is captured automatically and threaded into later statements, so `USE`
-  followed by `FIND`/`SHOW` works across REPL lines and piped scripts.
   followed by `FIND`/`SHOW` works across REPL lines and piped scripts.
 
 ## [0.62.0] — 2026-06-06 — SHOW body returns a bounded symbol in full
