@@ -6,6 +6,31 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.74.0] — 2026-06-08 — JSON and YAML language support
+
+### Added
+
+- JSON language support (`.json`, `.jsonc`), backed by `tree-sitter-json`:
+  - Each object member is indexed under its key (kind `pair`), and each object
+    is named after the value of its `name`, `id`, `key`, `title`, or `alias`
+    member when present. This makes individual entries of a large data file —
+    such as a golden-test corpus — directly searchable and addressable by a
+    stable node identifier.
+  - Kind mappings for `object`, `array`, and `pair`.
+- YAML language support (`.yaml`, `.yml`), backed by `tree-sitter-yaml`:
+  - Mapping members are indexed under their key and mappings are named after an
+    identifier-like member, mirroring the JSON behaviour for both block- and
+    flow-style collections.
+  - Kind mappings for `object` (mappings), `array` (sequences), and `pair`.
+- `object`, `array`, and `pair` are now addressable node kinds, so data-file
+  entries can be targeted directly by node-identifier edits rather than by
+  fragile line ranges.
+
+### Changed
+
+- New `forgeql-lang-json` and `forgeql-lang-yaml` crates are registered in the
+  language registry at startup.
+
 ## [0.73.0] — 2026-06-08 — Add node-stability regression tests for Markdown edits
 
 ### Added

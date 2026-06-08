@@ -1,0 +1,10 @@
+[
+  {
+    "name": "G2_kernel_sched_first_5_functions",
+    "fql": "FIND symbols WHERE fql_kind = 'function' IN 'kernel/sched.c'",
+    "expect_rows": [
+      { "line": 51, "name": "thread_runq" },
+      { "line": 80, "name": "runq_add" }
+    ]
+  }
+]

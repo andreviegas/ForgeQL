@@ -38,3 +38,24 @@ Short, durable facts discovered while working in this codebase.
   on the line directly above it. Inserting a helper function *between* that
   attribute and `fn parse_statement` silently re-targets the attribute — keep the
   attribute glued to `fn parse_statement`.
+
+## Adding a language plugin (crates/forgeql-lang-*)
+
+- One crate per language, mirroring `forgeql-lang-markdown`: `Cargo.toml`,
+  `config/<lang>.json` (embedded via `include_bytes!`), and `src/lib.rs`
+  implementing `LanguageSupport` (`name`, `extensions`, `tree_sitter_language`,
+  `extract_name`, `map_kind`, `config`). A node becomes a queryable row iff
+  `extract_name` returns `Some`.
+- Wiring (4 spots): root `Cargo.toml` (members + default-members + a
+  `tree-sitter-<lang>` dep + an internal `forgeql-lang-<lang>` path dep),
+  `crates/forgeql/Cargo.toml` dep, and `crates/forgeql/src/main.rs` (import +
+  `Arc::new(...)` in the startup `LanguageRegistry`).
+- Addressability (node_id) is a SEPARATE gate from being a row: a row only gets
+  an ordinal/`node_id` when its `fql_kind` is in `is_addressable_fql_kind`
+  (crates/forgeql-core/src/ast/index/file_indexer.rs). `fql_kind` values are
+  free-form per language (e.g. markdown `heading`; json/yaml `pair`/`object`/
+  `array`) — add new ones to that `matches!` list to make them editable.
+- JSON/YAML name objects/mappings after a `name`/`id`/`key`/`title`/`alias`
+  member so each entry of a data file (e.g. `golden.json` test cases) is
+  individually addressable; repeated keys stay distinct via parent_ordinal +
+  content_hash in the ordinal key.
