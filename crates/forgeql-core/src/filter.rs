@@ -301,6 +301,24 @@ fn dot_brace_min_len(pattern: &str) -> Option<usize> {
 /// 7. `OFFSET N`         — skip N items
 /// 8. `LIMIT N`          — truncate to N items
 pub fn apply_clauses<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
+    apply_clauses_inner(results, clauses, true);
+}
+
+/// Like [`apply_clauses`] but keeps the caller's insertion order when there is
+/// no explicit `ORDER BY`.
+///
+/// `SHOW outline` relies on this: its pre-order DFS sequence is the meaningful
+/// default order, and the usual `(name, line, path)` tie-break sort would
+/// flatten the structural tree into an alphabetical list.
+pub fn apply_clauses_keep_order<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
+    apply_clauses_inner(results, clauses, false);
+}
+
+fn apply_clauses_inner<T: ClauseTarget>(
+    results: &mut Vec<T>,
+    clauses: &Clauses,
+    default_sort: bool,
+) {
     // 1. IN glob
     if let Some(ref glob) = clauses.in_glob {
         results.retain(|item| item.path().is_some_and(|p| path_glob_matches(p, glob)));
@@ -408,7 +426,11 @@ pub fn apply_clauses<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
         return; // OFFSET == 0 and LIMIT already applied by collect_top_k.
     }
 
-    results.sort_by(|a, b| order_cmp(a, b, clauses));
+    // Default tie-break sort (name, line, path) runs unless the caller asked to
+    // preserve insertion order and supplied no explicit ORDER BY.
+    if default_sort || clauses.order_by.is_some() {
+        results.sort_by(|a, b| order_cmp(a, b, clauses));
+    }
 
     // 7. OFFSET
     let skip = clauses.offset.unwrap_or(0);

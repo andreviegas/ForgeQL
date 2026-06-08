@@ -6,6 +6,40 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.69.3] — 2026-06-08 — Land the outline order fix and consolidate golden tests
+
+### Fixed
+- `SHOW outline` without an explicit `ORDER BY` now actually preserves the
+  structural tree's pre-order. The 0.69.1 entry below described this fix, but the
+  code change was lost before that commit landed (only its CHANGELOG/version
+  shipped), so the default outline order was still alphabetical. This release
+  contains the real `apply_clauses_keep_order` change and the `SHOW outline`
+  wiring.
+
+### Changed
+- Golden suite: the slice-3/4/5 transactions are merged into a single
+  `BEGIN`/`ROLLBACK`, and the outline-tree tests now assert the default
+  (no `ORDER BY`) DFS order — so they fail if the order regresses again.
+
+## [0.69.2] — 2026-06-08 — Self-healing `CHANGE NODE … IF REV` rejection
+
+### Added
+- When a `CHANGE NODE … IF REV '<rev>'` (or `DELETE NODE … IF REV`) guard fails
+  because the node changed, the rejection now returns a self-healing payload:
+  the node's `current_rev`, its `line_start`/`line_end`, and its
+  `current_content`. The agent can re-read the new rev and re-target the edit
+  without a follow-up query. Mandatory `IF REV` on every `CHANGE NODE` remains a
+  deferred, opt-in decision.
+
+## [0.69.1] — 2026-06-08 — Fix SHOW outline tree order
+
+### Fixed
+- `SHOW outline` without an explicit `ORDER BY` now preserves the structural
+  tree's pre-order (source) sequence. The shared clause pipeline applied a
+  default tie-break sort by name, which alphabetized the entries and flattened
+  the tree (e.g. a method sorted ahead of its own class). Outline now keeps its
+  natural order unless an `ORDER BY` is given; all other commands are unchanged.
+
 ## [0.69.0] — 2026-06-07 — Structural outline tree and `SHOW NODE` line offsets
 
 ### Added

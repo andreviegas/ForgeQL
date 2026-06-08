@@ -128,7 +128,7 @@ impl ForgeQLEngine {
         // to structured list results: outline, members, and call graph entries.
         match (&mut show_result.content, op) {
             (ShowContent::Outline { entries }, ForgeQLIR::ShowOutline { clauses, .. }) => {
-                crate::filter::apply_clauses(entries, clauses);
+                crate::filter::apply_clauses_keep_order(entries, clauses);
             }
             (ShowContent::Members { members, .. }, ForgeQLIR::ShowMembers { clauses, .. }) => {
                 crate::filter::apply_clauses(members, clauses);
