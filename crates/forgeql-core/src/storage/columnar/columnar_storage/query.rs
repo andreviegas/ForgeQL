@@ -102,8 +102,7 @@ impl ColumnarStorage {
                     line
                 } else {
                     let file_bytes = std::fs::read(&path).unwrap_or_default();
-                    let end = byte_end.min(file_bytes.len());
-                    file_bytes[..end].iter().filter(|&&b| b == b'\n').count() + 1
+                    content_end_line_in_bytes(&file_bytes, byte_end)
                 }
             };
             // Nav ids must match what materialize_rows emits for this file.
@@ -464,8 +463,7 @@ impl StorageEngine for ColumnarStorage {
                     line
                 } else {
                     let file_bytes = std::fs::read(&path).unwrap_or_default();
-                    let end = byte_end.min(file_bytes.len());
-                    file_bytes[..end].iter().filter(|&&b| b == b'\n').count() + 1
+                    content_end_line_in_bytes(&file_bytes, byte_end)
                 }
             };
             let opt_nav = |ord: u32| -> Option<String> {
@@ -1515,6 +1513,22 @@ fn content_end_line(newlines: &[usize], byte_end: usize) -> usize {
     newlines.partition_point(|&nl| nl < end) + 1
 }
 
+/// 1-based end line of a node's last content byte, computed from raw file bytes.
+/// Trims trailing newline bytes exactly like [`content_end_line`]: tree-sitter folds
+/// the terminating newline — and, for a Markdown block, the following blank line —
+/// into a node's byte range, which would otherwise push `end_line` past the last
+/// content line and make a whole-node `CHANGE NODE` swallow the separator blank
+/// (merging the node with the next block). A no-op for code, whose `byte_end` sits
+/// on a closing token rather than a newline.
+#[allow(clippy::naive_bytecount)]
+fn content_end_line_in_bytes(bytes: &[u8], byte_end: usize) -> usize {
+    let mut end = byte_end.min(bytes.len());
+    while end > 0 && bytes[end - 1] == b'\n' {
+        end -= 1;
+    }
+    bytes[..end].iter().filter(|&&b| b == b'\n').count() + 1
+}
+
 /// Structural declaration kinds shown in a default (non-`ALL`) outline.
 fn outline_is_structural(kind: &str) -> bool {
     matches!(
@@ -1645,5 +1659,20 @@ mod innermost_resolver_tests {
         assert_eq!(content_end_line(&newlines, 2), 1);
         // Ends on line 2's '\n' (byte 5) → line 2.
         assert_eq!(content_end_line(&newlines, 5), 2);
+    }
+
+    #[test]
+    fn content_end_line_in_bytes_trims_trailing_blank() {
+        use super::content_end_line_in_bytes;
+        // "row\n\nnext\n": a Markdown-style block whose tree-sitter range folds in
+        // the terminating newline AND the following blank line.
+        let bytes = b"row\n\nnext\n";
+        // byte_end past the blank line's '\n' must still report the content line
+        // (line 1), not the blank (line 2) — this is the whole-node merge bug.
+        assert_eq!(content_end_line_in_bytes(bytes, 5), 1);
+        // No trailing newline: ends on the content line.
+        assert_eq!(content_end_line_in_bytes(bytes, 3), 1);
+        // Content on line 3.
+        assert_eq!(content_end_line_in_bytes(bytes, 9), 3);
     }
 }

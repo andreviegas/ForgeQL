@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.75.5] — 2026-06-09 — Fix CHANGE NODE swallowing the blank line after a Markdown block
+
+### Fixed
+
+- A whole-node `CHANGE NODE` on a Markdown block (table, paragraph, heading) deleted the blank line that separates it from the next block, merging the two and corrupting structure (for example, the following paragraph was absorbed into a table as if it were a row). The node-resolution path derived a block's end line from the raw parse range, which for Markdown folds in the trailing newline and the following blank line; it now trims trailing newline bytes the way the rest of the engine already does, so a block's end line is its last content line. Editing by node-relative offset (`'<id>(n)'` / `'<id>(n-m)'`) was never affected, and code files are unchanged.
+
 ## [0.75.4] — 2026-06-09 — Experimental: block CHANGE FILE on indexed files
 
 ### Changed
