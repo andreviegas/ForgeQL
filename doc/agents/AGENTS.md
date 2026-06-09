@@ -35,11 +35,11 @@ USE source_name.branch
 **The right way to find and read code:**
 
 1. `FIND symbols WHERE ...` → get name, file path, line number
-2. `SHOW LINES n-m OF 'file'` → read only those lines
+2. `SHOW NODE '<node_id>'` → read the located node by its stable handle
 
 **Do NOT:**
 - Dump large function bodies without explicit LIMIT
-- Scan files line-by-line with SHOW LINES 1-500
+- Brute-force whole files instead of `FIND symbols WHERE` + `SHOW NODE`
 - Fall back to grep/find/cat for code reading
 - Use unfiltered FIND queries on large codebases
 
@@ -48,7 +48,7 @@ USE source_name.branch
 | Need | Command |
 |---|---|
 | Find a symbol | `FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...']` |
-| Read specific lines | `SHOW LINES n-m OF 'file'` |
+| Read a located node | `SHOW NODE '<node_id>'` |
 | Function signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
@@ -64,7 +64,7 @@ USE source_name.branch
 - `IN 'src'` and `IN 'crates/'` auto-expand to `IN 'src/**'` — bare directory paths are always safe.
 - Multiple `WHERE` clauses combine as AND.
 - FIND defaults to 20 rows. Add LIMIT N for more.
-- SHOW body and SHOW context returning more than 40 lines without explicit LIMIT are blocked. **SHOW LINES n-m always returns the full requested range** — use it freely for any range size.
+- SHOW body and SHOW context returning more than 40 lines without explicit LIMIT are blocked. **`SHOW NODE '<id>'` returns a node's full span** — read a located node by its handle, at any size.
 - Format defaults to CSV (~60% fewer tokens).
 - Every response includes `tokens_approx` — if large, narrow with WHERE, IN, EXCLUDE.
 
@@ -90,22 +90,20 @@ ForgeQL indexes code quality metrics at parse time. Use them in WHERE clauses:
 
 ## Mutations
 
-Use `CHANGE` to modify file content, `COPY LINES` to copy a line range from one file to another, and `MOVE LINES` to move it (cut from source, paste to destination).
+Edit indexed code by stable `node_id`: `CHANGE NODE` replaces a node, `INSERT BEFORE/AFTER NODE` adds around it, `DELETE NODE` removes it. Raw-text file edits (`CHANGE FILE`, line-range copy and move) are reserved for non-indexed files — see the syntax reference.
 
 | Command | Effect |
 |---|---|
-| `CHANGE FILE 'f' LINES n-m WITH '...'` | Replace lines n-m |
-| `CHANGE FILE 'f' LINES n-m WITH NOTHING` | Delete lines n-m |
-| `CHANGE FILES '*.c' MATCHING 'old' WITH 'new'` | Bulk literal replacement |
-| `CHANGE FILE 'f' WITH '...'` | Replace entire file |
-| `COPY LINES n-m OF 'src' TO 'dst'` | Copy lines, append to dst |
-| `COPY LINES n-m OF 'src' TO 'dst' AT LINE k` | Copy lines, insert before line k in dst |
-| `MOVE LINES n-m OF 'src' TO 'dst'` | Move lines (cut+paste), append to dst |
-| `MOVE LINES n-m OF 'src' TO 'dst' AT LINE k` | Move lines, insert before line k in dst |
+| `CHANGE NODE '<id>' WITH '...'` | Replace the node's source span |
+| `CHANGE NODE '<id>(n-m)' WITH '...'` | Replace lines n–m within the node |
+| `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` | Insert lines around the node |
+| `DELETE NODE '<id>'` | Delete the node's source span |
+| `<mutation> IF REV '<rev>'` | Guard a mutation on the node's content rev |
+| Raw-text `CHANGE FILE` / copy / move | Non-indexed files only — see the syntax reference |
 
 Wrap mutations in a transaction for atomic rollback:
 
     BEGIN TRANSACTION 'name'
-      CHANGE FILE 'src/foo.c' LINES 10-12 WITH 'fixed'
+      CHANGE NODE '<node_id>' WITH 'fixed'
       VERIFY build 'test'
     COMMIT MESSAGE 'fix: ...'

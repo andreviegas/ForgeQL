@@ -6,7 +6,7 @@ Distributable agent configuration files that teach AI coding agents how to use F
 
 AI agents connected to the ForgeQL MCP server often drift mid-task:
 - They fall back to local filesystem tools (grep, find, cat) even though the workspace may be empty
-- They brute-force read code with `SHOW LINES 1-500` instead of using `FIND symbols WHERE`
+- They brute-force read whole files instead of using `FIND symbols WHERE` to locate code by name
 - They dump entire function bodies instead of using progressive disclosure
 
 ## The Solution
@@ -112,6 +112,6 @@ Three layers of defense against agent drift:
 
 1. **Tool restriction** (`forgeql.agent.md`): The agent literally cannot call grep/find/cat — only `forgeql/*` tools are available.
 
-2. **Behavioral instructions** (all files): Clear rules like "never fall back to local filesystem" and the two-step workflow: FIND → SHOW LINES.
+2. **Behavioral instructions** (all files): Clear rules like "never fall back to local filesystem" and the two-step workflow: FIND → SHOW NODE.
 
 3. **MCP server blocking** (built into ForgeQL): SHOW commands returning more than 40 lines without explicit LIMIT are blocked with a guidance message. This teaches the agent on first contact, even without any agent files installed.

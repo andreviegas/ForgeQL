@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.75.2] — 2026-06-09 — Node-first command documentation
+
+### Changed
+
+- Reworked the syntax reference and the agent instruction guides (README, AGENTS, and the Claude Code / ForgeQL agent files) so node-addressed commands — `SHOW NODE`, `CHANGE NODE`, `INSERT BEFORE/AFTER NODE`, `DELETE NODE` — are presented as the primary way to read and edit indexed code. The byte-range and whole-file commands are now collected in a dedicated raw-text chapter at the end of the syntax reference, documented as the fallback for non-indexed files only.
+
 ## [0.75.1] — 2026-06-09 — Fix flat node hierarchy in the from-scratch index build
 
 ### Fixed

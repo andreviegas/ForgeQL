@@ -13,7 +13,7 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
    - [FIND Commands](#find-commands)
    - [SHOW Commands](#show-commands)
    - [CHANGE Commands](#change-commands)
-   - [COPY / MOVE Commands](#copy--move-commands)
+   - [Node Addressing](#node-addressing)
    - [Transaction Commands](#transaction-commands)
 3. [Universal Clauses](#universal-clauses)
 4. [Operators and Values](#operators-and-values)
@@ -25,6 +25,7 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
    - [Dynamic Fields](#dynamic-fields)
    - [Enrichment Fields](#enrichment-fields)
 6. [Advanced Patterns](#advanced-patterns)
+7. [Raw-text commands (non-indexed files)](#raw-text-commands-non-indexed-files)
 
 ---
 
@@ -118,26 +119,22 @@ SHOW context OF 'symbol_name' [clauses]
 
 SHOW callees OF 'symbol_name' [clauses]
 
-SHOW LINES n-m OF 'file_path' [clauses]
-
 SHOW NODE '<node_id>' [CONTENT | METADATA] [clauses]
 
 SHOW MORE [HEAD n | TAIL n | n-m] [clauses]
 ```
-
 | Command | Returns |
 |---|---|
-| `SHOW body OF` | Source text of a symbol. **Default `DEPTH 0`**: signature only, body replaced by `{ ... }`. `DEPTH 1`+: progressively reveals nested structure. `DEPTH 99`: full source. In CSV output the first column is a **node-relative 1-based `off`set** (not an absolute line) and the node's id is in the header — so you can `CHANGE NODE '<id>'` straight from the read. Absolute line numbers remain in `format=JSON` and in `SHOW LINES`. |
+| `SHOW body OF` | Source text of a symbol. **Default `DEPTH 0`**: signature only, body replaced by `{ ... }`. `DEPTH 1`+: progressively reveals nested structure. `DEPTH 99`: full source. In CSV output the first column is a **node-relative 1-based `off`set** (not an absolute line) and the node's id is in the header — so you can `CHANGE NODE '<id>'` straight from the read. Absolute line numbers are available in `format=JSON`. |
 | `SHOW signature OF` | Declaration line only (return type, name, parameters). |
 | `SHOW outline OF` | Structural tree of a file. By default lists only **structural declarations** (functions, classes, structs, enums, traits, unions, namespaces, modules, type aliases, macros); each entry carries a **`depth`** so the compact output reads as an indented tree in source order. `ALL` includes every node; a `WHERE fql_kind = '...'` predicate implies `ALL`. Passing a `<node_id>` instead of a file path scopes the outline to that node's subtree. Supports `ORDER BY`, `LIMIT`, `OFFSET`. |
 | `SHOW members OF` | Member declarations of a class/struct/enum: fields, methods, enumerators. Supports `WHERE fql_kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
 | `SHOW context OF` | Surrounding lines of a symbol definition. `DEPTH N` controls how many context lines (default 5). |
 | `SHOW callees OF` | All symbols called from inside the named function body. |
-| `SHOW LINES n-m OF` | Verbatim line range from a file. |
-| `SHOW NODE '<id>'` | `CONTENT` (default) prints the node's source via `SHOW LINES`; `METADATA` returns its `FIND NODE` record. A node-relative line offset — `'<id>(n)'` or `'<id>(n-m)'` — narrows `CONTENT` to a single line or inclusive range within the node's own span (1-based). |
+| `SHOW NODE '<id>'` | `CONTENT` (default) prints the node's source; `METADATA` returns its `FIND NODE` record. A node-relative line offset — `'<id>(n)'` or `'<id>(n-m)'` — narrows `CONTENT` to a single line or inclusive range within the node's own span (1-based). |
 | `SHOW MORE` | Pages the session's last buffered output. When a command's output is too large to return inline (e.g. `VERIFY build`), ForgeQL returns a window and buffers the full output; `SHOW MORE` retrieves the rest without re-running the command. |
 
-Every `SHOW` response includes `start_line` and `end_line` — chain directly into `CHANGE LINES` without re-reading.
+Every `SHOW` response surfaces each result's `node_id` (and the CSV `off` column is node-relative), so you can chain directly into `CHANGE NODE` without re-reading.
 
 #### SHOW MORE — paged output buffer
 
@@ -170,55 +167,40 @@ the build: `SHOW MORE WHERE text MATCHES 'error|warning'`.
 ### CHANGE Commands
 
 ```sql
-CHANGE (FILE | FILES) file_list
-    MATCHING 'old_text' WITH 'new_text'
+CHANGE NODE '<node_id>' [IF REV '<rev>'] WITH 'new_content'
 
-CHANGE (FILE | FILES) file_list
-    LINES n-m WITH 'new_content'
+CHANGE NODE '<node_id>(n-m)' WITH 'new_content'
 
-CHANGE (FILE | FILES) file_list
-    LINES n-m WITH NOTHING
+INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'new_content'
 
-CHANGE FILE 'file_path'
-    WITH 'new_full_content'
-
-CHANGE FILE 'file_path'
-    WITH NOTHING
+DELETE NODE '<node_id>' [IF REV '<rev>']
 ```
-
-`file_list`: one or more single-quoted glob patterns, comma-separated.
-`FILE` and `FILES` are interchangeable.
+`<node_id>` is a stable handle from `FIND symbols`, `SHOW outline`, `FIND NODE`, or the CSV form of `SHOW body` (see [Node Addressing](#node-addressing)). Editing by handle is drift-proof: a node_id stays valid across edits that shift line numbers, so you read once and mutate by handle.
 
 | Variant | Effect |
 |---|---|
-| `MATCHING … WITH …` | Replace all literal occurrences across matched files |
-| `LINES n-m WITH '…'` | Replace a specific line range with new content |
-| `LINES n-m WITH NOTHING` | Delete a specific line range |
-| `WITH '…'` | Replace entire file content (creates file if absent) |
-| `WITH NOTHING` | Clear file content (file remains on disk, empty) |
+| `CHANGE NODE … WITH …` | Replace the node's entire source span |
+| `CHANGE NODE '<id>(n-m)' WITH …` | Replace only lines n–m within the node (node-relative offset) |
+| `INSERT BEFORE NODE … WITH …` | Insert new lines immediately before the node |
+| `INSERT AFTER NODE … WITH …` | Insert new lines immediately after the node |
+| `DELETE NODE … [IF REV '<rev>']` | Delete the node's source span (optionally rev-guarded) |
 
 #### Heredoc syntax
 
 Every `WITH 'content'` form also accepts a heredoc block as the replacement text:
 
 ```sql
--- Replace a line range — no escaping needed for Rust lifetimes, char literals, etc.
-CHANGE FILE 'src/lib.rs' LINES 10-15 WITH <<RUST
-fn longest<'a>(x: &'a str, y: &'a str) -> &'a str {
-    if x.len() > y.len() { x } else { y }
-}
-RUST
+-- Replace a whole node
+CHANGE NODE '<node_id>' WITH 'fn run(buf: &mut [u8]) { buf.fill(0); }'
 
--- Find-and-replace across files
-CHANGE FILES 'src/**/*.rs' MATCHING 'old_api()' WITH <<CODE
-new_api()
-CODE
+-- Splice one line inside a node (node-relative offset)
+CHANGE NODE '<node_id>(3)' WITH 'let mut total: u64 = 0;'
 
--- Replace full file content
-CHANGE FILE 'src/config.rs' WITH <<END
-// regenerated
-const VERSION: &str = "2.0";
-END
+-- Insert a new item immediately after a node
+INSERT AFTER NODE '<node_id>' WITH 'fn helper() -> u32 { 42 }'
+
+-- Delete a node, guarded by its content rev
+DELETE NODE '<node_id>' IF REV 'h0123456789abcdef'
 ```
 
 | Heredoc rule | Detail |
@@ -291,30 +273,6 @@ payload** so you can re-target without another read:
   "current_content": "…the node's current source…"
 }
 ```
-
----
-
-### COPY / MOVE Commands
-
-Copies or moves lines n..=m (1-based, inclusive) from `src_path` into `dst_path`.
-
-Syntax:
-
-    COPY LINES n-m OF 'src' TO 'dst'
-    COPY LINES n-m OF 'src' TO 'dst' AT LINE k
-
-    MOVE LINES n-m OF 'src' TO 'dst'
-    MOVE LINES n-m OF 'src' TO 'dst' AT LINE k
-
-| Argument | Meaning |
-|---|---|
-| `n-m` | 1-based inclusive source line range |
-| `'src'` | Relative source file path |
-| `'dst'` | Relative destination file path (may equal `'src'`) |
-| `AT LINE k` | Insert before line `k` in `dst`; omitted = append at end |
-
-**COPY** — inserts the lines into `dst` without modifying `src`.
-**MOVE** — inserts the lines into `dst` then deletes them from `src`. Same-file moves are handled atomically.
 
 ---
 
@@ -1025,19 +983,15 @@ VERIFY build 'test'
 ROLLBACK TRANSACTION 'phase-2-add-param'
 ```
 
-### SHOW body → CHANGE LINES workflow
-
-`SHOW body` returns `start_line` / `end_line`, enabling line-precise edits:
-
+### SHOW body → CHANGE NODE workflow
+`SHOW body` in CSV form surfaces the node's `node_id` (in the header) and a node-relative `off` column, so you can edit by handle without computing absolute line numbers:
 ```sql
--- Read the function (DEPTH 99 for full source)
+-- Read the function; the CSV header carries its node_id, the off column is node-relative
 SHOW body OF 'PiscoCode::process' DEPTH 99
--- Response includes start_line=87, end_line=103
 
--- Rewrite it
+-- Rewrite it by handle — drift-proof, no line numbers to recompute
 BEGIN TRANSACTION 'rewrite-process'
-CHANGE FILE 'src/PiscoCode.cpp'
-  LINES 87-103
+CHANGE NODE '<node_id>'
   WITH 'void PiscoCode::run(Buffer& buffer) {
     for (auto& sample : buffer) {
         sample = this->pipeline.apply(sample);
@@ -1046,7 +1000,6 @@ CHANGE FILE 'src/PiscoCode.cpp'
 VERIFY build 'test'
 COMMIT MESSAGE 'rewrite PiscoCode::run'
 ```
-
 ### File system exploration
 
 ```sql
@@ -1153,3 +1106,56 @@ column shows that field's value instead of `usages`:
 
 Mutations, transactions, and source ops keep their JSON format (already small).
 
+
+---
+
+## Raw-text commands (non-indexed files)
+
+The commands in this chapter operate on **raw byte ranges** and never touch the
+index. Reach for them **only** on files ForgeQL does not index — config, fixtures,
+generated output, plain text. For any indexed source file use the node commands
+above (`SHOW NODE`, `CHANGE NODE`, `INSERT … NODE`, `DELETE NODE`): a node handle
+survives edits that shift line numbers; a line range does not.
+
+### SHOW LINES
+
+```sql
+SHOW LINES n-m OF 'file_path' [clauses]
+```
+
+Returns a verbatim 1-based line range. Combine with `WHERE text MATCHES`/`LIKE` to
+grep within the range before the output is returned.
+
+### CHANGE FILE
+
+```sql
+CHANGE (FILE | FILES) file_list MATCHING 'old_text' WITH 'new_text'
+CHANGE (FILE | FILES) file_list LINES n-m WITH 'new_content'
+CHANGE (FILE | FILES) file_list LINES n-m WITH NOTHING
+CHANGE FILE 'file_path' WITH 'new_full_content'
+CHANGE FILE 'file_path' WITH NOTHING
+```
+
+| Variant | Effect |
+|---|---|
+| `MATCHING … WITH …` | Replace all literal occurrences across matched files |
+| `LINES n-m WITH '…'` | Replace a specific line range |
+| `LINES n-m WITH NOTHING` | Delete a specific line range |
+| `WITH '…'` | Replace entire file content (creates the file if absent) |
+| `WITH NOTHING` | Clear file content (file remains on disk, empty) |
+
+`file_list` is one or more comma-separated single-quoted globs; `FILE` and `FILES`
+are interchangeable. Every `WITH 'content'` form also accepts a heredoc block
+(`WITH <<TAG … TAG`, tag all-uppercase on its own line) when the replacement text
+contains quotes.
+
+### COPY / MOVE LINES
+
+```sql
+COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]
+MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]
+```
+
+Copies (or moves) source lines `n..=m` into `dst` before line `k`; the range is
+appended when `AT LINE k` is omitted. **COPY** leaves `src` untouched; **MOVE**
+deletes the range from `src` after inserting. Same-file moves are atomic.

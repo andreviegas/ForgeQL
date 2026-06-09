@@ -130,7 +130,7 @@ between the command target and any filtering `clauses`:
 ```sql
 FIND symbols USING 'legacy'  WHERE name LIKE 'get%'
 SHOW body OF 'myFn' USING 'columnar'
-SHOW LINES 1-20 OF 'src/lib.rs' USING 'legacy'
+SHOW NODE '<node_id>' USING 'legacy'
 ```
 
 ### `Backend` enum (`ir.rs`)

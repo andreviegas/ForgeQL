@@ -2271,7 +2271,7 @@
   },
   {
     "alias": "golden-python",
-    "expect_symbols_indexed": 3063558,
+    "expect_symbols_indexed": 3108613,
     "use": "pytorch-andre.pytorch-frozen"
   },
   {

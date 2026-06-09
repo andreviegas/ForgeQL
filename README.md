@@ -64,7 +64,7 @@ FIND symbols WHERE fql_kind = 'function'
 -- 7. Zoom into one of those hotspots — read just the signature
 FIND symbols WHERE name = 'PiscoCode::process'
 -- Result: path=src/PiscoCode.cpp, line=87
-SHOW LINES 87-103 OF 'src/PiscoCode.cpp'
+SHOW body OF 'PiscoCode::process' DEPTH 99
 -- Exactly 17 lines, exactly the function, zero waste
 ```
 
@@ -82,8 +82,8 @@ ForgeQL is intentionally minimal. Everything is built from four command families
 |---|---|
 | **Session** | `CREATE SOURCE` · `REFRESH SOURCE` · `USE` · `SHOW SOURCES` · `SHOW BRANCHES` · `DISCONNECT` |
 | **Queries** | `FIND symbols` · `FIND usages OF` · `FIND callees OF` · `FIND files` |
-| **Content** | `SHOW body` · `SHOW signature` · `SHOW outline` · `SHOW members` · `SHOW context` · `SHOW LINES` |
-| **Mutations** | `CHANGE FILE` / `CHANGE FILES` (with `MATCHING`, `LINES`, `WITH`, or `WITH NOTHING`) · `COPY LINES n-m OF src TO dst [AT LINE k]` · `MOVE LINES n-m OF src TO dst [AT LINE k]` |
+| **Content** | `SHOW body` · `SHOW signature` · `SHOW outline` · `SHOW members` · `SHOW context` · `SHOW NODE` |
+| **Mutations** | `CHANGE NODE` · `INSERT BEFORE/AFTER NODE` · `DELETE NODE` — addressed by stable `node_id`, optional `IF REV` guard. Raw-text file edits (`CHANGE FILE`, line-range copy/move) live in the syntax reference for non-indexed files |
 
 Complex workflows — renaming a symbol, applying a coding standard, migrating a pattern — are **composed by the agent** from these primitives. ForgeQL provides the precision tools; the agent decides the strategy.
 
@@ -247,7 +247,7 @@ FIND symbols
 SHOW body OF 'PiscoCode::process'
 ```
 
-Every `SHOW` response includes `start_line` and `end_line`. Those values feed directly into a `CHANGE LINES` command — no round-trip to re-read the file:
+Every `SHOW` response surfaces each result's `node_id`. That handle feeds directly into a `CHANGE NODE` command — no round-trip to re-read the file:
 
 ```json
 {
@@ -307,31 +307,26 @@ verify_steps:
 ### Edit a specific function body
 
 ```sql
--- Step 1: get the exact line range
+-- Step 1: locate the node — SHOW body's CSV header carries its node_id
 SHOW body OF 'PiscoCode::init'
 
--- Step 2: replace those lines with the new implementation
-CHANGE FILE 'src/PiscoCode.cpp'
-  LINES 87-103
+-- Step 2: replace the whole node by handle (drift-proof, no line numbers)
+CHANGE NODE '<node_id>'
   WITH 'void PiscoCode::run(Buffer& buffer) {
     for (auto& sample : buffer) {
         sample = this->pipeline.apply(sample);
     }
 }'
 ```
-
 ### Remove a deprecated function
 
 ```sql
--- After SHOW body returns start_line=200, end_line=214
+-- SHOW body's CSV header gives the node_id; no line numbers needed
 BEGIN TRANSACTION 'remove-legacyHelper'
-  CHANGE FILE 'src/PiscoCode.cpp'
-    LINES 200-214
-    WITH NOTHING
+  DELETE NODE '<node_id>'
   VERIFY build 'test'
 COMMIT MESSAGE 'remove deprecated legacyHelper'
 ```
-
 ---
 
 ## About This Project
@@ -360,7 +355,7 @@ ForgeQL ships with distributable agent configuration files that teach AI agents 
 **Three layers of defense against agent drift:**
 
 1. **Tool restriction** — the VS Code Custom Agent locks the agent to `forgeql/*` tools only. It literally cannot call grep, find, or cat.
-2. **Behavioral instructions** — every platform adapter includes the two-step workflow: `FIND symbols WHERE` → `SHOW LINES n-m` — no brute-force reading.
+2. **Behavioral instructions** — every platform adapter includes the two-step workflow: `FIND symbols WHERE` → `SHOW NODE` — no brute-force reading.
 3. **MCP server guardrails** — SHOW commands returning more than 40 lines without an explicit `LIMIT` clause are **blocked**. The agent gets zero lines and a guidance message redirecting it to precision queries. This teaches the right pattern on first contact, even without any agent files installed.
 
 | Platform | File | Tool Lock |

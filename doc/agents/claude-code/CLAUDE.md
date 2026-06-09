@@ -7,20 +7,20 @@ The local workspace may be empty — never fall back to local filesystem tools (
 
 1. Always start with `USE source.branch AS 'alias'` before any query. The `AS` clause is mandatory.
 2. Never use Bash tools (grep, find, cat, less) or Read File for source code. ForgeQL manages all code access.
-3. Never brute-force read code. Use FIND to locate symbols, then SHOW LINES for exact ranges.
-4. **SHOW body and SHOW context** without LIMIT are blocked beyond 40 lines. If blocked, use FIND to get file + line numbers, then SHOW LINES n-m. **SHOW LINES n-m always returns the full requested range** — explicit line ranges bypass the cap.
+3. Never brute-force read code. Use FIND to locate symbols, then SHOW NODE to read them by stable handle.
+4. **SHOW body and SHOW context** without LIMIT are blocked beyond 40 lines. If blocked, use FIND to get the symbol's node_id, then `SHOW NODE '<id>'`. **`SHOW NODE` returns the node's full span** regardless of size.
 5. Stack WHERE clauses aggressively before executing. Multiple WHERE clauses combine as AND — filter first, read later.
-6. Filter inside SHOW LINES — never read then grep. `SHOW LINES 1-400 OF 'file' WHERE text LIKE '%pattern%'` returns only matching lines.
+6. Filter inside the read — never read then grep. `SHOW body OF 'fn' DEPTH 99 WHERE text LIKE '%pattern%'` returns only matching lines.
 7. Always ORDER BY in GROUP BY queries. Use `ORDER BY count ASC` to surface lowest-scope candidates first. Add HAVING constraints to filter at aggregate level.
 8. Verify structural assumptions before mutating. Check includes and structure before refactoring, not after.
-9. Numbers have no symbolic usages — use text search. Use `SHOW LINES WHERE text LIKE '%value%'` or `WHERE name = 'value'` for literal search.
+9. Numbers have no symbolic usages — use text search. Use `FIND symbols WHERE name = 'value' WHERE is_magic = 'true'` or `SHOW body ... WHERE text LIKE '%value%'` for literal search.
 10. Persist key findings in `HINTS.md`. After completing a task, append short bullet points of key codebase facts discovered (file locations, naming conventions, architectural decisions) to `HINTS.md` in the workspace root.
 
 ## Query Workflow
 
 ```
 1. FIND symbols WHERE ... → get name, file, line number
-2. SHOW LINES n-m OF 'file' → read only those lines
+2. SHOW NODE '<node_id>' → read the located node by its stable handle
 ```
 
 **Progressive disclosure for SHOW body:**
@@ -33,7 +33,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Need | Command |
 |---|---|
 | Find a symbol | `FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...'] [IN 'path/**']` |
-| Read specific lines | `SHOW LINES n-m OF 'file'` |
+| Read a located node | `SHOW NODE '<node_id>'` |
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
@@ -44,23 +44,23 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Call graph | `SHOW callees OF 'name'` |
 | File list | `FIND files [IN 'path/**'] [WHERE extension = '...'] ORDER BY size DESC` |
 | Context around symbol | `SHOW context OF 'name'` |
-| Read + filter lines | `SHOW LINES n-m OF 'file' WHERE text LIKE '%pattern%'` |
+| Read + filter a node | `SHOW body OF 'name' DEPTH 99 WHERE text LIKE '%pattern%'` |
 | Page a truncated/buffered output | `SHOW MORE [HEAD n \| TAIL n \| n-m] [WHERE text MATCHES '...']` |
 | Grep the last `VERIFY` log (no rebuild) | `SHOW MORE WHERE text MATCHES 'error\|warning'` |
 | Repo top-level dirs | `FIND files` (returns depth-1 entries) |
-| Copy lines between files | `COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]` |
-| Move lines between files | `MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]` |
+| Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
+| Delete a node | `DELETE NODE '<id>' [IF REV '<rev>']` |
 
 ## Anti-Patterns
 
 | Never do this | Do this instead |
 |---|---|
-| `SHOW body OF 'func' DEPTH 99` without LIMIT | `FIND symbols WHERE name = 'func'` → `SHOW LINES n-m OF 'file'` |
-| `SHOW LINES 1-500 OF 'file'` | `SHOW outline OF 'file'` → `SHOW LINES n-m` for specific symbols |
+| `SHOW body OF 'func' DEPTH 99` without LIMIT | `FIND symbols WHERE name = 'func'` → `SHOW NODE '<id>'` |
+| Reading a whole file blindly | `SHOW outline OF 'file'` → `SHOW NODE '<id>'` for specific symbols |
 | `FIND symbols` (unfiltered) | `FIND symbols WHERE fql_kind = '...' WHERE name LIKE '...'` |
 | `GROUP BY` without `HAVING` or `ORDER BY` | `GROUP BY file HAVING count >= N ORDER BY count ASC` |
-| `SHOW LINES n-m OF 'file'` then filter manually | `SHOW LINES n-m OF 'file' WHERE text LIKE '%pattern%'` |
-| `FIND usages OF 'number'` for literal occurrence | `FIND symbols WHERE name = 'value' WHERE is_magic = 'true'` or `SHOW LINES WHERE text LIKE '%value%'` |
+| Read a node then filter manually | `SHOW body OF 'name' DEPTH 99 WHERE text LIKE '%pattern%'` |
+| `FIND usages OF 'number'` for literal occurrence | `FIND symbols WHERE name = 'value' WHERE is_magic = 'true'` or `SHOW body ... WHERE text LIKE '%value%'` |
 
 ## Efficiency
 
@@ -111,26 +111,22 @@ SHOW outline OF '<node_id>' [clauses]    -- outline a node's subtree
 SHOW members OF 'type' [clauses]
 SHOW context OF 'name' [clauses]
 SHOW callees OF 'name' [clauses]
-SHOW LINES n-m OF 'file' [clauses]
+SHOW NODE '<node_id>' [CONTENT | METADATA] [clauses]
 SHOW NODE '<node_id>' [CONTENT | METADATA] [clauses]   -- '<id>(n)' / '<id>(n-m)' narrows CONTENT
 ```
 
 ### CHANGE & Transactions
 ```sql
-CHANGE FILE 'path' LINES n-m WITH 'text'
-CHANGE FILE 'path' LINES n-m WITH NOTHING
-CHANGE FILES 'glob1','glob2' MATCHING 'old' WITH 'new'
-CHANGE FILE 'path' WITH 'full_content'
+-- Indexed code is edited by node handle (below); raw-text CHANGE FILE is in the syntax reference
 
 CHANGE NODE '<node_id>' [IF REV '<rev>'] WITH 'text'   -- '<id>(n)' / '<id>(n-m)' splices node lines
 INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'text'
 DELETE NODE '<node_id>' [IF REV '<rev>']
 
-COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]
-MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]
+-- Raw-text line-range copy/move: non-indexed files only (see syntax reference)
 
 BEGIN TRANSACTION 'name'
-  -- CHANGE / COPY / MOVE / VERIFY commands
+  -- CHANGE / INSERT / DELETE NODE / VERIFY commands
 COMMIT MESSAGE 'msg'
 VERIFY build 'step'
 ROLLBACK [TRANSACTION 'name']
@@ -143,7 +139,7 @@ ROLLBACK [TRANSACTION 'name']
 
 `MATCHES` / `NOT MATCHES` use Rust `regex` crate syntax. Prefix `(?i)` for case-insensitive matching.
 
-`SHOW body`, `SHOW LINES`, and `SHOW context` accept `WHERE` on source lines:
+`SHOW body`, `SHOW NODE`, and `SHOW context` accept `WHERE` on source lines:
 - `text` — line content (supports `=`, `LIKE`, `MATCHES`)
 - `line` — 1-based line number
 
@@ -446,8 +442,8 @@ FIND symbols GROUP BY file HAVING count >= 20 ORDER BY count DESC
 FIND symbols WHERE name = 'buggyFunction'
 -- Result gives: path=src/module.cpp, line=42
 
--- 2. Read only the relevant lines (preferred over SHOW body)
-SHOW LINES 42-89 OF 'src/module.cpp'
+-- 2. Read the node by its stable handle
+SHOW NODE '<node_id>'
 
 -- 3. If you need to see what the function calls
 SHOW callees OF 'buggyFunction'
@@ -460,7 +456,7 @@ FIND usages OF 'buggyFunction' GROUP BY file ORDER BY count DESC
 
 -- 6. Fix atomically
 BEGIN TRANSACTION 'fix-buggyFunction'
-  CHANGE FILE 'src/module.cpp' LINES 42-89 WITH 'fixed code...'
+  CHANGE NODE '<node_id>' WITH 'fixed code...'
   VERIFY build 'test'
 COMMIT MESSAGE 'fix: handle edge case in buggyFunction'
 
@@ -490,45 +486,36 @@ FIND symbols WHERE is_magic = 'true' WHERE name = '30U'
   IN 'subsys/**' LIMIT 20
 
 -- Step 4: Read context for each semantic domain (parallel)
-SHOW LINES 306-333 OF 'subsys/sd/mmc.c' WHERE text LIKE '%30U%' LIMIT 5
+SHOW NODE '<node_id>' WHERE text LIKE '%30U%' LIMIT 5
 
 -- Step 5: Confirm no existing constant
 FIND symbols WHERE fql_kind = 'macro' WHERE value = '30U'
   IN 'subsys/sd/**' LIMIT 5
 
 -- Step 6: Find common header
-SHOW LINES 1-20 OF 'subsys/sd/mmc.c' WHERE text LIKE '%include%' LIMIT 8
+SHOW outline OF 'subsys/sd/mmc.c' WHERE fql_kind = 'import' LIMIT 8
 
 -- Step 7: Apply atomically
 BEGIN TRANSACTION 'sd-csd-struct-shift'
-  CHANGE FILE 'include/zephyr/sd/sd_spec.h'
-    LINES 777-777 WITH '#define SDMMC_CSD_STRUCT_SHIFT 30U'
+  INSERT AFTER NODE '<node_id>' WITH '#define SDMMC_CSD_STRUCT_SHIFT 30U'
   CHANGE FILE 'subsys/sd/mmc.c' MATCHING '>> 30U' WITH '>> SDMMC_CSD_STRUCT_SHIFT'
   CHANGE FILE 'subsys/sd/sd_ops.c' MATCHING '>> 30U' WITH '>> SDMMC_CSD_STRUCT_SHIFT'
   VERIFY build 'test'
 COMMIT MESSAGE 'refactor: name CSD structure field bit shift constant'
 ```
 
-### Copy / Move Lines
+### Extract or relocate code
 
-Relocate a block of lines within or across files (v0.31.0+).
+Indexed code is edited by node handle — `CHANGE NODE`, `INSERT BEFORE/AFTER NODE`, `DELETE NODE`. Relocating a raw line range across non-indexed files uses `COPY`/`MOVE` from the syntax reference.
 
 ```sql
--- Copy to another file (append)
-COPY LINES 10-25 OF 'src/module.c' TO 'include/module.h'
-
--- Copy and insert at a specific line
-COPY LINES 10-25 OF 'src/module.c' TO 'include/module.h' AT LINE 42
-
--- Move (cut + paste, atomic)
-MOVE LINES 10-25 OF 'src/module.c' TO 'include/module.h' AT LINE 42
-
--- Same-file reorder
-MOVE LINES 80-95 OF 'src/module.c' TO 'src/module.c' AT LINE 20
-
--- Wrap in a transaction
+-- Move a function to another file by node handle, atomically
 BEGIN TRANSACTION 'extract-helper'
-  MOVE LINES 42-58 OF 'src/module.c' TO 'include/helpers.h' AT LINE 10
+  -- read the node (FIND symbols / SHOW outline gave the node_id)
+  SHOW NODE '<node_id>'
+  -- recreate it at the destination, then delete the original
+  INSERT AFTER NODE '<dst_anchor_id>' WITH 'static int helper(void) { ... }'
+  DELETE NODE '<node_id>'
   VERIFY build 'test'
 COMMIT MESSAGE 'refactor: extract helper to shared header'
 ```
