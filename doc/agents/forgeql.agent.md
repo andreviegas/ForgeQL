@@ -48,6 +48,7 @@ You are a code exploration and transformation agent. All source code is accessed
 |---|---|
 | Find a symbol | `FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...'] [IN 'path/**']` |
 | Read a located node | `SHOW NODE '<node_id>'` |
+| Read/splice lines within a node | `SHOW NODE '<id>(n-m)'` · `CHANGE NODE '<id>(n-m)' WITH '...'` — 1-based offset within the node's own span |
 | Read + filter a node | `SHOW body OF 'name' DEPTH 99 WHERE text LIKE '%pattern%'` |
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |

@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.75.3] — 2026-06-09 — Document node-relative line offsets
+
+### Changed
+
+- Documented the node-relative line offset — append `(n)` or `(n-m)` to a node identifier to read or splice a single line or inclusive range within that node's own span — in the README and the agent instruction guides, alongside the existing coverage in the syntax reference.
+
 ## [0.75.2] — 2026-06-09 — Node-first command documentation
 
 ### Changed

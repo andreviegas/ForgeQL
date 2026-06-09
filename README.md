@@ -247,7 +247,7 @@ FIND symbols
 SHOW body OF 'PiscoCode::process'
 ```
 
-Every `SHOW` response surfaces each result's `node_id`. That handle feeds directly into a `CHANGE NODE` command — no round-trip to re-read the file:
+Every `SHOW` response surfaces each result's `node_id`. That handle feeds directly into a `CHANGE NODE` command — and a `(n)` or `(n-m)` suffix targets a single line or an inclusive range within the node's own span (e.g. `SHOW NODE '<id>(2-4)'`, `CHANGE NODE '<id>(3)' WITH '...'`) — no round-trip to re-read the file:
 
 ```json
 {

@@ -49,6 +49,7 @@ USE source_name.branch
 |---|---|
 | Find a symbol | `FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...']` |
 | Read a located node | `SHOW NODE '<node_id>'` |
+| Read/splice lines within a node | `SHOW NODE '<id>(n-m)'` · `CHANGE NODE '<id>(n-m)' WITH '...'` — 1-based offset within the node's own span |
 | Function signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
