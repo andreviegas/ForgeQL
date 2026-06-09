@@ -392,6 +392,31 @@ mod tests {
     }
 
     #[test]
+    fn teardown_worktree_removes_dir_and_registration() {
+        let tmp = tempdir().unwrap();
+        let bare = make_bare_repo(tmp.path());
+        let branch = default_branch(&bare);
+        let wt_path = tmp.path().join("wt-teardown");
+
+        create(&bare, "teardowntest", &branch, &wt_path, None).unwrap();
+        assert!(wt_path.exists());
+
+        crate::session::teardown_worktree(tmp.path(), &wt_path, "teardowntest");
+
+        assert!(
+            !wt_path.exists(),
+            "teardown must remove the worktree directory from disk"
+        );
+        assert!(
+            list(&bare)
+                .unwrap()
+                .iter()
+                .all(|w| w.name != "teardowntest"),
+            "teardown must remove the git worktree registration"
+        );
+    }
+
+    #[test]
     fn invalid_branch_create_fails() {
         let tmp = tempdir().unwrap();
         let bare = make_bare_repo(tmp.path());

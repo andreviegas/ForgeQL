@@ -6,6 +6,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.0] — 2026-06-09 — Worktree teardown helper and per-session TTL
+
+### Added
+
+- `forgeql_core::session::teardown_worktree(data_dir, wt_path, wt_name)` plus the convenience method `SessionCoords::teardown(data_dir)`: remove a worktree's git registration, delete its session branch, and delete its working directory. Best-effort and panic-free, so callers (notably test harnesses that mint a per-run worktree) can reclaim it from a `Drop` guard. `ForgeQLEngine::prune_single_worktree` now delegates to this single implementation.
+- Per-session TTL override via the `FORGEQL_SESSION_TTL_SECS` environment variable, read once at session creation and persisted in the worktree's `.forgeql-session` sentinel as a `ttl=` line. `evict_idle_sessions` and `restore_sessions_from_disk` honour the per-session value, falling back to the global 48h `SESSION_TTL_SECS` when unset, so a short-lived test fleet can self-reclaim on a 1h TTL without shortening the TTL of unrelated worktrees in a shared data directory.
+
+### Changed
+
+- The Zephyr golden-test harness now spawns its MCP server with `FORGEQL_SESSION_TTL_SECS=3600` and tears down every per-run worktree it created when the client drops. Previously each `cargo test` run leaked four PID-suffixed worktrees that were never reclaimed.
+
 ## [0.75.6] — 2026-06-09 — Scope the CHANGE FILE block so it no longer blocks node edits
 
 ### Fixed

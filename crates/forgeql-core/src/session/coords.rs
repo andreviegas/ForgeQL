@@ -169,6 +169,17 @@ impl SessionCoords {
         Self::user_worktrees_root(data_dir, &self.user).join(self.worktree_dir())
     }
 
+    /// Tear down this session's worktree: git worktree registration, session
+    /// branch, and working directory. Convenience wrapper over
+    /// [`super::teardown_worktree`] for callers that hold the coordinates —
+    /// e.g. a test harness cleaning up a per-run worktree. Best-effort; never
+    /// panics.
+    pub fn teardown(&self, data_dir: &Path) {
+        let wt_path = self.worktree_path(data_dir);
+        let wt_name = self.worktree_dir();
+        super::teardown_worktree(data_dir, &wt_path, &wt_name);
+    }
+
     /// Root directory that holds **all** users' worktrees.
     ///
     /// Format: `{data_dir}/worktrees`.

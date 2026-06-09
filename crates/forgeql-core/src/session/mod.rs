@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::ast::index::SymbolTable;
 use crate::ast::lang::LanguageRegistry;
@@ -55,6 +55,9 @@ pub struct SessionSentinel {
     pub alias: Option<String>,
     /// User identity that owns this session.
     pub user: Option<String>,
+    /// Per-session TTL override in seconds, from `FORGEQL_SESSION_TTL_SECS`
+    /// at session creation. `None` falls back to the global `SESSION_TTL_SECS`.
+    pub ttl_secs: Option<u64>,
 }
 
 /// Read and parse the sentinel file from a worktree directory.
@@ -69,6 +72,7 @@ pub fn read_sentinel(worktree_path: &Path) -> Option<SessionSentinel> {
     let mut branch: Option<String> = None;
     let mut alias: Option<String> = None;
     let mut user: Option<String> = None;
+    let mut ttl_secs: Option<u64> = None;
 
     for line in data.lines() {
         if let Some((key, val)) = line.split_once('=') {
@@ -78,6 +82,7 @@ pub fn read_sentinel(worktree_path: &Path) -> Option<SessionSentinel> {
                 "branch" => branch = Some(val.to_string()),
                 "alias" => alias = Some(val.to_string()),
                 "user" => user = Some(val.to_string()),
+                "ttl" => ttl_secs = val.parse().ok(),
                 _ => {}
             }
         } else if timestamp.is_none() {
@@ -92,7 +97,37 @@ pub fn read_sentinel(worktree_path: &Path) -> Option<SessionSentinel> {
         branch,
         alias,
         user,
+        ttl_secs,
     })
+}
+
+/// Tear down a worktree: git worktree, session branch, and directory.
+///
+/// Best-effort and panic-free (every step logs on failure), so it is safe
+/// to call from `Drop` guards and test teardown.
+///
+/// `wt_name` is the worktree directory name as produced by
+/// [`SessionCoords::worktree_dir`]. This is the single implementation shared by
+/// startup pruning and explicit caller-driven cleanup.
+pub fn teardown_worktree(data_dir: &Path, wt_path: &Path, wt_name: &str) {
+    if let Ok(repo_entries) = std::fs::read_dir(data_dir) {
+        for re in repo_entries.flatten() {
+            let rpath = re.path();
+            if rpath.extension().is_some_and(|ext| ext == "git") {
+                if let Err(e) = crate::git::worktree::remove(&rpath, wt_name) {
+                    warn!(%wt_name, repo = %rpath.display(), %e, "teardown: worktree remove failed");
+                }
+                if let Err(e) = crate::git::worktree::delete_session_branch(&rpath, wt_name) {
+                    warn!(%wt_name, repo = %rpath.display(), %e, "teardown: branch delete failed");
+                }
+            }
+        }
+    }
+    if wt_path.exists()
+        && let Err(e) = std::fs::remove_dir_all(wt_path)
+    {
+        warn!(path = %wt_path.display(), %e, "teardown: remove_dir_all failed");
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -164,6 +199,11 @@ pub struct Session {
     /// Monotonic timestamp of the last request that touched this session.
     /// Used by the TTL eviction task to detect idle sessions.
     last_active: std::time::Instant,
+    /// Per-session TTL override (seconds) captured from
+    /// `FORGEQL_SESSION_TTL_SECS` at session creation. `None` falls back to the
+    /// global `SESSION_TTL_SECS`. Lets a short-lived test fleet self-reclaim its
+    /// worktrees on a tight TTL without affecting unrelated sessions.
+    pub ttl_secs: Option<u64>,
     /// Named checkpoint stack for the checkpoint-based transaction model.
     ///
     /// `BEGIN TRANSACTION 'label'` pushes a new entry; `ROLLBACK
@@ -243,6 +283,9 @@ impl Session {
             cached_commit: None,
             index_dirty: false,
             last_active: std::time::Instant::now(),
+            ttl_secs: std::env::var("FORGEQL_SESSION_TTL_SECS")
+                .ok()
+                .and_then(|v| v.trim().parse().ok()),
             checkpoints: Vec::new(),
             last_clean_oid: None,
             frozen_verify_steps: None,
@@ -633,8 +676,12 @@ impl Session {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+        let ttl_line = self
+            .ttl_secs
+            .map(|ttl| format!("ttl={ttl}\n"))
+            .unwrap_or_default();
         let contents = format!(
-            "timestamp={now}\nsource={}\nbranch={}\nalias={}\nuser={}\n",
+            "timestamp={now}\nsource={}\nbranch={}\nalias={}\nuser={}\n{ttl_line}",
             self.source_name, self.branch, self.id, self.user_id,
         );
         let _ = std::fs::write(self.worktree_path.join(SESSION_SENTINEL), contents);
@@ -822,6 +869,33 @@ mod tests {
             .unwrap();
 
         repo_path
+    }
+
+    #[test]
+    fn read_sentinel_parses_ttl_when_present() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(
+            dir.join(SESSION_SENTINEL),
+            "timestamp=100\nsource=s\nbranch=b\nalias=a\nuser=anonymous\nttl=3600\n",
+        )
+        .unwrap();
+        let sentinel = read_sentinel(dir).expect("sentinel must parse");
+        assert_eq!(sentinel.ttl_secs, Some(3600));
+        assert_eq!(sentinel.last_active_secs, 100);
+    }
+
+    #[test]
+    fn read_sentinel_ttl_absent_is_none() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(
+            dir.join(SESSION_SENTINEL),
+            "timestamp=100\nsource=s\nbranch=b\nalias=a\nuser=anonymous\n",
+        )
+        .unwrap();
+        let sentinel = read_sentinel(dir).expect("sentinel must parse");
+        assert_eq!(sentinel.ttl_secs, None);
     }
 
     #[test]

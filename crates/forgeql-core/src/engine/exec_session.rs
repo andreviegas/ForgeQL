@@ -24,7 +24,9 @@ impl ForgeQLEngine {
         let expired_ids: Vec<String> = self
             .sessions
             .iter()
-            .filter(|(_, session)| session.idle_secs() > SESSION_TTL_SECS)
+            .filter(|(_, session)| {
+                session.idle_secs() > session.ttl_secs.unwrap_or(SESSION_TTL_SECS)
+            })
             .map(|(id, _)| id.clone())
             .collect();
 
@@ -125,7 +127,8 @@ impl ForgeQLEngine {
                         pruned += 1;
                     }
                     Some(sentinel)
-                        if now.saturating_sub(sentinel.last_active_secs) >= SESSION_TTL_SECS =>
+                        if now.saturating_sub(sentinel.last_active_secs)
+                            >= sentinel.ttl_secs.unwrap_or(SESSION_TTL_SECS) =>
                     {
                         info!(%wt_name, "startup: TTL expired, pruning");
                         self.prune_single_worktree(&wt_path, &wt_name);
@@ -220,24 +223,7 @@ impl ForgeQLEngine {
 
     /// Remove a single worktree directory and its git metadata from all bare repos.
     fn prune_single_worktree(&self, wt_path: &Path, wt_name: &str) {
-        if let Ok(repo_entries) = std::fs::read_dir(&self.data_dir) {
-            for re in repo_entries.flatten() {
-                let rpath = re.path();
-                if rpath.extension().is_some_and(|ext| ext == "git") {
-                    if let Err(e) = worktree::remove(&rpath, wt_name) {
-                        warn!(%wt_name, repo = %rpath.display(), %e, "git prune failed");
-                    }
-                    if let Err(e) = worktree::delete_session_branch(&rpath, wt_name) {
-                        warn!(%wt_name, repo = %rpath.display(), %e, "branch delete failed");
-                    }
-                }
-            }
-        }
-        if wt_path.exists()
-            && let Err(e) = std::fs::remove_dir_all(wt_path)
-        {
-            warn!(path = %wt_path.display(), %e, "remove_dir_all failed");
-        }
+        crate::session::teardown_worktree(&self.data_dir, wt_path, wt_name);
     }
 
     // ===================================================================

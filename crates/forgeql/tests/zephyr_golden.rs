@@ -144,6 +144,9 @@ struct McpClient {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
+    data_dir: PathBuf,
+    /// (use_str, alias) pairs for every USE issued; torn down on Drop.
+    created: Vec<(String, String)>,
 }
 
 impl McpClient {
@@ -157,6 +160,7 @@ impl McpClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .env("FORGEQL_SESSION_TTL_SECS", "3600")
             .spawn()?;
         let stdin = child.stdin.take().expect("stdin piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout piped"));
@@ -165,9 +169,17 @@ impl McpClient {
             stdin,
             stdout,
             next_id: 1,
+            data_dir: data_dir.to_path_buf(),
+            created: Vec::new(),
         };
         client.handshake()?;
         Ok(client)
+    }
+
+    /// Record a worktree created by a USE/AS command so `Drop` can tear it
+    /// down when the test finishes.
+    fn track_worktree(&mut self, use_str: &str, alias: &str) {
+        self.created.push((use_str.to_string(), alias.to_string()));
     }
 
     fn handshake(&mut self) -> std::io::Result<()> {
@@ -263,8 +275,18 @@ impl McpClient {
 
 impl Drop for McpClient {
     fn drop(&mut self) {
+        // Kill the server first so it releases the worktree locks.
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // Then delete every per-run worktree this client created. A crash
+        // before this point leaks a worktree, which the next server startup
+        // reclaims once its 1h sentinel TTL expires.
+        for (use_str, alias) in std::mem::take(&mut self.created) {
+            if let Some((source, branch)) = use_str.split_once('.') {
+                forgeql_core::session::SessionCoords::new("anonymous", source, branch, alias)
+                    .teardown(&self.data_dir);
+            }
+        }
     }
 }
 
@@ -436,6 +458,7 @@ fn golden_values() {
             GoldenEntry::Use(u) => {
                 let run_alias = format!("{}-{}", u.alias, run_alias_suffix);
                 let fql = format!("USE {} AS '{}'", u.use_str, run_alias);
+                client.track_worktree(&u.use_str, &run_alias);
                 let result = client.run_fql(None, &fql).unwrap_or_else(|e| {
                     panic!(
                         "[golden] '{fql}' failed: {e}\n\
