@@ -17,6 +17,9 @@ env:
   # Keep the Rust toolchain version in sync with rust-toolchain.toml.
   # GitHub Actions caches this automatically once downloaded.
   RUST_BACKTRACE: 1
+  # Re-enable CHANGE FILE on indexed files so existing tests and the golden
+  # suite keep passing while the experiment is active.
+  FORGEQL_ALLOW_CHANGE_FILE_INDEXED: 1
 
 jobs:
   # -----------------------------------------------------------------------

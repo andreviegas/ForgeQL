@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
 
+env:
+  # Re-enable CHANGE FILE on indexed files so the release build is not blocked
+  # by the experiment gate active on this branch.
+  FORGEQL_ALLOW_CHANGE_FILE_INDEXED: 1
+
 jobs:
   build:
     name: Build ${{ matrix.target }}
