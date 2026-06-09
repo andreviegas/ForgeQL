@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.75.1] — 2026-06-09 — Fix flat node hierarchy in the from-scratch index build
+
+### Fixed
+
+- The inline path that builds an index from scratch now persists each node's parent ordinal and its first-child / sibling links, matching the per-file reindex path. Previously it stored only the node ordinal, so a freshly built index recorded a flat node hierarchy. The first reindex of any file then recomputed the correct nested hierarchy; the node-identifier remapper could no longer match the changed structure, and every node identifier in that file was reassigned (and the per-file ordinal base inflated). Node identifiers are now stable from the initial build onward.
+
 ## [0.75.0] — 2026-06-08 — Add a `--debug <file>` diagnostic trace log
 
 ### Added
