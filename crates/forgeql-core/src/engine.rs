@@ -378,7 +378,7 @@ impl ForgeQLEngine {
 
             // --- Mutations ---
             // --- Mutations ---
-            ForgeQLIR::ChangeContent { .. } => self.exec_mutation(sid, op),
+            ForgeQLIR::ChangeContent { .. } => self.exec_mutation(sid, op, true),
             ForgeQLIR::ChangeNode { .. } => self.exec_change_node(sid, op),
             ForgeQLIR::InsertNode { .. } => self.exec_insert_node(sid, op),
             ForgeQLIR::DeleteNode { .. } => self.exec_delete_node(sid, op),

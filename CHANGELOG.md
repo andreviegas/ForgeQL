@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.75.6] — 2026-06-09 — Scope the CHANGE FILE block so it no longer blocks node edits
+
+### Fixed
+
+- The experimental block on `CHANGE FILE` for indexed files (0.75.4) also blocked `CHANGE NODE` and `DELETE NODE`: those commands are implemented on top of the same internal mutation path, so the block could not tell them apart from a user `CHANGE FILE`. The block is now applied only to the user-facing `CHANGE FILE` / `CHANGE FILES` command; editing indexed code by node handle (`CHANGE NODE` / `INSERT NODE` / `DELETE NODE`) is never blocked. `INSERT NODE` was already unaffected.
+
 ## [0.75.5] — 2026-06-09 — Fix CHANGE NODE swallowing the blank line after a Markdown block
 
 ### Fixed

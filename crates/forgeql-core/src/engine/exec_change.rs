@@ -20,6 +20,7 @@ impl ForgeQLEngine {
         &mut self,
         session_id: Option<&str>,
         op: &ForgeQLIR,
+        gate_indexed: bool,
     ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
 
@@ -28,14 +29,18 @@ impl ForgeQLEngine {
             plan_from_ir(op, &workspace)?
         };
 
-        // Experiment (temporary): CHANGE FILE / CHANGE FILES is disabled for indexed
-        // source files so agents edit them by node handle instead. Override with
+        // Experiment (temporary): only the user-facing CHANGE FILE / CHANGE FILES command
+        // is blocked on indexed files (gate_indexed = true, set by the dispatch). Node
+        // mutations (CHANGE NODE / DELETE NODE) route through here too but pass
+        // gate_indexed = false, so they are never blocked. Override the block with
         // FORGEQL_ALLOW_CHANGE_FILE_INDEXED=1 (set by the VERIFY pre-commit script).
-        if let Some(path) = first_blocked_indexed_path(
-            plan.file_edits.iter().map(|fe| fe.path.as_path()),
-            &self.lang_registry,
-            change_file_indexed_allowed(),
-        ) {
+        if gate_indexed
+            && let Some(path) = first_blocked_indexed_path(
+                plan.file_edits.iter().map(|fe| fe.path.as_path()),
+                &self.lang_registry,
+                change_file_indexed_allowed(),
+            )
+        {
             bail!(
                 "CHANGE FILE is disabled for indexed files (temporary experiment): '{}' is an \
                  indexed source file. Edit it by node handle instead — locate it with FIND \
@@ -212,7 +217,7 @@ impl ForgeQLEngine {
             },
             clauses: crate::ir::Clauses::default(),
         };
-        let mut result = self.exec_mutation(session_id, &ir)?;
+        let mut result = self.exec_mutation(session_id, &ir, false)?;
         // After reindex the ordinal is stable — confirm with a lookup and
         // return the (unchanged) node_id so callers don't need a follow-up query.
         let sid = require_session_id(session_id)?;
@@ -310,7 +315,7 @@ impl ForgeQLEngine {
             },
             clauses: crate::ir::Clauses::default(),
         };
-        self.exec_mutation(session_id, &ir)
+        self.exec_mutation(session_id, &ir, false)
     }
 
     /// Resolve `node_id` → (`rel_path`, `line`, `end_line`) and optionally check IF REV guard.
