@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
@@ -13,6 +13,7 @@ use crate::{
 
 use super::ForgeQLEngine;
 use super::{convert_suggestions, mutation_op_name, require_session_id};
+use crate::ast::lang::LanguageRegistry;
 
 impl ForgeQLEngine {
     pub(super) fn exec_mutation(
@@ -26,6 +27,25 @@ impl ForgeQLEngine {
             let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
             plan_from_ir(op, &workspace)?
         };
+
+        // Experiment (temporary): CHANGE FILE / CHANGE FILES is disabled for indexed
+        // source files so agents edit them by node handle instead. Override with
+        // FORGEQL_ALLOW_CHANGE_FILE_INDEXED=1 (set by the VERIFY pre-commit script).
+        if let Some(path) = first_blocked_indexed_path(
+            plan.file_edits.iter().map(|fe| fe.path.as_path()),
+            &self.lang_registry,
+            change_file_indexed_allowed(),
+        ) {
+            bail!(
+                "CHANGE FILE is disabled for indexed files (temporary experiment): '{}' is an \
+                 indexed source file. Edit it by node handle instead — locate it with FIND \
+                 symbols or SHOW outline, then CHANGE NODE / INSERT NODE / DELETE NODE (append \
+                 '(n-m)' to a node_id to splice a line range). Raw-text CHANGE FILE stays \
+                 available for non-indexed files. Set FORGEQL_ALLOW_CHANGE_FILE_INDEXED=1 to \
+                 re-enable.",
+                path.display()
+            );
+        }
 
         let op_name = mutation_op_name(op);
         let files_changed: Vec<PathBuf> =
@@ -378,6 +398,62 @@ fn rev_mismatch_payload(
         "line_end": line_end,
         "current_content": current_content,
     })
+}
+
+/// True when `CHANGE FILE` on indexed files is permitted — escape hatch for the
+/// test harness and anyone who opts back in.
+fn change_file_indexed_allowed() -> bool {
+    std::env::var_os("FORGEQL_ALLOW_CHANGE_FILE_INDEXED").is_some()
+}
+
+/// First indexed path among `paths` that the temporary `CHANGE FILE` block would
+/// reject, or `None` when the edit is allowed (no indexed target, or `allow`).
+fn first_blocked_indexed_path<'a>(
+    paths: impl IntoIterator<Item = &'a Path>,
+    registry: &LanguageRegistry,
+    allow: bool,
+) -> Option<PathBuf> {
+    if allow {
+        return None;
+    }
+    paths
+        .into_iter()
+        .find(|p| registry.language_for_path(p).is_some())
+        .map(Path::to_path_buf)
+}
+
+#[cfg(test)]
+mod change_file_gate_tests {
+    use super::first_blocked_indexed_path;
+    use crate::ast::lang::{CppLanguageInline, LanguageRegistry};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn cpp_registry() -> LanguageRegistry {
+        LanguageRegistry::new(vec![Arc::new(CppLanguageInline)])
+    }
+
+    #[test]
+    fn blocks_indexed_path_when_not_allowed() {
+        let reg = cpp_registry();
+        let p = PathBuf::from("src/foo.cpp");
+        let blocked = first_blocked_indexed_path([p.as_path()], &reg, false);
+        assert_eq!(blocked, Some(p));
+    }
+
+    #[test]
+    fn allows_non_indexed_path() {
+        let reg = cpp_registry();
+        let p = PathBuf::from("notes.txt");
+        assert_eq!(first_blocked_indexed_path([p.as_path()], &reg, false), None);
+    }
+
+    #[test]
+    fn allow_override_lets_indexed_through() {
+        let reg = cpp_registry();
+        let p = PathBuf::from("src/foo.cpp");
+        assert_eq!(first_blocked_indexed_path([p.as_path()], &reg, true), None);
+    }
 }
 
 #[cfg(test)]

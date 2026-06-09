@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.75.4] — 2026-06-09 — Experimental: block CHANGE FILE on indexed files
+
+### Changed
+
+- **Experimental, opt-out:** `CHANGE FILE` and `CHANGE FILES` now refuse to edit indexed source files, returning guidance to edit them by node handle instead (`CHANGE NODE` / `INSERT NODE` / `DELETE NODE`, with `'<id>(n-m)'` for a sub-node line range). Raw-text `CHANGE FILE` remains available for non-indexed files (config, fixtures, plain text). This is a temporary experiment to evaluate retiring file-range editing of indexed code in the long run; set `FORGEQL_ALLOW_CHANGE_FILE_INDEXED=1` to restore the previous behavior.
+
 ## [0.75.3] — 2026-06-09 — Document node-relative line offsets
 
 ### Changed
