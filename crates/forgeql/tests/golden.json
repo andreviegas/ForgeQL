@@ -1,7 +1,7 @@
 [
   {
     "alias": "golden",
-    "expect_symbols_indexed": 2711516,
+    "expect_symbols_indexed": 2829244,
     "use": "zephyr-andre.zephyr-main"
   },
   {
@@ -1459,7 +1459,7 @@
   },
   {
     "alias": "nid-tests",
-    "expect_symbols_indexed": 2711516,
+    "expect_symbols_indexed": 2829244,
     "use": "zephyr-andre.zephyr-main"
   },
   {
@@ -1578,7 +1578,7 @@
   },
   {
     "alias": "rw-tests",
-    "expect_symbols_indexed": 2711516,
+    "expect_symbols_indexed": 2829244,
     "use": "zephyr-andre.zephyr-main"
   },
   {
@@ -1801,7 +1801,7 @@
   },
   {
     "alias": "enrich-stale-tests",
-    "expect_symbols_indexed": 2711516,
+    "expect_symbols_indexed": 2829244,
     "use": "zephyr-andre.zephyr-main"
   },
   {
