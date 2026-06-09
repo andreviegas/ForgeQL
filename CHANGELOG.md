@@ -15,7 +15,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- The Zephyr golden-test harness now spawns its MCP server with `FORGEQL_SESSION_TTL_SECS=3600` and tears down every per-run worktree it created when the client drops. Previously each `cargo test` run leaked four PID-suffixed worktrees that were never reclaimed.
+- The Zephyr golden-test harness now spawns its MCP server with `FORGEQL_SESSION_TTL_SECS=3600`, gives read-only USE windows a shared reusable worktree per source (alias `ro`, reclaimed by the 1h TTL), and gives each mutating window a unique alias that is torn down when the client drops. Previously every USE minted a PID-suffixed worktree per `cargo test` run and none were reclaimed.
 
 ## [0.75.6] — 2026-06-09 — Scope the CHANGE FILE block so it no longer blocks node edits
 

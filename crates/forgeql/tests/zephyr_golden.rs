@@ -404,6 +404,19 @@ fn write_golden_json(entries: &[Value]) -> String {
     out
 }
 
+/// True if an FQL statement mutates, so its USE session cannot share a
+/// read-only worktree. Conservative: matches any leading mutation/transaction
+/// keyword.
+fn is_mutation(fql: &str) -> bool {
+    let head = fql.trim_start().to_ascii_uppercase();
+    [
+        "CHANGE ", "INSERT ", "DELETE ", "BEGIN ", "COMMIT", "ROLLBACK", "COPY ", "MOVE ",
+        "VERIFY ",
+    ]
+    .iter()
+    .any(|kw| head.starts_with(kw))
+}
+
 // ── test ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -448,6 +461,23 @@ fn golden_values() {
     // Force per-run session aliases so mutation-heavy golden tests never
     // resume a dirty prior session after an interrupted run.
     let run_alias_suffix = format!("g{}", std::process::id());
+    // A USE session is read-only unless a query in its window (up to the next
+    // USE) mutates. Read-only windows share one reusable worktree per language
+    // (alias "ro"); mutating windows get a unique alias and are torn down on Drop.
+    let mut use_is_rw = vec![false; entries.len()];
+    let mut cur_use: Option<usize> = None;
+    for (i, e) in entries.iter().enumerate() {
+        match e {
+            GoldenEntry::Use(_) => cur_use = Some(i),
+            GoldenEntry::Query(q) => {
+                if let Some(ui) = cur_use
+                    && is_mutation(&q.fql)
+                {
+                    use_is_rw[ui] = true;
+                }
+            }
+        }
+    }
     let mut failures: Vec<String> = Vec::new();
     let mut pass = 0usize;
 
@@ -456,9 +486,17 @@ fn golden_values() {
         match entry {
             // ── USE step ──────────────────────────────────────────────────────
             GoldenEntry::Use(u) => {
-                let run_alias = format!("{}-{}", u.alias, run_alias_suffix);
+                let run_alias = if use_is_rw[idx] {
+                    format!("{}-{}", u.alias, run_alias_suffix)
+                } else {
+                    // Read-only window: share one reusable worktree per
+                    // source.branch (alias "ro"), reclaimed by the 1h TTL.
+                    "ro".to_string()
+                };
                 let fql = format!("USE {} AS '{}'", u.use_str, run_alias);
-                client.track_worktree(&u.use_str, &run_alias);
+                if use_is_rw[idx] {
+                    client.track_worktree(&u.use_str, &run_alias);
+                }
                 let result = client.run_fql(None, &fql).unwrap_or_else(|e| {
                     panic!(
                         "[golden] '{fql}' failed: {e}\n\
