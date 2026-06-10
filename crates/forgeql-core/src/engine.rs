@@ -277,43 +277,8 @@ impl ForgeQLEngine {
         // directory still exists on disk.  FIND/SHOW/mutations all need a
         // live worktree; source-management commands (CREATE, USE, DISCONNECT,
         // SHOW SOURCES, SHOW BRANCHES) do not.
-        if let Some(mk) = sid {
-            let needs_worktree = matches!(
-                op,
-                ForgeQLIR::FindSymbols { .. }
-                    | ForgeQLIR::FindUsages { .. }
-                    | ForgeQLIR::ShowContext { .. }
-                    | ForgeQLIR::ShowSignature { .. }
-                    | ForgeQLIR::ShowOutline { .. }
-                    | ForgeQLIR::ShowMembers { .. }
-                    | ForgeQLIR::ShowBody { .. }
-                    | ForgeQLIR::ShowCallees { .. }
-                    | ForgeQLIR::ShowLines { .. }
-                    | ForgeQLIR::FindFiles { .. }
-                    | ForgeQLIR::ChangeContent { .. }
-                    | ForgeQLIR::FindNode { .. }
-                    | ForgeQLIR::ShowNode { .. }
-                    | ForgeQLIR::ShowMore { .. }
-                    | ForgeQLIR::ChangeNode { .. }
-                    | ForgeQLIR::InsertNode { .. }
-                    | ForgeQLIR::DeleteNode { .. }
-                    | ForgeQLIR::BeginTransaction { .. }
-                    | ForgeQLIR::Commit { .. }
-                    | ForgeQLIR::Rollback { .. }
-                    | ForgeQLIR::VerifyBuild { .. }
-            );
-            if needs_worktree
-                && let Some(session) = self.sessions.get(mk)
-                && !session.worktree_path.is_dir()
-            {
-                anyhow::bail!(
-                    "session '{mk}' is stale — the worktree directory \
-                     '{}' no longer exists on disk.  \
-                     Run USE <source>.<branch> to start a new session.",
-                    session.worktree_path.display()
-                );
-            }
-        }
+        // Guard: session-dependent ops need a live worktree on disk.
+        self.check_worktree_alive(sid, op)?;
 
         // Content-addressed freshness gate (BUG-001/BUG-002): addressable-node
         // operations resolve a node_id to an exact line range. Reindex the
@@ -333,7 +298,76 @@ impl ForgeQLEngine {
                 self.ensure_node_file_fresh(mk, &node_id);
             }
         }
-        let mut result = match op {
+        let mut result = self.dispatch_op(user_id, sid, op)?;
+
+        // Strip absolute worktree prefixes so results carry only relative paths.
+        // This keeps MCP JSON compact and avoids leaking internal filesystem layout.
+        if let Some(ref root) = worktree_root {
+            result.relativize_paths(root);
+        }
+
+        // Update the session line budget based on the result (see apply_budget).
+        self.apply_budget(sid, op, &mut result);
+
+        Ok(result)
+    }
+
+    /// Guard for session-dependent operations: FIND / SHOW / mutations need a
+    /// live worktree directory on disk. Source-management commands (CREATE, USE,
+    /// DISCONNECT, SHOW SOURCES/BRANCHES) do not and are exempt. Errors if the
+    /// session's worktree has been removed underneath us.
+    fn check_worktree_alive(&self, sid: Option<&str>, op: &ForgeQLIR) -> Result<()> {
+        let Some(mk) = sid else {
+            return Ok(());
+        };
+        let needs_worktree = matches!(
+            op,
+            ForgeQLIR::FindSymbols { .. }
+                | ForgeQLIR::FindUsages { .. }
+                | ForgeQLIR::ShowContext { .. }
+                | ForgeQLIR::ShowSignature { .. }
+                | ForgeQLIR::ShowOutline { .. }
+                | ForgeQLIR::ShowMembers { .. }
+                | ForgeQLIR::ShowBody { .. }
+                | ForgeQLIR::ShowCallees { .. }
+                | ForgeQLIR::ShowLines { .. }
+                | ForgeQLIR::FindFiles { .. }
+                | ForgeQLIR::ChangeContent { .. }
+                | ForgeQLIR::FindNode { .. }
+                | ForgeQLIR::ShowNode { .. }
+                | ForgeQLIR::ShowMore { .. }
+                | ForgeQLIR::ChangeNode { .. }
+                | ForgeQLIR::InsertNode { .. }
+                | ForgeQLIR::DeleteNode { .. }
+                | ForgeQLIR::BeginTransaction { .. }
+                | ForgeQLIR::Commit { .. }
+                | ForgeQLIR::Rollback { .. }
+                | ForgeQLIR::VerifyBuild { .. }
+        );
+        if needs_worktree
+            && let Some(session) = self.sessions.get(mk)
+            && !session.worktree_path.is_dir()
+        {
+            anyhow::bail!(
+                "session '{mk}' is stale — the worktree directory \
+                 '{}' no longer exists on disk.  \
+                 Run USE <source>.<branch> to start a new session.",
+                session.worktree_path.display()
+            );
+        }
+        Ok(())
+    }
+
+    /// Dispatch a parsed operation to its handler. Pure routing — the
+    /// surrounding session/worktree guards, path relativization, and budget
+    /// accounting live in `execute`.
+    fn dispatch_op(
+        &mut self,
+        user_id: &str,
+        sid: Option<&str>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        match op {
             // --- Source / session management ---
             ForgeQLIR::CreateSource { name, url } => self.create_source(name, url),
             ForgeQLIR::RefreshSource { name } => self.refresh_source(name),
@@ -348,12 +382,11 @@ impl ForgeQLEngine {
                 session_id: for_session,
             } => {
                 // SHOW STATS 'token' — the token is the full to_session_id() value
-                // which equals map_key(), so it can be used for the sessions lookup directly.
+                // which equals map_key(), so it works for the sessions lookup directly.
                 self.show_stats(for_session.as_deref())
             }
             // --- Read-only queries ---
             ForgeQLIR::FindNode { node_id } => self.find_node(sid, node_id),
-
             ForgeQLIR::FindSymbols {
                 backend, clauses, ..
             } => self.find_symbols(sid, backend, clauses),
@@ -363,7 +396,6 @@ impl ForgeQLEngine {
                 clauses,
                 ..
             } => self.find_usages(sid, of, backend, clauses),
-
             // --- Code exposure (SHOW) ---
             ForgeQLIR::ShowNode { .. } => self.exec_show_node(sid, op),
             ForgeQLIR::ShowMore { .. } => self.exec_show_more(sid, op),
@@ -375,8 +407,6 @@ impl ForgeQLEngine {
             | ForgeQLIR::ShowCallees { .. }
             | ForgeQLIR::ShowLines { .. }
             | ForgeQLIR::FindFiles { .. } => self.exec_show(sid, op),
-
-            // --- Mutations ---
             // --- Mutations ---
             ForgeQLIR::ChangeContent { .. } => self.exec_mutation(sid, op, true),
             ForgeQLIR::ChangeNode { .. } => self.exec_change_node(sid, op),
@@ -384,35 +414,19 @@ impl ForgeQLEngine {
             ForgeQLIR::DeleteNode { .. } => self.exec_delete_node(sid, op),
             ForgeQLIR::CopyLines { .. } => self.exec_copy_lines(sid, op),
             ForgeQLIR::MoveLines { .. } => self.exec_move_lines(sid, op),
-
             // --- Checkpoint-based transactions ---
             ForgeQLIR::BeginTransaction { name } => self.exec_begin_transaction(sid, name),
             ForgeQLIR::Commit { message } => self.exec_commit(sid, message),
             ForgeQLIR::Rollback { name } => self.exec_rollback(sid, name.as_deref()),
             ForgeQLIR::VerifyBuild { step } => self.exec_verify_build(sid, step),
-        }?;
-
-        // Strip absolute worktree prefixes so results carry only relative paths.
-        // This keeps MCP JSON compact and avoids leaking internal filesystem layout.
-        if let Some(ref root) = worktree_root {
-            result.relativize_paths(root);
         }
+    }
 
-        // Deduct disclosed source lines from the session's line budget.
-        // Always call deduct_budget even for commands that return 0 source
-        // lines (FIND, transactions) so that the recovery windowing logic
-        // still runs — non-consuming commands may grant a positive delta if
-        // a new recovery window has opened.
-        //
-        // Mutations (CHANGE, COPY, MOVE) get proportional reward instead:
-        // the agent earns back 1 line of budget for every line it writes.
-        // This bypasses the rolling-window halving so bulk-edit tasks (e.g.
-        // comment translation) remain sustainable.
-        //
-        // Admin / source-management commands (CreateSource, RefreshSource,
-        // ShowSources, ShowBranches) are exempt: they do not read tree-sitter
-        // AST data and should not participate in either deduction or recovery.
-        // UseSource is already exempt because it executes without a session_id.
+    /// Apply line-budget accounting for one executed op. Mutations earn back a
+    /// line per line written; read ops deduct disclosed source lines (and run
+    /// the SHOW LINES anti-pattern tracker). Admin / source-management commands
+    /// read no AST data and are exempt from both deduction and recovery.
+    fn apply_budget(&mut self, sid: Option<&str>, op: &ForgeQLIR, result: &mut ForgeQLResult) {
         let is_admin_op = matches!(
             op,
             ForgeQLIR::CreateSource { .. }
@@ -421,38 +435,38 @@ impl ForgeQLEngine {
                 | ForgeQLIR::ShowBranches
                 | ForgeQLIR::ShowStats { .. }
         );
-        if !is_admin_op
-            && let Some(mk) = sid
-            && let Some(session) = self.sessions.get_mut(mk)
-        {
-            if let ForgeQLResult::Mutation(ref m) = result {
-                // Productive work: reward proportional to lines written.
-                let _ = session.reward_budget(m.lines_written);
-                session.clear_recent_show_lines();
-            } else {
-                let lines = result.source_lines_count();
-                let _ = session.deduct_budget(lines);
-
-                // Track SHOW LINES reads for anti-pattern detection.
-                // On 3+ sequential adjacent reads on the same file, inject
-                // a tip into the result suggesting SHOW body instead.
-                if let ForgeQLIR::ShowLines {
-                    file,
-                    start_line,
-                    end_line,
-                    ..
-                } = op
-                {
-                    if let Some(tip) = session.record_show_lines(file, *start_line, *end_line) {
-                        result.inject_hint(&tip);
-                    }
-                } else {
-                    session.clear_recent_show_lines();
+        if is_admin_op {
+            return;
+        }
+        let Some(mk) = sid else {
+            return;
+        };
+        let Some(session) = self.sessions.get_mut(mk) else {
+            return;
+        };
+        if let ForgeQLResult::Mutation(m) = &*result {
+            // Productive work: reward proportional to lines written.
+            let _ = session.reward_budget(m.lines_written);
+            session.clear_recent_show_lines();
+        } else {
+            let lines = result.source_lines_count();
+            let _ = session.deduct_budget(lines);
+            // Track SHOW LINES reads for anti-pattern detection: on 3+ sequential
+            // adjacent reads of the same file, inject a tip suggesting SHOW body.
+            if let ForgeQLIR::ShowLines {
+                file,
+                start_line,
+                end_line,
+                ..
+            } = op
+            {
+                if let Some(tip) = session.record_show_lines(file, *start_line, *end_line) {
+                    result.inject_hint(&tip);
                 }
+            } else {
+                session.clear_recent_show_lines();
             }
         }
-
-        Ok(result)
     }
 
     /// Content-addressed freshness gate for addressable-node operations.
