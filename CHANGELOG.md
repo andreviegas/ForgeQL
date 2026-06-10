@@ -6,6 +6,11 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.2] — 2026-06-10 — chores: refactor file_indexers.rs
+
+- Refactor of file_indexer.rs spliting their functions in other fil
+es
+
 ## [0.76.1] — 2026-06-10 — chores: refactor query.rs
 
 ### Changed
