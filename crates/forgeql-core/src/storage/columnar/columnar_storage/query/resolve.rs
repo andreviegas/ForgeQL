@@ -13,6 +13,7 @@ use crate::storage::columnar::columnar_storage::fast_paths::{
     passes_resolve_glob, split_qualified_name,
 };
 use crate::storage::columnar::segment_builder::ZONEMAP_NUMERIC_FIELDS;
+use crate::storage::columnar::segment_reader::SegmentReader;
 impl ColumnarStorage {
     /// Core columnar resolve used by all three `StorageEngine::resolve_*` methods.
     ///
@@ -40,88 +41,11 @@ impl ColumnarStorage {
         // Stage 1 — Dirty overlay: scan added segments before touching the persistent
         // index.  This ensures names that are *new* in the dirty overlay (not yet in
         // the persistent FST) are resolved, and dirty always wins over persistent.
-        if !self.dirty.is_empty() {
-            let mut dirty_all: Vec<SymbolLocation> = Vec::new();
-            let mut dirty_preferred: Vec<SymbolLocation> = Vec::new();
-            for ds in &self.dirty.added {
-                // Apply IN/EXCLUDE glob filter — mirrors segments_passing_path_filter
-                // from Stage 2.  Without this, `IN 'file'` clauses are silently
-                // ignored for dirty segments, causing wrong-file resolution.
-                if !passes_resolve_glob(&ds.source_path, clauses) {
-                    continue;
-                }
-                let row_ids = ds.reader.lookup_name(lookup_name);
-                if row_ids.is_empty() {
-                    continue;
-                }
-                let bm: RoaringBitmap = row_ids.into_iter().collect();
-                let bm = ds.reader.prefilter_enrichment_postings(bm, clauses);
-                for local_row in bm {
-                    if let Some(owner) = enclosing_owner
-                        && ds
-                            .reader
-                            .extra_field_str("enclosing_type", local_row)
-                            .unwrap_or("")
-                            != owner
-                    {
-                        continue;
-                    }
-                    let fql_kind_str = ds.reader.fql_kind_of(local_row);
-                    let line_num = ds.reader.line_of(local_row);
-                    let sm = SymbolMatch {
-                        name: ds.reader.name_of(local_row).to_owned(),
-                        node_kind: None,
-                        fql_kind: (!fql_kind_str.is_empty()).then(|| fql_kind_str.to_owned()),
-                        language: {
-                            let l = ds.reader.language_of(local_row);
-                            (!l.is_empty()).then(|| l.to_owned())
-                        },
-                        path: Some(ds.source_path.clone()),
-                        line: (line_num != 0).then_some(line_num as usize),
-                        usages_count: Some(ds.reader.usages_count_of(local_row) as usize),
-                        fields: ds.reader.enrichment_for_row(local_row),
-                        count: None,
-                        node_id: ds.reader.ordinal_of(local_row).map(|ord| {
-                            crate::node_id::make_node_id(&ds.source_path.to_string_lossy(), ord)
-                        }),
-                    };
-                    if clauses
-                        .where_predicates
-                        .iter()
-                        .any(|p| !eval_predicate(&sm, p))
-                    {
-                        continue;
-                    }
-                    let blob_sha: Option<[u8; 20]> = ds.reader.content_id[..].try_into().ok();
-                    let enrichment = ds.reader.enrichment_for_row(local_row);
-                    let loc = SymbolLocation {
-                        path: root.join(&ds.source_path),
-                        byte_range: ds.reader.byte_start_of(local_row) as usize
-                            ..ds.reader.byte_end_of(local_row) as usize,
-                        line: line_num as usize,
-                        language_id: 0,
-                        node_kind: fql_kind_str.to_owned(),
-                        enrichment,
-                        blob_sha,
-                        ordinal: ds.reader.ordinal_of(local_row),
-                    };
-                    if prefer_kinds.is_some_and(|kinds| kinds.contains(&fql_kind_str)) {
-                        dirty_preferred.push(loc.clone());
-                    }
-                    dirty_all.push(loc);
-                }
-            }
-            // Sort by path (alphabetical ascending) so .pop() returns the
-            // alphabetically-last match — identical tie-breaking to Stage 2's
-            // seg_order sort.  Eliminates insertion-order (edit-order) dependency.
-            dirty_preferred.sort_by(|a, b| a.path.cmp(&b.path));
-            if let Some(last) = dirty_preferred.pop() {
-                return Some(last);
-            }
-            dirty_all.sort_by(|a, b| a.path.cmp(&b.path));
-            if let Some(last) = dirty_all.pop() {
-                return Some(last);
-            }
+        if !self.dirty.is_empty()
+            && let Some(loc) =
+                self.resolve_in_dirty(lookup_name, enclosing_owner, clauses, root, prefer_kinds)
+        {
+            return Some(loc);
         }
 
         let global_bm = self.overlay.lookup_name_bitmap(lookup_name);
@@ -223,24 +147,7 @@ impl ColumnarStorage {
 
                 // 3. WHERE predicate filter — build a lightweight SymbolMatch for evaluation.
                 let fql_kind_str = seg.fql_kind_of(local_row);
-                let line_num = seg.line_of(local_row);
-                let sm = SymbolMatch {
-                    name: seg.name_of(local_row).to_owned(),
-                    node_kind: None,
-                    fql_kind: (!fql_kind_str.is_empty()).then(|| fql_kind_str.to_owned()),
-                    language: {
-                        let l = seg.language_of(local_row);
-                        (!l.is_empty()).then(|| l.to_owned())
-                    },
-                    path: Some(relative_path.clone()),
-                    line: (line_num != 0).then_some(line_num as usize),
-                    usages_count: Some(seg.usages_count_of(local_row) as usize),
-                    fields: seg.enrichment_for_row(local_row),
-                    count: None,
-                    node_id: seg.ordinal_of(local_row).map(|ord| {
-                        crate::node_id::make_node_id(&relative_path.to_string_lossy(), ord)
-                    }),
-                };
+                let sm = build_symbol_match(seg, local_row, relative_path);
                 if clauses
                     .where_predicates
                     .iter()
@@ -278,5 +185,109 @@ impl ColumnarStorage {
         };
 
         chosen.map(|(seg_idx, local_row)| self.location_for_row(seg_idx, local_row, root))
+    }
+}
+
+impl ColumnarStorage {
+    /// Stage 1 of `resolve_impl`: scan the dirty overlay's added segments before
+    /// the persistent index, so a name that is new in (or shadowed by) the dirty
+    /// overlay always wins. Returns the alphabetically-last match (preferring
+    /// `prefer_kinds`), or `None` to fall through to the persistent index.
+    fn resolve_in_dirty(
+        &self,
+        lookup_name: &str,
+        enclosing_owner: Option<&str>,
+        clauses: &Clauses,
+        root: &Path,
+        prefer_kinds: Option<&[&str]>,
+    ) -> Option<SymbolLocation> {
+        let mut dirty_all: Vec<SymbolLocation> = Vec::new();
+        let mut dirty_preferred: Vec<SymbolLocation> = Vec::new();
+        for ds in &self.dirty.added {
+            // Apply IN/EXCLUDE glob filter — mirrors segments_passing_path_filter
+            // from Stage 2; without it, `IN 'file'` is silently ignored for dirty
+            // segments, causing wrong-file resolution.
+            if !passes_resolve_glob(&ds.source_path, clauses) {
+                continue;
+            }
+            let row_ids = ds.reader.lookup_name(lookup_name);
+            if row_ids.is_empty() {
+                continue;
+            }
+            let bm: RoaringBitmap = row_ids.into_iter().collect();
+            let bm = ds.reader.prefilter_enrichment_postings(bm, clauses);
+            for local_row in bm {
+                if let Some(owner) = enclosing_owner
+                    && ds
+                        .reader
+                        .extra_field_str("enclosing_type", local_row)
+                        .unwrap_or("")
+                        != owner
+                {
+                    continue;
+                }
+                let fql_kind_str = ds.reader.fql_kind_of(local_row);
+                let line_num = ds.reader.line_of(local_row);
+                let sm = build_symbol_match(&ds.reader, local_row, &ds.source_path);
+                if clauses
+                    .where_predicates
+                    .iter()
+                    .any(|p| !eval_predicate(&sm, p))
+                {
+                    continue;
+                }
+                let blob_sha: Option<[u8; 20]> = ds.reader.content_id[..].try_into().ok();
+                let enrichment = ds.reader.enrichment_for_row(local_row);
+                let loc = SymbolLocation {
+                    path: root.join(&ds.source_path),
+                    byte_range: ds.reader.byte_start_of(local_row) as usize
+                        ..ds.reader.byte_end_of(local_row) as usize,
+                    line: line_num as usize,
+                    language_id: 0,
+                    node_kind: fql_kind_str.to_owned(),
+                    enrichment,
+                    blob_sha,
+                    ordinal: ds.reader.ordinal_of(local_row),
+                };
+                if prefer_kinds.is_some_and(|kinds| kinds.contains(&fql_kind_str)) {
+                    dirty_preferred.push(loc.clone());
+                }
+                dirty_all.push(loc);
+            }
+        }
+        // Sort by path ascending so .pop() returns the alphabetically-last match —
+        // identical tie-breaking to Stage 2's seg_order sort, eliminating any
+        // insertion-order (edit-order) dependency.
+        dirty_preferred.sort_by(|a, b| a.path.cmp(&b.path));
+        if let Some(last) = dirty_preferred.pop() {
+            return Some(last);
+        }
+        dirty_all.sort_by(|a, b| a.path.cmp(&b.path));
+        dirty_all.pop()
+    }
+}
+
+/// Build a `SymbolMatch` for one row, used to evaluate WHERE predicates during
+/// resolution. Shared by the dirty-overlay and persistent-segment scans, which
+/// differ only in the reader and source path they pull the row from.
+fn build_symbol_match(reader: &SegmentReader, local_row: u32, source_path: &Path) -> SymbolMatch {
+    let fql_kind_str = reader.fql_kind_of(local_row);
+    let line_num = reader.line_of(local_row);
+    SymbolMatch {
+        name: reader.name_of(local_row).to_owned(),
+        node_kind: None,
+        fql_kind: (!fql_kind_str.is_empty()).then(|| fql_kind_str.to_owned()),
+        language: {
+            let l = reader.language_of(local_row);
+            (!l.is_empty()).then(|| l.to_owned())
+        },
+        path: Some(source_path.to_path_buf()),
+        line: (line_num != 0).then_some(line_num as usize),
+        usages_count: Some(reader.usages_count_of(local_row) as usize),
+        fields: reader.enrichment_for_row(local_row),
+        count: None,
+        node_id: reader
+            .ordinal_of(local_row)
+            .map(|ord| crate::node_id::make_node_id(&source_path.to_string_lossy(), ord)),
     }
 }
