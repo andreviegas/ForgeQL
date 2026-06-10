@@ -498,55 +498,14 @@ fn collect_nodes(
             }
 
             // Run extra_rows() for every node (even if extract_name returned None).
-            for enricher in ctx.enrichers {
-                for extra in enricher.extra_rows(&enrich_ctx) {
-                    let parent_ordinal = parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
-                    let guard_group_id = extra.fields.get("guard_group_id").map(String::as_str);
-                    let guard_branch = extra.fields.get("guard_branch").map(String::as_str);
-                    let content_hash = node_content_hash(node, source);
-                    let extra_path = extra.path_override.as_deref().unwrap_or(ctx.path);
-                    let (eni, enk, enf, enl, enp) = ctx.table.strings.intern_row(
-                        &extra.name,
-                        &extra.node_kind,
-                        &extra.fql_kind,
-                        lang_name,
-                        extra_path,
-                    );
-                    let ordinal = if is_addressable_fql_kind(&extra.fql_kind) {
-                        Some(assign_ordinal(
-                            ctx.ordinal_remapper.as_mut(),
-                            &mut row_ordinal_counter,
-                            &OrdinalMatchKey {
-                                name: &extra.name,
-                                fql_kind: &extra.fql_kind,
-                                parent_ordinal,
-                                guard_group_id,
-                                guard_branch,
-                                first_body_statement_fingerprint: None,
-                                content_hash: Some(content_hash.as_str()),
-                            },
-                        ))
-                    } else {
-                        None
-                    };
-                    let rev = row_rev(ordinal, source, extra.byte_range.clone());
-                    let fields = ctx.table.strings.intern_fields(extra.fields);
-                    ctx.table.push_row(IndexRow {
-                        name_id: eni,
-                        node_kind_id: enk,
-                        fql_kind_id: enf,
-                        language_id: enl,
-                        path_id: enp,
-                        byte_range: extra.byte_range,
-                        line: extra.line,
-                        usages_count: 0,
-                        ordinal,
-                        parent_ordinal,
-                        rev,
-                        fields,
-                    });
-                }
-            }
+            let parent_ordinal = parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
+            let mut sink = RowSink {
+                table: ctx.table,
+                enrichers: ctx.enrichers,
+                remapper: ctx.ordinal_remapper.as_mut(),
+                row_ordinal_counter: &mut row_ordinal_counter,
+            };
+            emit_extra_rows(&mut sink, &enrich_ctx, parent_ordinal);
 
             // All identifier tokens become usage sites.
             if config.is_usage_node_kind(node.kind()) {
@@ -761,6 +720,64 @@ fn emit_addressable_row(
         fields,
     });
     ordinal
+}
+
+/// Emit the synthetic rows contributed by the `extra_rows` of each enricher for
+/// current node (e.g. usage sites, derived symbols). Runs for every node, even
+/// when `extract_name` returned `None`. `parent_ordinal` is constant across the
+/// extra rows of a node, so the caller computes it once.
+fn emit_extra_rows(sink: &mut RowSink<'_>, ctx: &EnrichContext<'_>, parent_ordinal: u32) {
+    let node = ctx.node;
+    let source = ctx.source;
+    let enrichers = sink.enrichers;
+    for enricher in enrichers {
+        for extra in enricher.extra_rows(ctx) {
+            let guard_group_id = extra.fields.get("guard_group_id").map(String::as_str);
+            let guard_branch = extra.fields.get("guard_branch").map(String::as_str);
+            let content_hash = node_content_hash(node, source);
+            let extra_path = extra.path_override.as_deref().unwrap_or(ctx.path);
+            let (eni, enk, enf, enl, enp) = sink.table.strings.intern_row(
+                &extra.name,
+                &extra.node_kind,
+                &extra.fql_kind,
+                ctx.language_name,
+                extra_path,
+            );
+            let ordinal = if is_addressable_fql_kind(&extra.fql_kind) {
+                Some(assign_ordinal(
+                    sink.remapper.as_deref_mut(),
+                    sink.row_ordinal_counter,
+                    &OrdinalMatchKey {
+                        name: &extra.name,
+                        fql_kind: &extra.fql_kind,
+                        parent_ordinal,
+                        guard_group_id,
+                        guard_branch,
+                        first_body_statement_fingerprint: None,
+                        content_hash: Some(content_hash.as_str()),
+                    },
+                ))
+            } else {
+                None
+            };
+            let rev = row_rev(ordinal, source, extra.byte_range.clone());
+            let fields = sink.table.strings.intern_fields(extra.fields);
+            sink.table.push_row(IndexRow {
+                name_id: eni,
+                node_kind_id: enk,
+                fql_kind_id: enf,
+                language_id: enl,
+                path_id: enp,
+                byte_range: extra.byte_range,
+                line: extra.line,
+                usages_count: 0,
+                ordinal,
+                parent_ordinal,
+                rev,
+                fields,
+            });
+        }
+    }
 }
 
 fn short_sha256_hex(bytes: &[u8]) -> String {
