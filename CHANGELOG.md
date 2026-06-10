@@ -6,6 +6,13 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.3] — 2026-06-10 — Fix stale SHOW outline and phantom node spans after dirty edits
+
+### Fixed
+
+- `SHOW outline` served the committed segment for any file edited this session, so deleted nodes stayed listed at stale pre-edit lines with pre-edit node_ids (BUG-013). The glob form now skips a file's committed segment when a dirty segment exists and renders the dirty overlay instead, matching `SHOW LINES` / `FIND`.
+- `find_node` resolved a committed node that had been deleted or relocated in the dirty overlay to a phantom inverted span — the stale committed line paired with an EOF-clamped `end_line` — leaving the node permanently uneditable with `end line < start line` (BUG-012). When the file has dirty edits and the committed node is no longer present by name, it now resolves by ordinal in the dirty segment, reporting not-found if the node is gone, instead of handing back a corrupt range.
+
 ## [0.76.2] — 2026-06-10 — chores: refactor file_indexers.rs
 
 - Refactor of file_indexer.rs spliting their functions in other fil

@@ -144,26 +144,39 @@ impl ColumnarStorage {
             let fql_kind_str = seg.fql_kind_of(local_row);
             let committed_line = seg.line_of(local_row);
 
-            let live_lookup: Option<(&SegmentReader, u32)> = self
+            let dirty_for_path = self
                 .dirty
                 .added
                 .iter()
-                .find(|ds| ds.source_path == seg_meta.source_path)
-                .and_then(|ds| {
-                    let rows = ds.reader.lookup_name(name_str);
-                    if rows.is_empty() {
-                        return None;
-                    }
-                    rows.into_iter()
-                        .filter(|&r| ds.reader.fql_kind_of(r) == fql_kind_str)
-                        .min_by_key(|&r| {
-                            u64::from(ds.reader.line_of(r)).abs_diff(u64::from(committed_line))
-                        })
-                        .map(|row| (&*ds.reader, row))
-                });
+                .find(|ds| ds.source_path == seg_meta.source_path);
 
-            let (data_seg, data_row): (&SegmentReader, u32) =
-                live_lookup.map_or((&**seg, local_row), |(s, r)| (s, r));
+            let live_lookup: Option<(&SegmentReader, u32)> = dirty_for_path.and_then(|ds| {
+                let rows = ds.reader.lookup_name(name_str);
+                if rows.is_empty() {
+                    return None;
+                }
+                rows.into_iter()
+                    .filter(|&r| ds.reader.fql_kind_of(r) == fql_kind_str)
+                    .min_by_key(|&r| {
+                        u64::from(ds.reader.line_of(r)).abs_diff(u64::from(committed_line))
+                    })
+                    .map(|row| (&*ds.reader, row))
+            });
+
+            // No live row matched this committed node by name. When the file
+            // was edited this session, the committed line/byte_end are stale:
+            // the node may have been deleted or relocated, leaving a committed
+            // line past EOF that yields an inverted span the mutation path
+            // rejects with "end line < start line" (BUG-012). Resolve by
+            // ordinal in the dirty segment instead; if the node is gone,
+            // report not-found rather than a phantom range.
+            let (data_seg, data_row): (&SegmentReader, u32) = match live_lookup {
+                Some(hit) => hit,
+                None if dirty_for_path.is_some() => {
+                    return Ok(self.find_node_in_dirty(node_id, ordinal, root));
+                }
+                None => (&**seg, local_row),
+            };
 
             let name = data_seg.name_of(data_row).to_owned();
             let fql_kind = data_seg.fql_kind_of(data_row).to_owned();

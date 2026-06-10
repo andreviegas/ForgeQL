@@ -1513,7 +1513,7 @@
   {
     "expect_row_count": 1,
     "expect_rows": [
-      {"line": 12, "name": "z_priq_rb_lessthan", "node_id": "nd8d2f5532cd6.0005"}
+      {"line": 13, "name": "z_priq_rb_lessthan", "node_id": "nd8d2f5532cd6.0005"}
     ],
     "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'function' WHERE name = 'z_priq_rb_lessthan'",
     "name": "NID07_function_node_id_survives_line_drift"
@@ -1521,8 +1521,8 @@
   {
     "expect_row_count": 2,
     "expect_rows": [
-      {"line": 22, "name": "(a>b)", "node_id": "nd8d2f5532cd6.0015"},
-      {"line": 24, "name": "(a<b)", "node_id": "nd8d2f5532cd6.0016"}
+      {"line": 23, "name": "(a>b)", "node_id": "nd8d2f5532cd6.0015"},
+      {"line": 25, "name": "(a<b)", "node_id": "nd8d2f5532cd6.0016"}
     ],
     "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'if' ORDER BY line ASC",
     "name": "NID08_if_node_ids_survive_line_drift"

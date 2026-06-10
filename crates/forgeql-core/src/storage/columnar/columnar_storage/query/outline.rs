@@ -72,6 +72,21 @@ impl ColumnarStorage {
             if !crate::ast::query::glob_matches(&seg_meta.source_path, file) {
                 continue;
             }
+            // A file edited this session is authoritative in the dirty overlay;
+            // its committed segment is stale (deleted nodes still listed, old
+            // line numbers, pre-edit node_ids). Skip it here and let the dirty
+            // overlay loop below render the file's current structure. Without
+            // this, SHOW outline hands back node_ids whose committed line is
+            // stale, which the mutation path then resolves to a phantom range
+            // (BUG-013 — the read-side trigger for BUG-012).
+            if self
+                .dirty
+                .added
+                .iter()
+                .any(|ds| ds.source_path == seg_meta.source_path)
+            {
+                continue;
+            }
             let seg = &self.segments[seg_idx];
             let abs_path = root.join(&seg_meta.source_path);
             let rel_path = workspace.relative(&abs_path).display().to_string();
