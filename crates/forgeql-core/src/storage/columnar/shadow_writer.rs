@@ -107,8 +107,6 @@ impl<'a> ShadowWriter<'a> {
     /// warnings and skipped.
     #[allow(clippy::too_many_lines)]
     pub fn run(self) -> Result<ShadowWriteResult> {
-        type WorkResult = (PathBuf, Vec<u8>, Option<BTreeSet<String>>);
-
         // Group row indices by path_id so each file is processed once.
         let mut by_path: HashMap<u32, Vec<usize>> = HashMap::new();
         for (idx, row) in self.table.rows.iter().enumerate() {
@@ -150,115 +148,14 @@ impl<'a> ShadowWriter<'a> {
             .collect::<Vec<_>>()
             .into_par_iter()
             .filter_map(|row_indices| {
-                // row_indices is non-empty by construction.
-                let first_row = &table.rows[row_indices[0]];
-                let abs_path = table.path_of(first_row).to_path_buf();
-
-                // Content ID: use pre-computed value when available, otherwise
-                // read the file and hash it.
-                let content_id: Vec<u8> = if let Some(cid) = pre_computed.get(&abs_path) {
-                    cid.clone()
-                } else {
-                    match std::fs::read(&abs_path) {
-                        Ok(bytes) => hash_content(&bytes),
-                        Err(e) => {
-                            warn!(
-                                path = %abs_path.display(),
-                                "shadow-write: skipping unreadable file: {e}"
-                            );
-                            return None;
-                        }
-                    }
-                };
-
-                let hex = bytes_to_hex(&content_id);
-                // 2-char git-style prefix sharding to avoid flat directories.
-                let target_path = provider_dir
-                    .join(&hex[..2])
-                    .join(format!("{}.fqsf", &hex[2..]));
-
-                // Idempotent: skip already-valid segments.
-                if is_valid_segment(&target_path) {
-                    debug!(
-                        path = %abs_path.display(),
-                        hex = %hex,
-                        "shadow-write: segment already valid, skipping"
-                    );
-                    return Some((abs_path, content_id, None));
-                }
-
-                // Build segment: core columns + enrichment fields.
-                let mut builder = SegmentBuilder::new(provider_id, &content_id);
-                let mut local_columns: BTreeSet<String> = BTreeSet::new();
-                // ordinal → (segment row_id, parent_ordinal) for nav post-pass.
-                let mut ordinal_row: Vec<(u32, u32, u32)> = Vec::new(); // (ordinal, row_id, parent)
-                for &idx in row_indices {
-                    let row = &table.rows[idx];
-                    let row_id = builder.emit_row(SymbolRow {
-                        name: table.name_of(row),
-                        fql_kind: table.fql_kind_of(row),
-                        language: table.language_of(row),
-                        line: u32::try_from(row.line).unwrap_or(u32::MAX),
-                        byte_start: u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
-                        byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
-                        usages_count: row.usages_count,
-                    });
-                    if let Some(ordinal) = row.ordinal {
-                        builder.set_ordinal(row_id, ordinal);
-                        builder.set_parent_ordinal(row_id, row.parent_ordinal);
-                        builder.set_rev(row_id, row.rev);
-                        ordinal_row.push((ordinal, row_id.0, row.parent_ordinal));
-                    }
-                    for (key, value) in table.resolve_fields(&row.fields) {
-                        if key == "parent_ordinal" {
-                            continue;
-                        } // now a typed column
-                        let _ = local_columns.insert(key.clone());
-                        builder.set_field(row_id, &key, value);
-                    }
-                }
-
-                // Nav post-pass: fill first_child, next_sibling, prev_sibling.
-                // Group addressable rows by parent_ordinal, sort by ordinal (= DFS order).
-                {
-                    let mut by_parent: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
-                    let mut ord_to_row: HashMap<u32, u32> = HashMap::new();
-                    for &(ord, rid, parent) in &ordinal_row {
-                        by_parent.entry(parent).or_default().push((ord, rid));
-                        let _ = ord_to_row.insert(ord, rid);
-                    }
-                    for (parent_ord, mut children) in by_parent {
-                        children.sort_unstable_by_key(|&(ord, _)| ord);
-                        if let Some(&parent_rid) = ord_to_row.get(&parent_ord)
-                            && let Some(&(first_ord, _)) = children.first()
-                        {
-                            builder.set_first_child_ordinal(RowId(parent_rid), first_ord);
-                        }
-                        for i in 0..children.len() {
-                            let (_, this_rid) = children[i];
-                            if i > 0 {
-                                builder
-                                    .set_prev_sibling_ordinal(RowId(this_rid), children[i - 1].0);
-                            }
-                            if i + 1 < children.len() {
-                                builder
-                                    .set_next_sibling_ordinal(RowId(this_rid), children[i + 1].0);
-                            }
-                        }
-                    }
-                }
-
-                // Flush to disk inside the worker.
-                match builder.flush(&target_path) {
-                    Ok(()) => Some((abs_path, content_id, Some(local_columns))),
-                    Err(e) => {
-                        warn!(
-                            target = %target_path.display(),
-                            "shadow-write: flush failed: {e}"
-                        );
-                        Some((abs_path, content_id, None))
-                    }
-                }
+                build_file_segment(
+                    row_indices,
+                    table,
+                    provider_id,
+                    hash_content,
+                    pre_computed,
+                    &provider_dir,
+                )
             })
             .collect();
 
@@ -300,6 +197,134 @@ impl<'a> ShadowWriter<'a> {
             count: written,
             segment_map,
         })
+    }
+}
+
+/// One worker result: the source file's absolute path, its content id, and the
+/// set of enrichment columns written (`Some` only when a new segment was built).
+type WorkResult = (PathBuf, Vec<u8>, Option<BTreeSet<String>>);
+
+/// Build (and flush) one shadow segment for all rows of a single source file.
+/// Runs on a Rayon worker — fully independent per file. Returns `None` when the
+/// file is unreadable; `Some((path, content_id, None))` when an up-to-date
+/// segment already exists or the flush failed; `Some((.., Some(columns)))` when
+/// a fresh segment was written.
+fn build_file_segment(
+    row_indices: &[usize],
+    table: &SymbolTable,
+    provider_id: &str,
+    hash_content: &(dyn Fn(&[u8]) -> Vec<u8> + Send + Sync),
+    pre_computed: &HashMap<PathBuf, Vec<u8>>,
+    provider_dir: &Path,
+) -> Option<WorkResult> {
+    // row_indices is non-empty by construction.
+    let first_row = &table.rows[row_indices[0]];
+    let abs_path = table.path_of(first_row).to_path_buf();
+
+    // Content ID: use the pre-computed value when available, otherwise read + hash.
+    let content_id: Vec<u8> = if let Some(cid) = pre_computed.get(&abs_path) {
+        cid.clone()
+    } else {
+        match std::fs::read(&abs_path) {
+            Ok(bytes) => hash_content(&bytes),
+            Err(e) => {
+                warn!(
+                    path = %abs_path.display(),
+                    "shadow-write: skipping unreadable file: {e}"
+                );
+                return None;
+            }
+        }
+    };
+
+    let hex = bytes_to_hex(&content_id);
+    // 2-char git-style prefix sharding to avoid flat directories.
+    let target_path = provider_dir
+        .join(&hex[..2])
+        .join(format!("{}.fqsf", &hex[2..]));
+
+    // Idempotent: skip already-valid segments.
+    if is_valid_segment(&target_path) {
+        debug!(
+            path = %abs_path.display(),
+            hex = %hex,
+            "shadow-write: segment already valid, skipping"
+        );
+        return Some((abs_path, content_id, None));
+    }
+
+    // Build segment: core columns + enrichment fields.
+    let mut builder = SegmentBuilder::new(provider_id, &content_id);
+    let mut local_columns: BTreeSet<String> = BTreeSet::new();
+    // (ordinal, row_id, parent_ordinal) for the navigation post-pass.
+    let mut ordinal_row: Vec<(u32, u32, u32)> = Vec::new();
+    for &idx in row_indices {
+        let row = &table.rows[idx];
+        let row_id = builder.emit_row(SymbolRow {
+            name: table.name_of(row),
+            fql_kind: table.fql_kind_of(row),
+            language: table.language_of(row),
+            line: u32::try_from(row.line).unwrap_or(u32::MAX),
+            byte_start: u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
+            byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
+            usages_count: row.usages_count,
+        });
+        if let Some(ordinal) = row.ordinal {
+            builder.set_ordinal(row_id, ordinal);
+            builder.set_parent_ordinal(row_id, row.parent_ordinal);
+            builder.set_rev(row_id, row.rev);
+            ordinal_row.push((ordinal, row_id.0, row.parent_ordinal));
+        }
+        for (key, value) in table.resolve_fields(&row.fields) {
+            if key == "parent_ordinal" {
+                continue;
+            } // now a typed column
+            let _ = local_columns.insert(key.clone());
+            builder.set_field(row_id, &key, value);
+        }
+    }
+
+    fill_navigation(&mut builder, &ordinal_row);
+
+    // Flush to disk inside the worker.
+    match builder.flush(&target_path) {
+        Ok(()) => Some((abs_path, content_id, Some(local_columns))),
+        Err(e) => {
+            warn!(
+                target = %target_path.display(),
+                "shadow-write: flush failed: {e}"
+            );
+            Some((abs_path, content_id, None))
+        }
+    }
+}
+
+/// Navigation post-pass: fill `first_child` / `prev_sibling` / `next_sibling`
+/// links on a freshly built segment. Groups addressable rows by parent ordinal
+/// and orders each sibling group by ordinal (= DFS order).
+fn fill_navigation(builder: &mut SegmentBuilder, ordinal_row: &[(u32, u32, u32)]) {
+    let mut by_parent: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
+    let mut ord_to_row: HashMap<u32, u32> = HashMap::new();
+    for &(ord, rid, parent) in ordinal_row {
+        by_parent.entry(parent).or_default().push((ord, rid));
+        let _ = ord_to_row.insert(ord, rid);
+    }
+    for (parent_ord, mut children) in by_parent {
+        children.sort_unstable_by_key(|&(ord, _)| ord);
+        if let Some(&parent_rid) = ord_to_row.get(&parent_ord)
+            && let Some(&(first_ord, _)) = children.first()
+        {
+            builder.set_first_child_ordinal(RowId(parent_rid), first_ord);
+        }
+        for i in 0..children.len() {
+            let (_, this_rid) = children[i];
+            if i > 0 {
+                builder.set_prev_sibling_ordinal(RowId(this_rid), children[i - 1].0);
+            }
+            if i + 1 < children.len() {
+                builder.set_next_sibling_ordinal(RowId(this_rid), children[i + 1].0);
+            }
+        }
     }
 }
 
