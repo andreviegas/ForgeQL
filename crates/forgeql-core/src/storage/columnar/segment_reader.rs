@@ -270,42 +270,7 @@ impl SegmentReader {
         }
 
         // ── 3. Parse TOC ──────────────────────────────────────────────────
-        let entry_count =
-            u32::from_le_bytes(mmap[8..12].try_into().context("FQSF entry_count bytes")?) as usize;
-        let toc_end = 12 + entry_count * TOC_ENTRY_SIZE;
-        ensure!(
-            file_len >= toc_end,
-            "segment {} too short for TOC (need {toc_end} bytes, have {file_len})",
-            path.display()
-        );
-
-        let mut blobs: HashMap<String, (usize, usize)> = HashMap::with_capacity(entry_count);
-        for i in 0..entry_count {
-            let es = 12 + i * TOC_ENTRY_SIZE;
-            let entry = &mmap[es..es + TOC_ENTRY_SIZE];
-            let name_end = entry[..ENTRY_NAME_LEN]
-                .iter()
-                .position(|&b| b == 0)
-                .unwrap_or(ENTRY_NAME_LEN);
-            let name = std::str::from_utf8(&entry[..name_end])
-                .with_context(|| format!("blob name at TOC index {i}"))?
-                .to_owned();
-            let offset = u32::from_le_bytes(
-                entry[ENTRY_NAME_LEN..ENTRY_NAME_LEN + 4]
-                    .try_into()
-                    .context("blob offset")?,
-            ) as usize;
-            let len = u32::from_le_bytes(
-                entry[ENTRY_NAME_LEN + 4..ENTRY_NAME_LEN + 8]
-                    .try_into()
-                    .context("blob length")?,
-            ) as usize;
-            ensure!(
-                offset + len <= file_len,
-                "blob '{name}' extends beyond file end ({offset} + {len} > {file_len})"
-            );
-            let _ = blobs.insert(name, (offset, offset + len));
-        }
+        let blobs = parse_toc(&mmap, file_len, path)?;
 
         // ── 4. Parse inner FQSG header blob ──────────────────────────────
         let &(hs, he) = blobs
@@ -868,6 +833,49 @@ impl SegmentReader {
                 .map(|ord| crate::node_id::make_node_id(&source_path.to_string_lossy(), ord)),
         })
     }
+}
+
+/// Parse the FQSF table-of-contents into one `(start, end)` byte range per
+/// named blob. `mmap` must already be validated as a well-formed FQSF file
+/// (magic, version, and at least a 12-byte header checked by the caller).
+fn parse_toc(mmap: &[u8], file_len: usize, path: &Path) -> Result<HashMap<String, (usize, usize)>> {
+    let entry_count =
+        u32::from_le_bytes(mmap[8..12].try_into().context("FQSF entry_count bytes")?) as usize;
+    let toc_end = 12 + entry_count * TOC_ENTRY_SIZE;
+    ensure!(
+        file_len >= toc_end,
+        "segment {} too short for TOC (need {toc_end} bytes, have {file_len})",
+        path.display()
+    );
+
+    let mut blobs: HashMap<String, (usize, usize)> = HashMap::with_capacity(entry_count);
+    for i in 0..entry_count {
+        let es = 12 + i * TOC_ENTRY_SIZE;
+        let entry = &mmap[es..es + TOC_ENTRY_SIZE];
+        let name_end = entry[..ENTRY_NAME_LEN]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(ENTRY_NAME_LEN);
+        let name = std::str::from_utf8(&entry[..name_end])
+            .with_context(|| format!("blob name at TOC index {i}"))?
+            .to_owned();
+        let offset = u32::from_le_bytes(
+            entry[ENTRY_NAME_LEN..ENTRY_NAME_LEN + 4]
+                .try_into()
+                .context("blob offset")?,
+        ) as usize;
+        let len = u32::from_le_bytes(
+            entry[ENTRY_NAME_LEN + 4..ENTRY_NAME_LEN + 8]
+                .try_into()
+                .context("blob length")?,
+        ) as usize;
+        ensure!(
+            offset + len <= file_len,
+            "blob '{name}' extends beyond file end ({offset} + {len} > {file_len})"
+        );
+        let _ = blobs.insert(name, (offset, offset + len));
+    }
+    Ok(blobs)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
