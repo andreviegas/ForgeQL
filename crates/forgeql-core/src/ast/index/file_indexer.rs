@@ -450,62 +450,26 @@ fn collect_nodes(
             // Every named node becomes a row.
             if let Some(name) = ctx.language.extract_name(node, source) {
                 let parent_ordinal = parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
-                let prepared = build_row_fields(&enrich_ctx, ts_language);
-                let mut fields = prepared.fields;
-
-                // Run all enrichers on this row.
-                for enricher in ctx.enrichers {
-                    enricher.enrich_row(&enrich_ctx, &name, &mut fields);
-                }
-
                 let fql_kind_val = ctx.language.map_kind(node.kind()).unwrap_or("");
-                let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = ctx
-                    .table
-                    .strings
-                    .intern_row(&name, node.kind(), fql_kind_val, lang_name, ctx.path);
-                // Reuse prior ordinals when possible to keep node_id stable across re-indexes.
-                let ordinal = if is_addressable_fql_kind(fql_kind_val) {
-                    let ord = assign_ordinal(
-                        ctx.ordinal_remapper.as_mut(),
-                        &mut row_ordinal_counter,
-                        &OrdinalMatchKey {
-                            name: &name,
-                            fql_kind: fql_kind_val,
-                            parent_ordinal,
-                            guard_group_id: prepared.guard_group_id.as_deref(),
-                            guard_branch: prepared.guard_branch.as_deref(),
-                            first_body_statement_fingerprint: prepared
-                                .first_body_statement_fingerprint
-                                .as_deref(),
-                            content_hash: Some(prepared.content_hash.as_str()),
-                        },
-                    );
-                    current_node_ordinal = Some(ord);
-                    Some(ord)
-                } else {
-                    None
+                let mut sink = RowSink {
+                    table: ctx.table,
+                    enrichers: ctx.enrichers,
+                    remapper: ctx.ordinal_remapper.as_mut(),
+                    row_ordinal_counter: &mut row_ordinal_counter,
                 };
-                let rev = row_rev(ordinal, source, node.byte_range());
-                let fields = ctx.table.strings.intern_fields(fields);
-                ctx.table.push_row(IndexRow {
-                    name_id,
-                    node_kind_id,
-                    fql_kind_id,
-                    language_id,
-                    path_id,
-                    byte_range: node.byte_range(),
-                    line: node.start_position().row + 1,
-                    usages_count: 0,
-                    ordinal,
+                current_node_ordinal = emit_addressable_row(
+                    &mut sink,
+                    &enrich_ctx,
+                    ts_language,
+                    &name,
+                    fql_kind_val,
                     parent_ordinal,
-                    rev,
-                    fields,
-                });
+                );
             } else if let Some(mtable) = ctx.macro_table {
-                // Re-tag: tree-sitter-cpp parses C macro calls as
-                // call_expression, not macro_invocation.  When extract_name
-                // returns None for a call_expression whose function name is
-                // in the MacroTable, emit a macro_call row.
+                // Re-tag: tree-sitter-cpp parses C macro calls as call_expression,
+                // not macro_invocation.  When extract_name returns None for a
+                // call_expression whose function name is in the MacroTable, emit a
+                // macro_call row.
                 let call_kind = config.call_expression_kind();
                 if !call_kind.is_empty()
                     && node.kind() == call_kind
@@ -515,54 +479,20 @@ fn collect_nodes(
                     if !func_name.is_empty() && mtable.contains(&func_name) {
                         let parent_ordinal =
                             parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
-                        let prepared = build_row_fields(&enrich_ctx, ts_language);
-                        let mut fields = prepared.fields;
-
-                        for enricher in ctx.enrichers {
-                            enricher.enrich_row(&enrich_ctx, &func_name, &mut fields);
-                        }
-
-                        let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = ctx
-                            .table
-                            .strings
-                            .intern_row(&func_name, node.kind(), "macro_call", lang_name, ctx.path);
-                        let ordinal = if is_addressable_fql_kind("macro_call") {
-                            let ord = assign_ordinal(
-                                ctx.ordinal_remapper.as_mut(),
-                                &mut row_ordinal_counter,
-                                &OrdinalMatchKey {
-                                    name: &func_name,
-                                    fql_kind: "macro_call",
-                                    parent_ordinal,
-                                    guard_group_id: prepared.guard_group_id.as_deref(),
-                                    guard_branch: prepared.guard_branch.as_deref(),
-                                    first_body_statement_fingerprint: prepared
-                                        .first_body_statement_fingerprint
-                                        .as_deref(),
-                                    content_hash: Some(prepared.content_hash.as_str()),
-                                },
-                            );
-                            current_node_ordinal = Some(ord);
-                            Some(ord)
-                        } else {
-                            None
+                        let mut sink = RowSink {
+                            table: ctx.table,
+                            enrichers: ctx.enrichers,
+                            remapper: ctx.ordinal_remapper.as_mut(),
+                            row_ordinal_counter: &mut row_ordinal_counter,
                         };
-                        let rev = row_rev(ordinal, source, node.byte_range());
-                        let fields = ctx.table.strings.intern_fields(fields);
-                        ctx.table.push_row(IndexRow {
-                            name_id,
-                            node_kind_id,
-                            fql_kind_id,
-                            language_id,
-                            path_id,
-                            byte_range: node.byte_range(),
-                            line: node.start_position().row + 1,
-                            usages_count: 0,
-                            ordinal,
+                        current_node_ordinal = emit_addressable_row(
+                            &mut sink,
+                            &enrich_ctx,
+                            ts_language,
+                            &func_name,
+                            "macro_call",
                             parent_ordinal,
-                            rev,
-                            fields,
-                        });
+                        );
                     }
                 }
             }
@@ -755,6 +685,82 @@ fn row_rev(ordinal: Option<u32>, source: &[u8], byte_range: std::ops::Range<usiz
         let bytes = Sha256::digest(&source[byte_range]);
         u64::from_le_bytes(bytes[..8].try_into().unwrap_or([0u8; 8]))
     })
+}
+
+/// Borrowed sinks an addressable row is written into: the symbol table, the
+/// active enrichers, the optional ordinal remapper, and the per-file ordinal
+/// counter. Bundled so the row-emission helper stays under the argument limit.
+struct RowSink<'a> {
+    table: &'a mut SymbolTable,
+    enrichers: &'a [Box<dyn NodeEnricher>],
+    remapper: Option<&'a mut OrdinalRemapper>,
+    row_ordinal_counter: &'a mut u32,
+}
+
+/// Emit one addressable index row for `node` under the given `name` and
+/// `fql_kind`. Shared by the named-node path (`fql_kind` from `map_kind`) and
+/// the re-tagged macro-call path (`fql_kind` = `"macro_call"`); the two differ
+/// only in those two strings. Returns the assigned ordinal (or `None` when the
+/// kind is not addressable) so the caller can propagate it to descendants.
+fn emit_addressable_row(
+    sink: &mut RowSink<'_>,
+    ctx: &EnrichContext<'_>,
+    ts_language: &tree_sitter::Language,
+    name: &str,
+    fql_kind: &str,
+    parent_ordinal: u32,
+) -> Option<u32> {
+    let node = ctx.node;
+    let source = ctx.source;
+    let prepared = build_row_fields(ctx, ts_language);
+    let mut fields = prepared.fields;
+
+    // Run all enrichers on this row.
+    for enricher in sink.enrichers {
+        enricher.enrich_row(ctx, name, &mut fields);
+    }
+
+    let (name_id, node_kind_id, fql_kind_id, language_id, path_id) =
+        sink.table
+            .strings
+            .intern_row(name, node.kind(), fql_kind, ctx.language_name, ctx.path);
+    // Reuse prior ordinals when possible to keep node_id stable across re-indexes.
+    let ordinal = if is_addressable_fql_kind(fql_kind) {
+        Some(assign_ordinal(
+            sink.remapper.as_deref_mut(),
+            sink.row_ordinal_counter,
+            &OrdinalMatchKey {
+                name,
+                fql_kind,
+                parent_ordinal,
+                guard_group_id: prepared.guard_group_id.as_deref(),
+                guard_branch: prepared.guard_branch.as_deref(),
+                first_body_statement_fingerprint: prepared
+                    .first_body_statement_fingerprint
+                    .as_deref(),
+                content_hash: Some(prepared.content_hash.as_str()),
+            },
+        ))
+    } else {
+        None
+    };
+    let rev = row_rev(ordinal, source, node.byte_range());
+    let fields = sink.table.strings.intern_fields(fields);
+    sink.table.push_row(IndexRow {
+        name_id,
+        node_kind_id,
+        fql_kind_id,
+        language_id,
+        path_id,
+        byte_range: node.byte_range(),
+        line: node.start_position().row + 1,
+        usages_count: 0,
+        ordinal,
+        parent_ordinal,
+        rev,
+        fields,
+    });
+    ordinal
 }
 
 fn short_sha256_hex(bytes: &[u8]) -> String {
