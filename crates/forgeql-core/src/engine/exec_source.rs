@@ -164,91 +164,11 @@ impl ForgeQLEngine {
 
         info!(%source_name, %branch, ?as_branch, %budget_branch, "starting session");
 
-        // Session resume: if an in-memory session already exists for this
-        // source + branch + as_branch combination, reuse it — unless the
-        // branch HEAD in the bare repo has moved (e.g. after REFRESH SOURCE),
-        // in which case evict the stale session and fall through to create a
-        // fresh one.
-        //
-        // We collect the decision into `resume_outcome` before mutating
-        // `self.sessions` to avoid holding a shared borrow across a mutable one.
-        // Because the alias is the session key (see below), an O(1) lookup suffices.
-        let resume_outcome: Option<(String, Option<usize>)> = {
-            if let Some((existing_id, existing_session)) =
-                self.sessions.get_key_value(&coords.map_key())
-            {
-                // Guard: if the alias was previously bound to a *different* source
-                // or a different user, evict it rather than returning the wrong
-                // repo's data or leaking one user's session to another.
-                if existing_session.source_name != source_name
-                    || existing_session.user_id != coords.user
-                {
-                    return Err(crate::error::ForgeError::InvalidInput(format!(
-                        "alias '{as_branch}' is already bound to source '{}' (user '{}') — \
-                         choose a different alias or DROP SESSION '{as_branch}' first",
-                        existing_session.source_name, existing_session.user_id,
-                    ))
-                    .into());
-                }
-                // Compare the bare repo's current branch tip to what we
-                // indexed.  If `branch_head` returns None (repo unavailable
-                // or branch missing) we treat the session as fresh to avoid
-                // spurious evictions.
-                let is_stale = self
-                    .registry
-                    .get(source_name)
-                    .and_then(|src| git::branch_head(src.path(), branch))
-                    .is_some_and(|head| {
-                        existing_session.cached_commit().is_some_and(|c| c != head)
-                    });
-                if is_stale {
-                    info!(
-                        session_id = %existing_id,
-                        %source_name,
-                        %branch,
-                        "branch HEAD moved after REFRESH — evicting stale session"
-                    );
-                    Some((existing_id.clone(), None))
-                } else {
-                    // PhaseFT5: prefer columnar stats; fall back to legacy table.
-                    let symbols_indexed = existing_session.engine().index_stats().map_or_else(
-                        || existing_session.index().map_or(0, |idx| idx.rows.len()),
-                        |s| s.rows,
-                    );
-                    info!(
-                        session_id = %existing_id,
-                        %source_name,
-                        %branch,
-                        "session resume — reusing existing in-memory session"
-                    );
-                    Some((existing_id.clone(), Some(symbols_indexed)))
-                }
-            } else {
-                None
-            }
-        };
-        match resume_outcome {
-            Some((id, Some(symbols_indexed))) => {
-                return Ok(ForgeQLResult::SourceOp(SourceOpResult {
-                    op: "use_source".to_string(),
-                    source_name: Some(source_name.to_string()),
-                    session_id: Some(id),
-                    branches: Vec::new(),
-                    symbols_indexed: Some(symbols_indexed),
-                    resumed: true,
-                    message: Some(format!(
-                        "resumed in-memory session for {}",
-                        coords.git_branch()
-                    )),
-                }));
-            }
-            Some((stale_id, None)) => {
-                drop(self.sessions.remove(&stale_id));
-                // Fall through to create a new session at the updated HEAD.
-            }
-            None => {
-                // No existing session — fall through to create one.
-            }
+        // Session resume: reuse an in-memory session for this source + branch +
+        // alias when one exists and its branch HEAD has not moved; otherwise a
+        // stale session is evicted and we fall through to create a fresh one.
+        if let Some(result) = self.try_resume_session(&coords, source_name, branch, as_branch)? {
+            return Ok(result);
         }
 
         // Verify source exists.
@@ -311,70 +231,9 @@ impl ForgeQLEngine {
             ));
         }
 
-        // Warm-path optimisation: if the columnar overlay already exists for
-        // the current HEAD commit AND opens cleanly (schema version matches),
-        // skip resume_index() entirely — loading the 2-3 GB legacy SymbolTable
-        // only to immediately discard it wastes RAM and time.  We go straight
-        // to warm_or_open(ctx, None) which reads the overlay from disk in
-        // seconds.
-        //
-        // Cold path (no overlay yet, or overlay has a schema-version mismatch):
-        // fall through to resume_index() so the legacy SymbolTable is available
-        // for the shadow-writer to build/rebuild the overlay.
-        let columnar_warm = if let Some(ctx) = session.columnar_build() {
-            let commit =
-                crate::session::Session::get_head_oid(&session.worktree_path).unwrap_or_default();
-            let path = ctx.overlay_path_for(&commit);
-            path.exists() && crate::storage::columnar::overlay::Overlay::open(&path).is_ok()
-        } else {
-            false
-        };
-
-        if !columnar_warm {
-            // Cold path: load legacy index so shadow-writer can build the
-            // overlay.  Use resume_index() so an existing disk cache at
-            // <worktree>/.forgeql-index is reused when HEAD matches.
-            session.resume_index()?;
-        }
-
-        // If the columnar backend is enabled, ensure the overlay exists for this
-        // commit and install a ready-to-query ColumnarStorage on the session.
-        if let Some(ctx) = session.columnar_build().cloned() {
-            let commit =
-                crate::session::Session::get_head_oid(&session.worktree_path).unwrap_or_default();
-            // Warm path passes None for legacy — overlay is loaded from disk.
-            // Cold path passes the loaded legacy storage for shadow-write.
-            let legacy = if columnar_warm {
-                None
-            } else {
-                session.legacy_storage()
-            };
-            match crate::storage::columnar::ColumnarStorage::warm_or_open(
-                &ctx,
-                legacy,
-                session.worktree_path.clone(),
-                &commit,
-                Arc::clone(&self.lang_registry),
-            ) {
-                Ok(storage) => {
-                    // Delta is loaded inside warm_or_open — just install.
-                    session.install_columnar(Box::new(storage));
-                    // PhaseFT5: free legacy RAM now that columnar is default.
-                    session.drop_legacy_index();
-                }
-                Err(e) => {
-                    tracing::warn!(%commit, "columnar warm_or_open failed (non-fatal): {e}");
-                    // warm_or_open failed; fall back to legacy if it wasn't
-                    // loaded (warm path skipped resume_index).
-                    if columnar_warm && let Err(re) = session.resume_index() {
-                        tracing::warn!("columnar fallback resume_index failed: {re}");
-                    }
-                }
-            }
-        } else {
-            // Columnar not configured — legacy already loaded by resume_index()
-            // above (columnar_warm is always false when ctx is None).
-        }
+        // Load the session index (warm path reads the columnar overlay from
+        // disk; cold path loads the legacy table for the shadow-writer).
+        self.load_session_index(&mut session)?;
 
         // FT6: restore checkpoint stack from disk if the file is present and
         // the stored HEAD matches the current worktree HEAD.  Both conditions
@@ -451,6 +310,146 @@ impl ForgeQLEngine {
                 Some(format!("created new worktree for {}", coords.git_branch()))
             },
         }))
+    }
+
+    /// Reuse an in-memory session for this source + branch + alias when one
+    /// exists and is still valid. Returns `Some(result)` to short-circuit
+    /// `use_source` (the caller returns it), or `None` to create a fresh session.
+    ///
+    /// A stale session — whose indexed commit differs from the bare repo's
+    /// current branch HEAD (e.g. after REFRESH SOURCE) — is evicted before
+    /// returning `None`. An alias already bound to a different source or user is
+    /// an error rather than a silent rebind.
+    fn try_resume_session(
+        &mut self,
+        coords: &SessionCoords,
+        source_name: &str,
+        branch: &str,
+        as_branch: &str,
+    ) -> Result<Option<ForgeQLResult>> {
+        // Decide before mutating self.sessions to avoid holding a shared borrow
+        // across a mutable one. The alias is the session key, so this is O(1).
+        let resume_outcome: Option<(String, Option<usize>)> = {
+            if let Some((existing_id, existing_session)) =
+                self.sessions.get_key_value(&coords.map_key())
+            {
+                if existing_session.source_name != source_name
+                    || existing_session.user_id != coords.user
+                {
+                    return Err(crate::error::ForgeError::InvalidInput(format!(
+                        "alias '{as_branch}' is already bound to source '{}' (user '{}') — \
+                         choose a different alias or DROP SESSION '{as_branch}' first",
+                        existing_session.source_name, existing_session.user_id,
+                    ))
+                    .into());
+                }
+                let is_stale = self
+                    .registry
+                    .get(source_name)
+                    .and_then(|src| git::branch_head(src.path(), branch))
+                    .is_some_and(|head| {
+                        existing_session.cached_commit().is_some_and(|c| c != head)
+                    });
+                if is_stale {
+                    info!(
+                        session_id = %existing_id,
+                        %source_name,
+                        %branch,
+                        "branch HEAD moved after REFRESH — evicting stale session"
+                    );
+                    Some((existing_id.clone(), None))
+                } else {
+                    let symbols_indexed = existing_session.engine().index_stats().map_or_else(
+                        || existing_session.index().map_or(0, |idx| idx.rows.len()),
+                        |s| s.rows,
+                    );
+                    info!(
+                        session_id = %existing_id,
+                        %source_name,
+                        %branch,
+                        "session resume — reusing existing in-memory session"
+                    );
+                    Some((existing_id.clone(), Some(symbols_indexed)))
+                }
+            } else {
+                None
+            }
+        };
+        match resume_outcome {
+            Some((id, Some(symbols_indexed))) => {
+                Ok(Some(ForgeQLResult::SourceOp(SourceOpResult {
+                    op: "use_source".to_string(),
+                    source_name: Some(source_name.to_string()),
+                    session_id: Some(id),
+                    branches: Vec::new(),
+                    symbols_indexed: Some(symbols_indexed),
+                    resumed: true,
+                    message: Some(format!(
+                        "resumed in-memory session for {}",
+                        coords.git_branch()
+                    )),
+                })))
+            }
+            Some((stale_id, None)) => {
+                drop(self.sessions.remove(&stale_id));
+                Ok(None)
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Load the session index. Warm path: when a columnar overlay already exists
+    /// for the current HEAD and opens cleanly, read it from disk and skip loading
+    /// the multi-GB legacy table. Cold path: load the legacy table so the
+    /// shadow-writer can build the overlay, then install columnar and drop legacy.
+    fn load_session_index(&self, session: &mut Session) -> Result<()> {
+        let columnar_warm = if let Some(ctx) = session.columnar_build() {
+            let commit =
+                crate::session::Session::get_head_oid(&session.worktree_path).unwrap_or_default();
+            let path = ctx.overlay_path_for(&commit);
+            path.exists() && crate::storage::columnar::overlay::Overlay::open(&path).is_ok()
+        } else {
+            false
+        };
+
+        if !columnar_warm {
+            // Cold path: load legacy index (reuses the on-disk cache when HEAD matches).
+            session.resume_index()?;
+        }
+
+        let Some(ctx) = session.columnar_build().cloned() else {
+            // Columnar not configured — legacy was loaded above.
+            return Ok(());
+        };
+        let commit =
+            crate::session::Session::get_head_oid(&session.worktree_path).unwrap_or_default();
+        // Warm path passes None (overlay from disk); cold path passes the legacy
+        // storage for shadow-write.
+        let legacy = if columnar_warm {
+            None
+        } else {
+            session.legacy_storage()
+        };
+        match crate::storage::columnar::ColumnarStorage::warm_or_open(
+            &ctx,
+            legacy,
+            session.worktree_path.clone(),
+            &commit,
+            Arc::clone(&self.lang_registry),
+        ) {
+            Ok(storage) => {
+                session.install_columnar(Box::new(storage));
+                session.drop_legacy_index();
+            }
+            Err(e) => {
+                tracing::warn!(%commit, "columnar warm_or_open failed (non-fatal): {e}");
+                // Fall back to legacy if the warm path skipped resume_index.
+                if columnar_warm && let Err(re) = session.resume_index() {
+                    tracing::warn!("columnar fallback resume_index failed: {re}");
+                }
+            }
+        }
+        Ok(())
     }
     /// `SHOW SOURCES` — list all registered sources.
     #[allow(clippy::unnecessary_wraps)] // uniform Result return across all ops
