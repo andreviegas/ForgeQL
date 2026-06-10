@@ -449,32 +449,9 @@ fn collect_nodes(
 
             // Every named node becomes a row.
             if let Some(name) = ctx.language.extract_name(node, source) {
-                let mut fields = extract_fields(node, source, ts_language);
                 let parent_ordinal = parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
-
-                // Inject guard fields from the current block-guard stack.
-                if !guard_stack.is_empty() {
-                    inject_guard_fields(&guard_stack, &mut fields);
-                }
-
-                // Inject item-level attribute guards (e.g. Rust `#[cfg(...)]`).
-                let attr_guard_name = config.item_guard_attribute();
-                if !attr_guard_name.is_empty() {
-                    let attr_frames = collect_attribute_guard_frames(node, source, attr_guard_name);
-                    if !attr_frames.is_empty() {
-                        inject_guard_fields(&attr_frames, &mut fields);
-                    }
-                }
-
-                let first_body_statement_fingerprint =
-                    first_body_statement_fingerprint(node, source);
-                let content_hash = node_content_hash(node, source);
-                let guard_group_id = fields.get("guard_group_id").cloned();
-                let guard_branch = fields.get("guard_branch").cloned();
-                if let Some(fp) = &first_body_statement_fingerprint {
-                    drop(fields.insert("first_body_statement_fingerprint".to_string(), fp.clone()));
-                }
-                drop(fields.insert("content_hash".to_string(), content_hash.clone()));
+                let prepared = build_row_fields(&enrich_ctx, ts_language);
+                let mut fields = prepared.fields;
 
                 // Run all enrichers on this row.
                 for enricher in ctx.enrichers {
@@ -488,23 +465,19 @@ fn collect_nodes(
                     .intern_row(&name, node.kind(), fql_kind_val, lang_name, ctx.path);
                 // Reuse prior ordinals when possible to keep node_id stable across re-indexes.
                 let ordinal = if is_addressable_fql_kind(fql_kind_val) {
-                    let ord = ctx.ordinal_remapper.as_mut().map_or_else(
-                        || {
-                            let next = row_ordinal_counter;
-                            row_ordinal_counter = row_ordinal_counter.saturating_add(1);
-                            next
-                        },
-                        |remapper| {
-                            remapper.assign(&OrdinalMatchKey {
-                                name: &name,
-                                fql_kind: fql_kind_val,
-                                parent_ordinal,
-                                guard_group_id: guard_group_id.as_deref(),
-                                guard_branch: guard_branch.as_deref(),
-                                first_body_statement_fingerprint: first_body_statement_fingerprint
-                                    .as_deref(),
-                                content_hash: Some(content_hash.as_str()),
-                            })
+                    let ord = assign_ordinal(
+                        ctx.ordinal_remapper.as_mut(),
+                        &mut row_ordinal_counter,
+                        &OrdinalMatchKey {
+                            name: &name,
+                            fql_kind: fql_kind_val,
+                            parent_ordinal,
+                            guard_group_id: prepared.guard_group_id.as_deref(),
+                            guard_branch: prepared.guard_branch.as_deref(),
+                            first_body_statement_fingerprint: prepared
+                                .first_body_statement_fingerprint
+                                .as_deref(),
+                            content_hash: Some(prepared.content_hash.as_str()),
                         },
                     );
                     current_node_ordinal = Some(ord);
@@ -512,12 +485,7 @@ fn collect_nodes(
                 } else {
                     None
                 };
-                // Intern field keys+values before storing — converts the temporary
-                // HashMap<String,String> enricher buffer into HashMap<u32,u32>.
-                let rev = ordinal.map_or(0, |_| {
-                    let bytes = Sha256::digest(&source[node.byte_range()]);
-                    u64::from_le_bytes(bytes[..8].try_into().unwrap_or([0u8; 8]))
-                });
+                let rev = row_rev(ordinal, source, node.byte_range());
                 let fields = ctx.table.strings.intern_fields(fields);
                 ctx.table.push_row(IndexRow {
                     name_id,
@@ -545,34 +513,10 @@ fn collect_nodes(
                 {
                     let func_name = node_text(source, func_node);
                     if !func_name.is_empty() && mtable.contains(&func_name) {
-                        let mut fields = extract_fields(node, source, ts_language);
                         let parent_ordinal =
                             parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
-
-                        if !guard_stack.is_empty() {
-                            inject_guard_fields(&guard_stack, &mut fields);
-                        }
-                        let attr_guard_name = config.item_guard_attribute();
-                        if !attr_guard_name.is_empty() {
-                            let attr_frames =
-                                collect_attribute_guard_frames(node, source, attr_guard_name);
-                            if !attr_frames.is_empty() {
-                                inject_guard_fields(&attr_frames, &mut fields);
-                            }
-                        }
-
-                        let first_body_statement_fingerprint =
-                            first_body_statement_fingerprint(node, source);
-                        let content_hash = node_content_hash(node, source);
-                        let guard_group_id = fields.get("guard_group_id").cloned();
-                        let guard_branch = fields.get("guard_branch").cloned();
-                        if let Some(fp) = &first_body_statement_fingerprint {
-                            drop(fields.insert(
-                                "first_body_statement_fingerprint".to_string(),
-                                fp.clone(),
-                            ));
-                        }
-                        drop(fields.insert("content_hash".to_string(), content_hash.clone()));
+                        let prepared = build_row_fields(&enrich_ctx, ts_language);
+                        let mut fields = prepared.fields;
 
                         for enricher in ctx.enrichers {
                             enricher.enrich_row(&enrich_ctx, &func_name, &mut fields);
@@ -583,23 +527,19 @@ fn collect_nodes(
                             .strings
                             .intern_row(&func_name, node.kind(), "macro_call", lang_name, ctx.path);
                         let ordinal = if is_addressable_fql_kind("macro_call") {
-                            let ord = ctx.ordinal_remapper.as_mut().map_or_else(
-                                || {
-                                    let next = row_ordinal_counter;
-                                    row_ordinal_counter = row_ordinal_counter.saturating_add(1);
-                                    next
-                                },
-                                |remapper| {
-                                    remapper.assign(&OrdinalMatchKey {
-                                        name: &func_name,
-                                        fql_kind: "macro_call",
-                                        parent_ordinal,
-                                        guard_group_id: guard_group_id.as_deref(),
-                                        guard_branch: guard_branch.as_deref(),
-                                        first_body_statement_fingerprint:
-                                            first_body_statement_fingerprint.as_deref(),
-                                        content_hash: Some(content_hash.as_str()),
-                                    })
+                            let ord = assign_ordinal(
+                                ctx.ordinal_remapper.as_mut(),
+                                &mut row_ordinal_counter,
+                                &OrdinalMatchKey {
+                                    name: &func_name,
+                                    fql_kind: "macro_call",
+                                    parent_ordinal,
+                                    guard_group_id: prepared.guard_group_id.as_deref(),
+                                    guard_branch: prepared.guard_branch.as_deref(),
+                                    first_body_statement_fingerprint: prepared
+                                        .first_body_statement_fingerprint
+                                        .as_deref(),
+                                    content_hash: Some(prepared.content_hash.as_str()),
                                 },
                             );
                             current_node_ordinal = Some(ord);
@@ -607,10 +547,7 @@ fn collect_nodes(
                         } else {
                             None
                         };
-                        let rev = ordinal.map_or(0, |_| {
-                            let bytes = Sha256::digest(&source[node.byte_range()]);
-                            u64::from_le_bytes(bytes[..8].try_into().unwrap_or([0u8; 8]))
-                        });
+                        let rev = row_rev(ordinal, source, node.byte_range());
                         let fields = ctx.table.strings.intern_fields(fields);
                         ctx.table.push_row(IndexRow {
                             name_id,
@@ -629,6 +566,7 @@ fn collect_nodes(
                     }
                 }
             }
+
             // Run extra_rows() for every node (even if extract_name returned None).
             for enricher in ctx.enrichers {
                 for extra in enricher.extra_rows(&enrich_ctx) {
@@ -645,31 +583,23 @@ fn collect_nodes(
                         extra_path,
                     );
                     let ordinal = if is_addressable_fql_kind(&extra.fql_kind) {
-                        Some(ctx.ordinal_remapper.as_mut().map_or_else(
-                            || {
-                                let next = row_ordinal_counter;
-                                row_ordinal_counter = row_ordinal_counter.saturating_add(1);
-                                next
-                            },
-                            |remapper| {
-                                remapper.assign(&OrdinalMatchKey {
-                                    name: &extra.name,
-                                    fql_kind: &extra.fql_kind,
-                                    parent_ordinal,
-                                    guard_group_id,
-                                    guard_branch,
-                                    first_body_statement_fingerprint: None,
-                                    content_hash: Some(content_hash.as_str()),
-                                })
+                        Some(assign_ordinal(
+                            ctx.ordinal_remapper.as_mut(),
+                            &mut row_ordinal_counter,
+                            &OrdinalMatchKey {
+                                name: &extra.name,
+                                fql_kind: &extra.fql_kind,
+                                parent_ordinal,
+                                guard_group_id,
+                                guard_branch,
+                                first_body_statement_fingerprint: None,
+                                content_hash: Some(content_hash.as_str()),
                             },
                         ))
                     } else {
                         None
                     };
-                    let rev = ordinal.map_or(0, |_| {
-                        let bytes = Sha256::digest(&source[extra.byte_range.clone()]);
-                        u64::from_le_bytes(bytes[..8].try_into().unwrap_or([0u8; 8]))
-                    });
+                    let rev = row_rev(ordinal, source, extra.byte_range.clone());
                     let fields = ctx.table.strings.intern_fields(extra.fields);
                     ctx.table.push_row(IndexRow {
                         name_id: eni,
@@ -745,6 +675,86 @@ fn collect_nodes(
             break;
         }
     }
+}
+
+/// Fields and identity metadata prepared for a single index row, shared by the
+/// named-node and re-tagged macro-call emission paths.
+struct PreparedRow {
+    fields: HashMap<String, String>,
+    content_hash: String,
+    guard_group_id: Option<String>,
+    guard_branch: Option<String>,
+    first_body_statement_fingerprint: Option<String>,
+}
+
+/// Extract the raw fields of a node and inject its guard/attribute context,
+/// returning the field map plus the identity metadata needed to compute a
+/// stable ordinal.
+///
+/// Pure: derives the node, source, config, and guard stack from `ctx`, so the
+/// named and macro-call paths prepare rows identically.
+fn build_row_fields(ctx: &EnrichContext<'_>, ts_language: &tree_sitter::Language) -> PreparedRow {
+    let node = ctx.node;
+    let source = ctx.source;
+    let mut fields = extract_fields(node, source, ts_language);
+
+    // Inject guard fields from the current block-guard stack.
+    if !ctx.guard_stack.is_empty() {
+        inject_guard_fields(ctx.guard_stack, &mut fields);
+    }
+
+    // Inject item-level attribute guards (e.g. Rust `#[cfg(...)]`).
+    let attr_guard_name = ctx.language_config.item_guard_attribute();
+    if !attr_guard_name.is_empty() {
+        let attr_frames = collect_attribute_guard_frames(node, source, attr_guard_name);
+        if !attr_frames.is_empty() {
+            inject_guard_fields(&attr_frames, &mut fields);
+        }
+    }
+
+    let first_body_statement_fingerprint = first_body_statement_fingerprint(node, source);
+    let content_hash = node_content_hash(node, source);
+    let guard_group_id = fields.get("guard_group_id").cloned();
+    let guard_branch = fields.get("guard_branch").cloned();
+    if let Some(fp) = &first_body_statement_fingerprint {
+        drop(fields.insert("first_body_statement_fingerprint".to_string(), fp.clone()));
+    }
+    drop(fields.insert("content_hash".to_string(), content_hash.clone()));
+
+    PreparedRow {
+        fields,
+        content_hash,
+        guard_group_id,
+        guard_branch,
+        first_body_statement_fingerprint,
+    }
+}
+
+/// Assign a node ordinal: reuse a prior one via the remapper when available
+/// (keeps `node_id` handles stable across re-indexes), otherwise hand out the
+/// next value from the per-file counter.
+fn assign_ordinal(
+    remapper: Option<&mut OrdinalRemapper>,
+    row_ordinal_counter: &mut u32,
+    key: &OrdinalMatchKey<'_>,
+) -> u32 {
+    remapper.map_or_else(
+        || {
+            let next = *row_ordinal_counter;
+            *row_ordinal_counter = row_ordinal_counter.saturating_add(1);
+            next
+        },
+        |remapper| remapper.assign(key),
+    )
+}
+
+/// Content revision for an addressable row: the first 8 bytes of the SHA-256 of
+/// the node source. Non-addressable rows (ordinal `None`) get `0`.
+fn row_rev(ordinal: Option<u32>, source: &[u8], byte_range: std::ops::Range<usize>) -> u64 {
+    ordinal.map_or(0, |_| {
+        let bytes = Sha256::digest(&source[byte_range]);
+        u64::from_le_bytes(bytes[..8].try_into().unwrap_or([0u8; 8]))
+    })
 }
 
 fn short_sha256_hex(bytes: &[u8]) -> String {
