@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.1] — 2026-06-10 — chores: refactor query.rs
+
+### Changed
+
+- Refactor of query.rs spliting their functions in other files
+
 ## [0.76.0] — 2026-06-09 — Worktree teardown helper and per-session TTL
 
 ### Added
