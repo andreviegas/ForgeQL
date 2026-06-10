@@ -127,6 +127,17 @@ impl ColumnarStorage {
             .parse()
             .map_err(|_| anyhow::anyhow!("invalid ordinal in node_id: {node_id}"))?;
 
+        // Dirty-first: when this file was reindexed this session, its dirty
+        // segment holds the ordinals that SHOW/FIND emit for it, and
+        // find_node_id_at_line reads those same dirty ordinals. Resolve here so
+        // reads and writes agree. Committed-first resolution could map an ordinal
+        // the OrdinalRemapper reassigned to a different committed node and silently
+        // edit the wrong line (BUG-011); this also covers nodes created this
+        // session beyond the committed high-water mark (BUG-008).
+        if let Some(result) = self.find_node_in_dirty(node_id, ordinal, root) {
+            return Ok(Some(result));
+        }
+
         // Committed path: the node existed at index time. Resolve its committed
         // row; when a dirty segment exists for this file (reindexed this session)
         // prefer its byte positions via a name + fql_kind proximity lookup, since

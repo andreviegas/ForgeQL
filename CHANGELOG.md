@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.4] — 2026-06-10 — Fix find_node resolving dirty-first to prevent wrong-line edits
+
+### Fixed
+
+- `find_node` resolved node_ids committed-first, so when the `OrdinalRemapper` reassigned a committed ordinal to a different node (indistinguishable same-name siblings + an insertion), the id emitted by `SHOW LINES`/`FIND` and the node resolved by `CHANGE NODE` diverged — silently editing the wrong line (BUG-011). `find_node` now consults the dirty segment first; the committed path only runs when the file has no dirty segment this session.
+
 ## [0.76.3] — 2026-06-10 — Fix stale SHOW outline and phantom node spans after dirty edits
 
 ### Fixed

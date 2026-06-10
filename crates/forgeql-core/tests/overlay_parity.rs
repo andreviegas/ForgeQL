@@ -2884,6 +2884,88 @@ fn find_node_resolves_newly_created_dirty_node() {
     assert_eq!(resolved.name, "ZetaFn");
 }
 
+/// BUG-011: `SHOW LINES` emits the dirty segment's ordinal for a line, but
+/// `find_node` resolved committed-first. When the `OrdinalRemapper` reassigns a
+/// committed ordinal to a different node (ambiguous same-name siblings + an
+/// insertion), the emitted id and the resolver disagreed, so `CHANGE NODE`
+/// edited the wrong line. `find_node` now resolves dirty-first; the round-trip
+/// `find_node(find_node_id_at_line(line)).line == line` must hold.
+#[test]
+fn find_node_round_trips_after_ordinal_reassignment() {
+    use forgeql_core::storage::StorageEngine;
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let tmp = TempDir::new().expect("tempdir");
+    let worktree = tmp.path().to_path_buf();
+    let file = worktree.join("rt.cpp");
+    // Two IDENTICAL `if (cond) { same(); }` siblings, far apart. Identical bodies
+    // mean the remapper cannot tell them apart by fingerprint or content hash.
+    let v0 = "void F() {\n    if (cond) { same(); }\n    int p1 = 1;\n    int p2 = 2;\n    int p3 = 3;\n    int p4 = 4;\n    int p5 = 5;\n    int p6 = 6;\n    if (cond) { same(); }\n}\n";
+    std::fs::write(&file, v0).expect("write");
+
+    let seg_dir = tmp.path().join("segments").join(vp());
+    let overlay_dir = tmp.path().join("overlays");
+    std::fs::create_dir_all(&seg_dir).expect("seg_dir");
+    std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
+
+    let table = index_at_path(&CppLanguageInline, &file);
+    let cid = build_segment(&table, &file, seg_dir.parent().unwrap());
+    let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(file.clone(), cid);
+
+    let overlay_path = overlay_dir.join("rt.bin");
+    OverlayBuilder::new(
+        "test",
+        seg_dir.parent().unwrap().to_path_buf(),
+        worktree.clone(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path)
+    .expect("overlay build");
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segments: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|meta| {
+            Arc::new(
+                SegmentReader::open(&seg_path(seg_dir.parent().unwrap(), &meta.hex_content_id))
+                    .expect("open seg"),
+            )
+        })
+        .collect();
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+
+    // Insert a third IDENTICAL `if (cond) { same(); }` at the front. The second
+    // committed if's ordinal is reassigned to the (now) middle if on line 3,
+    // while its committed line (9) is nearest the LAST if on line 10.
+    let v1 = "void F() {\n    if (cond) { same(); }\n    if (cond) { same(); }\n    int p1 = 1;\n    int p2 = 2;\n    int p3 = 3;\n    int p4 = 4;\n    int p5 = 5;\n    int p6 = 6;\n    if (cond) { same(); }\n}\n";
+    std::fs::write(&file, v1).expect("rewrite");
+    storage
+        .reindex_files(std::slice::from_ref(&file))
+        .expect("reindex");
+
+    // Round-trip invariant: every line SHOW emits a node_id for must resolve
+    // (via find_node) back to that same line.
+    let mut mismatches = Vec::new();
+    for i in 0..v1.lines().count() {
+        let line = i + 1;
+        if let Some(id) = storage.find_node_id_at_line("rt.cpp", line) {
+            let resolved = storage.find_node(&id, &worktree).expect("find_node ok");
+            let got = resolved.as_ref().map(|r| r.line);
+            eprintln!("line {line}: id={id} -> resolved line={got:?}");
+            if got != Some(line) {
+                mismatches.push((line, id.clone(), got));
+            }
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "find_node round-trip broke for (line, id, got): {mismatches:?}"
+    );
+}
+
 /// BUG-001 regression: a committed segment is content-addressed by git blob
 /// sha1, so `is_path_fresh` must report it stale the moment the file on disk
 /// diverges from the indexed content (HEAD advanced, file reverted while
