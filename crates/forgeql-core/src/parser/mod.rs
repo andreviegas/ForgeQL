@@ -189,10 +189,8 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         }
 
         Rule::show_context_stmt => {
-            let mut inner = pair.into_inner();
-            let symbol = next_str(&mut inner, "show_context: expected symbol name")?;
-            let backend = parse_using_clause(&mut inner)?;
-            let clauses = parse_clauses(inner);
+            let (symbol, backend, clauses) =
+                parse_symbol_backend_clauses(pair, "show_context: expected symbol name")?;
             Ok(ForgeQLIR::ShowContext {
                 symbol,
                 backend,
@@ -201,10 +199,8 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         }
 
         Rule::show_signature_stmt => {
-            let mut inner = pair.into_inner();
-            let symbol = next_str(&mut inner, "show_signature: expected symbol name")?;
-            let backend = parse_using_clause(&mut inner)?;
-            let clauses = parse_clauses(inner);
+            let (symbol, backend, clauses) =
+                parse_symbol_backend_clauses(pair, "show_signature: expected symbol name")?;
             Ok(ForgeQLIR::ShowSignature {
                 symbol,
                 backend,
@@ -233,10 +229,8 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         }
 
         Rule::show_members_stmt => {
-            let mut inner = pair.into_inner();
-            let symbol = next_str(&mut inner, "show_members: expected symbol name")?;
-            let backend = parse_using_clause(&mut inner)?;
-            let clauses = parse_clauses(inner);
+            let (symbol, backend, clauses) =
+                parse_symbol_backend_clauses(pair, "show_members: expected symbol name")?;
             Ok(ForgeQLIR::ShowMembers {
                 symbol,
                 backend,
@@ -245,10 +239,8 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         }
 
         Rule::show_body_stmt => {
-            let mut inner = pair.into_inner();
-            let symbol = next_str(&mut inner, "show_body: expected symbol name")?;
-            let backend = parse_using_clause(&mut inner)?;
-            let clauses = parse_clauses(inner);
+            let (symbol, backend, clauses) =
+                parse_symbol_backend_clauses(pair, "show_body: expected symbol name")?;
             Ok(ForgeQLIR::ShowBody {
                 symbol,
                 backend,
@@ -257,10 +249,8 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         }
 
         Rule::show_callees_stmt => {
-            let mut inner = pair.into_inner();
-            let symbol = next_str(&mut inner, "show_callees: expected symbol name")?;
-            let backend = parse_using_clause(&mut inner)?;
-            let clauses = parse_clauses(inner);
+            let (symbol, backend, clauses) =
+                parse_symbol_backend_clauses(pair, "show_callees: expected symbol name")?;
             Ok(ForgeQLIR::ShowCallees {
                 symbol,
                 backend,
@@ -306,6 +296,66 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
             Ok(ForgeQLIR::FindNode { node_id })
         }
 
+        Rule::change_node_stmt
+        | Rule::insert_node_stmt
+        | Rule::delete_node_stmt
+        | Rule::show_node_stmt => parse_node_stmt(pair),
+        Rule::show_more_stmt => parse_show_more_stmt(pair),
+
+        Rule::statement => {
+            let inner = pair
+                .into_inner()
+                .next()
+                .ok_or_else(|| ForgeError::DslParse("empty wrapper rule".into()))?;
+            parse_statement(inner)
+        }
+
+        Rule::transaction_stmt => parse_transaction(pair),
+
+        Rule::rollback_stmt => {
+            let name = pair.into_inner().next().map(|l| unquote(l.as_str()));
+            Ok(ForgeQLIR::Rollback { name })
+        }
+
+        Rule::verify_stmt => {
+            let step = pair
+                .into_inner()
+                .next()
+                .map(|l| unquote(l.as_str()))
+                .ok_or_else(|| ForgeError::DslParse("verify: expected step name".into()))?;
+            Ok(ForgeQLIR::VerifyBuild { step })
+        }
+
+        Rule::commit_stmt => {
+            let message = pair
+                .into_inner()
+                .next()
+                .map(|l| unquote(l.as_str()))
+                .ok_or_else(|| ForgeError::DslParse("commit: expected message".into()))?;
+            Ok(ForgeQLIR::Commit { message })
+        }
+
+        r => Err(ForgeError::DslParse(format!("unhandled rule: {r:?}"))),
+    }
+}
+
+/// Parse the `<symbol> [USING backend] [clauses]` tail shared by the SHOW
+/// context / signature / members / body / callees statements.
+fn parse_symbol_backend_clauses(
+    pair: pest::iterators::Pair<'_, Rule>,
+    ctx: &'static str,
+) -> Result<(String, crate::ir::Backend, crate::ir::Clauses), ForgeError> {
+    let mut inner = pair.into_inner();
+    let symbol = next_str(&mut inner, ctx)?;
+    let backend = parse_using_clause(&mut inner)?;
+    let clauses = parse_clauses(inner);
+    Ok((symbol, backend, clauses))
+}
+
+/// Parse the node-handle statements (CHANGE / INSERT / DELETE / SHOW NODE),
+/// each addressing an indexed node by its stable id.
+fn parse_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
+    match pair.as_rule() {
         Rule::change_node_stmt => {
             let mut inner = pair.into_inner();
             let node_id = next_str(&mut inner, "change_node: expected node_id")?;
@@ -385,42 +435,10 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
                 clauses,
             })
         }
-        Rule::show_more_stmt => parse_show_more_stmt(pair),
 
-        Rule::statement => {
-            let inner = pair
-                .into_inner()
-                .next()
-                .ok_or_else(|| ForgeError::DslParse("empty wrapper rule".into()))?;
-            parse_statement(inner)
-        }
-
-        Rule::transaction_stmt => parse_transaction(pair),
-
-        Rule::rollback_stmt => {
-            let name = pair.into_inner().next().map(|l| unquote(l.as_str()));
-            Ok(ForgeQLIR::Rollback { name })
-        }
-
-        Rule::verify_stmt => {
-            let step = pair
-                .into_inner()
-                .next()
-                .map(|l| unquote(l.as_str()))
-                .ok_or_else(|| ForgeError::DslParse("verify: expected step name".into()))?;
-            Ok(ForgeQLIR::VerifyBuild { step })
-        }
-
-        Rule::commit_stmt => {
-            let message = pair
-                .into_inner()
-                .next()
-                .map(|l| unquote(l.as_str()))
-                .ok_or_else(|| ForgeError::DslParse("commit: expected message".into()))?;
-            Ok(ForgeQLIR::Commit { message })
-        }
-
-        r => Err(ForgeError::DslParse(format!("unhandled rule: {r:?}"))),
+        r => Err(ForgeError::DslParse(format!(
+            "parse_node_stmt: unhandled rule: {r:?}"
+        ))),
     }
 }
 
