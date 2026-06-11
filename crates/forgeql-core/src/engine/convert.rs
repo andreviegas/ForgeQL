@@ -132,131 +132,157 @@ fn convert_show_content(op: &ForgeQLIR, json: &serde_json::Value) -> Result<Show
             })
         }
 
-        ForgeQLIR::ShowOutline { .. } => {
-            let entries = json
-                .get("results")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|entry| {
-                            Some(OutlineEntry {
-                                name: entry.get("name")?.as_str()?.to_string(),
-                                fql_kind: entry.get("fql_kind")?.as_str()?.to_string(),
-                                path: PathBuf::from(entry.get("path")?.as_str()?),
-                                line: entry.get("line")?.as_u64()? as usize,
-                                node_id: entry
-                                    .get("node_id")
-                                    .and_then(|v| v.as_str())
-                                    .map(String::from),
-                                depth: entry
-                                    .get("depth")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .unwrap_or(0) as usize,
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            Ok(ShowContent::Outline { entries })
-        }
+        ForgeQLIR::ShowOutline { .. } => Ok(ShowContent::Outline {
+            entries: parse_outline_entries(json),
+        }),
 
         ForgeQLIR::ShowMembers { .. } => {
-            let members = json
-                .get("members")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|m| {
-                            Some(MemberEntry {
-                                fql_kind: m.get("fql_kind")?.as_str()?.to_string(),
-                                text: m.get("text")?.as_str()?.to_string(),
-                                line: m.get("line")?.as_u64()? as usize,
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
             let byte_start = json.get("byte_start").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
             Ok(ShowContent::Members {
-                members,
+                members: parse_member_entries(json),
                 byte_start,
             })
         }
 
-        ForgeQLIR::ShowCallees { .. } => {
-            let direction = CallDirection::Callees;
-            let entries = json
-                .get("results")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|entry| {
-                            Some(CallGraphEntry {
-                                name: entry.get("name")?.as_str()?.to_string(),
-                                path: entry
-                                    .get("path")
-                                    .and_then(|v| v.as_str())
-                                    .map(PathBuf::from),
-                                line: entry
-                                    .get("line")
-                                    .and_then(|v| v.as_u64())
-                                    .map(|l| l as usize),
-                                byte_start: entry
-                                    .get("byte_start")
-                                    .and_then(|v| v.as_u64())
-                                    .map(|b| b as usize),
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            Ok(ShowContent::CallGraph { direction, entries })
-        }
+        ForgeQLIR::ShowCallees { .. } => Ok(ShowContent::CallGraph {
+            direction: CallDirection::Callees,
+            entries: parse_callee_entries(json),
+        }),
 
         ForgeQLIR::FindFiles { clauses, .. } => {
-            let results = json
-                .get("results")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|entry| {
-                            // FIND files results can be strings or objects with "path".
-                            let path_str = entry
-                                .as_str()
-                                .or_else(|| entry.get("path").and_then(|v| v.as_str()))?;
-                            let extension = entry
-                                .get("extension")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let size = entry.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let count = entry
-                                .get("count")
-                                .and_then(|v| v.as_u64())
-                                .map(|n| n as usize);
-                            Some(FileEntry {
-                                path: PathBuf::from(path_str),
-                                depth: clauses.depth,
-                                extension,
-                                size,
-                                count,
-                            })
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+            let files = parse_file_entries(json, clauses);
             let total = json
                 .get("count")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(results.len() as u64) as usize;
-            Ok(ShowContent::FileList {
-                files: results,
-                total,
-            })
+                .unwrap_or(files.len() as u64) as usize;
+            Ok(ShowContent::FileList { files, total })
         }
 
         _ => bail!("unsupported SHOW variant: {op:?}"),
     }
+}
+
+/// Parse `SHOW outline` rows from the engine JSON into typed entries.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::redundant_closure_for_method_calls
+)]
+fn parse_outline_entries(json: &serde_json::Value) -> Vec<OutlineEntry> {
+    json.get("results")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    Some(OutlineEntry {
+                        name: entry.get("name")?.as_str()?.to_string(),
+                        fql_kind: entry.get("fql_kind")?.as_str()?.to_string(),
+                        path: PathBuf::from(entry.get("path")?.as_str()?),
+                        line: entry.get("line")?.as_u64()? as usize,
+                        node_id: entry
+                            .get("node_id")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
+                        depth: entry
+                            .get("depth")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0) as usize,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse `SHOW members` rows from the engine JSON into typed entries.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::redundant_closure_for_method_calls
+)]
+fn parse_member_entries(json: &serde_json::Value) -> Vec<MemberEntry> {
+    json.get("members")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    Some(MemberEntry {
+                        fql_kind: m.get("fql_kind")?.as_str()?.to_string(),
+                        text: m.get("text")?.as_str()?.to_string(),
+                        line: m.get("line")?.as_u64()? as usize,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse `SHOW callees` rows from the engine JSON into call-graph entries.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::redundant_closure_for_method_calls
+)]
+fn parse_callee_entries(json: &serde_json::Value) -> Vec<CallGraphEntry> {
+    json.get("results")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    Some(CallGraphEntry {
+                        name: entry.get("name")?.as_str()?.to_string(),
+                        path: entry
+                            .get("path")
+                            .and_then(|v| v.as_str())
+                            .map(PathBuf::from),
+                        line: entry
+                            .get("line")
+                            .and_then(|v| v.as_u64())
+                            .map(|l| l as usize),
+                        byte_start: entry
+                            .get("byte_start")
+                            .and_then(|v| v.as_u64())
+                            .map(|b| b as usize),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse `FIND files` rows from the engine JSON. Each row may be a bare path
+/// string or an object carrying `path`/`extension`/`size`/`count`.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::redundant_closure_for_method_calls
+)]
+fn parse_file_entries(json: &serde_json::Value, clauses: &crate::ir::Clauses) -> Vec<FileEntry> {
+    json.get("results")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| {
+                    let path_str = entry
+                        .as_str()
+                        .or_else(|| entry.get("path").and_then(|v| v.as_str()))?;
+                    let extension = entry
+                        .get("extension")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let size = entry.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let count = entry
+                        .get("count")
+                        .and_then(|v| v.as_u64())
+                        .map(|n| n as usize);
+                    Some(FileEntry {
+                        path: PathBuf::from(path_str),
+                        depth: clauses.depth,
+                        extension,
+                        size,
+                        count,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 /// Extract source lines from the JSON `"lines"` or `"results"` array.
