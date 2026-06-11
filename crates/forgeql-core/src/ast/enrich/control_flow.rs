@@ -430,80 +430,41 @@ fn skeleton_walk(
         || config.is_boolean_literal(kind)
         || config.is_null_literal(kind)
     {
-        let text = node_text(source, node);
-        let label = mapping
-            .entry(text)
-            .or_insert_with(|| next_label(next_letter))
-            .clone();
-        result.push_str(&label);
+        push_label(mapping, next_letter, result, node_text(source, node));
         return;
     }
 
-    // Call expressions: map the whole call as one letter.
-    // If any argument contains a side-effectful ++/-- operation, the call
-    // produces a different result at each position (e.g. `isdigit(*p++)`)
-    // — treat every such occurrence as unique to avoid false dup_logic hits.
+    // Call expressions: map the whole call as one letter. A side-effectful
+    // ++/-- in an argument makes each occurrence position-unique (e.g.
+    // `isdigit(*p++)`) to avoid false dup_logic hits.
     if config.is_call_expression_kind(kind) {
-        let text = node_text(source, node);
-        let key = if subtree_has_update(node, config) {
-            format!("{text}@{}", node.start_byte())
-        } else {
-            text
-        };
-        let label = mapping
-            .entry(key)
-            .or_insert_with(|| next_label(next_letter))
-            .clone();
-        result.push_str(&label);
+        let key = position_key(node, config, node_text(source, node));
+        push_label(mapping, next_letter, result, key);
         return;
     }
 
-    // Field expressions (member access): map as one unit
+    // Field expressions (member access): map as one unit.
     if config.is_field_expression_kind(kind) {
-        let text = node_text(source, node);
-        let label = mapping
-            .entry(text)
-            .or_insert_with(|| next_label(next_letter))
-            .clone();
-        result.push_str(&label);
+        push_label(mapping, next_letter, result, node_text(source, node));
         return;
     }
 
-    // Subscript expressions: map as one unit.
-    // Position-unique key if the index contains a side-effectful ++/--.
+    // Subscript expressions: map as one unit, position-unique on ++/-- in index.
     if config.is_subscript_expression_kind(kind) {
-        let text = node_text(source, node);
-        let key = if subtree_has_update(node, config) {
-            format!("{text}@{}", node.start_byte())
-        } else {
-            text
-        };
-        let label = mapping
-            .entry(key)
-            .or_insert_with(|| next_label(next_letter))
-            .clone();
-        result.push_str(&label);
+        let key = position_key(node, config, node_text(source, node));
+        push_label(mapping, next_letter, result, key);
         return;
     }
 
-    // Pointer dereference / address-of: map as one unit so that
-    // `*ptr` and `ptr` get distinct letters.
-    // Position-unique key when the expression contains ++/--, e.g. `*p++`.
+    // Pointer deref / address-of: map as one unit (so `*ptr` and `ptr` differ),
+    // position-unique on ++/-- (e.g. `*p++`).
     if config.address_of_expression_kind().contains(kind) {
-        let text = node_text(source, node);
-        let key = if subtree_has_update(node, config) {
-            format!("{text}@{}", node.start_byte())
-        } else {
-            text
-        };
-        let label = mapping
-            .entry(key)
-            .or_insert_with(|| next_label(next_letter))
-            .clone();
-        result.push_str(&label);
+        let key = position_key(node, config, node_text(source, node));
+        push_label(mapping, next_letter, result, key);
         return;
     }
-    // Operators and punctuation: keep as-is
+
+    // Operators and punctuation: keep as-is.
     if !node.is_named() {
         let text = node_text(source, node);
         match text.as_str() {
@@ -518,62 +479,84 @@ fn skeleton_walk(
         return;
     }
 
-    // Unary not: keep the ! and recurse
+    // Unary not: keep the ! and recurse.
     if config.is_unary_expression_kind(kind) {
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                skeleton_walk(child, source, mapping, next_letter, result, config);
-            }
-        }
+        recurse_children(node, source, mapping, next_letter, result, config);
         return;
     }
 
-    // Binary/logical expressions: recurse into children
+    // Binary/logical expressions: recurse into children.
     if config.is_binary_expression_kind(kind) || config.is_logical_expression_kind(kind) {
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                skeleton_walk(child, source, mapping, next_letter, result, config);
-            }
-        }
+        recurse_children(node, source, mapping, next_letter, result, config);
         return;
     }
 
-    // Parenthesized expression: recurse, keeping parens from unnamed children
+    // Parenthesized expression: recurse, keeping parens from unnamed children.
     if config.is_parenthesized_expression_kind(kind) {
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                skeleton_walk(child, source, mapping, next_letter, result, config);
-            }
-        }
+        recurse_children(node, source, mapping, next_letter, result, config);
         return;
     }
 
-    // Wrapper / transparent nodes that should be recursed through
+    // Wrapper / transparent nodes that should be recursed through.
     if config.is_condition_clause_kind(kind)
         || config.cast_info(kind).is_some()
         || config.is_comma_expression_kind(kind)
     {
-        for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
-                skeleton_walk(child, source, mapping, next_letter, result, config);
-            }
-        }
+        recurse_children(node, source, mapping, next_letter, result, config);
         return;
     }
 
-    // Catch-all for named nodes: map the whole text as one opaque leaf.
-    // This prevents unknown expression types (e.g. C++ `operator` keyword
-    // in member access) from being recursed into and losing structure.
+    // Catch-all for named nodes: map the whole text as one opaque leaf. Prevents
+    // unknown expression types from being recursed into and losing structure.
     if node.is_named() {
-        let text = node_text(source, node);
-        let label = mapping
-            .entry(text)
-            .or_insert_with(|| next_label(next_letter))
-            .clone();
-        result.push_str(&label);
+        push_label(mapping, next_letter, result, node_text(source, node));
     }
-
     // Unnamed nodes not caught by the operator handler above: drop silently.
+}
+
+/// Assign (or reuse) the skeleton letter for `key` and append it to `result`.
+fn push_label(
+    mapping: &mut HashMap<String, String>,
+    next_letter: &mut u8,
+    result: &mut String,
+    key: String,
+) {
+    let label = mapping
+        .entry(key)
+        .or_insert_with(|| next_label(next_letter))
+        .clone();
+    result.push_str(&label);
+}
+
+/// Mapping key for a node: its text, made position-unique (`text@byte`) when the
+/// subtree contains a side-effectful `++`/`--`, so repeated occurrences that are
+/// not actually duplicates get distinct letters.
+fn position_key(
+    node: tree_sitter::Node<'_>,
+    config: &crate::ast::lang::LanguageConfig,
+    text: String,
+) -> String {
+    if subtree_has_update(node, config) {
+        format!("{text}@{}", node.start_byte())
+    } else {
+        text
+    }
+}
+
+/// Recurse `skeleton_walk` into every child of `node`, preserving order.
+fn recurse_children(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    mapping: &mut HashMap<String, String>,
+    next_letter: &mut u8,
+    result: &mut String,
+    config: &crate::ast::lang::LanguageConfig,
+) {
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            skeleton_walk(child, source, mapping, next_letter, result, config);
+        }
+    }
 }
 
 // -----------------------------------------------------------------------
