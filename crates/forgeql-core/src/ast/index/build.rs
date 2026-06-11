@@ -86,30 +86,7 @@ impl SymbolTable {
         // Pass 1 — collect macro definitions (parallel, per-file, then merged).
         let t_build = std::time::Instant::now();
         let t_step = std::time::Instant::now();
-        let macro_table: MacroTable = paths
-            .par_iter()
-            .filter_map(|path| {
-                let lang = lang_registry.language_for_path(path)?;
-                let _ = lang.macro_expander()?;
-                let mut parser = tree_sitter::Parser::new();
-                if parser.set_language(&lang.tree_sitter_language()).is_err() {
-                    return None;
-                }
-                match collect_macro_defs_for_file(&mut parser, path, lang.as_ref()) {
-                    Ok(defs) if !defs.is_empty() => {
-                        let mut local = MacroTable::new();
-                        for def in defs {
-                            local.insert(def);
-                        }
-                        Some(local)
-                    }
-                    _ => None,
-                }
-            })
-            .reduce(MacroTable::new, |mut acc, local| {
-                acc.merge_from(local);
-                acc
-            });
+        let macro_table = Self::collect_macro_table(&paths, lang_registry);
 
         info!(
             ms = t_step.elapsed().as_millis(),
@@ -125,35 +102,7 @@ impl SymbolTable {
         // This eliminates the ~2-minute sequential bottleneck on large repos.
         if seg_ctx.is_some() {
             let t_fast = std::time::Instant::now();
-            paths.par_iter().for_each(|path| {
-                let Some(lang) = lang_registry.language_for_path(path) else {
-                    return;
-                };
-                let mut parser = tree_sitter::Parser::new();
-                if parser.set_language(&lang.tree_sitter_language()).is_err() {
-                    warn!(path = %path.display(), "columnar fast-path: failed to set language");
-                    return;
-                }
-                let enrichers = default_enrichers();
-                let mut file_table = Self::default();
-                {
-                    let mut ctx = IndexContext {
-                        path,
-                        language: lang.as_ref(),
-                        enrichers: &enrichers,
-                        macro_table: Some(&macro_table),
-                        ordinal_remapper: None,
-                        table: &mut file_table,
-                    };
-                    match index_file(&mut parser, &mut ctx, seg_ctx) {
-                        Ok(count) => {
-                            debug!(path = %path.display(), rows = count, "indexed (columnar fast-path)");
-                        }
-                        Err(e) => warn!(path = %path.display(), "skipping file: {e}"),
-                    }
-                }
-                // file_table dropped here — no merge needed for columnar.
-            });
+            Self::build_columnar_segments(&paths, lang_registry, &macro_table, seg_ctx);
             info!(
                 ms = t_fast.elapsed().as_millis(),
                 files = paths.len(),
@@ -165,47 +114,8 @@ impl SymbolTable {
         // Pass 2 — parse + enrich each file in parallel, merging via tree
         // reduction so merges also happen across multiple cores.
         let t_step = std::time::Instant::now();
-        let mut table: Self = paths
-            .par_iter()
-            .filter_map(|path| {
-                let lang = lang_registry.language_for_path(path)?;
-                let mut parser = tree_sitter::Parser::new();
-                if parser.set_language(&lang.tree_sitter_language()).is_err() {
-                    warn!(path = %path.display(), "failed to set tree-sitter language");
-                    return None;
-                }
-                let enrichers = default_enrichers();
-                let mut file_table = Self::default();
-
-                {
-                    let mut ctx = IndexContext {
-                        path,
-                        language: lang.as_ref(),
-                        enrichers: &enrichers,
-                        macro_table: Some(&macro_table),
-                        ordinal_remapper: None,
-                        table: &mut file_table,
-                    };
-                    match index_file(&mut parser, &mut ctx, seg_ctx) {
-                        Ok(count) => {
-                            debug!(
-                                path = %workspace.relative(path).display(),
-                                rows = count,
-                                "indexed"
-                            );
-                        }
-                        Err(err) => {
-                            warn!(path = %path.display(), error = %err, "skipping file");
-                            return None;
-                        }
-                    }
-                }
-                Some(file_table)
-            })
-            .reduce(Self::default, |mut acc, file_table| {
-                acc.merge(file_table);
-                acc
-            });
+        let mut table =
+            Self::parse_and_reduce(&paths, lang_registry, &macro_table, seg_ctx, workspace);
 
         info!(
             ms = t_step.elapsed().as_millis(),
@@ -723,6 +633,127 @@ impl SymbolTable {
             enricher.post_pass(self, Some(&scope));
         }
         Ok(())
+    }
+}
+
+impl SymbolTable {
+    /// Pass 1: collect macro definitions across all files in parallel, merged
+    /// via tree reduction. Files without a macro expander contribute nothing.
+    fn collect_macro_table(paths: &[PathBuf], lang_registry: &LanguageRegistry) -> MacroTable {
+        paths
+            .par_iter()
+            .filter_map(|path| {
+                let lang = lang_registry.language_for_path(path)?;
+                let _ = lang.macro_expander()?;
+                let mut parser = tree_sitter::Parser::new();
+                if parser.set_language(&lang.tree_sitter_language()).is_err() {
+                    return None;
+                }
+                match collect_macro_defs_for_file(&mut parser, path, lang.as_ref()) {
+                    Ok(defs) if !defs.is_empty() => {
+                        let mut local = MacroTable::new();
+                        for def in defs {
+                            local.insert(def);
+                        }
+                        Some(local)
+                    }
+                    _ => None,
+                }
+            })
+            .reduce(MacroTable::new, |mut acc, local| {
+                acc.merge_from(local);
+                acc
+            })
+    }
+
+    /// Columnar fast-path: segments are written inline per-file during
+    /// `index_file` (including per-file `post_pass`), so no merge / full-table
+    /// `post_pass` / usage-count population is needed — the columnar engine never
+    /// queries the in-memory `SymbolTable` after build.
+    fn build_columnar_segments(
+        paths: &[PathBuf],
+        lang_registry: &LanguageRegistry,
+        macro_table: &MacroTable,
+        seg_ctx: Option<&SegmentBuildCtx>,
+    ) {
+        paths.par_iter().for_each(|path| {
+            let Some(lang) = lang_registry.language_for_path(path) else {
+                return;
+            };
+            let mut parser = tree_sitter::Parser::new();
+            if parser.set_language(&lang.tree_sitter_language()).is_err() {
+                warn!(path = %path.display(), "columnar fast-path: failed to set language");
+                return;
+            }
+            let enrichers = default_enrichers();
+            let mut file_table = Self::default();
+            let mut ctx = IndexContext {
+                path,
+                language: lang.as_ref(),
+                enrichers: &enrichers,
+                macro_table: Some(macro_table),
+                ordinal_remapper: None,
+                table: &mut file_table,
+            };
+            match index_file(&mut parser, &mut ctx, seg_ctx) {
+                Ok(count) => {
+                    debug!(path = %path.display(), rows = count, "indexed (columnar fast-path)");
+                }
+                Err(e) => warn!(path = %path.display(), "skipping file: {e}"),
+            }
+            // file_table dropped here — no merge needed for columnar.
+        });
+    }
+
+    /// Pass 2: parse + enrich each file in parallel into a per-file table, then
+    /// merge via tree reduction so merges also spread across cores.
+    fn parse_and_reduce(
+        paths: &[PathBuf],
+        lang_registry: &LanguageRegistry,
+        macro_table: &MacroTable,
+        seg_ctx: Option<&SegmentBuildCtx>,
+        workspace: &Workspace,
+    ) -> Self {
+        paths
+            .par_iter()
+            .filter_map(|path| {
+                let lang = lang_registry.language_for_path(path)?;
+                let mut parser = tree_sitter::Parser::new();
+                if parser.set_language(&lang.tree_sitter_language()).is_err() {
+                    warn!(path = %path.display(), "failed to set tree-sitter language");
+                    return None;
+                }
+                let enrichers = default_enrichers();
+                let mut file_table = Self::default();
+                {
+                    let mut ctx = IndexContext {
+                        path,
+                        language: lang.as_ref(),
+                        enrichers: &enrichers,
+                        macro_table: Some(macro_table),
+                        ordinal_remapper: None,
+                        table: &mut file_table,
+                    };
+                    match index_file(&mut parser, &mut ctx, seg_ctx) {
+                        Ok(count) => {
+                            debug!(
+                                path = %workspace.relative(path).display(),
+                                rows = count,
+                                "indexed"
+                            );
+                        }
+                        Err(err) => {
+                            warn!(path = %path.display(), error = %err, "skipping file");
+                            return None;
+                        }
+                    }
+                }
+                Some(file_table)
+            })
+            .reduce(Self::default, |mut acc, file_table| {
+                acc.merge(file_table);
+                acc
+            })
     }
 }
 #[cfg(test)]
