@@ -619,10 +619,6 @@ impl ForgeQLEngine {
         };
         self.exec_show(session_id, &show_op)
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "FindFiles clause pipeline; splitting would scatter tightly-coupled logic"
-    )]
     fn exec_show_find_files(
         workspace: &Workspace,
         engine: &dyn StorageEngine,
@@ -679,90 +675,7 @@ impl ForgeQLEngine {
                 .collect()
         };
         let max_depth = clauses.depth.unwrap_or(usize::MAX);
-        let results: Vec<serde_json::Value> =
-            if clauses.depth.is_some() && clauses.group_by.is_none() {
-                let mut filter_clauses = clauses.clone();
-                filter_clauses.order_by = None;
-                filter_clauses.limit = None;
-                filter_clauses.offset = None;
-                crate::filter::apply_clauses(&mut entries, &filter_clauses);
-
-                let file_json: Vec<serde_json::Value> = entries
-                    .iter()
-                    .map(|fe| {
-                        serde_json::json!({
-                            "path":      fe.path.display().to_string(),
-                            "extension": fe.extension,
-                            "size":      fe.size,
-                        })
-                    })
-                    .collect();
-                let mut grouped = query::group_files_by_depth(&file_json, max_depth);
-
-                if let Some(ref order_by) = clauses.order_by {
-                    let dir = order_by.direction;
-                    let field = order_by.field.clone();
-                    grouped.sort_by(|a, b| {
-                        let cmp = if let (Some(va), Some(vb)) = (
-                            a.get(&field).and_then(serde_json::Value::as_u64),
-                            b.get(&field).and_then(serde_json::Value::as_u64),
-                        ) {
-                            va.cmp(&vb)
-                        } else {
-                            let sa = a
-                                .get(&field)
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("");
-                            let sb = b
-                                .get(&field)
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("");
-                            sa.cmp(sb)
-                        };
-                        match dir {
-                            SortDirection::Desc => cmp.reverse(),
-                            SortDirection::Asc => cmp,
-                        }
-                    });
-                }
-
-                let skip = clauses.offset.unwrap_or(0);
-                if skip > 0 {
-                    drop(grouped.drain(..skip.min(grouped.len())));
-                }
-                if let Some(max) = clauses.limit {
-                    grouped.truncate(max);
-                }
-                grouped
-            } else if clauses.group_by.is_some() {
-                crate::filter::apply_clauses(&mut entries, clauses);
-                entries
-                    .iter()
-                    .map(|fe| {
-                        let mut obj = serde_json::json!({
-                            "path":      fe.path.display().to_string(),
-                            "extension": fe.extension,
-                            "size":      fe.size,
-                        });
-                        if let Some(n) = fe.count {
-                            obj["count"] = serde_json::Value::from(n);
-                        }
-                        obj
-                    })
-                    .collect()
-            } else {
-                crate::filter::apply_clauses(&mut entries, clauses);
-                entries
-                    .iter()
-                    .map(|fe| {
-                        serde_json::json!({
-                            "path":      fe.path.display().to_string(),
-                            "extension": fe.extension,
-                            "size":      fe.size,
-                        })
-                    })
-                    .collect()
-            };
+        let results = format_file_results(&mut entries, clauses, max_depth);
         let count = results.len();
         Ok(serde_json::json!({
             "op":      "find_files",
@@ -771,5 +684,86 @@ impl ForgeQLEngine {
             "results": results,
             "count":   count,
         }))
+    }
+}
+
+/// Base JSON object for a file entry: `path`, `extension`, `size`.
+fn file_entry_json(fe: &FileEntry) -> serde_json::Value {
+    serde_json::json!({
+        "path":      fe.path.display().to_string(),
+        "extension": fe.extension,
+        "size":      fe.size,
+    })
+}
+
+/// Format file entries into result JSON, applying the clause-dependent shape:
+/// depth-grouping (with its own sort/skip/limit), GROUP BY (carrying `count`),
+/// or the plain filtered list.
+fn format_file_results(
+    entries: &mut Vec<FileEntry>,
+    clauses: &Clauses,
+    max_depth: usize,
+) -> Vec<serde_json::Value> {
+    if clauses.depth.is_some() && clauses.group_by.is_none() {
+        // Depth grouping handles its own ordering/paging, so strip those here.
+        let mut filter_clauses = clauses.clone();
+        filter_clauses.order_by = None;
+        filter_clauses.limit = None;
+        filter_clauses.offset = None;
+        crate::filter::apply_clauses(entries, &filter_clauses);
+
+        let file_json: Vec<serde_json::Value> = entries.iter().map(file_entry_json).collect();
+        let mut grouped = query::group_files_by_depth(&file_json, max_depth);
+
+        if let Some(ref order_by) = clauses.order_by {
+            let dir = order_by.direction;
+            let field = order_by.field.clone();
+            grouped.sort_by(|a, b| {
+                let cmp = if let (Some(va), Some(vb)) = (
+                    a.get(&field).and_then(serde_json::Value::as_u64),
+                    b.get(&field).and_then(serde_json::Value::as_u64),
+                ) {
+                    va.cmp(&vb)
+                } else {
+                    let sa = a
+                        .get(&field)
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    let sb = b
+                        .get(&field)
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("");
+                    sa.cmp(sb)
+                };
+                match dir {
+                    SortDirection::Desc => cmp.reverse(),
+                    SortDirection::Asc => cmp,
+                }
+            });
+        }
+
+        let skip = clauses.offset.unwrap_or(0);
+        if skip > 0 {
+            drop(grouped.drain(..skip.min(grouped.len())));
+        }
+        if let Some(max) = clauses.limit {
+            grouped.truncate(max);
+        }
+        grouped
+    } else if clauses.group_by.is_some() {
+        crate::filter::apply_clauses(entries, clauses);
+        entries
+            .iter()
+            .map(|fe| {
+                let mut obj = file_entry_json(fe);
+                if let Some(n) = fe.count {
+                    obj["count"] = serde_json::Value::from(n);
+                }
+                obj
+            })
+            .collect()
+    } else {
+        crate::filter::apply_clauses(entries, clauses);
+        entries.iter().map(file_entry_json).collect()
     }
 }
