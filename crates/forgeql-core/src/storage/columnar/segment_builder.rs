@@ -450,10 +450,6 @@ impl SegmentBuilder {
     ///
     /// # Errors
     /// Propagates I/O errors from file creation / renaming.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Linear encoding pipeline: string-table, fixed columns, enrichment columns, posting indices, and CRC; splitting would fragment the write-ordering logic"
-    )]
     pub fn flush(mut self, target_path: &Path) -> Result<()> {
         if is_valid_segment(target_path) {
             return Ok(());
@@ -461,46 +457,118 @@ impl SegmentBuilder {
 
         let row_count = self.col_name_id.len();
 
-        // Pre-process extra enrichment columns: intern string values into the
-        // shared pool, then convert to dense `u32` arrays (u32::MAX = absent).
-        // This MUST run before `encode_string_table` so all string values are
-        // included in the pool.
-        let extra_arrays: Vec<(String, Vec<u32>)> = {
-            let extra = std::mem::take(&mut self.extra_cols);
-            extra
-                .into_iter()
-                .map(|(name, draft)| {
-                    let ids: Vec<u32> = match draft {
-                        ColumnDraft::Str(mut vals) => {
-                            vals.resize(row_count, None);
-                            vals.into_iter()
-                                .map(|v| v.map_or(u32::MAX, |s| self.intern(&s)))
-                                .collect()
-                        }
-                        ColumnDraft::Bit(mut vals) => {
-                            vals.resize(row_count, None);
-                            vals.into_iter()
-                                .map(|v| v.map_or(u32::MAX, u32::from))
-                                .collect()
-                        }
-                        ColumnDraft::U32(mut vals) => {
-                            vals.resize(row_count, None);
-                            vals.into_iter().map(|v| v.unwrap_or(u32::MAX)).collect()
-                        }
-                    };
-                    (name, ids)
-                })
-                .collect()
-        };
+        // Pre-process extra enrichment columns into dense u32 arrays. MUST run
+        // before encode_string_table so all string values are in the pool.
+        let extra_arrays = self.dense_extra_columns(row_count);
 
-        // --- encode all blobs into (name, bytes) pairs ---
-        // Pre-compute fallible encodings before assembling the vec.
+        // Encode the fallible blobs before assembling the vec.
         let (offsets_bytes, data_bytes) = encode_string_table(&self.strings)?;
         let kind_postings_bytes = encode_kind_postings(&self.kind_postings)?;
         let (fst_bytes, name_post_bytes) = encode_name_fst(&self.name_to_rows)?;
         let name_prefix_bytes = encode_name_prefix(&self.name_to_rows)?;
 
-        let mut blobs: Vec<(String, Vec<u8>)> = vec![
+        let mut blobs = self.core_column_blobs();
+        blobs.extend([
+            ("strings_offsets".to_owned(), offsets_bytes),
+            ("strings_data".to_owned(), data_bytes),
+            ("postings_fql_kind".to_owned(), kind_postings_bytes),
+            ("name_fst".to_owned(), fst_bytes),
+            ("name_postings".to_owned(), name_post_bytes),
+            ("name_prefix".to_owned(), name_prefix_bytes),
+        ]);
+
+        // Extra enrichment columns.
+        for (name, ids) in &extra_arrays {
+            blobs.push((format!("col_{name}"), encode_u32_col(ids)));
+        }
+        // Per-field enrichment postings.
+        for (name, bytes) in encode_enrichment_postings(&extra_arrays)? {
+            blobs.push((name, bytes));
+        }
+        // Zone maps for numeric columns.
+        let zone_cols: &[(&str, &[u32])] = &[
+            ("line", &self.col_line),
+            ("ordinal", &self.col_ordinal),
+            ("usages_count", &self.col_usages_count),
+            ("byte_start", &self.col_byte_start),
+            ("byte_end", &self.col_byte_end),
+        ];
+        for (name, bytes) in encode_zone_maps(zone_cols) {
+            blobs.push((name, bytes));
+        }
+
+        // FQSG header blob (encodes row_count, string_count, column list).
+        let col_meta = column_metadata(&extra_arrays);
+        blobs.push((
+            "header".to_owned(),
+            encode_header(
+                &self.provider_id,
+                &self.content_id,
+                self.content_id_len,
+                u32::try_from(row_count).context("row count overflow")?,
+                u32::try_from(self.strings.len()).context("string count overflow")?,
+                &col_meta,
+            )?,
+        ));
+
+        write_segment_file(target_path, &blobs)
+    }
+
+    // --- private ---
+
+    #[expect(
+        clippy::expect_used,
+        reason = "string pool overflow (> 4 billion unique strings) indicates a corrupt index; panic is the correct response"
+    )]
+    fn intern(&mut self, s: &str) -> u32 {
+        if let Some(&id) = self.string_map.get(s) {
+            return id;
+        }
+        // This pool can hold 2^32 unique strings, which no real source file
+        // will ever reach.  Panic is intentional — it signals a corrupt index.
+        let id = u32::try_from(self.strings.len())
+            .expect("segment string pool overflow (> 4 billion unique strings)");
+        self.strings.push(s.to_owned());
+        let _ = self.string_map.insert(s.to_owned(), id);
+        id
+    }
+}
+
+impl SegmentBuilder {
+    /// Resolve the draft enrichment columns into dense `u32` arrays
+    /// (`u32::MAX` = absent), interning string values into the shared pool.
+    /// Must run before `encode_string_table` so every value is in the pool.
+    fn dense_extra_columns(&mut self, row_count: usize) -> Vec<(String, Vec<u32>)> {
+        let extra = std::mem::take(&mut self.extra_cols);
+        extra
+            .into_iter()
+            .map(|(name, draft)| {
+                let ids: Vec<u32> = match draft {
+                    ColumnDraft::Str(mut vals) => {
+                        vals.resize(row_count, None);
+                        vals.into_iter()
+                            .map(|v| v.map_or(u32::MAX, |s| self.intern(&s)))
+                            .collect()
+                    }
+                    ColumnDraft::Bit(mut vals) => {
+                        vals.resize(row_count, None);
+                        vals.into_iter()
+                            .map(|v| v.map_or(u32::MAX, u32::from))
+                            .collect()
+                    }
+                    ColumnDraft::U32(mut vals) => {
+                        vals.resize(row_count, None);
+                        vals.into_iter().map(|v| v.unwrap_or(u32::MAX)).collect()
+                    }
+                };
+                (name, ids)
+            })
+            .collect()
+    }
+
+    /// Encode the fixed core columns into `(name, bytes)` blob pairs.
+    fn core_column_blobs(&self) -> Vec<(String, Vec<u8>)> {
+        vec![
             ("col_name_id".to_owned(), encode_u32_col(&self.col_name_id)),
             (
                 "col_fql_kind_id".to_owned(),
@@ -541,90 +609,32 @@ impl SegmentBuilder {
                 "col_language_id".to_owned(),
                 encode_u32_col(&self.col_language_id),
             ),
-            ("strings_offsets".to_owned(), offsets_bytes),
-            ("strings_data".to_owned(), data_bytes),
-            ("postings_fql_kind".to_owned(), kind_postings_bytes),
-            ("name_fst".to_owned(), fst_bytes),
-            ("name_postings".to_owned(), name_post_bytes),
-            ("name_prefix".to_owned(), name_prefix_bytes),
-        ];
-
-        // Extra enrichment columns.
-        for (name, ids) in &extra_arrays {
-            blobs.push((format!("col_{name}"), encode_u32_col(ids)));
-        }
-
-        // Per-field enrichment postings.
-        for (name, bytes) in encode_enrichment_postings(&extra_arrays)? {
-            blobs.push((name, bytes));
-        }
-
-        // Zone maps for numeric columns.
-        let zone_cols: &[(&str, &[u32])] = &[
-            ("line", &self.col_line),
-            ("ordinal", &self.col_ordinal),
-            ("usages_count", &self.col_usages_count),
-            ("byte_start", &self.col_byte_start),
-            ("byte_end", &self.col_byte_end),
-        ];
-        for (name, bytes) in encode_zone_maps(zone_cols) {
-            blobs.push((name, bytes));
-        }
-
-        // Column metadata for the inner FQSG header blob.
-        let mut col_meta: Vec<(&str, u8)> = vec![
-            ("name_id", TYPE_TAG_U32),
-            ("fql_kind_id", TYPE_TAG_U32),
-            ("line", TYPE_TAG_U32),
-            ("ordinal", TYPE_TAG_U32),
-            ("parent_ordinal", TYPE_TAG_U32),
-            ("rev", TYPE_TAG_U64),
-            ("first_child_ordinal", TYPE_TAG_U32),
-            ("next_sibling_ordinal", TYPE_TAG_U32),
-            ("prev_sibling_ordinal", TYPE_TAG_U32),
-            ("byte_start", TYPE_TAG_U32),
-            ("byte_end", TYPE_TAG_U32),
-            ("usages_count", TYPE_TAG_U32),
-            ("language_id", TYPE_TAG_U32),
-        ];
-        for (name, _) in &extra_arrays {
-            col_meta.push((name.as_str(), TYPE_TAG_STR_OPT));
-        }
-
-        // FQSG header blob (encodes row_count, string_count, column list).
-        blobs.push((
-            "header".to_owned(),
-            encode_header(
-                &self.provider_id,
-                &self.content_id,
-                self.content_id_len,
-                u32::try_from(row_count).context("row count overflow")?,
-                u32::try_from(self.strings.len()).context("string count overflow")?,
-                &col_meta,
-            )?,
-        ));
-
-        write_segment_file(target_path, &blobs)
+        ]
     }
+}
 
-    // --- private ---
-
-    #[expect(
-        clippy::expect_used,
-        reason = "string pool overflow (> 4 billion unique strings) indicates a corrupt index; panic is the correct response"
-    )]
-    fn intern(&mut self, s: &str) -> u32 {
-        if let Some(&id) = self.string_map.get(s) {
-            return id;
-        }
-        // This pool can hold 2^32 unique strings, which no real source file
-        // will ever reach.  Panic is intentional — it signals a corrupt index.
-        let id = u32::try_from(self.strings.len())
-            .expect("segment string pool overflow (> 4 billion unique strings)");
-        self.strings.push(s.to_owned());
-        let _ = self.string_map.insert(s.to_owned(), id);
-        id
+/// Column metadata (name, type tag) for the inner FQSG header blob: the fixed
+/// core columns followed by one `STR_OPT` entry per extra enrichment column.
+fn column_metadata(extra_arrays: &[(String, Vec<u32>)]) -> Vec<(&str, u8)> {
+    let mut col_meta: Vec<(&str, u8)> = vec![
+        ("name_id", TYPE_TAG_U32),
+        ("fql_kind_id", TYPE_TAG_U32),
+        ("line", TYPE_TAG_U32),
+        ("ordinal", TYPE_TAG_U32),
+        ("parent_ordinal", TYPE_TAG_U32),
+        ("rev", TYPE_TAG_U64),
+        ("first_child_ordinal", TYPE_TAG_U32),
+        ("next_sibling_ordinal", TYPE_TAG_U32),
+        ("prev_sibling_ordinal", TYPE_TAG_U32),
+        ("byte_start", TYPE_TAG_U32),
+        ("byte_end", TYPE_TAG_U32),
+        ("usages_count", TYPE_TAG_U32),
+        ("language_id", TYPE_TAG_U32),
+    ];
+    for (name, _) in extra_arrays {
+        col_meta.push((name.as_str(), TYPE_TAG_STR_OPT));
     }
+    col_meta
 }
 
 // ---------------------------------------------------------------------------
