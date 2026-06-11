@@ -34,47 +34,7 @@ impl ColumnarStorage {
             // the committed segment (first edit).  This keeps node_ids stable
             // across every reindex — including the one triggered by COMMIT MESSAGE
             // when dirty segments are promoted to committed.
-            let hints: Vec<OrdinalHint> = {
-                let seg: Option<&SegmentReader> = self
-                    .dirty
-                    .added
-                    .iter()
-                    .find(|ds| ds.source_path == rel_path)
-                    .map(|ds| ds.reader.as_ref())
-                    .or_else(|| {
-                        self.overlay
-                            .segments()
-                            .iter()
-                            .enumerate()
-                            .find(|(_, m)| m.source_path == rel_path)
-                            .and_then(|(idx, _)| self.segments.get(idx).map(Arc::as_ref))
-                    });
-                seg.map_or_else(Vec::new, |seg| {
-                    (0..seg.row_count)
-                        .filter_map(|row| {
-                            let ordinal = seg.ordinal_of(row)?;
-                            Some(OrdinalHint {
-                                name: seg.name_of(row).to_owned(),
-                                fql_kind: seg.fql_kind_of(row).to_owned(),
-                                parent_ordinal: seg.parent_ordinal_of(row),
-                                guard_group_id: seg
-                                    .extra_field_str("guard_group_id", row)
-                                    .map(str::to_owned),
-                                guard_branch: seg
-                                    .extra_field_str("guard_branch", row)
-                                    .map(str::to_owned),
-                                first_body_statement_fingerprint: seg
-                                    .extra_field_str("first_body_statement_fingerprint", row)
-                                    .map(str::to_owned),
-                                content_hash: seg
-                                    .extra_field_str("content_hash", row)
-                                    .map(str::to_owned),
-                                ordinal,
-                            })
-                        })
-                        .collect()
-                })
-            };
+            let hints = self.build_ordinal_hints(&rel_path);
             if crate::debug_log::is_enabled() {
                 let base = hints
                     .iter()
@@ -135,60 +95,7 @@ impl ColumnarStorage {
 
                 let mut builder = SegmentBuilder::new("git-sha1", &content_id_bytes);
 
-                let mut ordinal_row: Vec<(u32, u32, u32)> = Vec::new();
-                for row in &table.rows {
-                    let row_id = builder.emit_row(SymbolRow {
-                        name: table.name_of(row),
-                        fql_kind: table.fql_kind_of(row),
-                        language: table.language_of(row),
-                        line: u32::try_from(row.line).unwrap_or(u32::MAX),
-                        byte_start: u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
-                        byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
-                        usages_count: row.usages_count,
-                    });
-                    if let Some(ordinal) = row.ordinal {
-                        builder.set_ordinal(row_id, ordinal);
-                        builder.set_parent_ordinal(row_id, row.parent_ordinal);
-                        builder.set_rev(row_id, row.rev);
-                        ordinal_row.push((ordinal, row_id.0, row.parent_ordinal));
-                    }
-                    for (key, val) in table.resolve_fields(&row.fields) {
-                        if key == "parent_ordinal" {
-                            continue;
-                        }
-                        builder.set_field(row_id, &key, val.as_str());
-                    }
-                }
-                // Nav post-pass: fill first_child/next_sibling/prev_sibling and the
-                // typed parent_ordinal/rev columns so reindexed segments carry the
-                // same navigation + identity data as the initial shadow_writer build.
-                {
-                    let mut by_parent: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
-                    let mut ord_to_row: HashMap<u32, u32> = HashMap::new();
-                    for &(ord, rid, parent) in &ordinal_row {
-                        by_parent.entry(parent).or_default().push((ord, rid));
-                        let _ = ord_to_row.insert(ord, rid);
-                    }
-                    for (parent_ord, mut children) in by_parent {
-                        children.sort_unstable_by_key(|&(ord, _)| ord);
-                        if let Some(&parent_rid) = ord_to_row.get(&parent_ord)
-                            && let Some(&(first_ord, _)) = children.first()
-                        {
-                            builder.set_first_child_ordinal(RowId(parent_rid), first_ord);
-                        }
-                        for i in 0..children.len() {
-                            let (_, this_rid) = children[i];
-                            if i > 0 {
-                                builder
-                                    .set_prev_sibling_ordinal(RowId(this_rid), children[i - 1].0);
-                            }
-                            if i + 1 < children.len() {
-                                builder
-                                    .set_next_sibling_ordinal(RowId(this_rid), children[i + 1].0);
-                            }
-                        }
-                    }
-                }
+                populate_builder(&mut builder, &table);
 
                 builder.flush(&seg_path)?;
             }
@@ -199,5 +106,104 @@ impl ColumnarStorage {
         }
         self.save_delta()?;
         Ok(())
+    }
+}
+
+impl ColumnarStorage {
+    /// Build ordinal hints for `rel_path` from the most-recent version of its
+    /// segment — preferring a dirty entry (re-edit within a transaction) over
+    /// the committed segment (first edit). Keeps node_ids stable across every
+    /// reindex, including the one COMMIT triggers when dirty segments promote.
+    fn build_ordinal_hints(&self, rel_path: &std::path::Path) -> Vec<OrdinalHint> {
+        let seg: Option<&SegmentReader> = self
+            .dirty
+            .added
+            .iter()
+            .find(|ds| ds.source_path == *rel_path)
+            .map(|ds| ds.reader.as_ref())
+            .or_else(|| {
+                self.overlay
+                    .segments()
+                    .iter()
+                    .enumerate()
+                    .find(|(_, m)| m.source_path == *rel_path)
+                    .and_then(|(idx, _)| self.segments.get(idx).map(Arc::as_ref))
+            });
+        seg.map_or_else(Vec::new, |seg| {
+            (0..seg.row_count)
+                .filter_map(|row| {
+                    let ordinal = seg.ordinal_of(row)?;
+                    Some(OrdinalHint {
+                        name: seg.name_of(row).to_owned(),
+                        fql_kind: seg.fql_kind_of(row).to_owned(),
+                        parent_ordinal: seg.parent_ordinal_of(row),
+                        guard_group_id: seg
+                            .extra_field_str("guard_group_id", row)
+                            .map(str::to_owned),
+                        guard_branch: seg.extra_field_str("guard_branch", row).map(str::to_owned),
+                        first_body_statement_fingerprint: seg
+                            .extra_field_str("first_body_statement_fingerprint", row)
+                            .map(str::to_owned),
+                        content_hash: seg.extra_field_str("content_hash", row).map(str::to_owned),
+                        ordinal,
+                    })
+                })
+                .collect()
+        })
+    }
+}
+
+/// Emit every row of `table` into `builder`, then run the navigation post-pass
+/// (first_child / prev_sibling / next_sibling, grouped by parent ordinal and
+/// ordered by ordinal = DFS order) so the reindexed segment carries the same
+/// navigation + identity data as the initial shadow-writer build.
+fn populate_builder(builder: &mut SegmentBuilder, table: &SymbolTable) {
+    let mut ordinal_row: Vec<(u32, u32, u32)> = Vec::new();
+    for row in &table.rows {
+        let row_id = builder.emit_row(SymbolRow {
+            name: table.name_of(row),
+            fql_kind: table.fql_kind_of(row),
+            language: table.language_of(row),
+            line: u32::try_from(row.line).unwrap_or(u32::MAX),
+            byte_start: u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
+            byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
+            usages_count: row.usages_count,
+        });
+        if let Some(ordinal) = row.ordinal {
+            builder.set_ordinal(row_id, ordinal);
+            builder.set_parent_ordinal(row_id, row.parent_ordinal);
+            builder.set_rev(row_id, row.rev);
+            ordinal_row.push((ordinal, row_id.0, row.parent_ordinal));
+        }
+        for (key, val) in table.resolve_fields(&row.fields) {
+            if key == "parent_ordinal" {
+                continue;
+            }
+            builder.set_field(row_id, &key, val.as_str());
+        }
+    }
+
+    let mut by_parent: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
+    let mut ord_to_row: HashMap<u32, u32> = HashMap::new();
+    for &(ord, rid, parent) in &ordinal_row {
+        by_parent.entry(parent).or_default().push((ord, rid));
+        let _ = ord_to_row.insert(ord, rid);
+    }
+    for (parent_ord, mut children) in by_parent {
+        children.sort_unstable_by_key(|&(ord, _)| ord);
+        if let Some(&parent_rid) = ord_to_row.get(&parent_ord)
+            && let Some(&(first_ord, _)) = children.first()
+        {
+            builder.set_first_child_ordinal(RowId(parent_rid), first_ord);
+        }
+        for i in 0..children.len() {
+            let (_, this_rid) = children[i];
+            if i > 0 {
+                builder.set_prev_sibling_ordinal(RowId(this_rid), children[i - 1].0);
+            }
+            if i + 1 < children.len() {
+                builder.set_next_sibling_ordinal(RowId(this_rid), children[i + 1].0);
+            }
+        }
     }
 }
