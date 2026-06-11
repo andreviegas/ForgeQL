@@ -6,6 +6,8 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.5] — 2026-06-11 — Refactor: decompose large functions across engine, parser, query, shadow-writer, and segment modules
+
 ## [0.76.4] — 2026-06-10 — Fix find_node resolving dirty-first to prevent wrong-line edits
 
 ### Fixed
