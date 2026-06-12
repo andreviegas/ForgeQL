@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.7] — 2026-06-12 — Refactor: decompose analyse_uses into UseTracker accumulator and helpers
+
+### Changed
+
+- Decomposed `analyse_uses` into a `UseTracker` accumulator struct and focused helper functions for readability and testability. No behaviour change.
+
 ## [0.76.6] — 2026-06-12 — Refactor: decompose enrich/index/engine/segment/query functions; add ci build profile
 
 ### Changed
