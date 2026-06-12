@@ -21,7 +21,7 @@ use super::data_flow_utils::{
     is_in_declaration, is_inside_parameter_list, is_write_context,
 };
 use super::guard_utils::{
-    GuardFrame, GuardInfo, are_guards_exclusive, build_guard_frame, guard_info_from_stack,
+    GuardFrame, GuardInfo, are_guards_exclusive, guard_info_from_stack, update_guard_stack,
 };
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::lang::LanguageConfig;
@@ -375,32 +375,6 @@ impl<'a: 'l, 'l> UseTracker<'a, 'l> {
             has_dead_store_conditional: self.has_dead_store_conditional,
             seen_identifiers: self.seen_identifiers,
         }
-    }
-}
-
-/// Maintain the mini guard stack in lock-step with the walk cursor: pop frames
-/// the current node has advanced past, then push a new frame when the node
-/// opens a guard (`if` / else-if / `else`).
-fn update_guard_stack(
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-    config: &LanguageConfig,
-    stack: &mut Vec<GuardFrame>,
-) {
-    if !config.has_guard_support() {
-        return;
-    }
-    let kind = node.kind();
-    while let Some(top) = stack.last() {
-        if node.start_byte() >= top.guard_byte_range.end {
-            drop(stack.pop());
-        } else {
-            break;
-        }
-    }
-    if config.is_block_guard_kind(kind) || config.is_elif_kind(kind) || config.is_else_kind(kind) {
-        let frame = build_guard_frame(node, source, config, stack);
-        stack.push(frame);
     }
 }
 

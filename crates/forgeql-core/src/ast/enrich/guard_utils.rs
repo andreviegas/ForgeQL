@@ -256,6 +256,33 @@ pub fn build_guard_frame(
     }
 }
 
+/// Maintain a mini guard stack in lock-step with a tree walk.
+///
+/// Pops frames whose byte scope the node has left, then pushes one when the
+/// node opens a guard.  Shared by the dead-store, shadow, and indexing walks.
+pub fn update_guard_stack(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    config: &LanguageConfig,
+    stack: &mut Vec<GuardFrame>,
+) {
+    if !config.has_guard_support() {
+        return;
+    }
+    let kind = node.kind();
+    while let Some(top) = stack.last() {
+        if node.start_byte() >= top.guard_byte_range.end {
+            drop(stack.pop());
+        } else {
+            break;
+        }
+    }
+    if config.is_block_guard_kind(kind) || config.is_elif_kind(kind) || config.is_else_kind(kind) {
+        let frame = build_guard_frame(node, source, config, stack);
+        stack.push(frame);
+    }
+}
+
 // -----------------------------------------------------------------------
 // Private helpers
 // -----------------------------------------------------------------------
