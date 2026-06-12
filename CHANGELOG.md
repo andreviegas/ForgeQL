@@ -6,6 +6,13 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.6] — 2026-06-12 — Refactor: decompose enrich/index/engine/segment/query functions; add ci build profile
+
+### Changed
+
+- Decomposed large functions for readability: `skeleton_walk` node dispatch (enrich), `SymbolTable::build` passes (index), `exec_show_find_files` and the `convert_show_content` list parsers (engine), `SegmentBuilder::flush` (segment), and `reindex_files_impl` (query). No behaviour change.
+- Added `[profile.ci]` (inherits `release` plus `debug-assertions` and `overflow-checks`) so cached CI scripts can share one optimised build/test compile without losing assertion coverage.
+
 ## [0.76.5] — 2026-06-11 — Refactor: decompose large functions across engine, parser, query, shadow-writer, and segment modules
 
 ## [0.76.4] — 2026-06-10 — Fix find_node resolving dirty-first to prevent wrong-line edits
