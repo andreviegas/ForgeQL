@@ -135,7 +135,10 @@ struct AnalyseResult<'a> {
 /// cursor DFS — each entry records whether the level was entered by crossing
 /// a branch/loop node.  No recursion is used.
 #[allow(clippy::too_many_lines)] // guard stack management adds necessary lines
-fn analyse_uses<'a>(ctx: &EnrichContext<'a>, locals: &[LocalDecl]) -> AnalyseResult<'a> {
+fn analyse_uses<'a, 'l>(ctx: &EnrichContext<'a>, locals: &'l [LocalDecl]) -> AnalyseResult<'a>
+where
+    'a: 'l,
+{
     let source = ctx.source;
     let func = ctx.node;
     let config = ctx.language_config;
@@ -143,31 +146,8 @@ fn analyse_uses<'a>(ctx: &EnrichContext<'a>, locals: &[LocalDecl]) -> AnalyseRes
     let local_names: HashMap<&str, usize> =
         locals.iter().map(|d| (d.name.as_str(), d.line)).collect();
 
-    let mut first_uses: HashMap<&str, usize> = HashMap::new();
-    let mut first_use_depths: HashMap<&str, u32> = HashMap::new();
-    let mut seen_identifiers: HashSet<String> = HashSet::new();
-    // `(written, guard)` — tracks whether the last op was a write (not yet read),
-    // and the guard in effect when the write occurred.  Guard info is used to
-    // suppress false-positive dead-store reports for writes in exclusive branches.
-    let mut written_not_read: HashMap<&str, (bool, Option<GuardInfo>)> = HashMap::new();
-    let mut has_dead_store = false;
-    let mut has_dead_store_conditional = false;
-
-    // Only seed unconditional declarations that carry an initializer value
-    // as "initially written".  Rules:
-    //   1. branch_depth == 0: the declaration always executes — a conditional
-    //      declaration may not run, so its "write" is not guaranteed.
-    //   2. has_initializer: only a declaration *with* an initial value
-    //      (e.g. `int x = 0;`) can produce a dead store if immediately
-    //      overwritten.  A bare uninitialized declaration (e.g. `int x;` or
-    //      `let x;`) has no value to preserve — the first write after it is
-    //      always valid and must NOT be flagged as a dead store.
-    for local in locals {
-        if local.branch_depth == 0 && local.has_initializer {
-            // Unconditional declarations have no guard (None).
-            let _ = written_not_read.insert(local.name.as_str(), (true, None));
-        }
-    }
+    let mut tracker = UseTracker::new();
+    tracker.seed(locals);
 
     let mut cursor = func.walk();
     let mut visit = true;
@@ -181,115 +161,9 @@ fn analyse_uses<'a>(ctx: &EnrichContext<'a>, locals: &[LocalDecl]) -> AnalyseRes
             let node = cursor.node();
             let kind = node.kind();
 
-            // --- Mini guard stack management ---
-            if config.has_guard_support() {
-                while let Some(top) = mini_guard_stack.last() {
-                    if node.start_byte() >= top.guard_byte_range.end {
-                        drop(mini_guard_stack.pop());
-                    } else {
-                        break;
-                    }
-                }
-                if config.is_block_guard_kind(kind)
-                    || config.is_elif_kind(kind)
-                    || config.is_else_kind(kind)
-                {
-                    let frame = build_guard_frame(node, source, config, &mini_guard_stack);
-                    mini_guard_stack.push(frame);
-                }
-            }
-
-            // Macro expansion: when a call_expression matches a macro in
-            // the table, expand it and register contained identifiers as
-            // reads.  This prevents false dead-store positives for patterns
-            // like `err = fn(); __ASSERT(err == 0);`.
-            if let Some(table) = ctx.macro_table {
-                let call_kind = config.call_expression_kind();
-                if !call_kind.is_empty()
-                    && kind == call_kind
-                    && let Some(func_node) = node.child_by_field_name("function")
-                {
-                    let func_name =
-                        std::str::from_utf8(&source[func_node.byte_range()]).unwrap_or("");
-                    if let Some(expander) = ctx.language_support.macro_expander() {
-                        let args = expander.extract_args(node, source);
-                        let mut budget = super::macro_resolve::ExpansionBudget {
-                            max_depth: 1,
-                            max_steps: 1,
-                            steps_remaining: 1,
-                        };
-                        if let Some(result) = super::macro_resolve::resolve_macro(
-                            table,
-                            func_name,
-                            &args,
-                            expander,
-                            &mut budget,
-                            0,
-                        ) {
-                            // Scan expanded text for local variable reads.
-                            for &local_name in local_names.keys() {
-                                if contains_word(&result.expanded, local_name) {
-                                    let _ = seen_identifiers.insert(local_name.to_owned());
-                                    // Mark as read — clears any pending dead-store flag.
-                                    let _ = written_not_read.insert(local_name, (false, None));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if config.is_identifier_kind(kind)
-                && node != func
-                && !is_inside_parameter_list(node, config)
-            {
-                let text = std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
-                if !text.is_empty() {
-                    let _ = seen_identifiers.insert(text.to_owned());
-
-                    if let Some(&decl_line) = local_names.get(text) {
-                        let use_line = node.start_position().row + 1;
-
-                        // Skip the identifier that IS the declaration itself.
-                        if use_line != decl_line || !is_in_declaration(node, config) {
-                            // Record first use with its branch depth.
-                            if let std::collections::hash_map::Entry::Vacant(e) =
-                                first_uses.entry(text)
-                            {
-                                let _ = e.insert(use_line);
-                                let _ = first_use_depths.insert(text, branch_depth);
-                            }
-
-                            let is_write = is_write_context(node, config);
-                            let is_compound = is_compound_assign_or_update(node, config);
-
-                            if is_compound {
-                                // Compound assign / ++ / -- : read AND write.
-                                let _ = written_not_read.insert(text, (false, None));
-                            } else if is_write {
-                                let prev = written_not_read.get(text).copied();
-                                if let Some((true, prev_guard)) = prev {
-                                    let write_guard = guard_info_from_stack(&mini_guard_stack);
-                                    // Exclusive guard branches → not a dead store.
-                                    if !guards_exclusive_opts(
-                                        prev_guard.as_ref(),
-                                        write_guard.as_ref(),
-                                    ) {
-                                        if branch_depth == 0 {
-                                            has_dead_store = true;
-                                        } else {
-                                            has_dead_store_conditional = true;
-                                        }
-                                    }
-                                }
-                                let write_guard = guard_info_from_stack(&mini_guard_stack);
-                                let _ = written_not_read.insert(text, (true, write_guard));
-                            } else {
-                                let _ = written_not_read.insert(text, (false, None));
-                            }
-                        }
-                    }
-                }
-            }
+            update_guard_stack(node, source, config, &mut mini_guard_stack);
+            tracker.scan_macro_expansion(ctx, node, &local_names);
+            tracker.record_identifier(ctx, node, branch_depth, &mini_guard_stack, &local_names);
 
             // Try to descend.  Record whether we are crossing a branch/loop boundary.
             let is_branch = config.is_branch_kind(kind) || config.is_loop_kind(kind);
@@ -309,13 +183,7 @@ fn analyse_uses<'a>(ctx: &EnrichContext<'a>, locals: &[LocalDecl]) -> AnalyseRes
 
         loop {
             if !cursor.goto_parent() {
-                return AnalyseResult {
-                    first_uses,
-                    first_use_depths,
-                    has_dead_store,
-                    has_dead_store_conditional,
-                    seen_identifiers,
-                };
+                return tracker.finish();
             }
             if let Some(was_branch) = depth_stack.pop()
                 && was_branch
@@ -327,6 +195,212 @@ fn analyse_uses<'a>(ctx: &EnrichContext<'a>, locals: &[LocalDecl]) -> AnalyseRes
                 break;
             }
         }
+    }
+}
+
+/// Mutable accumulators threaded through the function-body walk in
+/// `analyse_uses`.  Lifetime `'a` borrows from the source byte buffer (these
+/// keys are returned in `AnalyseResult`); `'l` borrows from the declared-locals
+/// slice, which is shorter-lived (`'a: 'l`), so write-tracking keys are held at
+/// the locals lifetime.
+struct UseTracker<'a, 'l> {
+    /// First-use line per local, keyed by identifier text.
+    first_uses: HashMap<&'a str, usize>,
+    /// Branch depth at each local's first use.
+    first_use_depths: HashMap<&'a str, u32>,
+    /// Every identifier seen in the body (drives unused-parameter detection).
+    seen_identifiers: HashSet<String>,
+    /// `(written, guard)` — whether the last op on a local was a write not yet
+    /// read, and the guard in effect when that write occurred.  The guard
+    /// suppresses false dead-store reports for writes in exclusive branches.
+    written_not_read: HashMap<&'l str, (bool, Option<GuardInfo>)>,
+    /// An unconditional write whose prior value was never read.
+    has_dead_store: bool,
+    /// As `has_dead_store`, but the offending write sits under a branch/loop.
+    has_dead_store_conditional: bool,
+}
+
+impl<'a: 'l, 'l> UseTracker<'a, 'l> {
+    fn new() -> Self {
+        Self {
+            first_uses: HashMap::new(),
+            first_use_depths: HashMap::new(),
+            seen_identifiers: HashSet::new(),
+            written_not_read: HashMap::new(),
+            has_dead_store: false,
+            has_dead_store_conditional: false,
+        }
+    }
+
+    /// Seed unconditional, initialized declarations as "initially written" so an
+    /// immediate overwrite is reported as a dead store.  Two rules:
+    ///   1. `branch_depth == 0`: the declaration always executes — a conditional
+    ///      declaration may not run, so its "write" is not guaranteed.
+    ///   2. `has_initializer`: only a declaration *with* an initial value (e.g.
+    ///      `int x = 0;`) can produce a dead store if immediately overwritten.
+    ///      A bare `int x;` / `let x;` has no value to preserve, so its first
+    ///      write is always valid and must not be flagged.
+    fn seed(&mut self, locals: &'l [LocalDecl]) {
+        for local in locals {
+            if local.branch_depth == 0 && local.has_initializer {
+                // Unconditional declarations have no guard (None).
+                let _ = self
+                    .written_not_read
+                    .insert(local.name.as_str(), (true, None));
+            }
+        }
+    }
+
+    /// Expand a macro call and register any contained local reads, clearing
+    /// their pending dead-store flags.  Handles patterns like
+    /// `err = fn(); ASSERT(err == 0);` where the read hides inside a macro.
+    fn scan_macro_expansion(
+        &mut self,
+        ctx: &EnrichContext<'a>,
+        node: tree_sitter::Node<'a>,
+        local_names: &HashMap<&'l str, usize>,
+    ) {
+        let Some(table) = ctx.macro_table else {
+            return;
+        };
+        let source = ctx.source;
+        let config = ctx.language_config;
+        let call_kind = config.call_expression_kind();
+        if call_kind.is_empty() || node.kind() != call_kind {
+            return;
+        }
+        let Some(func_node) = node.child_by_field_name("function") else {
+            return;
+        };
+        let func_name = std::str::from_utf8(&source[func_node.byte_range()]).unwrap_or("");
+        let Some(expander) = ctx.language_support.macro_expander() else {
+            return;
+        };
+        let args = expander.extract_args(node, source);
+        let mut budget = super::macro_resolve::ExpansionBudget {
+            max_depth: 1,
+            max_steps: 1,
+            steps_remaining: 1,
+        };
+        let Some(result) =
+            super::macro_resolve::resolve_macro(table, func_name, &args, expander, &mut budget, 0)
+        else {
+            return;
+        };
+        // Scan expanded text for local variable reads.
+        for &local_name in local_names.keys() {
+            if contains_word(&result.expanded, local_name) {
+                let _ = self.seen_identifiers.insert(local_name.to_owned());
+                // Mark as read — clears any pending dead-store flag.
+                let _ = self.written_not_read.insert(local_name, (false, None));
+            }
+        }
+    }
+
+    /// Record one identifier occurrence: first-use position/depth tracking plus
+    /// the read/write state machine that flags dead stores (a write whose prior
+    /// written value was never read, outside mutually exclusive guard branches).
+    fn record_identifier(
+        &mut self,
+        ctx: &EnrichContext<'a>,
+        node: tree_sitter::Node<'a>,
+        branch_depth: u32,
+        mini_guard_stack: &[GuardFrame],
+        local_names: &HashMap<&'l str, usize>,
+    ) {
+        let func = ctx.node;
+        let source = ctx.source;
+        let config = ctx.language_config;
+        let kind = node.kind();
+
+        if !config.is_identifier_kind(kind)
+            || node == func
+            || is_inside_parameter_list(node, config)
+        {
+            return;
+        }
+        let text = std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
+        if text.is_empty() {
+            return;
+        }
+        let _ = self.seen_identifiers.insert(text.to_owned());
+
+        let Some(&decl_line) = local_names.get(text) else {
+            return;
+        };
+        let use_line = node.start_position().row + 1;
+
+        // Skip the identifier that IS the declaration itself.
+        if use_line == decl_line && is_in_declaration(node, config) {
+            return;
+        }
+
+        // Record first use with its branch depth.
+        if let std::collections::hash_map::Entry::Vacant(e) = self.first_uses.entry(text) {
+            let _ = e.insert(use_line);
+            let _ = self.first_use_depths.insert(text, branch_depth);
+        }
+
+        let is_write = is_write_context(node, config);
+        let is_compound = is_compound_assign_or_update(node, config);
+
+        if is_compound {
+            // Compound assign / ++ / -- : read AND write.
+            let _ = self.written_not_read.insert(text, (false, None));
+        } else if is_write {
+            if let Some((true, prev_guard)) = self.written_not_read.get(text).copied() {
+                let write_guard = guard_info_from_stack(mini_guard_stack);
+                // Exclusive guard branches → not a dead store.
+                if !guards_exclusive_opts(prev_guard.as_ref(), write_guard.as_ref()) {
+                    if branch_depth == 0 {
+                        self.has_dead_store = true;
+                    } else {
+                        self.has_dead_store_conditional = true;
+                    }
+                }
+            }
+            let write_guard = guard_info_from_stack(mini_guard_stack);
+            let _ = self.written_not_read.insert(text, (true, write_guard));
+        } else {
+            let _ = self.written_not_read.insert(text, (false, None));
+        }
+    }
+
+    /// Consume the tracker, returning the collected analysis results.
+    fn finish(self) -> AnalyseResult<'a> {
+        AnalyseResult {
+            first_uses: self.first_uses,
+            first_use_depths: self.first_use_depths,
+            has_dead_store: self.has_dead_store,
+            has_dead_store_conditional: self.has_dead_store_conditional,
+            seen_identifiers: self.seen_identifiers,
+        }
+    }
+}
+
+/// Maintain the mini guard stack in lock-step with the walk cursor: pop frames
+/// the current node has advanced past, then push a new frame when the node
+/// opens a guard (`if` / else-if / `else`).
+fn update_guard_stack(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    config: &LanguageConfig,
+    stack: &mut Vec<GuardFrame>,
+) {
+    if !config.has_guard_support() {
+        return;
+    }
+    let kind = node.kind();
+    while let Some(top) = stack.last() {
+        if node.start_byte() >= top.guard_byte_range.end {
+            drop(stack.pop());
+        } else {
+            break;
+        }
+    }
+    if config.is_block_guard_kind(kind) || config.is_elif_kind(kind) || config.is_else_kind(kind) {
+        let frame = build_guard_frame(node, source, config, stack);
+        stack.push(frame);
     }
 }
 
