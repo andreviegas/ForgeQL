@@ -330,11 +330,26 @@ fn apply_clauses_inner<T: ClauseTarget>(
     }
 
     // 3. WHERE predicates
-    // MATCHES / NOT MATCHES are handled with two optimisations:
-    //   a) ".{N,}" → simple `len >= N` check (no regex engine at all).
-    //   b) All other patterns: compile the regex once per predicate, not
-    //      once per item, avoiding millions of redundant compilations on
-    //      large symbol tables (e.g. Linux kernel with 29 M+ symbols).
+    apply_where_predicates(results, clauses);
+
+    // 4. GROUP BY — deduplicate by group key and store per-group count in .count
+    apply_group_by(results, clauses);
+
+    // 5. HAVING predicates
+    for predicate in &clauses.having_predicates {
+        let pred = predicate.clone();
+        results.retain(|item| eval_predicate(item, &pred));
+    }
+
+    // 6-8. ORDER BY (+ top-K fast path), then OFFSET and LIMIT.
+    apply_ordering(results, clauses, default_sort);
+}
+
+/// Apply WHERE predicates.  MATCHES / NOT MATCHES are optimised: `.{N,}`
+/// collapses to a `len >= N` check, and every other pattern is compiled once
+/// per predicate (not once per item) to avoid millions of redundant regex
+/// compilations on large symbol tables (e.g. a 29 M+ symbol kernel).
+fn apply_where_predicates<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
     for predicate in &clauses.where_predicates {
         if let (CompareOp::Matches | CompareOp::NotMatches, PredicateValue::String(pat)) =
             (&predicate.op, &predicate.value)
@@ -342,9 +357,9 @@ fn apply_clauses_inner<T: ClauseTarget>(
             let is_matches = predicate.op == CompareOp::Matches;
             let field = predicate.field.clone();
 
-            // Fast path: ".{N,}" ↔ len >= N  (no newlines assumed in the
-            // target field, which holds for structural enrichment values
-            // such as condition_text, signature, and name).
+            // Fast path: ".{N,}" ↔ len >= N (no newlines assumed in the target
+            // field, which holds for structural enrichment values such as
+            // condition_text, signature, and name).
             if let Some(min_len) = dot_brace_min_len(pat) {
                 results.retain(|item| {
                     let ok = item.field_str(&field).is_some_and(|v| v.len() >= min_len);
@@ -362,11 +377,11 @@ fn apply_clauses_inner<T: ClauseTarget>(
                     });
                 }
                 Err(_) => {
-                    // Invalid regex: MATCHES → nothing passes; NOT MATCHES → all pass.
+                    // Invalid regex: MATCHES → nothing passes; NOT MATCHES → all
+                    // pass (a no-op retain).
                     if is_matches {
                         results.clear();
                     }
-                    // NOT MATCHES with invalid regex: retain all (no-op).
                 }
             }
         } else {
@@ -374,47 +389,43 @@ fn apply_clauses_inner<T: ClauseTarget>(
             results.retain(|item| eval_predicate(item, &pred));
         }
     }
+}
 
-    // 4. GROUP BY — deduplicate by group key and store per-group count in .count
-    if let Some(GroupBy::Field(ref field)) = clauses.group_by {
-        let field = field.clone();
-        // Pass 1: count occurrences per group key.
-        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        for item in results.iter() {
-            let key = item.field_str(&field).map(String::from).unwrap_or_default();
-            *counts.entry(key).or_insert(0) += 1;
-        }
-        // Pass 2: keep first row per group, write per-group count into it.
-        let mut seen = std::collections::HashSet::new();
-        let all = std::mem::take(results);
-        for mut item in all {
-            let key = item.field_str(&field).map(String::from).unwrap_or_default();
-            if seen.insert(key.clone()) {
-                if let Some(&n) = counts.get(&key) {
-                    item.set_count(n);
-                }
-                results.push(item);
+/// Apply GROUP BY: collapse to the first row per group key, recording the
+/// per-group count on the kept row.
+fn apply_group_by<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
+    let Some(GroupBy::Field(ref field)) = clauses.group_by else {
+        return;
+    };
+    let field = field.clone();
+    // Pass 1: count occurrences per group key.
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for item in results.iter() {
+        let key = item.field_str(&field).map(String::from).unwrap_or_default();
+        *counts.entry(key).or_insert(0) += 1;
+    }
+    // Pass 2: keep first row per group, write per-group count into it.
+    let mut seen = std::collections::HashSet::new();
+    let all = std::mem::take(results);
+    for mut item in all {
+        let key = item.field_str(&field).map(String::from).unwrap_or_default();
+        if seen.insert(key.clone()) {
+            if let Some(&n) = counts.get(&key) {
+                item.set_count(n);
             }
+            results.push(item);
         }
     }
+}
 
-    // 5. HAVING predicates
-    for predicate in &clauses.having_predicates {
-        let pred = predicate.clone();
-        results.retain(|item| eval_predicate(item, &pred));
-    }
-
-    // 6. ORDER BY (+ 7/8 fast-path for bounded top-K)
-    //
-    // A deterministic ordering is required *before* OFFSET/LIMIT so that
-    // truncation picks the same rows across backends (legacy ↔ columnar).
-    // Even when no ORDER BY is supplied we apply a stable default sort by
-    // `(name, line, path)` to keep parity tests deterministic.
-    //
-    // Fast path: when ORDER BY is present, LIMIT <= TOPK_THRESHOLD, OFFSET
-    // is zero, and GROUP BY is absent, use `collect_top_k` (introselect
-    // O(N) avg) instead of a full O(N log N) sort.  Produces byte-identical
-    // results via the shared `order_cmp` comparator.
+/// Apply the final ordering pipeline: ORDER BY (with a bounded top-K fast path),
+/// then OFFSET and LIMIT.  A deterministic order is established before
+/// truncation so backends (legacy ↔ columnar) pick identical rows; even without
+/// an explicit ORDER BY a stable `(name, line, path)` sort is applied.
+fn apply_ordering<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses, default_sort: bool) {
+    // Fast path: ORDER BY present, LIMIT <= TOPK_THRESHOLD, OFFSET zero, no
+    // GROUP BY → `collect_top_k` (introselect O(N) avg) instead of an O(N log N)
+    // sort; byte-identical via the shared `order_cmp` comparator.
     let want_topk = clauses.order_by.is_some()
         && clauses.group_by.is_none()
         && clauses.offset.unwrap_or(0) == 0
@@ -432,14 +443,14 @@ fn apply_clauses_inner<T: ClauseTarget>(
         results.sort_by(|a, b| order_cmp(a, b, clauses));
     }
 
-    // 7. OFFSET
+    // OFFSET
     let skip = clauses.offset.unwrap_or(0);
     if skip > 0 {
         let drained = skip.min(results.len());
         drop(results.drain(..drained));
     }
 
-    // 8. LIMIT
+    // LIMIT
     if let Some(max) = clauses.limit {
         results.truncate(max);
     }
