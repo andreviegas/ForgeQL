@@ -403,110 +403,28 @@ impl ColumnarStorage {
         by_segment: &HashMap<u32, RoaringBitmap>,
         clauses: &Clauses,
     ) -> Vec<SymbolMatch> {
-        // Sort segment indices by source_path so that rows from different files
-        // are emitted in a deterministic (alphabetical path, then line) order.
-        // This matches the legacy backend's iteration order (parsed file-by-file
-        // in path order), ensuring that ORDER BY tie-breaking on equal-name
-        // symbols produces the same first-N result across both backends.
-        //
-        // Phase 2 note: after the FQOV v4 format change, segments are stored in
-        // path order in the overlay.  For queries over the full index this sort
-        // is therefore a no-op (segment indices are already path-sorted).  For
-        // queries filtered to a subset (IN / EXCLUDE / kind bitmap), the subset
-        // keys are still path-ordered so this sort remains O(k log k) but fast.
-        let mut seg_order: Vec<u32> = by_segment.keys().copied().collect();
-        seg_order.sort_by_key(|&idx| {
-            self.overlay
-                .segments()
-                .get(idx as usize)
-                .map(|m| m.source_path.clone())
-        });
-
-        // Early-exit cap: when no ORDER BY and no GROUP BY and an explicit LIMIT
-        // was set, stop opening segment files once the fetch budget is exhausted.
-        // We fetch cap+1 so that `total > results.len()` stays reliable — the
-        // one extra row signals "more results exist" to the caller.
-        //
-        // NOTE: when `clauses.limit` is `None` we do NOT fall back to the
-        // engine's DEFAULT_QUERY_LIMIT here.  exec_find injects an explicit
-        // limit before calling find_symbols so that path is already covered;
-        // callers that invoke find_symbols directly (tests, etc.) still get all
-        // matching rows as expected.
-        let fetch_cap: Option<usize> = if clauses.order_by.is_none() && clauses.group_by.is_none() {
-            clauses.limit.map(|c| c.saturating_add(1))
-        } else {
-            None
-        };
-
-        // Top-K running trim (Phase 8): when ORDER BY is set, LIMIT is small,
-        // and GROUP BY is absent, periodically discard accumulated rows that
-        // cannot possibly make the final top-K.  This bounds peak result memory
-        // to O(K * TOPK_OVER_FETCH) instead of O(total_matching_rows).
-        //
-        // We trim whenever the working set exceeds K * TOPK_OVER_FETCH rows,
-        // keeping K * TOPK_OVER_FETCH / 2 survivors.  The over-fetch factor of
-        // 4 means we retain 4× the requested LIMIT throughout the scan so that
-        // later deduplication + apply_clauses passes never drop a row that would
-        // otherwise belong in the final top-K.
-        let topk_trim: Option<usize> = if clauses.order_by.is_some()
-            && clauses.group_by.is_none()
-            && clauses.offset.unwrap_or(0) == 0
-            && clauses.limit.is_some_and(|k| k <= TOPK_THRESHOLD)
-        {
-            clauses.limit
-        } else {
-            None
-        };
+        let seg_order = self.ordered_segments(by_segment);
+        let fetch_cap = Self::fetch_cap_for(clauses);
+        let topk_trim = Self::topk_trim_for(clauses);
+        let prefilter_where = fetch_cap.is_some() || topk_trim.is_some();
 
         let mut results = Vec::new();
         for seg_idx in seg_order {
-            // Early-exit: checked before opening the segment file so that we
-            // don't pay I/O cost once the fetch budget is exhausted.
+            // Early-exit: checked before opening the segment file so we don't pay
+            // I/O cost once the fetch budget is exhausted.
             if fetch_cap.is_some_and(|cap| results.len() >= cap) {
                 break;
             }
-
-            let Some(local_rows) = by_segment.get(&seg_idx) else {
+            let Some(mut seg_results) = self.materialize_one_segment(
+                seg_idx,
+                by_segment,
+                clauses,
+                fetch_cap,
+                results.len(),
+                prefilter_where,
+            ) else {
                 continue;
             };
-            let Some(seg) = self.segments.get(seg_idx as usize) else {
-                continue;
-            };
-            let Some(seg_meta) = self.overlay.segments().get(seg_idx as usize) else {
-                continue;
-            };
-
-            // Stage 3a — narrow local row set using per-segment enrichment
-            // posting bitmaps before materialisation.  Falls back to the
-            // full local set when no posting file exists for a given predicate.
-            let narrowed = seg.prefilter_enrichment_postings(local_rows.clone(), clauses);
-            if narrowed.is_empty() {
-                continue;
-            }
-
-            // Pass the relative source path so that IN/EXCLUDE glob matching in
-            // apply_clauses works against the same relative paths that the
-            // legacy backend stores.  Do NOT join with worktree_root here.
-            let mut seg_results = seg.materialize_rows(&narrowed, Some(&seg_meta.source_path));
-            // Apply WHERE predicates per-segment before counting toward the
-            // fetch cap.  This filters both enrichment-posting false positives
-            // (segments without a posting blob pass ALL rows through
-            // `prefilter_enrichment_postings`) and trigram false positives
-            // (e.g. `name LIKE 'alloc%'` matches names containing "alloc" but
-            // not necessarily starting with it).  Without this pre-filter,
-            // the cap is exhausted by non-matching rows and `apply_clauses`
-            // then returns fewer results than LIMIT requested.
-            if fetch_cap.is_some() || topk_trim.is_some() {
-                for predicate in &clauses.where_predicates {
-                    let pred = predicate.clone();
-                    seg_results.retain(|item| eval_predicate(item, &pred));
-                }
-            }
-            // Trim within this segment to avoid overshooting the fetch budget.
-            if let Some(cap) = fetch_cap {
-                let remaining = cap.saturating_sub(results.len());
-                seg_results.truncate(remaining);
-            }
             results.append(&mut seg_results);
 
             // Running top-K trim: shed rows that cannot make the final top-K.
@@ -522,6 +440,99 @@ impl ColumnarStorage {
             }
         }
         results
+    }
+
+    /// Segment indices sorted by source path (then line) — matches the legacy
+    /// backend's path-ordered, file-by-file iteration so ORDER BY tie-breaking
+    /// on equal-name symbols yields the same first-N across both backends.
+    /// After FQOV v4 segments are already stored path-ordered, so for full-index
+    /// queries this is a no-op; for filtered subsets it stays O(k log k).
+    fn ordered_segments(&self, by_segment: &HashMap<u32, RoaringBitmap>) -> Vec<u32> {
+        let mut seg_order: Vec<u32> = by_segment.keys().copied().collect();
+        seg_order.sort_by_key(|&idx| {
+            self.overlay
+                .segments()
+                .get(idx as usize)
+                .map(|m| m.source_path.clone())
+        });
+        seg_order
+    }
+
+    /// Early-exit fetch cap: when there is no ORDER BY / GROUP BY but an explicit
+    /// LIMIT, stop opening segment files once the budget is spent.  Fetches cap+1
+    /// so `total > results.len()` stays a reliable "more results exist" signal.
+    /// When `limit` is None we deliberately do NOT inject DEFAULT_QUERY_LIMIT
+    /// here — exec_find injects an explicit limit before calling find_symbols, so
+    /// direct callers (tests) still receive all matching rows.
+    fn fetch_cap_for(clauses: &Clauses) -> Option<usize> {
+        if clauses.order_by.is_none() && clauses.group_by.is_none() {
+            clauses.limit.map(|c| c.saturating_add(1))
+        } else {
+            None
+        }
+    }
+
+    /// Running top-K trim budget (Phase 8): set when ORDER BY is present, LIMIT
+    /// is small, OFFSET is zero, and GROUP BY is absent.  Bounds peak result
+    /// memory to O(K * TOPK_OVER_FETCH) by periodically discarding rows that
+    /// cannot make the final top-K.
+    fn topk_trim_for(clauses: &Clauses) -> Option<usize> {
+        if clauses.order_by.is_some()
+            && clauses.group_by.is_none()
+            && clauses.offset.unwrap_or(0) == 0
+            && clauses.limit.is_some_and(|k| k <= TOPK_THRESHOLD)
+        {
+            clauses.limit
+        } else {
+            None
+        }
+    }
+
+    /// Materialise one segment's matching rows: enrichment-posting prefilter →
+    /// row materialisation → (optional) per-segment WHERE filter → fetch-budget
+    /// trim.  Returns `None` to skip the segment (missing data or empty result).
+    fn materialize_one_segment(
+        &self,
+        seg_idx: u32,
+        by_segment: &HashMap<u32, RoaringBitmap>,
+        clauses: &Clauses,
+        fetch_cap: Option<usize>,
+        results_len: usize,
+        prefilter_where: bool,
+    ) -> Option<Vec<SymbolMatch>> {
+        let local_rows = by_segment.get(&seg_idx)?;
+        let seg = self.segments.get(seg_idx as usize)?;
+        let seg_meta = self.overlay.segments().get(seg_idx as usize)?;
+
+        // Stage 3a — narrow the local row set using per-segment enrichment
+        // posting bitmaps before materialisation.  Falls back to the full local
+        // set when no posting file exists for a given predicate.
+        let narrowed = seg.prefilter_enrichment_postings(local_rows.clone(), clauses);
+        if narrowed.is_empty() {
+            return None;
+        }
+
+        // Pass the relative source path so IN/EXCLUDE glob matching in
+        // apply_clauses works against the same relative paths the legacy backend
+        // stores.  Do NOT join with worktree_root here.
+        let mut seg_results = seg.materialize_rows(&narrowed, Some(&seg_meta.source_path));
+
+        // Apply WHERE predicates per-segment before counting toward the fetch
+        // cap, filtering enrichment-posting and trigram false positives that
+        // would otherwise exhaust the cap with non-matching rows.
+        if prefilter_where {
+            for predicate in &clauses.where_predicates {
+                let pred = predicate.clone();
+                seg_results.retain(|item| eval_predicate(item, &pred));
+            }
+        }
+
+        // Trim within this segment to avoid overshooting the fetch budget.
+        if let Some(cap) = fetch_cap {
+            let remaining = cap.saturating_sub(results_len);
+            seg_results.truncate(remaining);
+        }
+        Some(seg_results)
     }
 }
 // ─────────────────────────────────────────────────────────────────────────────
