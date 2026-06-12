@@ -54,19 +54,14 @@ impl NodeEnricher for EscapeEnricher {
         if locals.is_empty() {
             return;
         }
-
         let local_names: HashSet<&str> = locals.iter().map(|d| d.name.as_str()).collect();
 
-        // Phase 2: Identify which locals are arrays.
+        // Phases 2-4: classify locals (arrays, statics) and build the alias map.
         let array_locals = collect_array_locals(ctx, &local_names);
-
-        // Phase 3: Identify which locals are static (safe — exclude them).
         let static_locals = collect_static_locals(ctx);
-
-        // Phase 4: Build alias map (Tier 3): track `ptr = &local` assignments.
         let alias_map = build_alias_map(ctx, &local_names, &static_locals);
 
-        // Phase 5: Walk all return statements and detect escaping patterns.
+        // Phase 5: scan return statements; Phase 5b: scan macro expansions.
         let escape_locals = EscapeLocals {
             local_names: &local_names,
             array_locals: &array_locals,
@@ -74,66 +69,8 @@ impl NodeEnricher for EscapeEnricher {
             alias_map: &alias_map,
         };
         let mut acc = EscapeAccumulator::new();
-
-        walk_dfs(ctx.node, |node| {
-            if !config.is_return_statement_kind(node.kind()) {
-                return;
-            }
-
-            // Find the returned expression (first non-keyword child, or named child).
-            let Some(ret_expr) = find_return_expr(node) else {
-                return;
-            };
-
-            // Recurse into the expression to find escaping patterns even
-            // inside ternary/conditional expressions, casts, parenthesised
-            // expressions, etc.
-            check_expr_escape(ret_expr, ctx, &escape_locals, &mut acc);
-        });
-
-        // Phase 5b: Macro expansion — check if any macro call in the
-        // function body expands to contain `&<local_var>`.
-        if let Some(table) = ctx.macro_table
-            && let Some(expander) = ctx.language_support.macro_expander()
-        {
-            let call_kind = config.call_expression_kind();
-            if !call_kind.is_empty() {
-                walk_dfs(ctx.node, |node| {
-                    if node.kind() != call_kind {
-                        return;
-                    }
-                    let Some(func_node) = node.child_by_field_name("function") else {
-                        return;
-                    };
-                    let func_name = node_text(ctx.source, func_node);
-                    let args = expander.extract_args(node, ctx.source);
-                    let mut budget = super::macro_resolve::ExpansionBudget {
-                        max_depth: 1,
-                        max_steps: 1,
-                        steps_remaining: 1,
-                    };
-                    if let Some(result) = super::macro_resolve::resolve_macro(
-                        table,
-                        &func_name,
-                        &args,
-                        expander,
-                        &mut budget,
-                        0,
-                    ) {
-                        for &local_name in &local_names {
-                            let pattern = format!("&{local_name}");
-                            if result.expanded.contains(&pattern) {
-                                acc.escaping.push(local_name.to_string());
-                                let _ = acc.kinds_seen.insert("address_of");
-                                if acc.best_tier == 0 || acc.best_tier > 2 {
-                                    acc.best_tier = 2;
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        }
+        scan_return_escapes(ctx, config, &escape_locals, &mut acc);
+        scan_macro_escapes(ctx, config, &local_names, &mut acc);
 
         if acc.escaping.is_empty() {
             return;
@@ -256,6 +193,75 @@ fn check_expr_escape(
             check_expr_escape(child, ctx, locals, acc);
         }
     }
+}
+
+/// Phase 5: walk every `return` statement and flag locals that escape through
+/// the returned expression (including via casts, ternaries, parentheses).
+fn scan_return_escapes(
+    ctx: &EnrichContext<'_>,
+    config: &LanguageConfig,
+    locals: &EscapeLocals<'_>,
+    acc: &mut EscapeAccumulator,
+) {
+    walk_dfs(ctx.node, |node| {
+        if !config.is_return_statement_kind(node.kind()) {
+            return;
+        }
+        // Find the returned expression (first non-keyword child, or named child).
+        let Some(ret_expr) = find_return_expr(node) else {
+            return;
+        };
+        check_expr_escape(ret_expr, ctx, locals, acc);
+    });
+}
+
+/// Phase 5b: detect locals whose address escapes through a macro expansion — a
+/// macro call in the body that expands to text containing `&<local>`.
+fn scan_macro_escapes(
+    ctx: &EnrichContext<'_>,
+    config: &LanguageConfig,
+    local_names: &HashSet<&str>,
+    acc: &mut EscapeAccumulator,
+) {
+    let Some(table) = ctx.macro_table else {
+        return;
+    };
+    let Some(expander) = ctx.language_support.macro_expander() else {
+        return;
+    };
+    let call_kind = config.call_expression_kind();
+    if call_kind.is_empty() {
+        return;
+    }
+    walk_dfs(ctx.node, |node| {
+        if node.kind() != call_kind {
+            return;
+        }
+        let Some(func_node) = node.child_by_field_name("function") else {
+            return;
+        };
+        let func_name = node_text(ctx.source, func_node);
+        let args = expander.extract_args(node, ctx.source);
+        let mut budget = super::macro_resolve::ExpansionBudget {
+            max_depth: 1,
+            max_steps: 1,
+            steps_remaining: 1,
+        };
+        if let Some(result) =
+            super::macro_resolve::resolve_macro(table, &func_name, &args, expander, &mut budget, 0)
+        {
+            for &local_name in local_names {
+                let pattern = format!("&{local_name}");
+                if result.expanded.contains(&pattern) {
+                    acc.escaping.push(local_name.to_string());
+                    let _ = acc.kinds_seen.insert("address_of");
+                    if acc.best_tier == 0 || acc.best_tier > 2 {
+                        acc.best_tier = 2;
+                    }
+                }
+            }
+        }
+    });
 }
 
 /// Find the first named child of a return statement that is the returned
