@@ -177,124 +177,24 @@ impl ForgeQLEngine {
     ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
 
-        // Pop the checkpoint (releases mutable borrow before reindex).
-        // Pop the checkpoint (releases mutable borrow before reindex).
-        let (label, oid, pre_txn_oid, worktree_path) = {
-            let session = self
-                .sessions
-                .get_mut(sid)
-                .ok_or_else(|| anyhow::anyhow!("session '{sid}' not found"))?;
+        // Pop the checkpoint (releases the mutable borrow before reindex).
+        let (label, oid, pre_txn_oid, worktree_path) = self.pop_rollback_checkpoint(sid, name)?;
 
-            let checkpoint = if let Some(target) = name {
-                // Find the named checkpoint and pop everything from that point onward.
-                let pos = session
-                    .checkpoints
-                    .iter()
-                    .rposition(|cp| cp.name == target)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("no checkpoint named '{target}' in this session")
-                    })?;
-                let cp = session.checkpoints.remove(pos);
-                session.checkpoints.truncate(pos);
-                cp
-            } else {
-                // Pop the most recent checkpoint.
-                session.checkpoints.pop().ok_or_else(|| {
-                    anyhow::anyhow!("no checkpoints available — run BEGIN TRANSACTION first")
-                })?
-            };
-
-            // When the last checkpoint is popped, reset last_clean_oid so the
-            // next BEGIN TRANSACTION captures a fresh pre-transaction base.
-            // Without this, a sequence like BEGIN → ROLLBACK → BEGIN → ROLLBACK
-            // → BEGIN → COMMIT would squash to a stale checkpoint OID (which
-            // contains .forgeql-index) instead of the true clean base.
-            if session.checkpoints.is_empty() {
-                session.last_clean_oid = None;
-            } else {
-                session.last_clean_oid = Some(checkpoint.pre_txn_oid.clone());
-            }
-
-            (
-                checkpoint.name,
-                checkpoint.oid,
-                checkpoint.pre_txn_oid,
-                session.worktree_path.clone(),
-            )
-        };
-
-        // Git-as-source-of-truth ROLLBACK.
-        //
-        // For legacy-only sessions: the checkpoint commit includes
-        // `.forgeql-index` (see `git::CHECKPOINT_EXCLUDED`). After
-        // `git reset --hard <checkpoint_oid>` the worktree contains both
-        // the file state AND the matching cache file from that point in
-        // time, so `resume_index` cache-hits and restores a provably-correct
-        // index in O(deserialize) instead of O(rebuild).
-        //
-        // For columnar sessions: `.forgeql-index` is never written (the legacy
-        // table is a transient build artefact freed after `warm_or_open`).
-        // The overlay for the checkpoint commit is untouched by git reset, and
-        // the dirty delta is restored by `reload_dirty_from_delta` below.
-        // Calling `resume_index` here would trigger an expensive full rebuild
-        // of a legacy table that is immediately unused — skip it.
+        // Git-as-source-of-truth ROLLBACK: `git reset --hard <checkpoint_oid>`
+        // restores the worktree (and, for legacy sessions, the matching
+        // `.forgeql-index` cache) to the checkpoint state.  Columnar sessions
+        // never write `.forgeql-index`, so the in-memory restore below handles
+        // them instead (calling `resume_index` here would force a wasted rebuild).
         let repo = git::open(&worktree_path)?;
         git::reset_hard(&repo, &oid)?;
 
-        if let Some(session) = self.sessions.get_mut(sid) {
-            // Drop the in-memory index so resume_index reads the freshly
-            // restored cache from disk rather than keeping a stale view.
-            session.drop_index();
-            if !session.has_columnar()
-                && let Err(err) = session.resume_index()
-            {
-                warn!(error = %err, "rollback: resume_index failed; falling back to build_index");
-                if let Err(err) = session.build_index() {
-                    warn!(error = %err, "rollback: index rebuild failed");
-                }
-            }
-            // Restore the columnar dirty overlay from the just-restored delta file.
-            // `git reset --hard` already rewrote `.forgeql-columnar-delta` to the
-            // checkpoint state; GC orphaned staging dirs then reload into RAM.
-            if let Some(columnar) = session.columnar_storage_mut()
-                && let Err(e) = columnar.reload_dirty_from_delta()
-            {
-                warn!(error = %e, "rollback: columnar delta reload failed (non-fatal)");
-            }
-            // FT6: save the popped in-memory stack to disk.  This overwrites
-            // whatever `.forgeql-checkpoints` git reset --hard restored (which
-            // is the pre-push state from the checkpoint commit tree — one entry
-            // behind where in-memory is after the pop).  Saving here ensures
-            // file == in-memory stack invariant is restored.
-            //
-            // Special case: when the last checkpoint was just popped and
-            // last_clean_oid is None there is no longer any active transaction
-            // state to persist.  Removing the file prevents try_restore from
-            // seeing expected=None on the next server start and emitting a
-            // spurious HEAD-mismatch warning.
-            if session.checkpoints.is_empty() && session.last_clean_oid.is_none() {
-                crate::session::checkpoint_file::remove(&worktree_path);
-            } else if let Err(e) = crate::session::checkpoint_file::save(session, &worktree_path) {
-                warn!(error = %e, "rollback: checkpoint file save failed (non-fatal)");
-            }
-        }
+        self.restore_session_after_reset(sid, &worktree_path);
 
-        // Pop the checkpoint commit off the branch tip.
-        //
-        // `BEGIN TRANSACTION` creates a "forgeql: checkpoint '...'" commit on
-        // top of the user's clean work so it can include `.forgeql-index` in
-        // the snapshot.  After `reset_hard` restores the worktree to that
-        // checkpoint, HEAD still points to the checkpoint commit — which then
-        // shows up in `git log` as a spurious entry.
-        //
-        // `soft_reset` to `pre_txn_oid` moves the branch ref back to the
-        // commit that existed before BEGIN was called, without touching the
-        // worktree.  `.forgeql-index` therefore remains on disk for the
-        // already-completed `resume_index` call above.
-        //
-        // Edge case: if `stage_and_commit` inside BEGIN had nothing to commit
-        // (worktree was already clean), `oid == pre_txn_oid` and this is a
-        // no-op.
+        // Pop the checkpoint commit off the branch tip: BEGIN TRANSACTION made a
+        // "forgeql: checkpoint '...'" commit on top of the user's clean work, so
+        // `soft_reset` to `pre_txn_oid` moves the branch ref back without touching
+        // the worktree.  If BEGIN had nothing to commit, oid == pre_txn_oid and
+        // this is a no-op.
         if oid != pre_txn_oid
             && let Err(err) = git::soft_reset(&repo, &pre_txn_oid)
         {
@@ -305,6 +205,93 @@ impl ForgeQLEngine {
             name: label,
             reset_to_oid: oid,
         }))
+    }
+
+    /// Pop the checkpoint to roll back to (the named one, or the most recent),
+    /// update `last_clean_oid`, and return its identity plus the worktree path.
+    fn pop_rollback_checkpoint(
+        &mut self,
+        sid: &str,
+        name: Option<&str>,
+    ) -> Result<(String, String, String, std::path::PathBuf)> {
+        let session = self
+            .sessions
+            .get_mut(sid)
+            .ok_or_else(|| anyhow::anyhow!("session '{sid}' not found"))?;
+
+        let checkpoint = if let Some(target) = name {
+            // Find the named checkpoint and pop everything from that point onward.
+            let pos = session
+                .checkpoints
+                .iter()
+                .rposition(|cp| cp.name == target)
+                .ok_or_else(|| anyhow::anyhow!("no checkpoint named '{target}' in this session"))?;
+            let cp = session.checkpoints.remove(pos);
+            session.checkpoints.truncate(pos);
+            cp
+        } else {
+            // Pop the most recent checkpoint.
+            session.checkpoints.pop().ok_or_else(|| {
+                anyhow::anyhow!("no checkpoints available — run BEGIN TRANSACTION first")
+            })?
+        };
+
+        // When the last checkpoint is popped, reset last_clean_oid so the next
+        // BEGIN TRANSACTION captures a fresh pre-transaction base.  Without this,
+        // BEGIN → ROLLBACK → BEGIN → ROLLBACK → BEGIN → COMMIT would squash to a
+        // stale checkpoint OID (which contains .forgeql-index) instead of the
+        // true clean base.
+        if session.checkpoints.is_empty() {
+            session.last_clean_oid = None;
+        } else {
+            session.last_clean_oid = Some(checkpoint.pre_txn_oid.clone());
+        }
+
+        Ok((
+            checkpoint.name,
+            checkpoint.oid,
+            checkpoint.pre_txn_oid,
+            session.worktree_path.clone(),
+        ))
+    }
+
+    /// After `git reset --hard` to the checkpoint, restore the in-memory index,
+    /// the columnar dirty overlay, and the on-disk checkpoint file to match.
+    fn restore_session_after_reset(&mut self, sid: &str, worktree_path: &std::path::Path) {
+        let Some(session) = self.sessions.get_mut(sid) else {
+            return;
+        };
+        // Drop the in-memory index so resume_index reads the freshly restored
+        // cache from disk rather than keeping a stale view.
+        session.drop_index();
+        if !session.has_columnar()
+            && let Err(err) = session.resume_index()
+        {
+            warn!(error = %err, "rollback: resume_index failed; falling back to build_index");
+            if let Err(err) = session.build_index() {
+                warn!(error = %err, "rollback: index rebuild failed");
+            }
+        }
+        // Restore the columnar dirty overlay from the just-restored delta file.
+        // `git reset --hard` already rewrote `.forgeql-columnar-delta` to the
+        // checkpoint state; GC orphaned staging dirs then reload into RAM.
+        if let Some(columnar) = session.columnar_storage_mut()
+            && let Err(e) = columnar.reload_dirty_from_delta()
+        {
+            warn!(error = %e, "rollback: columnar delta reload failed (non-fatal)");
+        }
+        // FT6: save the popped in-memory stack to disk, overwriting whatever git
+        // reset --hard restored (the pre-push state from the checkpoint commit
+        // tree — one entry behind in-memory after the pop), restoring the
+        // file == in-memory stack invariant.  Special case: when the last
+        // checkpoint was just popped and last_clean_oid is None there is no
+        // active transaction state, so remove the file to avoid a spurious
+        // HEAD-mismatch warning from try_restore on the next server start.
+        if session.checkpoints.is_empty() && session.last_clean_oid.is_none() {
+            crate::session::checkpoint_file::remove(worktree_path);
+        } else if let Err(e) = crate::session::checkpoint_file::save(session, worktree_path) {
+            warn!(error = %e, "rollback: checkpoint file save failed (non-fatal)");
+        }
     }
 
     /// Run a named verify step from `.forgeql.yaml` as a standalone command.
