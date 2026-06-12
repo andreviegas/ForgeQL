@@ -75,46 +75,7 @@ impl ForgeQLEngine {
         let backend = backend_for_show_op(op);
         let (workspace, engine) = self.require_workspace_and_engine_for(session_id, backend)?;
 
-        let json = match op {
-            ForgeQLIR::ShowContext {
-                symbol, clauses, ..
-            } => Self::exec_show_context(&workspace, engine, symbol, clauses),
-            ForgeQLIR::ShowSignature {
-                symbol, clauses, ..
-            } => self.exec_show_signature(session_id, &workspace, engine, symbol, clauses),
-            ForgeQLIR::ShowOutline {
-                file, all, clauses, ..
-            } => {
-                // Default outline is structural-only. An explicit `ALL`, or a
-                // `WHERE fql_kind = …` predicate, opts back into every node so
-                // the post-hoc clause filter still has the full set to act on.
-                let show_all = *all
-                    || clauses
-                        .where_predicates
-                        .iter()
-                        .any(|p| p.field == "fql_kind" || p.field == "node_kind");
-                Self::exec_show_outline(&workspace, engine, file, show_all)
-            }
-            ForgeQLIR::ShowMembers {
-                symbol, clauses, ..
-            } => self.exec_show_members(session_id, &workspace, engine, symbol, clauses),
-            ForgeQLIR::ShowBody {
-                symbol, clauses, ..
-            } => self.exec_show_body(session_id, &workspace, engine, symbol, clauses),
-            ForgeQLIR::ShowCallees {
-                symbol, clauses, ..
-            } => self.exec_show_callees(session_id, &workspace, engine, symbol, clauses),
-            ForgeQLIR::ShowLines {
-                file,
-                start_line,
-                end_line,
-                ..
-            } => Self::exec_show_lines(&workspace, engine, file, *start_line, *end_line),
-            ForgeQLIR::FindFiles { clauses, .. } => {
-                Self::exec_show_find_files(&workspace, engine, clauses)?
-            }
-            other => serde_json::json!({ "error": format!("not a show op: {other:?}") }),
-        };
+        let json = self.dispatch_show_op(session_id, op, &workspace, engine)?;
 
         // Check for error responses.
         if let Some(err) = json.get("error").and_then(|v| v.as_str()) {
@@ -124,32 +85,9 @@ impl ForgeQLEngine {
         // Convert the JSON value to a typed ShowResult.
         let mut show_result = convert_show_json(op, &json)?;
 
-        // Apply the full clause pipeline (WHERE, ORDER BY, LIMIT, OFFSET, …)
-        // to structured list results: outline, members, and call graph entries.
-        match (&mut show_result.content, op) {
-            (ShowContent::Outline { entries }, ForgeQLIR::ShowOutline { clauses, .. }) => {
-                crate::filter::apply_clauses_keep_order(entries, clauses);
-            }
-            (ShowContent::Members { members, .. }, ForgeQLIR::ShowMembers { clauses, .. }) => {
-                crate::filter::apply_clauses(members, clauses);
-            }
-            (ShowContent::CallGraph { entries, .. }, ForgeQLIR::ShowCallees { clauses, .. }) => {
-                // Default sort for callees is by call-site line (ascending) so
-                // the output reflects call order.  If the user supplied an
-                // explicit ORDER BY, respect it instead.
-                if clauses.order_by.is_none() {
-                    let mut effective = clauses.clone();
-                    effective.order_by = Some(crate::ir::OrderBy {
-                        field: "line".to_string(),
-                        direction: crate::ir::SortDirection::Asc,
-                    });
-                    crate::filter::apply_clauses(entries, &effective);
-                } else {
-                    crate::filter::apply_clauses(entries, clauses);
-                }
-            }
-            _ => {}
-        }
+        // Apply the full clause pipeline (WHERE, ORDER BY, LIMIT, OFFSET, …) to
+        // structured list results: outline, members, and call graph entries.
+        Self::apply_list_clauses(&mut show_result.content, op);
 
         // Extract clauses for ShowContent::Lines variants.
         let show_clauses: Option<&Clauses> = match op {
@@ -164,14 +102,13 @@ impl ForgeQLEngine {
         //   - SHOW LINES n-m       — a user-specified line range.
         //   - SHOW body OF 'sym'   — a single addressable symbol's own extent.
         // (SHOW NODE CONTENT is rewritten into a SHOW LINES range above, so it
-        // is already covered.) SHOW context can expand via DEPTH, so it stays
-        // capped.
+        // is already covered.) SHOW context can expand via DEPTH, so it stays capped.
         let is_explicit_range =
             matches!(op, ForgeQLIR::ShowLines { .. } | ForgeQLIR::ShowBody { .. });
 
-        // Apply WHERE predicates BEFORE the line caps.
-        // This lets queries like `SHOW body OF 'fn' WHERE text MATCHES 'TODO'`
-        // filter over the full function body, not just the first N lines.
+        // Apply WHERE predicates BEFORE the line caps so queries like
+        // `SHOW body OF 'fn' WHERE text MATCHES 'TODO'` filter over the full
+        // function body, not just the first N lines.
         if let (ShowContent::Lines { lines, .. }, Some(clauses)) =
             (&mut show_result.content, show_clauses)
         {
@@ -201,6 +138,86 @@ impl ForgeQLEngine {
         );
 
         Ok(ForgeQLResult::Show(show_result))
+    }
+
+    /// Dispatch a `SHOW`/`FIND files` op to the matching backend handler,
+    /// returning the raw JSON value (an `{ "error": … }` object for non-show ops).
+    fn dispatch_show_op(
+        &self,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+        workspace: &Workspace,
+        engine: &dyn StorageEngine,
+    ) -> Result<serde_json::Value> {
+        let json = match op {
+            ForgeQLIR::ShowContext {
+                symbol, clauses, ..
+            } => Self::exec_show_context(workspace, engine, symbol, clauses),
+            ForgeQLIR::ShowSignature {
+                symbol, clauses, ..
+            } => self.exec_show_signature(session_id, workspace, engine, symbol, clauses),
+            ForgeQLIR::ShowOutline {
+                file, all, clauses, ..
+            } => {
+                // Default outline is structural-only. An explicit `ALL`, or a
+                // `WHERE fql_kind = …` predicate, opts back into every node so
+                // the post-hoc clause filter still has the full set to act on.
+                let show_all = *all
+                    || clauses
+                        .where_predicates
+                        .iter()
+                        .any(|p| p.field == "fql_kind" || p.field == "node_kind");
+                Self::exec_show_outline(workspace, engine, file, show_all)
+            }
+            ForgeQLIR::ShowMembers {
+                symbol, clauses, ..
+            } => self.exec_show_members(session_id, workspace, engine, symbol, clauses),
+            ForgeQLIR::ShowBody {
+                symbol, clauses, ..
+            } => self.exec_show_body(session_id, workspace, engine, symbol, clauses),
+            ForgeQLIR::ShowCallees {
+                symbol, clauses, ..
+            } => self.exec_show_callees(session_id, workspace, engine, symbol, clauses),
+            ForgeQLIR::ShowLines {
+                file,
+                start_line,
+                end_line,
+                ..
+            } => Self::exec_show_lines(workspace, engine, file, *start_line, *end_line),
+            ForgeQLIR::FindFiles { clauses, .. } => {
+                Self::exec_show_find_files(workspace, engine, clauses)?
+            }
+            other => serde_json::json!({ "error": format!("not a show op: {other:?}") }),
+        };
+        Ok(json)
+    }
+
+    /// Apply the clause pipeline to structured list results (outline / members /
+    /// call graph).  Lines results are handled separately (cap-aware) by the caller.
+    fn apply_list_clauses(content: &mut ShowContent, op: &ForgeQLIR) {
+        match (content, op) {
+            (ShowContent::Outline { entries }, ForgeQLIR::ShowOutline { clauses, .. }) => {
+                crate::filter::apply_clauses_keep_order(entries, clauses);
+            }
+            (ShowContent::Members { members, .. }, ForgeQLIR::ShowMembers { clauses, .. }) => {
+                crate::filter::apply_clauses(members, clauses);
+            }
+            (ShowContent::CallGraph { entries, .. }, ForgeQLIR::ShowCallees { clauses, .. }) => {
+                // Default sort for callees is by call-site line (ascending) so
+                // the output reflects call order.  An explicit ORDER BY wins.
+                if clauses.order_by.is_none() {
+                    let mut effective = clauses.clone();
+                    effective.order_by = Some(crate::ir::OrderBy {
+                        field: "line".to_string(),
+                        direction: crate::ir::SortDirection::Asc,
+                    });
+                    crate::filter::apply_clauses(entries, &effective);
+                } else {
+                    crate::filter::apply_clauses(entries, clauses);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// `SHOW MORE [HEAD n | TAIL n | n-m] [WHERE …] [LIMIT n]`
