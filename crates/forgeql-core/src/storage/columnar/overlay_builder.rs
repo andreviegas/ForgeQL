@@ -403,10 +403,6 @@ impl OverlayBuilder {
 
     // ── Step 5.5 ─────────────────────────────────────────────────────────────
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "three-phase enrich-bitmap pipeline; splitting would require threading more state"
-    )]
     fn step55_build_enrich_bitmaps(
         segs: &[(PathBuf, String, SegmentReader)],
         row_offsets: &[u32],
@@ -416,9 +412,48 @@ impl OverlayBuilder {
         let mut enrich_raw: HashMap<String, RoaringBitmap> = HashMap::new();
         let mut field_seen: HashMap<String, HashSet<String>> = HashMap::new();
         let mut pruned_fields: HashSet<String> = HashSet::new();
-        let posting_field_set: HashSet<&str> = POSTING_ENRICHMENT_FIELDS.iter().copied().collect();
 
         // Category 1: boolean flags + string enums via field_postings.
+        Self::collect_posting_enrichment(
+            segs,
+            row_offsets,
+            seg_dedup,
+            &mut enrich_raw,
+            &mut field_seen,
+            &mut pruned_fields,
+        );
+        // Category 2: numeric fields not in POSTING_ENRICHMENT_FIELDS.
+        Self::collect_numeric_enrichment(
+            segs,
+            row_offsets,
+            seg_dedup,
+            &mut enrich_raw,
+            &mut field_seen,
+            &mut pruned_fields,
+        );
+
+        let enrich_bitmaps_bytes = Self::serialize_enrich_bitmaps(&enrich_raw)?;
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            entries = enrich_raw.len(),
+            pruned = pruned_fields.len(),
+            bytes = enrich_bitmaps_bytes.len(),
+            "TIMING step5.5: enrichment bitmaps",
+        );
+        Ok(enrich_bitmaps_bytes)
+    }
+
+    /// Category 1 of step 5.5: boolean flags + string enums sourced from each
+    /// segment's `field_postings`.  Fields exceeding `MAX_ENRICH_BUCKETS`
+    /// distinct values are pruned (and their already-collected keys dropped).
+    fn collect_posting_enrichment(
+        segs: &[(PathBuf, String, SegmentReader)],
+        row_offsets: &[u32],
+        seg_dedup: &[(RoaringBitmap, u32)],
+        enrich_raw: &mut HashMap<String, RoaringBitmap>,
+        field_seen: &mut HashMap<String, HashSet<String>>,
+        pruned_fields: &mut HashSet<String>,
+    ) {
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
             let row_offset = row_offsets[seg_idx];
             let canonical_bm = &seg_dedup[seg_idx].0;
@@ -455,8 +490,20 @@ impl OverlayBuilder {
                 }
             }
         }
+    }
 
-        // Category 2: numeric fields not in POSTING_ENRICHMENT_FIELDS.
+    /// Category 2 of step 5.5: numeric fields not covered by the posting index
+    /// (`POSTING_ENRICHMENT_FIELDS`), read row-by-row.  Same bucket-pruning rule
+    /// as the posting pass.
+    fn collect_numeric_enrichment(
+        segs: &[(PathBuf, String, SegmentReader)],
+        row_offsets: &[u32],
+        seg_dedup: &[(RoaringBitmap, u32)],
+        enrich_raw: &mut HashMap<String, RoaringBitmap>,
+        field_seen: &mut HashMap<String, HashSet<String>>,
+        pruned_fields: &mut HashSet<String>,
+    ) {
+        let posting_field_set: HashSet<&str> = POSTING_ENRICHMENT_FIELDS.iter().copied().collect();
         for (seg_idx, (_, _, reader)) in segs.iter().enumerate() {
             let row_offset = row_offsets[seg_idx];
             let canonical_bm = &seg_dedup[seg_idx].0;
@@ -487,8 +534,11 @@ impl OverlayBuilder {
                 }
             }
         }
+    }
 
-        // Serialise enrichment bitmaps into the `enrich_bitmaps` blob.
+    /// Serialise the collected enrichment bitmaps into the `enrich_bitmaps` blob:
+    /// a sorted (entry-table, key-bytes, bitmap-bytes) layout.
+    fn serialize_enrich_bitmaps(enrich_raw: &HashMap<String, RoaringBitmap>) -> Result<Vec<u8>> {
         let mut sorted_enrich: Vec<(&String, &RoaringBitmap)> = enrich_raw.iter().collect();
         sorted_enrich.sort_by_key(|(k, _)| k.as_str());
         let mut enrich_key_bytes: Vec<u8> = Vec::new();
@@ -525,13 +575,6 @@ impl OverlayBuilder {
         enrich_bitmaps_bytes.extend_from_slice(cast_slice(enrich_entries.as_slice()));
         enrich_bitmaps_bytes.extend_from_slice(&enrich_key_bytes);
         enrich_bitmaps_bytes.extend_from_slice(&enrich_bitmap_data);
-        info!(
-            ms = t_step.elapsed().as_millis(),
-            entries = enrich_entries.len(),
-            pruned = pruned_fields.len(),
-            bytes = enrich_bitmaps_bytes.len(),
-            "TIMING step5.5: enrichment bitmaps",
-        );
         Ok(enrich_bitmaps_bytes)
     }
 
