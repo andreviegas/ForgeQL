@@ -19,7 +19,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use super::data_flow_utils::{collect_parameter_names, extract_declarator_name};
 use super::guard_utils::{
-    GuardFrame, GuardInfo, are_guards_exclusive, build_guard_frame, guard_info_from_stack,
+    GuardFrame, GuardInfo, are_guards_exclusive, guard_info_from_stack, update_guard_stack,
 };
 use super::{EnrichContext, NodeEnricher};
 use crate::ast::lang::LanguageConfig;
@@ -101,10 +101,14 @@ fn walk_scopes_iterative(
     // start with params already in `current_scope` and an empty outer stack.
     // In C++/Rust-style languages params are an outer scope and the function
     // body is an inner scope.
-    let (mut scope_stack, mut current_scope) = if config.params_share_body_scope() {
-        (Vec::<HashMap<String, Option<GuardInfo>>>::new(), params_map)
+    let (scope_stack, current_scope) = if config.params_share_body_scope() {
+        (Vec::new(), params_map)
     } else {
         (vec![params_map], HashMap::new())
+    };
+    let mut tracker = ScopeTracker {
+        scope_stack,
+        current_scope,
     };
 
     // Mini guard stack: maintained in parallel with the tree walk using the
@@ -113,98 +117,113 @@ fn walk_scopes_iterative(
 
     // Seed with body's direct children in reverse so they pop in forward order.
     let mut work: Vec<WorkItem<'_>> = Vec::new();
-    for i in (0..body.child_count()).rev() {
-        if let Some(child) = body.child(i) {
-            work.push(WorkItem::Visit {
-                node: child,
-                in_block_direct: true,
-            });
-        }
-    }
+    push_children(&mut work, body, true);
 
     while let Some(item) = work.pop() {
         match item {
-            WorkItem::ExitScope { saved_current } => {
-                let _ = scope_stack.pop();
-                current_scope = saved_current;
-            }
+            WorkItem::ExitScope { saved_current } => tracker.exit_scope(saved_current),
             WorkItem::Visit {
                 node,
                 in_block_direct,
             } => {
                 let kind = node.kind();
-
-                // --- Mini guard stack management ---
-                if config.has_guard_support() {
-                    // Pop frames whose byte scope we've left.
-                    while let Some(top) = mini_guard_stack.last() {
-                        if node.start_byte() >= top.guard_byte_range.end {
-                            drop(mini_guard_stack.pop());
-                        } else {
-                            break;
-                        }
-                    }
-                    // Push a frame when entering a guard-opening node.
-                    if config.is_block_guard_kind(kind)
-                        || config.is_elif_kind(kind)
-                        || config.is_else_kind(kind)
-                    {
-                        let frame = build_guard_frame(node, source, config, &mini_guard_stack);
-                        mini_guard_stack.push(frame);
-                    }
-                }
+                update_guard_stack(node, source, config, &mut mini_guard_stack);
 
                 if config.is_scope_creating_kind(kind) {
-                    // Open a new scope: save current state, push it for inner
-                    // block to check against, start fresh current_scope.
-                    let saved = std::mem::take(&mut current_scope);
-                    scope_stack.push(saved.clone());
-                    work.push(WorkItem::ExitScope {
-                        saved_current: saved,
-                    });
-                    for i in (0..node.child_count()).rev() {
-                        if let Some(child) = node.child(i) {
-                            work.push(WorkItem::Visit {
-                                node: child,
-                                in_block_direct: true,
-                            });
-                        }
-                    }
+                    tracker.open_scope(&mut work, node);
                 } else if config.is_declaration_kind(kind) {
-                    if let Some(name) = extract_declarator_name(node, source, config) {
-                        let decl_guard = guard_info_from_stack(&mini_guard_stack);
-
-                        // Direct children of a block: shadow only if name is in an outer scope.
-                        // Non-direct (for-loop init etc.): also shadow if in current scope.
-                        // Guard exclusivity suppresses false positives from #ifdef/#else siblings.
-                        let is_outer_shadow = scope_stack.iter().any(|s| {
-                            s.get(&name).is_some_and(|existing| {
-                                !guards_exclusive_opt(existing.as_ref(), decl_guard.as_ref())
-                            })
-                        });
-                        let is_current_shadow = !config.params_share_body_scope()
-                            && !in_block_direct
-                            && current_scope.get(&name).is_some_and(|existing| {
-                                !guards_exclusive_opt(existing.as_ref(), decl_guard.as_ref())
-                            });
-
-                        if is_outer_shadow || is_current_shadow {
-                            let _ = shadowed.insert(name.clone());
-                        }
-                        let _ = current_scope.insert(name, decl_guard);
-                    }
+                    tracker.record_declaration(
+                        node,
+                        source,
+                        config,
+                        in_block_direct,
+                        &mini_guard_stack,
+                        shadowed,
+                    );
                 } else {
                     // Non-scope, non-declaration: recurse into children.
-                    for i in (0..node.child_count()).rev() {
-                        if let Some(child) = node.child(i) {
-                            work.push(WorkItem::Visit {
-                                node: child,
-                                in_block_direct: false,
-                            });
-                        }
-                    }
+                    push_children(&mut work, node, false);
                 }
             }
+        }
+    }
+}
+
+/// Live scope chain for the iterative shadow-detection walk: `scope_stack` holds
+/// the enclosing scopes (outermost first) and `current_scope` the innermost one.
+struct ScopeTracker {
+    scope_stack: Vec<HashMap<String, Option<GuardInfo>>>,
+    current_scope: HashMap<String, Option<GuardInfo>>,
+}
+
+impl ScopeTracker {
+    /// Leave the current scope, restoring the one saved when it was opened.
+    fn exit_scope(&mut self, saved_current: HashMap<String, Option<GuardInfo>>) {
+        let _ = self.scope_stack.pop();
+        self.current_scope = saved_current;
+    }
+
+    /// Open a new scope: stash the current one (on the chain for inner lookups
+    /// and on the work stack for restoration), then queue the node's children.
+    fn open_scope<'a>(&mut self, work: &mut Vec<WorkItem<'a>>, node: tree_sitter::Node<'a>) {
+        let saved = std::mem::take(&mut self.current_scope);
+        self.scope_stack.push(saved.clone());
+        work.push(WorkItem::ExitScope {
+            saved_current: saved,
+        });
+        push_children(work, node, true);
+    }
+
+    /// Record a declaration: flag a shadow when the name already exists in an
+    /// outer scope (or, for non-direct declarations, the current scope) under a
+    /// non-exclusive guard, then bind the name in the current scope.
+    fn record_declaration(
+        &mut self,
+        node: tree_sitter::Node<'_>,
+        source: &[u8],
+        config: &LanguageConfig,
+        in_block_direct: bool,
+        guard_stack: &[GuardFrame],
+        shadowed: &mut BTreeSet<String>,
+    ) {
+        let Some(name) = extract_declarator_name(node, source, config) else {
+            return;
+        };
+        let decl_guard = guard_info_from_stack(guard_stack);
+
+        // Direct children of a block: shadow only if name is in an outer scope.
+        // Non-direct (for-loop init etc.): also shadow if in current scope.
+        // Guard exclusivity suppresses false positives from #ifdef/#else siblings.
+        let is_outer_shadow = self.scope_stack.iter().any(|s| {
+            s.get(&name).is_some_and(|existing| {
+                !guards_exclusive_opt(existing.as_ref(), decl_guard.as_ref())
+            })
+        });
+        let is_current_shadow = !config.params_share_body_scope()
+            && !in_block_direct
+            && self.current_scope.get(&name).is_some_and(|existing| {
+                !guards_exclusive_opt(existing.as_ref(), decl_guard.as_ref())
+            });
+
+        if is_outer_shadow || is_current_shadow {
+            let _ = shadowed.insert(name.clone());
+        }
+        let _ = self.current_scope.insert(name, decl_guard);
+    }
+}
+
+/// Queue a node's children for visiting, in reverse so they pop in source order.
+fn push_children<'a>(
+    work: &mut Vec<WorkItem<'a>>,
+    node: tree_sitter::Node<'a>,
+    in_block_direct: bool,
+) {
+    for i in (0..node.child_count()).rev() {
+        if let Some(child) = node.child(i) {
+            work.push(WorkItem::Visit {
+                node: child,
+                in_block_direct,
+            });
         }
     }
 }
