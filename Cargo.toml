@@ -180,3 +180,22 @@ opt-level = 3
 
 [profile.dev.package.forgeql-lang-python]
 opt-level = 3
+
+# -----------------------------------------------------------------------
+# `ci` profile — used by the cached CI scripts (data/scripts/lib/build-cache.sh).
+#
+# Goal: let `cargo build` and `cargo test` share ONE optimised compile instead
+# of building the workspace twice (release for the binary + dev for the tests).
+# It inherits `release` (opt-level 3 → fast test execution) but keeps the two
+# correctness checks that the dev/test profile normally gives, so switching
+# tests onto it loses no coverage:
+#   * debug-assertions → `debug_assert!` stays active   (≈ C assert())
+#   * overflow-checks   → integer overflow still panics  (vs silent wrap)
+#
+# Nothing uses this profile unless invoked explicitly with `--profile ci`, so
+# adding it does not change `cargo build`, `cargo test`, or `--release`.
+# -----------------------------------------------------------------------
+[profile.ci]
+inherits         = "release"
+debug-assertions = true
+overflow-checks  = true
