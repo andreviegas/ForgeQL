@@ -87,13 +87,10 @@ impl ForgeQLEngine {
             .unwrap_or_default()
             .as_secs();
 
-        // Worktrees are now stored in a per-user subdirectory:
+        // Worktrees live in a per-user subdirectory:
         //   data_dir/worktrees/{user}/{source}.{branch}.{alias}/
-        // Scan two levels: user dirs → worktree dirs inside each.
-        //
-        // NOTE: old flat-layout worktrees (data_dir/worktrees/{wt_name}/) that
-        // pre-date this layout are ignored here and remain on disk harmlessly;
-        // they can be removed manually.
+        // Scan two levels: user dirs → worktree dirs inside each.  Old flat-layout
+        // worktrees that pre-date this layout are ignored and remain on disk.
         let Ok(user_entries) = std::fs::read_dir(&wt_dir) else {
             return;
         };
@@ -106,119 +103,133 @@ impl ForgeQLEngine {
             if !user_dir.is_dir() {
                 continue;
             }
-
             let Ok(wt_entries) = std::fs::read_dir(&user_dir) else {
                 continue;
             };
-
             for entry in wt_entries.flatten() {
                 let wt_path = entry.path();
                 if !wt_path.is_dir() {
                     continue;
                 }
                 let wt_name = entry.file_name().to_string_lossy().to_string();
-
-                match read_sentinel(&wt_path) {
-                    None => {
-                        // No readable sentinel — orphan from an older version or
-                        // a partially created worktree.  Prune unconditionally.
-                        info!(%wt_name, "startup: no sentinel, pruning");
-                        self.prune_single_worktree(&wt_path, &wt_name);
-                        pruned += 1;
-                    }
-                    Some(sentinel)
-                        if now.saturating_sub(sentinel.last_active_secs)
-                            >= sentinel.ttl_secs.unwrap_or(SESSION_TTL_SECS) =>
-                    {
-                        info!(%wt_name, "startup: TTL expired, pruning");
-                        self.prune_single_worktree(&wt_path, &wt_name);
-                        pruned += 1;
-                    }
-                    Some(SessionSentinel {
-                        user,
-                        source: Some(source),
-                        branch: Some(branch),
-                        alias: Some(alias),
-                        ..
-                    }) => {
-                        // Warm worktree with full metadata — register as pending.
-                        // The index will be loaded lazily when the agent issues
-                        // a USE command for this session.
-                        let user = user
-                            .as_deref()
-                            .unwrap_or_else(|| auth(AuthContext::Session))
-                            .to_owned();
-                        let coords = SessionCoords::new(&user, &source, &branch, &alias);
-                        let session_key = coords.map_key();
-                        let worktree_name = coords.worktree_dir();
-                        info!(%user, %source, %branch, %alias, "startup: session registered as pending");
-                        drop(self.pending_sessions.insert(
-                            session_key,
-                            PendingSession {
-                                user,
-                                source,
-                                branch,
-                                alias,
-                                worktree_name,
-                            },
-                        ));
-                        registered += 1;
-                    }
-                    Some(_) => {
-                        // Old-format sentinel (timestamp only) — cannot recover
-                        // source/branch/alias.  Leave on disk; the agent will
-                        // re-issue USE when it next connects.
-                        info!(%wt_name, "startup: old-format sentinel, leaving for agent reconnect");
-                    }
-                }
+                self.restore_one_worktree(&wt_path, &wt_name, now, &mut registered, &mut pruned);
             }
         }
 
-        // Pass 2: sweep git worktree metadata entries whose checkout path
-        // is gone (handles crash-interrupted prune from a previous run).
-        if let Ok(repo_entries) = std::fs::read_dir(&self.data_dir) {
-            // Protect both fully-loaded in-memory sessions AND pending sessions
-            // (registered above) so their worktrees are never pruned here.
-            let live_wt_names: std::collections::HashSet<&str> = self
-                .sessions
-                .values()
-                .map(|s| s.worktree_name.as_str())
-                .chain(
-                    self.pending_sessions
-                        .values()
-                        .map(|p| p.worktree_name.as_str()),
-                )
-                .collect();
-
-            for re in repo_entries.flatten() {
-                let rpath = re.path();
-                if rpath.extension().is_none_or(|ext| ext != "git") {
-                    continue;
-                }
-                let Ok(wts) = worktree::list(&rpath) else {
-                    continue;
-                };
-                for wt in wts {
-                    if live_wt_names.contains(wt.name.as_str()) {
-                        continue;
-                    }
-                    if !wt.path.exists() {
-                        info!(wt_name = %wt.name, "startup: pruning stale git worktree metadata");
-                        if let Err(e) = worktree::remove(&rpath, &wt.name) {
-                            warn!(wt_name = %wt.name, %e, "stale metadata prune failed");
-                        }
-                        if let Err(e) = worktree::delete_session_branch(&rpath, &wt.name) {
-                            warn!(wt_name = %wt.name, %e, "stale branch delete failed");
-                        }
-                    }
-                }
-            }
-        }
+        self.prune_stale_git_worktrees();
 
         info!(
             registered,
             pruned, "startup: session restore complete (lazy — indexes load on first USE)"
         );
+    }
+
+    /// Restore (or prune) a single worktree dir based on its sentinel: prune on
+    /// missing/expired sentinels, register as pending on full metadata, leave
+    /// old-format sentinels for the agent to reconnect.  Bumps the counters.
+    fn restore_one_worktree(
+        &mut self,
+        wt_path: &std::path::Path,
+        wt_name: &str,
+        now: u64,
+        registered: &mut u32,
+        pruned: &mut u32,
+    ) {
+        match read_sentinel(wt_path) {
+            None => {
+                // No readable sentinel — orphan from an older version or a
+                // partially created worktree.  Prune unconditionally.
+                info!(%wt_name, "startup: no sentinel, pruning");
+                self.prune_single_worktree(wt_path, wt_name);
+                *pruned += 1;
+            }
+            Some(sentinel)
+                if now.saturating_sub(sentinel.last_active_secs)
+                    >= sentinel.ttl_secs.unwrap_or(SESSION_TTL_SECS) =>
+            {
+                info!(%wt_name, "startup: TTL expired, pruning");
+                self.prune_single_worktree(wt_path, wt_name);
+                *pruned += 1;
+            }
+            Some(SessionSentinel {
+                user,
+                source: Some(source),
+                branch: Some(branch),
+                alias: Some(alias),
+                ..
+            }) => {
+                // Warm worktree with full metadata — register as pending.  The
+                // index loads lazily when the agent issues USE for this session.
+                let user = user
+                    .as_deref()
+                    .unwrap_or_else(|| auth(AuthContext::Session))
+                    .to_owned();
+                let coords = SessionCoords::new(&user, &source, &branch, &alias);
+                let session_key = coords.map_key();
+                let worktree_name = coords.worktree_dir();
+                info!(%user, %source, %branch, %alias, "startup: session registered as pending");
+                drop(self.pending_sessions.insert(
+                    session_key,
+                    PendingSession {
+                        user,
+                        source,
+                        branch,
+                        alias,
+                        worktree_name,
+                    },
+                ));
+                *registered += 1;
+            }
+            Some(_) => {
+                // Old-format sentinel (timestamp only) — cannot recover
+                // source/branch/alias.  Leave on disk; the agent will re-issue
+                // USE when it next connects.
+                info!(%wt_name, "startup: old-format sentinel, leaving for agent reconnect");
+            }
+        }
+    }
+
+    /// Pass 2: sweep git worktree metadata entries whose checkout path is gone
+    /// (handles a crash-interrupted prune from a previous run).  In-memory and
+    /// pending sessions are protected from pruning.
+    fn prune_stale_git_worktrees(&self) {
+        let Ok(repo_entries) = std::fs::read_dir(&self.data_dir) else {
+            return;
+        };
+        let live_wt_names: std::collections::HashSet<&str> = self
+            .sessions
+            .values()
+            .map(|s| s.worktree_name.as_str())
+            .chain(
+                self.pending_sessions
+                    .values()
+                    .map(|p| p.worktree_name.as_str()),
+            )
+            .collect();
+
+        for re in repo_entries.flatten() {
+            let rpath = re.path();
+            if rpath.extension().is_none_or(|ext| ext != "git") {
+                continue;
+            }
+            let Ok(wts) = worktree::list(&rpath) else {
+                continue;
+            };
+            for wt in wts {
+                if live_wt_names.contains(wt.name.as_str()) {
+                    continue;
+                }
+                if !wt.path.exists() {
+                    info!(wt_name = %wt.name, "startup: pruning stale git worktree metadata");
+                    if let Err(e) = worktree::remove(&rpath, &wt.name) {
+                        warn!(wt_name = %wt.name, %e, "stale metadata prune failed");
+                    }
+                    if let Err(e) = worktree::delete_session_branch(&rpath, &wt.name) {
+                        warn!(wt_name = %wt.name, %e, "stale branch delete failed");
+                    }
+                }
+            }
+        }
     }
 
     /// Remove a single worktree directory and its git metadata from all bare repos.
