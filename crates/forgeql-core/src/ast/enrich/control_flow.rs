@@ -115,119 +115,134 @@ impl NodeEnricher for ControlFlowEnricher {
         table: &mut SymbolTable,
         scope: Option<&std::collections::HashSet<std::path::PathBuf>>,
     ) {
-        // Phase 1 (immutable): build file → sorted-functions lookup, then
-        // scan CF rows and map each to its containing function via binary
-        // search.  This is O(N log F) instead of the previous O(N × F).
-        //
-        // When `scope` is Some, we only iterate rows whose path is in the
-        // set — this is what makes incremental re-indexing O(P) instead of
-        // O(N) on large workspaces.
+        // Phase 1 (immutable): map each CF row to its enclosing function and
+        // accumulate per-function metric maxima.  When `scope` is Some, only
+        // rows whose path is in the set are visited, making incremental
+        // re-indexing O(P) instead of O(N) on large workspaces.
+        let (func_metrics, cf_encl) = build_cf_metrics(table, scope);
 
-        let (func_metrics, cf_encl) = {
-            let strings = &table.strings;
-            let in_scope = |row: &crate::ast::index::IndexRow| -> bool {
-                scope
-                    .as_ref()
-                    .is_none_or(|s| s.contains(strings.paths.get(row.path_id)))
-            };
-
-            let mut funcs_by_file: HashMap<&std::path::Path, Vec<(usize, std::ops::Range<usize>)>> =
-                HashMap::new();
-            for (i, row) in table.rows.iter().enumerate() {
-                if strings.fql_kinds.get(row.fql_kind_id) == lang::FQL_FUNCTION && in_scope(row) {
-                    funcs_by_file
-                        .entry(strings.paths.get(row.path_id))
-                        .or_default()
-                        .push((i, row.byte_range.clone()));
-                }
-            }
-            for funcs in funcs_by_file.values_mut() {
-                funcs.sort_by_key(|(_, range)| range.start);
-            }
-
-            let mut metrics: HashMap<usize, (i64, i64, i64)> = HashMap::new();
-            // Maps CF row index → enclosing function name.
-            let mut cf_encl: HashMap<usize, String> = HashMap::new();
-            for (cf_idx, row) in table.rows.iter().enumerate() {
-                let row_fql_kind = strings.fql_kinds.get(row.fql_kind_id);
-                if !CF_FQL_KINDS.contains(&row_fql_kind) {
-                    continue;
-                }
-                if !in_scope(row) {
-                    continue;
-                }
-                let row_path = strings.paths.get(row.path_id);
-                if let Some(funcs) = funcs_by_file.get(row_path) {
-                    // Binary search: find the last function whose start ≤ row start.
-                    let pos =
-                        funcs.partition_point(|(_, range)| range.start <= row.byte_range.start);
-                    if pos > 0 {
-                        let (func_idx, ref func_range) = funcs[pos - 1];
-                        if row.byte_range.end <= func_range.end {
-                            let entry = metrics.entry(func_idx).or_insert((0, 0, 0));
-                            let tests: i64 = strings
-                                .field_str(&row.fields, "condition_tests")
-                                .and_then(|s| s.parse().ok())
-                                .unwrap_or(0);
-                            let depth: i64 = strings
-                                .field_str(&row.fields, "paren_depth")
-                                .and_then(|s| s.parse().ok())
-                                .unwrap_or(0);
-                            entry.0 = entry.0.max(tests);
-                            entry.1 = entry.1.max(depth);
-                            entry.2 += 1;
-                            // Record enclosing function name for this CF row.
-                            let fn_name =
-                                strings.names.get(table.rows[func_idx].name_id).to_owned();
-                            drop(cf_encl.insert(cf_idx, fn_name));
-                        }
-                    }
-                }
-            }
-            (metrics, cf_encl)
-        };
-
-        // Phase 2 (mutable): pre-intern field keys and values, then apply.
-        // Two-phase pattern: intern first (borrows strings), apply second (borrows rows).
-        let phase2_entries: Vec<(usize, u32, u32, u32, u32, u32, u32)> = func_metrics
-            .into_iter()
-            .map(|(func_idx, (max_tests, max_depth, branch_count))| {
-                let (k_tests, v_tests) = table
-                    .strings
-                    .intern_field_entry("max_condition_tests", &max_tests.to_string());
-                let (k_depth, v_depth) = table
-                    .strings
-                    .intern_field_entry("max_paren_depth", &max_depth.to_string());
-                let (k_branch, v_branch) = table
-                    .strings
-                    .intern_field_entry("branch_count", &branch_count.to_string());
-                (
-                    func_idx, k_tests, v_tests, k_depth, v_depth, k_branch, v_branch,
-                )
-            })
-            .collect();
-        for (func_idx, k_tests, v_tests, k_depth, v_depth, k_branch, v_branch) in phase2_entries {
-            let row = &mut table.rows[func_idx];
-            let _ = row.fields.insert(k_tests, v_tests);
-            let _ = row.fields.insert(k_depth, v_depth);
-            let _ = row.fields.insert(k_branch, v_branch);
-        }
-
-        // Phase 3 (mutable): pre-intern enclosing_fn key, then write fn name values.
-        let k_encl = table.strings.field_keys.intern("enclosing_fn");
-        let phase3_entries: Vec<(usize, u32)> = cf_encl
-            .into_iter()
-            .map(|(cf_idx, fn_name)| {
-                let v = table.strings.field_values.intern(fn_name.as_str());
-                (cf_idx, v)
-            })
-            .collect();
-        for (cf_idx, v_encl) in phase3_entries {
-            let _ = table.rows[cf_idx].fields.insert(k_encl, v_encl);
-        }
+        // Phases 2 & 3 (mutable): write the aggregated metrics and the enclosing
+        // function names back onto the rows.
+        apply_cf_metrics(table, func_metrics);
+        apply_enclosing_fn(table, cf_encl);
     }
 }
 
+type CfMetrics = HashMap<usize, (i64, i64, i64)>;
+type CfEnclosing = HashMap<usize, String>;
+
+/// Phase 1 of `post_pass` (immutable): map each control-flow row to its
+/// enclosing function via binary search, accumulating per-function metric
+/// maxima and each CF row's enclosing function name.  O(N log F) rather than
+/// O(N x F); honours `scope` so incremental re-indexing stays O(P).
+fn build_cf_metrics(
+    table: &SymbolTable,
+    scope: Option<&std::collections::HashSet<std::path::PathBuf>>,
+) -> (CfMetrics, CfEnclosing) {
+    let strings = &table.strings;
+    let in_scope = |row: &crate::ast::index::IndexRow| -> bool {
+        scope
+            .as_ref()
+            .is_none_or(|s| s.contains(strings.paths.get(row.path_id)))
+    };
+
+    let mut funcs_by_file: HashMap<&std::path::Path, Vec<(usize, std::ops::Range<usize>)>> =
+        HashMap::new();
+    for (i, row) in table.rows.iter().enumerate() {
+        if strings.fql_kinds.get(row.fql_kind_id) == lang::FQL_FUNCTION && in_scope(row) {
+            funcs_by_file
+                .entry(strings.paths.get(row.path_id))
+                .or_default()
+                .push((i, row.byte_range.clone()));
+        }
+    }
+    for funcs in funcs_by_file.values_mut() {
+        funcs.sort_by_key(|(_, range)| range.start);
+    }
+
+    let mut metrics: CfMetrics = HashMap::new();
+    // Maps CF row index -> enclosing function name.
+    let mut cf_encl: CfEnclosing = HashMap::new();
+    for (cf_idx, row) in table.rows.iter().enumerate() {
+        let row_fql_kind = strings.fql_kinds.get(row.fql_kind_id);
+        if !CF_FQL_KINDS.contains(&row_fql_kind) {
+            continue;
+        }
+        if !in_scope(row) {
+            continue;
+        }
+        let row_path = strings.paths.get(row.path_id);
+        if let Some(funcs) = funcs_by_file.get(row_path) {
+            // Binary search: find the last function whose start <= row start.
+            let pos = funcs.partition_point(|(_, range)| range.start <= row.byte_range.start);
+            if pos > 0 {
+                let (func_idx, ref func_range) = funcs[pos - 1];
+                if row.byte_range.end <= func_range.end {
+                    let entry = metrics.entry(func_idx).or_insert((0, 0, 0));
+                    let tests: i64 = strings
+                        .field_str(&row.fields, "condition_tests")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0);
+                    let depth: i64 = strings
+                        .field_str(&row.fields, "paren_depth")
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0);
+                    entry.0 = entry.0.max(tests);
+                    entry.1 = entry.1.max(depth);
+                    entry.2 += 1;
+                    // Record enclosing function name for this CF row.
+                    let fn_name = strings.names.get(table.rows[func_idx].name_id).to_owned();
+                    drop(cf_encl.insert(cf_idx, fn_name));
+                }
+            }
+        }
+    }
+    (metrics, cf_encl)
+}
+
+/// Phase 2 of `post_pass` (mutable): intern then write the aggregated CF metrics
+/// onto each function row.  Two-phase: intern borrows strings, apply borrows rows.
+fn apply_cf_metrics(table: &mut SymbolTable, func_metrics: CfMetrics) {
+    let phase2_entries: Vec<(usize, u32, u32, u32, u32, u32, u32)> = func_metrics
+        .into_iter()
+        .map(|(func_idx, (max_tests, max_depth, branch_count))| {
+            let (k_tests, v_tests) = table
+                .strings
+                .intern_field_entry("max_condition_tests", &max_tests.to_string());
+            let (k_depth, v_depth) = table
+                .strings
+                .intern_field_entry("max_paren_depth", &max_depth.to_string());
+            let (k_branch, v_branch) = table
+                .strings
+                .intern_field_entry("branch_count", &branch_count.to_string());
+            (
+                func_idx, k_tests, v_tests, k_depth, v_depth, k_branch, v_branch,
+            )
+        })
+        .collect();
+    for (func_idx, k_tests, v_tests, k_depth, v_depth, k_branch, v_branch) in phase2_entries {
+        let row = &mut table.rows[func_idx];
+        let _ = row.fields.insert(k_tests, v_tests);
+        let _ = row.fields.insert(k_depth, v_depth);
+        let _ = row.fields.insert(k_branch, v_branch);
+    }
+}
+
+/// Phase 3 of `post_pass` (mutable): intern the `enclosing_fn` key, then write
+/// each CF row's enclosing function name.
+fn apply_enclosing_fn(table: &mut SymbolTable, cf_encl: CfEnclosing) {
+    let k_encl = table.strings.field_keys.intern("enclosing_fn");
+    let phase3_entries: Vec<(usize, u32)> = cf_encl
+        .into_iter()
+        .map(|(cf_idx, fn_name)| {
+            let v = table.strings.field_values.intern(fn_name.as_str());
+            (cf_idx, v)
+        })
+        .collect();
+    for (cf_idx, v_encl) in phase3_entries {
+        let _ = table.rows[cf_idx].fields.insert(k_encl, v_encl);
+    }
+}
 /// Count the number of atomic clauses in a condition subtree.
 ///
 /// Returns the number of independent sub-expressions joined by `&&` / `||`
