@@ -38,7 +38,68 @@ pub fn show_body<S: ::std::hash::BuildHasher>(
     let fn_start = fn_node.start_byte();
     let fn_start_line = byte_to_line(source, fn_start); // 0-based
 
-    let lines: Vec<Value> = match depth {
+    let lines_raw = collect_body_lines(source, fn_node, fn_start_line, depth, config);
+
+    let fn_end_line_raw = fn_node.end_position().row + 1;
+
+    // Re-derive the true end-line boundary by running the absorbed-sibling
+    // check live on the already-parsed AST node.  This supersedes the stored
+    // `enrichment["lines"]` value, which may be stale from an index built
+    // before a fix to the enrichment pipeline (e.g. a local-variable
+    // initializer incorrectly counted as an absorbed file-scope declaration).
+    // The live check always uses the current, post-fix code path.
+    //
+    // `absorbed_row` is the 0-based row of the first absorbed child, which
+    // mirrors the `end_row` used in the enrichment pipeline:
+    //   fn_end_line = absorbed_row + 1  (0-based row → 1-based line)
+    let fn_end_line =
+        crate::ast::enrich::metrics::first_absorbed_toplevel_in_compound(fn_node, config)
+            .map_or(fn_end_line_raw, |absorbed_row| absorbed_row + 1);
+
+    // Clip emitted lines to the true boundary (no-op for clean functions).
+    let mut lines: Vec<Value> = lines_raw
+        .into_iter()
+        .filter(|l| {
+            l["line"]
+                .as_u64()
+                .is_none_or(|n| usize::try_from(n).is_ok_and(|n| n <= fn_end_line))
+        })
+        .collect();
+
+    let path_str = req.workspace.relative(req.path).display().to_string();
+    attach_node_id(&mut lines, req, fn_start_line, &path_str);
+
+    // When DEPTH 0, include enrichment metadata so the agent can make informed
+    // decisions (lines, params, branches) without a separate FIND query.
+    let metadata = select_metadata(depth, enrichment);
+
+    let mut result = serde_json::json!({
+        "op":         "show_body",
+        "symbol":     req.symbol,
+        "path":       path_str,
+        "start_line": fn_start_line + 1,
+        "end_line":   fn_end_line,
+        "line":       fn_start_line + 1,
+        "byte_start": fn_start,
+        "depth":      depth,
+        "lines":      lines,
+    });
+    if !metadata.is_null() {
+        result["metadata"] = metadata;
+    }
+    Ok(result)
+}
+
+/// Build the per-line JSON entries for the requested `depth`: `None` = full body,
+/// `Some(0)` = signature only, `Some(n)` = body lines down to compound depth `n`.
+fn collect_body_lines(
+    source: &[u8],
+    fn_node: tree_sitter::Node<'_>,
+    fn_start_line: usize,
+    depth: Option<usize>,
+    config: &crate::ast::lang::LanguageConfig,
+) -> Vec<Value> {
+    match depth {
         None => {
             // Full body — number every line from fn_start_line.
             let text = std::str::from_utf8(&source[fn_node.byte_range()]).unwrap_or("");
@@ -74,88 +135,57 @@ pub fn show_body<S: ::std::hash::BuildHasher>(
             .into_iter()
             .map(|(ln, text)| serde_json::json!({ "line": ln, "text": text }))
             .collect(),
-    };
+    }
+}
 
-    let fn_end_line_raw = fn_node.end_position().row + 1;
-
-    // Re-derive the true end-line boundary by running the absorbed-sibling
-    // check live on the already-parsed AST node.  This supersedes the stored
-    // `enrichment["lines"]` value, which may be stale from an index built
-    // before a fix to the enrichment pipeline (e.g. a local-variable
-    // initializer incorrectly counted as an absorbed file-scope declaration).
-    // The live check always uses the current, post-fix code path.
-    //
-    // `absorbed_row` is the 0-based row of the first absorbed child, which
-    // mirrors the `end_row` used in the enrichment pipeline:
-    //   fn_end_line = absorbed_row + 1  (0-based row → 1-based line)
-    let fn_end_line =
-        crate::ast::enrich::metrics::first_absorbed_toplevel_in_compound(fn_node, config)
-            .map_or(fn_end_line_raw, |absorbed_row| absorbed_row + 1);
-
-    // Clip emitted lines to the true boundary (no-op for clean functions).
-    let mut lines: Vec<Value> = lines
-        .into_iter()
-        .filter(|l| {
-            l["line"]
-                .as_u64()
-                .is_none_or(|n| usize::try_from(n).is_ok_and(|n| n <= fn_end_line))
-        })
-        .collect();
-
-    let path_str = req.workspace.relative(req.path).display().to_string();
+/// Attach the stable `node_id` to the function's first emitted line, if the
+/// request carries an ordinal.
+fn attach_node_id(
+    lines: &mut [Value],
+    req: &ShowRequest<'_>,
+    fn_start_line: usize,
+    path_str: &str,
+) {
     if let Some(node_id) = req
         .ordinal
-        .map(|ord| crate::node_id::make_node_id(&path_str, ord))
+        .map(|ord| crate::node_id::make_node_id(path_str, ord))
         && let Some(line) = lines
             .iter_mut()
             .find(|line| line["line"].as_u64() == Some((fn_start_line + 1) as u64))
     {
         line["node_id"] = serde_json::Value::String(node_id);
     }
+}
 
-    // When DEPTH 0, include enrichment metadata so the agent can make
-    // informed decisions (e.g. how many lines, params, branches) without
-    // a separate FIND query.
-    let metadata: serde_json::Value = if depth == Some(0) && !enrichment.is_empty() {
-        const SELECTED_KEYS: &[&str] = &[
-            "lines",
-            "param_count",
-            "return_count",
-            "branch_count",
-            "is_recursive",
-            "has_todo",
-            "has_shadow",
-            "has_escape",
-            "has_unused_param",
-            "enclosing_type",
-        ];
-        let selected: serde_json::Map<String, serde_json::Value> = enrichment
-            .iter()
-            .filter(|(k, _)| SELECTED_KEYS.contains(&k.as_str()))
-            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-            .collect();
-        if selected.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::Value::Object(selected)
-        }
-    } else {
-        serde_json::Value::Null
-    };
-
-    let mut result = serde_json::json!({
-        "op":         "show_body",
-        "symbol":     req.symbol,
-        "path":       path_str,
-        "start_line": fn_start_line + 1,
-        "end_line":   fn_end_line,
-        "line":       fn_start_line + 1,
-        "byte_start": fn_start,
-        "depth":      depth,
-        "lines":      lines,
-    });
-    if !metadata.is_null() {
-        result["metadata"] = metadata;
+/// Select the enrichment metadata to surface for a `DEPTH 0` request: a curated
+/// subset of keys, or `Null` when not DEPTH 0 / nothing relevant is present.
+fn select_metadata<S: ::std::hash::BuildHasher>(
+    depth: Option<usize>,
+    enrichment: &HashMap<String, String, S>,
+) -> serde_json::Value {
+    const SELECTED_KEYS: &[&str] = &[
+        "lines",
+        "param_count",
+        "return_count",
+        "branch_count",
+        "is_recursive",
+        "has_todo",
+        "has_shadow",
+        "has_escape",
+        "has_unused_param",
+        "enclosing_type",
+    ];
+    if depth != Some(0) || enrichment.is_empty() {
+        return serde_json::Value::Null;
     }
-    Ok(result)
+    let selected: serde_json::Map<String, serde_json::Value> = enrichment
+        .iter()
+        .filter(|(k, _)| SELECTED_KEYS.contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    if selected.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::Object(selected)
+    }
 }
