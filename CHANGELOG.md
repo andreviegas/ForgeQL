@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.19] — 2026-06-13 — Refactor: decouple LegacyMemoryStorage from the columnar engine (steps 1, 1b-part1, 1b-part2)
+
+### Changed
+
+- `storage::columnar`: `ColumnarStorage::warm_or_open` / `warm` now take a backend-neutral `BuildInput { table, prebuilt_segment_map }` instead of `Option<&LegacyMemoryStorage>` — the columnar engine no longer names the legacy storage type at all
+- `storage::legacy`: removed `prebuilt_segment_map` from `LegacyMemoryStorage`; the inline columnar segment map (build output) now lives on `Session::prebuilt_segment_map`
+- `storage::legacy`: removed the `seg_ctx` field and `install_segment_build_ctx`; `SegmentBuildCtx` is now built by `Session::build_index` and passed directly to a new `build_with_seg_ctx` inherent method — `LegacyMemoryStorage` now holds only its `SymbolTable`, macro table, and language registry
+
+Pure refactor — no behaviour change.
+
 ## [0.76.18] — 2026-06-13 — Cross-platform release packaging: Debian, static musl, and macOS
 
 ### Added
