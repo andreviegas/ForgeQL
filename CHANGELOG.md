@@ -5,6 +5,11 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.76.10] — 2026-06-13 — Refactor: extract overlay on-disk format records into a submodule
+
+### Changed
+
+- `storage::columnar::overlay`: moved the on-disk format constants, the fixed-size `#[repr(C)]` `Pod` record types (`TocEntry`, `RowPtr`, `KindEntry`, `TrigramEntry`, `SegmentRecord`, `EnrichEntry`) and the heap-decoded `SegmentMeta` into a new `overlay::format` submodule, re-exported with `pub use format::*`. Pure code organisation — no behavioural change; `overlay.rs` drops from ~1530 to ~1340 lines.
 
 ## [0.76.9] — 2026-06-13 — Fix BUG-015 and consolidate golden test sessions
 
