@@ -179,6 +179,79 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
             })
         }
 
+        Rule::show_sources_stmt
+        | Rule::show_branches_stmt
+        | Rule::show_stats_stmt
+        | Rule::show_context_stmt
+        | Rule::show_signature_stmt
+        | Rule::show_outline_stmt
+        | Rule::show_members_stmt
+        | Rule::show_body_stmt
+        | Rule::show_callees_stmt
+        | Rule::show_lines_stmt => parse_show_statement(pair),
+
+        Rule::change_stmt => parse_change(pair),
+
+        Rule::copy_stmt => parse_copy_or_move(pair, false),
+        Rule::move_stmt => parse_copy_or_move(pair, true),
+
+        Rule::find_stmt => parse_find(pair),
+
+        Rule::find_node_stmt => {
+            let node_id = next_str(&mut pair.into_inner(), "find_node: expected node_id")?;
+            Ok(ForgeQLIR::FindNode { node_id })
+        }
+
+        Rule::change_node_stmt
+        | Rule::insert_node_stmt
+        | Rule::delete_node_stmt
+        | Rule::show_node_stmt => parse_node_stmt(pair),
+        Rule::show_more_stmt => parse_show_more_stmt(pair),
+
+        Rule::statement => {
+            let inner = pair
+                .into_inner()
+                .next()
+                .ok_or_else(|| ForgeError::DslParse("empty wrapper rule".into()))?;
+            parse_statement(inner)
+        }
+
+        Rule::transaction_stmt => parse_transaction(pair),
+
+        Rule::rollback_stmt => {
+            let name = pair.into_inner().next().map(|l| unquote(l.as_str()));
+            Ok(ForgeQLIR::Rollback { name })
+        }
+
+        Rule::verify_stmt => {
+            let step = pair
+                .into_inner()
+                .next()
+                .map(|l| unquote(l.as_str()))
+                .ok_or_else(|| ForgeError::DslParse("verify: expected step name".into()))?;
+            Ok(ForgeQLIR::VerifyBuild { step })
+        }
+
+        Rule::commit_stmt => {
+            let message = pair
+                .into_inner()
+                .next()
+                .map(|l| unquote(l.as_str()))
+                .ok_or_else(|| ForgeError::DslParse("commit: expected message".into()))?;
+            Ok(ForgeQLIR::Commit { message })
+        }
+
+        r => Err(ForgeError::DslParse(format!("unhandled rule: {r:?}"))),
+    }
+}
+
+/// Parse the read-only `SHOW ...` query family: sources, branches, stats,
+/// context, signature, outline, members, body, callees, and lines. Dispatched
+/// from `parse_statement`; `pair`'s rule is one of the `show_*_stmt` variants
+/// listed there. (`SHOW NODE` and `SHOW MORE` are handled by `parse_node_stmt`
+/// / `parse_show_more_stmt`, not here.)
+fn parse_show_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
+    match pair.as_rule() {
         Rule::show_sources_stmt => Ok(ForgeQLIR::ShowSources),
 
         Rule::show_branches_stmt => Ok(ForgeQLIR::ShowBranches),
@@ -284,58 +357,9 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
             })
         }
 
-        Rule::change_stmt => parse_change(pair),
-
-        Rule::copy_stmt => parse_copy_or_move(pair, false),
-        Rule::move_stmt => parse_copy_or_move(pair, true),
-
-        Rule::find_stmt => parse_find(pair),
-
-        Rule::find_node_stmt => {
-            let node_id = next_str(&mut pair.into_inner(), "find_node: expected node_id")?;
-            Ok(ForgeQLIR::FindNode { node_id })
-        }
-
-        Rule::change_node_stmt
-        | Rule::insert_node_stmt
-        | Rule::delete_node_stmt
-        | Rule::show_node_stmt => parse_node_stmt(pair),
-        Rule::show_more_stmt => parse_show_more_stmt(pair),
-
-        Rule::statement => {
-            let inner = pair
-                .into_inner()
-                .next()
-                .ok_or_else(|| ForgeError::DslParse("empty wrapper rule".into()))?;
-            parse_statement(inner)
-        }
-
-        Rule::transaction_stmt => parse_transaction(pair),
-
-        Rule::rollback_stmt => {
-            let name = pair.into_inner().next().map(|l| unquote(l.as_str()));
-            Ok(ForgeQLIR::Rollback { name })
-        }
-
-        Rule::verify_stmt => {
-            let step = pair
-                .into_inner()
-                .next()
-                .map(|l| unquote(l.as_str()))
-                .ok_or_else(|| ForgeError::DslParse("verify: expected step name".into()))?;
-            Ok(ForgeQLIR::VerifyBuild { step })
-        }
-
-        Rule::commit_stmt => {
-            let message = pair
-                .into_inner()
-                .next()
-                .map(|l| unquote(l.as_str()))
-                .ok_or_else(|| ForgeError::DslParse("commit: expected message".into()))?;
-            Ok(ForgeQLIR::Commit { message })
-        }
-
-        r => Err(ForgeError::DslParse(format!("unhandled rule: {r:?}"))),
+        r => Err(ForgeError::DslParse(format!(
+            "parse_show_statement: unhandled rule: {r:?}"
+        ))),
     }
 }
 

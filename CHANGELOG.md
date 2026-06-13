@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.21] — 2026-06-13 — Refactor: extract the SHOW family out of `parse_statement`
+
+### Changed
+
+- `parser`: pulled the ten read-only `SHOW *` arms (sources, branches, stats, context,
+  signature, outline, members, body, callees, lines) out of the 198-line `parse_statement`
+  dispatch into a dedicated `parse_show_statement` helper; `parse_statement` now routes them
+  with a single combined match arm and is ~104 lines. Pure refactor — parse output unchanged
+  (golden 329/0).
+
 ## [0.76.20] — 2026-06-13 — Refactor: decompose `collect_nodes` in the file indexer
 
 ### Changed
