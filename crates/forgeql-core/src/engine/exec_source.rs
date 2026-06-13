@@ -186,7 +186,6 @@ impl ForgeQLEngine {
         // to_session_id).  Callers echo this opaque token back on every request;
         // the engine decodes it into SessionCoords via from_session_id().
         let session_token = coords.to_session_id(); // returned to caller & used as map key
-        let map_key = session_token.clone();
         // All path and branch name derivations go through `SessionCoords`
         // so the layout can be changed in one place — see session/coords.rs.
         let wt_name = coords.worktree_dir();
@@ -218,39 +217,66 @@ impl ForgeQLEngine {
 
         // Configure columnar when a `.forgeql.yaml` is present (always-on).
         if maybe_config.is_some() {
-            let segments_dir = repo_path.join("forgeql").join("segments");
-            // Wrap git_blob_sha1 behind HashFn so ShadowWriter stays decoupled
-            // from the concrete provider type (Issue 1).
-            let hash_fn: crate::storage::HashFn = Arc::new(|b: &[u8]| git_blob_sha1(b).to_vec());
-            let overlays_dir = repo_path.join("forgeql").join("overlays");
-            session.set_columnar_build(crate::storage::ColumnarBuildContext::new(
-                segments_dir,
-                overlays_dir,
-                "git-sha1",
-                hash_fn,
-            ));
+            Self::configure_columnar_build(&mut session, &repo_path);
         }
 
         // Load the session index (warm path reads the columnar overlay from
         // disk; cold path loads the legacy table for the shadow-writer).
         self.load_session_index(&mut session)?;
 
+        // Restore checkpoint stack (FT6) and reindex dirty files on reconnect (FT7).
+        Self::restore_session_on_reconnect(&mut session, wt_existed);
+
+        // Freeze verify config at session start — sidecar takes priority over in-repo file.
+        // Any later CHANGE has no effect on VERIFY; steps are captured once here.
+        if let Some((workdir, config)) = maybe_config {
+            session.frozen_workdir = Some(workdir);
+            if let Some(ref budget_cfg) = config.line_budget {
+                // Sweep expired budget files before initialising the budget
+                // for this session — clean up abandoned branches for free.
+                crate::budget::sweep_expired(&self.data_dir);
+                session.init_budget(budget_cfg, wt_existed, &self.data_dir, budget_branch);
+            }
+            session.frozen_output_config = Some(config.output);
+            session.frozen_verify_steps = Some(config.verify_steps);
+        }
+
+        Ok(self.finalize_use_source(session, &coords, source_name, session_token, wt_existed))
+    }
+
+    /// Configure columnar shadow-write on `session` when a `.forgeql.yaml` is
+    /// present. Wraps `git_blob_sha1` behind `HashFn` so `ShadowWriter` stays
+    /// decoupled from the concrete provider type.
+    fn configure_columnar_build(session: &mut Session, repo_path: &std::path::Path) {
+        let segments_dir = repo_path.join("forgeql").join("segments");
+        let hash_fn: crate::storage::HashFn = Arc::new(|b: &[u8]| git_blob_sha1(b).to_vec());
+        let overlays_dir = repo_path.join("forgeql").join("overlays");
+        session.set_columnar_build(crate::storage::ColumnarBuildContext::new(
+            segments_dir,
+            overlays_dir,
+            "git-sha1",
+            hash_fn,
+        ));
+    }
+
+    /// Restore the checkpoint stack from disk (FT6) and, for a resumed worktree,
+    /// reindex any files modified on disk but not captured in a checkpoint (FT7).
+    /// Both steps degrade gracefully — failures are logged and ignored.
+    fn restore_session_on_reconnect(session: &mut Session, wt_existed: bool) {
         // FT6: restore checkpoint stack from disk if the file is present and
         // the stored HEAD matches the current worktree HEAD.  Both conditions
         // must hold to guarantee the stack is consistent with git state.
-        // On mismatch or any error, the session starts with an empty stack
-        // (graceful degradation — same behaviour as before FT6).
+        // On mismatch or any error, the session starts with an empty stack.
         {
             // Clone the path first to avoid holding an immutable borrow on
             // `session` while also passing `&mut session` to `try_restore`.
             let worktree = session.worktree_path.clone();
             let current_head = crate::session::Session::get_head_oid(&worktree).unwrap_or_default();
-            crate::session::checkpoint_file::try_restore(&mut session, &worktree, &current_head);
+            crate::session::checkpoint_file::try_restore(session, &worktree, &current_head);
         }
         // FT7: on reconnect, reindex any tracked files that were modified on
-        // disk but not captured in a checkpoint commit.  Skipped for fresh
-        // sessions (no dirty files possible).  Non-fatal — if the git diff
-        // fails (e.g. detached HEAD), log a warning and continue with the
+        // disk but not captured in a checkpoint commit.  Non-fatal — if the git
+        // diff fails (e.g. detached HEAD), log a warning and continue with the
         // cached index (graceful degradation to pre-FT7 behaviour).
         if wt_existed {
             match git::diff_head_to_worktree(&session.worktree_path) {
@@ -266,20 +292,22 @@ impl ForgeQLEngine {
                 }
             }
         }
-        // Freeze verify config at session start — sidecar takes priority over in-repo file.
-        // Any later CHANGE has no effect on VERIFY; steps are captured once here.
-        if let Some((workdir, config)) = maybe_config {
-            session.frozen_workdir = Some(workdir);
-            if let Some(ref budget_cfg) = config.line_budget {
-                // Sweep expired budget files before initialising the budget
-                // for this session — clean up abandoned branches for free.
-                crate::budget::sweep_expired(&self.data_dir);
-                session.init_budget(budget_cfg, wt_existed, &self.data_dir, budget_branch);
-            }
-            session.frozen_output_config = Some(config.output);
-            session.frozen_verify_steps = Some(config.verify_steps);
-        }
+    }
 
+    /// Finalise a freshly built session: record index stats, register it in the
+    /// live session map, clear any pending-session entry, and build the
+    /// `use_source` result. Consumes `session`.
+    /// Finalise a freshly built session: record index stats, register it in the
+    /// live session map, clear any pending-session entry, and build the
+    /// `use_source` result. Consumes `session`.
+    fn finalize_use_source(
+        &mut self,
+        mut session: Session,
+        coords: &SessionCoords,
+        source_name: &str,
+        session_token: String,
+        wt_existed: bool,
+    ) -> ForgeQLResult {
         // PhaseFT5: prefer columnar stats; fall back to legacy table.
         let symbols_indexed = session.engine().index_stats().map_or_else(
             || session.index().map_or(0, |idx| idx.rows.len()),
@@ -288,13 +316,14 @@ impl ForgeQLEngine {
 
         // Write the initial timestamp so background pruners see this worktree as active.
         session.touch();
+        let map_key = session_token.clone();
         drop(self.sessions.insert(map_key.clone(), session));
 
         // If this session was previously registered as pending (from
         // restore_sessions_from_disk), remove it now that it is fully active.
         drop(self.pending_sessions.remove(&map_key));
 
-        Ok(ForgeQLResult::SourceOp(SourceOpResult {
+        ForgeQLResult::SourceOp(SourceOpResult {
             op: "use_source".to_string(),
             source_name: Some(source_name.to_string()),
             session_id: Some(session_token),
@@ -309,7 +338,7 @@ impl ForgeQLEngine {
             } else {
                 Some(format!("created new worktree for {}", coords.git_branch()))
             },
-        }))
+        })
     }
 
     /// Reuse an in-memory session for this source + branch + alias when one

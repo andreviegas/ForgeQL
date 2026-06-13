@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.22] — 2026-06-13 — Refactor: split `use_source` into focused helpers
+
+### Changed
+
+- `engine::exec_source`: extracted three cohesive helpers out of the 165-line `use_source`
+  method — `configure_columnar_build` (columnar shadow-write setup), `restore_session_on_reconnect`
+  (FT6 checkpoint restore + FT7 dirty-file reindex), and `finalize_use_source` (stats, session-map
+  registration, result construction). `use_source` is now a ~97-line linear driver. Pure refactor —
+  session behaviour unchanged (golden 329/0).
+
 ## [0.76.21] — 2026-06-13 — Refactor: extract the SHOW family out of `parse_statement`
 
 ### Changed
