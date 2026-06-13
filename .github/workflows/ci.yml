@@ -71,7 +71,12 @@ jobs:
         run: cargo clippy --workspace --all-targets -- --deny warnings
 
   # -----------------------------------------------------------------------
-  # test — build the workspace in release mode and run all tests
+  # test — build the workspace and run all tests under the shared `ci` profile
+  #
+  # `ci` inherits `release` (opt-level 3 → fast test execution) but keeps
+  # debug-assertions + overflow-checks on, so build and test share ONE compile
+  # (target/ci/) instead of compiling the workspace twice (release + dev). The
+  # local gate (data/scripts/ci-check.sh) runs the identical commands.
   # -----------------------------------------------------------------------
   test:
     name: Build and Test
@@ -94,8 +99,8 @@ jobs:
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-test-
 
-      - name: Build (release)
-        run: cargo build --workspace --release
+      - name: Build (ci profile)
+        run: cargo build --workspace --profile ci
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --profile ci

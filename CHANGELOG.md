@@ -6,6 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.8] — 2026-06-13 — Refactor: decompose large functions across enrich, show, engine, filter, and columnar modules
+
+### Changed
+
+- `walk_scopes_iterative` (enrich): extracted into `ScopeTracker` struct + `push_children` helper
+- `update_guard_stack` (enrich): hoisted into shared `guard_utils` module
+- Escape/enrich-row return and macro walks (enrich): split into dedicated helpers
+- `control_flow` post-pass (enrich): decomposed into build-phase and apply-phase helpers
+- `show_body` (show): split into `collect_body_lines`, `attach_node_id`, and `select_metadata`
+- `exec_rollback` (engine): extracted `pop_rollback_checkpoint` + `restore_session_after_reset`
+- `exec_show` dispatch (engine): extracted `dispatch_show_op` + `apply_list_clauses`
+- `restore_sessions_from_disk` (engine): split into `restore_one_worktree` + `prune_stale_git_worktrees`
+- `apply_clauses_inner` (filter): split into where/group-by/ordering helpers
+- `materialize_all` (columnar): decomposed into segment-ordering, cap, and per-segment helpers
+- `step55_build_enrich_bitmaps` (columnar): split into posting/numeric/serialize helpers
+
+No behaviour change.
+
 ## [0.76.7] — 2026-06-12 — Refactor: decompose analyse_uses into UseTracker accumulator and helpers
 
 ### Changed
