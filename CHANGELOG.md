@@ -5,6 +5,12 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.76.14] — 2026-06-13 — Refactor: extract segment_reader loader helpers into a submodule
+
+### Changed
+
+- `storage::columnar::segment_reader`: moved the eight open-time loader free functions (`parse_toc`, `blob_slice`, `parse_column_entries`, `load_kind_postings`, `load_enrichment_postings`, `load_zone_maps`, `decode_name_postings`, `load_name_prefix`) out of `segment_reader.rs` into a new `segment_reader::load` submodule as `pub(super)` helpers. Pure code organisation — no behavioural change; `segment_reader.rs` drops another ~270 lines.
+
 ## [0.76.13] — 2026-06-13 — Refactor: move segment_reader.rs unit tests into segment_reader/tests.rs
 
 ### Changed
