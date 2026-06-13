@@ -5,6 +5,12 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.76.15] — 2026-06-13 — Refactor: move parser unit tests into parser/tests.rs
+
+### Changed
+
+- `parser`: moved the ~1160-line `#[cfg(test)] mod tests` block out of `parser/mod.rs` into a new `parser/tests.rs` file module (declared `#[cfg(test)] mod tests;`), joining the existing `change`/`clauses`/`find`/`helpers`/`transaction` submodules. Tests unchanged; `parser/mod.rs` drops from ~1612 to ~448 lines.
+
 ## [0.76.14] — 2026-06-13 — Refactor: extract segment_reader loader helpers into a submodule
 
 ### Changed
