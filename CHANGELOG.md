@@ -5,6 +5,12 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.76.13] — 2026-06-13 — Refactor: move segment_reader.rs unit tests into segment_reader/tests.rs
+
+### Changed
+
+- `storage::columnar::segment_reader`: moved the ~400-line `#[cfg(test)] mod tests` block out of `segment_reader.rs` into a new `segment_reader/tests.rs` file module (declared `#[cfg(test)] #[expect(clippy::unwrap_used, clippy::expect_used)] mod tests;`). Tests unchanged; `segment_reader.rs` drops from ~1522 to ~1110 lines.
+
 ## [0.76.12] — 2026-06-13 — Refactor: move result.rs unit tests into result/tests.rs
 
 ### Changed
