@@ -430,9 +430,13 @@ impl ForgeQLEngine {
         } else {
             session.legacy_storage()
         };
+        let input = crate::storage::columnar::BuildInput {
+            table: legacy.and_then(|l| l.table()),
+            prebuilt_segment_map: legacy.and_then(|l| l.prebuilt_segment_map.clone()),
+        };
         match crate::storage::columnar::ColumnarStorage::warm_or_open(
             &ctx,
-            legacy,
+            input,
             session.worktree_path.clone(),
             &commit,
             Arc::clone(&self.lang_registry),

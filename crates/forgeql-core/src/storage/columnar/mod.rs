@@ -44,6 +44,7 @@ pub mod segment_builder;
 pub mod segment_reader;
 pub mod shadow_writer;
 
+pub use build_context::BuildInput;
 pub use build_context::ColumnarBuildContext;
 pub use columnar_storage::ColumnarStorage;
 pub use delta_file::{DeltaFile, StagedEntry};

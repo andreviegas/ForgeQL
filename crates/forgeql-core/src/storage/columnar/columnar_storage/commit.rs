@@ -6,8 +6,8 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result, anyhow};
 use tracing::{debug, info};
 
+use super::super::build_context::BuildInput;
 use crate::ast::lang::LanguageRegistry;
-use crate::storage::LegacyMemoryStorage;
 
 use super::super::build_context::ColumnarBuildContext;
 use super::super::delta_file::DeltaFile;
@@ -42,7 +42,7 @@ impl ColumnarStorage {
     )]
     pub fn warm_or_open(
         ctx: &crate::storage::ColumnarBuildContext,
-        legacy: Option<&LegacyMemoryStorage>,
+        input: BuildInput<'_>,
         worktree_path: PathBuf,
         commit_sha: &str,
         lang_registry: Arc<LanguageRegistry>,
@@ -88,7 +88,7 @@ impl ColumnarStorage {
 
                 // Build segments + overlay. Prefer the inline fast-path when
                 // segments were already written per-file during build_index.
-                let segment_map_opt = legacy.and_then(|l| l.prebuilt_segment_map.clone());
+                let segment_map_opt = input.prebuilt_segment_map;
 
                 if let Some(segment_map) = segment_map_opt {
                     // Fast-path: segments written inline — skip ShadowWriter.
@@ -113,9 +113,7 @@ impl ColumnarStorage {
                     } else {
                         debug!(%commit_sha, "columnar warm_or_open: overlay built (inline path)");
                     }
-                } else if let Some(legacy) = legacy
-                    && let Some(table) = legacy.table()
-                {
+                } else if let Some(table) = input.table {
                     // Legacy path: shadow-write from the merged SymbolTable.
                     let writer = ShadowWriter::new(
                         table,
@@ -183,13 +181,13 @@ impl ColumnarStorage {
     /// Propagates errors from `warm_or_open`.
     pub fn warm(
         ctx: &crate::storage::ColumnarBuildContext,
-        legacy: Option<&LegacyMemoryStorage>,
+        input: BuildInput<'_>,
         worktree_path: PathBuf,
         commit_sha: &str,
     ) -> Result<()> {
         // Background warming never calls reindex_files; use an empty registry.
         let registry = Arc::new(LanguageRegistry::new(vec![]));
-        let _ = Self::warm_or_open(ctx, legacy, worktree_path, commit_sha, registry)?;
+        let _ = Self::warm_or_open(ctx, input, worktree_path, commit_sha, registry)?;
         Ok(())
     }
 

@@ -225,9 +225,14 @@ pub fn warm_snapshot(
         // the columnar segments and overlay (locking internally).
         session.build_index()?;
         if let Some(ctx) = session.columnar_build().cloned() {
+            let legacy = session.legacy_storage();
+            let input = crate::storage::columnar::BuildInput {
+                table: legacy.and_then(|l| l.table()),
+                prebuilt_segment_map: legacy.and_then(|l| l.prebuilt_segment_map.clone()),
+            };
             let _ = crate::storage::columnar::ColumnarStorage::warm(
                 &ctx,
-                session.legacy_storage(),
+                input,
                 wt_path.clone(),
                 &target.commit_sha,
             );

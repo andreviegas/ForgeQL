@@ -6,6 +6,20 @@ use tracing::warn;
 
 use super::HashFn;
 
+/// Inputs the columnar engine consumes to build or open an overlay, decoupled from
+/// any concrete storage backend.
+///
+/// Handler-style separation (à la MySQL storage engines): the columnar engine never
+/// names the legacy in-memory storage type. The session/engine layer extracts the
+/// merged `SymbolTable` and/or the inline segment map and hands them over here.
+pub struct BuildInput<'a> {
+    /// Merged symbol table to shadow-write from when no inline segments exist.
+    pub table: Option<&'a crate::ast::index::SymbolTable>,
+    /// Segments already written inline during `build_index` — when present, the
+    /// `ShadowWriter` pass is skipped entirely.
+    pub prebuilt_segment_map: Option<HashMap<PathBuf, Vec<u8>>>,
+}
+
 /// Per-session columnar build configuration.
 ///
 /// Populated at session creation when columnar shadow-write is enabled,
