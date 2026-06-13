@@ -6,6 +6,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.20] — 2026-06-13 — Refactor: decompose `collect_nodes` in the file indexer
+
+### Changed
+
+- `ast::index::file_indexer`: split the 209-line `collect_nodes` AST-walk loop into three
+  focused free helpers — `update_guard_stack` (guard-frame pop/push), `process_node_rows`
+  (named / `macro_call` / `extra_rows` / usage-site emission for one node, returning its
+  ordinal), and `ascend_to_next_sibling` (cursor unwind + stack/depth bookkeeping).
+  `collect_nodes` is now a 108-line driver loop. Pure refactor — row output and node
+  ordinals are unchanged (golden 329/0).
+
 ## [0.76.19] — 2026-06-13 — Refactor: decouple LegacyMemoryStorage from the columnar engine (steps 1, 1b-part1, 1b-part2)
 
 ### Changed

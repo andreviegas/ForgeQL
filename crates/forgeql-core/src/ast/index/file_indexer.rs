@@ -11,7 +11,7 @@ use crate::ast::enrich::guard_utils::{
 };
 use crate::ast::enrich::macro_table::MacroTable;
 use crate::ast::enrich::{EnrichContext, NodeEnricher};
-use crate::ast::lang::LanguageSupport;
+use crate::ast::lang::{LanguageConfig, LanguageSupport};
 use crate::error::ForgeError;
 
 use super::{IndexRow, SegmentBuildCtx, SymbolTable, node_text};
@@ -363,7 +363,6 @@ fn collect_nodes(
     ts_language: &tree_sitter::Language,
 ) {
     let config = ctx.language.config();
-    let lang_name = ctx.language.name();
     let mut guard_stack: Vec<GuardFrame> = Vec::new();
     // Tracks the kind of the parent node at each level of the DFS, updated
     // O(1) by the cursor navigation below.  Avoids calling node.parent()
@@ -396,125 +395,34 @@ fn collect_nodes(
     let mut parent_ordinal_stack: Vec<u32> = Vec::new();
     loop {
         let node = cursor.node();
-        // Tracks whether this iteration produced a named row (and its ordinal),
-        // so goto_first_child can push the correct parent ordinal.
-        let mut current_node_ordinal: Option<u32> = None;
 
-        // --- Guard stack management ---
-        // Pop frames whose byte scope we've left.
-        while let Some(frame) = guard_stack.last() {
-            if node.start_byte() >= frame.guard_byte_range.end {
-                drop(guard_stack.pop());
-            } else {
-                break;
-            }
-        }
-        // Push a new frame when entering a block-guard-opening node.
-        if config.has_guard_support()
-            && (config.is_block_guard_kind(node.kind())
-                || config.is_elif_kind(node.kind())
-                || config.is_else_kind(node.kind()))
-        {
-            let frame = build_guard_frame(node, source, config, &guard_stack);
-            guard_stack.push(frame);
-        }
-        // Push a heuristic guard frame for env-guarded `if` nodes
-        // (e.g. Python `if TYPE_CHECKING:` or `if sys.platform == "linux":`).
-        if let Some(regex_set) = &env_guard_regex
-            && ctx.language.map_kind(node.kind()) == Some("if")
-            && let Some(frame) = build_env_guard_frame(node, source, config, regex_set)
-        {
-            guard_stack.push(frame);
-        }
-        // --- End guard stack management ---
+        // --- Guard stack management (pop stale frames, push new guard frames) ---
+        update_guard_stack(
+            node,
+            source,
+            config,
+            env_guard_regex.as_ref(),
+            ctx.language,
+            &mut guard_stack,
+        );
 
         // Skip alternate conditional-compilation branches entirely.
         let skip = config.is_skip_kind(node.kind());
 
         if !skip {
-            // Build the enrichment context once for this node.
-            let enrich_ctx = EnrichContext {
+            let parent_ordinal = parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
+            let current_node_ordinal = process_node_rows(
+                ctx,
                 node,
                 source,
-                path: ctx.path,
-                language_name: lang_name,
-                language_config: config,
-                language_support: ctx.language,
-                guard_stack: &guard_stack,
-                macro_table: ctx.macro_table,
-                parent_kind: parent_kind_stack.last().copied().unwrap_or(""),
-                inside_string: string_depth > 0,
-                inside_error: error_depth > 0,
-            };
-
-            // Every named node becomes a row.
-            if let Some(name) = ctx.language.extract_name(node, source) {
-                let parent_ordinal = parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
-                let fql_kind_val = ctx.language.map_kind(node.kind()).unwrap_or("");
-                let mut sink = RowSink {
-                    table: ctx.table,
-                    enrichers: ctx.enrichers,
-                    remapper: ctx.ordinal_remapper.as_mut(),
-                    row_ordinal_counter: &mut row_ordinal_counter,
-                };
-                current_node_ordinal = emit_addressable_row(
-                    &mut sink,
-                    &enrich_ctx,
-                    ts_language,
-                    &name,
-                    fql_kind_val,
-                    parent_ordinal,
-                );
-            } else if let Some(mtable) = ctx.macro_table {
-                // Re-tag: tree-sitter-cpp parses C macro calls as call_expression,
-                // not macro_invocation.  When extract_name returns None for a
-                // call_expression whose function name is in the MacroTable, emit a
-                // macro_call row.
-                let call_kind = config.call_expression_kind();
-                if !call_kind.is_empty()
-                    && node.kind() == call_kind
-                    && let Some(func_node) = node.child_by_field_name("function")
-                {
-                    let func_name = node_text(source, func_node);
-                    if !func_name.is_empty() && mtable.contains(&func_name) {
-                        let parent_ordinal =
-                            parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
-                        let mut sink = RowSink {
-                            table: ctx.table,
-                            enrichers: ctx.enrichers,
-                            remapper: ctx.ordinal_remapper.as_mut(),
-                            row_ordinal_counter: &mut row_ordinal_counter,
-                        };
-                        current_node_ordinal = emit_addressable_row(
-                            &mut sink,
-                            &enrich_ctx,
-                            ts_language,
-                            &func_name,
-                            "macro_call",
-                            parent_ordinal,
-                        );
-                    }
-                }
-            }
-
-            // Run extra_rows() for every node (even if extract_name returned None).
-            let parent_ordinal = parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
-            let mut sink = RowSink {
-                table: ctx.table,
-                enrichers: ctx.enrichers,
-                remapper: ctx.ordinal_remapper.as_mut(),
-                row_ordinal_counter: &mut row_ordinal_counter,
-            };
-            emit_extra_rows(&mut sink, &enrich_ctx, parent_ordinal);
-
-            // All identifier tokens become usage sites.
-            if config.is_usage_node_kind(node.kind()) {
-                let name = node_text(source, node);
-                if name.len() > 1 {
-                    let line = node.start_position().row + 1;
-                    ctx.table.add_usage(name, ctx.path, node.byte_range(), line);
-                }
-            }
+                ts_language,
+                &guard_stack,
+                parent_kind_stack.last().copied().unwrap_or(""),
+                parent_ordinal,
+                string_depth > 0,
+                error_depth > 0,
+                &mut row_ordinal_counter,
+            );
 
             // Descend into children.
             if cursor.goto_first_child() {
@@ -544,26 +452,189 @@ fn collect_nodes(
         if cursor.goto_next_sibling() {
             continue;
         }
-        let mut found_sibling = false;
-        while cursor.goto_parent() {
-            let _ = parent_ordinal_stack.pop();
-            if let Some(popped) = parent_kind_stack.pop() {
-                if config.is_opaque_string_kind(popped) || config.is_comment_kind(popped) {
-                    string_depth = string_depth.saturating_sub(1);
-                }
-                if popped == "ERROR" {
-                    error_depth = error_depth.saturating_sub(1);
-                }
-            }
-            if cursor.goto_next_sibling() {
-                found_sibling = true;
-                break;
-            }
-        }
-        if !found_sibling {
+        if !ascend_to_next_sibling(
+            cursor,
+            config,
+            &mut parent_ordinal_stack,
+            &mut parent_kind_stack,
+            &mut string_depth,
+            &mut error_depth,
+        ) {
             break;
         }
     }
+}
+
+/// Advance the `guard_stack` for `node`: pop frames whose byte scope we have
+/// left, then push a block/elif/else guard frame and/or a heuristic env-guard
+/// frame when `node` opens one. Extracted from the `collect_nodes` walk loop.
+fn update_guard_stack(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    config: &LanguageConfig,
+    env_guard_regex: Option<&regex::RegexSet>,
+    language: &dyn LanguageSupport,
+    guard_stack: &mut Vec<GuardFrame>,
+) {
+    // Pop frames whose byte scope we've left.
+    while let Some(frame) = guard_stack.last() {
+        if node.start_byte() >= frame.guard_byte_range.end {
+            drop(guard_stack.pop());
+        } else {
+            break;
+        }
+    }
+    // Push a new frame when entering a block-guard-opening node.
+    if config.has_guard_support()
+        && (config.is_block_guard_kind(node.kind())
+            || config.is_elif_kind(node.kind())
+            || config.is_else_kind(node.kind()))
+    {
+        let frame = build_guard_frame(node, source, config, &*guard_stack);
+        guard_stack.push(frame);
+    }
+    // Push a heuristic guard frame for env-guarded `if` nodes
+    // (e.g. Python `if TYPE_CHECKING:` or `if sys.platform == "linux":`).
+    if let Some(regex_set) = env_guard_regex
+        && language.map_kind(node.kind()) == Some("if")
+        && let Some(frame) = build_env_guard_frame(node, source, config, regex_set)
+    {
+        guard_stack.push(frame);
+    }
+}
+
+/// Emit all symbol-table rows for a single (non-skipped) `node`: the named row
+/// (or a re-tagged `macro_call` row), every enricher `extra_rows`, and any
+/// usage site. Returns the named row's ordinal so the caller can propagate it
+/// to descendant nodes. Does **not** descend into children — the caller owns
+/// the cursor walk. Extracted from the `collect_nodes` walk loop.
+#[allow(clippy::too_many_arguments)]
+fn process_node_rows(
+    ctx: &mut IndexContext<'_>,
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    ts_language: &tree_sitter::Language,
+    guard_stack: &[GuardFrame],
+    parent_kind: &'static str,
+    parent_ordinal: u32,
+    inside_string: bool,
+    inside_error: bool,
+    row_ordinal_counter: &mut u32,
+) -> Option<u32> {
+    let config = ctx.language.config();
+    let lang_name = ctx.language.name();
+    let mut current_node_ordinal: Option<u32> = None;
+
+    // Build the enrichment context once for this node.
+    let enrich_ctx = EnrichContext {
+        node,
+        source,
+        path: ctx.path,
+        language_name: lang_name,
+        language_config: config,
+        language_support: ctx.language,
+        guard_stack,
+        macro_table: ctx.macro_table,
+        parent_kind,
+        inside_string,
+        inside_error,
+    };
+
+    // Every named node becomes a row.
+    if let Some(name) = ctx.language.extract_name(node, source) {
+        let fql_kind_val = ctx.language.map_kind(node.kind()).unwrap_or("");
+        let mut sink = RowSink {
+            table: ctx.table,
+            enrichers: ctx.enrichers,
+            remapper: ctx.ordinal_remapper.as_mut(),
+            row_ordinal_counter,
+        };
+        current_node_ordinal = emit_addressable_row(
+            &mut sink,
+            &enrich_ctx,
+            ts_language,
+            &name,
+            fql_kind_val,
+            parent_ordinal,
+        );
+    } else if let Some(mtable) = ctx.macro_table {
+        // Re-tag: tree-sitter-cpp parses C macro calls as call_expression,
+        // not macro_invocation.  When extract_name returns None for a
+        // call_expression whose function name is in the MacroTable, emit a
+        // macro_call row.
+        let call_kind = config.call_expression_kind();
+        if !call_kind.is_empty()
+            && node.kind() == call_kind
+            && let Some(func_node) = node.child_by_field_name("function")
+        {
+            let func_name = node_text(source, func_node);
+            if !func_name.is_empty() && mtable.contains(&func_name) {
+                let mut sink = RowSink {
+                    table: ctx.table,
+                    enrichers: ctx.enrichers,
+                    remapper: ctx.ordinal_remapper.as_mut(),
+                    row_ordinal_counter,
+                };
+                current_node_ordinal = emit_addressable_row(
+                    &mut sink,
+                    &enrich_ctx,
+                    ts_language,
+                    &func_name,
+                    "macro_call",
+                    parent_ordinal,
+                );
+            }
+        }
+    }
+
+    // Run extra_rows() for every node (even if extract_name returned None).
+    let mut sink = RowSink {
+        table: ctx.table,
+        enrichers: ctx.enrichers,
+        remapper: ctx.ordinal_remapper.as_mut(),
+        row_ordinal_counter,
+    };
+    emit_extra_rows(&mut sink, &enrich_ctx, parent_ordinal);
+
+    // All identifier tokens become usage sites.
+    if config.is_usage_node_kind(node.kind()) {
+        let name = node_text(source, node);
+        if name.len() > 1 {
+            let line = node.start_position().row + 1;
+            ctx.table.add_usage(name, ctx.path, node.byte_range(), line);
+        }
+    }
+
+    current_node_ordinal
+}
+
+/// Walk up the cursor until a node with an unvisited next sibling is found,
+/// unwinding the parent/ordinal stacks and string/error depth counters on the
+/// way. Returns `true` if a next sibling was reached, `false` at end of tree.
+/// Extracted from the `collect_nodes` walk loop.
+fn ascend_to_next_sibling(
+    cursor: &mut tree_sitter::TreeCursor<'_>,
+    config: &LanguageConfig,
+    parent_ordinal_stack: &mut Vec<u32>,
+    parent_kind_stack: &mut Vec<&'static str>,
+    string_depth: &mut usize,
+    error_depth: &mut usize,
+) -> bool {
+    while cursor.goto_parent() {
+        let _ = parent_ordinal_stack.pop();
+        if let Some(popped) = parent_kind_stack.pop() {
+            if config.is_opaque_string_kind(popped) || config.is_comment_kind(popped) {
+                *string_depth = string_depth.saturating_sub(1);
+            }
+            if popped == "ERROR" {
+                *error_depth = error_depth.saturating_sub(1);
+            }
+        }
+        if cursor.goto_next_sibling() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Fields and identity metadata prepared for a single index row, shared by the
