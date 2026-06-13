@@ -5,6 +5,12 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.76.11] — 2026-06-13 — Refactor: extract overlay open-time parsing helpers into a submodule
+
+### Changed
+
+- `storage::columnar::overlay`: moved the open-time parsing free functions (`parse_header`, `open_blobs`, `build_segment_offsets`, `parse_file_entries`, `parse_enrich_index`, `parse_toc_entries`, `find_blob_ranges`, `decode_segment_metas`, `validate_blob_layout`) out of `overlay.rs` into a new `overlay::parse` submodule as `pub(super)` helpers. Pure code organisation — no behavioural change; `overlay.rs` drops another ~300 lines.
+
 ## [0.76.10] — 2026-06-13 — Refactor: extract overlay on-disk format records into a submodule
 
 ### Changed
