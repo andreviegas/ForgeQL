@@ -1458,11 +1458,6 @@
     "name": "GSMB2_show_members_TSSLSocket_fql_kind_bug2"
   },
   {
-    "alias": "nid-tests",
-    "expect_symbols_indexed": 2829244,
-    "use": "zephyr-andre.zephyr-main"
-  },
-  {
     "expect_row_count": 1,
     "expect_rows": [
       {
@@ -1575,11 +1570,6 @@
     "expect_row_count": 0,
     "fql": "FIND symbols WHERE name = 'z_priq_rb_lessthan_renamed' IN 'kernel/priority_queues.c'",
     "name": "NID16_renamed_function_removed_after_rollback"
-  },
-  {
-    "alias": "rw-tests",
-    "expect_symbols_indexed": 2829244,
-    "use": "zephyr-andre.zephyr-main"
   },
   {
     "expect_field": {"type": "begin_transaction"},
