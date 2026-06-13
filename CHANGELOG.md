@@ -6,6 +6,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.23] — 2026-06-13 — Refactor: decompose columnar `resolve_impl`
+
+### Changed
+
+- `storage::columnar` query: split the 157-line `resolve_impl` segment-resolution method into
+  three focused helpers — `prune_seg_order_by_zone_maps` (numeric zone-map pruning),
+  `collect_resolve_candidates` (per-segment enclosing-type / enrichment / WHERE filtering, returning
+  the `ResolveCandidates` `(all, preferred)` pair), and `pick_best_resolved` (last-write-wins
+  selection). `resolve_impl` is now a ~71-line pipeline. Pure refactor — resolution behaviour
+  unchanged (golden 329/0).
+
 ## [0.76.22] — 2026-06-13 — Refactor: split `use_source` into focused helpers
 
 ### Changed

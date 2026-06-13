@@ -14,6 +14,9 @@ use crate::storage::columnar::columnar_storage::fast_paths::{
 };
 use crate::storage::columnar::segment_builder::ZONEMAP_NUMERIC_FIELDS;
 use crate::storage::columnar::segment_reader::SegmentReader;
+/// Candidate `(segment_index, local_row)` pairs produced by a resolve scan:
+/// `(all, preferred)` — every passing candidate and the `prefer_kinds` subset.
+type ResolveCandidates = (Vec<(u32, u32)>, Vec<(u32, u32)>);
 impl ColumnarStorage {
     /// Core columnar resolve used by all three `StorageEngine::resolve_*` methods.
     ///
@@ -25,10 +28,6 @@ impl ColumnarStorage {
     ///    (candidates whose `fql_kind` is in `prefer_kinds`, if given).
     /// 5. Pick: last preferred candidate → last definition candidate → last overall.
     /// 6. Convert the chosen row to a [`SymbolLocation`].
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Three-phase resolution: dirty-overlay scan, persistent-overlay scan with zone-map pruning, and best-candidate selection"
-    )]
     pub(super) fn resolve_impl(
         &self,
         name: &str,
@@ -82,7 +81,30 @@ impl ColumnarStorage {
         }
 
         // Zone-map prune for numeric range predicates.
-        // Same field-alias and negative-value rules as in find_symbols.
+        self.prune_seg_order_by_zone_maps(&mut seg_order, clauses);
+
+        // Collect every candidate that passes all filters; `preferred` also matches
+        // `prefer_kinds` (if given).
+        let (all, preferred) = self.collect_resolve_candidates(
+            seg_order,
+            &by_segment,
+            clauses,
+            enclosing_owner,
+            prefer_kinds,
+        );
+        if all.is_empty() {
+            return None;
+        }
+
+        let chosen = self.pick_best_resolved(&all, &preferred);
+        chosen.map(|(seg_idx, local_row)| self.location_for_row(seg_idx, local_row, root))
+    }
+
+    /// Zone-map prune for numeric range predicates: drop (or, for impossible
+    /// predicates on u32 columns, clear) candidate segments in `seg_order` that
+    /// cannot satisfy a numeric `WHERE`. Same field-alias and negative-value
+    /// rules as `find_symbols`.
+    fn prune_seg_order_by_zone_maps(&self, seg_order: &mut Vec<u32>, clauses: &Clauses) {
         'zone: for pred in &clauses.where_predicates {
             if let PredicateValue::Number(val_i64) = &pred.value {
                 let col = match pred.field.as_str() {
@@ -109,9 +131,20 @@ impl ColumnarStorage {
                 }
             }
         }
+    }
 
-        // `all` — every candidate that passes all filters.
-        // `preferred` — subset that also matches `prefer_kinds` (if given).
+    /// Scan the candidate segments in `seg_order`, applying the enclosing-type
+    /// filter (for qualified names), the enrichment-postings prefilter, and the
+    /// `WHERE` predicates. Returns `(all, preferred)`: every passing `(seg, row)`
+    /// pair, and the subset whose `fql_kind` also matches `prefer_kinds`.
+    fn collect_resolve_candidates(
+        &self,
+        seg_order: Vec<u32>,
+        by_segment: &std::collections::HashMap<u32, RoaringBitmap>,
+        clauses: &Clauses,
+        enclosing_owner: Option<&str>,
+        prefer_kinds: Option<&[&str]>,
+    ) -> ResolveCandidates {
         let mut all: Vec<(u32, u32)> = Vec::new();
         let mut preferred: Vec<(u32, u32)> = Vec::new();
 
@@ -127,15 +160,15 @@ impl ColumnarStorage {
             };
             let relative_path = &seg_meta.source_path;
 
-            // 2. Enrichment-postings prefilter — bitmap intersection per allowlisted
-            //    field before any per-row work.  Mirrors the same step in materialize_all.
+            // Enrichment-postings prefilter — bitmap intersection per allowlisted
+            // field before any per-row work.  Mirrors the same step in materialize_all.
             let local_rows = seg.prefilter_enrichment_postings(local_rows.clone(), clauses);
             if local_rows.is_empty() {
                 continue;
             }
 
             for local_row in local_rows {
-                // 1. Enclosing-type filter for qualified names.
+                // Enclosing-type filter for qualified names.
                 if let Some(owner) = enclosing_owner
                     && seg
                         .extra_field_str("enclosing_type", local_row)
@@ -145,7 +178,7 @@ impl ColumnarStorage {
                     continue;
                 }
 
-                // 3. WHERE predicate filter — build a lightweight SymbolMatch for evaluation.
+                // WHERE predicate filter — build a lightweight SymbolMatch for evaluation.
                 let fql_kind_str = seg.fql_kind_of(local_row);
                 let sm = build_symbol_match(seg, local_row, relative_path);
                 if clauses
@@ -165,13 +198,17 @@ impl ColumnarStorage {
             }
         }
 
-        if all.is_empty() {
-            return None;
-        }
+        (all, preferred)
+    }
 
-        // Pick best candidate — mirrors the legacy "last-write-wins" strategy.
-        // Preference order: last preferred → last definition (non-empty fql_kind) → last overall.
-        let chosen = if preferred.is_empty() {
+    /// Pick the winning candidate, mirroring the legacy "last-write-wins" strategy:
+    /// last preferred → last definition (non-empty `fql_kind`) → last overall.
+    fn pick_best_resolved(
+        &self,
+        all: &[(u32, u32)],
+        preferred: &[(u32, u32)],
+    ) -> Option<(u32, u32)> {
+        if preferred.is_empty() {
             all.iter()
                 .rposition(|&(si, lr)| {
                     self.segments
@@ -182,9 +219,7 @@ impl ColumnarStorage {
                 .or_else(|| all.last().copied())
         } else {
             preferred.last().copied()
-        };
-
-        chosen.map(|(seg_idx, local_row)| self.location_for_row(seg_idx, local_row, root))
+        }
     }
 }
 
