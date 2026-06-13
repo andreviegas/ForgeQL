@@ -1,0 +1,31 @@
+[NAME]
+forgeql \- AST-aware code transformation engine
+
+[DESCRIPTION]
+ForgeQL queries and transforms source code by structure rather than text. It
+indexes source into an AST and addresses symbols by stable node handles. The
+same binary runs three ways: as an MCP server over stdio for AI agents
+(\fB\-\-mcp\fR), as an interactive REPL, or as a one\-shot command via the
+\fBrun\fR subcommand.
+
+[EXAMPLES]
+.TP
+\fBforgeql \-\-mcp\fR
+Run as an MCP server over stdio, for use by AI agents.
+.TP
+\fBforgeql run 'USE repo.main AS s'\fR
+Execute a single ForgeQL statement and exit.
+.TP
+\fBforgeql \-\-data\-dir ./data \-\-format json\fR
+Use a specific data directory and emit structured JSON.
+
+[SEE ALSO]
+\fBforgeql\-server\fR(1), \fBforgeql\-client\fR(1)
+.PP
+ForgeQL query reference: https://github.com/andreviegas/ForgeQL
+
+[AUTHOR]
+Written by Andre Viegas.
+
+[REPORTING BUGS]
+Report bugs at https://github.com/andreviegas/ForgeQL/issues

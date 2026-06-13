@@ -6,6 +6,16 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[package.metadata.deb]
+maintainer = "Andre Viegas <andrerviegas@gmail.com>"
+section = "devel"
+priority = "optional"
+assets = [
+    ["target/release/forgeql-client", "usr/bin/", "755"],
+    ["man/forgeql-client.1", "usr/share/man/man1/forgeql-client.1", "644"],
+]
+extended-description = "ForgeQL client — a thin terminal REPL and pipe client for forgeql-server."
+
 [[bin]]
 name = "forgeql-client"
 path = "src/main.rs"

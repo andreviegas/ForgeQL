@@ -1,10 +1,20 @@
 [package]
 name        = "forgeql"
-description = "ForgeQL — AST-aware code transformation (MCP server, REPL, CLI)"
+description = "ForgeQL - AST-aware code transformation (MCP server, REPL, CLI)"
 version.workspace    = true
 edition.workspace    = true
 authors.workspace    = true
 license.workspace    = true
+
+[package.metadata.deb]
+maintainer = "Andre Viegas <andrerviegas@gmail.com>"
+section = "devel"
+priority = "optional"
+assets = [
+    ["target/release/forgeql", "usr/bin/", "755"],
+    ["man/forgeql.1", "usr/share/man/man1/forgeql.1", "644"],
+]
+extended-description = "AST-aware code transformation engine. Provides the forgeql binary: an MCP server, interactive REPL, and command-line interface for querying and transforming source code by structure rather than text."
 
 [[bin]]
 name = "forgeql"

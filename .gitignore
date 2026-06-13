@@ -2,6 +2,9 @@
 target/
 **/*.rs.bk
 
+# Generated man pages (produced by help2man during .deb packaging)
+crates/*/man/
+
 # IDE / editor
 .vscode/
 .idea/

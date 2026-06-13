@@ -64,21 +64,23 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} --bin forgeql
+        run: cargo build --release --target ${{ matrix.target }} --bin forgeql --bin forgeql-server --bin forgeql-client
 
       - name: Package binary (Linux / tar.gz)
         if: matrix.archive_ext == 'tar.gz'
         run: |
-          cp target/${{ matrix.target }}/release/forgeql forgeql
-          tar czf "${{ matrix.artifact_name }}.tar.gz" forgeql
-          rm forgeql
+          tar czf "${{ matrix.artifact_name }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" \
+            forgeql forgeql-server forgeql-client
 
       - name: Package binary (Windows / zip)
         if: matrix.archive_ext == 'zip'
         run: |
-          cp "target/${{ matrix.target }}/release/forgeql${{ matrix.binary_ext }}" "forgeql.exe"
-          zip "${{ matrix.artifact_name }}.zip" forgeql.exe
-          rm forgeql.exe
+          BIN_DIR="target/${{ matrix.target }}/release"
+          zip -j "${{ matrix.artifact_name }}.zip" \
+            "$BIN_DIR/forgeql${{ matrix.binary_ext }}" \
+            "$BIN_DIR/forgeql-server${{ matrix.binary_ext }}" \
+            "$BIN_DIR/forgeql-client${{ matrix.binary_ext }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -87,9 +89,132 @@ jobs:
           path: ${{ matrix.artifact_name }}.${{ matrix.archive_ext }}
           if-no-files-found: error
 
+  deb:
+    name: Build .deb packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.94.0'
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y help2man
+          cargo install cargo-deb --locked
+
+      - name: Build release binaries
+        run: cargo build --release --bin forgeql --bin forgeql-server --bin forgeql-client
+
+      - name: Generate man pages
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          for pkg in forgeql forgeql-server forgeql-client; do
+            mkdir -p "crates/${pkg}/man"
+            help2man --no-info --version-string "$VERSION" \
+              --include "crates/${pkg}/${pkg}.h2m" \
+              "target/release/${pkg}" -o "crates/${pkg}/man/${pkg}.1"
+          done
+
+      - name: Build .deb packages
+        run: |
+          for pkg in forgeql forgeql-server forgeql-client; do
+            cargo deb --no-build -p "$pkg"
+          done
+          mkdir -p deb-out
+          cp target/debian/*.deb deb-out/
+          ls -1 deb-out
+
+      - name: Upload .deb artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: forgeql-deb-x86_64
+          path: deb-out/*.deb
+          if-no-files-found: error
+  build-musl:
+    name: Build static musl ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            artifact_name: forgeql-linux-x86_64-musl
+          - target: aarch64-unknown-linux-musl
+            artifact_name: forgeql-linux-aarch64-musl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.94.0'
+          targets: ${{ matrix.target }}
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Build static binaries (forgeql, forgeql-server, forgeql-client)
+        run: cargo zigbuild --release --target ${{ matrix.target }} --bin forgeql --bin forgeql-server --bin forgeql-client
+
+      - name: Package (tar.gz)
+        run: |
+          BIN_DIR="target/${{ matrix.target }}/release"
+          tar czf "${{ matrix.artifact_name }}.tar.gz" -C "$BIN_DIR" forgeql forgeql-server forgeql-client
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.tar.gz
+          if-no-files-found: error
+  build-macos:
+    name: Build macOS ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            artifact_name: forgeql-macos-aarch64
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            artifact_name: forgeql-macos-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.94.0'
+          targets: ${{ matrix.target }}
+
+      - name: Build release binaries (forgeql, forgeql-server, forgeql-client)
+        run: cargo build --release --target ${{ matrix.target }} --bin forgeql --bin forgeql-server --bin forgeql-client
+
+      - name: Package (tar.gz)
+        run: |
+          BIN_DIR="target/${{ matrix.target }}/release"
+          tar czf "${{ matrix.artifact_name }}.tar.gz" -C "$BIN_DIR" forgeql forgeql-server forgeql-client
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}.tar.gz
+          if-no-files-found: error
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, build-musl, deb, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

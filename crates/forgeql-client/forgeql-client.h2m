@@ -1,0 +1,27 @@
+[NAME]
+forgeql\-client \- terminal REPL and pipe client for forgeql-server
+
+[DESCRIPTION]
+forgeql\-client is a thin terminal client for \fBforgeql\-server\fR(1). It offers
+an interactive REPL and a one\-shot pipe mode for sending ForgeQL statements to
+a running server and printing the results.
+
+[EXAMPLES]
+.TP
+\fBforgeql\-client \-\-host localhost \-\-port 8080\fR
+Start an interactive REPL against a local server.
+.TP
+\fBforgeql\-client \-e "FIND symbols WHERE name LIKE 'set%'"\fR
+Execute a single statement and exit.
+.TP
+\fBforgeql\-client \-\-tls \-\-host forgeql.example.com\fR
+Connect to a remote server over HTTPS.
+
+[SEE ALSO]
+\fBforgeql\fR(1), \fBforgeql\-server\fR(1)
+
+[AUTHOR]
+Written by Andre Viegas.
+
+[REPORTING BUGS]
+Report bugs at https://github.com/andreviegas/ForgeQL/issues

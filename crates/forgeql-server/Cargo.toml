@@ -6,6 +6,16 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[package.metadata.deb]
+maintainer = "Andre Viegas <andrerviegas@gmail.com>"
+section = "devel"
+priority = "optional"
+assets = [
+    ["target/release/forgeql-server", "usr/bin/", "755"],
+    ["man/forgeql-server.1", "usr/share/man/man1/forgeql-server.1", "644"],
+]
+extended-description = "ForgeQL server — a multi-tenant MCP daemon exposing AST-aware code queries and transformations over HTTP/SSE."
+
 [[bin]]
 name = "forgeql-server"
 path = "src/main.rs"

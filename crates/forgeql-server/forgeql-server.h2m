@@ -1,0 +1,24 @@
+[NAME]
+forgeql\-server \- multi-tenant ForgeQL MCP daemon
+
+[DESCRIPTION]
+forgeql\-server exposes ForgeQL's AST-aware code queries and transformations to
+multiple concurrent clients over HTTP/SSE, speaking the MCP JSON-RPC protocol.
+Each client session is isolated in its own git worktree.
+
+[EXAMPLES]
+.TP
+\fBforgeql\-server \-\-port 8080 \-\-data\-dir ./data\fR
+Listen on port 8080 and store repos and worktrees under ./data.
+.TP
+\fBforgeql\-server \-\-host 127.0.0.1\fR
+Bind only to localhost.
+
+[SEE ALSO]
+\fBforgeql\fR(1), \fBforgeql\-client\fR(1)
+
+[AUTHOR]
+Written by Andre Viegas.
+
+[REPORTING BUGS]
+Report bugs at https://github.com/andreviegas/ForgeQL/issues
