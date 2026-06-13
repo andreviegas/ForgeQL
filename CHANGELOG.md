@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.9] — 2026-06-13 — Fix BUG-015 and consolidate golden test sessions
+
+### Fixed
+
+- BUG-015: JSON/data container nodes are now treated as structural, so a plain SHOW outline is no longer empty for files whose root is a JSON array or object
+
+### Changed
+
+- Golden test suite: folded `nid-tests`, `rw-tests`, and `enrich-stale-tests` read/write windows into the shared Zephyr session, reducing session-setup overhead
+
 ## [0.76.8] — 2026-06-13 — Refactor: decompose large functions across enrich, show, engine, filter, and columnar modules
 
 ### Changed
