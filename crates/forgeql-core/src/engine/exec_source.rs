@@ -432,7 +432,7 @@ impl ForgeQLEngine {
         };
         let input = crate::storage::columnar::BuildInput {
             table: legacy.and_then(|l| l.table()),
-            prebuilt_segment_map: legacy.and_then(|l| l.prebuilt_segment_map.clone()),
+            prebuilt_segment_map: session.prebuilt_segment_map.clone(),
         };
         match crate::storage::columnar::ColumnarStorage::warm_or_open(
             &ctx,

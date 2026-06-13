@@ -228,7 +228,7 @@ pub fn warm_snapshot(
             let legacy = session.legacy_storage();
             let input = crate::storage::columnar::BuildInput {
                 table: legacy.and_then(|l| l.table()),
-                prebuilt_segment_map: legacy.and_then(|l| l.prebuilt_segment_map.clone()),
+                prebuilt_segment_map: session.prebuilt_segment_map.clone(),
             };
             let _ = crate::storage::columnar::ColumnarStorage::warm(
                 &ctx,

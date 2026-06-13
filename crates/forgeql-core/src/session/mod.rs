@@ -253,6 +253,12 @@ pub struct Session {
     /// a session. Keyed by SHA-1 content hash so stale entries are bypassed
     /// automatically after `CHANGE FILE` commands. Capacity: 32 entries.
     pub(crate) parse_cache: Mutex<ParseCache>,
+    /// Inline columnar segment map produced by `build_index`'s inline-emit fast-path.
+    /// Read by `exec_source::load_session_index` / `warm::warm_snapshot` and handed to
+    /// `ColumnarStorage::warm_or_open` via `BuildInput` (skips the `ShadowWriter` pass).
+    /// Lives here rather than on the legacy backend so columnar build output is not
+    /// stashed on the legacy storage type.
+    pub(crate) prebuilt_segment_map: Option<std::collections::HashMap<std::path::PathBuf, Vec<u8>>>,
 }
 
 impl Session {
@@ -297,6 +303,7 @@ impl Session {
             recent_show_lines: Vec::new(),
             columnar_build: None,
             parse_cache: Mutex::new(ParseCache::with_capacity(32)),
+            prebuilt_segment_map: None,
         }
     }
 
@@ -391,7 +398,7 @@ impl Session {
                 },
                 |s| s.segment_map.into_inner().unwrap_or_default(),
             );
-            legacy.prebuilt_segment_map = Some(map);
+            self.prebuilt_segment_map = Some(map);
         }
 
         // When columnar is configured, the legacy SymbolTable is a transient
