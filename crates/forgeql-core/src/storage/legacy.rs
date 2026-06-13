@@ -53,10 +53,6 @@ pub struct LegacyMemoryStorage {
     macro_table: Option<MacroTable>,
     /// Language support registry — used by `build` and `reindex_files`.
     lang_registry: Arc<LanguageRegistry>,
-    /// Optional inline columnar build context.  Set by `Session::build_index`
-    /// before calling `build()` when shadow-write is enabled.  Consumed
-    /// (taken) at the start of `build()` so it does not linger.
-    seg_ctx: Option<crate::ast::index::SegmentBuildCtx>,
 }
 
 impl LegacyMemoryStorage {
@@ -69,7 +65,6 @@ impl LegacyMemoryStorage {
             table: None,
             macro_table: None,
             lang_registry,
-            seg_ctx: None,
         }
     }
 
@@ -85,12 +80,23 @@ impl LegacyMemoryStorage {
         self.table.as_mut()
     }
 
-    /// Install a [`SegmentBuildCtx`] to be consumed at the start of `build()`.
+    /// Build the index, optionally firing the inline columnar segment hook.
     ///
-    /// Called by `Session::build_index` when shadow-write is enabled so that
-    /// `SymbolTable::build` fires the inline columnar hook per file.
-    pub fn install_segment_build_ctx(&mut self, ctx: SegmentBuildCtx) {
-        self.seg_ctx = Some(ctx);
+    /// `seg_ctx` is `Some` when shadow-write is enabled (passed by
+    /// `Session::build_index`); `SymbolTable::build` then emits a segment per file.
+    pub fn build_with_seg_ctx(
+        &mut self,
+        workspace: &Workspace,
+        seg_ctx: Option<&SegmentBuildCtx>,
+    ) -> Result<()> {
+        let (table, macro_table) = SymbolTable::build(workspace, &self.lang_registry, seg_ctx)?;
+        debug!(
+            symbols = table.rows.len(),
+            "LegacyMemoryStorage: index built"
+        );
+        self.table = Some(table);
+        self.macro_table = Some(macro_table);
+        Ok(())
     }
 }
 // Fast-path GROUP BY helper (moved from exec_find.rs)
@@ -300,16 +306,7 @@ impl StorageEngine for LegacyMemoryStorage {
     // ---- lifecycle -----------------------------------------------------
 
     fn build(&mut self, workspace: &Workspace) -> Result<()> {
-        let ctx = self.seg_ctx.take();
-        let (table, macro_table) =
-            SymbolTable::build(workspace, &self.lang_registry, ctx.as_ref())?;
-        debug!(
-            symbols = table.rows.len(),
-            "LegacyMemoryStorage: index built"
-        );
-        self.table = Some(table);
-        self.macro_table = Some(macro_table);
-        Ok(())
+        self.build_with_seg_ctx(workspace, None)
     }
 
     fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
