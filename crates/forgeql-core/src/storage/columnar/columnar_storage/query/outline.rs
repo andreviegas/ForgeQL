@@ -126,6 +126,7 @@ impl ColumnarStorage {
 fn outline_is_structural(kind: &str) -> bool {
     matches!(
         kind,
+        // Code declarations.
         "function"
             | "class"
             | "struct"
@@ -137,6 +138,12 @@ fn outline_is_structural(kind: &str) -> bool {
             | "module"
             | "type_alias"
             | "macro"
+            // Data-language containers (JSON/YAML/TOML/…) — so a plain
+            // `SHOW outline` on a data file shows its structure rather than
+            // nothing (BUG-015). Leaf nodes (pair/scalar) stay out; they are
+            // visible only with the `ALL` flag.
+            | "object"
+            | "array"
     )
 }
 
@@ -232,5 +239,35 @@ fn push_outline_tree(
                 stack.push((cr, child_depth));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::outline_is_structural;
+
+    #[test]
+    fn structural_includes_code_declarations() {
+        assert!(outline_is_structural("function"));
+        assert!(outline_is_structural("struct"));
+        assert!(outline_is_structural("class"));
+    }
+
+    #[test]
+    fn structural_includes_data_containers() {
+        // BUG-015: JSON/YAML container nodes must count as structural so a plain
+        // `SHOW outline` on a data file isn't empty (the emit gate in
+        // push_outline_tree is `all || outline_is_structural(kind)`).
+        assert!(outline_is_structural("object"));
+        assert!(outline_is_structural("array"));
+    }
+
+    #[test]
+    fn structural_excludes_leaves_and_statements() {
+        // Leaf/detail nodes stay out of the plain outline (visible only with ALL).
+        assert!(!outline_is_structural("pair"));
+        assert!(!outline_is_structural("number"));
+        assert!(!outline_is_structural("if"));
+        assert!(!outline_is_structural(""));
     }
 }
