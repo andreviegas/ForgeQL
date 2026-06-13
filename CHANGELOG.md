@@ -5,6 +5,12 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.76.16] — 2026-06-13 — Refactor: move compact.rs unit tests into compact/tests.rs
+
+### Changed
+
+- `compact`: moved the ~810-line `#[cfg(test)] mod tests` block out of `compact.rs` into a new `compact/tests.rs` file module (declared `#[cfg(test)] mod tests;`). Tests unchanged; `compact.rs` drops from ~1532 to ~720 lines.
+
 ## [0.76.15] — 2026-06-13 — Refactor: move parser unit tests into parser/tests.rs
 
 ### Changed
