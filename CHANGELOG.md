@@ -5,6 +5,12 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.76.12] — 2026-06-13 — Refactor: move result.rs unit tests into result/tests.rs
+
+### Changed
+
+- `result`: moved the ~800-line `#[cfg(test)] mod tests` block out of `result.rs` into a new `result/tests.rs` file module (declared as `#[cfg(test)] mod tests;`). Tests are unchanged; `result.rs` drops from ~1595 to ~790 lines, joining the existing `result/convert.rs` and `result/display.rs` submodules.
+
 ## [0.76.11] — 2026-06-13 — Refactor: extract overlay open-time parsing helpers into a submodule
 
 ### Changed
