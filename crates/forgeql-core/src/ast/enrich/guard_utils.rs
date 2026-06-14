@@ -441,11 +441,15 @@ pub fn collect_attribute_guard_frames(
     node: tree_sitter::Node<'_>,
     source: &[u8],
     attr_name: &str,
+    decorator_kind: &str,
 ) -> Vec<GuardFrame> {
     let mut frames = Vec::new();
+    if decorator_kind.is_empty() {
+        return frames;
+    }
     let mut cursor = node.prev_named_sibling();
     while let Some(sib) = cursor {
-        if sib.kind() != "attribute_item" {
+        if sib.kind() != decorator_kind {
             break;
         }
         if let Some(frame) = attribute_item_to_guard_frame(sib, source, attr_name) {

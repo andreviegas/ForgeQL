@@ -763,7 +763,9 @@ fn build_row_fields(ctx: &EnrichContext<'_>, ts_language: &tree_sitter::Language
     // Inject item-level attribute guards (e.g. Rust `#[cfg(...)]`).
     let attr_guard_name = ctx.language_config.item_guard_attribute();
     if !attr_guard_name.is_empty() {
-        let attr_frames = collect_attribute_guard_frames(node, source, attr_guard_name);
+        let decorator_kind = ctx.language_config.decorator_kind().unwrap_or("");
+        let attr_frames =
+            collect_attribute_guard_frames(node, source, attr_guard_name, decorator_kind);
         if !attr_frames.is_empty() {
             inject_guard_fields(&attr_frames, &mut fields);
         }
@@ -881,7 +883,7 @@ fn emit_addressable_row(
     };
     // Fold leading `#[...]` attributes into the span (rev covers them); ordinal
     // matching keeps the unextended content_hash so attribute edits don't churn ids.
-    let (start_byte, start_line) = attr_extended_start(node);
+    let (start_byte, start_line) = attr_extended_start(node, ctx.language_config.decorator_kind());
     let span = start_byte..node.byte_range().end;
     let rev = row_rev(ordinal, source, span.clone());
     let fields = sink.table.strings.intern_fields(fields);
@@ -1049,12 +1051,18 @@ fn emit_block_row(
 /// Matches `collect_attribute_guard_frames`' detection (`attribute_item` via
 /// `prev_named_sibling`), so today this only folds Rust attributes; other
 /// languages' attribute kinds don't match and are left unchanged.
-fn attr_extended_start(node: tree_sitter::Node<'_>) -> (usize, usize) {
+fn attr_extended_start(
+    node: tree_sitter::Node<'_>,
+    decorator_kind: Option<&str>,
+) -> (usize, usize) {
+    let Some(attr_kind) = decorator_kind else {
+        return (node.start_byte(), node.start_position().row + 1);
+    };
     let mut start_byte = node.start_byte();
     let mut start_line = node.start_position().row + 1;
     let mut prev = node.prev_named_sibling();
     while let Some(sib) = prev {
-        if sib.kind() != "attribute_item" {
+        if sib.kind() != attr_kind {
             break;
         }
         start_byte = sib.start_byte();
