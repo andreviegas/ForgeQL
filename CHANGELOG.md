@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.25] — 2026-06-13 — Refactor: decompose columnar `warm_or_open`
+
+### Changed
+
+- `storage::columnar` commit: split the 128-line `warm_or_open` into helpers — `finish_open`
+  (the "open segments + construct + load delta" triple shared by all three return paths) and
+  `build_overlay` (the lock-guarded inline-vs-shadow-write build). `warm_or_open` is now a
+  ~63-line fast-path / lock / final-open skeleton. Removed the now-unfulfilled `too_many_lines`
+  expectation. Pure refactor — overlay output unchanged (golden 329/0).
+
 ## [0.76.24] — 2026-06-13 — Refactor: decompose `make_inline_ctx`
 
 ### Changed

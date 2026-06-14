@@ -36,10 +36,6 @@ impl ColumnarStorage {
     /// Returns `Err` only for hard failures (lock file I/O, final
     /// `Overlay::open` after a successful build). Shadow-write failures
     /// are treated as non-fatal and logged.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Three phases: fast overlay open, lock-guarded slow-path build, and final open; collapsing phases would obscure the retry/lock logic"
-    )]
     pub fn warm_or_open(
         ctx: &crate::storage::ColumnarBuildContext,
         input: BuildInput<'_>,
@@ -53,12 +49,13 @@ impl ColumnarStorage {
         if overlay_path.exists() {
             if let Ok(overlay) = Overlay::open(&overlay_path) {
                 debug!(%commit_sha, "columnar warm_or_open: overlay found, fast-path load");
-                let segments = Self::open_segments_from_overlay(ctx, &overlay);
-                let mut storage = Self::new(worktree_path, segments, overlay, lang_registry);
-                if let Err(e) = storage.load_delta() {
-                    tracing::warn!(%commit_sha, "columnar warm_or_open: delta load failed (non-fatal): {e}");
-                }
-                return Ok(storage);
+                return Ok(Self::finish_open(
+                    ctx,
+                    worktree_path,
+                    overlay,
+                    lang_registry,
+                    commit_sha,
+                ));
             }
             // Corrupt / schema mismatch — remove and rebuild below.
             debug!(%commit_sha, "columnar warm_or_open: overlay unreadable, will rebuild");
@@ -75,85 +72,18 @@ impl ColumnarStorage {
                 if overlay_path.exists() {
                     if let Ok(overlay) = Overlay::open(&overlay_path) {
                         debug!(%commit_sha, "columnar warm_or_open: peer built overlay under lock");
-                        let segments = Self::open_segments_from_overlay(ctx, &overlay);
-                        let mut storage =
-                            Self::new(worktree_path, segments, overlay, Arc::clone(&lang_registry));
-                        if let Err(e) = storage.load_delta() {
-                            tracing::warn!(%commit_sha, "columnar warm_or_open: delta load failed (non-fatal): {e}");
-                        }
-                        return Ok(storage);
+                        return Ok(Self::finish_open(
+                            ctx,
+                            worktree_path,
+                            overlay,
+                            Arc::clone(&lang_registry),
+                            commit_sha,
+                        ));
                     }
                     let _ = std::fs::remove_file(&overlay_path);
                 }
 
-                // Build segments + overlay. Prefer the inline fast-path when
-                // segments were already written per-file during build_index.
-                let segment_map_opt = input.prebuilt_segment_map;
-
-                if let Some(segment_map) = segment_map_opt {
-                    // Fast-path: segments written inline — skip ShadowWriter.
-                    let t_sw = std::time::Instant::now();
-                    info!(
-                        ms = t_sw.elapsed().as_millis(),
-                        %commit_sha,
-                        segments = segment_map.len(),
-                        "TIMING warm_or_open: inline segments (no shadow-write)"
-                    );
-                    let builder = OverlayBuilder::new(
-                        &ctx.provider_id,
-                        ctx.segments_dir.clone(),
-                        worktree_path.clone(),
-                        segment_map,
-                    );
-                    if let Err(e) = builder.build_and_persist(&overlay_path) {
-                        tracing::warn!(
-                            %commit_sha,
-                            "columnar warm_or_open: overlay build failed: {e}"
-                        );
-                    } else {
-                        debug!(%commit_sha, "columnar warm_or_open: overlay built (inline path)");
-                    }
-                } else if let Some(table) = input.table {
-                    // Legacy path: shadow-write from the merged SymbolTable.
-                    let writer = ShadowWriter::new(
-                        table,
-                        &ctx.segments_dir,
-                        &ctx.provider_id,
-                        ctx.hash_fn.as_ref(),
-                        HashMap::new(),
-                    );
-                    let t_sw = std::time::Instant::now();
-                    match writer.run() {
-                        Ok(result) => {
-                            info!(
-                                ms = t_sw.elapsed().as_millis(),
-                                %commit_sha,
-                                segments = result.count,
-                                "TIMING warm_or_open: shadow-write"
-                            );
-                            let builder = OverlayBuilder::new(
-                                &ctx.provider_id,
-                                ctx.segments_dir.clone(),
-                                worktree_path.clone(),
-                                result.segment_map,
-                            );
-                            if let Err(e) = builder.build_and_persist(&overlay_path) {
-                                tracing::warn!(
-                                    %commit_sha,
-                                    "columnar warm_or_open: overlay build failed: {e}"
-                                );
-                            } else {
-                                debug!(%commit_sha, "columnar warm_or_open: overlay built");
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                %commit_sha,
-                                "columnar warm_or_open: shadow-write failed: {e}"
-                            );
-                        }
-                    }
-                }
+                Self::build_overlay(ctx, input, &worktree_path, &overlay_path, commit_sha);
                 // _lock dropped here — releases OS lock.
             }
         }
@@ -161,12 +91,100 @@ impl ColumnarStorage {
         // Open whatever we built (or what was there before — best-effort).
         let overlay = Overlay::open(&overlay_path)
             .map_err(|e| anyhow!("overlay open failed for {commit_sha}: {e}"))?;
+        Ok(Self::finish_open(
+            ctx,
+            worktree_path,
+            overlay,
+            lang_registry,
+            commit_sha,
+        ))
+    }
+
+    /// Open the freshly built (or pre-existing) `overlay`: load its segments,
+    /// construct the `ColumnarStorage`, and best-effort load the dirty delta.
+    /// Shared by all three return paths of `warm_or_open`.
+    fn finish_open(
+        ctx: &ColumnarBuildContext,
+        worktree_path: PathBuf,
+        overlay: Arc<Overlay>,
+        lang_registry: Arc<LanguageRegistry>,
+        commit_sha: &str,
+    ) -> Self {
         let segments = Self::open_segments_from_overlay(ctx, &overlay);
         let mut storage = Self::new(worktree_path, segments, overlay, lang_registry);
         if let Err(e) = storage.load_delta() {
             tracing::warn!(%commit_sha, "columnar warm_or_open: delta load failed (non-fatal): {e}");
         }
-        Ok(storage)
+        storage
+    }
+
+    /// Build segments + overlay under the held lock. Prefers the inline fast-path
+    /// (segments already written per-file during `build_index`) and falls back to
+    /// shadow-writing the merged `SymbolTable`. Best-effort: failures are logged.
+    fn build_overlay(
+        ctx: &ColumnarBuildContext,
+        input: BuildInput<'_>,
+        worktree_path: &Path,
+        overlay_path: &Path,
+        commit_sha: &str,
+    ) {
+        // Prefer the inline fast-path when segments were already written per-file
+        // during build_index.
+        if let Some(segment_map) = input.prebuilt_segment_map {
+            // Fast-path: segments written inline — skip ShadowWriter.
+            let t_sw = std::time::Instant::now();
+            info!(
+                ms = t_sw.elapsed().as_millis(),
+                %commit_sha,
+                segments = segment_map.len(),
+                "TIMING warm_or_open: inline segments (no shadow-write)"
+            );
+            let builder = OverlayBuilder::new(
+                &ctx.provider_id,
+                ctx.segments_dir.clone(),
+                worktree_path.to_path_buf(),
+                segment_map,
+            );
+            if let Err(e) = builder.build_and_persist(overlay_path) {
+                tracing::warn!(%commit_sha, "columnar warm_or_open: overlay build failed: {e}");
+            } else {
+                debug!(%commit_sha, "columnar warm_or_open: overlay built (inline path)");
+            }
+        } else if let Some(table) = input.table {
+            // Legacy path: shadow-write from the merged SymbolTable.
+            let writer = ShadowWriter::new(
+                table,
+                &ctx.segments_dir,
+                &ctx.provider_id,
+                ctx.hash_fn.as_ref(),
+                HashMap::new(),
+            );
+            let t_sw = std::time::Instant::now();
+            match writer.run() {
+                Ok(result) => {
+                    info!(
+                        ms = t_sw.elapsed().as_millis(),
+                        %commit_sha,
+                        segments = result.count,
+                        "TIMING warm_or_open: shadow-write"
+                    );
+                    let builder = OverlayBuilder::new(
+                        &ctx.provider_id,
+                        ctx.segments_dir.clone(),
+                        worktree_path.to_path_buf(),
+                        result.segment_map,
+                    );
+                    if let Err(e) = builder.build_and_persist(overlay_path) {
+                        tracing::warn!(%commit_sha, "columnar warm_or_open: overlay build failed: {e}");
+                    } else {
+                        debug!(%commit_sha, "columnar warm_or_open: overlay built");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(%commit_sha, "columnar warm_or_open: shadow-write failed: {e}");
+                }
+            }
+        }
     }
 
     /// Build segments + overlay for `commit_sha` without returning a
