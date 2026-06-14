@@ -6,6 +6,15 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.28] — 2026-06-13 — Refactor: decompose `parse_change`
+
+### Changed
+
+- `parser`: extracted the ~80-line `change_target` match out of the 113-line `parse_change`
+  into `parse_change_target`, and deduplicated the four line-number parses behind a `next_usize`
+  helper. `parse_change` is now a ~34-line file-list → target → clauses pipeline. Pure refactor —
+  parse output unchanged (golden 329/0).
+
 ## [0.76.27] — 2026-06-13 — Refactor: decompose columnar `show_outline_for_file_impl`
 
 ### Changed

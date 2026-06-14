@@ -28,7 +28,37 @@ pub(super) fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<Forg
         .into_inner()
         .next()
         .ok_or_else(|| ForgeError::DslParse("change: empty change_target".into()))?;
+    let target = parse_change_target(target_inner)?;
 
+    // Remaining pairs: the trailing `clauses` block.
+    let clauses = parse_clauses(inner);
+
+    Ok(ForgeQLIR::ChangeContent {
+        files,
+        target,
+        clauses,
+    })
+}
+
+/// Parse the next token as a 1-based line number. `missing` is the error when no
+/// token is present; `label` prefixes a parse-failure error.
+fn next_usize(
+    m: &mut pest::iterators::Pairs<'_, Rule>,
+    missing: &'static str,
+    label: &'static str,
+) -> Result<usize, ForgeError> {
+    m.next()
+        .ok_or_else(|| ForgeError::DslParse(missing.into()))?
+        .as_str()
+        .parse()
+        .map_err(|e| ForgeError::DslParse(format!("{label}: {e}")))
+}
+
+/// Parse the inner `change_target` rule into a [`ChangeTarget`]. Dispatched from
+/// `parse_change`; `target_inner` is the single sub-rule of the change target.
+fn parse_change_target(
+    target_inner: pest::iterators::Pair<'_, Rule>,
+) -> Result<ChangeTarget, ForgeError> {
     let target = match target_inner.as_rule() {
         Rule::change_matching => {
             let mut m = target_inner.into_inner();
@@ -50,18 +80,16 @@ pub(super) fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<Forg
         }
         Rule::change_lines_delete => {
             let mut m = target_inner.into_inner();
-            let start: usize = m
-                .next()
-                .ok_or_else(|| ForgeError::DslParse("change_lines_delete: expected start".into()))?
-                .as_str()
-                .parse()
-                .map_err(|e| ForgeError::DslParse(format!("change_lines_delete start: {e}")))?;
-            let end: usize = m
-                .next()
-                .ok_or_else(|| ForgeError::DslParse("change_lines_delete: expected end".into()))?
-                .as_str()
-                .parse()
-                .map_err(|e| ForgeError::DslParse(format!("change_lines_delete end: {e}")))?;
+            let start = next_usize(
+                &mut m,
+                "change_lines_delete: expected start",
+                "change_lines_delete start",
+            )?;
+            let end = next_usize(
+                &mut m,
+                "change_lines_delete: expected end",
+                "change_lines_delete end",
+            )?;
             // Empty content replaces the line range with nothing (deletion).
             ChangeTarget::Lines {
                 start,
@@ -71,18 +99,8 @@ pub(super) fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<Forg
         }
         Rule::change_lines_range => {
             let mut m = target_inner.into_inner();
-            let start: usize = m
-                .next()
-                .ok_or_else(|| ForgeError::DslParse("change_lines: expected start".into()))?
-                .as_str()
-                .parse()
-                .map_err(|e| ForgeError::DslParse(format!("change_lines start: {e}")))?;
-            let end: usize = m
-                .next()
-                .ok_or_else(|| ForgeError::DslParse("change_lines: expected end".into()))?
-                .as_str()
-                .parse()
-                .map_err(|e| ForgeError::DslParse(format!("change_lines end: {e}")))?;
+            let start = next_usize(&mut m, "change_lines: expected start", "change_lines start")?;
+            let end = next_usize(&mut m, "change_lines: expected end", "change_lines end")?;
             let content = m
                 .next()
                 .ok_or_else(|| ForgeError::DslParse("change_lines: expected content".into()))
@@ -108,15 +126,7 @@ pub(super) fn parse_change(pair: pest::iterators::Pair<'_, Rule>) -> Result<Forg
             )));
         }
     };
-
-    // Remaining pairs: the trailing `clauses` block.
-    let clauses = parse_clauses(inner);
-
-    Ok(ForgeQLIR::ChangeContent {
-        files,
-        target,
-        clauses,
-    })
+    Ok(target)
 }
 
 /// Parse `COPY LINES n-m OF 'src' TO 'dst' [AT LINE k]` and
