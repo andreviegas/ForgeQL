@@ -205,6 +205,14 @@ impl StringPool {
 ///
 /// Open with [`SegmentReader::open`].  The reader holds one `Arc<Mmap>` for
 /// the whole file; individual blobs are accessed as subslices.
+/// Fields decoded from the inner FQSG `header` blob of a segment file.
+struct HeaderFields {
+    provider_id: String,
+    content_id: Vec<u8>,
+    row_count: u32,
+    string_count: u32,
+    extra_col_names: Vec<String>,
+}
 pub struct SegmentReader {
     /// Whole-file mmap shared with the string pool.
     mmap: Arc<Mmap>,
@@ -239,6 +247,62 @@ impl SegmentReader {
     /// Returns `Err` on I/O failure, missing file, format mismatch, schema
     /// version mismatch, or corrupt string pool.
     pub fn open(path: &Path) -> Result<Self> {
+        // ── 1-2. Mmap + validate the outer FQSF header ────────────────────
+        let (mmap, file_len) = Self::map_and_validate(path)?;
+
+        // ── 3. Parse TOC ──────────────────────────────────────────────────
+        let blobs = parse_toc(&mmap, file_len, path)?;
+
+        // ── 4-5. Inner FQSG header blob + extra enrichment columns ────────
+        let hdr = Self::parse_header_blob(&mmap, &blobs, path)?;
+
+        // ── 6. String pool ────────────────────────────────────────────────
+        let off_range = blobs.get("strings_offsets").copied().unwrap_or((0, 0));
+        let dat_range = blobs.get("strings_data").copied().unwrap_or((0, 0));
+        let strings =
+            StringPool::from_blobs(Arc::clone(&mmap), off_range, dat_range, hdr.string_count)?;
+
+        // ── 7. Roaring postings ───────────────────────────────────────────
+        let kind_postings = {
+            let data = blob_slice(&blobs, &mmap, "postings_fql_kind");
+            load_kind_postings(data)?
+        };
+        let field_postings = load_enrichment_postings(&blobs, &mmap)?;
+        let zone_maps = load_zone_maps(&blobs, &mmap)?;
+
+        // ── 8. FST + name prefix ──────────────────────────────────────────
+        let (fst_start, fst_end) = blobs.get("name_fst").copied().unwrap_or((0, 0));
+        let name_fst = FstMap::new(MmapSlice {
+            mmap: Arc::clone(&mmap),
+            start: fst_start,
+            end: fst_end,
+        })
+        .context("parsing name_fst blob")?;
+        let name_prefix = {
+            let data = blob_slice(&blobs, &mmap, "name_prefix");
+            load_name_prefix(data)?
+        };
+
+        Ok(Self {
+            mmap,
+            blobs,
+            path: path.to_owned(),
+            row_count: hdr.row_count,
+            provider_id: hdr.provider_id,
+            content_id: hdr.content_id,
+            extra_col_names: hdr.extra_col_names,
+            strings,
+            kind_postings,
+            field_postings,
+            zone_maps,
+            name_prefix,
+            name_fst,
+        })
+    }
+
+    /// Mmap `path` and validate the outer FQSF magic, version, and host
+    /// endianness. Returns the shared mmap and the file length in bytes.
+    fn map_and_validate(path: &Path) -> Result<(Arc<Mmap>, usize)> {
         // ── 1. Mmap the whole file ────────────────────────────────────────
         let file = std::fs::File::open(path)
             .with_context(|| format!("opening segment {}", path.display()))?;
@@ -275,10 +339,17 @@ impl SegmentReader {
             );
         }
 
-        // ── 3. Parse TOC ──────────────────────────────────────────────────
-        let blobs = parse_toc(&mmap, file_len, path)?;
+        Ok((mmap, file_len))
+    }
 
-        // ── 4. Parse inner FQSG header blob ──────────────────────────────
+    /// Parse and validate the inner FQSG `header` blob: schema version, provider
+    /// id, content id, and row/string counts, plus the extra enrichment column
+    /// names (non-core string-option columns).
+    fn parse_header_blob(
+        mmap: &Arc<Mmap>,
+        blobs: &HashMap<String, (usize, usize)>,
+        path: &Path,
+    ) -> Result<HeaderFields> {
         let &(hs, he) = blobs
             .get("header")
             .context("missing 'header' blob in FQSF")?;
@@ -344,47 +415,12 @@ impl SegmentReader {
             .map(|(name, _)| name.clone())
             .collect();
 
-        // ── 6. String pool ────────────────────────────────────────────────
-        let off_range = blobs.get("strings_offsets").copied().unwrap_or((0, 0));
-        let dat_range = blobs.get("strings_data").copied().unwrap_or((0, 0));
-        let strings =
-            StringPool::from_blobs(Arc::clone(&mmap), off_range, dat_range, string_count)?;
-
-        // ── 7. Roaring postings ───────────────────────────────────────────
-        let kind_postings = {
-            let data = blob_slice(&blobs, &mmap, "postings_fql_kind");
-            load_kind_postings(data)?
-        };
-        let field_postings = load_enrichment_postings(&blobs, &mmap)?;
-        let zone_maps = load_zone_maps(&blobs, &mmap)?;
-
-        // ── 8. FST + name prefix ──────────────────────────────────────────
-        let (fst_start, fst_end) = blobs.get("name_fst").copied().unwrap_or((0, 0));
-        let name_fst = FstMap::new(MmapSlice {
-            mmap: Arc::clone(&mmap),
-            start: fst_start,
-            end: fst_end,
-        })
-        .context("parsing name_fst blob")?;
-        let name_prefix = {
-            let data = blob_slice(&blobs, &mmap, "name_prefix");
-            load_name_prefix(data)?
-        };
-
-        Ok(Self {
-            mmap,
-            blobs,
-            path: path.to_owned(),
-            row_count,
+        Ok(HeaderFields {
             provider_id,
             content_id,
+            row_count,
+            string_count,
             extra_col_names,
-            strings,
-            kind_postings,
-            field_postings,
-            zone_maps,
-            name_prefix,
-            name_fst,
         })
     }
 

@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.29] — 2026-06-13 — Refactor: decompose `SegmentReader::open`
+
+### Changed
+
+- `storage::columnar::segment_reader`: split the 149-line `SegmentReader::open` into
+  `map_and_validate` (sections 1–2: mmap + outer FQSF magic/version/endianness checks) and
+  `parse_header_blob` (sections 4–5: inner FQSG header decode + extra-column collection,
+  returning a `HeaderFields` struct). `open` is now a ~53-line section-by-section pipeline.
+  Pure refactor — segment loading unchanged (golden 329/0).
+
 ## [0.76.28] — 2026-06-13 — Refactor: decompose `parse_change`
 
 ### Changed
