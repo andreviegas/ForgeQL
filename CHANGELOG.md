@@ -6,6 +6,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.24] — 2026-06-13 — Refactor: decompose `make_inline_ctx`
+
+### Changed
+
+- `storage::columnar::build_context`: lifted the ~108-line `emit_fn` closure body out of the
+  133-line `make_inline_ctx` into associated helpers — `emit_inline_segment` (orchestrator:
+  path derivation, segment-map registration, idempotency, flush), `populate_inline_builder`
+  (per-row emit + field collection), and `fill_inline_navigation` (first-child / sibling
+  post-pass). `make_inline_ctx` is now a ~33-line wiring function whose closure just delegates.
+  Pure refactor — segment output unchanged (golden 329/0).
+
 ## [0.76.23] — 2026-06-13 — Refactor: decompose columnar `resolve_impl`
 
 ### Changed

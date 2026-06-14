@@ -124,8 +124,6 @@ impl ColumnarBuildContext {
         reason = "mirrors reindex_files / ShadowWriter::run"
     )]
     pub fn make_inline_ctx(&self) -> (crate::ast::index::SegmentBuildCtx, Arc<InlineCtxState>) {
-        use super::bytes_to_hex;
-        use super::segment_builder::{RowId, SegmentBuilder, SymbolRow, is_valid_segment};
         use crate::ast::index::{SegEmitFn, SegmentBuildCtx};
 
         let state = Arc::new(InlineCtxState {
@@ -135,116 +133,18 @@ impl ColumnarBuildContext {
 
         let segments_dir = self.segments_dir.clone();
         let provider_id = self.provider_id.clone();
-        let enrich_ver = super::ENRICH_VER;
         let state_ref = Arc::clone(&state);
 
         let emit_fn: SegEmitFn = Arc::new(
             move |content_id: &[u8], table: &crate::ast::index::SymbolTable, rows_start: usize| {
-                let Some(first_row) = table.rows.get(rows_start) else {
-                    return;
-                };
-                let abs_path = table.path_of(first_row).to_path_buf();
-
-                let hex = bytes_to_hex(content_id);
-                let provider_ver_dir = segments_dir.join(format!("{provider_id}-v{enrich_ver}"));
-                let target_path = provider_ver_dir
-                    .join(&hex[..2])
-                    .join(format!("{}.fqsf", &hex[2..]));
-
-                // Always register in segment_map, even for already-written segments.
-                {
-                    let mut map = state_ref
-                        .segment_map
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    let _ = map.insert(abs_path, content_id.to_vec());
-                }
-
-                if is_valid_segment(&target_path) {
-                    return; // Idempotent: segment already written on a prior run.
-                }
-
-                if let Err(e) = std::fs::create_dir_all(&provider_ver_dir) {
-                    warn!(path = %provider_ver_dir.display(), "inline emit: failed to create provider dir: {e}");
-                    return;
-                }
-
-                let mut builder = SegmentBuilder::new(&provider_id, content_id);
-                let mut local_cols: BTreeSet<String> = BTreeSet::new();
-
-                // (ordinal, row_id, parent_ordinal) for the nav post-pass. Keeping
-                // this in sync with ShadowWriter::run and reindex_files is essential:
-                // omitting set_parent_ordinal + the nav pass here wrote flat
-                // (parent_ordinal = MAX) segments from the inline build path, which
-                // mismatched the nested rows reindex writes — the root of BUG-010.
-                let mut ordinal_row: Vec<(u32, u32, u32)> = Vec::new();
-                for row in &table.rows[rows_start..] {
-                    let row_id = builder.emit_row(SymbolRow {
-                        name: table.name_of(row),
-                        fql_kind: table.fql_kind_of(row),
-                        language: table.language_of(row),
-                        line: u32::try_from(row.line).unwrap_or(u32::MAX),
-                        byte_start: u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
-                        byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
-                        usages_count: row.usages_count,
-                    });
-                    if let Some(ordinal) = row.ordinal {
-                        builder.set_ordinal(row_id, ordinal);
-                        builder.set_parent_ordinal(row_id, row.parent_ordinal);
-                        builder.set_rev(row_id, row.rev);
-                        ordinal_row.push((ordinal, row_id.0, row.parent_ordinal));
-                    }
-                    for (key, value) in table.resolve_fields(&row.fields) {
-                        if key == "parent_ordinal" {
-                            continue; // now a typed column
-                        }
-                        let _ = local_cols.insert(key.clone());
-                        builder.set_field(row_id, &key, value);
-                    }
-                }
-
-                // Nav post-pass: fill first_child, next_sibling, prev_sibling.
-                // Group addressable rows by parent_ordinal, sort by ordinal (= DFS order).
-                {
-                    let mut by_parent: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
-                    let mut ord_to_row: HashMap<u32, u32> = HashMap::new();
-                    for &(ord, rid, parent) in &ordinal_row {
-                        by_parent.entry(parent).or_default().push((ord, rid));
-                        let _ = ord_to_row.insert(ord, rid);
-                    }
-                    for (parent_ord, mut children) in by_parent {
-                        children.sort_unstable_by_key(|&(ord, _)| ord);
-                        if let Some(&parent_rid) = ord_to_row.get(&parent_ord)
-                            && let Some(&(first_ord, _)) = children.first()
-                        {
-                            builder.set_first_child_ordinal(RowId(parent_rid), first_ord);
-                        }
-                        for i in 0..children.len() {
-                            let (_, this_rid) = children[i];
-                            if i > 0 {
-                                builder
-                                    .set_prev_sibling_ordinal(RowId(this_rid), children[i - 1].0);
-                            }
-                            if i + 1 < children.len() {
-                                builder
-                                    .set_next_sibling_ordinal(RowId(this_rid), children[i + 1].0);
-                            }
-                        }
-                    }
-                }
-
-                match builder.flush(&target_path) {
-                    Ok(()) => {
-                        let mut cols = state_ref
-                            .all_columns
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        cols.extend(local_cols);
-                    }
-                    Err(e) => {
-                        warn!(target = %target_path.display(), "inline emit: flush failed: {e}");
-                    }
-                }
+                Self::emit_inline_segment(
+                    content_id,
+                    table,
+                    rows_start,
+                    &segments_dir,
+                    &provider_id,
+                    &state_ref,
+                );
             },
         );
 
@@ -255,6 +155,146 @@ impl ColumnarBuildContext {
         };
 
         (ctx, state)
+    }
+
+    /// Inline `emit_fn` body: write (or idempotently skip) the `.fqsf` segment for
+    /// one file's rows `[rows_start..]`, registering it in the shared `segment_map`
+    /// and merging its column set into `all_columns` on success.
+    fn emit_inline_segment(
+        content_id: &[u8],
+        table: &crate::ast::index::SymbolTable,
+        rows_start: usize,
+        segments_dir: &std::path::Path,
+        provider_id: &str,
+        state: &InlineCtxState,
+    ) {
+        use super::bytes_to_hex;
+        use super::segment_builder::{SegmentBuilder, is_valid_segment};
+
+        let Some(first_row) = table.rows.get(rows_start) else {
+            return;
+        };
+        let abs_path = table.path_of(first_row).to_path_buf();
+
+        let hex = bytes_to_hex(content_id);
+        let provider_ver_dir = segments_dir.join(format!("{provider_id}-v{}", super::ENRICH_VER));
+        let target_path = provider_ver_dir
+            .join(&hex[..2])
+            .join(format!("{}.fqsf", &hex[2..]));
+
+        // Always register in segment_map, even for already-written segments.
+        {
+            let mut map = state
+                .segment_map
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _ = map.insert(abs_path, content_id.to_vec());
+        }
+
+        if is_valid_segment(&target_path) {
+            return; // Idempotent: segment already written on a prior run.
+        }
+
+        if let Err(e) = std::fs::create_dir_all(&provider_ver_dir) {
+            warn!(path = %provider_ver_dir.display(), "inline emit: failed to create provider dir: {e}");
+            return;
+        }
+
+        let mut builder = SegmentBuilder::new(provider_id, content_id);
+        let (local_cols, ordinal_row) =
+            Self::populate_inline_builder(&mut builder, table, rows_start);
+        Self::fill_inline_navigation(&mut builder, &ordinal_row);
+
+        match builder.flush(&target_path) {
+            Ok(()) => {
+                let mut cols = state
+                    .all_columns
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                cols.extend(local_cols);
+            }
+            Err(e) => {
+                warn!(target = %target_path.display(), "inline emit: flush failed: {e}");
+            }
+        }
+    }
+
+    /// Emit every row in `table.rows[rows_start..]` into `builder`, returning the
+    /// set of extra column names seen and the `(ordinal, row_id, parent_ordinal)`
+    /// triples the navigation post-pass needs.
+    fn populate_inline_builder(
+        builder: &mut super::segment_builder::SegmentBuilder,
+        table: &crate::ast::index::SymbolTable,
+        rows_start: usize,
+    ) -> (BTreeSet<String>, Vec<(u32, u32, u32)>) {
+        use super::segment_builder::SymbolRow;
+
+        let mut local_cols: BTreeSet<String> = BTreeSet::new();
+        // (ordinal, row_id, parent_ordinal) for the nav post-pass. Keeping
+        // this in sync with ShadowWriter::run and reindex_files is essential:
+        // omitting set_parent_ordinal + the nav pass here wrote flat
+        // (parent_ordinal = MAX) segments from the inline build path, which
+        // mismatched the nested rows reindex writes — the root of BUG-010.
+        let mut ordinal_row: Vec<(u32, u32, u32)> = Vec::new();
+        for row in &table.rows[rows_start..] {
+            let row_id = builder.emit_row(SymbolRow {
+                name: table.name_of(row),
+                fql_kind: table.fql_kind_of(row),
+                language: table.language_of(row),
+                line: u32::try_from(row.line).unwrap_or(u32::MAX),
+                byte_start: u32::try_from(row.byte_range.start).unwrap_or(u32::MAX),
+                byte_end: u32::try_from(row.byte_range.end).unwrap_or(u32::MAX),
+                usages_count: row.usages_count,
+            });
+            if let Some(ordinal) = row.ordinal {
+                builder.set_ordinal(row_id, ordinal);
+                builder.set_parent_ordinal(row_id, row.parent_ordinal);
+                builder.set_rev(row_id, row.rev);
+                ordinal_row.push((ordinal, row_id.0, row.parent_ordinal));
+            }
+            for (key, value) in table.resolve_fields(&row.fields) {
+                if key == "parent_ordinal" {
+                    continue; // now a typed column
+                }
+                let _ = local_cols.insert(key.clone());
+                builder.set_field(row_id, &key, value);
+            }
+        }
+        (local_cols, ordinal_row)
+    }
+
+    /// Navigation post-pass: from the `(ordinal, row_id, parent_ordinal)` triples,
+    /// fill each row's `first_child`, `next_sibling`, and `prev_sibling` ordinals.
+    fn fill_inline_navigation(
+        builder: &mut super::segment_builder::SegmentBuilder,
+        ordinal_row: &[(u32, u32, u32)],
+    ) {
+        use super::segment_builder::RowId;
+
+        // Group addressable rows by parent_ordinal, sort by ordinal (= DFS order).
+        let mut by_parent: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
+        let mut ord_to_row: HashMap<u32, u32> = HashMap::new();
+        for &(ord, rid, parent) in ordinal_row {
+            by_parent.entry(parent).or_default().push((ord, rid));
+            let _ = ord_to_row.insert(ord, rid);
+        }
+        for (parent_ord, mut children) in by_parent {
+            children.sort_unstable_by_key(|&(ord, _)| ord);
+            if let Some(&parent_rid) = ord_to_row.get(&parent_ord)
+                && let Some(&(first_ord, _)) = children.first()
+            {
+                builder.set_first_child_ordinal(RowId(parent_rid), first_ord);
+            }
+            for i in 0..children.len() {
+                let (_, this_rid) = children[i];
+                if i > 0 {
+                    builder.set_prev_sibling_ordinal(RowId(this_rid), children[i - 1].0);
+                }
+                if i + 1 < children.len() {
+                    builder.set_next_sibling_ordinal(RowId(this_rid), children[i + 1].0);
+                }
+            }
+        }
     }
 }
 
