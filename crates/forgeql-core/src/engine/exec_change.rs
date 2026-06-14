@@ -306,11 +306,20 @@ impl ForgeQLEngine {
             _ => bail!("exec_delete_node called with wrong IR variant"),
         };
         let node = self.resolve_node(session_id, node_id, if_rev)?;
+        // Absorb the node's trailing blank line(s) so the delete doesn't leave a
+        // stray separator. Whitespace is not part of the node's span/rev, so this
+        // only widens the DELETE extent; best-effort on read failure.
+        let end_line = {
+            let session = self.require_session(require_session_id(session_id)?)?;
+            std::fs::read_to_string(session.worktree_path.join(&node.rel_path))
+                .map(|content| absorb_trailing_blank_lines(&content, node.end_line))
+                .unwrap_or(node.end_line)
+        };
         let ir = ForgeQLIR::ChangeContent {
             files: vec![node.rel_path],
             target: ChangeTarget::Lines {
                 start: node.line,
-                end: node.end_line,
+                end: end_line,
                 content: String::new(),
             },
             clauses: crate::ir::Clauses::default(),
@@ -381,6 +390,22 @@ fn node_span_text(src: &str, line_start: usize, line_end: usize) -> String {
         .take(line_end.saturating_sub(line_start).saturating_add(1))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Extend a 1-based inclusive `end_line` forward over the contiguous run of
+/// blank lines that immediately follow it in `content`, so deleting a node also
+/// removes its trailing blank separator (avoids blank-line accumulation).
+/// Whitespace is not part of a node's span/rev, so this only widens the DELETE
+/// extent. Returns `end_line` unchanged when the next line is non-blank or out
+/// of range.
+fn absorb_trailing_blank_lines(content: &str, end_line: usize) -> usize {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut end = end_line;
+    // The 1-based line `end + 1` sits at 0-based index `end`.
+    while end < lines.len() && lines[end].trim().is_empty() {
+        end += 1;
+    }
+    end
 }
 
 /// Build the self-healing rejection payload for a failed `CHANGE NODE … IF REV`
@@ -472,6 +497,22 @@ mod rev_mismatch_tests {
         assert_eq!(node_span_text(src, 1, 1), "a");
         assert_eq!(node_span_text(src, 5, 5), "e");
         assert_eq!(node_span_text(src, 1, 5), src);
+    }
+
+    #[test]
+    fn absorb_trailing_blank_lines_extends_over_blank_run() {
+        // No trailing blank → unchanged.
+        assert_eq!(super::absorb_trailing_blank_lines("a\nb\nc", 1), 1);
+        // One trailing blank after line 1 → absorbs it (end 1 → 2).
+        assert_eq!(super::absorb_trailing_blank_lines("a\n\nc", 1), 2);
+        // Multiple trailing blanks → absorbs the whole run.
+        assert_eq!(super::absorb_trailing_blank_lines("a\n\n\n\nc", 1), 4);
+        // Node is the last line → nothing to absorb.
+        assert_eq!(super::absorb_trailing_blank_lines("a", 1), 1);
+        // Trailing blank at EOF.
+        assert_eq!(super::absorb_trailing_blank_lines("a\n\n", 1), 2);
+        // Whitespace-only line counts as blank.
+        assert_eq!(super::absorb_trailing_blank_lines("a\n   \nc", 1), 2);
     }
 
     #[test]

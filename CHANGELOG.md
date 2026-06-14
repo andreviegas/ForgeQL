@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.31] — 2026-06-14 — Node arch: DELETE NODE absorbs trailing blank lines
+
+### Changed
+
+- `engine::exec_change`: `DELETE NODE` now extends its delete range forward over the contiguous
+  run of blank lines immediately following the node, so deleting a node also removes its trailing
+  blank separator instead of leaving a stray blank (no accumulation). New pure helper
+  `absorb_trailing_blank_lines` widens only the DELETE extent — whitespace is not part of the
+  node's span/rev, and `CHANGE NODE` / explicit line-range deletes are unaffected. Best-effort:
+  a read failure or a non-blank next line leaves the range unchanged. This removes the `fmt-apply`
+  round-trips that node deletes used to force.
+
+### Added
+
+- `absorb_trailing_blank_lines_extends_over_blank_run` unit test (no-trailing, single/multi blank
+  run, last-line, EOF-blank, whitespace-only-line cases).
+
 ## [0.76.30] — 2026-06-14 — Node arch (step 1): fold leading attributes into the node span
 
 ### Changed
