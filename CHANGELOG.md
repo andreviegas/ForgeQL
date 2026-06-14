@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.27] — 2026-06-13 — Refactor: decompose columnar `show_outline_for_file_impl`
+
+### Changed
+
+- `storage::columnar` query: split the 116-line `show_outline_for_file_impl` into the two
+  outline forms it dispatches — `outline_subtree` (node_id → that node + descendants) and
+  `outline_glob` (file/glob, committed-authoritative with dirty-overlay fallback). The method
+  is now a ~22-line dispatcher that wraps the chosen `results` in the response JSON. Pure
+  refactor — outline output unchanged (golden 329/0).
+
 ## [0.76.26] — 2026-06-13 — Refactor: decompose columnar `find_node_impl`
 
 ### Changed

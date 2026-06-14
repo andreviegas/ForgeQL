@@ -12,60 +12,88 @@ impl ColumnarStorage {
         all: bool,
     ) -> serde_json::Value {
         let root = workspace.root();
-        let mut results: Vec<serde_json::Value> = Vec::new();
 
         // Subtree form: `file` is actually a node_id → outline that node and its
-        // descendants. Committed segments win (their nav is authoritative); a
-        // brand-new file lives only in the dirty overlay, so fall back to it.
-        if let Some((hex, ordinal)) = parse_outline_node_target(file) {
-            if let Some(seg_idx) = self.overlay.seg_idx_for_node_id_prefix(&hex) {
-                let seg_idx = seg_idx as usize;
-                if let (Some(seg), Some(seg_meta)) = (
-                    self.segments.get(seg_idx),
-                    self.overlay.segments().get(seg_idx),
-                ) {
-                    let abs_path = root.join(&seg_meta.source_path);
-                    let rel_path = workspace.relative(&abs_path).display().to_string();
-                    let node_id_for = |ord: u32| seg_meta.node_id(ord);
-                    push_outline_tree(
-                        seg,
-                        &rel_path,
-                        &node_id_for,
-                        all,
-                        Some(ordinal),
-                        &mut results,
-                    );
-                    return serde_json::json!({
-                        "op": "show_outline", "file": file, "results": results,
-                    });
-                }
-            }
-            for ds in &self.dirty.added {
-                let src = ds.source_path.to_string_lossy().into_owned();
-                if crate::node_id::make_node_id(&src, ordinal) != file {
-                    continue;
-                }
-                let abs_path = root.join(&ds.source_path);
+        // descendants. File / glob form otherwise.
+        let results = if let Some((hex, ordinal)) = parse_outline_node_target(file) {
+            self.outline_subtree(workspace, root, file, &hex, ordinal, all)
+        } else {
+            self.outline_glob(workspace, root, file, all)
+        };
+
+        serde_json::json!({
+            "op":      "show_outline",
+            "file":    file,
+            "results": results,
+        })
+    }
+
+    /// Subtree outline: `file` is a node_id. Outline that node and its
+    /// descendants, preferring the committed segment (authoritative nav) and
+    /// falling back to the dirty overlay for a brand-new file.
+    fn outline_subtree(
+        &self,
+        workspace: &Workspace,
+        root: &std::path::Path,
+        file: &str,
+        hex: &str,
+        ordinal: u32,
+        all: bool,
+    ) -> Vec<serde_json::Value> {
+        let mut results: Vec<serde_json::Value> = Vec::new();
+        if let Some(seg_idx) = self.overlay.seg_idx_for_node_id_prefix(hex) {
+            let seg_idx = seg_idx as usize;
+            if let (Some(seg), Some(seg_meta)) = (
+                self.segments.get(seg_idx),
+                self.overlay.segments().get(seg_idx),
+            ) {
+                let abs_path = root.join(&seg_meta.source_path);
                 let rel_path = workspace.relative(&abs_path).display().to_string();
-                let node_id_for = |ord: u32| crate::node_id::make_node_id(&src, ord);
+                let node_id_for = |ord: u32| seg_meta.node_id(ord);
                 push_outline_tree(
-                    ds.reader.as_ref(),
+                    seg,
                     &rel_path,
                     &node_id_for,
                     all,
                     Some(ordinal),
                     &mut results,
                 );
-                break;
+                return results;
             }
-            return serde_json::json!({
-                "op": "show_outline", "file": file, "results": results,
-            });
         }
+        for ds in &self.dirty.added {
+            let src = ds.source_path.to_string_lossy().into_owned();
+            if crate::node_id::make_node_id(&src, ordinal) != file {
+                continue;
+            }
+            let abs_path = root.join(&ds.source_path);
+            let rel_path = workspace.relative(&abs_path).display().to_string();
+            let node_id_for = |ord: u32| crate::node_id::make_node_id(&src, ord);
+            push_outline_tree(
+                ds.reader.as_ref(),
+                &rel_path,
+                &node_id_for,
+                all,
+                Some(ordinal),
+                &mut results,
+            );
+            break;
+        }
+        results
+    }
 
-        // File / glob form. Committed segments are authoritative and match the
-        // prior behaviour exactly; the dirty overlay is consulted only for paths
-        // that have no committed segment yet (files created this session).
+    /// File / glob outline: committed segments are authoritative and matched
+    /// first; the dirty overlay is consulted only for paths with no committed
+    /// segment yet, or whose committed segment is stale after a session edit
+    /// (BUG-013 — the read-side trigger for BUG-012).
+    fn outline_glob(
+        &self,
+        workspace: &Workspace,
+        root: &std::path::Path,
+        file: &str,
+        all: bool,
+    ) -> Vec<serde_json::Value> {
+        let mut results: Vec<serde_json::Value> = Vec::new();
         let mut committed_paths: std::collections::HashSet<String> =
             std::collections::HashSet::new();
         for (seg_idx, seg_meta) in self.overlay.segments().iter().enumerate() {
@@ -73,12 +101,9 @@ impl ColumnarStorage {
                 continue;
             }
             // A file edited this session is authoritative in the dirty overlay;
-            // its committed segment is stale (deleted nodes still listed, old
-            // line numbers, pre-edit node_ids). Skip it here and let the dirty
-            // overlay loop below render the file's current structure. Without
-            // this, SHOW outline hands back node_ids whose committed line is
-            // stale, which the mutation path then resolves to a phantom range
-            // (BUG-013 — the read-side trigger for BUG-012).
+            // its committed segment is stale (deleted nodes still listed, old line
+            // numbers, pre-edit node_ids). Skip it here and let the dirty overlay
+            // loop below render the file's current structure.
             if self
                 .dirty
                 .added
@@ -114,12 +139,7 @@ impl ColumnarStorage {
                 &mut results,
             );
         }
-
-        serde_json::json!({
-            "op":      "show_outline",
-            "file":    file,
-            "results": results,
-        })
+        results
     }
 }
 /// Structural declaration kinds shown in a default (non-`ALL`) outline.
