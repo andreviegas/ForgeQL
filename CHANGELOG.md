@@ -6,6 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.30] — 2026-06-14 — Node arch (step 1): fold leading attributes into the node span
+
+### Changed
+
+- `ast::index`: a node's span (`byte_range` / `line` / `rev`) now folds in its contiguous
+  leading attribute items (`#[...]`). New `attr_extended_start` walks `prev_named_sibling`
+  matching `attribute_item` (mirrors `collect_attribute_guard_frames`) and extends the span back
+  to the first attribute, so `rev` covers attributes and edits/`IF REV` protect them. Ordinal
+  matching keeps using the unextended `content_hash`, so attribute edits do **not** churn node_ids.
+  First step of the nested node-id re-architecture (see `plan-node-id-rearchitecture.md`).
+  Currently folds Rust attributes only (other languages' attribute kinds are left unchanged);
+  golden 329/0, no corpus churn.
+
+### Added
+
+- `index::tests::leading_attribute_folds_into_node_span` — indexes `#[derive(Clone)]\nstruct
+  Widget;` and asserts the row reports line 1 / byte 0 (the attribute), not the `struct` keyword.
+
 ## [0.76.29] — 2026-06-13 — Refactor: decompose `SegmentReader::open`
 
 ### Changed

@@ -581,6 +581,46 @@ mod tests {
     }
 
     #[test]
+    fn leading_attribute_folds_into_node_span() {
+        // A Rust item's span (line / byte_range / rev) should start at its
+        // leading `#[...]` attribute, not at the `fn`/`struct` keyword.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("snippet.rs");
+        std::fs::write(&file, "#[derive(Clone)]\nstruct Widget;\n").unwrap();
+
+        let mut table = SymbolTable::default();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let enrichers = default_enrichers();
+        {
+            let mut ctx = IndexContext {
+                path: &file,
+                language: &crate::ast::lang::RustLanguageInline,
+                enrichers: &enrichers,
+                macro_table: None,
+                ordinal_remapper: None,
+                table: &mut table,
+            };
+            index_file(&mut parser, &mut ctx, None).unwrap();
+        }
+
+        let widget = table
+            .rows
+            .iter()
+            .find(|r| table.name_of(r) == "Widget")
+            .expect("struct Widget should be indexed");
+        // Line 1 is `#[derive(Clone)]`; line 2 is `struct Widget;`. The attribute
+        // folds into the span, so the node reports line 1 and starts at byte 0.
+        assert_eq!(widget.line, 1, "span should start at the #[derive] line");
+        assert_eq!(
+            widget.byte_range.start, 0,
+            "byte_range should include the leading attribute"
+        );
+    }
+
+    #[test]
     fn indexes_function_definition() {
         let table = index_snippet("void processSignal(int speed) { return; }");
         let row = table.find_def("processSignal").expect("indexed");

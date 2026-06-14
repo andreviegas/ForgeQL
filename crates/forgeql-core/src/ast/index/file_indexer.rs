@@ -774,7 +774,11 @@ fn emit_addressable_row(
     } else {
         None
     };
-    let rev = row_rev(ordinal, source, node.byte_range());
+    // Fold leading `#[...]` attributes into the span (rev covers them); ordinal
+    // matching keeps the unextended content_hash so attribute edits don't churn ids.
+    let (start_byte, start_line) = attr_extended_start(node);
+    let span = start_byte..node.byte_range().end;
+    let rev = row_rev(ordinal, source, span.clone());
     let fields = sink.table.strings.intern_fields(fields);
     sink.table.push_row(IndexRow {
         name_id,
@@ -782,8 +786,8 @@ fn emit_addressable_row(
         fql_kind_id,
         language_id,
         path_id,
-        byte_range: node.byte_range(),
-        line: node.start_position().row + 1,
+        byte_range: span,
+        line: start_line,
         usages_count: 0,
         ordinal,
         parent_ordinal,
@@ -791,6 +795,29 @@ fn emit_addressable_row(
         fields,
     });
     ordinal
+}
+
+/// Walk back over the contiguous run of leading attribute items (`#[...]`)
+/// preceding `node` and return the `(start_byte, 1-based start_line)` of the
+/// first attribute, so a node's span folds in its operational attributes.
+/// Falls back to the node's own start when there are none.
+///
+/// Matches `collect_attribute_guard_frames`' detection (`attribute_item` via
+/// `prev_named_sibling`), so today this only folds Rust attributes; other
+/// languages' attribute kinds don't match and are left unchanged.
+fn attr_extended_start(node: tree_sitter::Node<'_>) -> (usize, usize) {
+    let mut start_byte = node.start_byte();
+    let mut start_line = node.start_position().row + 1;
+    let mut prev = node.prev_named_sibling();
+    while let Some(sib) = prev {
+        if sib.kind() != "attribute_item" {
+            break;
+        }
+        start_byte = sib.start_byte();
+        start_line = sib.start_position().row + 1;
+        prev = sib.prev_named_sibling();
+    }
+    (start_byte, start_line)
 }
 
 /// Emit the synthetic rows contributed by the `extra_rows` of each enricher for
