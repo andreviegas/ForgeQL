@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.26] — 2026-06-13 — Refactor: decompose columnar `find_node_impl`
+
+### Changed
+
+- `storage::columnar` query: extracted the ~85-line committed-path body of `find_node_impl`
+  into `build_committed_node_result` (live-row proximity lookup, stale-byte / deleted-node
+  fallback, and `FindNodeResult` construction). `find_node_impl` is now a ~42-line
+  dirty-first → committed → dirty dispatch. Pure refactor — node resolution unchanged
+  (golden 329/0).
+
 ## [0.76.25] — 2026-06-13 — Refactor: decompose columnar `warm_or_open`
 
 ### Changed

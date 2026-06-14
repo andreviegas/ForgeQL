@@ -147,85 +147,11 @@ impl ColumnarStorage {
             .seg_idx_for_node_id_prefix(hex_prefix)
             .map(|i| i as usize)
             && let Some(seg) = self.segments.get(seg_idx)
-            && let Some(seg_meta) = self.overlay.segments().get(seg_idx)
+            && self.overlay.segments().get(seg_idx).is_some()
             && let Some(local_row) =
                 (0..seg.row_count).find(|&r| seg.ordinal_of(r) == Some(ordinal))
         {
-            let name_str = seg.name_of(local_row);
-            let fql_kind_str = seg.fql_kind_of(local_row);
-            let committed_line = seg.line_of(local_row);
-
-            let dirty_for_path = self
-                .dirty
-                .added
-                .iter()
-                .find(|ds| ds.source_path == seg_meta.source_path);
-
-            let live_lookup: Option<(&SegmentReader, u32)> = dirty_for_path.and_then(|ds| {
-                let rows = ds.reader.lookup_name(name_str);
-                if rows.is_empty() {
-                    return None;
-                }
-                rows.into_iter()
-                    .filter(|&r| ds.reader.fql_kind_of(r) == fql_kind_str)
-                    .min_by_key(|&r| {
-                        u64::from(ds.reader.line_of(r)).abs_diff(u64::from(committed_line))
-                    })
-                    .map(|row| (&*ds.reader, row))
-            });
-
-            // No live row matched this committed node by name. When the file
-            // was edited this session, the committed line/byte_end are stale:
-            // the node may have been deleted or relocated, leaving a committed
-            // line past EOF that yields an inverted span the mutation path
-            // rejects with "end line < start line" (BUG-012). Resolve by
-            // ordinal in the dirty segment instead; if the node is gone,
-            // report not-found rather than a phantom range.
-            let (data_seg, data_row): (&SegmentReader, u32) = match live_lookup {
-                Some(hit) => hit,
-                None if dirty_for_path.is_some() => {
-                    return Ok(self.find_node_in_dirty(node_id, ordinal, root));
-                }
-                None => (&**seg, local_row),
-            };
-
-            let name = data_seg.name_of(data_row).to_owned();
-            let fql_kind = data_seg.fql_kind_of(data_row).to_owned();
-            let line = data_seg.line_of(data_row) as usize;
-            let rev = crate::node_id::format_rev(data_seg.rev_of(data_row));
-            let path = root.join(&seg_meta.source_path);
-            #[allow(clippy::naive_bytecount)]
-            let end_line = {
-                let byte_end = data_seg.byte_end_of(data_row) as usize;
-                if byte_end == 0 {
-                    line
-                } else {
-                    let file_bytes = std::fs::read(&path).unwrap_or_default();
-                    content_end_line_in_bytes(&file_bytes, byte_end)
-                }
-            };
-            let opt_nav = |ord: u32| -> Option<String> {
-                if ord == u32::MAX {
-                    None
-                } else {
-                    Some(seg_meta.node_id(ord))
-                }
-            };
-            // Nav pointers come from the committed segment — ordinals are layout-stable
-            // (DFS order doesn't change when a body is replaced).
-            return Ok(Some(FindNodeResult {
-                node_id: node_id.to_owned(),
-                fql_kind,
-                name,
-                path,
-                line,
-                end_line,
-                rev,
-                parent_node_id: opt_nav(seg.parent_ordinal_of(local_row)),
-                first_child_node_id: opt_nav(seg.first_child_ordinal_of(local_row)),
-                next_sibling_node_id: opt_nav(seg.next_sibling_ordinal_of(local_row)),
-                prev_sibling_node_id: opt_nav(seg.prev_sibling_ordinal_of(local_row)),
-            }));
+            return Ok(self.build_committed_node_result(node_id, ordinal, root, seg_idx, local_row));
         }
 
         // Dirty path: a node created this session (via INSERT NODE, or in a
@@ -237,6 +163,103 @@ impl ColumnarStorage {
         }
 
         Err(anyhow::anyhow!("node_id not found: {node_id}"))
+    }
+
+    /// Resolve a committed node (one that existed at index time) by its segment
+    /// prefix + ordinal. Returns `None` when no committed segment/row matches
+    /// (caller falls through to the dirty path); `Some(inner)` when the committed
+    /// path applies — `inner` is the resolved [`FindNodeResult`], or the
+    /// dirty-segment fallback when the committed row's bytes are stale (BUG-012).
+    /// Build the [`FindNodeResult`] for a committed node located at `seg_idx` /
+    /// `local_row`. When a dirty segment exists for the file, prefers its live
+    /// byte positions via a name + `fql_kind` proximity lookup; if the committed
+    /// row's live row is gone, falls back to the dirty segment by ordinal, or
+    /// reports `None` rather than a phantom range (BUG-012).
+    fn build_committed_node_result(
+        &self,
+        node_id: &str,
+        ordinal: u32,
+        root: &Path,
+        seg_idx: usize,
+        local_row: u32,
+    ) -> Option<FindNodeResult> {
+        let seg = self.segments.get(seg_idx)?;
+        let seg_meta = self.overlay.segments().get(seg_idx)?;
+
+        let name_str = seg.name_of(local_row);
+        let fql_kind_str = seg.fql_kind_of(local_row);
+        let committed_line = seg.line_of(local_row);
+
+        let dirty_for_path = self
+            .dirty
+            .added
+            .iter()
+            .find(|ds| ds.source_path == seg_meta.source_path);
+
+        let live_lookup: Option<(&SegmentReader, u32)> = dirty_for_path.and_then(|ds| {
+            let rows = ds.reader.lookup_name(name_str);
+            if rows.is_empty() {
+                return None;
+            }
+            rows.into_iter()
+                .filter(|&r| ds.reader.fql_kind_of(r) == fql_kind_str)
+                .min_by_key(|&r| {
+                    u64::from(ds.reader.line_of(r)).abs_diff(u64::from(committed_line))
+                })
+                .map(|row| (&*ds.reader, row))
+        });
+
+        // No live row matched this committed node by name. When the file was
+        // edited this session, the committed line/byte_end are stale: the node may
+        // have been deleted or relocated, leaving a committed line past EOF that
+        // yields an inverted span the mutation path rejects (BUG-012). Resolve by
+        // ordinal in the dirty segment instead; if the node is gone, report
+        // not-found rather than a phantom range.
+        let (data_seg, data_row): (&SegmentReader, u32) = match live_lookup {
+            Some(hit) => hit,
+            None if dirty_for_path.is_some() => {
+                return self.find_node_in_dirty(node_id, ordinal, root);
+            }
+            None => (&**seg, local_row),
+        };
+
+        let name = data_seg.name_of(data_row).to_owned();
+        let fql_kind = data_seg.fql_kind_of(data_row).to_owned();
+        let line = data_seg.line_of(data_row) as usize;
+        let rev = crate::node_id::format_rev(data_seg.rev_of(data_row));
+        let path = root.join(&seg_meta.source_path);
+        #[allow(clippy::naive_bytecount)]
+        let end_line = {
+            let byte_end = data_seg.byte_end_of(data_row) as usize;
+            if byte_end == 0 {
+                line
+            } else {
+                let file_bytes = std::fs::read(&path).unwrap_or_default();
+                content_end_line_in_bytes(&file_bytes, byte_end)
+            }
+        };
+        let opt_nav = |ord: u32| -> Option<String> {
+            if ord == u32::MAX {
+                None
+            } else {
+                Some(seg_meta.node_id(ord))
+            }
+        };
+        // Nav pointers come from the committed segment — ordinals are layout-stable
+        // (DFS order doesn't change when a body is replaced).
+        Some(FindNodeResult {
+            node_id: node_id.to_owned(),
+            fql_kind,
+            name,
+            path,
+            line,
+            end_line,
+            rev,
+            parent_node_id: opt_nav(seg.parent_ordinal_of(local_row)),
+            first_child_node_id: opt_nav(seg.first_child_ordinal_of(local_row)),
+            next_sibling_node_id: opt_nav(seg.next_sibling_ordinal_of(local_row)),
+            prev_sibling_node_id: opt_nav(seg.prev_sibling_ordinal_of(local_row)),
+        })
     }
 
     pub(super) fn find_node_id_at_line_impl(&self, rel_path: &str, line: usize) -> Option<String> {
