@@ -222,6 +222,23 @@ pub(crate) struct SymbolRow {
     pub node_id: Option<String>,
 }
 
+/// Stage 2 block alias: when a row is a block member (it carries `block_ord` /
+/// `block_off` fields written at index time), surface its handle as
+/// `block_id(offset)` instead of the member's own node id. The member's segment
+/// prefix is reused, so only the ordinal and offset change. Members still
+/// resolve by their own node id; this only changes what FIND/SHOW display.
+fn surface_block_alias(row: &SymbolMatch) -> Option<String> {
+    let base = row.node_id.clone();
+    let (Some(member_id), Some(ord), Some(off)) = (
+        row.node_id.as_deref(),
+        row.fields.get("block_ord"),
+        row.fields.get("block_off"),
+    ) else {
+        return base;
+    };
+    let seg = member_id.rsplit_once('.').map_or(member_id, |(seg, _)| seg);
+    Some(format!("{seg}.{ord}({off})"))
+}
 impl SymbolRow {
     /// Build a display row from a query match, using query-level context to
     /// decide which enrichment fields to extract.
@@ -253,7 +270,7 @@ impl SymbolRow {
                 "path" => row.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
                 _ => row.fields.get(field).cloned(),
             }),
-            node_id: row.node_id.clone(),
+            node_id: surface_block_alias(row),
         }
     }
 

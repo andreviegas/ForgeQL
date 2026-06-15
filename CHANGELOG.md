@@ -6,6 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.35] — 2026-06-15 — Node arch: block grouping (Stage 2 — member alias surfacing)
+
+### Added
+
+- **Block members now surface as `block_id(offset)`** in `FIND`/`SHOW` output. At index time each member of a block is tagged with `block_ord` (the block node's 4-digit ordinal) and `block_off` (the member's 1-based offset within the block); `SymbolRow::from_match_with_ctx` (`crates/forgeql-core/src/result.rs`) then renders the member's handle as `block_id(offset)` instead of its own node id, reusing the member's own segment prefix so only the ordinal + offset change. The member's own node id still resolves under the hood — this only changes what the discovery surfaces display, nudging agents toward the block handle. `ENRICH_VER` 15 → 16.
+
+### Changed
+
+- `emit_block_row` returns the block ordinal; `collect_nodes` tracks the active block as `ActiveBlock` (ord suffix, start line, end byte, member kind) and computes a per-member `BlockTag` threaded through `process_node_rows` → `emit_addressable_row` (`crates/forgeql-core/src/ast/index/file_indexer.rs`).
+
+### Tests
+
+- `block_members_carry_block_alias_fields` (`ast/index.rs`); `surface_block_alias_builds_block_handle_for_members`, `surface_block_alias_passes_through_non_members` (`result/tests.rs`).
+
+### Notes
+
+- Like Stage 1, only Rust is enabled, so the C/C++ golden corpus is unaffected. The surfacing is backend-agnostic (projection layer) and only triggers on rows carrying the block fields, so `overlay_parity` (which compares raw `SymbolMatch`) is unchanged. `SHOW outline` member entries still show their own node id — extending the alias there, and enabling other languages, remain follow-ups (each gated on a reviewed golden rebaseline).
+
 ## [0.76.34] — 2026-06-15 — Node arch: block grouping (Stage 1 — comment blocks)
 
 ### Added

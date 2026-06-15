@@ -783,6 +783,42 @@ mod tests {
     }
 
     #[test]
+    fn block_members_carry_block_alias_fields() {
+        // Each member of a block is tagged with the block's 4-digit ordinal
+        // (`block_ord`) and its 1-based offset within the block (`block_off`),
+        // which powers the FIND/SHOW `block_id(offset)` surfacing.
+        let src = "// first\n// second\n// third\nfn f() {}\n";
+        let table = index_rust_snippet(src);
+
+        let block_ord = table
+            .rows
+            .iter()
+            .find(|r| table.fql_kind_of(r) == "comment_block")
+            .and_then(|r| r.ordinal)
+            .expect("comment_block exists");
+        let expected_ord = format!("{block_ord:04}");
+
+        let offs: Vec<&str> = table
+            .rows
+            .iter()
+            .filter(|r| table.fql_kind_of(r) == "comment")
+            .map(|r| {
+                assert_eq!(
+                    table.field_str(&r.fields, "block_ord"),
+                    Some(expected_ord.as_str()),
+                    "each member points at the owning block ordinal"
+                );
+                table.field_str(&r.fields, "block_off").unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(
+            offs,
+            ["1", "2", "3"],
+            "members are tagged with 1-based offsets within the block"
+        );
+    }
+
+    #[test]
     fn control_flow_body_preserves_sibling_node_ids_across_unrelated_edit() {
         // §4.1 must not break node-id survival across an unrelated edit (the NID08
         // "if node-ids survive line drift" property, at unit scope).

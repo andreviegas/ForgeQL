@@ -611,6 +611,38 @@ fn compact_name_with_newline_returns_len_format() {
     assert_eq!(result.as_ref(), "len:11");
 }
 
+#[test]
+fn surface_block_alias_builds_block_handle_for_members() {
+    // A row carrying block_ord/block_off surfaces as block_id(offset), reusing
+    // the member's own segment prefix and swapping ordinal + offset.
+    let fields = HashMap::from([
+        ("block_ord".to_string(), "0007".to_string()),
+        ("block_off".to_string(), "2".to_string()),
+    ]);
+    let row = SymbolMatch {
+        node_id: Some("nabc123def456.0011".to_string()),
+        fields,
+        ..Default::default()
+    };
+    assert_eq!(
+        surface_block_alias(&row).as_deref(),
+        Some("nabc123def456.0007(2)"),
+    );
+}
+
+#[test]
+fn surface_block_alias_passes_through_non_members() {
+    // A row without block fields keeps its own node id.
+    let row = SymbolMatch {
+        node_id: Some("nabc123def456.0011".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        surface_block_alias(&row).as_deref(),
+        Some("nabc123def456.0011"),
+    );
+}
+
 // -- ShowResult Display variants -------------------------------------
 
 #[test]

@@ -368,10 +368,9 @@ fn collect_nodes(
     // comments) to be spanned by a synthetic, childless "block" node. When the
     // language declares none, all per-node block work below is skipped.
     let block_groups_active = !config.block_groups().is_empty();
-    // End byte of the block currently being spanned. While set, member nodes
-    // inside it are skipped for detection (the block was already emitted at the
-    // run's first member).
-    let mut active_block_end: Option<usize> = None;
+    // The block currently being spanned, carried across loop iterations; while
+    // set, member nodes inside its span are tagged with the block address.
+    let mut active_block: Option<ActiveBlock> = None;
     let mut guard_stack: Vec<GuardFrame> = Vec::new();
     // Tracks the kind of the parent node at each level of the DFS, updated
     // O(1) by the cursor navigation below.  Avoids calling node.parent()
@@ -426,17 +425,20 @@ fn collect_nodes(
             // run. Members keep their own parent and node ids; only the block is
             // added. next_sibling() bridges blank lines (they are not tree nodes).
             if block_groups_active {
-                if active_block_end.is_some_and(|end| node.start_byte() >= end) {
-                    active_block_end = None;
+                if active_block
+                    .as_ref()
+                    .is_some_and(|ab| node.start_byte() >= ab.end_byte)
+                {
+                    active_block = None;
                 }
-                if active_block_end.is_none()
+                if active_block.is_none()
                     && let Some(spec) =
                         config.block_group_for_member(lang.map_kind(node.kind()).unwrap_or(""))
                 {
                     let key = block_group_key(node, source, config, spec);
                     let (count, end_byte) = scan_block_run(node, source, config, lang, spec, &key);
                     if count >= spec.min_run {
-                        emit_block_row(
+                        let block_ordinal = emit_block_row(
                             ctx,
                             spec,
                             node.start_byte(),
@@ -446,10 +448,38 @@ fn collect_nodes(
                             &mut row_ordinal_counter,
                             source,
                         );
-                        active_block_end = Some(end_byte);
+                        active_block = Some(ActiveBlock {
+                            ord_suffix: format!("{block_ordinal:04}"),
+                            start_line: node.start_position().row + 1,
+                            end_byte,
+                            member_fql_kind: spec.member_fql_kind.clone(),
+                        });
                     }
                 }
             }
+
+            // Stage 2: tag each member of an active block with the block ordinal
+            // and the member's offset within it, so FIND/SHOW surface the member
+            // as `block_id(offset)`.
+            let block_tag = active_block.as_ref().and_then(|ab| {
+                if lang.map_kind(node.kind()).unwrap_or("") == ab.member_fql_kind
+                    && node.start_byte() < ab.end_byte
+                {
+                    let start = node.start_position().row + 1 - ab.start_line + 1;
+                    let end = node.end_position().row + 1 - ab.start_line + 1;
+                    let off = if start == end {
+                        start.to_string()
+                    } else {
+                        format!("{start}-{end}")
+                    };
+                    Some(BlockTag {
+                        ord: ab.ord_suffix.clone(),
+                        off,
+                    })
+                } else {
+                    None
+                }
+            });
             let current_node_ordinal = process_node_rows(
                 ctx,
                 node,
@@ -461,6 +491,7 @@ fn collect_nodes(
                 string_depth > 0,
                 error_depth > 0,
                 &mut row_ordinal_counter,
+                block_tag.as_ref(),
             );
 
             // Descend into children.
@@ -559,6 +590,7 @@ fn process_node_rows(
     inside_string: bool,
     inside_error: bool,
     row_ordinal_counter: &mut u32,
+    block_tag: Option<&BlockTag>,
 ) -> Option<u32> {
     let config = ctx.language.config();
     let lang_name = ctx.language.name();
@@ -595,6 +627,7 @@ fn process_node_rows(
             &name,
             fql_kind_val,
             parent_ordinal,
+            block_tag,
         );
     } else if let Some(mtable) = ctx.macro_table {
         // Re-tag: tree-sitter-cpp parses C macro calls as call_expression,
@@ -621,6 +654,7 @@ fn process_node_rows(
                     &func_name,
                     "macro_call",
                     parent_ordinal,
+                    None,
                 );
             }
         }
@@ -782,6 +816,7 @@ fn emit_addressable_row(
     name: &str,
     fql_kind: &str,
     parent_ordinal: u32,
+    block_tag: Option<&BlockTag>,
 ) -> Option<u32> {
     let node = ctx.node;
     let source = ctx.source;
@@ -791,6 +826,13 @@ fn emit_addressable_row(
     // Run all enrichers on this row.
     for enricher in sink.enrichers {
         enricher.enrich_row(ctx, name, &mut fields);
+    }
+
+    // Stage 2: tag this row with its owning block address so FIND/SHOW can
+    // surface the member node id as `block_id(offset)`.
+    if let Some(tag) = block_tag {
+        drop(fields.insert("block_ord".to_string(), tag.ord.clone()));
+        drop(fields.insert("block_off".to_string(), tag.off.clone()));
     }
 
     let (name_id, node_kind_id, fql_kind_id, language_id, path_id) =
@@ -845,6 +887,30 @@ fn emit_addressable_row(
 /// "comment_style"` the key is the comment style, so `///` doc runs and `//`
 /// line runs form separate blocks; otherwise every member of the kind shares
 /// one key.
+/// State for the block currently being spanned, carried across loop iterations
+/// so each member of the run can be tagged with the block's address.
+struct ActiveBlock {
+    /// 4-digit ordinal suffix of the block node (matches the `node_id` format),
+    /// e.g. `"0123"` for ordinal 123.
+    ord_suffix: String,
+    /// 1-based start line of the block (used to compute member offsets).
+    start_line: usize,
+    /// End byte of the block span; once a node starts at/after this, the block is
+    /// closed.
+    end_byte: usize,
+    /// FQL kind of the run's members (only these nodes are tagged).
+    member_fql_kind: String,
+}
+
+/// Per-member block address, written onto the member row as `block_ord` /
+/// `block_off` fields so `FIND`/`SHOW` can surface the member as
+/// `block_id(offset)` (Stage 2 alias).
+struct BlockTag {
+    /// 4-digit ordinal suffix of the owning block node.
+    ord: String,
+    /// 1-based offset (or `start-end` range) of the member within the block.
+    off: String,
+}
 fn block_group_key(
     node: tree_sitter::Node<'_>,
     source: &[u8],
@@ -904,7 +970,7 @@ fn emit_block_row(
     parent_ordinal: u32,
     row_ordinal_counter: &mut u32,
     source: &[u8],
-) {
+) -> u32 {
     let span = start_byte..end_byte;
     let block_kind = spec.block_fql_kind.as_str();
     let content_hash = short_sha256_hex(source.get(span.clone()).unwrap_or_default());
@@ -946,6 +1012,7 @@ fn emit_block_row(
         rev,
         fields,
     });
+    ordinal
 }
 
 /// Walk back over the contiguous run of leading attribute items (`#[...]`)
