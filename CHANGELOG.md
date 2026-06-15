@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.33] — 2026-06-15 — Node arch: explicit self-row flag (hardening)
+
+### Changed
+
+- **Control-flow self-row detection is now explicit** (`crates/forgeql-core/src/ast/enrich/mod.rs`, `crates/forgeql-core/src/ast/index/file_indexer.rs`). `ExtraRow` gains an `is_self_row: bool` field; enrichers that emit the row representing the visited node itself set it `true`, and `emit_extra_rows` recovers the node's own ordinal from the first row whose `is_self_row` is set. This replaces the implicit `extra.byte_range == node.byte_range()` equality check. Behaviour is unchanged — every current self-row already spans the node's exact byte range — but the contract is now declared at the enricher call site instead of inferred from a range comparison, so a future enricher emitting a synthetic same-span row (a scope wrapper, derived symbol, or usage) can no longer be silently mistaken for the node itself.
+
 ## [0.76.32] — 2026-06-15 — Node arch: branches-as-parents (§4.1)
 
 ### Changed

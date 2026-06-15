@@ -71,6 +71,7 @@ impl OperatorEnricher {
             line: ctx.node.start_position().row + 1,
             fields,
             path_override: None,
+            is_self_row: true,
         }]
     }
 
@@ -121,6 +122,7 @@ impl OperatorEnricher {
             line: ctx.node.start_position().row + 1,
             fields,
             path_override: None,
+            is_self_row: true,
         }]
     }
 
@@ -175,6 +177,7 @@ impl OperatorEnricher {
             line: ctx.node.start_position().row + 1,
             fields,
             path_override: None,
+            is_self_row: true,
         }]
     }
 }

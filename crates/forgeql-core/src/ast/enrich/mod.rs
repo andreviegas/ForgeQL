@@ -131,6 +131,12 @@ pub struct ExtraRow {
     /// Optional owned path override (most enrichers leave this `None`,
     /// meaning the path comes from `EnrichContext::path`).
     pub path_override: Option<PathBuf>,
+    /// `true` when this row represents the visited node itself — the whole-node
+    /// "self-row" — rather than a synthetic sub-row (a usage, derived symbol, or
+    /// same-span scope wrapper). The indexer reads this to recover the ordinal of
+    /// the node itself, so a control-flow node can become the parent of its body.
+    /// Enrichers that emit the row for the node they were invoked on set `true`.
+    pub is_self_row: bool,
 }
 
 // -----------------------------------------------------------------------

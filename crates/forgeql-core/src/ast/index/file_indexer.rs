@@ -867,8 +867,11 @@ fn emit_extra_rows(
             } else {
                 None
             };
-            if self_ordinal.is_none() && ordinal.is_some() && extra.byte_range == node.byte_range()
-            {
+            // `is_self_row` (set by the enricher that produced the row) marks
+            // the row representing the visited node itself. Capture its ordinal so
+            // a control-flow node can become the parent of its body — an explicit
+            // flag instead of an implicit `byte_range == node.byte_range()` match.
+            if self_ordinal.is_none() && extra.is_self_row && ordinal.is_some() {
                 self_ordinal = ordinal;
             }
             let rev = row_rev(ordinal, source, extra.byte_range.clone());
