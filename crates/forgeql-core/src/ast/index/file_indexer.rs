@@ -594,7 +594,11 @@ fn process_node_rows(
         remapper: ctx.ordinal_remapper.as_mut(),
         row_ordinal_counter,
     };
-    emit_extra_rows(&mut sink, &enrich_ctx, parent_ordinal);
+    let extra_self = emit_extra_rows(&mut sink, &enrich_ctx, parent_ordinal);
+    // §4.1: promote the nameless control-flow self-row so the body parents to it.
+    if current_node_ordinal.is_none() && config.is_control_flow_kind(node.kind()) {
+        current_node_ordinal = extra_self;
+    }
 
     // All identifier tokens become usage sites.
     if config.is_usage_node_kind(node.kind()) {
@@ -824,10 +828,15 @@ fn attr_extended_start(node: tree_sitter::Node<'_>) -> (usize, usize) {
 /// current node (e.g. usage sites, derived symbols). Runs for every node, even
 /// when `extract_name` returned `None`. `parent_ordinal` is constant across the
 /// extra rows of a node, so the caller computes it once.
-fn emit_extra_rows(sink: &mut RowSink<'_>, ctx: &EnrichContext<'_>, parent_ordinal: u32) {
+fn emit_extra_rows(
+    sink: &mut RowSink<'_>,
+    ctx: &EnrichContext<'_>,
+    parent_ordinal: u32,
+) -> Option<u32> {
     let node = ctx.node;
     let source = ctx.source;
     let enrichers = sink.enrichers;
+    let mut self_ordinal: Option<u32> = None;
     for enricher in enrichers {
         for extra in enricher.extra_rows(ctx) {
             let guard_group_id = extra.fields.get("guard_group_id").map(String::as_str);
@@ -858,6 +867,10 @@ fn emit_extra_rows(sink: &mut RowSink<'_>, ctx: &EnrichContext<'_>, parent_ordin
             } else {
                 None
             };
+            if self_ordinal.is_none() && ordinal.is_some() && extra.byte_range == node.byte_range()
+            {
+                self_ordinal = ordinal;
+            }
             let rev = row_rev(ordinal, source, extra.byte_range.clone());
             let fields = sink.table.strings.intern_fields(extra.fields);
             sink.table.push_row(IndexRow {
@@ -876,6 +889,7 @@ fn emit_extra_rows(sink: &mut RowSink<'_>, ctx: &EnrichContext<'_>, parent_ordin
             });
         }
     }
+    self_ordinal
 }
 
 fn short_sha256_hex(bytes: &[u8]) -> String {

@@ -86,7 +86,10 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///  12 — Phase A node_id policy gate: only addressable `fql_kind`s receive ordinals
 ///  13 — B-prep: col_parent_ordinal, col_rev, col_first/next/prev_sibling_ordinal as
 ///          typed columns; parent_ordinal promoted from enrichment string to u32 field
-pub const ENRICH_VER: u32 = 13;
+///  14 — branches-as-parents: control-flow nodes (if/while/for/switch/do) become
+///          parents of their body statements, so node_ids nest under the branch
+///          rather than the enclosing function (plan §4.1)
+pub const ENRICH_VER: u32 = 14;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

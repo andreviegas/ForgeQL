@@ -6,6 +6,29 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.32] — 2026-06-15 — Node arch: branches-as-parents (§4.1)
+
+### Changed
+
+- Control-flow nodes (`if`/`while`/`for`/`switch`/`do`) are now the **parents of
+  their body statements** instead of the enclosing function (plan §4.1). In the
+  DFS, `process_node_rows` promotes the (nameless) control-flow row — emitted by
+  `emit_extra_rows`, which now returns the whole-node row's ordinal — to the
+  current node for descent. Keyed on `config.is_control_flow_kind` / `map_kind`
+  (universal `fql_kind`), so it applies to every language with no per-language
+  code. Nav pointers self-correct from `parent_ordinal`.
+- Bumped `ENRICH_VER` 13 → 14 (`storage/columnar/mod.rs`): the new parent shape
+  requires a cold reindex so cached flat-graph segments don't keep the old
+  flat parenting. Node-ids are unchanged in a fresh index (emission order is
+  identical); only parent/outline structure changes — golden-neutral (329/0).
+
+### Tests
+
+- `control_flow_node_parents_its_body` — a statement inside an `if` parents to
+  the if-node, not the function.
+- `control_flow_body_preserves_sibling_node_ids_across_unrelated_edit` — building
+  an `OrdinalRemapper` from a nested index and re-indexing a drifted file keeps
+  the second if's node-id (node-id survival holds under the new model).
 ## [0.76.31] — 2026-06-14 — Node arch: DELETE NODE absorbs trailing blank lines
 
 ### Changed

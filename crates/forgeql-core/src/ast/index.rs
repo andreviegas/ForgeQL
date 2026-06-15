@@ -621,6 +621,130 @@ mod tests {
     }
 
     #[test]
+    fn control_flow_node_parents_its_body() {
+        // A statement inside an `if` must parent to the if-node, not jump up to the
+        // enclosing function (plan §4.1 branches-as-parents). Engine-level, keyed on
+        // config.is_control_flow_kind, so it holds for every language.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("snippet.rs");
+        let src = "fn f(x: i32) {\n    if x > 0 {\n        let y = x;\n    }\n}\n";
+        std::fs::write(&file, src).unwrap();
+
+        let mut table = SymbolTable::default();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let enrichers = default_enrichers();
+        {
+            let mut ctx = IndexContext {
+                path: &file,
+                language: &crate::ast::lang::RustLanguageInline,
+                enrichers: &enrichers,
+                macro_table: None,
+                ordinal_remapper: None,
+                table: &mut table,
+            };
+            index_file(&mut parser, &mut ctx, None).unwrap();
+        }
+
+        let if_ord = table
+            .rows
+            .iter()
+            .find(|r| table.fql_kind_of(r) == "if")
+            .and_then(|r| r.ordinal)
+            .expect("if node should be indexed with an ordinal");
+        let let_row = table
+            .rows
+            .iter()
+            .find(|r| table.name_of(r) == "y")
+            .expect("`let y` should be indexed");
+        assert_eq!(
+            let_row.parent_ordinal, if_ord,
+            "statement inside the `if` should parent to the if-node, not the function"
+        );
+    }
+
+    #[test]
+    fn control_flow_body_preserves_sibling_node_ids_across_unrelated_edit() {
+        // §4.1 must not break node-id survival across an unrelated edit (the NID08
+        // "if node-ids survive line drift" property, at unit scope).
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("snippet.rs");
+        let src_a = "fn f(x: i32) {\n    if x > 0 {\n        g();\n    }\n    if x < 0 {\n        h();\n    }\n}\n";
+        std::fs::write(&file, src_a).unwrap();
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let enrichers = default_enrichers();
+
+        let mut table_a = SymbolTable::default();
+        {
+            let mut ctx = IndexContext {
+                path: &file,
+                language: &crate::ast::lang::RustLanguageInline,
+                enrichers: &enrichers,
+                macro_table: None,
+                ordinal_remapper: None,
+                table: &mut table_a,
+            };
+            index_file(&mut parser, &mut ctx, None).unwrap();
+        }
+
+        let lt_if_ordinal = |t: &SymbolTable| -> u32 {
+            t.rows
+                .iter()
+                .find(|r| t.fql_kind_of(r) == "if" && t.name_of(r).contains('<'))
+                .and_then(|r| r.ordinal)
+                .expect("the `x < 0` if should be indexed with an ordinal")
+        };
+        let before = lt_if_ordinal(&table_a);
+
+        let mut hints = Vec::new();
+        for row in &table_a.rows {
+            let Some(ordinal) = row.ordinal else {
+                continue;
+            };
+            let fields = table_a.resolve_fields(&row.fields);
+            hints.push(OrdinalHint {
+                name: table_a.name_of(row).to_string(),
+                fql_kind: table_a.fql_kind_of(row).to_string(),
+                parent_ordinal: row.parent_ordinal,
+                guard_group_id: fields.get("guard_group_id").cloned(),
+                guard_branch: fields.get("guard_branch").cloned(),
+                first_body_statement_fingerprint: fields
+                    .get("first_body_statement_fingerprint")
+                    .cloned(),
+                content_hash: fields.get("content_hash").cloned(),
+                ordinal,
+            });
+        }
+
+        let src_b = format!("// drift marker\n{src_a}");
+        std::fs::write(&file, &src_b).unwrap();
+        let mut table_b = SymbolTable::default();
+        {
+            let mut ctx = IndexContext {
+                path: &file,
+                language: &crate::ast::lang::RustLanguageInline,
+                enrichers: &enrichers,
+                macro_table: None,
+                ordinal_remapper: Some(OrdinalRemapper::from_previous(hints)),
+                table: &mut table_b,
+            };
+            index_file(&mut parser, &mut ctx, None).unwrap();
+        }
+        let after = lt_if_ordinal(&table_b);
+
+        assert_eq!(
+            before, after,
+            "the `x < 0` if node-id must survive an unrelated edit above the function"
+        );
+    }
+
+    #[test]
     fn indexes_function_definition() {
         let table = index_snippet("void processSignal(int speed) { return; }");
         let row = table.find_def("processSignal").expect("indexed");
