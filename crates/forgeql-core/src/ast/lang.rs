@@ -51,6 +51,25 @@ pub const FQL_DO: &str = "do";
 ///
 /// Each language crate constructs this via JSON deserialization
 /// ([`super::lang_json::LanguageConfigJson::from_json_bytes`]).
+/// One block-grouping rule: coalesce a run of adjacent same-kind sibling
+/// members into a single synthetic, addressable "block" node spanning the whole
+/// run. The block shares the parent of its members and never has children; the
+/// member rows are emitted unchanged. Configured per language via the
+/// `block_groups` section of the language JSON.
+#[derive(Debug, Clone)]
+pub struct BlockGroupSpec {
+    /// FQL kind of the members to group (e.g. `comment`).
+    pub member_fql_kind: String,
+    /// FQL kind assigned to the synthetic block node (e.g. `comment_block`).
+    pub block_fql_kind: String,
+    /// Minimum number of adjacent members before a block is created. A run
+    /// shorter than this is left as plain individual members.
+    pub min_run: usize,
+    /// Optional attribute that splits a run so only members sharing it group
+    /// together. Currently supports `comment_style` (so `///` doc runs and `//`
+    /// line runs form separate blocks); `None` groups every adjacent member.
+    pub split_on_attr: Option<String>,
+}
 #[expect(
     clippy::struct_excessive_bools,
     reason = "LanguageConfig describes language properties; each bool is semantically distinct"
@@ -437,6 +456,11 @@ pub struct LanguageConfig {
     /// `map_kind` implementation. Built from the `kind_map` section of
     /// the language JSON config.
     pub(crate) kind_map: HashMap<String, String>,
+
+    /// Block-grouping rules (`block_groups` section of the language JSON). Each
+    /// coalesces a run of same-kind sibling members into one synthetic, childless
+    /// "block" node spanning the run — see `BlockGroupSpec`.
+    pub(crate) block_groups: Vec<BlockGroupSpec>,
 }
 
 mod config;

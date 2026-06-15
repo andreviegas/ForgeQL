@@ -665,6 +665,123 @@ mod tests {
         );
     }
 
+    fn index_rust_snippet(src: &str) -> SymbolTable {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("snippet.rs");
+        std::fs::write(&file, src).unwrap();
+        let mut table = SymbolTable::default();
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let enrichers = default_enrichers();
+        {
+            let mut ctx = IndexContext {
+                path: &file,
+                language: &crate::ast::lang::RustLanguageInline,
+                enrichers: &enrichers,
+                macro_table: None,
+                ordinal_remapper: None,
+                table: &mut table,
+            };
+            index_file(&mut parser, &mut ctx, None).unwrap();
+        }
+        table
+    }
+
+    #[test]
+    fn comment_run_births_a_childless_block() {
+        // Three consecutive `//` comments coalesce into one synthetic
+        // `comment_block` that spans the whole run, shares the comments' parent,
+        // and has no children of its own.
+        let src = "// first line\n// second line\n// third line\nfn f() {}\n";
+        let table = index_rust_snippet(src);
+
+        let block = table
+            .rows
+            .iter()
+            .find(|r| table.fql_kind_of(r) == "comment_block")
+            .expect("a comment_block should be born for a run of 3 comments");
+
+        let block_text = &src[block.byte_range.clone()];
+        assert!(
+            block_text.contains("first line"),
+            "block should cover the first comment"
+        );
+        assert!(
+            block_text.contains("third line"),
+            "block should cover the last comment"
+        );
+
+        let block_ord = block.ordinal.expect("block must have an ordinal");
+        assert!(
+            !table.rows.iter().any(|r| r.parent_ordinal == block_ord),
+            "the comment_block must be childless"
+        );
+
+        let comment = table
+            .rows
+            .iter()
+            .find(|r| table.fql_kind_of(r) == "comment")
+            .expect("individual comment rows should still exist");
+        assert_eq!(
+            block.parent_ordinal, comment.parent_ordinal,
+            "the block is a sibling of its members, sharing their parent"
+        );
+
+        let comment_count = table
+            .rows
+            .iter()
+            .filter(|r| table.fql_kind_of(r) == "comment")
+            .count();
+        assert_eq!(comment_count, 3, "individual comment rows are preserved");
+    }
+
+    #[test]
+    fn comment_block_bridges_blank_lines() {
+        // A blank line between same-style comments does not split the block:
+        // blank lines are not tree nodes, so the comments stay adjacent siblings.
+        let src = "// a\n// b\n\n// c\n// d\nfn f() {}\n";
+        let table = index_rust_snippet(src);
+
+        let blocks: Vec<_> = table
+            .rows
+            .iter()
+            .filter(|r| table.fql_kind_of(r) == "comment_block")
+            .collect();
+        assert_eq!(blocks.len(), 1, "the blank line must not split the run");
+        let block_text = &src[blocks[0].byte_range.clone()];
+        assert!(block_text.contains("// a") && block_text.contains("// d"));
+    }
+
+    #[test]
+    fn comment_block_splits_on_style() {
+        // `///` (doc) and `//` (line) runs form separate blocks via split_on_attr.
+        let src = "/// doc one\n/// doc two\n// line one\n// line two\nfn f() {}\n";
+        let table = index_rust_snippet(src);
+
+        let blocks = table
+            .rows
+            .iter()
+            .filter(|r| table.fql_kind_of(r) == "comment_block")
+            .count();
+        assert_eq!(blocks, 2, "doc and line comment runs are separate blocks");
+    }
+
+    #[test]
+    fn single_comment_gets_no_block() {
+        // A lone comment (run shorter than min_run = 2) stays a plain comment.
+        let src = "// lonely\nfn f() {}\n";
+        let table = index_rust_snippet(src);
+        assert!(
+            !table
+                .rows
+                .iter()
+                .any(|r| table.fql_kind_of(r) == "comment_block"),
+            "a single comment must not create a block"
+        );
+    }
+
     #[test]
     fn control_flow_body_preserves_sibling_node_ids_across_unrelated_edit() {
         // §4.1 must not break node-id survival across an unrelated edit (the NID08

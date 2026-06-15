@@ -89,7 +89,10 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///  14 — branches-as-parents: control-flow nodes (if/while/for/switch/do) become
 ///          parents of their body statements, so node_ids nest under the branch
 ///          rather than the enclosing function (plan §4.1)
-pub const ENRICH_VER: u32 = 14;
+///  15 — block grouping: synthetic childless block nodes (e.g. `comment_block`)
+///          span a run of same-kind sibling members, sharing the parent of the
+///          members instead of nesting under it (Stage 1: comments)
+pub const ENRICH_VER: u32 = 15;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

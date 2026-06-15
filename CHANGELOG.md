@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.34] — 2026-06-15 — Node arch: block grouping (Stage 1 — comment blocks)
+
+### Added
+
+- **Configurable block grouping** (`block_groups` in the language JSON). A run of adjacent same-kind sibling members (e.g. comments) is now spanned by a synthetic, **childless** "block" node that shares the members' parent and gives one addressable handle over the whole run — `SHOW`/`CHANGE`/`DELETE NODE` on the block, or `block(n-m)` to splice a sub-line range. The individual member rows are emitted unchanged and keep their own node ids; only the block is added, so member node ids do not move. Adjacency bridges blank lines for free (blank lines are not tree nodes, so a node of a different kind is what ends a run); `split_on_attr` keeps `///` doc runs and `//` line runs in separate blocks. New `BlockGroupSpec` (`crates/forgeql-core/src/ast/lang.rs`), `LanguageConfig::block_groups`/`block_group_for_member` (`lang/config.rs`), `BlockGroupJson` (`lang_json.rs`), and `block_group_key`/`scan_block_run`/`emit_block_row` + `collect_nodes` wiring (`ast/index/file_indexer.rs`). `ENRICH_VER` 14 → 15.
+- **Comments wired as the first consumer** (`crates/forgeql-lang-rust/config/rust.json`): a run of 2+ adjacent same-style comments forms a `comment_block`. Enabling cpp/c/python is a one-line config addition each (deferred — each needs its own golden rebaseline).
+
+### Tests
+
+- `comment_run_births_a_childless_block`, `comment_block_bridges_blank_lines`, `comment_block_splits_on_style`, `single_comment_gets_no_block` (`crates/forgeql-core/src/ast/index.rs`).
+
+### Notes
+
+- Stage 1 enables block grouping only for Rust, so the C/C++ golden corpus is unaffected. Stage 2 (surfacing a member node id as `block(offset)` via an alias in `FIND`/`SHOW`) and enabling other languages are follow-ups, each gated on a reviewed golden rebaseline.
+
 ## [0.76.33] — 2026-06-15 — Node arch: explicit self-row flag (hardening)
 
 ### Changed

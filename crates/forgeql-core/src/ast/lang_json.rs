@@ -28,7 +28,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use super::lang::LanguageConfig;
+use super::lang::{BlockGroupSpec, LanguageConfig};
 
 // -----------------------------------------------------------------------
 // Top-level JSON config
@@ -107,6 +107,10 @@ pub struct LanguageConfigJson {
     /// Raw tree-sitter kind → FQL kind mapping.
     #[serde(default)]
     pub kind_map: HashMap<String, String>,
+
+    /// Block-grouping rules (coalesce runs of same-kind nodes into block ids).
+    #[serde(default)]
+    pub block_groups: Vec<BlockGroupJson>,
 }
 
 // -----------------------------------------------------------------------
@@ -456,6 +460,22 @@ pub struct VisibilitySection {
 }
 
 /// Comment style detection.
+/// One entry in the `block_groups` list — maps to
+/// [`crate::ast::lang::BlockGroupSpec`].
+#[derive(Deserialize, Default)]
+pub struct BlockGroupJson {
+    /// FQL kind of the members to group (e.g. `comment`).
+    pub member_fql_kind: String,
+    /// FQL kind for the synthetic block node (e.g. `comment_block`).
+    pub block_fql_kind: String,
+    /// Minimum adjacent members before a block is created (default 2).
+    #[serde(default)]
+    pub min_run: Option<usize>,
+    /// Optional run-splitting attribute (e.g. `comment_style`).
+    #[serde(default)]
+    pub split_on_attr: Option<String>,
+}
+
 #[derive(Deserialize, Default)]
 pub struct CommentsSection {
     /// `[prefix, style]` pairs, checked in order.
@@ -715,6 +735,16 @@ impl LanguageConfigJson {
             nested_function_body_raw_kinds: self.definitions.nested_function_body_kinds,
             constant_def_parent_raw_kinds: self.definitions.constant_def_parent_kinds,
             kind_map: self.kind_map,
+            block_groups: self
+                .block_groups
+                .into_iter()
+                .map(|g| BlockGroupSpec {
+                    member_fql_kind: g.member_fql_kind,
+                    block_fql_kind: g.block_fql_kind,
+                    min_run: g.min_run.unwrap_or(2),
+                    split_on_attr: g.split_on_attr,
+                })
+                .collect(),
         }
     }
 }

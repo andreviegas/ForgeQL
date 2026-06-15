@@ -11,7 +11,7 @@ use crate::ast::enrich::guard_utils::{
 };
 use crate::ast::enrich::macro_table::MacroTable;
 use crate::ast::enrich::{EnrichContext, NodeEnricher};
-use crate::ast::lang::{LanguageConfig, LanguageSupport};
+use crate::ast::lang::{BlockGroupSpec, LanguageConfig, LanguageSupport};
 use crate::error::ForgeError;
 
 use super::{IndexRow, SegmentBuildCtx, SymbolTable, node_text};
@@ -363,6 +363,15 @@ fn collect_nodes(
     ts_language: &tree_sitter::Language,
 ) {
     let config = ctx.language.config();
+    let lang = ctx.language;
+    // Block grouping: a language may declare runs of same-kind leaf nodes (e.g.
+    // comments) to be spanned by a synthetic, childless "block" node. When the
+    // language declares none, all per-node block work below is skipped.
+    let block_groups_active = !config.block_groups().is_empty();
+    // End byte of the block currently being spanned. While set, member nodes
+    // inside it are skipped for detection (the block was already emitted at the
+    // run's first member).
+    let mut active_block_end: Option<usize> = None;
     let mut guard_stack: Vec<GuardFrame> = Vec::new();
     // Tracks the kind of the parent node at each level of the DFS, updated
     // O(1) by the cursor navigation below.  Avoids calling node.parent()
@@ -411,6 +420,36 @@ fn collect_nodes(
 
         if !skip {
             let parent_ordinal = parent_ordinal_stack.last().copied().unwrap_or(u32::MAX);
+
+            // Block grouping: if this node begins a run of >= min_run adjacent
+            // same-key members, emit one childless block row spanning the whole
+            // run. Members keep their own parent and node ids; only the block is
+            // added. next_sibling() bridges blank lines (they are not tree nodes).
+            if block_groups_active {
+                if active_block_end.is_some_and(|end| node.start_byte() >= end) {
+                    active_block_end = None;
+                }
+                if active_block_end.is_none()
+                    && let Some(spec) =
+                        config.block_group_for_member(lang.map_kind(node.kind()).unwrap_or(""))
+                {
+                    let key = block_group_key(node, source, config, spec);
+                    let (count, end_byte) = scan_block_run(node, source, config, lang, spec, &key);
+                    if count >= spec.min_run {
+                        emit_block_row(
+                            ctx,
+                            spec,
+                            node.start_byte(),
+                            end_byte,
+                            node.start_position().row + 1,
+                            parent_ordinal,
+                            &mut row_ordinal_counter,
+                            source,
+                        );
+                        active_block_end = Some(end_byte);
+                    }
+                }
+            }
             let current_node_ordinal = process_node_rows(
                 ctx,
                 node,
@@ -799,6 +838,114 @@ fn emit_addressable_row(
         fields,
     });
     ordinal
+}
+
+/// Grouping key for a block-group member. Members that share a key AND are
+/// adjacent tree siblings coalesce into one block. For `split_on_attr =
+/// "comment_style"` the key is the comment style, so `///` doc runs and `//`
+/// line runs form separate blocks; otherwise every member of the kind shares
+/// one key.
+fn block_group_key(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    config: &LanguageConfig,
+    spec: &BlockGroupSpec,
+) -> String {
+    match spec.split_on_attr.as_deref() {
+        Some("comment_style") => config
+            .detect_comment_style(&node_text(source, node))
+            .unwrap_or("")
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Walk forward over tree siblings, extending a run while each sibling is the
+/// same member kind and grouping key. Blank lines are bridged for free: blank
+/// lines are not tree nodes, so two same-kind declarations separated only by
+/// blank lines are adjacent siblings. A node of any other kind ends the run.
+/// Returns `(member_count, run_end_byte)`.
+fn scan_block_run(
+    first: tree_sitter::Node<'_>,
+    source: &[u8],
+    config: &LanguageConfig,
+    lang: &dyn LanguageSupport,
+    spec: &BlockGroupSpec,
+    key: &str,
+) -> (usize, usize) {
+    let mut count = 1usize;
+    let mut end_byte = first.byte_range().end;
+    let mut cursor = first;
+    while let Some(sib) = cursor.next_sibling() {
+        if lang.map_kind(sib.kind()).unwrap_or("") != spec.member_fql_kind {
+            break;
+        }
+        if block_group_key(sib, source, config, spec) != key {
+            break;
+        }
+        count += 1;
+        end_byte = sib.byte_range().end;
+        cursor = sib;
+    }
+    (count, end_byte)
+}
+
+/// Emit a synthetic, childless "block" row spanning a run of grouped members.
+/// The block shares the `parent_ordinal` of its members — it is their sibling,
+/// never their parent — and gives one addressable handle over the whole run.
+/// The member rows are emitted normally and keep their own node ids.
+#[allow(clippy::too_many_arguments)]
+fn emit_block_row(
+    ctx: &mut IndexContext<'_>,
+    spec: &BlockGroupSpec,
+    start_byte: usize,
+    end_byte: usize,
+    start_line: usize,
+    parent_ordinal: u32,
+    row_ordinal_counter: &mut u32,
+    source: &[u8],
+) {
+    let span = start_byte..end_byte;
+    let block_kind = spec.block_fql_kind.as_str();
+    let content_hash = short_sha256_hex(source.get(span.clone()).unwrap_or_default());
+    let path = ctx.path;
+    let lang_name = ctx.language.name();
+    let (name_id, node_kind_id, fql_kind_id, language_id, path_id) = ctx
+        .table
+        .strings
+        .intern_row(block_kind, block_kind, block_kind, lang_name, path);
+    let ordinal = assign_ordinal(
+        ctx.ordinal_remapper.as_mut(),
+        row_ordinal_counter,
+        &OrdinalMatchKey {
+            name: block_kind,
+            fql_kind: block_kind,
+            parent_ordinal,
+            guard_group_id: None,
+            guard_branch: None,
+            first_body_statement_fingerprint: None,
+            content_hash: Some(content_hash.as_str()),
+        },
+    );
+    let rev = row_rev(Some(ordinal), source, span.clone());
+    let fields = ctx
+        .table
+        .strings
+        .intern_fields(HashMap::<String, String>::new());
+    ctx.table.push_row(IndexRow {
+        name_id,
+        node_kind_id,
+        fql_kind_id,
+        language_id,
+        path_id,
+        byte_range: span,
+        line: start_line,
+        usages_count: 0,
+        ordinal: Some(ordinal),
+        parent_ordinal,
+        rev,
+        fields,
+    });
 }
 
 /// Walk back over the contiguous run of leading attribute items (`#[...]`)

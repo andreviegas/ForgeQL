@@ -1,5 +1,5 @@
 //! Query methods for [`super::LanguageConfig`].
-use super::LanguageConfig;
+use super::{BlockGroupSpec, LanguageConfig};
 impl LanguageConfig {
     // -- kind membership tests (slice fields) --------------------------
 
@@ -627,6 +627,20 @@ impl LanguageConfig {
     #[must_use]
     pub fn control_flow_kinds(&self) -> &[String] {
         &self.control_flow_raw_kinds
+    }
+
+    /// Block-grouping rules configured for this language (may be empty).
+    #[must_use]
+    pub fn block_groups(&self) -> &[BlockGroupSpec] {
+        &self.block_groups
+    }
+
+    /// The block-grouping rule whose member kind matches `fql_kind`, if any.
+    #[must_use]
+    pub fn block_group_for_member(&self, fql_kind: &str) -> Option<&BlockGroupSpec> {
+        self.block_groups
+            .iter()
+            .find(|g| g.member_fql_kind == fql_kind)
     }
 
     /// Raw kinds for switch/match statements.
