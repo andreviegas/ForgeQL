@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.39] — 2026-06-16 — CHANGE NODE returns the post-edit handle even when it churns
+
+### Fixed
+
+- **`CHANGE NODE` now reports the correct `new_node_id` when an edit changes a node's identity.** It previously re-resolved the *old* node id after the edit, which returned a stale/wrong handle whenever the edit shifted the node's `content_hash` and the remapper assigned a new ordinal (e.g. editing a `comment_block`'s text when sibling blocks exist, or a rename). `exec_change_node` now re-resolves by the base node's **start line** via `find_node_id_at_line`, so the returned handle is the node's current id even after churn. `NodeSpan` carries `node_line` (the base node's start line) instead of `base_id`. Behaviour is unchanged for ordinary edits (the line still maps to the same node) — the existing golden `GS` tests, which assert the returned handle, continue to pass.
+
 ## [0.76.38] — 2026-06-16 — Block alias surfacing unified across FIND and SHOW outline
 
 ### Changed

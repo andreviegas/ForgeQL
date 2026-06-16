@@ -202,13 +202,13 @@ impl ForgeQLEngine {
         };
         let NodeSpan {
             rel_path,
+            node_line,
             start,
             end,
-            base_id,
             ..
         } = self.resolve_node_span(session_id, node_id, if_rev)?;
         let ir = ForgeQLIR::ChangeContent {
-            files: vec![rel_path],
+            files: vec![rel_path.clone()],
             target: ChangeTarget::Lines {
                 start,
                 end,
@@ -217,18 +217,15 @@ impl ForgeQLEngine {
             clauses: crate::ir::Clauses::default(),
         };
         let mut result = self.exec_mutation(session_id, &ir, false)?;
-        // After reindex, re-resolve the base handle and hand back the node_id so
-        // callers do not need a follow-up query.
+        // Re-resolve by the base node's start line (not its prior id) so the
+        // caller learns the current handle even when the edit changed the node's
+        // content_hash and the remapper assigned it a new ordinal.
         let sid = require_session_id(session_id)?;
         let new_node_id = {
             let session = self.require_session(sid)?;
-            let root = session.worktree_path.clone();
             session
                 .engine_for(&crate::ir::Backend::Default)?
-                .find_node(&base_id, &root)
-                .ok()
-                .flatten()
-                .map(|n| n.node_id)
+                .find_node_id_at_line(&rel_path, node_line)
         };
         if let ForgeQLResult::Mutation(ref mut m) = result {
             m.new_node_id = new_node_id;
@@ -403,7 +400,7 @@ impl ForgeQLEngine {
             start,
             end,
             has_offset: offset.is_some(),
-            base_id: base_id.to_string(),
+            node_line: node.line,
         })
     }
 }
@@ -427,8 +424,9 @@ struct NodeSpan {
     end: usize,
     /// True when an `(n-m)` suffix narrowed the span to a sub-range.
     has_offset: bool,
-    /// Base node id with any offset suffix stripped.
-    base_id: String,
+    /// 1-based start line of the base node, used to re-resolve the post-edit
+    /// handle by position so the caller learns the new id even if it churned.
+    node_line: usize,
 }
 
 /// Extract the inclusive 1-based line span `[line_start, line_end]` from `src`.
