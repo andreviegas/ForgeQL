@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.36] — 2026-06-16 — Block grouping: stable block node ids
+
+### Fixed
+
+- **`comment_block` node ids no longer churn when sibling blocks are added or removed.** `emit_block_row` (`crates/forgeql-core/src/ast/index/file_indexer.rs`) now stores the block's `content_hash` as a row field, the same way `build_row_fields` does for every other row. The reindex hint (`OrdinalHint`, built in `build.rs`) reads `content_hash` from that field to disambiguate nodes that share a name — and since all blocks share the constant `comment_block` name, without it the remapper could not tell two blocks apart and would slide one into the other's freed ordinal. Members were already stable; this makes the block handles stable too. `ENRICH_VER` 16 → 17.
+
+### Tests
+
+- `block_node_ids_survive_deletion_of_a_sibling_block` (`ast/index.rs`) — indexes two comment blocks, drops one via the reindex/remapper path, and asserts the survivor keeps its ordinal.
+
 ## [0.76.35] — 2026-06-15 — Node arch: block grouping (Stage 2 — member alias surfacing)
 
 ### Added

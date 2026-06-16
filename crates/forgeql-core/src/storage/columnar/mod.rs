@@ -94,7 +94,9 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///          members instead of nesting under it (Stage 1: comments)
 ///  16 — block grouping Stage 2: block members carry `block_ord`/`block_off`
 ///          fields so FIND/SHOW surface them as `block_id(offset)`
-pub const ENRICH_VER: u32 = 16;
+///  17 — block grouping: block rows carry a `content_hash` field so the reindex
+///          remapper can keep block node ids stable across sibling-block edits
+pub const ENRICH_VER: u32 = 17;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

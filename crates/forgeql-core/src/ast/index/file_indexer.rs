@@ -994,10 +994,12 @@ fn emit_block_row(
         },
     );
     let rev = row_rev(Some(ordinal), source, span.clone());
-    let fields = ctx
-        .table
-        .strings
-        .intern_fields(HashMap::<String, String>::new());
+    // Carry the content hash as a field so the reindex hint can disambiguate this
+    // block from sibling blocks (which all share the constant `comment_block`
+    // name) and keep its node id stable across edits to other blocks.
+    let mut block_fields = HashMap::new();
+    drop(block_fields.insert("content_hash".to_string(), content_hash.clone()));
+    let fields = ctx.table.strings.intern_fields(block_fields);
     ctx.table.push_row(IndexRow {
         name_id,
         node_kind_id,
