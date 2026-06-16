@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.38] — 2026-06-16 — Block alias surfacing unified across FIND and SHOW outline
+
+### Changed
+
+- **One shared helper now surfaces block-member handles everywhere.** Extracted `node_id::surface_block_id(own_id, block_ord, block_off)` (`crates/forgeql-core/src/node_id.rs`): when a row carries `block_ord`/`block_off` it returns `block_id(offset)` (reusing the member's own segment prefix), otherwise the id unchanged. `SymbolRow::from_match_with_ctx` (FIND, via `surface_block_alias`) and `push_outline_tree` (`SHOW outline`, reading the fields with `SegmentReader::extra_field_str`) both call it, so a block member now surfaces the **same way** in `FIND` and `SHOW outline` instead of only in `FIND`.
+
+### Tests
+
+- `surface_block_id_builds_handle_for_members`, `surface_block_id_passes_through_non_members` (`node_id.rs`); the existing `surface_block_alias_*` tests now exercise the shared helper through the FIND wrapper.
+
 ## [0.76.37] — 2026-06-16 — Node addressing: DELETE NODE offsets + shared resolver
 
 ### Fixed

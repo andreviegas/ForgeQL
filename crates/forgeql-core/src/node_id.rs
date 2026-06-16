@@ -101,6 +101,23 @@ pub fn make_node_id(path: &str, ordinal: u32) -> String {
     format_node_id(&hash, DEFAULT_SEGMENT_PREFIX_HEX, ordinal)
 }
 
+/// Surface a node's handle for display.
+///
+/// When `block_ord`/`block_off` are present
+/// (the node is a block member), return `block_id(offset)` — reusing `own_id`'s
+/// segment prefix so only the ordinal and offset change. Otherwise return
+/// `own_id` unchanged. FIND and SHOW outline both call this, so a block member
+/// surfaces the same way everywhere.
+#[must_use]
+pub fn surface_block_id(own_id: &str, block_ord: Option<&str>, block_off: Option<&str>) -> String {
+    if let (Some(ord), Some(off)) = (block_ord, block_off) {
+        let seg = own_id.rsplit_once('.').map_or(own_id, |(s, _)| s);
+        format!("{seg}.{ord}({off})")
+    } else {
+        own_id.to_string()
+    }
+}
+
 /// Format a `rev` handle from the packed u64 stored in `col_rev`.
 ///
 /// Format: `h{:016x}` — 16 lowercase hex chars prefixed with `h`.
@@ -290,6 +307,27 @@ mod tests {
         // first line of the node, then the last line of a 4-line node
         assert_eq!(offset_lines(26, 29, Some((1, 1))), Ok((26, 26)));
         assert_eq!(offset_lines(26, 29, Some((4, 4))), Ok((29, 29)));
+    }
+
+    #[test]
+    fn surface_block_id_builds_handle_for_members() {
+        assert_eq!(
+            surface_block_id("nabc123def456.0011", Some("0007"), Some("2")),
+            "nabc123def456.0007(2)"
+        );
+    }
+
+    #[test]
+    fn surface_block_id_passes_through_non_members() {
+        assert_eq!(
+            surface_block_id("nabc123def456.0011", None, None),
+            "nabc123def456.0011"
+        );
+        // Only one of the two fields present is not a block member.
+        assert_eq!(
+            surface_block_id("nabc123def456.0011", Some("0007"), None),
+            "nabc123def456.0011"
+        );
     }
 
     #[test]

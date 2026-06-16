@@ -245,7 +245,13 @@ fn push_outline_tree(
                 "fql_kind": if kind.is_empty() { "unknown" } else { kind },
                 "path": rel_path,
                 "line": lines[r as usize],
-                "node_id": ords[r as usize].map(node_id_for),
+                "node_id": ords[r as usize].map(|o| {
+                    crate::node_id::surface_block_id(
+                        &node_id_for(o),
+                        reader.extra_field_str("block_ord", r),
+                        reader.extra_field_str("block_off", r),
+                    )
+                }),
                 "depth": depth,
             }));
             depth + 1
