@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.37] — 2026-06-16 — Node addressing: DELETE NODE offsets + shared resolver
+
+### Fixed
+
+- **`DELETE NODE 'id(n-m)'` now works.** Previously DELETE rejected the offset suffix ("invalid ordinal") even though SHOW NODE and CHANGE NODE accepted it, so a member surfaced as `block(1)` could not be deleted by that handle. Offset addressing is now extracted into one shared helper, `Engine::resolve_node_span` (`crates/forgeql-core/src/engine/exec_change.rs`), which both `exec_change_node` and `exec_delete_node` route through: `split_node_offset` → `resolve_node` → `offset_lines`. A whole-node delete still absorbs trailing blank lines; an offset delete removes exactly the addressed line range.
+
+### Changed
+
+- `exec_change_node` and `exec_delete_node` no longer duplicate the offset-resolution sequence — it lives in `resolve_node_span` (returns the file, target line span, the whole-node end line, and the offset flag). The `(n-m)` parsing (`split_node_offset`/`offset_lines`) is unchanged and already unit-tested; CHANGE NODE offset behavior is exercised by the existing golden `GS` tests through the new helper.
+
 ## [0.76.36] — 2026-06-16 — Block grouping: stable block node ids
 
 ### Fixed

@@ -200,16 +200,15 @@ impl ForgeQLEngine {
             } => (node_id.as_str(), if_rev.as_deref(), content.as_str()),
             _ => bail!("exec_change_node called with wrong IR variant"),
         };
-        // A node_id may carry a node-relative line offset suffix — `id(n)` or
-        // `id(n-m)`. The `IF REV` guard always checks the whole node's rev, so
-        // resolve the base node first, then narrow the spliced line range.
-        let (base_id, offset) =
-            crate::node_id::split_node_offset(node_id).map_err(|e| anyhow::anyhow!(e))?;
-        let node = self.resolve_node(session_id, base_id, if_rev)?;
-        let (start, end) = crate::node_id::offset_lines(node.line, node.end_line, offset)
-            .map_err(|e| anyhow::anyhow!(e))?;
+        let NodeSpan {
+            rel_path,
+            start,
+            end,
+            base_id,
+            ..
+        } = self.resolve_node_span(session_id, node_id, if_rev)?;
         let ir = ForgeQLIR::ChangeContent {
-            files: vec![node.rel_path],
+            files: vec![rel_path],
             target: ChangeTarget::Lines {
                 start,
                 end,
@@ -218,15 +217,15 @@ impl ForgeQLEngine {
             clauses: crate::ir::Clauses::default(),
         };
         let mut result = self.exec_mutation(session_id, &ir, false)?;
-        // After reindex the ordinal is stable — confirm with a lookup and
-        // return the (unchanged) node_id so callers don't need a follow-up query.
+        // After reindex, re-resolve the base handle and hand back the node_id so
+        // callers do not need a follow-up query.
         let sid = require_session_id(session_id)?;
         let new_node_id = {
             let session = self.require_session(sid)?;
             let root = session.worktree_path.clone();
             session
                 .engine_for(&crate::ir::Backend::Default)?
-                .find_node(base_id, &root)
+                .find_node(&base_id, &root)
                 .ok()
                 .flatten()
                 .map(|n| n.node_id)
@@ -305,21 +304,30 @@ impl ForgeQLEngine {
             ForgeQLIR::DeleteNode { node_id, if_rev } => (node_id.as_str(), if_rev.as_deref()),
             _ => bail!("exec_delete_node called with wrong IR variant"),
         };
-        let node = self.resolve_node(session_id, node_id, if_rev)?;
-        // Absorb the node's trailing blank line(s) so the delete doesn't leave a
-        // stray separator. Whitespace is not part of the node's span/rev, so this
-        // only widens the DELETE extent; best-effort on read failure.
-        let end_line = {
+        let NodeSpan {
+            rel_path,
+            node_end_line,
+            start,
+            end,
+            has_offset,
+            ..
+        } = self.resolve_node_span(session_id, node_id, if_rev)?;
+        // A whole-node delete absorbs the node's trailing blank line(s) so it
+        // leaves no stray separator; an `id(n-m)` offset delete removes exactly
+        // the addressed line range.
+        let end = if has_offset {
+            end
+        } else {
             let session = self.require_session(require_session_id(session_id)?)?;
-            std::fs::read_to_string(session.worktree_path.join(&node.rel_path))
-                .map(|content| absorb_trailing_blank_lines(&content, node.end_line))
-                .unwrap_or(node.end_line)
+            std::fs::read_to_string(session.worktree_path.join(&rel_path))
+                .map(|content| absorb_trailing_blank_lines(&content, node_end_line))
+                .unwrap_or(node_end_line)
         };
         let ir = ForgeQLIR::ChangeContent {
-            files: vec![node.rel_path],
+            files: vec![rel_path],
             target: ChangeTarget::Lines {
-                start: node.line,
-                end: end_line,
+                start,
+                end,
                 content: String::new(),
             },
             clauses: crate::ir::Clauses::default(),
@@ -374,6 +382,30 @@ impl ForgeQLEngine {
             end_line: node.end_line,
         })
     }
+
+    /// Resolve `id` or `id(n-m)` to the file + inclusive line span to operate on.
+    /// Offset addressing lives here so CHANGE NODE and DELETE NODE stay in sync.
+    /// The `IF REV` guard always covers the whole base node.
+    fn resolve_node_span(
+        &self,
+        session_id: Option<&str>,
+        node_id: &str,
+        if_rev: Option<&str>,
+    ) -> Result<NodeSpan> {
+        let (base_id, offset) =
+            crate::node_id::split_node_offset(node_id).map_err(|e| anyhow::anyhow!(e))?;
+        let node = self.resolve_node(session_id, base_id, if_rev)?;
+        let (start, end) = crate::node_id::offset_lines(node.line, node.end_line, offset)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        Ok(NodeSpan {
+            rel_path: node.rel_path,
+            node_end_line: node.end_line,
+            start,
+            end,
+            has_offset: offset.is_some(),
+            base_id: base_id.to_string(),
+        })
+    }
 }
 
 /// Scratch struct for resolved node location used by Phase C mutation helpers.
@@ -381,6 +413,22 @@ struct ResolvedNode {
     rel_path: String,
     line: usize,
     end_line: usize,
+}
+
+/// A node resolved to the line span an operation targets, honoring an optional
+/// `(n-m)` offset suffix. Shared by CHANGE NODE and DELETE NODE so offset
+/// addressing is defined in exactly one place.
+struct NodeSpan {
+    rel_path: String,
+    /// Whole-node last line — used for trailing-blank absorption on a whole delete.
+    node_end_line: usize,
+    /// 1-based inclusive target span: the whole node, or the offset sub-range.
+    start: usize,
+    end: usize,
+    /// True when an `(n-m)` suffix narrowed the span to a sub-range.
+    has_offset: bool,
+    /// Base node id with any offset suffix stripped.
+    base_id: String,
 }
 
 /// Extract the inclusive 1-based line span `[line_start, line_end]` from `src`.
