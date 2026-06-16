@@ -466,7 +466,18 @@ fn collect_nodes(
                     && node.start_byte() < ab.end_byte
                 {
                     let start = node.start_position().row + 1 - ab.start_line + 1;
-                    let end = node.end_position().row + 1 - ab.start_line + 1;
+                    // A doc (`///`) or block (`/* */`) comment span can include
+                    // the trailing newline — its end_position is column 0 of the
+                    // next line. Clamp to the last content line so a one-line
+                    // comment surfaces as a single offset, not a 2-line range.
+                    let end_pos = node.end_position();
+                    let member_end =
+                        if end_pos.column == 0 && end_pos.row > node.start_position().row {
+                            end_pos.row
+                        } else {
+                            end_pos.row + 1
+                        };
+                    let end = member_end - ab.start_line + 1;
                     let off = if start == end {
                         start.to_string()
                     } else {

@@ -819,6 +819,26 @@ mod tests {
     }
 
     #[test]
+    fn doc_comment_block_members_get_single_line_offsets() {
+        // A `///` doc comment's tree-sitter span includes the trailing newline
+        // (end_position at column 0 of the next line); the member offset must
+        // still be a single line, not a 2-line range.
+        let src = "/// first\n/// second\nfn f() {}\n";
+        let table = index_rust_snippet(src);
+        let offs: Vec<&str> = table
+            .rows
+            .iter()
+            .filter(|r| table.fql_kind_of(r) == "comment")
+            .map(|r| table.field_str(&r.fields, "block_off").unwrap_or_default())
+            .collect();
+        assert_eq!(
+            offs,
+            ["1", "2"],
+            "doc-comment members must surface as single-line offsets"
+        );
+    }
+
+    #[test]
     fn control_flow_body_preserves_sibling_node_ids_across_unrelated_edit() {
         // §4.1 must not break node-id survival across an unrelated edit (the NID08
         // "if node-ids survive line drift" property, at unit scope).

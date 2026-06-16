@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.40] — 2026-06-16 — Block grouping: single-line offsets for doc/block comments
+
+### Fixed
+
+- **A one-line doc (`///`) or block (`/* */`) comment now surfaces as a single offset, not a 2-line range.** Such comments include the trailing newline in their tree-sitter span (`end_position` is column 0 of the next line), so the member offset was computed one line too long — e.g. `block(1-2)`, `block(2-3)` instead of `block(1)`, `block(2)`. `collect_nodes` (`crates/forgeql-core/src/ast/index/file_indexer.rs`) now clamps the member's end to its last content line. `ENRICH_VER` 17 → 18.
+
+### Tests
+
+- `doc_comment_block_members_get_single_line_offsets` (`ast/index.rs`).
+
 ## [0.76.39] — 2026-06-16 — CHANGE NODE returns the post-edit handle even when it churns
 
 ### Fixed
