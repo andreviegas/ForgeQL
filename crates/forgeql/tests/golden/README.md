@@ -90,9 +90,36 @@ CHANGE NODE '<value_node_id>' WITH '...'            -- tweak one value
 Capture expected values from a live query first (the corpus is frozen, so they are
 stable), then run the single case to confirm.
 
-## Mutation suites (planned)
+## Mutation suites (`DELETE NODE` / `CHANGE NODE` / transactions)
 
-Cases that exercise `CHANGE NODE` / `DELETE NODE` / `INSERT NODE` will run against a
-throwaway **read-write** worktree branched off the frozen corpus and be discarded on
-teardown, so the frozen branch is never modified. See `golden_test.rs` once that mode
-lands.
+Set `"mode": "rw"` on a case to run it in a fresh **read-write** worktree branched off
+the corpus (discarded on teardown — the frozen branch is never modified). Such cases use
+`steps` instead of a single `fql`:
+
+```
+{
+  "name": "delete_and_rollback",
+  "use": "forgeql-pub.frozen",
+  "mode": "rw",
+  "steps": [
+    { "fql": "FIND symbols IN '<file>' WHERE name='foo' LIMIT 1",
+      "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id" } },
+    { "fql": "BEGIN TRANSACTION 'txn'", "assert": { "field": { "name": "txn" } } },
+    { "fql": "DELETE NODE '${A}'", "assert": { "applied": true } },
+    { "fql": "FIND symbols IN '<file>' WHERE name='foo' LIMIT 1", "assert": { "row_count": 0 } },
+    { "fql": "ROLLBACK", "assert": { "field": { "name": "txn" } } },
+    { "fql": "FIND symbols IN '<file>' WHERE name='foo' LIMIT 1", "assert": { "row_count": 1 } }
+  ]
+}
+```
+
+- `steps` run in order in one session. `capture` pulls a value (a dotted path into the
+  step result, e.g. `results.0.node_id`) into a `${var}` substituted in later steps — so
+  node_ids are resolved at runtime, never hard-coded.
+- Result-step asserts: `applied`, `diff_contains`, `files_changed`, `field` (top-level
+  equality, e.g. a rollback's `name`), `pointer` (JSON-pointer), and `error: true` (the
+  step is expected to fail, e.g. `ROLLBACK` with no open transaction).
+
+**Nested transactions** are just more steps: each `BEGIN` pushes a checkpoint stack, a
+bare `ROLLBACK` pops the innermost, and `ROLLBACK 'name'` pops to that level. See the
+`node_mutations` suite for `DELETE`/`CHANGE NODE` + nested-rollback examples.

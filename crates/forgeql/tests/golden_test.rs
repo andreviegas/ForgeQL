@@ -49,8 +49,33 @@ struct Case {
     name: String,
     #[serde(rename = "use")]
     use_str: String,
-    fql: String,
+    /// "ro" (default) shares a memoized read-only session; "rw" gets a fresh
+    /// per-case worktree off the corpus branch, discarded on teardown.
+    #[serde(default = "mode_ro")]
+    mode: String,
+    /// One-shot read case: a single query + assert.
+    #[serde(default)]
+    fql: Option<String>,
+    #[serde(default)]
     assert: Assert,
+    /// Multi-step case (mutations / transactions): run in order in one session.
+    #[serde(default)]
+    steps: Vec<Step>,
+}
+fn mode_ro() -> String {
+    "ro".to_string()
+}
+
+/// A step in a multi-step case. `${var}` placeholders in `fql` are substituted
+/// from values `capture`d by earlier steps (keeps node_ids out of the fixture).
+#[derive(Deserialize)]
+struct Step {
+    fql: String,
+    #[serde(default)]
+    assert: Assert,
+    /// var name -> dotted path into this step's result JSON (e.g. "results.0.node_id").
+    #[serde(default)]
+    capture: std::collections::HashMap<String, String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -69,6 +94,25 @@ struct Assert {
     distinct: Option<Distinct>,
     #[serde(default)]
     rows: Vec<Value>,
+    // -- mutation / transaction result asserts --
+    /// Expect the step's query to ERROR (e.g. ROLLBACK with no open txn).
+    #[serde(default)]
+    error: Option<bool>,
+    /// Expect `result.applied == <bool>` (mutation result).
+    #[serde(default)]
+    applied: Option<bool>,
+    /// Substring expected in `result.diff`.
+    #[serde(default)]
+    diff_contains: Option<String>,
+    /// Exact `result.files_changed` array.
+    #[serde(default)]
+    files_changed: Option<Vec<Value>>,
+    /// Top-level field equality, e.g. {"name": "inner"} for a rollback result.
+    #[serde(default)]
+    field: std::collections::HashMap<String, Value>,
+    /// JSON-pointer equality, e.g. {"/results/0/line": 12}.
+    #[serde(default)]
+    pointer: std::collections::HashMap<String, Value>,
 }
 #[derive(Deserialize)]
 struct Ordered {
@@ -244,10 +288,30 @@ impl Harness {
         let _ = self.sessions.insert(use_str.to_string(), sid.clone());
         Ok(sid)
     }
-    fn query(&mut self, use_str: &str, fql: &str) -> Result<Value, String> {
-        let sid = self.session_for(use_str)?;
+    /// Fresh read-write session: a unique alias each call → its own worktree off
+    /// the corpus branch, tracked for teardown. Used for mutation/transaction cases
+    /// so each rw case is fully isolated and discarded when the run ends.
+    fn rw_session(&mut self, use_str: &str) -> Result<String, String> {
+        let alias = format!("gt-{}-rw-{}", self.pid, self.client.created.len());
+        let fql = format!("USE {use_str} AS '{alias}'");
+        let res = self
+            .client
+            .run_fql(None, &fql)
+            .map_err(|e| format!("{fql}: {e}"))?;
         self.client
-            .run_fql(Some(&sid), fql)
+            .created
+            .push((use_str.to_string(), alias.clone()));
+        Ok(res
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or(&alias)
+            .to_string())
+    }
+
+    /// Run a query on an explicit session id (used by multi-step cases).
+    fn run(&mut self, sid: &str, fql: &str) -> Result<Value, String> {
+        self.client
+            .run_fql(Some(sid), fql)
             .map_err(|e| e.to_string())
     }
 }
@@ -292,6 +356,7 @@ fn rows_of(result: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+#[allow(clippy::too_many_lines)]
 fn check(a: &Assert, result: &Value) -> Vec<String> {
     let mut f = Vec::new();
     let rows = rows_of(result);
@@ -379,7 +444,123 @@ fn check(a: &Assert, result: &Value) -> Vec<String> {
             }
         }
     }
+    if let Some(expected) = a.applied {
+        let got = result
+            .get("applied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if got != expected {
+            f.push(format!("applied: expected {expected}, got {got}"));
+        }
+    }
+    if let Some(sub) = &a.diff_contains {
+        let diff = result.get("diff").and_then(Value::as_str).unwrap_or("");
+        if !diff.contains(sub) {
+            f.push(format!("diff_contains: {sub:?} not found in diff"));
+        }
+    }
+    if let Some(expected) = &a.files_changed {
+        let got = result.get("files_changed").cloned().unwrap_or(Value::Null);
+        if got.as_array() != Some(expected) {
+            f.push(format!("files_changed: expected {expected:?}, got {got}"));
+        }
+    }
+    for (k, ev) in &a.field {
+        let av = result.get(k).unwrap_or(&Value::Null);
+        if av != ev {
+            f.push(format!("field[{k}]: expected {ev}, got {av}"));
+        }
+    }
+    for (ptr, ev) in &a.pointer {
+        let av = result.pointer(ptr).unwrap_or(&Value::Null);
+        if av != ev {
+            f.push(format!("pointer[{ptr}]: expected {ev}, got {av}"));
+        }
+    }
     f
+}
+
+/// Substitute `${var}` placeholders in a step's fql from captured values.
+fn interpolate(fql: &str, vars: &HashMap<String, String>) -> String {
+    let mut out = fql.to_string();
+    for (k, v) in vars {
+        out = out.replace(&format!("${{{k}}}"), v);
+    }
+    out
+}
+
+/// Extract a dotted path (e.g. "results.0.node_id") from a result Value.
+fn extract_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut cur = value;
+    for seg in path.split('.') {
+        cur = match seg.parse::<usize>() {
+            Ok(idx) => cur.get(idx)?,
+            Err(_) => cur.get(seg)?,
+        };
+    }
+    Some(cur)
+}
+
+/// Run one case — single-shot read, or a multi-step (mutation/transaction) case.
+fn run_case(h: &Arc<Mutex<Harness>>, case: &Case) -> Result<(), Failed> {
+    // Resolve a session: rw → a fresh isolated worktree; ro → shared memoized.
+    let sid = {
+        let mut hg = h.lock().unwrap();
+        if case.mode == "rw" {
+            hg.rw_session(&case.use_str)
+        } else {
+            hg.session_for(&case.use_str)
+        }
+    }
+    .map_err(Failed::from)?;
+
+    // One-shot read case: a single query + assert.
+    if case.steps.is_empty() {
+        let fql = case
+            .fql
+            .as_deref()
+            .ok_or_else(|| Failed::from("case has neither 'fql' nor 'steps'"))?;
+        let result = { h.lock().unwrap().run(&sid, fql) }.map_err(Failed::from)?;
+        let fails = check(&case.assert, &result);
+        return if fails.is_empty() {
+            Ok(())
+        } else {
+            Err(Failed::from(fails.join("; ")))
+        };
+    }
+
+    // Multi-step case: one shared session, captures threaded across steps.
+    let mut vars: HashMap<String, String> = HashMap::new();
+    for (i, step) in case.steps.iter().enumerate() {
+        let fql = interpolate(&step.fql, &vars);
+        let outcome = { h.lock().unwrap().run(&sid, &fql) };
+
+        // `error: true` — the step is expected to fail (e.g. ROLLBACK with no txn).
+        if step.assert.error == Some(true) {
+            if outcome.is_ok() {
+                return Err(Failed::from(format!(
+                    "step[{i}]: expected an error, but the query succeeded"
+                )));
+            }
+            continue;
+        }
+        let result = outcome.map_err(|e| Failed::from(format!("step[{i}] '{fql}': {e}")))?;
+
+        // Capture values for later `${var}` interpolation.
+        for (var, path) in &step.capture {
+            let v = extract_path(&result, path).ok_or_else(|| {
+                Failed::from(format!("step[{i}]: capture path '{path}' not found"))
+            })?;
+            let s = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+            let _ = vars.insert(var.clone(), s);
+        }
+
+        let fails = check(&step.assert, &result);
+        if !fails.is_empty() {
+            return Err(Failed::from(format!("step[{i}]: {}", fails.join("; "))));
+        }
+    }
+    Ok(())
 }
 
 // ───────────────────────── entrypoint ─────────────────────────
@@ -417,16 +598,7 @@ fn main() {
         for case in suite.cases {
             let h = Arc::clone(&harness);
             let name = format!("{sname}::{}", case.name);
-            trials.push(Trial::test(name, move || {
-                let result =
-                    { h.lock().unwrap().query(&case.use_str, &case.fql) }.map_err(Failed::from)?;
-                let fails = check(&case.assert, &result);
-                if fails.is_empty() {
-                    Ok(())
-                } else {
-                    Err(Failed::from(fails.join("; ")))
-                }
-            }));
+            trials.push(Trial::test(name, move || run_case(&h, &case)));
         }
     }
 

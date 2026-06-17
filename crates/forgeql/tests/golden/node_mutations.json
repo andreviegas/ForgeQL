@@ -1,0 +1,60 @@
+{
+  "suite": "node_mutations",
+  "description": "Mutation + transaction behaviour (DELETE/CHANGE NODE, nested BEGIN/ROLLBACK) on a throwaway rw worktree off forgeql-pub.frozen. node_ids are captured at runtime, never hard-coded.",
+  "cases": [
+    {
+      "name": "delete_and_rollback",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "steps": [
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id" } },
+        { "fql": "BEGIN TRANSACTION 'txn'", "assert": { "field": { "name": "txn" } } },
+        { "fql": "DELETE NODE '${A}'", "assert": { "applied": true, "files_changed": ["crates/forgeql-core/src/node_id.rs"] } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 0 } },
+        { "fql": "ROLLBACK", "assert": { "field": { "name": "txn" } } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 } }
+      ]
+    },
+    {
+      "name": "change_node_and_rollback",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "steps": [
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id" } },
+        { "fql": "BEGIN TRANSACTION 'txn'", "assert": { "field": { "name": "txn" } } },
+        { "fql": "CHANGE NODE '${A}' WITH 'fn parse_offset_renamed() {}'", "assert": { "applied": true, "diff_contains": "parse_offset_renamed" } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 0 } },
+        { "fql": "ROLLBACK", "assert": { "field": { "name": "txn" } } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 } }
+      ]
+    },
+    {
+      "name": "nested_rollback_pops_inner_only",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "steps": [
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id" } },
+        { "fql": "BEGIN TRANSACTION 'outer'", "assert": { "field": { "name": "outer" } } },
+        { "fql": "DELETE NODE '${A}'", "assert": { "applied": true } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 0 } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "B": "results.0.node_id" } },
+        { "fql": "BEGIN TRANSACTION 'inner'", "assert": { "field": { "name": "inner" } } },
+        { "fql": "DELETE NODE '${B}'", "assert": { "applied": true } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1", "assert": { "row_count": 0 } },
+        { "fql": "ROLLBACK", "assert": { "field": { "name": "inner" } } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1", "assert": { "row_count": 1 } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 0 } },
+        { "fql": "ROLLBACK", "assert": { "field": { "name": "outer" } } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 } }
+      ]
+    },
+    {
+      "name": "rollback_without_transaction_errors",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "steps": [
+        { "fql": "ROLLBACK", "assert": { "error": true } }
+      ]
+    }
+  ]
+}
