@@ -438,6 +438,14 @@ fn collect_nodes(
                     let key = block_group_key(node, source, config, spec);
                     let (count, end_byte) = scan_block_run(node, source, config, lang, spec, &key);
                     if count >= spec.min_run {
+                        let first_text = node_text(source, node);
+                        let snippet = crate::result::comment_snippet(&first_text);
+                        let label = if snippet.chars().count() > 40 {
+                            let short: String = snippet.chars().take(40).collect();
+                            format!("{short}… (×{count})")
+                        } else {
+                            format!("{snippet} (×{count})")
+                        };
                         let block_ordinal = emit_block_row(
                             ctx,
                             spec,
@@ -447,6 +455,7 @@ fn collect_nodes(
                             parent_ordinal,
                             &mut row_ordinal_counter,
                             source,
+                            &label,
                         );
                         active_block = Some(ActiveBlock {
                             ord_suffix: format!("{block_ordinal:04}"),
@@ -981,6 +990,7 @@ fn emit_block_row(
     parent_ordinal: u32,
     row_ordinal_counter: &mut u32,
     source: &[u8],
+    label: &str,
 ) -> u32 {
     let span = start_byte..end_byte;
     let block_kind = spec.block_fql_kind.as_str();
@@ -1005,11 +1015,14 @@ fn emit_block_row(
         },
     );
     let rev = row_rev(Some(ordinal), source, span.clone());
-    // Carry the content hash as a field so the reindex hint can disambiguate this
-    // block from sibling blocks (which all share the constant `comment_block`
-    // name) and keep its node id stable across edits to other blocks.
+    // Carry the content hash so the reindex hint can disambiguate this block from
+    // sibling blocks (which all share the constant `comment_block` identity name)
+    // and keep its node id stable across edits to other blocks. `block_label` is a
+    // display-only field (first-member snippet + member count) surfaced by SHOW
+    // outline; the identity name_id stays `comment_block`.
     let mut block_fields = HashMap::new();
     drop(block_fields.insert("content_hash".to_string(), content_hash.clone()));
+    drop(block_fields.insert("block_label".to_string(), label.to_string()));
     let fields = ctx.table.strings.intern_fields(block_fields);
     ctx.table.push_row(IndexRow {
         name_id,

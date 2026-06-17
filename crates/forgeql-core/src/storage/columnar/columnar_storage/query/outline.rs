@@ -250,7 +250,9 @@ fn push_outline_tree(
         let emit = all || outline_is_structural(kind);
         let child_depth = if emit {
             out.push(serde_json::json!({
-                "name": reader.name_of(r),
+                "name": reader
+                    .extra_field_str("block_label", r)
+                    .unwrap_or_else(|| reader.name_of(r)),
                 "fql_kind": if kind.is_empty() { "unknown" } else { kind },
                 "path": rel_path,
                 "line": lines[r as usize],
@@ -323,7 +325,9 @@ fn push_outline_all_source_order(
         }
         let kind = reader.fql_kind_of(r);
         out.push(serde_json::json!({
-            "name": reader.name_of(r),
+            "name": reader
+                .extra_field_str("block_label", r)
+                .unwrap_or_else(|| reader.name_of(r)),
             "fql_kind": if kind.is_empty() { "unknown" } else { kind },
             "path": rel_path,
             "line": reader.line_of(r) as usize,

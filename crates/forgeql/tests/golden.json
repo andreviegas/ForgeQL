@@ -2739,5 +2739,12 @@
     ],
     "fql": "SHOW outline OF 'need66ca6e801.0031' ALL",
     "name": "P4_outline_all_nests_in_source_order"
+  },
+  {
+    "expect_rows": [
+      {"line": 83, "depth": 0, "fql_kind": "comment_block", "name": "/// Convert the inner content of a SHOW … (×8)"}
+    ],
+    "fql": "SHOW outline OF 'need66ca6e801.0031' ALL",
+    "name": "P5_comment_block_label"
   }
 ]

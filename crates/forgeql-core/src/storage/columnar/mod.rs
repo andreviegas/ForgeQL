@@ -100,7 +100,9 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///          so a one-line doc/block comment surfaces as a single offset
 ///  19 — has_doc skips leading attribute/decorator siblings, so a documented
 ///          item with an interposed `#[...]` attribute is still detected as documented
-pub const ENRICH_VER: u32 = 19;
+///  20 — comment_block rows carry a `block_label` field (first-member snippet +
+///          member count) for SHOW outline display; identity name stays `comment_block`
+pub const ENRICH_VER: u32 = 20;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

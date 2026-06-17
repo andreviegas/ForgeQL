@@ -1006,6 +1006,95 @@ mod tests {
     }
 
     #[test]
+    fn block_node_id_survives_editing_its_own_member() {
+        // Editing a comment inside a block must not churn that block's node id,
+        // even when a sibling block shares the same parent (BUG-021).
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("snippet.rs");
+        let src_a =
+            "// aaa one\n// aaa two\nfn first() {}\n// bbb one\n// bbb two\nfn second() {}\n";
+        std::fs::write(&file, src_a).unwrap();
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let enrichers = default_enrichers();
+
+        let mut table_a = SymbolTable::default();
+        {
+            let mut ctx = IndexContext {
+                path: &file,
+                language: &crate::ast::lang::RustLanguageInline,
+                enrichers: &enrichers,
+                macro_table: None,
+                ordinal_remapper: None,
+                table: &mut table_a,
+            };
+            index_file(&mut parser, &mut ctx, None).unwrap();
+        }
+
+        // bbb is the comment_block with the larger start line.
+        let bbb_ordinal = table_a
+            .rows
+            .iter()
+            .filter(|r| table_a.fql_kind_of(r) == "comment_block")
+            .max_by_key(|r| r.line)
+            .and_then(|r| r.ordinal)
+            .expect("the bbb comment_block should be indexed");
+
+        let mut hints = Vec::new();
+        for row in &table_a.rows {
+            let Some(ordinal) = row.ordinal else {
+                continue;
+            };
+            let fields = table_a.resolve_fields(&row.fields);
+            hints.push(OrdinalHint {
+                name: table_a.name_of(row).to_string(),
+                fql_kind: table_a.fql_kind_of(row).to_string(),
+                parent_ordinal: row.parent_ordinal,
+                guard_group_id: fields.get("guard_group_id").cloned(),
+                guard_branch: fields.get("guard_branch").cloned(),
+                first_body_statement_fingerprint: fields
+                    .get("first_body_statement_fingerprint")
+                    .cloned(),
+                content_hash: fields.get("content_hash").cloned(),
+                ordinal,
+            });
+        }
+
+        // Edit bbb's second member; both blocks' first members are untouched.
+        let src_b =
+            "// aaa one\n// aaa two\nfn first() {}\n// bbb one\n// bbb CHANGED\nfn second() {}\n";
+        std::fs::write(&file, src_b).unwrap();
+        let mut table_b = SymbolTable::default();
+        {
+            let mut ctx = IndexContext {
+                path: &file,
+                language: &crate::ast::lang::RustLanguageInline,
+                enrichers: &enrichers,
+                macro_table: None,
+                ordinal_remapper: Some(OrdinalRemapper::from_previous(hints)),
+                table: &mut table_b,
+            };
+            index_file(&mut parser, &mut ctx, None).unwrap();
+        }
+
+        let after = table_b
+            .rows
+            .iter()
+            .filter(|r| table_b.fql_kind_of(r) == "comment_block")
+            .max_by_key(|r| r.line)
+            .and_then(|r| r.ordinal)
+            .expect("the bbb comment_block should survive");
+
+        assert_eq!(
+            bbb_ordinal, after,
+            "editing bbb's own content must not churn its node id"
+        );
+    }
+
+    #[test]
     fn indexes_function_definition() {
         let table = index_snippet("void processSignal(int speed) { return; }");
         let row = table.find_def("processSignal").expect("indexed");

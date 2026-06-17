@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.45] — 2026-06-17 — comment_block rows show a descriptive label in SHOW outline
+
+### Changed
+
+- **`comment_block` rows in `SHOW outline` now show a descriptive label** — the first member
+  snippet plus the member count (e.g. `/// Convert the inner content… (×8)`) — instead of the
+  bare kind string `comment_block` (P5). The label is stored as a display-only `block_label`
+  field; the row identity name stays `comment_block`, so reindex node-id stability and
+  `WHERE fql_kind = 'comment_block'` filtering are unchanged. `ENRICH_VER` 19 → 20.
+
+### Fixed
+
+- Added a regression test (`block_node_id_survives_editing_its_own_member`) confirming that
+  editing a comment inside a block does not churn that block's node id when a sibling block
+  shares the same parent (BUG-021 content-edit case — already handled by the `content_hash`
+  disambiguator + source-order reuse; now locked by a test).
 ## [0.76.44] — 2026-06-17 — `SHOW outline … ALL` emits every node in source order
 
 ### Fixed
