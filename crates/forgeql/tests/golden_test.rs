@@ -1,7 +1,7 @@
 //! Data-driven golden harness (v2), isolated from `zephyr_golden.rs`.
 //!
-//! Each `tests/golden/*.golden` suite (JSON content, non-indexed extension)
-//! becomes one libtest-mimic trial per case, named `<suite>::<case>`, so:
+//! Each `tests/golden/*.json` suite becomes one libtest-mimic trial per case,
+//! named `<suite>::<case>`, so:
 //!   cargo test --test golden_test                  # all
 //!   cargo test --test golden_test enrich_is_magic  # one suite (group)
 //!   cargo test --test golden_test enrich_is_magic::rust   # one case
