@@ -401,7 +401,7 @@ fn main() {
         .flatten()
     {
         let path = entry.path();
-        if path.extension().is_some_and(|e| e == "golden") {
+        if path.extension().is_some_and(|e| e == "json") {
             let txt = std::fs::read_to_string(&path).expect("read suite");
             suites.push(
                 serde_json::from_str(&txt)
