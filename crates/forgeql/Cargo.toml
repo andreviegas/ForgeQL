@@ -63,4 +63,9 @@ tikv-jemallocator = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+libtest-mimic = "0.8"
 forgeql-core = { path = "../forgeql-core", features = ["test-helpers"] }
+
+[[test]]
+name = "golden_test"
+harness = false

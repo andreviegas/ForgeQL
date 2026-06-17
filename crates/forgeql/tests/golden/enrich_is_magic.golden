@@ -1,0 +1,79 @@
+{
+  "suite": "enrich_is_magic",
+  "description": "NumberEnricher is_magic — cross-language + formats + value classes + clause combinations + negatives",
+  "cases": [
+    { "name": "c", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'lib/libc/minimal/source/stdlib/atoi.c' WHERE fql_kind='number' WHERE is_magic='true' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count":4, "all_same":"_file", "ordered":{"by":"line","dir":"asc"}, "distinct":{"by":"name","count":3,"values":["0","1","10"]},
+        "rows":[{"name":"0","line":36},{"name":"1","line":41},{"name":"0","line":55},{"name":"10","line":56}] } },
+
+    { "name": "cpp", "use": "pytorch-andre.pytorch-frozen",
+      "fql": "FIND symbols IN 'c10/core/WrapDimMinimal.cpp' WHERE fql_kind='number' WHERE is_magic='true' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count":5, "all_same":"_file", "ordered":{"by":"line","dir":"asc"}, "distinct":{"by":"name","count":3,"values":["-1","0","1"]},
+        "rows":[{"name":"0","line":9},{"name":"0","line":11},{"name":"1","line":18},{"name":"-1","line":21},{"name":"1","line":22}] } },
+
+    { "name": "python", "use": "pytorch-andre.pytorch-frozen",
+      "fql": "FIND symbols IN 'torch/utils/_stats.py' WHERE fql_kind='number' WHERE is_magic='true' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count":4, "all_same":"_file", "ordered":{"by":"line","dir":"asc"}, "distinct":{"by":"name","count":2,"values":["0","1"]},
+        "rows":[{"name":"0","line":19},{"name":"1","line":20},{"name":"0","line":27},{"name":"1","line":28}] } },
+
+    { "name": "rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/ast/enrich/macro_table.rs' WHERE fql_kind='number' WHERE is_magic='true' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count":4, "all_same":"_file", "ordered":{"by":"line","dir":"asc"}, "distinct":{"by":"name","count":2,"values":["1","2"]},
+        "rows":[{"name":"1","line":128},{"name":"1","line":138},{"name":"2","line":148},{"name":"2","line":149}] } },
+
+    { "name": "negative_file", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'lib/os/reboot.c' WHERE fql_kind='number' WHERE is_magic='true' LIMIT 20",
+      "assert": { "row_count":0, "total":0 } },
+
+    { "name": "negative_folder", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'LICENSES' WHERE fql_kind='number' WHERE is_magic='true' LIMIT 20",
+      "assert": { "row_count":0, "total":0 } },
+
+    { "name": "negative_oct_absent", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'lib/hash/hash_func32_murmur3.c' WHERE fql_kind='number' WHERE is_magic='true' WHERE num_format='oct' LIMIT 20",
+      "assert": { "row_count":0 } },
+
+    { "name": "hex_constants", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'lib/hash/hash_func32_murmur3.c' WHERE fql_kind='number' WHERE is_magic='true' WHERE num_format='hex' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count":4, "all_same":"_file", "ordered":{"by":"line","dir":"asc"}, "distinct":{"by":"name","count":4},
+        "rows":[{"name":"0xcc9e2d51","line":14},{"name":"0x1b873593","line":16},{"name":"0x85ebca6b","line":51},{"name":"0xc2b2ae35","line":53}] } },
+
+    { "name": "binary_constants", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'drivers/fuel_gauge/ltc2959/ltc2959.c' WHERE fql_kind='number' WHERE is_magic='true' WHERE num_format='bin' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count":4, "ordered":{"by":"line","dir":"asc"}, "distinct":{"by":"name","count":4,"values":["0b00","0b01","0b10","0b11"]},
+        "rows":[{"name":"0b00","line":79},{"name":"0b01","line":80},{"name":"0b10","line":81},{"name":"0b11","line":82}] } },
+
+    { "name": "sort_by_name", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'lib/hash/hash_func32_murmur3.c' WHERE fql_kind='number' WHERE is_magic='true' WHERE num_format='hex' ORDER BY name ASC LIMIT 20",
+      "assert": { "row_count":4,
+        "rows":[{"name":"0x1b873593","line":16},{"name":"0x85ebca6b","line":51},{"name":"0xc2b2ae35","line":53},{"name":"0xcc9e2d51","line":14}] } },
+
+    { "name": "order_desc_limit", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'drivers/fuel_gauge/ltc2959/ltc2959.c' WHERE fql_kind='number' WHERE is_magic='true' ORDER BY line DESC LIMIT 3",
+      "assert": { "row_count":3, "ordered":{"by":"line","dir":"desc"},
+        "rows":[{"name":"0","line":668},{"name":"1","line":647},{"name":"0","line":538}] } },
+
+    { "name": "value_filter", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'drivers/fuel_gauge/ltc2959/ltc2959.c' WHERE fql_kind='number' WHERE is_magic='true' WHERE name='15' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count":6, "all_same":"name", "distinct":{"by":"name","count":1,"values":["15"]},
+        "rows":[{"line":241},{"line":246},{"line":283},{"line":288},{"line":366},{"line":374}] } },
+
+    { "name": "offset_limit", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'drivers/fuel_gauge/ltc2959/ltc2959.c' WHERE fql_kind='number' WHERE is_magic='true' WHERE name='15' ORDER BY line ASC LIMIT 2 OFFSET 2",
+      "assert": { "row_count":2, "rows":[{"name":"15","line":283},{"name":"15","line":288}] } },
+
+    { "name": "value_range", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'lib/hash/hash_func32_murmur3.c' WHERE fql_kind='number' WHERE is_magic='true' WHERE num_value>=13 WHERE num_value<=17 ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count":5, "distinct":{"by":"name","count":4,"values":["13","15","16","17"]},
+        "rows":[{"name":"15","line":15},{"name":"17","line":15},{"name":"16","line":50},{"name":"13","line":52},{"name":"16","line":54}] } },
+
+    { "name": "classify_positive", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'lib/hash/hash_func32_murmur3.c' WHERE fql_kind='number' WHERE is_magic='true' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count":11, "all_same":"_file", "ordered":{"by":"line","dir":"asc"} } },
+
+    { "name": "classify_negative", "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols IN 'lib/hash/hash_func32_murmur3.c' WHERE fql_kind='number' WHERE is_magic='false' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count":1, "rows":[{"name":"0","line":33}] } }
+  ]
+}
