@@ -200,6 +200,15 @@ fn push_outline_tree(
 ) {
     use std::collections::{HashMap, HashSet};
 
+    // ALL mode emits every node — including analysis-only rows that carry no
+    // ordinal — in strict source order, nesting by byte-span containment. The
+    // ordinal tree below cannot place ord-less rows (they are never a parent
+    // key), which is what pushed them out of order to the end of the file (P4).
+    if all {
+        push_outline_all_source_order(reader, rel_path, node_id_for, root_ordinal, out);
+        return;
+    }
+
     let n = reader.row_count;
     // Per-row facts: `ord` is None for analysis-only rows (no node handle).
     let ords: Vec<Option<u32>> = (0..n).map(|r| reader.ordinal_of(r)).collect();
@@ -265,6 +274,69 @@ fn push_outline_tree(
                 stack.push((cr, child_depth));
             }
         }
+    }
+}
+
+/// ALL-mode outline: every row in strict source order, depth derived from
+/// byte-span containment so analysis-only rows (no ordinal) nest in place rather
+/// than being promoted to roots and flushed after their enclosing subtree (P4).
+/// When `root_ordinal` is set, only rows whose span falls inside that node are
+/// emitted, so `SHOW outline '<id>' ALL` outlines just that subtree.
+fn push_outline_all_source_order(
+    reader: &SegmentReader,
+    rel_path: &str,
+    node_id_for: &dyn Fn(u32) -> String,
+    root_ordinal: Option<u32>,
+    out: &mut Vec<serde_json::Value>,
+) {
+    let n = reader.row_count;
+
+    // Optional subtree restriction: the byte span of the requested root node.
+    let bounds: Option<(u32, u32)> = root_ordinal.and_then(|target| {
+        (0..n)
+            .find(|&r| reader.ordinal_of(r) == Some(target))
+            .map(|r| (reader.byte_start_of(r), reader.byte_end_of(r)))
+    });
+
+    // Source order: outer/earlier first (start asc, end desc) so a containing
+    // node always precedes the nodes it contains.
+    let mut rows: Vec<u32> = (0..n)
+        .filter(|&r| {
+            bounds
+                .is_none_or(|(lo, hi)| reader.byte_start_of(r) >= lo && reader.byte_end_of(r) <= hi)
+        })
+        .collect();
+    rows.sort_by(|&a, &b| {
+        let (sa, ea) = (reader.byte_start_of(a), reader.byte_end_of(a));
+        let (sb, eb) = (reader.byte_start_of(b), reader.byte_end_of(b));
+        sa.cmp(&sb).then(eb.cmp(&ea))
+    });
+
+    // Depth = nesting level. Pop ancestors that close at or before this row
+    // starts; whatever remains on the stack contains it.
+    let mut stack: Vec<u32> = Vec::new(); // byte_end of open ancestors
+    for r in rows {
+        let start = reader.byte_start_of(r);
+        let end = reader.byte_end_of(r);
+        while stack.last().is_some_and(|&top_end| top_end <= start) {
+            let _ = stack.pop();
+        }
+        let kind = reader.fql_kind_of(r);
+        out.push(serde_json::json!({
+            "name": reader.name_of(r),
+            "fql_kind": if kind.is_empty() { "unknown" } else { kind },
+            "path": rel_path,
+            "line": reader.line_of(r) as usize,
+            "node_id": reader.ordinal_of(r).map(|o| {
+                crate::node_id::surface_block_id(
+                    &node_id_for(o),
+                    reader.extra_field_str("block_ord", r),
+                    reader.extra_field_str("block_off", r),
+                )
+            }),
+            "depth": stack.len(),
+        }));
+        stack.push(end);
     }
 }
 

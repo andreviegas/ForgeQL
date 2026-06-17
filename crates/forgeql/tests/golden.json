@@ -2723,5 +2723,21 @@
     ],
     "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE line >= 83 WHERE line <= 84 IN 'crates/forgeql-core/src/engine/convert.rs' ORDER BY line ASC",
     "name": "P3_comment_name_snippet_not_len"
+  },
+  {
+    "expect_row_count": 9,
+    "expect_rows": [
+      {"line": 83, "depth": 0, "fql_kind": "comment_block"},
+      {"line": 83, "depth": 1, "fql_kind": "comment"},
+      {"line": 84, "depth": 1, "fql_kind": "comment"},
+      {"line": 85, "depth": 1},
+      {"line": 86, "depth": 1},
+      {"line": 87, "depth": 1, "fql_kind": "comment"},
+      {"line": 88, "depth": 1},
+      {"line": 89, "depth": 1},
+      {"line": 90, "depth": 1}
+    ],
+    "fql": "SHOW outline OF 'need66ca6e801.0031' ALL",
+    "name": "P4_outline_all_nests_in_source_order"
   }
 ]

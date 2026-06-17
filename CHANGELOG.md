@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.44] — 2026-06-17 — `SHOW outline … ALL` emits every node in source order
+
+### Fixed
+
+- **`SHOW outline … ALL` now emits every node in strict source order, nested by span
+  containment**, instead of promoting analysis-only rows (type refs, casts, numbers — which
+  carry no ordinal) to depth-0 roots and flushing them after their enclosing subtree, where
+  they appeared at the end of the file or in the middle, out of line order (P4). The ordinal
+  tree cannot place an ord-less row (it is never a parent key); the new `all` path
+  (`push_outline_all_source_order`) sorts rows by byte span and derives depth from a
+  containment stack, so block members nest under their block and every row lands at its true
+  position. `SHOW outline '<id>' ALL` restricts to the node subtree. Default (structural)
+  outline is unchanged. Query-only — no `ENRICH_VER` bump.
 ## [0.76.43] — 2026-06-17 — Comment names render as a first-line snippet, not `len:N`
 
 ### Changed
