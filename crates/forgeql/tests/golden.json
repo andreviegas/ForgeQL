@@ -2690,5 +2690,20 @@
     ],
     "fql": "FIND symbols WHERE shift_direction = 'left' WHERE language = 'python' IN 'torch/**' ORDER BY line ASC LIMIT 3",
     "name": "GP25_left_shifts_python"
+  },
+  {
+    "alias": "golden-rust",
+    "expect_symbols_indexed": 55775,
+    "use": "forgeql-pub.frozen"
+  },
+  {
+    "expect_line_count": 3,
+    "expect_lines": [
+      {"line": 14, "node_id": "need66ca6e801.0006", "node_offset": 1},
+      {"line": 15, "node_id": "need66ca6e801.0006", "node_offset": 2},
+      {"line": 16, "node_id": "need66ca6e801.0006", "node_offset": 3}
+    ],
+    "fql": "SHOW LINES 14-16 OF 'crates/forgeql-core/src/engine/convert.rs'",
+    "name": "P1_show_lines_surfaces_block_alias"
   }
 ]

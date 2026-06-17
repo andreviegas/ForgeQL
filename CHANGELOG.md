@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.41] — 2026-06-17 — SHOW LINES/NODE surface block members under the block handle
+
+### Fixed
+
+- **`SHOW LINES` and `SHOW NODE CONTENT` now surface block members under the shared block
+  handle.** A line belonging to a comment block resolves to the block id with a block-relative
+  offset (e.g. `…0006` at offset 1/2/3), matching what `FIND` and `SHOW outline` already show.
+  Previously these paths returned each member raw per-line handle (`…0007/…0008/…0009`, all at
+  offset 1), so the same line had two different addresses depending on the command (P1).
+  Extracted `node_id::block_node_id` as the shared helper that `surface_block_id` now builds on.
 ## [0.76.40] — 2026-06-16 — Block grouping: single-line offsets for doc/block comments
 
 ### Fixed

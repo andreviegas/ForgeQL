@@ -108,11 +108,19 @@ pub fn make_node_id(path: &str, ordinal: u32) -> String {
 /// segment prefix so only the ordinal and offset change. Otherwise return
 /// `own_id` unchanged. FIND and SHOW outline both call this, so a block member
 /// surfaces the same way everywhere.
+/// The block node id (`{seg}.{block_ord}`) for a member whose handle is `own_id`.
+/// Strips the member ordinal and substitutes the block ordinal, so block members and the
+/// block itself share one segment-qualified identity.
+#[must_use]
+pub fn block_node_id(own_id: &str, block_ord: &str) -> String {
+    let seg = own_id.rsplit_once('.').map_or(own_id, |(s, _)| s);
+    format!("{seg}.{block_ord}")
+}
+
 #[must_use]
 pub fn surface_block_id(own_id: &str, block_ord: Option<&str>, block_off: Option<&str>) -> String {
     if let (Some(ord), Some(off)) = (block_ord, block_off) {
-        let seg = own_id.rsplit_once('.').map_or(own_id, |(s, _)| s);
-        format!("{seg}.{ord}({off})")
+        format!("{}({off})", block_node_id(own_id, ord))
     } else {
         own_id.to_string()
     }

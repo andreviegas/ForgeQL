@@ -334,7 +334,22 @@ impl ColumnarStorage {
                     if node_span <= best_span[idx]
                         && let Some(id) = node_id_of(ord)
                     {
-                        out[idx] = Some((id, node_start));
+                        // Surface block members under the shared block handle, matching
+                        // FIND/outline: a member tagged with block_ord/block_off resolves to
+                        // `{seg}.{block_ord}` with a block-relative offset.
+                        let (surf_id, surf_start) = match (
+                            reader.extra_field_str("block_ord", r),
+                            reader.extra_field_str("block_off", r),
+                        ) {
+                            (Some(bord), Some(boff)) => (
+                                crate::node_id::block_node_id(&id, bord),
+                                node_start.saturating_sub(
+                                    boff.parse::<usize>().unwrap_or(1).saturating_sub(1),
+                                ),
+                            ),
+                            _ => (id, node_start),
+                        };
+                        out[idx] = Some((surf_id, surf_start));
                         best_span[idx] = node_span;
                     }
                 }
