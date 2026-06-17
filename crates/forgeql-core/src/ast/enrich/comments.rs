@@ -37,8 +37,20 @@ impl NodeEnricher for CommentEnricher {
         }
 
         // Definition rows: check for preceding doc comment
+        // Definition rows: check for a preceding doc comment, skipping any leading
+        // attribute/decorator siblings that sit between the doc comment and the
+        // definition (e.g. Rust `#[...]`), mirroring the indexer leading-attribute fold.
         if config.is_definition_kind(kind) {
-            let has_doc = ctx.node.prev_named_sibling().is_some_and(|sib| {
+            let decorator = config.decorator_kind();
+            let mut sib = ctx.node.prev_named_sibling();
+            while let Some(s) = sib {
+                if decorator == Some(s.kind()) {
+                    sib = s.prev_named_sibling();
+                } else {
+                    break;
+                }
+            }
+            let has_doc = sib.is_some_and(|sib| {
                 if !config.is_comment_kind(sib.kind()) {
                     return false;
                 }

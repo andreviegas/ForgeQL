@@ -6,6 +6,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.42] — 2026-06-17 — has_doc detects docs through interposed attributes
+
+### Fixed
+
+- **`has_doc` is now true for a documented item that has an interposed attribute/decorator.**
+  `CommentEnricher::enrich_row` walks back over leading attribute siblings (e.g. Rust `#[...]`)
+  before testing for a preceding doc comment, mirroring the indexer leading-attribute span fold.
+  Previously a `///` block separated from its `fn` by `#[allow(...)]`/`#[must_use]` reported
+  `has_doc = false` (the attribute was the function prev-sibling, not the doc comment) (P6).
+- Bumped `ENRICH_VER` 18 → 19 (`storage/columnar/mod.rs`): the `has_doc` change alters index
+  output, so cached segments must cold-reindex.
 ## [0.76.41] — 2026-06-17 — SHOW LINES/NODE surface block members under the block handle
 
 ### Fixed

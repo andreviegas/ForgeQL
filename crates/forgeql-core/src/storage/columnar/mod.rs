@@ -98,7 +98,9 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///          remapper can keep block node ids stable across sibling-block edits
 ///  18 — block grouping: clamp a block member offset to its last content line
 ///          so a one-line doc/block comment surfaces as a single offset
-pub const ENRICH_VER: u32 = 18;
+///  19 — has_doc skips leading attribute/decorator siblings, so a documented
+///          item with an interposed `#[...]` attribute is still detected as documented
+pub const ENRICH_VER: u32 = 19;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

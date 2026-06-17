@@ -2705,5 +2705,14 @@
     ],
     "fql": "SHOW LINES 14-16 OF 'crates/forgeql-core/src/engine/convert.rs'",
     "name": "P1_show_lines_surfaces_block_alias"
+  },
+  {
+    "expect_total": 1,
+    "expect_row_count": 1,
+    "expect_rows": [
+      {"line": 91, "name": "convert_show_content"}
+    ],
+    "fql": "FIND symbols WHERE name = 'convert_show_content' WHERE has_doc = 'true' IN 'crates/forgeql-core/src/engine/convert.rs'",
+    "name": "P6_has_doc_true_with_interposed_attribute"
   }
 ]
