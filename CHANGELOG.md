@@ -6,6 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.77.0] — 2026-06-17 — feat(golden): add data-driven enrichment golden harness v2
+
+### Added
+- Golden test harness v2 (`crates/forgeql/tests/golden_test.rs`) driven by JSON suite files under `tests/golden/*.json`; replaces the old `.golden` format
+- `enrich_is_magic.json` — 16 enrichment test cases across C, C++, Python and Rust frozen branches
+- `node_mutations.json` — 4 mutation/transaction test cases (delete, change, nested rollback, error on bare rollback)
+- `tests/golden/README.md` documenting suite schema and assert fields
+- Mutation mode (`"mode": "rw"`) and `capture` mechanism for runtime node_id resolution
+
+## [0.76.46] — 2026-06-17 — feat(golden): add data-driven enrichment golden harness v2
+
+### Added
+- Golden test harness v2 (`crates/forgeql/tests/golden_test.rs`) driven by JSON suite files under `tests/golden/*.json`; replaces the old `.golden` format
+- `enrich_is_magic.json` — 16 enrichment test cases across C, C++, Python and Rust frozen branches
+- `node_mutations.json` — 4 mutation/transaction test cases (delete, change, nested rollback, error on bare rollback)
+- `tests/golden/README.md` documenting suite schema and assert fields
+- Mutation mode (`"mode": "rw"`) and `capture` mechanism for runtime node_id resolution
+
 ## [0.76.45] — 2026-06-17 — comment_block rows show a descriptive label in SHOW outline
 
 ### Changed
