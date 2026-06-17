@@ -1082,11 +1082,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"line": 7,  "name": "len:54",  "path": "arch/arc/core/arc_connect.c"},
-      {"line": 10, "name": "len:117", "path": "arch/arc/core/cache.c"},
-      {"line": 7,  "name": "len:87",  "path": "arch/arc/core/dsp/dsp_offsets.c"},
-      {"line": 7,  "name": "len:76",  "path": "arch/arc/core/dsp/swap_dsp_macros.h"},
-      {"line": 25, "name": "len:480", "path": "arch/arc/core/elf.c"}
+      {"line": 7,  "name": "* @file…", "path": "arch/arc/core/arc_connect.c"},
+      {"line": 10, "name": "* @file…", "path": "arch/arc/core/cache.c"},
+      {"line": 7,  "name": "* @file…", "path": "arch/arc/core/dsp/dsp_offsets.c"},
+      {"line": 7,  "name": "* @file…", "path": "arch/arc/core/dsp/swap_dsp_macros.h"},
+      {"line": 25, "name": "* @brief Architecture specific function for relocating shared elf…", "path": "arch/arc/core/elf.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE comment_style = 'doc_block' ORDER BY path ASC LIMIT 5",
     "name": "GST52_comment_doc_block_compact_name"
@@ -2714,5 +2714,14 @@
     ],
     "fql": "FIND symbols WHERE name = 'convert_show_content' WHERE has_doc = 'true' IN 'crates/forgeql-core/src/engine/convert.rs'",
     "name": "P6_has_doc_true_with_interposed_attribute"
+  },
+  {
+    "expect_row_count": 2,
+    "expect_rows": [
+      {"line": 83, "name": "/// Convert the inner content of a SHOW JSON response to a typed `ShowContent`."},
+      {"line": 84, "name": "///"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE line >= 83 WHERE line <= 84 IN 'crates/forgeql-core/src/engine/convert.rs' ORDER BY line ASC",
+    "name": "P3_comment_name_snippet_not_len"
   }
 ]

@@ -605,10 +605,10 @@ fn compact_name_121_chars_truncated_with_ellipsis() {
 }
 
 #[test]
-fn compact_name_with_newline_returns_len_format() {
+fn compact_name_with_newline_returns_first_line_snippet() {
     let name = "line1\nline2";
     let result = compact_name(name);
-    assert_eq!(result.as_ref(), "len:11");
+    assert_eq!(result.as_ref(), "line1…");
 }
 
 #[test]

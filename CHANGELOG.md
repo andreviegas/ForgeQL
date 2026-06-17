@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.76.43] — 2026-06-17 — Comment names render as a first-line snippet, not `len:N`
+
+### Changed
+
+- **A multi-line comment name now renders as a single-line snippet** (first line, trimmed,
+  truncated to 120 chars with a trailing `…` when content is dropped) instead of the opaque
+  `len:N` placeholder. Applied uniformly across `FIND` (`result::compact_name`, via the new
+  `comment_snippet` helper) and `SHOW outline` (`compact_outline` now calls `compact_name`),
+  so `//`, `///`, and `/* */` comments all surface the same readable hint regardless of style
+  or renderer (P3). The name column stays an orientation hint; full text is read via `SHOW NODE`.
 ## [0.76.42] — 2026-06-17 — has_doc detects docs through interposed attributes
 
 ### Fixed

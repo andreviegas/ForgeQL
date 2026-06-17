@@ -57,7 +57,7 @@ fn outline_renders_pre_order_tree_with_depth() {
 }
 
 #[test]
-fn outline_comment_compressed_to_len() {
+fn outline_comment_renders_as_snippet() {
     let result = ForgeQLResult::Show(ShowResult {
         op: "show_outline".into(),
         symbol: None,
@@ -90,12 +90,12 @@ fn outline_comment_compressed_to_len() {
     });
     let csv = to_compact(&result);
     assert!(
-        csv.contains("len:17"),
-        "comment should be compressed to len:N, got: {csv}"
+        csv.contains("// ADC conversion"),
+        "comment should render as a first-line snippet, got: {csv}"
     );
     assert!(
-        !csv.contains("ADC conversion"),
-        "comment text should not appear in compact output"
+        !csv.contains("len:"),
+        "comment should not render the opaque len:N placeholder, got: {csv}"
     );
 }
 

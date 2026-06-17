@@ -668,9 +668,36 @@ pub struct FileEditSummary {
 /// Compact a symbol name for display.  Multi-line names (e.g. block comments)
 /// are replaced with `len:<bytes>` so they don't flood the output.
 /// Single-line names longer than 120 chars are truncated with `…`.
+/// A single-line orientation snippet of a (possibly multi-line) name: the first
+/// line, trimmed, truncated to 120 chars, with a trailing `…` when any content
+/// was dropped. Used so a comment name never spills raw multi-line text into the
+/// name column while still hinting what the comment says.
+/// A single-line orientation snippet of a (possibly multi-line) name: the first
+/// line that carries real (alphanumeric) content, trimmed, truncated to 120
+/// chars, with a trailing `…` when any content was dropped. Bare comment openers
+/// like `/**`, `/*`, `//` are skipped so block comments surface their text, not a
+/// delimiter. Used so a comment name never spills raw multi-line text into the
+/// name column while still hinting what the comment says.
+pub(crate) fn comment_snippet(name: &str) -> String {
+    let max = 120usize;
+    let full = name.trim();
+    let chosen = name
+        .lines()
+        .map(str::trim)
+        .find(|l| l.chars().any(char::is_alphanumeric))
+        .or_else(|| name.lines().map(str::trim).find(|l| !l.is_empty()))
+        .unwrap_or("");
+    let dropped = chosen.len() < full.len();
+    let mut snippet: String = chosen.chars().take(max).collect();
+    if dropped || chosen.chars().count() > max {
+        snippet.push('…');
+    }
+    snippet
+}
+
 pub(crate) fn compact_name(name: &str) -> std::borrow::Cow<'_, str> {
     if name.contains('\n') {
-        std::borrow::Cow::Owned(format!("len:{}", name.len()))
+        std::borrow::Cow::Owned(comment_snippet(name))
     } else if name.len() > 120 {
         std::borrow::Cow::Owned(format!("{}…", &name[..120]))
     } else {

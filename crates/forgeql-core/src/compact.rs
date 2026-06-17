@@ -222,7 +222,7 @@ fn compact_outline(s: &ShowResult, entries: &[OutlineEntry]) -> String {
     row(&mut out, &[&q("depth"), &q(schema)]);
     for e in entries {
         let display_name = if e.fql_kind == "comment" {
-            format!("len:{}", e.name.len())
+            crate::result::compact_name(&e.name).into_owned()
         } else {
             e.name.clone()
         };
