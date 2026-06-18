@@ -6,6 +6,11 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.77.1] — 2026-06-18 — fix(index): attribute span folding and guard detection are now language-agnostic
+
+### Fixed
+- `attr_extended_start` and `collect_attribute_guard_frames` hardcoded Rust's `"attribute_item"` tree-sitter kind instead of reading the language config — Python decorators (`@...`) were silently ignored when computing a function's start line and when detecting attribute guards. Both functions now read `LanguageConfig::decorator_kind()` from the language JSON config; languages with no decorator kind (C, JSON, Markdown) exit early without scanning.
+
 ## [0.77.0] — 2026-06-17 — feat(golden): add data-driven enrichment golden harness v2
 
 ### Added
