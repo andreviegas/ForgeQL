@@ -9,11 +9,12 @@
 
 use std::sync::Arc;
 
+use crate::auth::{Principal, TokenStore};
 use axum::Router;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::Json;
 use axum::routing::{get, post};
-use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::compact;
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::ir::ForgeQLIR;
@@ -30,6 +31,8 @@ pub(crate) struct AppState {
     /// The `ForgeQL` engine. Behind an async mutex because `execute` takes
     /// `&mut self` while axum handlers run concurrently.
     pub(crate) engine: Arc<TokioMutex<ForgeQLEngine>>,
+    /// Bearer-token to principal lookup used to authorise each request.
+    pub(crate) auth: Arc<TokenStore>,
 }
 
 /// Build the application router.
@@ -49,7 +52,11 @@ async fn health() -> Json<Value> {
 ///
 /// Supports `tools/call` for the `run_fql` tool only. Any other method or tool
 /// returns a JSON-RPC error.
-async fn mcp_post(State(state): State<AppState>, Json(req): Json<Value>) -> Json<Value> {
+async fn mcp_post(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<Value>,
+) -> Json<Value> {
     let id = req.get("id").cloned().unwrap_or(Value::Null);
     let method = req
         .get("method")
@@ -79,9 +86,10 @@ async fn mcp_post(State(state): State<AppState>, Json(req): Json<Value>) -> Json
     let session_id = args.get("session_id").and_then(Value::as_str);
     let format = args.get("format").and_then(Value::as_str).unwrap_or("CSV");
 
-    debug!(%fql, ?session_id, %format, "run_fql");
+    let principal = state.auth.resolve(bearer_token(&headers).as_deref());
+    debug!(%fql, ?session_id, %format, user = %principal.user, "run_fql");
 
-    match execute_fql(&state.engine, fql, session_id, format).await {
+    match execute_fql(&state.engine, &principal, fql, session_id, format).await {
         Ok((text, new_session)) => {
             let mut result = json!({
                 "content": [{ "type": "text", "text": text }],
@@ -93,6 +101,23 @@ async fn mcp_post(State(state): State<AppState>, Json(req): Json<Value>) -> Json
             Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
         }
         Err(msg) => Json(rpc_error(&id, -32603, &msg)),
+    }
+}
+
+/// Extract a bearer token from the `Authorization` header, if present.
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    let token = value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("bearer "))?
+        .trim();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_string())
     }
 }
 
@@ -113,6 +138,7 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> Value {
 /// are rejected — sources are administrator-managed.
 async fn execute_fql(
     engine: &TokioMutex<ForgeQLEngine>,
+    principal: &Principal,
     fql: &str,
     session_id: Option<&str>,
     format: &str,
@@ -122,20 +148,22 @@ async fn execute_fql(
         return Err("empty FQL statement".to_string());
     }
 
-    for (_, op) in &ops {
-        if matches!(
-            op,
-            ForgeQLIR::CreateSource { .. } | ForgeQLIR::RefreshSource { .. }
-        ) {
-            return Err(
-                "CREATE SOURCE and REFRESH SOURCE are not permitted via MCP; \
+    // Source-management commands are reserved for admin principals. Normal and
+    // anonymous callers may only connect to and query existing sources.
+    if !principal.is_admin() {
+        for (_, op) in &ops {
+            if matches!(
+                op,
+                ForgeQLIR::CreateSource { .. } | ForgeQLIR::RefreshSource { .. }
+            ) {
+                return Err("CREATE SOURCE and REFRESH SOURCE require an admin token; \
                         use USE to connect to an existing source"
-                    .to_string(),
-            );
+                    .to_string());
+            }
         }
     }
 
-    let user_id = auth(AuthContext::Mcp);
+    let user_id = principal.user.as_str();
     let coords = session_id
         .map(SessionCoords::from_session_id)
         .transpose()

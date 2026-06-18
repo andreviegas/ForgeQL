@@ -39,6 +39,10 @@ struct Cli {
     /// Output format requested from the server.
     #[arg(long, default_value = "CSV", value_parser = ["CSV", "JSON"])]
     format: String,
+
+    /// Bearer token sent as `Authorization: Bearer <token>` for authenticated commands.
+    #[arg(long, env = "FORGEQL_TOKEN")]
+    token: Option<String>,
 }
 
 /// HTTP MCP client. Holds the base URL and the current session token.
@@ -46,15 +50,18 @@ struct Client {
     base_url: String,
     http: reqwest::blocking::Client,
     format: String,
+    /// Bearer token sent on every request, if configured.
+    token: Option<String>,
     session_id: RefCell<Option<String>>,
 }
 
 impl Client {
-    fn new(base_url: String, format: String) -> Self {
+    fn new(base_url: String, format: String, token: Option<String>) -> Self {
         Self {
             base_url,
             http: reqwest::blocking::Client::new(),
             format,
+            token,
             session_id: RefCell::new(None),
         }
     }
@@ -73,10 +80,14 @@ impl Client {
             "params": { "name": "run_fql", "arguments": arguments },
         });
 
-        let response: Value = self
+        let mut builder = self
             .http
             .post(format!("{}/mcp", self.base_url))
-            .json(&request)
+            .json(&request);
+        if let Some(token) = self.token.as_ref() {
+            builder = builder.bearer_auth(token);
+        }
+        let response: Value = builder
             .send()
             .with_context(|| format!("sending request to {}", self.base_url))?
             .json()
@@ -119,7 +130,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let scheme = if cli.tls { "https" } else { "http" };
     let base_url = format!("{scheme}://{}:{}", cli.host, cli.port);
-    let client = Client::new(base_url, cli.format.clone());
+    let client = Client::new(base_url, cli.format.clone(), cli.token.clone());
 
     // One-shot mode: run a single statement and exit.
     if let Some(stmt) = cli.execute.as_deref() {

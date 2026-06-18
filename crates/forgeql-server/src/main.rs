@@ -11,6 +11,7 @@
 
 mod http;
 
+mod auth;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -25,6 +26,7 @@ use forgeql_lang_rust::RustLanguage;
 use tokio::sync::Mutex as TokioMutex;
 use tracing::info;
 
+use crate::auth::TokenStore;
 use crate::http::AppState;
 
 /// Command-line arguments for `forgeql-server`.
@@ -46,6 +48,11 @@ struct Cli {
     /// Verbosity: -v info, -vv debug, -vvv trace.
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
+
+    /// Path to a JSON auth-token file mapping bearer tokens to a user and role.
+    /// Without it, every request is anonymous and CREATE/REFRESH SOURCE is rejected.
+    #[arg(long, env = "FORGEQL_AUTH_FILE")]
+    auth_file: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
@@ -81,8 +88,20 @@ async fn main() -> Result<()> {
 
     let engine = ForgeQLEngine::new(data_dir.clone(), lang_registry)
         .with_context(|| format!("initialising engine with data_dir '{}'", data_dir.display()))?;
+
+    let auth = if let Some(ref path) = cli.auth_file {
+        let store = TokenStore::load_from_file(path)
+            .with_context(|| format!("loading auth file '{}'", path.display()))?;
+        info!(tokens = store.token_count(), path = %path.display(), "loaded auth tokens");
+        store
+    } else {
+        info!("no --auth-file given; all requests are anonymous (no admin access)");
+        TokenStore::empty()
+    };
+    let admin_tokens = auth.token_count();
     let state = AppState {
         engine: Arc::new(TokioMutex::new(engine)),
+        auth: Arc::new(auth),
     };
 
     let app = http::router(state);
@@ -94,7 +113,8 @@ async fn main() -> Result<()> {
     info!(
         %addr,
         data_dir = %data_dir.display(),
-        "forgeql-server listening — POST /mcp, GET /health (no auth yet)"
+        admin_tokens,
+        "forgeql-server listening — POST /mcp, GET /health"
     );
 
     axum::serve(listener, app).await.context("server error")?;
