@@ -6,6 +6,15 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.77.2] — 2026-06-18 — feat(server): bearer-token authentication with admin-gated source management
+
+### Added
+- `crates/forgeql-server/src/auth.rs` — file-backed `TokenStore` mapping bearer tokens to a `Principal` (user + role); loaded at startup via `--auth-file`/`FORGEQL_AUTH_FILE`
+- `Authorization: Bearer <token>` header parsing on every MCP request; unknown or missing token resolves to anonymous/normal role
+- Admin tokens may run `CREATE SOURCE` and `REFRESH SOURCE`; normal and anonymous callers receive a clear rejection instead of a blanket ban
+- `forgeql-client` gains `--token`/`FORGEQL_TOKEN` to send a bearer token on each request
+- `forgeql-core` and the `forgeql` binary are untouched — auth applies only to the HTTP server
+
 ## [0.77.1] — 2026-06-18 — fix(index): attribute span folding and guard detection are now language-agnostic
 
 ### Fixed
