@@ -283,7 +283,7 @@ fn open_repo(path: &Path) -> Result<Repository> {
 /// Return the local branch name currently checked out in the worktree whose
 /// working directory is `wt_path`, or `None` if the HEAD is detached or the
 /// repository cannot be opened.
-fn branch_of_worktree(wt_path: &Path) -> Option<String> {
+pub(crate) fn branch_of_worktree(wt_path: &Path) -> Option<String> {
     let repo = Repository::open(wt_path).ok()?;
     let head = repo.head().ok()?;
     if !head.is_branch() {
@@ -413,6 +413,39 @@ mod tests {
                 .iter()
                 .all(|w| w.name != "teardowntest"),
             "teardown must remove the git worktree registration"
+        );
+    }
+
+    /// Regression: explicit teardown must delete the real `fql/…` session
+    /// branch created by `USE … AS`, not just the worktree. Reconstructing the
+    /// name as `forgeql/<wt_name>` never matched the custom branch, so the
+    /// branch was orphaned in the bare repo (accumulating frozen/gt-* refs).
+    #[test]
+    fn teardown_deletes_custom_session_branch() {
+        let tmp = tempdir().unwrap();
+        let bare = make_bare_repo(tmp.path());
+        let branch = default_branch(&bare);
+        // Mirror the engine: worktree NAME is the dotted `worktree_dir()`, while
+        // the checked-out BRANCH is the slashed `git_branch()`.
+        let wt_name = "forgeql-pub.frozen.gt-1-rw-0";
+        let wt_path = tmp.path().join(wt_name);
+        let session_branch = "fql/anonymous/forgeql-pub/frozen/gt-1-rw-0";
+
+        create(&bare, wt_name, &branch, &wt_path, Some(session_branch)).unwrap();
+        let repo = Repository::open_bare(&bare).unwrap();
+        assert!(
+            repo.find_branch(session_branch, BranchType::Local).is_ok(),
+            "custom session branch must exist after create"
+        );
+        drop(repo);
+
+        crate::session::teardown_worktree(tmp.path(), &wt_path, wt_name);
+
+        assert!(!wt_path.exists(), "teardown must remove the worktree dir");
+        let repo = Repository::open_bare(&bare).unwrap();
+        assert!(
+            repo.find_branch(session_branch, BranchType::Local).is_err(),
+            "teardown must delete the custom session branch, not orphan it"
         );
     }
 

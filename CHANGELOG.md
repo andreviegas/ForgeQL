@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.77.4] — 2026-06-19 — fix(session): teardown deletes the real session branch instead of orphaning it
+
+### Fixed
+- `session::teardown_worktree` deleted a reconstructed `forgeql/<wt_name>` branch that never matched the actual `fql/{user}/{source}/{branch}/{alias}` ref created by `USE … AS`, so every torn-down session left its branch behind in the bare repo (the accumulating `frozen/gt-*` refs). It now reads the worktree's real checked-out branch via `branch_of_worktree` before removal and deletes that exact ref, falling back to the legacy name only when HEAD is detached. The server's TTL-eviction path still intentionally keeps named branches for review.
+- Regression test `teardown_deletes_custom_session_branch` covers the `fql/…` custom-branch scheme that the prior test missed.
+
 ## [0.77.3] — 2026-06-19 — test(golden): add 16 enrichment golden suites
 
 ### Added

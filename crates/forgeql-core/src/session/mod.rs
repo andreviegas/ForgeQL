@@ -110,6 +110,13 @@ pub fn read_sentinel(worktree_path: &Path) -> Option<SessionSentinel> {
 /// [`SessionCoords::worktree_dir`]. This is the single implementation shared by
 /// startup pruning and explicit caller-driven cleanup.
 pub fn teardown_worktree(data_dir: &Path, wt_path: &Path, wt_name: &str) {
+    // The session branch follows the `fql/{user}/{source}/{branch}/{alias}`
+    // scheme and CANNOT be reconstructed from `wt_name` (which flattens every
+    // `/` to `-` and omits the user). Read the actual checked-out branch from
+    // the live worktree now, before `remove` deletes the working directory —
+    // otherwise the branch is orphaned in the bare repo.
+    let session_branch = crate::git::worktree::branch_of_worktree(wt_path);
+
     if let Ok(repo_entries) = std::fs::read_dir(data_dir) {
         for re in repo_entries.flatten() {
             let rpath = re.path();
@@ -117,7 +124,14 @@ pub fn teardown_worktree(data_dir: &Path, wt_path: &Path, wt_name: &str) {
                 if let Err(e) = crate::git::worktree::remove(&rpath, wt_name) {
                     warn!(%wt_name, repo = %rpath.display(), %e, "teardown: worktree remove failed");
                 }
-                if let Err(e) = crate::git::worktree::delete_session_branch(&rpath, wt_name) {
+                // Delete the exact branch git had checked out. Fall back to the
+                // legacy `forgeql/<wt_name>` name only when HEAD was detached or
+                // unreadable, preserving the original behaviour for that case.
+                let branch_result = session_branch.as_ref().map_or_else(
+                    || crate::git::worktree::delete_session_branch(&rpath, wt_name),
+                    |branch| crate::git::worktree::delete_branch(&rpath, branch),
+                );
+                if let Err(e) = branch_result {
                     warn!(%wt_name, repo = %rpath.display(), %e, "teardown: branch delete failed");
                 }
             }
