@@ -1,0 +1,25 @@
+{
+  "suite": "enrich_decl_distance",
+  "description": "Declaration-distance enrichment: decl_distance, decl_far_count, has_unused_reassign (dead store). Grounded on forgeql-pub.frozen — Rust source for distance metrics, C/C++ fixture for the dead-store pattern.",
+  "cases": [
+    { "name": "decl_far_count_function", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/ast/index/file_indexer.rs' WHERE name='collect_nodes' WHERE decl_far_count=21 LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "collect_nodes", "line": 358 }] } },
+
+    { "name": "decl_distance_exact", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/ast/index/file_indexer.rs' WHERE name='collect_nodes' WHERE decl_distance=789 LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "collect_nodes", "line": 358 }] } },
+
+    { "name": "has_unused_reassign_dead_store", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='function' WHERE has_unused_reassign='true' LIMIT 10",
+      "assert": { "row_count": 1, "rows": [{ "name": "deadStorePattern", "line": 429 }] } },
+
+    { "name": "negative_no_unused_reassign_in_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE has_unused_reassign='true' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } },
+
+    { "name": "negative_no_far_decl_in_small_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE decl_far_count>=5 LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } }
+  ]
+}

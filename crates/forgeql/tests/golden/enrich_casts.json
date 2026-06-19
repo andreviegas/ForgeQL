@@ -1,0 +1,37 @@
+{
+  "suite": "enrich_casts",
+  "description": "Cast enrichment: cast_style (as_cast/c_style/static_cast/dynamic_cast/reinterpret_cast), cast_target_type, cast_safety (safe/moderate/unsafe). Grounded on forgeql-pub.frozen — Rust 'as' casts plus C/C++ fixture casts.",
+  "cases": [
+    { "name": "as_cast_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/storage/columnar/segment_reader.rs' WHERE fql_kind='cast' WHERE cast_style='as_cast' ORDER BY line ASC LIMIT 100",
+      "assert": { "row_count": 25, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "rows": [{ "name": "as_cast<usize>", "line": 134 }, { "name": "as_cast<usize>", "line": 144 }, { "name": "as_cast<usize>", "line": 145 }] } },
+
+    { "name": "c_style_cast_count", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE fql_kind='cast' WHERE cast_style='c_style' LIMIT 100",
+      "assert": { "row_count": 74, "all_same": "_file" } },
+
+    { "name": "static_cast_global", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='cast' WHERE cast_style='static_cast' LIMIT 100",
+      "assert": { "row_count": 3 } },
+
+    { "name": "cast_safety_safe", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='cast' WHERE cast_safety='safe' ORDER BY line ASC LIMIT 10",
+      "assert": { "row_count": 4, "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "_file", "count": 2 }, "rows": [{ "name": "static_cast<ErrorSensor>", "line": 160 }, { "name": "static_cast<uint32_t>", "line": 234 }, { "name": "static_cast<unsigned int>", "line": 241 }, { "name": "dynamic_cast<void*>", "line": 242 }] } },
+
+    { "name": "cast_safety_unsafe_global", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='cast' WHERE cast_safety='unsafe' LIMIT 100",
+      "assert": { "row_count": 81 } },
+
+    { "name": "cast_target_type_u32", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='cast' WHERE cast_target_type='u32' LIMIT 100",
+      "assert": { "row_count": 7 } },
+
+    { "name": "reinterpret_cast_global", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='cast' WHERE cast_style='reinterpret_cast' LIMIT 100",
+      "assert": { "row_count": 1 } },
+
+    { "name": "negative_no_c_style_in_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/storage/columnar/segment_reader.rs' WHERE fql_kind='cast' WHERE cast_style='c_style' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } }
+  ]
+}

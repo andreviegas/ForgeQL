@@ -1,0 +1,21 @@
+{
+  "suite": "enrich_scope",
+  "description": "ScopeEnricher — scope (file/local), is_exported, binding_kind on forgeql-pub.frozen (node_id.rs). storage (static/extern) is C-specific and covered in a C-context suite.",
+  "cases": [
+    { "name": "file_scope_exported_const", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='DEFAULT_SEGMENT_PREFIX_HEX' WHERE scope='file' WHERE is_exported='true' LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "DEFAULT_SEGMENT_PREFIX_HEX", "line": 15 }] } },
+    { "name": "binding_kind_variable", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='DEFAULT_SEGMENT_PREFIX_HEX' WHERE binding_kind='variable' LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "DEFAULT_SEGMENT_PREFIX_HEX", "line": 15 }] } },
+    { "name": "local_scope_count", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='variable' WHERE scope='local' LIMIT 100",
+      "assert": { "total": 24, "row_count": 24 } },
+    { "name": "file_scope_count", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='variable' WHERE scope='file' LIMIT 100",
+      "assert": { "total": 1, "row_count": 1 } },
+    { "name": "negative_const_not_local", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='DEFAULT_SEGMENT_PREFIX_HEX' WHERE scope='local' LIMIT 5",
+      "assert": { "row_count": 0 } }
+  ]
+}

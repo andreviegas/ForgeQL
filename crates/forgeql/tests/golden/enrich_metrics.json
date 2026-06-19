@@ -1,0 +1,27 @@
+{
+  "suite": "enrich_metrics",
+  "description": "MetricsEnricher — param_count, lines, return_count, branch_count, member_count, and goto_count (0 in Rust), on forgeql-pub.frozen. throw_count/goto_count C-specifics covered in a C-context suite.",
+  "cases": [
+    { "name": "param_count", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='format_node_id' WHERE param_count=3 LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "format_node_id", "line": 85 }] } },
+    { "name": "lines_span", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='split_node_offset' WHERE lines=29 LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "split_node_offset", "line": 149 }] } },
+    { "name": "return_count", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='split_node_offset' WHERE return_count=4 LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "split_node_offset", "line": 149 }] } },
+    { "name": "zero_return", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='format_node_id' WHERE return_count=0 LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "format_node_id", "line": 85 }] } },
+    { "name": "branch_count", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='split_node_offset' WHERE branch_count=4 LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "split_node_offset", "line": 149 }] } },
+    { "name": "member_count_struct", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/result.rs' WHERE name='SessionStats' WHERE member_count=17 LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "SessionStats", "line": 456 }] } },
+    { "name": "negative_no_goto_in_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE goto_count>=1 LIMIT 5",
+      "assert": { "row_count": 0 } }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "suite": "enrich_shadow",
+  "description": "Shadow-detection enrichment: has_shadow, shadow_count, shadow_vars. Grounded on forgeql-pub.frozen — Rust source shadowing (multiple files) plus a C/C++ fixture multi-shadow function.",
+  "cases": [
+    { "name": "shadow_count_max", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='function' WHERE has_shadow='true' WHERE shadow_count=2 LIMIT 10",
+      "assert": { "row_count": 1, "rows": [{ "name": "shadowMultiple", "line": 518 }] } },
+
+    { "name": "shadow_in_rust_guard_utils", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/ast/enrich/guard_utils.rs' WHERE fql_kind='function' WHERE has_shadow='true' ORDER BY line ASC LIMIT 10",
+      "assert": { "row_count": 3, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "line", "count": 3 }, "rows": [{ "name": "parse_condition_text", "line": 380 }, { "name": "parse_cfg_condition", "line": 519 }, { "name": "cfg_simple_ident", "line": 587 }] } },
+
+    { "name": "shadow_in_rust_query", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/ast/query.rs' WHERE fql_kind='function' WHERE has_shadow='true' ORDER BY line ASC LIMIT 10",
+      "assert": { "row_count": 2, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "rows": [{ "name": "glob_matches", "line": 196 }, { "name": "like_match", "line": 267 }] } },
+
+    { "name": "negative_no_shadow_in_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE has_shadow='true' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } }
+  ]
+}

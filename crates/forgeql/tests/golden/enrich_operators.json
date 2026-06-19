@@ -1,0 +1,41 @@
+{
+  "suite": "enrich_operators",
+  "description": "Operator enrichment: increment_style/increment_op, compound_op, shift_direction/shift_amount, operator_category. Grounded on forgeql-pub.frozen (C/C++ enrichment fixtures provide clean increment/compound_assignment/shift_expression nodes; Rust negative).",
+  "cases": [
+    { "name": "increment_prefix", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE fql_kind='increment' WHERE increment_style='prefix' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count": 2, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "rows": [{ "name": "val", "line": 158 }, { "name": "val", "line": 159 }] } },
+
+    { "name": "increment_postfix_global", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='increment' WHERE increment_style='postfix' LIMIT 100",
+      "assert": { "row_count": 23 } },
+
+    { "name": "increment_op_decrement", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE fql_kind='increment' WHERE increment_op='--' LIMIT 100",
+      "assert": { "row_count": 8, "all_same": "_file" } },
+
+    { "name": "compound_assignment_in_file", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE compound_op != '' ORDER BY line ASC LIMIT 100",
+      "assert": { "row_count": 9, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "line", "count": 9 }, "rows": [{ "name": "val", "line": 166 }, { "name": "val", "line": 167 }, { "name": "val", "line": 168 }] } },
+
+    { "name": "compound_op_plus_global", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE compound_op='+=' LIMIT 100",
+      "assert": { "row_count": 3 } },
+
+    { "name": "shift_expression_in_file", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE shift_direction != '' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count": 2, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "rows": [{ "name": "val << 4", "line": 176 }, { "name": "val >> 2", "line": 177 }] } },
+
+    { "name": "operator_category_bitwise", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE operator_category='bitwise' LIMIT 100",
+      "assert": { "row_count": 16 } },
+
+    { "name": "operator_category_arithmetic", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE operator_category='arithmetic' LIMIT 100",
+      "assert": { "row_count": 7 } },
+
+    { "name": "negative_no_increment_in_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='increment' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } }
+  ]
+}

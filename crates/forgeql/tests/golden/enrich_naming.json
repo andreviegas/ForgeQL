@@ -1,0 +1,21 @@
+{
+  "suite": "enrich_naming",
+  "description": "NamingEnricher — naming-style classification + name_length, on forgeql-pub.frozen (node_id.rs).",
+  "cases": [
+    { "name": "snake_case_function", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='parse_offset' WHERE naming='snake_case' LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "parse_offset", "line": 179 }] } },
+    { "name": "pascal_case_type", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='NodeOffsetSplit' WHERE naming='PascalCase' LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "NodeOffsetSplit", "line": 135 }] } },
+    { "name": "upper_snake_const", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='DEFAULT_SEGMENT_PREFIX_HEX' WHERE naming='UPPER_SNAKE' LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "DEFAULT_SEGMENT_PREFIX_HEX", "line": 15 }] } },
+    { "name": "name_length_filter", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='parse_offset' WHERE name_length=12 LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "parse_offset", "line": 179 }] } },
+    { "name": "negative_snake_not_pascal", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='parse_offset' WHERE naming='PascalCase' LIMIT 5",
+      "assert": { "row_count": 0 } }
+  ]
+}

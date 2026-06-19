@@ -1,0 +1,25 @@
+{
+  "suite": "enrich_redundancy",
+  "description": "Redundancy enrichment: has_repeated_condition_calls, duplicate_condition, null_check_count. Grounded on forgeql-pub.frozen (Rust source for repeated-call/duplicate-condition; C/C++ fixtures for null-check counts).",
+  "cases": [
+    { "name": "has_repeated_condition_calls_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/ast/enrich/casts.rs' WHERE name='count_casts' WHERE has_repeated_condition_calls='true' LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "count_casts", "line": 189 }] } },
+
+    { "name": "duplicate_condition_pair", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/ast/enrich/escape.rs' WHERE duplicate_condition='true' WHERE enclosing_fn='build_alias_map' ORDER BY line ASC LIMIT 10",
+      "assert": { "row_count": 2, "all_same": "name", "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "line", "count": 2 }, "rows": [{ "name": "a&&!b", "line": 484 }, { "name": "a&&!b", "line": 512 }] } },
+
+    { "name": "null_check_count_functions", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='function' WHERE null_check_count>=2 ORDER BY line ASC LIMIT 100",
+      "assert": { "row_count": 3, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "rows": [{ "name": "controlFlowPatterns", "line": 58 }, { "name": "redundancyPatterns", "line": 257 }, { "name": "dupLogicPatterns", "line": 295 }] } },
+
+    { "name": "null_check_count_exact", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='function' WHERE null_check_count=4 ORDER BY line ASC LIMIT 100",
+      "assert": { "row_count": 2, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "rows": [{ "name": "redundancyPatterns", "line": 257 }, { "name": "dupLogicPatterns", "line": 295 }] } },
+
+    { "name": "negative_no_duplicate_condition_in_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE duplicate_condition='true' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } }
+  ]
+}

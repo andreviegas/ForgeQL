@@ -1,0 +1,24 @@
+{
+  "suite": "enrich_comments",
+  "description": "CommentEnricher — has_doc (function preceded by a doc comment) + comment_style, on forgeql-pub.frozen (node_id.rs).",
+  "cases": [
+    { "name": "has_doc_true", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='sha256_of_path' WHERE has_doc='true' LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "sha256_of_path", "line": 29 }] } },
+    { "name": "has_doc_false", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' WHERE has_doc='false' LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "parse_offset", "line": 179 }] } },
+    { "name": "doc_line_comments", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='comment' WHERE comment_style='doc_line' LIMIT 100",
+      "assert": { "total": 68, "row_count": 68 } },
+    { "name": "inner_doc_comments", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='comment' WHERE comment_style='inner_doc' LIMIT 100",
+      "assert": { "total": 11, "row_count": 11 } },
+    { "name": "line_comments", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='comment' WHERE comment_style='line' LIMIT 100",
+      "assert": { "total": 3, "row_count": 3 } },
+    { "name": "negative_no_doc_block", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='comment' WHERE comment_style='doc_block' LIMIT 100",
+      "assert": { "row_count": 0, "total": 0 } }
+  ]
+}

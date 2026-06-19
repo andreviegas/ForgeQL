@@ -6,6 +6,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.77.3] — 2026-06-19 — test(golden): add 16 enrichment golden suites
+
+### Added
+- 16 data-driven enrichment golden suites under `crates/forgeql/tests/golden/*.json`, one per enricher: `enrich_naming`, `enrich_comments`, `enrich_scope`, `enrich_metrics`, `enrich_control_flow`, `enrich_operators`, `enrich_casts`, `enrich_redundancy`, `enrich_members`, `enrich_decl_distance`, `enrich_escape`, `enrich_shadow`, `enrich_unused_param`, `enrich_fallthrough`, `enrich_recursion`, `enrich_todo`
+- Each suite queries frozen `forgeql-pub` branches and asserts enrichment-field classification, filtering and negative cases against the golden harness v2
+
 ## [0.77.2] — 2026-06-18 — feat(server): bearer-token authentication with admin-gated source management
 
 ### Added

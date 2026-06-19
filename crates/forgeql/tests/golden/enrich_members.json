@@ -1,0 +1,25 @@
+{
+  "suite": "enrich_members",
+  "description": "Member enrichment: enclosing_type (qualified-name resolution), member_kind (field/method), visibility (public/private/protected). Grounded on forgeql-pub.frozen — Rust impl methods via enclosing_type, C/C++ fixtures for member_kind/visibility.",
+  "cases": [
+    { "name": "enclosing_type_methods", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='function' WHERE enclosing_type='SegmentReader' LIMIT 100",
+      "assert": { "row_count": 33, "all_same": "_file" } },
+
+    { "name": "member_kind_method", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='field' WHERE member_kind='method' ORDER BY line ASC LIMIT 10",
+      "assert": { "row_count": 2, "distinct": { "by": "_file", "count": 2 }, "ordered": { "by": "line", "dir": "asc" }, "rows": [{ "name": "start", "line": 149 }, { "name": "declaredMethod", "line": 223 }] } },
+
+    { "name": "struct_public_fields", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/result.rs' WHERE fql_kind='field' WHERE name MATCHES '^mem_' WHERE visibility='public' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count": 6, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "line", "count": 6 }, "rows": [{ "name": "mem_total_bytes", "line": 477 }, { "name": "mem_rows_bytes", "line": 479 }] } },
+
+    { "name": "visibility_protected", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='field' WHERE visibility='protected' LIMIT 10",
+      "assert": { "row_count": 1, "rows": [{ "name": "protectedField", "line": 227 }] } },
+
+    { "name": "negative_no_method_field_in_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/result.rs' WHERE fql_kind='field' WHERE member_kind='method' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } }
+  ]
+}

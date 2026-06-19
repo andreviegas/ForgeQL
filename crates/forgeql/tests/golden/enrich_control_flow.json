@@ -1,0 +1,45 @@
+{
+  "suite": "enrich_control_flow",
+  "description": "Control-flow enrichment: condition_tests, paren_depth, for_style, mixed_logic, dup_logic, has_assignment_in_condition, has_catch_all/catch_all_kind. Grounded on forgeql-pub.frozen (Rust source + C/C++ fixtures).",
+  "cases": [
+    { "name": "condition_tests_high", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/ast/enrich/control_flow.rs' WHERE fql_kind='if' WHERE condition_tests=6 ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count": 1, "all_same": "_file", "rows": [{ "name": "a||b||c||d||e||f", "line": 442 }] } },
+
+    { "name": "paren_depth_nested", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-lang-rust/src/macro_expand.rs' WHERE fql_kind='if' WHERE paren_depth=3 ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count": 1, "rows": [{ "line": 187 }] } },
+
+    { "name": "for_style_range", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/ast/enrich/control_flow.rs' WHERE fql_kind='for' WHERE for_style='range' ORDER BY line ASC LIMIT 100",
+      "assert": { "row_count": 11, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "_file", "count": 1 }, "rows": [{ "line": 152 }, { "line": 160 }] } },
+
+    { "name": "for_style_traditional", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='for' WHERE for_style='traditional' ORDER BY line ASC LIMIT 100",
+      "assert": { "row_count": 3, "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "_file", "count": 2 }, "all_same": "name", "rows": [{ "name": "a<b", "line": 39 }, { "name": "a<b", "line": 99 }, { "name": "a<b", "line": 512 }] } },
+
+    { "name": "mixed_logic", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='if' WHERE mixed_logic='true' ORDER BY line ASC LIMIT 100",
+      "assert": { "row_count": 2, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "rows": [{ "name": "(a>b&&c<d||e==f)", "line": 65 }, { "name": "(a>b&&c<d||e!=a)", "line": 116 }] } },
+
+    { "name": "dup_logic", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE dup_logic='true' WHERE enclosing_fn='dupLogicPatterns' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count": 4, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "line", "count": 4 }, "rows": [{ "line": 297 }, { "line": 301 }, { "line": 305 }, { "line": 309 }] } },
+
+    { "name": "has_assignment_in_condition", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE fql_kind='if' WHERE has_assignment_in_condition='true' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count": 1, "rows": [{ "line": 76 }] } },
+
+    { "name": "has_catch_all_default", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='switch' WHERE has_catch_all='true' WHERE catch_all_kind='default' LIMIT 100",
+      "assert": { "row_count": 9, "distinct": { "by": "_file", "count": 3 } } },
+
+    { "name": "negative_no_assignment_in_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='if' WHERE has_assignment_in_condition='true' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } },
+
+    { "name": "negative_no_dup_logic_in_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE dup_logic='true' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } }
+  ]
+}

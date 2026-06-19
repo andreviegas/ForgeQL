@@ -1,0 +1,21 @@
+{
+  "suite": "enrich_todo",
+  "description": "Todo-marker enrichment: has_todo, todo_count, todo_tags (sorted unique TODO/FIXME/HACK/XXX). Grounded on forgeql-pub.frozen — Rust source markers plus C/C++ fixture todo patterns.",
+  "cases": [
+    { "name": "todo_in_cpp_fixture", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE fql_kind='function' WHERE has_todo='true' WHERE name MATCHES '^todo' ORDER BY line ASC LIMIT 10",
+      "assert": { "row_count": 3, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "line", "count": 3 }, "rows": [{ "name": "todoSingle", "line": 699 }, { "name": "todoMultiple", "line": 705 }, { "name": "todoRepeated", "line": 719 }] } },
+
+    { "name": "todo_count_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/ast/enrich/todo.rs' WHERE fql_kind='function' WHERE name='marker_word_boundary' WHERE todo_count=3 LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "marker_word_boundary", "line": 122 }] } },
+
+    { "name": "todo_tags_multi_marker", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='function' WHERE has_todo='true' WHERE todo_tags='FIXME,HACK,TODO' ORDER BY line ASC LIMIT 10",
+      "assert": { "row_count": 2, "distinct": { "by": "_file", "count": 2 }, "ordered": { "by": "line", "dir": "asc" }, "rows": [{ "name": "todoMultiple", "line": 705 }, { "name": "todo_multiple_markers", "line": 3939 }] } },
+
+    { "name": "negative_no_todo_in_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE has_todo='true' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } }
+  ]
+}

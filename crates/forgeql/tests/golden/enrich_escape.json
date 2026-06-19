@@ -1,0 +1,25 @@
+{
+  "suite": "enrich_escape",
+  "description": "Escape-analysis enrichment: has_escape, escape_count, escape_tier (1 return / 2 address-of / 3 pointer-array alias), escape_kinds, escape_vars. Grounded on forgeql-pub.frozen — Rust source escapes plus C/C++ fixture escape patterns.",
+  "cases": [
+    { "name": "has_escape_all", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='function' WHERE has_escape='true' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count": 8, "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "_file", "count": 4 }, "rows": [{ "name": "mcp_post", "line": 52 }, { "name": "extra_rows", "line": 55 }, { "name": "escaping", "line": 77 }, { "name": "extract_template_type", "line": 159 }] } },
+
+    { "name": "escape_in_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/ast/enrich/casts.rs' WHERE fql_kind='function' WHERE has_escape='true' ORDER BY line ASC LIMIT 10",
+      "assert": { "row_count": 2, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "rows": [{ "name": "extra_rows", "line": 55 }, { "name": "extract_template_type", "line": 159 }] } },
+
+    { "name": "escape_tier_3_alias", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='function' WHERE has_escape='true' WHERE escape_tier='3' ORDER BY line ASC LIMIT 10",
+      "assert": { "row_count": 2, "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "_file", "count": 2 }, "rows": [{ "name": "escaping", "line": 77 }, { "name": "escapeIndirectAlias", "line": 468 }] } },
+
+    { "name": "escape_tier_1_count", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='function' WHERE has_escape='true' WHERE escape_tier='1' LIMIT 20",
+      "assert": { "row_count": 5 } },
+
+    { "name": "negative_no_escape_in_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE has_escape='true' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } }
+  ]
+}

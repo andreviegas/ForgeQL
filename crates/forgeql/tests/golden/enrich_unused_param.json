@@ -1,0 +1,21 @@
+{
+  "suite": "enrich_unused_param",
+  "description": "Unused-parameter enrichment: has_unused_param, unused_param_count, unused_params. Grounded on forgeql-pub.frozen — Rust source (stub module has trait stubs with unused params) plus a C/C++ fixture.",
+  "cases": [
+    { "name": "unused_param_in_rust_stub", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/storage/stub.rs' WHERE fql_kind='function' WHERE has_unused_param='true' ORDER BY line ASC LIMIT 100",
+      "assert": { "row_count": 11, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "rows": [{ "name": "find_symbols", "line": 38 }, { "name": "find_usages", "line": 42 }, { "name": "resolve_symbol", "line": 51 }] } },
+
+    { "name": "unused_param_pair_in_node_id", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE has_unused_param='true' ORDER BY line ASC LIMIT 10",
+      "assert": { "row_count": 2, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "line", "count": 2 }, "rows": [{ "name": "format_node_id", "line": 85 }, { "name": "parse_offset", "line": 179 }] } },
+
+    { "name": "unused_param_count_cpp", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE fql_kind='function' WHERE name='unusedParamAll' WHERE unused_param_count=3 LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "unusedParamAll", "line": 570 }] } },
+
+    { "name": "negative_no_high_unused_param", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='function' WHERE has_unused_param='true' WHERE unused_param_count>=5 LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "suite": "enrich_fallthrough",
+  "description": "Fallthrough-detection enrichment: has_fallthrough, fallthrough_count. Grounded on forgeql-pub.frozen — C/C++ fixture switch fallthrough patterns plus Rust match-arm fallthrough counts.",
+  "cases": [
+    { "name": "fallthrough_in_cpp_fixture", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE fql_kind='function' WHERE name MATCHES '^fallthrough' WHERE has_fallthrough='true' ORDER BY line ASC LIMIT 10",
+      "assert": { "row_count": 2, "all_same": "_file", "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "line", "count": 2 }, "rows": [{ "name": "fallthroughOne", "line": 584 }, { "name": "fallthroughGrouped", "line": 612 }] } },
+
+    { "name": "fallthrough_count_rust", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql-core/src/parser/clauses.rs' WHERE fql_kind='function' WHERE name='parse_clauses' WHERE fallthrough_count=10 LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{ "name": "parse_clauses", "line": 5 }] } },
+
+    { "name": "fallthrough_high_global", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind='function' WHERE has_fallthrough='true' WHERE fallthrough_count>=10 LIMIT 100",
+      "assert": { "row_count": 2, "distinct": { "by": "_file", "count": 2 } } },
+
+    { "name": "negative_fixture_none_no_fallthrough", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/enrichment_patterns.cpp' WHERE fql_kind='function' WHERE name='fallthroughNone' WHERE has_fallthrough='true' LIMIT 5",
+      "assert": { "row_count": 0, "total": 0 } }
+  ]
+}
