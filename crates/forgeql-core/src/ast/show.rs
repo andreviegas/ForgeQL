@@ -156,6 +156,67 @@ pub(crate) fn find_function_node_for_symbol<'t>(
         None
     }
 
+    /// Byte offset of a node's attribute-extended start: walk back over the
+    /// node's contiguous leading decorator siblings. Mirrors `attr_extended_start`
+    /// in `ast/index/file_indexer.rs`, which folds a symbol's stored span back
+    /// over those same siblings. Kept in lock-step with the indexer; the
+    /// `show_body_resolves_attributed_function` regression test guards drift.
+    fn attr_extended_start_byte(
+        node: tree_sitter::Node<'_>,
+        decorator_kind: Option<&str>,
+    ) -> usize {
+        let Some(attr_kind) = decorator_kind else {
+            return node.start_byte();
+        };
+        let mut start = node.start_byte();
+        let mut prev = node.prev_named_sibling();
+        while let Some(sib) = prev {
+            if sib.kind() != attr_kind {
+                break;
+            }
+            start = sib.start_byte();
+            prev = sib.prev_named_sibling();
+        }
+        start
+    }
+
+    /// Find the function-kind node whose attribute-extended start equals
+    /// `def_start`. The exact inverse of the index's span fold: resolves an
+    /// attributed function from its (folded) stored start without ever matching
+    /// an unrelated function.
+    fn find_func_by_attr_extended_start<'n>(
+        cursor: &mut tree_sitter::TreeCursor<'n>,
+        def_start: usize,
+        func_kinds: &[String],
+        decorator_kind: Option<&str>,
+    ) -> Option<tree_sitter::Node<'n>> {
+        let node = cursor.node();
+        // Prune: subtrees ending at/before def_start cannot contain the target.
+        if node.end_byte() <= def_start {
+            return None;
+        }
+        if func_kinds.iter().any(|s| s == node.kind())
+            && attr_extended_start_byte(node, decorator_kind) == def_start
+        {
+            return Some(node);
+        }
+        if cursor.goto_first_child() {
+            loop {
+                if let Some(found) =
+                    find_func_by_attr_extended_start(cursor, def_start, func_kinds, decorator_kind)
+                {
+                    while cursor.goto_parent() {}
+                    return Some(found);
+                }
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+            let _ = cursor.goto_parent();
+        }
+        None
+    }
+
     // First try: standard enclosing-function search.
     if let Some(node) = find_enclosing_function_def(root, def_start, config)
         && hint_line.is_none_or(|ln| node.start_position().row + 1 == ln)
@@ -176,10 +237,25 @@ pub(crate) fn find_function_node_for_symbol<'t>(
 
     // Third try (misparsed-AST fallback): search for a function node that
     // starts on the exact line stored in the index.
-    hint_line.and_then(|ln| {
+    if let Some(node) = hint_line.and_then(|ln| {
         let mut cursor = root.walk();
         find_by_start_line(&mut cursor, ln - 1, config.function_kinds())
-    })
+    }) {
+        return Some(node);
+    }
+
+    // Fourth try (attribute-folded start): the index folds a symbol's span back
+    // over its contiguous leading attribute/decorator siblings, so `def_start`
+    // points at the first attribute — *before* the function node — which the
+    // three searches above all miss. Resolve the function whose own
+    // attribute-extended start equals `def_start`.
+    let mut cursor = root.walk();
+    find_func_by_attr_extended_start(
+        &mut cursor,
+        def_start,
+        config.function_kinds(),
+        config.decorator_kind(),
+    )
 }
 
 /// Find a type node (struct/class/enum) whose `name` field text equals `name`.

@@ -203,3 +203,47 @@ fn show_body_single_language_no_ambiguity() {
     let result = exec(&mut engine, &sid, "SHOW body OF 'foo'");
     assert_show_ok(&result, "show_body");
 }
+
+// -----------------------------------------------------------------------
+// Attribute-folded span resolution
+// -----------------------------------------------------------------------
+
+/// Regression: `SHOW body OF 'fn'` must resolve a function whose indexed span
+/// was folded back over a leading attribute (`#[...]`). Before the four-strategy
+/// `find_function_node_for_symbol`, the resolver searched at the folded
+/// (attribute) start byte and returned "function definition not found in AST"
+/// for every attributed function (`#[test]`, `#[inline]`, `#[must_use]`, ...).
+#[test]
+fn show_body_resolves_attributed_function() {
+    let dir = tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("attr.rs"),
+        "#[inline]\nfn decorated(x: i32) -> i32 {\n    x + 1\n}\n",
+    )
+    .expect("write rs");
+
+    let data_dir = dir.path().join("data");
+    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
+    let sid = engine
+        .register_local_session(dir.path())
+        .expect("register session");
+
+    let result = exec(&mut engine, &sid, "SHOW body OF 'decorated'");
+    match &result {
+        ForgeQLResult::Show(sr) => match &sr.content {
+            forgeql_core::result::ShowContent::Lines { lines, .. } => {
+                let text: String = lines
+                    .iter()
+                    .map(|l| l.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(
+                    text.contains("fn decorated"),
+                    "attributed function body must resolve, got: {text}"
+                );
+            }
+            other => panic!("expected Lines content, got {other:?}"),
+        },
+        other => panic!("expected Show, got {other:?}"),
+    }
+}
