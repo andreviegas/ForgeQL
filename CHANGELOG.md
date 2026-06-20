@@ -6,6 +6,14 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.77.6] — 2026-06-20 — fix(show): SHOW body for attribute-decorated functions; feat(parser): heredoc in COMMIT MESSAGE
+
+### Fixed
+- `SHOW … body` returned "function definition not found in AST" for any function carrying an attribute/decorator (`#[test]`, `#[inline]`, `#[must_use]`, multi-line `#[expect(...)]`, …). The index folds a symbol span back over its contiguous leading attribute siblings (`attr_extended_start`), so the stored start byte points at the attribute rather than the `function_item`, and all three existing resolution strategies missed it. Added a fourth strategy that locates the function-kind node whose own attribute-extended start equals `def_start` — the exact inverse of the index fold — so it never matches an unrelated function. `FIND`, `SHOW outline` and `SHOW context` were unaffected. Regression test: `show_body_resolves_attributed_function`.
+
+### Added
+- `COMMIT MESSAGE` now accepts heredoc syntax, not just a single-quoted string. A commit message containing an apostrophe or single quote (ordinary in prose) previously could not be written through `run_fql` and had to be reworded. `commit_stmt` is now routed through the same `content_value` rule (`heredoc | string_literal`) that the `CHANGE` forms use. Parser test: `parse_commit_message_heredoc_with_apostrophes`.
+
 ## [0.77.5] — 2026-06-20 — fix(tests): parity session id + de-hardcode the session user
 
 ### Fixed
