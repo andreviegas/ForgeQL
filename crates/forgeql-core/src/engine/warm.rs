@@ -240,9 +240,16 @@ pub fn warm_snapshot(
         Ok(())
     })();
 
-    // Best-effort cleanup of the throwaway worktree regardless of outcome.
+    // Best-effort cleanup of the throwaway worktree AND its branch, regardless
+    // of outcome — otherwise every warmed HEAD leaks a `fql/__warm__/…` ref. The
+    // branch name is known exactly here, so pass it through.
     if cleanup_path.exists()
-        && let Err(e) = worktree::remove(&cleanup_repo, &cleanup_name)
+        && let Err(e) = worktree::remove_with_branch(
+            &cleanup_repo,
+            &cleanup_path,
+            &cleanup_name,
+            Some(&session_branch),
+        )
     {
         debug!(name = %cleanup_name, "warm_snapshot: worktree cleanup failed (non-fatal): {e}");
         let _ = std::fs::remove_dir_all(&cleanup_path);

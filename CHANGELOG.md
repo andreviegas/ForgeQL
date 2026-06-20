@@ -6,6 +6,39 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.77.7] — 2026-06-20 — fix(worktree): unify worktree+branch teardown; GC empty research sessions
+
+A worktree and its branch are now treated as a single unit: every teardown path
+removes both together (never orphaning one), and a session is kept past its TTL
+only when it carries real committed work.
+
+### Fixed
+- Removing a worktree no longer leaks its git branch. Background warming
+  (`warm_snapshot`) and startup stale-worktree pruning each called
+  `worktree::remove` (which deletes the checkout) without deleting the backing
+  branch, so every warmed HEAD leaked a `fql/__warm__/…` ref and stale named
+  sessions leaked a `fql/{user}/…` ref into the bare repo. Both now go through a
+  single helper that removes the worktree and deletes its branch together.
+
+### Changed
+- Added `git::worktree::remove_with_branch(repo, wt_path, name, known_branch)` —
+  the single teardown entry point for every worktree the server creates (live
+  sessions, TTL eviction, startup stale-pruning, background warming). It
+  resolves the branch in priority order — caller-known name → live HEAD read
+  from the checkout → legacy `forgeql/<name>` fallback — so a custom session
+  branch is deleted by its true name even after the checkout directory is gone.
+  `teardown_worktree`, TTL eviction, the startup prune and the warmer all route
+  through it. Regression tests: `remove_with_branch_removes_worktree_and_branch`,
+  `remove_with_branch_resolves_live_head_when_unknown`.
+- TTL eviction now garbage-collects **research** sessions. When an idle session
+  expires, its branch is diffed against its base via `git::source_changes`
+  (ignoring control files): if there are no committed changes the whole unit
+  (worktree + branch) is removed; if the branch carries real work it is retained
+  in full for manual review. Previously every `USE … AS` branch was kept
+  unconditionally — accumulating indefinitely — because the work-detection that
+  `source_changes` provides was orphaned when `DISCONNECT` was removed. On a
+  `source_changes` error the branch is conservatively kept so work is never lost.
+
 ## [0.77.6] — 2026-06-20 — fix(show): SHOW body for attribute-decorated functions; feat(parser): heredoc in COMMIT MESSAGE
 
 ### Fixed

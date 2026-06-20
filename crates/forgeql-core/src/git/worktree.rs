@@ -269,6 +269,57 @@ pub fn delete_branch(repo_path: &Path, branch_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Resolve the branch a worktree teardown should delete.
+///
+/// Resolution order, most authoritative first:
+///   1. `known` — the exact branch the caller already holds (a warm worktree's
+///      `fql/__warm__/…` name, or [`WorktreeInfo::branch`], which survives the
+///      checkout directory already being gone);
+///   2. the live HEAD branch read from `wt_path`, while the checkout still
+///      exists — covers custom `fql/{user}/{source}/{branch}/{alias}` names that
+///      cannot be reconstructed from `name`;
+///   3. the legacy auto name `forgeql/{name}` as a last resort (HEAD detached or
+///      unreadable).
+fn resolve_teardown_branch(wt_path: &Path, name: &str, known: Option<&str>) -> String {
+    known
+        .map(str::to_owned)
+        .or_else(|| branch_of_worktree(wt_path))
+        .unwrap_or_else(|| format!("forgeql/{name}"))
+}
+
+/// Remove a worktree **and** delete its backing branch in one call.
+///
+/// This is the single teardown entry point for every worktree the server
+/// creates — live sessions, TTL eviction of auto sessions, startup
+/// stale-pruning, and background warming. Going through it guarantees a
+/// worktree is never removed while its branch is left orphaned in the bare repo
+/// (the leak that accumulated `fql/__warm__/…` and `fql/anonymous/…` refs).
+///
+/// The branch is resolved via [`resolve_teardown_branch`]; pass `known_branch`
+/// whenever the exact name is available, since it is the only source that
+/// survives the checkout directory already being gone.
+///
+/// Best-effort: both the worktree removal and the branch deletion are always
+/// attempted; the first error is returned for the caller to log. Callers that
+/// intentionally keep a branch (e.g. a named session retained for review) must
+/// call [`remove`] directly instead.
+///
+/// # Errors
+/// Returns the first of the worktree-removal or branch-deletion errors, if any.
+pub fn remove_with_branch(
+    repo_path: &Path,
+    wt_path: &Path,
+    name: &str,
+    known_branch: Option<&str>,
+) -> Result<()> {
+    // Resolve the branch BEFORE remove() deletes the checkout — once the
+    // directory is gone, HEAD can no longer be read.
+    let branch = resolve_teardown_branch(wt_path, name, known_branch);
+    let remove_res = remove(repo_path, name);
+    let branch_res = delete_branch(repo_path, &branch);
+    remove_res.and(branch_res)
+}
+
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
@@ -446,6 +497,51 @@ mod tests {
         assert!(
             repo.find_branch(session_branch, BranchType::Local).is_err(),
             "teardown must delete the custom session branch, not orphan it"
+        );
+    }
+
+    /// `remove_with_branch` is the single teardown path: it must remove the
+    /// worktree AND delete the custom `fql/…` branch when the exact name is
+    /// passed, so no caller can leak a branch by forgetting the second step.
+    #[test]
+    fn remove_with_branch_removes_worktree_and_branch() {
+        let tmp = tempdir().unwrap();
+        let bare = make_bare_repo(tmp.path());
+        let branch = default_branch(&bare);
+        let wt_name = "forgeql-pub.main.warm-x";
+        let wt_path = tmp.path().join(wt_name);
+        let session_branch = "fql/__warm__/main/deadbeef0000";
+
+        create(&bare, wt_name, &branch, &wt_path, Some(session_branch)).unwrap();
+
+        remove_with_branch(&bare, &wt_path, wt_name, Some(session_branch)).unwrap();
+
+        assert!(!wt_path.exists(), "worktree dir must be removed");
+        let repo = Repository::open_bare(&bare).unwrap();
+        assert!(
+            repo.find_branch(session_branch, BranchType::Local).is_err(),
+            "remove_with_branch must delete the backing branch, not orphan it"
+        );
+    }
+
+    /// When no branch is known, `remove_with_branch` reads the live HEAD before
+    /// removal — so an auto `forgeql/<name>` session branch is still deleted.
+    #[test]
+    fn remove_with_branch_resolves_live_head_when_unknown() {
+        let tmp = tempdir().unwrap();
+        let bare = make_bare_repo(tmp.path());
+        let branch = default_branch(&bare);
+        let wt_path = tmp.path().join("wt-auto");
+
+        create(&bare, "autotest", &branch, &wt_path, None).unwrap();
+
+        remove_with_branch(&bare, &wt_path, "autotest", None).unwrap();
+
+        let repo = Repository::open_bare(&bare).unwrap();
+        assert!(
+            repo.find_branch("forgeql/autotest", BranchType::Local)
+                .is_err(),
+            "auto session branch must be deleted via live-HEAD resolution"
         );
     }
 

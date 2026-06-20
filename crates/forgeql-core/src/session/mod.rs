@@ -121,18 +121,18 @@ pub fn teardown_worktree(data_dir: &Path, wt_path: &Path, wt_name: &str) {
         for re in repo_entries.flatten() {
             let rpath = re.path();
             if rpath.extension().is_some_and(|ext| ext == "git") {
-                if let Err(e) = crate::git::worktree::remove(&rpath, wt_name) {
-                    warn!(%wt_name, repo = %rpath.display(), %e, "teardown: worktree remove failed");
-                }
-                // Delete the exact branch git had checked out. Fall back to the
-                // legacy `forgeql/<wt_name>` name only when HEAD was detached or
-                // unreadable, preserving the original behaviour for that case.
-                let branch_result = session_branch.as_ref().map_or_else(
-                    || crate::git::worktree::delete_session_branch(&rpath, wt_name),
-                    |branch| crate::git::worktree::delete_branch(&rpath, branch),
-                );
-                if let Err(e) = branch_result {
-                    warn!(%wt_name, repo = %rpath.display(), %e, "teardown: branch delete failed");
+                // Single teardown path: removes the worktree and deletes its
+                // branch together so the branch is never orphaned. The branch was
+                // read from the live HEAD above (before removal); the helper falls
+                // back to the legacy `forgeql/<wt_name>` name when HEAD was
+                // detached or unreadable.
+                if let Err(e) = crate::git::worktree::remove_with_branch(
+                    &rpath,
+                    wt_path,
+                    wt_name,
+                    session_branch.as_deref(),
+                ) {
+                    warn!(%wt_name, repo = %rpath.display(), %e, "teardown: worktree/branch cleanup failed");
                 }
             }
         }

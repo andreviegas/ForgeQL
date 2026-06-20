@@ -607,4 +607,72 @@ mod tests {
             "ForgeQL control file must be excluded from the dirty list"
         );
     }
+
+    /// `source_changes` drives the TTL "keep work, GC research" decision: a
+    /// session branch identical to its base (a research session that committed
+    /// nothing) reports empty, a branch with a real source commit reports the
+    /// changed file, and a branch that only touches control files is treated as
+    /// having no reviewable work.
+    #[test]
+    fn source_changes_distinguishes_research_from_work() {
+        let tmp = tempdir().unwrap();
+        let bare = tmp.path().join("repo.git");
+        let repo = git2::Repository::init_bare(&bare).unwrap();
+        let sig = git2::Signature::new("t", "t@t.com", &git2::Time::new(0, 0)).unwrap();
+
+        // Base commit on `main` with one source file.
+        let base_blob = repo.blob(b"int main(){}\n").unwrap();
+        let base_oid = {
+            let mut tb = repo.treebuilder(None).unwrap();
+            tb.insert("a.cpp", base_blob, 0o100_644).unwrap();
+            let tree = repo.find_tree(tb.write().unwrap()).unwrap();
+            repo.commit(Some("refs/heads/main"), &sig, &sig, "base", &tree, &[])
+                .unwrap()
+        };
+        let base_commit = repo.find_commit(base_oid).unwrap();
+
+        // Research branch: same commit as main → no changes.
+        repo.branch("research", &base_commit, false).unwrap();
+        assert!(
+            source_changes(&bare, "main", "research")
+                .unwrap()
+                .is_empty(),
+            "a research branch with no commits must report no changes"
+        );
+
+        // Work branch: a new commit that edits the source file.
+        let work_oid = {
+            let mut tb = repo.treebuilder(None).unwrap();
+            let blob = repo.blob(b"int main(){return 1;}\n").unwrap();
+            tb.insert("a.cpp", blob, 0o100_644).unwrap();
+            let tree = repo.find_tree(tb.write().unwrap()).unwrap();
+            repo.commit(None, &sig, &sig, "work", &tree, &[&base_commit])
+                .unwrap()
+        };
+        repo.branch("work", &repo.find_commit(work_oid).unwrap(), false)
+            .unwrap();
+        assert_eq!(
+            source_changes(&bare, "main", "work").unwrap(),
+            vec!["a.cpp".to_string()],
+            "a branch with a real source commit must report the changed file"
+        );
+
+        // Control-file-only branch: identical source, extra `.forgeql-index` →
+        // treated as no reviewable work.
+        let ctrl_oid = {
+            let mut tb = repo.treebuilder(None).unwrap();
+            tb.insert("a.cpp", base_blob, 0o100_644).unwrap();
+            let ctrl = repo.blob(b"index-data").unwrap();
+            tb.insert(".forgeql-index", ctrl, 0o100_644).unwrap();
+            let tree = repo.find_tree(tb.write().unwrap()).unwrap();
+            repo.commit(None, &sig, &sig, "ctrl", &tree, &[&base_commit])
+                .unwrap()
+        };
+        repo.branch("ctrl", &repo.find_commit(ctrl_oid).unwrap(), false)
+            .unwrap();
+        assert!(
+            source_changes(&bare, "main", "ctrl").unwrap().is_empty(),
+            "a branch touching only control files must report no reviewable work"
+        );
+    }
 }

@@ -34,22 +34,44 @@ impl ForgeQLEngine {
             if let Some(session) = self.sessions.remove(&id) {
                 info!(%id, "TTL eviction: removing idle session");
                 let repo_path = self.data_dir.join(format!("{}.git", session.source_name));
-                if let Err(err) = worktree::remove(&repo_path, &session.worktree_name) {
-                    warn!(
-                        worktree = %session.worktree_name,
-                        error = %err,
-                        "TTL eviction: worktree remove failed"
+                // Unity rule: a worktree and its branch are deleted together or
+                // kept together. A session is kept only when its named branch
+                // carries real committed work (something to review); research
+                // sessions that changed nothing are reclaimed whole at the TTL.
+                let keep_for_review = match session.custom_branch.as_deref() {
+                    // No USE … AS branch → auto scratch, never reviewable.
+                    None => false,
+                    // Keep iff the branch diff vs its base has non-control changes.
+                    Some(branch) => {
+                        match crate::git::source_changes(&repo_path, &session.branch, branch) {
+                            Ok(changed) => !changed.is_empty(),
+                            // Be conservative on error: keep, so work is never lost.
+                            Err(e) => {
+                                warn!(%id, %e, "TTL eviction: source_changes failed — keeping branch");
+                                true
+                            }
+                        }
+                    }
+                };
+                if keep_for_review {
+                    info!(
+                        %id,
+                        branch = ?session.custom_branch,
+                        "TTL eviction: worktree+branch retained for review (has unmerged work)"
                     );
+                    continue;
                 }
-                // Named branches (from USE … AS) are kept for review.
-                if session.custom_branch.is_none()
-                    && let Err(err) =
-                        worktree::delete_session_branch(&repo_path, &session.worktree_name)
-                {
+                // No reviewable work → delete the whole unit (worktree + branch).
+                if let Err(err) = worktree::remove_with_branch(
+                    &repo_path,
+                    &session.worktree_path,
+                    &session.worktree_name,
+                    session.custom_branch.as_deref(),
+                ) {
                     warn!(
                         worktree = %session.worktree_name,
                         error = %err,
-                        "TTL eviction: branch delete failed"
+                        "TTL eviction: worktree cleanup failed"
                     );
                 }
             }
@@ -221,11 +243,16 @@ impl ForgeQLEngine {
                 }
                 if !wt.path.exists() {
                     info!(wt_name = %wt.name, "startup: pruning stale git worktree metadata");
-                    if let Err(e) = worktree::remove(&rpath, &wt.name) {
-                        warn!(wt_name = %wt.name, %e, "stale metadata prune failed");
-                    }
-                    if let Err(e) = worktree::delete_session_branch(&rpath, &wt.name) {
-                        warn!(wt_name = %wt.name, %e, "stale branch delete failed");
+                    // `wt.branch` carries the real branch name even though the
+                    // checkout is gone, so a custom `fql/…` session branch is
+                    // deleted by its true name rather than the legacy fallback.
+                    if let Err(e) = worktree::remove_with_branch(
+                        &rpath,
+                        &wt.path,
+                        &wt.name,
+                        wt.branch.as_deref(),
+                    ) {
+                        warn!(wt_name = %wt.name, %e, "stale worktree/branch prune failed");
                     }
                 }
             }
