@@ -283,7 +283,11 @@ impl Drop for McpClient {
         // reclaims once its 1h sentinel TTL expires.
         for (use_str, alias) in std::mem::take(&mut self.created) {
             if let Some((source, branch)) = use_str.split_once('.') {
-                forgeql_core::session::SessionCoords::new("anonymous", source, branch, alias)
+                // User must match what the MCP server assigned this session
+                // (auth(AuthContext::Mcp)); the literal "anonymous" lives only in
+                // forgeql_core::auth, so derive it rather than hardcoding.
+                let user = forgeql_core::auth::auth(forgeql_core::auth::AuthContext::Mcp);
+                forgeql_core::session::SessionCoords::new(user, source, branch, alias)
                     .teardown(&self.data_dir);
             }
         }

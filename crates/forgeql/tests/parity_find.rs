@@ -188,9 +188,19 @@ impl McpClient {
         if let Some(err) = resp.get("error") {
             return Err(std::io::Error::other(format!("tools/call error: {err}")));
         }
+        // The structured JSON payload is the LAST content block. USE prepends a
+        // human-readable "store this session_id" warning as content[0], so reading
+        // content[0] would return prose, not JSON. Take the last text block, as the
+        // zephyr/golden harnesses do.
         let text = resp
-            .pointer("/result/content/0/text")
-            .and_then(Value::as_str)
+            .pointer("/result/content")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items
+                    .iter()
+                    .rev()
+                    .find_map(|c| c.get("text").and_then(Value::as_str))
+            })
             .ok_or_else(|| std::io::Error::other(format!("unexpected response shape: {resp}")))?
             .to_owned();
         Ok(text)
@@ -242,8 +252,19 @@ impl ParitySession {
         };
 
         let use_fql = format!("USE {source}.{branch} AS '{PARITY_ALIAS}'");
-        match client.run_fql(None, &use_fql) {
-            Ok(_) => {}
+        // The server's session_id is the full `user:source:branch:alias` coordinate,
+        // not the bare alias — read it from the USE response and use it for every
+        // subsequent call. Hardcoding PARITY_ALIAS is rejected with
+        // "invalid session id 'parity': expected 'user:source:branch:alias'".
+        let session_id = match client.run_fql(None, &use_fql) {
+            Ok(text) => serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|v| {
+                    v.get("session_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| PARITY_ALIAS.to_owned()),
             Err(err) => {
                 eprintln!(
                     "[parity_find] SKIP — USE {source}.{branch} AS '{PARITY_ALIAS}' failed: {err}\n\
@@ -252,15 +273,13 @@ impl ParitySession {
                 );
                 return None;
             }
-        }
+        };
 
         eprintln!(
-            "[parity_find] MCP session '{PARITY_ALIAS}' ready — source={source} branch={branch}"
+            "[parity_find] MCP session '{PARITY_ALIAS}' ready ({session_id}) — \
+             source={source} branch={branch}"
         );
-        Some(Self {
-            client,
-            session_id: PARITY_ALIAS.to_owned(),
-        })
+        Some(Self { client, session_id })
     }
 
     /// Execute a full FQL query string via `run_fql` and project results to

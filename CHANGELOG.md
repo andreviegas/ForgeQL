@@ -6,6 +6,14 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.77.5] — 2026-06-20 — fix(tests): parity session id + de-hardcode the session user
+
+### Fixed
+- `parity_find` passed the bare alias `'parity'` as the `session_id` on every `run_fql` call, which the server rejects (`invalid session id 'parity': expected 'user:source:branch:alias'`). Root cause: its `run_fql` helper read `content[0]`, but `USE` returns a human-readable "store this session_id" warning as the first block and the JSON payload (carrying the real `user:source:branch:alias` token) as the last block. It now reads the last content block — like the zephyr/golden harnesses — and uses the returned token. The test only surfaced when `FORGEQL_DATA_DIR` is set (otherwise it skips), so a normal pre-commit run never hit it.
+
+### Changed
+- `golden_test` and `zephyr_golden` teardown now derive the session user from `forgeql_core::auth::auth(AuthContext::Mcp)` instead of the literal `"anonymous"`, matching what the MCP server assigns and keeping the single source of truth in `forgeql_core::auth` (the literal is documented to live only there).
+
 ## [0.77.4] — 2026-06-19 — fix(session): teardown deletes the real session branch instead of orphaning it
 
 ### Fixed
