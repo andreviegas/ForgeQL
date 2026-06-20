@@ -20,12 +20,13 @@ pub struct VerifyResult {
 /// Run a single named build step and return its result.
 /// Does **not** roll back anything — use this for standalone `VERIFY build`.
 #[must_use]
-pub fn run_standalone(step: &VerifyStep, workdir: &Path) -> VerifyResult {
+pub fn run_standalone(step: &VerifyStep, workdir: &Path, env: &[(&str, String)]) -> VerifyResult {
     use std::process::Command;
 
     match Command::new("sh")
         .args(["-c", &step.command])
         .current_dir(workdir)
+        .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
         .output()
     {
         Err(e) => VerifyResult {

@@ -26,7 +26,7 @@ use tempfile::tempdir;
 const FIXTURE_CPP: &str =
     "int calcularPotencia(int velocidad, int carga)\n{\n    return velocidad * carga;\n}\n";
 
-const FIXTURE_YAML: &str = "verify_steps:\n  - name: gate\n    command: \"true\"\n    commit_gate: true\n  - name: nogate\n    command: \"true\"\n  - name: echo-target\n    command: \"printf %s $target\"\n    params:\n      - { name: target, type: ident }\n";
+const FIXTURE_YAML: &str = "verify_steps:\n  - name: gate\n    command: \"true\"\n    commit_gate: true\n  - name: nogate\n    command: \"true\"\n  - name: echo-target\n    command: \"printf %s $target\"\n    params:\n      - { name: target, type: ident }\n  - name: env-probe\n    command: \"printf '%s|%s' $FORGEQL_SOURCE $FORGEQL_BUILD_DIR\"\n";
 
 fn make_registry() -> Arc<LanguageRegistry> {
     Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
@@ -171,4 +171,29 @@ fn verify_step_rejects_bad_arity_and_injection() {
         exec(&mut engine, &sid, "VERIFY build 'nogate'"),
         ForgeQLResult::VerifyBuild(_)
     ));
+}
+
+#[test]
+fn verify_step_sees_forgeql_env_vars() {
+    let (mut engine, sid, _dir) = gated_session();
+
+    // run_standalone injects per-session FORGEQL_* vars into the command env.
+    match exec(&mut engine, &sid, "VERIFY build 'env-probe'") {
+        ForgeQLResult::VerifyBuild(r) => {
+            assert!(r.success, "env-probe should run: {}", r.output);
+            // FORGEQL_SOURCE is the synthetic local source name.
+            assert!(
+                r.output.contains("local"),
+                "output should contain FORGEQL_SOURCE: {}",
+                r.output
+            );
+            // FORGEQL_BUILD_DIR is the per-worktree target dir.
+            assert!(
+                r.output.contains("target"),
+                "output should contain FORGEQL_BUILD_DIR: {}",
+                r.output
+            );
+        }
+        other => panic!("expected VerifyBuild, got {other:?}"),
+    }
 }

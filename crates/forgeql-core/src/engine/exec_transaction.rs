@@ -351,12 +351,29 @@ impl ForgeQLEngine {
                     "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
                 )
             })?;
+        // Session context exposed to the command (and to RUN templates later).
+        // `FORGEQL_BUILD_DIR` is per-worktree so concurrent agents never share
+        // build artifacts; consume it as `cargo --target-dir $FORGEQL_BUILD_DIR`.
+        let env: [(&str, String); 6] = [
+            ("FORGEQL_SESSION_ID", sid.to_string()),
+            ("FORGEQL_SOURCE", session.source_name.clone()),
+            ("FORGEQL_BRANCH", session.branch.clone()),
+            ("FORGEQL_ALIAS", session.id.clone()),
+            (
+                "FORGEQL_WORKTREE",
+                session.worktree_path.display().to_string(),
+            ),
+            (
+                "FORGEQL_BUILD_DIR",
+                workdir.join("target").display().to_string(),
+            ),
+        ];
         // Validate the supplied args against the step's declared params and
         // substitute them into the command (injection-safe: ident-typed only).
         step.command = crate::config::resolve_command(&step, args)
             .map_err(|e| anyhow::anyhow!("VERIFY build '{step_name}': {e}"))?;
         let summary = step.summary;
-        let result = verify::run_standalone(&step, &workdir);
+        let result = verify::run_standalone(&step, &workdir, &env);
         // Commit-gate bookkeeping: a gated step that passes marks itself
         // satisfied for the current (unmutated) worktree state. The next
         // mutation clears this set (see exec_mutation), so a stale gate can
