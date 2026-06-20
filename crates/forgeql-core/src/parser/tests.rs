@@ -507,6 +507,20 @@ fn parse_heredoc_lowercase_tag_is_rejected() {
     let input = format!("CHANGE FILE {q}a.rs{q} WITH <<rust\ncontent\nrust");
     assert!(parse(&input).is_err());
 }
+
+#[test]
+fn parse_commit_message_heredoc_with_apostrophes() {
+    // COMMIT MESSAGE now accepts a heredoc, so a message may contain single
+    // quotes / apostrophes that would otherwise terminate the quoted form.
+    let input = "COMMIT MESSAGE <<MSG\nfix: don't drop the agent's apostrophes\nMSG";
+    let ops = parse(input).unwrap();
+    match &ops[0] {
+        ForgeQLIR::Commit { message } => {
+            assert_eq!(message, "fix: don't drop the agent's apostrophes");
+        }
+        _ => panic!("wrong variant"),
+    }
+}
 #[test]
 fn parse_change_delete() {
     let ops = parse("CHANGE FILES 'a.cpp', 'b.h' WITH NOTHING").unwrap();

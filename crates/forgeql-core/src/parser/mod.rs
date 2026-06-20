@@ -233,11 +233,11 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         }
 
         Rule::commit_stmt => {
-            let message = pair
-                .into_inner()
-                .next()
-                .map(|l| unquote(l.as_str()))
-                .ok_or_else(|| ForgeError::DslParse("commit: expected message".into()))?;
+            let message = unwrap_content(
+                pair.into_inner()
+                    .next()
+                    .ok_or_else(|| ForgeError::DslParse("commit: expected message".into()))?,
+            )?;
             Ok(ForgeQLIR::Commit { message })
         }
 

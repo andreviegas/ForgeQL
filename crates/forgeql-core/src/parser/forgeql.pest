@@ -235,7 +235,7 @@ transaction_stmt = {
 rollback_stmt = { "ROLLBACK" ~ ("TRANSACTION" ~ any_value)? }
 
 verify_stmt = { "VERIFY" ~ "build" ~ any_value }
-commit_stmt = { "COMMIT" ~ "MESSAGE" ~ string_literal }
+commit_stmt = { "COMMIT" ~ "MESSAGE" ~ content_value }
 
 // -----------------------------------------------------------------------
 // Universal clause block
