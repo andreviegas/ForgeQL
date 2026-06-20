@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.78.0] — 2026-06-20 — feat(engine): gate COMMIT on commit_gate verify steps
+
+### Added
+- Verify steps in `.forgeql.yaml` may now set `commit_gate: true`. When set,
+  `COMMIT` is refused until that step has passed **since the most recent
+  mutation** — and any edit after a pass re-blocks the commit until the step is
+  re-run. Several steps may be gated; every gated step must pass (logical AND).
+  Steps without the flag never gate commits. This lets a project require, e.g.,
+  a green test/lint run to be reproduced against the exact tree being committed,
+  so a commit can never record an unvalidated state. Tests:
+  `commit_is_gated_until_the_gated_step_passes`,
+  `an_edit_after_the_gate_re_blocks_commit` (`tests/commit_gate.rs`).
+
 ## [0.77.7] — 2026-06-20 — fix(worktree): unify worktree+branch teardown; GC empty research sessions
 
 A worktree and its branch are now treated as a single unit: every teardown path
