@@ -76,6 +76,13 @@ impl ForgeQLEngine {
         // Reindex touched files.
         self.reindex_session(sid, &files_changed);
 
+        // A successful mutation invalidates every commit gate: the agent must
+        // re-run the gated VERIFY build(s) before COMMIT will accept the change.
+        if let Some(session) = self.sessions.get_mut(sid) {
+            session.satisfied_gates.clear();
+            session.edits_since_gate = session.edits_since_gate.saturating_add(1);
+        }
+
         Ok(ForgeQLResult::Mutation(MutationResult {
             op: op_name.to_string(),
             applied: true,

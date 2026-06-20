@@ -200,6 +200,11 @@ pub struct VerifyStep {
     /// default tail window (see [`SummaryConfig::default`]).
     #[serde(default)]
     pub summary: SummaryConfig,
+    /// When `true`, `COMMIT` is refused until this step has passed since the
+    /// most recent mutation. Several steps may set this — every gated step must
+    /// pass (logical AND). Absent/false → this step never gates commits.
+    #[serde(default)]
+    pub commit_gate: bool,
 }
 
 /// Inline output window for a [`VerifyStep`].

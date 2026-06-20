@@ -368,6 +368,18 @@ impl ForgeQLEngine {
             "test-branch", // synthetic branch name (not main/master to allow budget tests)
             &Arc::clone(&self.lang_registry),
         );
+
+        // Honor a workspace `.forgeql.yaml` (when present) so local sessions
+        // freeze the same verify steps — including commit-gate flags — as a real
+        // `USE`.  Absent config → nothing frozen (back-compat).
+        if let Some((workdir, config)) =
+            super::load_verify_config(workspace_root, "local", workspace_root)
+        {
+            session.frozen_workdir = Some(workdir);
+            session.frozen_output_config = Some(config.output);
+            session.frozen_verify_steps = Some(config.verify_steps);
+        }
+
         session.build_index()?;
 
         session.touch();

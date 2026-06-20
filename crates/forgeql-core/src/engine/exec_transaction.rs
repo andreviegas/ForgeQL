@@ -100,6 +100,31 @@ impl ForgeQLEngine {
         message: &str,
     ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
+
+        // Commit gate: every verify step flagged `commit_gate: true` in
+        // `.forgeql.yaml` must have passed since the last mutation. When no
+        // step is flagged the gate is inactive (back-compat — COMMIT as before).
+        {
+            let session = self.require_session(sid)?;
+            let stale: Vec<String> = session
+                .frozen_verify_steps
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .filter(|s| s.commit_gate && !session.satisfied_gates.contains(&s.name))
+                .map(|s| s.name.clone())
+                .collect();
+            if !stale.is_empty() {
+                let edits = session.edits_since_gate;
+                anyhow::bail!(
+                    "COMMIT blocked: commit-gate step(s) [{}] have not passed since your last \
+                     edit ({edits} edit(s) since the last gated run). Re-run `VERIFY build` for \
+                     each gated step, then COMMIT.",
+                    stale.join(", ")
+                );
+            }
+        }
+
         let worktree_path = self.require_session(sid)?.worktree_path.clone();
         let last_clean = self
             .sessions
@@ -132,6 +157,10 @@ impl ForgeQLEngine {
         // Update the clean base for the next commit cycle.
         if let Some(session) = self.sessions.get_mut(sid) {
             session.last_clean_oid = Some(commit_hash.clone());
+            // A fresh commit resets the gate's edit counter; `satisfied_gates`
+            // stays intact — the committed tree is still the gated tree, so a
+            // subsequent no-op COMMIT need not re-run the gate.
+            session.edits_since_gate = 0;
             // Always save after COMMIT: HEAD just moved so the cache's
             // `commit_hash` field is now stale even when no reindex
             // happened.  Mark dirty first to force the flush.
@@ -299,11 +328,12 @@ impl ForgeQLEngine {
     /// # Errors
     /// Returns `Err` if the step name is not found in `.forgeql.yaml`.
     pub(super) fn exec_verify_build(
-        &self,
+        &mut self,
         session_id: Option<&str>,
         step_name: &str,
     ) -> Result<ForgeQLResult> {
-        let session = self.require_session(require_session_id(session_id)?)?;
+        let sid = require_session_id(session_id)?;
+        let session = self.require_session(sid)?;
         // Use the verify steps frozen at USE time — prevents config tampering
         // between session start and VERIFY execution.
         let frozen_steps = session.frozen_verify_steps.as_deref().unwrap_or(&[]);
@@ -322,6 +352,16 @@ impl ForgeQLEngine {
             })?;
         let summary = step.summary;
         let result = verify::run_standalone(&step, &workdir);
+        // Commit-gate bookkeeping: a gated step that passes marks itself
+        // satisfied for the current (unmutated) worktree state. The next
+        // mutation clears this set (see exec_mutation), so a stale gate can
+        // never satisfy COMMIT.
+        if result.success
+            && step.commit_gate
+            && let Some(session) = self.sessions.get_mut(sid)
+        {
+            let _ = session.satisfied_gates.insert(step.name);
+        }
         Ok(ForgeQLResult::VerifyBuild(VerifyBuildResult {
             step: result.step,
             success: result.success,

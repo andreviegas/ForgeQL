@@ -242,6 +242,14 @@ pub struct Session {
     /// `frozen_verify_steps`.  `None` until the first `USE` that finds a config;
     /// callers fall back to `OutputConfig::default()`.
     pub frozen_output_config: Option<crate::config::OutputConfig>,
+    /// Commit-gate tracking — names of `commit_gate` verify steps that have
+    /// passed since the last mutation. Cleared by every mutation; a name is
+    /// inserted when its gated `VERIFY build` succeeds. `COMMIT` requires every
+    /// gated step in `frozen_verify_steps` to be present here.
+    pub satisfied_gates: std::collections::HashSet<String>,
+    /// Mutations applied since the last successful gated `VERIFY build`,
+    /// surfaced only to enrich the COMMIT-blocked message.
+    pub edits_since_gate: usize,
     /// Optional line-budget tracker.  `None` when the `.forgeql.yaml` does
     /// not contain a `line_budget` section.
     budget: Option<BudgetState>,
@@ -311,6 +319,8 @@ impl Session {
             frozen_verify_steps: None,
             frozen_workdir: None,
             frozen_output_config: None,
+            satisfied_gates: std::collections::HashSet::new(),
+            edits_since_gate: 0,
             budget: None,
             budget_data_dir: None,
             budget_branch: None,
