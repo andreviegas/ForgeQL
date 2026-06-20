@@ -205,6 +205,71 @@ pub struct VerifyStep {
     /// pass (logical AND). Absent/false → this step never gates commits.
     #[serde(default)]
     pub commit_gate: bool,
+    /// Typed positional parameters this step accepts. `VERIFY build '<step>'
+    /// '<arg>'…` validates argument count and type, then substitutes each
+    /// `$name` occurrence in `command`. Empty → the step takes no arguments.
+    #[serde(default)]
+    pub params: Vec<ParamSpec>,
+}
+
+/// Type of a [`VerifyStep`] parameter — constrains how an argument is
+/// validated and bound. Only `Ident` exists today (a safe shell token);
+/// `String` (stdin-bound) will arrive with the RUN command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParamType {
+    /// `[A-Za-z0-9_.-]+` — safe to splice directly into the shell command.
+    #[default]
+    Ident,
+}
+
+/// One declared positional parameter of a [`VerifyStep`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParamSpec {
+    /// Placeholder name; `$name` in the step `command` is replaced with the arg.
+    pub name: String,
+    /// Validation kind for the supplied argument.
+    #[serde(default, rename = "type")]
+    pub kind: ParamType,
+}
+
+/// Validate `args` against `step.params` and substitute them into the command
+/// template. Returns the resolved command or a human-readable error. Each
+/// `Ident` argument must match `[A-Za-z0-9_.-]+`, so substitution into the
+/// shell command cannot inject metacharacters.
+pub(crate) fn resolve_command(step: &VerifyStep, args: &[String]) -> Result<String, String> {
+    if args.len() != step.params.len() {
+        return Err(format!(
+            "step '{}' expects {} argument(s), got {}",
+            step.name,
+            step.params.len(),
+            args.len()
+        ));
+    }
+    let mut command = step.command.clone();
+    // Substitute longest names first so `$t` never clobbers `$target`.
+    let mut order: Vec<usize> = (0..step.params.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(step.params[i].name.len()));
+    for i in order {
+        let param = &step.params[i];
+        let arg = &args[i];
+        match param.kind {
+            ParamType::Ident => {
+                let ok = !arg.is_empty()
+                    && arg
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+                if !ok {
+                    return Err(format!(
+                        "argument for '{}' must be an identifier [A-Za-z0-9_.-], got '{arg}'",
+                        param.name
+                    ));
+                }
+            }
+        }
+        command = command.replace(&format!("${}", param.name), arg);
+    }
+    Ok(command)
 }
 
 /// Inline output window for a [`VerifyStep`].

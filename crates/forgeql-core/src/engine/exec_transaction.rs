@@ -331,6 +331,7 @@ impl ForgeQLEngine {
         &mut self,
         session_id: Option<&str>,
         step_name: &str,
+        args: &[String],
     ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
         let session = self.require_session(sid)?;
@@ -341,7 +342,7 @@ impl ForgeQLEngine {
             .frozen_workdir
             .clone()
             .unwrap_or_else(|| session.worktree_path.clone());
-        let step = frozen_steps
+        let mut step = frozen_steps
             .iter()
             .find(|s| s.name == step_name)
             .cloned()
@@ -350,6 +351,10 @@ impl ForgeQLEngine {
                     "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
                 )
             })?;
+        // Validate the supplied args against the step's declared params and
+        // substitute them into the command (injection-safe: ident-typed only).
+        step.command = crate::config::resolve_command(&step, args)
+            .map_err(|e| anyhow::anyhow!("VERIFY build '{step_name}': {e}"))?;
         let summary = step.summary;
         let result = verify::run_standalone(&step, &workdir);
         // Commit-gate bookkeeping: a gated step that passes marks itself

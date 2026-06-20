@@ -26,7 +26,7 @@ use tempfile::tempdir;
 const FIXTURE_CPP: &str =
     "int calcularPotencia(int velocidad, int carga)\n{\n    return velocidad * carga;\n}\n";
 
-const FIXTURE_YAML: &str = "verify_steps:\n  - name: gate\n    command: \"true\"\n    commit_gate: true\n  - name: nogate\n    command: \"true\"\n";
+const FIXTURE_YAML: &str = "verify_steps:\n  - name: gate\n    command: \"true\"\n    commit_gate: true\n  - name: nogate\n    command: \"true\"\n  - name: echo-target\n    command: \"printf %s $target\"\n    params:\n      - { name: target, type: ident }\n";
 
 fn make_registry() -> Arc<LanguageRegistry> {
     Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
@@ -125,5 +125,50 @@ fn an_edit_after_the_gate_re_blocks_commit() {
     assert!(matches!(
         exec(&mut engine, &sid, "COMMIT MESSAGE 'final'"),
         ForgeQLResult::Commit(_)
+    ));
+}
+
+#[test]
+fn verify_step_substitutes_typed_params() {
+    let (mut engine, sid, _dir) = gated_session();
+
+    // A valid ident arg is substituted into the command template.
+    match exec(
+        &mut engine,
+        &sid,
+        "VERIFY build 'echo-target' 'multistring-pxrox'",
+    ) {
+        ForgeQLResult::VerifyBuild(r) => {
+            assert!(r.success, "step should run: {}", r.output);
+            assert!(
+                r.output.contains("multistring-pxrox"),
+                "output should echo the substituted target: {}",
+                r.output
+            );
+        }
+        other => panic!("expected VerifyBuild, got {other:?}"),
+    }
+}
+
+#[test]
+fn verify_step_rejects_bad_arity_and_injection() {
+    let (mut engine, sid, _dir) = gated_session();
+
+    // Wrong argument count.
+    try_exec(&mut engine, &sid, "VERIFY build 'echo-target'")
+        .expect_err("missing required argument must be rejected");
+
+    // Non-ident argument (shell metacharacters) is refused before running.
+    try_exec(
+        &mut engine,
+        &sid,
+        "VERIFY build 'echo-target' 'foo; rm -rf /'",
+    )
+    .expect_err("a non-ident argument must be rejected");
+
+    // A parameterless step still works with zero args (back-compat).
+    assert!(matches!(
+        exec(&mut engine, &sid, "VERIFY build 'nogate'"),
+        ForgeQLResult::VerifyBuild(_)
     ));
 }

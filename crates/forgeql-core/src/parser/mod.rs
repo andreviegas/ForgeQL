@@ -224,12 +224,13 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         }
 
         Rule::verify_stmt => {
-            let step = pair
-                .into_inner()
+            let mut inner = pair.into_inner();
+            let step = inner
                 .next()
                 .map(|l| unquote(l.as_str()))
                 .ok_or_else(|| ForgeError::DslParse("verify: expected step name".into()))?;
-            Ok(ForgeQLIR::VerifyBuild { step })
+            let args = inner.map(|l| unquote(l.as_str())).collect();
+            Ok(ForgeQLIR::VerifyBuild { step, args })
         }
 
         Rule::commit_stmt => {

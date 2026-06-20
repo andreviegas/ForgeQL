@@ -418,7 +418,7 @@ impl ForgeQLEngine {
             ForgeQLIR::BeginTransaction { name } => self.exec_begin_transaction(sid, name),
             ForgeQLIR::Commit { message } => self.exec_commit(sid, message),
             ForgeQLIR::Rollback { name } => self.exec_rollback(sid, name.as_deref()),
-            ForgeQLIR::VerifyBuild { step } => self.exec_verify_build(sid, step),
+            ForgeQLIR::VerifyBuild { step, args } => self.exec_verify_build(sid, step, args),
         }
     }
 

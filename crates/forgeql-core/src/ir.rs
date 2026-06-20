@@ -443,6 +443,9 @@ pub enum ForgeQLIR {
     VerifyBuild {
         /// Name of the verify step to run.
         step: String,
+        /// Positional arguments supplied after the step name; validated
+        /// against the step's declared `params` at execution time.
+        args: Vec<String>,
     },
 }
 

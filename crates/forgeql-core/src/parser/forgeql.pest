@@ -234,7 +234,7 @@ transaction_stmt = {
 
 rollback_stmt = { "ROLLBACK" ~ ("TRANSACTION" ~ any_value)? }
 
-verify_stmt = { "VERIFY" ~ "build" ~ any_value }
+verify_stmt = { "VERIFY" ~ "build" ~ any_value ~ string_literal* }
 commit_stmt = { "COMMIT" ~ "MESSAGE" ~ content_value }
 
 // -----------------------------------------------------------------------
