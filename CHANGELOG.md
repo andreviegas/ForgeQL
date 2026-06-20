@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.79.0] — 2026-06-20 — feat(verify): typed parameters and per-session env vars for VERIFY steps
+
+### Added
+- `VERIFY build '<step>' '<arg>'…` now passes positional arguments to a step.
+  A step declares typed params in `.forgeql.yaml` (`params: [{ name: target,
+  type: ident }]`); each `$name` in the step's `command` is substituted after
+  the argument count and type are validated. The only type today is `ident`
+  (`[A-Za-z0-9_.-]+`), and grammar args are quoted-only, so a substituted value
+  can never inject shell metacharacters or swallow a following statement's
+  keyword — non-ident args are rejected before the command runs. Steps without
+  params are unchanged. Tests: param substitution, arity check, injection
+  rejection (`tests/commit_gate.rs`).
+- VERIFY (and future RUN) steps now receive per-session environment variables:
+  `FORGEQL_BUILD_DIR` (`<worktree>/target` — per-worktree so concurrent agents
+  never share build artifacts; consume as `cargo --target-dir $FORGEQL_BUILD_DIR`,
+  not `CARGO_TARGET_DIR`, which would defeat sccache) plus `FORGEQL_SESSION_ID`,
+  `FORGEQL_SOURCE`, `FORGEQL_BRANCH`, `FORGEQL_ALIAS`, and `FORGEQL_WORKTREE`.
+  A step can locate its freshly-built binary at `$FORGEQL_BUILD_DIR/debug/forgeql`.
+  Test: a step echoes `$FORGEQL_SOURCE` / `$FORGEQL_BUILD_DIR` and asserts both
+  are present.
+
 ## [0.78.0] — 2026-06-20 — feat(engine): gate COMMIT on commit_gate verify steps
 
 ### Added
