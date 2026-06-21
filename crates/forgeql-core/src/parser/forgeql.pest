@@ -167,7 +167,8 @@ show_lines_stmt = { "SHOW" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ any_value 
 /// `SHOW MORE [HEAD n | TAIL n | n-m] [WHERE …] [LIMIT n]`
 /// Pages the session's last buffered output. With no window the whole buffer
 /// is returned (bypassing the inline cap, like an explicit SHOW LINES range).
-show_more_stmt   = { "SHOW" ~ "MORE" ~ show_more_window? ~ clauses }
+show_more_stmt   = { "SHOW" ~ "MORE" ~ show_more_last? ~ show_more_window? ~ clauses }
+show_more_last   = @{ "LAST-" ~ ASCII_DIGIT+ }
 show_more_window = { show_more_head | show_more_tail | show_more_range }
 show_more_head   = { "HEAD" ~ number }
 show_more_tail   = { "TAIL" ~ number }

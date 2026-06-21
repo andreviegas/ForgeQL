@@ -20,8 +20,13 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-/// Filename of the per-session `SHOW MORE` buffer, written in the worktree root.
+/// Filename prefix of the per-session `SHOW MORE` ring buffers. Each slot is
+/// written in the worktree root as `<prefix>-<n>` (`LAST-<n>`, 0 = most recent).
 pub const SHOWMORE_FILE_NAME: &str = ".forgeql-showmore";
+
+/// Depth of the `LAST-n` ring: slots `LAST-0` (most recent) .. `LAST-<N-1>`.
+/// A buffered write pushes existing slots back one and writes the new `LAST-0`.
+pub const RING_SIZE: usize = 5;
 
 /// First-line marker identifying a valid buffer file and its format version.
 const HEADER_MARKER: &str = "FQLSHOWMORE\tv1";
@@ -118,8 +123,8 @@ impl Buffer {
 
 /// Absolute path of the buffer file for a session worktree.
 #[must_use]
-pub fn buffer_path(worktree_root: &Path) -> PathBuf {
-    worktree_root.join(SHOWMORE_FILE_NAME)
+pub fn slot_path(worktree_root: &Path, n: usize) -> PathBuf {
+    worktree_root.join(format!("{SHOWMORE_FILE_NAME}-{n}"))
 }
 
 /// Write `lines` as the session's current `SHOW MORE` buffer.
@@ -135,6 +140,10 @@ pub fn write_buffer(
     label: &str,
     lines: &[&str],
 ) -> std::io::Result<()> {
+    // Push the existing buffers back one slot so this write becomes LAST-0; the
+    // previous LAST-0 becomes LAST-1, and so on (git-style ring).
+    rotate_ring(worktree_root);
+
     // Header carries the version marker, default direction, line count, and a
     // single-line label (newlines stripped so the header stays one line).
     let safe_label = label.replace(['\n', '\r'], " ");
@@ -147,7 +156,20 @@ pub fn write_buffer(
         buf.push_str(line);
         buf.push('\n');
     }
-    std::fs::write(buffer_path(worktree_root), buf)
+    std::fs::write(slot_path(worktree_root, 0), buf)
+}
+
+/// Shift every ring slot up by one (dropping the oldest) so a fresh `LAST-0`
+/// can be written. Best-effort: a missing slot is skipped and a failed rename
+/// only costs a stale page — the ring is a throwaway paging cache.
+fn rotate_ring(worktree_root: &Path) {
+    let _ = std::fs::remove_file(slot_path(worktree_root, RING_SIZE - 1));
+    for n in (0..RING_SIZE - 1).rev() {
+        let from = slot_path(worktree_root, n);
+        if from.exists() {
+            let _ = std::fs::rename(&from, slot_path(worktree_root, n + 1));
+        }
+    }
 }
 
 /// Read and parse the session's current `SHOW MORE` buffer, if one exists.
@@ -158,7 +180,18 @@ pub fn write_buffer(
 /// # Errors
 /// Returns the underlying I/O error for failures other than a missing file.
 pub fn read_buffer(worktree_root: &Path) -> std::io::Result<Option<Buffer>> {
-    let path = buffer_path(worktree_root);
+    read_buffer_n(worktree_root, 0)
+}
+
+/// Read and parse ring slot `n` (`LAST-<n>`, 0 = most recent), if present.
+///
+/// Returns `Ok(None)` when the slot file is absent or lacks a recognised
+/// header (treated as "no buffer" rather than an error).
+///
+/// # Errors
+/// Returns the underlying I/O error for failures other than a missing file.
+pub fn read_buffer_n(worktree_root: &Path, n: usize) -> std::io::Result<Option<Buffer>> {
+    let path = slot_path(worktree_root, n);
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -366,6 +399,32 @@ mod tests {
         assert!(out.text.contains("line1"));
         assert!(out.text.contains("line2"));
         assert!(!out.text.contains("line3\n"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn ring_pages_previous_buffers_as_last_n() {
+        let tmp = tmp_dir();
+        write_buffer(&tmp, Direction::Head, "first", &["a1"]).unwrap();
+        write_buffer(&tmp, Direction::Head, "second", &["b1", "b2"]).unwrap();
+
+        // LAST-0 is the most recent write; LAST-1 is the one before it.
+        let last0 = read_buffer_n(&tmp, 0).unwrap().unwrap();
+        assert_eq!(last0.label, "second");
+        assert_eq!(last0.lines, vec!["b1", "b2"]);
+        let last1 = read_buffer_n(&tmp, 1).unwrap().unwrap();
+        assert_eq!(last1.label, "first");
+        assert_eq!(last1.lines, vec!["a1"]);
+        // A bare read_buffer is LAST-0.
+        assert_eq!(read_buffer(&tmp).unwrap().unwrap().label, "second");
+
+        // The ring is bounded to RING_SIZE slots.
+        for i in 0..RING_SIZE {
+            write_buffer(&tmp, Direction::Head, &format!("w{i}"), &["x"]).unwrap();
+        }
+        assert!(read_buffer_n(&tmp, RING_SIZE - 1).unwrap().is_some());
+        assert!(read_buffer_n(&tmp, RING_SIZE).unwrap().is_none());
+
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

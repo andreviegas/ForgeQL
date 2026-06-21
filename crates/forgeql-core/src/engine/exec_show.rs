@@ -214,13 +214,18 @@ impl ForgeQLEngine {
         session_id: Option<&str>,
         op: &ForgeQLIR,
     ) -> Result<ForgeQLResult> {
-        let ForgeQLIR::ShowMore { window, clauses } = op else {
+        let ForgeQLIR::ShowMore {
+            window,
+            last,
+            clauses,
+        } = op
+        else {
             unreachable!("exec_show_more: wrong IR variant")
         };
         let sid = require_session_id(session_id)?;
         let root = self.require_session(sid)?.worktree_path.clone();
 
-        let buffer = crate::showmore::read_buffer(&root)
+        let buffer = crate::showmore::read_buffer_n(&root, *last)
             .map_err(|e| anyhow::anyhow!("reading SHOW MORE buffer: {e}"))?
             .ok_or_else(|| {
                 anyhow::anyhow!(

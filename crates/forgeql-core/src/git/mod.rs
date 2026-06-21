@@ -99,8 +99,7 @@ const CLEAN_COMMIT_EXCLUDED: &[&str] = &[
     ".forgeql-index",
     ".forgeql-session",
     crate::storage::columnar::DELTA_FILE_NAME,
-    ".forgeql-checkpoints",              // FT6: never in user-facing history
-    crate::showmore::SHOWMORE_FILE_NAME, // SHOW MORE buffer: session-local, never published
+    ".forgeql-checkpoints", // FT6: never in user-facing history
 ];
 
 /// Files excluded from **internal checkpoint** commits (`BEGIN TRANSACTION`).
@@ -116,7 +115,12 @@ const CHECKPOINT_EXCLUDED: &[&str] = &[
 fn is_clean_commit_excluded(path: &std::path::Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|name| CLEAN_COMMIT_EXCLUDED.contains(&name))
+        .is_some_and(|name| {
+            CLEAN_COMMIT_EXCLUDED.contains(&name)
+                // The SHOW MORE ring writes `<prefix>-<n>` slot files — exclude
+                // every slot (and the legacy single-file name) by prefix.
+                || name.starts_with(crate::showmore::SHOWMORE_FILE_NAME)
+        })
 }
 
 fn is_checkpoint_excluded(path: &std::path::Path) -> bool {

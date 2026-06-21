@@ -373,6 +373,10 @@ pub enum ForgeQLIR {
     /// log with `SHOW MORE WHERE text MATCHES 'error'`).
     ShowMore {
         window: ShowMoreWindow,
+        /// Which buffer in the `LAST-n` ring to page (0 = most recent). A bare
+        /// `SHOW MORE` is `LAST-0`; `SHOW MORE LAST-1` pages the previous buffer.
+        #[serde(default)]
+        last: usize,
         #[serde(flatten)]
         clauses: Clauses,
     },

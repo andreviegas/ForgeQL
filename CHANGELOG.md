@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.80.3] — 2026-06-21 — feat(output): LAST-n ring buffer for SHOW MORE
+
+### Added
+
+- The `SHOW MORE` buffer is now a **`LAST-n` ring** (`RING_SIZE` = 5 slots,
+  written in the worktree as `.forgeql-showmore-<n>`). Each buffered command
+  pushes the existing slots back one and writes the new `LAST-0`, so a recently
+  buffered output (e.g. a mutation diff) survives a subsequent SHOW/FIND that
+  would previously have overwritten the single buffer. `SHOW MORE LAST-1` pages
+  the previous buffer; a bare `SHOW MORE` is `LAST-0`. The selector is an atomic
+  grammar token (`@{ "LAST-" ~ ASCII_DIGIT+ }`) so `SHOW MORE LAST-1 1-1000`
+  parses as selector `LAST-1` + range `1-1000` without colliding with the range
+  hyphen. The ring slots are excluded from user-facing commits by prefix
+  (`git::is_clean_commit_excluded`). Tests: `ring_pages_previous_buffers_as_last_n`
+  (`showmore.rs`) and `parse_show_more_last_n` (`parser/tests.rs`).
+
 ## [0.80.2] — 2026-06-21 — feat(output): universal SHOW MORE cap for SHOW and FIND
 
 ### Changed

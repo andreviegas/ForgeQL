@@ -583,7 +583,9 @@ fn parse_change_in_transaction_sequence() {
 fn parse_show_more_bare_is_full() {
     let ops = parse("SHOW MORE").unwrap();
     match &ops[0] {
-        ForgeQLIR::ShowMore { window, clauses } => {
+        ForgeQLIR::ShowMore {
+            window, clauses, ..
+        } => {
             assert_eq!(*window, crate::ir::ShowMoreWindow::Full);
             assert!(clauses.where_predicates.is_empty());
         }
@@ -614,11 +616,43 @@ fn parse_show_more_head_tail_range() {
 }
 
 #[test]
+fn parse_show_more_last_n() {
+    use crate::ir::ShowMoreWindow;
+    // Bare SHOW MORE defaults to LAST-0.
+    match &parse("SHOW MORE").unwrap()[0] {
+        ForgeQLIR::ShowMore { last, window, .. } => {
+            assert_eq!(*last, 0);
+            assert_eq!(*window, ShowMoreWindow::Full);
+        }
+        _ => panic!("wrong variant"),
+    }
+    // LAST-n selector alone.
+    match &parse("SHOW MORE LAST-2").unwrap()[0] {
+        ForgeQLIR::ShowMore { last, window, .. } => {
+            assert_eq!(*last, 2);
+            assert_eq!(*window, ShowMoreWindow::Full);
+        }
+        _ => panic!("wrong variant"),
+    }
+    // LAST-n composes with a range window — the atomic LAST-<n> token never
+    // collides with the range hyphen.
+    match &parse("SHOW MORE LAST-1 1-1000").unwrap()[0] {
+        ForgeQLIR::ShowMore { last, window, .. } => {
+            assert_eq!(*last, 1);
+            assert_eq!(*window, ShowMoreWindow::Range(1, 1000));
+        }
+        _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
 fn parse_show_more_window_then_where_composes() {
     // WHERE must apply after every window form, not just bare SHOW MORE.
     let ops = parse("SHOW MORE TAIL 40 WHERE text MATCHES 'error|fail'").unwrap();
     match &ops[0] {
-        ForgeQLIR::ShowMore { window, clauses } => {
+        ForgeQLIR::ShowMore {
+            window, clauses, ..
+        } => {
             assert_eq!(*window, crate::ir::ShowMoreWindow::Tail(40));
             assert_eq!(clauses.where_predicates.len(), 1);
             assert_eq!(clauses.where_predicates[0].field, "text");
@@ -631,7 +665,9 @@ fn parse_show_more_window_then_where_composes() {
 fn parse_show_more_range_then_where_and_limit() {
     let ops = parse("SHOW MORE 1-400 WHERE text LIKE '%warning%' LIMIT 10").unwrap();
     match &ops[0] {
-        ForgeQLIR::ShowMore { window, clauses } => {
+        ForgeQLIR::ShowMore {
+            window, clauses, ..
+        } => {
             assert_eq!(*window, crate::ir::ShowMoreWindow::Range(1, 400));
             assert_eq!(clauses.where_predicates.len(), 1);
             assert_eq!(clauses.limit, Some(10));

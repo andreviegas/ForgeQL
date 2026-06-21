@@ -124,8 +124,19 @@ fn parse_show_more_window(
 fn parse_show_more_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
     let mut window = crate::ir::ShowMoreWindow::Full;
     let mut clauses = crate::ir::Clauses::default();
+    let mut last = 0_usize;
     for child in pair.into_inner() {
         match child.as_rule() {
+            Rule::show_more_last => {
+                // Atomic token "LAST-<n>": strip the prefix and parse the index.
+                last = child
+                    .as_str()
+                    .strip_prefix("LAST-")
+                    .and_then(|n| n.parse().ok())
+                    .ok_or_else(|| {
+                        ForgeError::DslParse("show_more: invalid LAST-n selector".into())
+                    })?;
+            }
             Rule::show_more_window => {
                 window = parse_show_more_window(child)?;
             }
@@ -135,7 +146,11 @@ fn parse_show_more_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQL
             _ => {}
         }
     }
-    Ok(ForgeQLIR::ShowMore { window, clauses })
+    Ok(ForgeQLIR::ShowMore {
+        window,
+        last,
+        clauses,
+    })
 }
 
 // parse_statement is inherently long: one match arm per grammar rule.
