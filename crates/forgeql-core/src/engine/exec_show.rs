@@ -97,15 +97,6 @@ impl ForgeQLEngine {
             _ => None,
         };
 
-        // The implicit 40-line cap blocks only UNBOUNDED source output. Two
-        // shapes are bounded and must never be blocked:
-        //   - SHOW LINES n-m       — a user-specified line range.
-        //   - SHOW body OF 'sym'   — a single addressable symbol's own extent.
-        // (SHOW NODE CONTENT is rewritten into a SHOW LINES range above, so it
-        // is already covered.) SHOW context can expand via DEPTH, so it stays capped.
-        let is_explicit_range =
-            matches!(op, ForgeQLIR::ShowLines { .. } | ForgeQLIR::ShowBody { .. });
-
         // Apply WHERE predicates BEFORE the line caps so queries like
         // `SHOW body OF 'fn' WHERE text MATCHES 'TODO'` filter over the full
         // function body, not just the first N lines.
@@ -118,24 +109,14 @@ impl ForgeQLEngine {
             }
         }
 
-        // Apply all caps: explicit LIMIT/OFFSET, implicit DEFAULT_SHOW_LINE_LIMIT,
-        // and budget critical cap.
+        // Bound the result *set* (explicit LIMIT/OFFSET) and apply the budget
+        // critical cap. The inline output cap is applied later, at the single
+        // CSV render boundary (mcp.rs::finalize_csv), which windows + buffers
+        // any over-cap output for `SHOW MORE`.
         let budget_max = session_id
             .and_then(|sid| self.sessions.get(sid))
             .and_then(Session::budget_critical_max_lines);
-        let show_limit = session_id
-            .and_then(|sid| self.sessions.get(sid))
-            .map_or_else(
-                || crate::config::OutputConfig::default().show_lines,
-                |s| s.output_config().show_lines,
-            );
-        Self::apply_show_lines_cap(
-            &mut show_result,
-            show_clauses,
-            budget_max,
-            is_explicit_range,
-            show_limit,
-        );
+        Self::apply_show_lines_cap(&mut show_result, show_clauses, budget_max);
 
         Ok(ForgeQLResult::Show(show_result))
     }
@@ -291,9 +272,9 @@ impl ForgeQLEngine {
             metadata: None,
         };
 
-        // Honour an explicit LIMIT/OFFSET; is_explicit_range = true so the
-        // inline cap never blocks an explicit SHOW MORE retrieval.
-        Self::apply_show_lines_cap(&mut show_result, Some(clauses), None, true, usize::MAX);
+        // Honour an explicit LIMIT/OFFSET on the buffered lines. SHOW MORE is
+        // itself the cap-bypass path, so no inline cap is applied here.
+        Self::apply_show_lines_cap(&mut show_result, Some(clauses), None);
 
         // Tell the agent how much of the buffer it is seeing, so it can page on.
         let shown = match &show_result.content {

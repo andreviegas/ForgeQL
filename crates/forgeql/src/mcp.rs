@@ -239,6 +239,7 @@ async fn exec_engine(
         ForgeQLResult,
         Option<forgeql_core::budget::BudgetSnapshot>,
         Option<std::path::PathBuf>,
+        usize,
     ),
     ErrorData,
 > {
@@ -284,18 +285,28 @@ async fn exec_engine(
     // uses it to write the SHOW MORE buffer for over-cap output.
     let worktree = session_id.and_then(|mk| guard.session_worktree(mk));
 
+    // Inline output cap (lines) for the session, read while the lock is held.
+    // The CSV transport windows over-cap output to this many lines and buffers
+    // the full text for `SHOW MORE`. No session → the configured default.
+    let inline_cap = session_id.map_or_else(
+        || forgeql_core::config::OutputConfig::default().show_lines,
+        |mk| guard.session_inline_cap(mk),
+    );
+
     drop(guard);
-    Ok((result, budget_snap, worktree))
+    Ok((result, budget_snap, worktree, inline_cap))
 }
 
 /// Decide whether a result's rendered CSV output should be buffered for
 /// `SHOW MORE`, returning `(label, direction, inline-cap)` when so.
 ///
-/// Enabled for `VERIFY build`, whose full log is the largest single output
-/// sink. The buffer mechanism is general — other result types roll in here
-/// without changing the call site.
+/// Enabled for every bulk-output result type: `SHOW` and `FIND` (read output,
+/// capped at the session's inline limit) plus `VERIFY build` / `RUN` (command
+/// logs, capped at their summary window). `finalize` only writes a buffer when
+/// the rendered output exceeds the cap, so small results pass through inline.
 fn buffering_params(
     result: &ForgeQLResult,
+    inline_cap: usize,
 ) -> Option<(String, forgeql_core::showmore::Direction, usize)> {
     use forgeql_core::config::SummaryDirection;
     use forgeql_core::showmore::Direction;
@@ -314,6 +325,12 @@ fn buffering_params(
             };
             Some((format!("run '{}'", v.step), dir, v.summary_lines))
         }
+        // Read-oriented bulk output: SHOW (source lines) and FIND (rows). Both
+        // page top-down and share the session's inline cap. `finalize` only
+        // writes a buffer when the rendered output actually exceeds the cap, so
+        // small results pass through inline and unchanged.
+        ForgeQLResult::Show(_) => Some(("show".to_string(), Direction::Head, inline_cap)),
+        ForgeQLResult::Query(_) => Some(("find".to_string(), Direction::Head, inline_cap)),
         _ => None,
     }
 }
@@ -325,11 +342,12 @@ fn finalize_csv(
     rendered: String,
     result: &ForgeQLResult,
     worktree: Option<&std::path::Path>,
+    inline_cap: usize,
 ) -> String {
     let Some(root) = worktree else {
         return rendered;
     };
-    let Some((label, dir, cap)) = buffering_params(result) else {
+    let Some((label, dir, cap)) = buffering_params(result, inline_cap) else {
         return rendered;
     };
     match forgeql_core::showmore::finalize(root, &rendered, &label, dir, cap) {
@@ -385,7 +403,7 @@ impl ForgeQlMcp {
         let mut outputs: Vec<String> = Vec::with_capacity(ops.len());
         for (source_text, op) in &ops {
             let t0 = std::time::Instant::now();
-            let (result, budget_snap, worktree) =
+            let (result, budget_snap, worktree, inline_cap) =
                 exec_engine(&self.engine, user_id, params.session_id.as_deref(), op).await?;
             let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
             if let ForgeQLIR::UseSource { source, .. } = op {
@@ -407,9 +425,12 @@ impl ForgeQlMcp {
                 ));
             }
             let output = match format {
-                OutputFormat::Csv => {
-                    finalize_csv(compact::to_compact(&result), &result, worktree.as_deref())
-                }
+                OutputFormat::Csv => finalize_csv(
+                    compact::to_compact(&result),
+                    &result,
+                    worktree.as_deref(),
+                    inline_cap,
+                ),
                 OutputFormat::Json => result.to_json(),
             };
             // Show line_budget to the agent only when the budget is actually
@@ -707,6 +728,81 @@ mod tests {
         assert!(
             budgeted.contains("line_budget"),
             "a low-budget line must be shown regardless of size: {budgeted}"
+        );
+    }
+
+    #[test]
+    fn show_and_query_route_through_show_more_buffer() {
+        use forgeql_core::result::{QueryResult, ShowContent, ShowResult, SourceLine};
+
+        // FIND (Query) opts into buffering so large result sets page via SHOW MORE.
+        let query = ForgeQLResult::Query(QueryResult {
+            op: "find_symbols".to_string(),
+            results: vec![],
+            total: 0,
+            metric_hint: None,
+            group_by_field: None,
+        });
+        assert!(
+            buffering_params(&query, 40).is_some(),
+            "FIND output must route through the SHOW MORE buffer"
+        );
+
+        // A SHOW result with more lines than the cap is windowed inline while the
+        // full rendered output is written to the session buffer for SHOW MORE,
+        // replacing the old hard block that returned zero lines.
+        let lines: Vec<SourceLine> = (1..=100)
+            .map(|i| SourceLine {
+                line: i,
+                text: format!("source line {i}"),
+                marker: None,
+                node_id: None,
+                node_offset: None,
+            })
+            .collect();
+        let show = ForgeQLResult::Show(ShowResult {
+            op: "show_lines".to_string(),
+            symbol: None,
+            file: Some(PathBuf::from("big.rs")),
+            start_line: Some(1),
+            end_line: Some(100),
+            total_lines: None,
+            hint: None,
+            metadata: None,
+            content: ShowContent::Lines {
+                lines,
+                byte_start: None,
+                depth: None,
+            },
+        });
+        assert!(
+            buffering_params(&show, 40).is_some(),
+            "SHOW output must route through the SHOW MORE buffer"
+        );
+
+        let tmp = tempdir().expect("tempdir");
+        let rendered = compact::to_compact(&show);
+        let full_lines = rendered.lines().count();
+        assert!(full_lines > 40, "fixture must exceed the cap: {full_lines}");
+
+        let windowed = finalize_csv(rendered, &show, Some(tmp.path()), 40);
+        let shown = windowed.lines().count();
+        assert!(
+            shown <= 42,
+            "over-cap SHOW must be windowed near the cap, got {shown} lines"
+        );
+        assert!(
+            windowed.contains("show_more"),
+            "windowed output must carry the SHOW MORE hint: {windowed}"
+        );
+
+        // The full output is recoverable from the session buffer.
+        let buffer = forgeql_core::showmore::read_buffer(tmp.path())
+            .expect("read buffer")
+            .expect("buffer must exist after an over-cap SHOW");
+        assert!(
+            buffer.total() >= full_lines,
+            "buffer must hold the full rendered output"
         );
     }
 }

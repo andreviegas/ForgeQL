@@ -543,6 +543,17 @@ impl ForgeQLEngine {
             .map(|s| s.worktree_path.clone())
     }
 
+    /// Inline output cap (lines) for a loaded session, used by transports to
+    /// window over-cap CSV output into the `SHOW MORE` buffer. Falls back to
+    /// the configured default when the session is not resident in memory.
+    #[must_use]
+    pub fn session_inline_cap(&self, session_id: &str) -> usize {
+        self.sessions.get(session_id).map_or_else(
+            || crate::config::OutputConfig::default().show_lines,
+            |s| s.output_config().show_lines,
+        )
+    }
+
     /// Return `Some(snapshot)` only for non-admin ops, `None` for admin-exempt commands.
     #[must_use]
     pub fn budget_status_for_op(

@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.80.2] — 2026-06-21 — feat(output): universal SHOW MORE cap for SHOW and FIND
+
+### Changed
+
+- `SHOW` and `FIND` output now flows through the same `SHOW MORE` buffer as
+  `VERIFY build` / `RUN`: it is windowed to the session's inline cap (default
+  40 lines) and the full output is buffered for paging, replacing the old hard
+  block that returned **zero** lines with a "Blocked" guidance message once an
+  unbounded `SHOW` exceeded the cap. Over-cap reads now return the first page
+  plus a `SHOW MORE` hint; the full output is recoverable with `SHOW MORE 1-N`,
+  `HEAD n`, `TAIL n`, or `WHERE text MATCHES '…'`. `format=JSON` stays exempt
+  (full structured dump). The inline cap is now purely a presentation concern
+  applied at the single CSV render boundary (`mcp.rs::finalize_csv`); the
+  engine's `apply_show_lines_cap` only bounds the result *set* (LIMIT/OFFSET)
+  and applies the budget-critical cap. Test:
+  `show_and_query_route_through_show_more_buffer` (`crates/forgeql/src/mcp.rs`).
+
 ## [0.80.1] — 2026-06-21 — feat(query-logger): per-agent `session` column + larger preview cap
 
 ### Added

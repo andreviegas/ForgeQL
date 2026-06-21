@@ -107,23 +107,25 @@ impl ForgeQLEngine {
     // Show-line cap helper
     // -------------------------------------------------------------------
 
-    /// Apply all source-line output caps in one place.
+    /// Apply source-line result-set bounds in one place.
     ///
     /// Must be called **after** WHERE predicates have been applied so that
     /// the counts reflect post-filter line totals.
     ///
     /// Caps applied in order:
-    /// 1. Explicit `LIMIT` + `OFFSET` from the agent's clauses.
-    /// 2. Implicit `DEFAULT_SHOW_LINE_LIMIT` block when no explicit `LIMIT`
-    ///    was given — returns zero lines and a guidance hint.
-    /// 3. Budget critical cap — truncates to `critical_max_lines` when the
+    /// 1. Explicit `LIMIT` + `OFFSET` from the agent's clauses — bounds the
+    ///    result *set*, not the inline output.
+    /// 2. Budget critical cap — truncates to `critical_max_lines` when the
     ///    session budget is in critical state.
+    ///
+    /// The implicit inline-output cap is intentionally NOT applied here: over-
+    /// cap output is windowed and buffered for `SHOW MORE` at the single CSV
+    /// render boundary (`mcp.rs::finalize_csv`), so the agent always receives
+    /// the first page plus a pageable buffer rather than a hard empty result.
     pub(super) fn apply_show_lines_cap(
         show_result: &mut ShowResult,
         clauses: Option<&Clauses>,
         budget_max: Option<usize>,
-        is_explicit_range: bool,
-        show_limit: usize,
     ) {
         // Operates only on source-line outputs.
         let total = match &show_result.content {
@@ -131,37 +133,25 @@ impl ForgeQLEngine {
             _ => return,
         };
 
-        // ---- Explicit LIMIT + OFFSET, or implicit line cap ----
-        if let Some(clauses) = clauses {
-            if clauses.limit.is_some() {
-                // Agent gave an explicit LIMIT — honour OFFSET + LIMIT.
-                if let ShowContent::Lines { lines, .. } = &mut show_result.content {
-                    let offset = clauses.offset.unwrap_or(0);
-                    if offset > 0 && offset < total {
-                        *lines = lines.split_off(offset);
-                    } else if offset >= total {
-                        lines.clear();
-                    }
-                    let limit = clauses.limit.unwrap_or(total);
-                    if lines.len() > limit {
-                        lines.truncate(limit);
-                    }
-                }
-            } else if !is_explicit_range && total > show_limit {
-                // No explicit LIMIT and output exceeds the cap.
-                // Block the output entirely — return zero lines + guidance.
-                if let ShowContent::Lines { lines, .. } = &mut show_result.content {
+        // ---- Explicit LIMIT + OFFSET (bounds the result *set*) ----
+        // The inline output cap is deliberately NOT applied here. Over-cap
+        // output is windowed and buffered for `SHOW MORE` at the single CSV
+        // render boundary (mcp.rs::finalize_csv).
+        if let Some(clauses) = clauses
+            && clauses.limit.is_some()
+        {
+            // Agent gave an explicit LIMIT — honour OFFSET + LIMIT.
+            if let ShowContent::Lines { lines, .. } = &mut show_result.content {
+                let offset = clauses.offset.unwrap_or(0);
+                if offset > 0 && offset < total {
+                    *lines = lines.split_off(offset);
+                } else if offset >= total {
                     lines.clear();
                 }
-                show_result.total_lines = Some(total);
-                show_result.hint = Some(format!(
-                    "Blocked: this SHOW command would return {total} lines \
-                     (limit is {show_limit} without an explicit LIMIT clause). \
-                     Use FIND symbols WHERE to locate the exact symbol you need — \
-                     it returns file path and line numbers. \
-                     Then use SHOW LINES n-m OF 'file' to read only those lines. \
-                     If you really need all {total} lines, re-run with LIMIT {total}."
-                ));
+                let limit = clauses.limit.unwrap_or(total);
+                if lines.len() > limit {
+                    lines.truncate(limit);
+                }
             }
         }
 
