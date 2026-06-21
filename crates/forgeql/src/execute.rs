@@ -149,7 +149,15 @@ pub(crate) fn execute_and_print(
                 update_session_from_result(session, op, &result, &mut log_source);
                 let output = format_result(&result, format);
                 if let Some(ref mut l) = log {
-                    l.log(source_text, &result, &output, elapsed_ms, &log_source, None);
+                    l.log(
+                        source_text,
+                        &result,
+                        &output,
+                        elapsed_ms,
+                        &log_source,
+                        session.session_id.as_deref().unwrap_or(""),
+                        None,
+                    );
                 }
                 println!("{output}");
             }

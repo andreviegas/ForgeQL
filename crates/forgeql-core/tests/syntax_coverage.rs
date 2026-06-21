@@ -2265,6 +2265,7 @@ fn query_logger_creates_csv_with_header() {
         "some output text",
         0,
         "test-source",
+        "anonymous:test-source:main:agent-a",
         None,
     );
 
@@ -2273,8 +2274,18 @@ fn query_logger_creates_csv_with_header() {
     let content = fs::read_to_string(&log_path).unwrap();
     let lines: Vec<&str> = content.lines().collect();
     assert!(lines.len() >= 2, "should have header + at least 1 data row");
+    assert!(
+        lines[0].starts_with("session"),
+        "session must be the first column"
+    );
     assert!(lines[0].contains("timestamp"));
     assert!(lines[0].contains("command_preview"));
+    // The session column drops the source component (already the file name).
+    assert!(
+        lines[1].contains("anonymous:main:agent-a"),
+        "data row should carry the source-stripped session id, got: {}",
+        lines[1]
+    );
 }
 
 #[test]
@@ -2293,14 +2304,24 @@ fn query_logger_appends_multiple_rows() {
         message: Some("ok".to_string()),
     });
 
-    logger.log("FIND symbols", &result, "output1", 0, "multi-test", None);
-    logger.log("FIND files", &result, "output2", 0, "multi-test", None);
+    let sid = "anonymous:multi-test:main:agent-a";
+    logger.log(
+        "FIND symbols",
+        &result,
+        "output1",
+        0,
+        "multi-test",
+        sid,
+        None,
+    );
+    logger.log("FIND files", &result, "output2", 0, "multi-test", sid, None);
     logger.log(
         "SHOW body OF 'func'",
         &result,
         "output3",
         0,
         "multi-test",
+        sid,
         None,
     );
 
@@ -2342,18 +2363,19 @@ fn query_logger_records_source_lines_for_show() {
         &output,
         42,
         "show-test",
+        "anonymous:show-test:main:agent-a",
         None,
     );
 
     let content = fs::read_to_string(logger.log_path("show-test")).unwrap();
     let data_line = content.lines().nth(1).expect("data row");
-    // CSV: "timestamp","line_budget",elapsed_ms,source_lines,tokens_sent,tokens_received,"preview"
+    // CSV: "session","timestamp","line_budget",elapsed_ms,source_lines,tokens_sent,tokens_received,"preview"
     let fields: Vec<&str> = data_line.split(',').collect();
-    // elapsed_ms is now at index 2 (index 1 = line_budget).
-    let elapsed: u64 = fields[2].parse().expect("parse elapsed_ms");
+    // elapsed_ms is now at index 3 (index 0 = session, 1 = timestamp, 2 = line_budget).
+    let elapsed: u64 = fields[3].parse().expect("parse elapsed_ms");
     assert_eq!(elapsed, 42, "elapsed_ms should be logged");
     // source_lines should be "5" (we asked for 5 lines).
-    let source_lines: usize = fields[3].parse().expect("parse source_lines");
+    let source_lines: usize = fields[4].parse().expect("parse source_lines");
     assert_eq!(source_lines, 5, "SHOW LINES 1-5 should log 5 source_lines");
 }
 
@@ -2372,15 +2394,72 @@ fn query_logger_records_zero_source_lines_for_query() {
         &output,
         0,
         "query-test",
+        "anonymous:query-test:main:agent-a",
         None,
     );
 
     let content = fs::read_to_string(logger.log_path("query-test")).unwrap();
     let data_line = content.lines().nth(1).expect("data row");
-    // CSV: "timestamp","line_budget",elapsed_ms,source_lines,...
+    // CSV: "session","timestamp","line_budget",elapsed_ms,source_lines,...
     let fields: Vec<&str> = data_line.split(',').collect();
-    let source_lines: usize = fields[3].parse().expect("parse source_lines");
+    let source_lines: usize = fields[4].parse().expect("parse source_lines");
     assert_eq!(source_lines, 0, "FIND query should log 0 source_lines");
+}
+
+#[test]
+fn query_logger_session_column_strips_source() {
+    let tmp = tempdir().unwrap();
+    let logger = QueryLogger::new(tmp.path().to_path_buf());
+
+    let result = ForgeQLResult::SourceOp(forgeql_core::result::SourceOpResult {
+        op: "test".to_string(),
+        source_name: None,
+        session_id: None,
+        branches: vec![],
+        symbols_indexed: None,
+        resumed: false,
+        message: Some("ok".to_string()),
+    });
+
+    // A well-formed session id (user:source:branch:alias) is logged with the
+    // source component removed — the CSV file is already per-source.
+    logger.log(
+        "FIND symbols",
+        &result,
+        "out",
+        0,
+        "sess-test",
+        "anonymous:sess-test:main:agent-7",
+        None,
+    );
+    // A malformed token falls back to the raw value rather than being dropped.
+    logger.log(
+        "FIND files",
+        &result,
+        "out",
+        0,
+        "sess-test",
+        "not-a-session-id",
+        None,
+    );
+
+    let content = fs::read_to_string(logger.log_path("sess-test")).unwrap();
+    let lines: Vec<&str> = content.lines().collect();
+    assert!(
+        lines[1].starts_with("\"anonymous:main:agent-7\""),
+        "first column should be the source-stripped session, got: {}",
+        lines[1]
+    );
+    assert!(
+        !lines[1].contains("sess-test"),
+        "source component must not appear in the session column, got: {}",
+        lines[1]
+    );
+    assert!(
+        lines[2].starts_with("\"not-a-session-id\""),
+        "malformed session id should fall back to the raw token, got: {}",
+        lines[2]
+    );
 }
 
 // =======================================================================

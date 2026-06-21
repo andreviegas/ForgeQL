@@ -60,6 +60,10 @@ impl ForgeQlMcp {
     }
 
     /// Append a log row for a completed FQL statement (no-op when logger is disabled).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors QueryLogger::log: per-source selector, agent session id, and execution metrics"
+    )]
     fn log_query(
         &self,
         fql: &str,
@@ -67,12 +71,21 @@ impl ForgeQlMcp {
         output: &str,
         elapsed_ms: u64,
         source: &str,
+        session_id: &str,
         budget_line: Option<&str>,
     ) {
         if let Ok(mut guard) = self.logger.lock()
             && let Some(ref mut l) = *guard
         {
-            l.log(fql, result, output, elapsed_ms, source, budget_line);
+            l.log(
+                fql,
+                result,
+                output,
+                elapsed_ms,
+                source,
+                session_id,
+                budget_line,
+            );
         }
     }
 
@@ -416,6 +429,7 @@ impl ForgeQlMcp {
                 &output,
                 elapsed_ms,
                 &log_source,
+                params.session_id.as_deref().unwrap_or(""),
                 budget_fixed.as_deref(),
             );
             outputs.push(output);

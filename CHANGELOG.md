@@ -6,6 +6,32 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.80.1] — 2026-06-21 — feat(query-logger): per-agent `session` column + larger preview cap
+
+### Added
+
+- The query log CSV (`{data_dir}/log/{source}.csv`) now leads with a `session`
+  column identifying which agent issued each command. Previously every agent
+  writing to the same per-source file was indistinguishable — the rows got
+  mixed together. The value is the full session id (`user:source:branch:alias`)
+  with its `source` component removed (the file is already named per source), so
+  it reads `user:branch:alias`; a malformed token falls back to the raw value.
+  Wired through `QueryLogger::log` and both call sites (`mcp::run_fql`,
+  `execute_and_print`).
+
+### Changed
+
+- `LOG_PREVIEW_MAX_CHARS` doubled 160 → 320 so the `command_preview` column no
+  longer truncates the meaningful tail of longer statements.
+
+### Tests
+
+- `query_logger_creates_csv_with_header` now asserts `session` is the first
+  column and the data row carries the source-stripped id; new
+  `query_logger_session_column_strips_source` covers both the strip and the
+  malformed-token fallback; the field-index assertions in the source-line tests
+  shifted by one.
+
 ## [0.80.0] — 2026-06-21 — feat(engine): RUN verb for allowlisted command templates
 
 ### Added

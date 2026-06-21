@@ -7,16 +7,20 @@
 //! All subsequent writes are append-only so the log survives process
 //! restarts without duplication.
 //!
-//! CSV columns:
-//! CSV columns:`timestamp`, `line_budget`, `elapsed_ms`, `source_lines`, `tokens_sent`, `tokens_received`, `command_preview`
+//! The leading `session` column identifies which agent issued the command —
+//! it is the full session id minus its `source` component (the file is
+//! already named per source), so concurrent agents no longer get mixed up.
+//!
+//! CSV columns: `session`, `timestamp`, `line_budget`, `elapsed_ms`, `source_lines`, `tokens_sent`, `tokens_received`, `command_preview`
 
 use std::io::Write;
 use std::path::PathBuf;
 
 use crate::result::ForgeQLResult;
+use crate::session::SessionCoords;
 
 /// Maximum characters kept in the CSV log command preview column.
-const LOG_PREVIEW_MAX_CHARS: usize = 160;
+const LOG_PREVIEW_MAX_CHARS: usize = 320;
 
 /// Approximate number of UTF-8 characters per LLM token (used for
 /// rough token-count estimates in the query log).
@@ -56,6 +60,17 @@ impl QueryLogger {
             .join(format!("{}.csv", Self::sanitize_source(source)))
     }
 
+    /// Reduce a full session id (`user:source:branch:alias`) to the
+    /// agent-identifying portion (`user:branch:alias`). The `source`
+    /// component is dropped because it already names the per-source CSV
+    /// log file. Falls back to the raw token when it is not a well-formed id.
+    fn session_without_source(session_id: &str) -> String {
+        SessionCoords::from_session_id(session_id).map_or_else(
+            |_| session_id.to_string(),
+            |c| format!("{}:{}:{}", c.user, c.branch, c.alias),
+        )
+    }
+
     /// Append one CSV row for the completed FQL statement.
     ///
     /// `fql`           — the raw statement text.
@@ -63,6 +78,12 @@ impl QueryLogger {
     /// `result_output` — the serialized output string, used to estimate token usage.
     /// `elapsed_ms`    — wall-clock milliseconds to execute the command.
     /// `source`        — the source name, used to select the per-source CSV file.
+    /// `session_id`    — the full session id; logged as the first column with its
+    ///                   `source` component stripped (the file is already per-source).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a log row needs the per-source file selector, the agent session id, and the execution metrics together"
+    )]
     pub fn log(
         &self,
         fql: &str,
@@ -70,6 +91,7 @@ impl QueryLogger {
         result_output: &str,
         elapsed_ms: u64,
         source: &str,
+        session_id: &str,
         budget_line: Option<&str>,
     ) {
         let sanitized = Self::sanitize_source(source);
@@ -91,7 +113,7 @@ impl QueryLogger {
         if needs_header {
             let _ = writeln!(
                 file,
-                "timestamp,line_budget,elapsed_ms,source_lines,tokens_sent,tokens_received,command_preview"
+                "session,timestamp,line_budget,elapsed_ms,source_lines,tokens_sent,tokens_received,command_preview"
             );
         }
 
@@ -107,6 +129,7 @@ impl QueryLogger {
             .collect::<String>()
             .replace('"', "\"\"");
 
+        let session = Self::session_without_source(session_id).replace('"', "\"\"");
         let source_lines = result.source_lines_count();
         let tokens_sent = fql.len().div_ceil(CHARS_PER_TOKEN);
         let tokens_received = result_output.len().div_ceil(CHARS_PER_TOKEN);
@@ -114,7 +137,8 @@ impl QueryLogger {
 
         let _ = writeln!(
             file,
-            "\"{}\",\"{}\",{},{},{},{},\"{}\"",
+            "\"{}\",\"{}\",\"{}\",{},{},{},{},\"{}\"",
+            session,
             iso_timestamp(),
             budget,
             elapsed_ms,
