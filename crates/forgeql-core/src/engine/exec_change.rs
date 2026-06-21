@@ -7,7 +7,7 @@ use crate::{
     result::{ForgeQLResult, MutationResult},
     transforms::change::lines_to_byte_range,
     transforms::copy_move::{plan_copy_lines, plan_copy_lines_at, plan_move_lines},
-    transforms::diff::{CompactDiffConfig, compact_diff_plan},
+    transforms::diff::{CompactDiffConfig, compact_diff_addressed},
     transforms::{ByteRangeEdit, FileEdit, TransformPlan, plan_from_ir},
 };
 
@@ -59,19 +59,12 @@ impl ForgeQLEngine {
         let lines_written = plan.lines_written();
         let suggestions = convert_suggestions(&plan);
 
-        // Merge before generating preview (compact_diff_plan reads files).
         plan.merge_by_file()?;
 
-        // Generate a compact diff preview *before* applying (apply consumes
-        // the plan). Bounded by CompactDiffConfig defaults — at most K
-        // content lines per file, each ≤ W characters wide.
-        let diff = match compact_diff_plan(&plan, &CompactDiffConfig::default()) {
-            Ok(d) if d.is_empty() => None,
-            Ok(d) => Some(d),
-            Err(_) => None,
-        };
-
-        let _ = plan.apply()?;
+        // Snapshot the merged edits before apply() consumes the plan, then apply.
+        // apply() returns the pre-edit bytes of every modified file.
+        let edits_snapshot = plan.file_edits.clone();
+        let applied = plan.apply()?;
 
         // Reindex touched files.
         self.reindex_session(sid, &files_changed);
@@ -82,6 +75,11 @@ impl ForgeQLEngine {
             session.satisfied_gates.clear();
             session.edits_since_gate = session.edits_since_gate.saturating_add(1);
         }
+
+        // Build the diff AFTER apply + reindex so each present line carries an
+        // inline `node_id(offset)` handle — the agent's BUG-022 self-correction
+        // address — instead of an unaddressed pre-apply preview.
+        let diff = self.build_post_edit_diff(sid, &edits_snapshot, &applied.originals);
 
         Ok(ForgeQLResult::Mutation(MutationResult {
             op: op_name.to_string(),
@@ -169,15 +167,13 @@ impl ForgeQLEngine {
 
         plan.merge_by_file()?;
 
-        let diff = match compact_diff_plan(&plan, &CompactDiffConfig::default()) {
-            Ok(d) if d.is_empty() => None,
-            Ok(d) => Some(d),
-            Err(_) => None,
-        };
-
-        let _ = plan.apply()?;
-
+        // Snapshot the merged edits before apply() consumes the plan.
+        let edits_snapshot = plan.file_edits.clone();
+        let applied = plan.apply()?;
         self.reindex_session(sid, &files_changed);
+
+        // Diff built after apply + reindex so it carries inline node addresses.
+        let diff = self.build_post_edit_diff(sid, &edits_snapshot, &applied.originals);
 
         Ok(ForgeQLResult::Mutation(MutationResult {
             op: op_name.to_string(),
@@ -189,6 +185,41 @@ impl ForgeQLEngine {
             suggestions: Vec::new(),
             new_node_id: None,
         }))
+    }
+
+    /// Build the post-edit mutation diff with inline `node_id(offset)` addresses
+    /// on present lines.
+    ///
+    /// Must be called AFTER `plan.apply()` + `reindex_session` so the post-edit
+    /// node ordinals exist. `originals` are the pre-edit bytes returned by
+    /// `apply()`; `edits` is the pre-apply snapshot of the file edits. Returns
+    /// `None` for an empty diff; gracefully degrades to an unaddressed diff when
+    /// the session index is unavailable (the addresser then yields no handles).
+    fn build_post_edit_diff(
+        &self,
+        sid: &str,
+        edits: &[FileEdit],
+        originals: &std::collections::HashMap<PathBuf, Vec<u8>>,
+    ) -> Option<String> {
+        let we = self.require_workspace_and_engine(Some(sid)).ok();
+        let mut node_refs = |path: &Path, lo: usize, hi: usize| -> Vec<Option<(String, usize)>> {
+            match &we {
+                Some((ws, eng)) => {
+                    let rel = ws.relative(path);
+                    let rel_str = rel.to_string_lossy();
+                    eng.innermost_nodes_for_lines(&rel_str, ws.root(), lo, hi)
+                }
+                None => Vec::new(),
+            }
+        };
+        compact_diff_addressed(
+            edits,
+            originals,
+            &CompactDiffConfig::default(),
+            &mut node_refs,
+        )
+        .ok()
+        .filter(|d| !d.is_empty())
     }
     // =================================================================
     // Node-addressed mutations (Phase C)

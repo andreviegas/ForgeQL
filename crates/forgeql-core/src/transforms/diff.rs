@@ -132,11 +132,92 @@ pub fn compact_diff_plan(plan: &TransformPlan, cfg: &CompactDiffConfig) -> Resul
             continue;
         }
 
-        let hunks = build_compact_hunks(&old_lines, &new_lines, &ranges, cfg);
+        let hunks = build_compact_hunks(&old_lines, &new_lines, &ranges, cfg, None);
         if hunks.is_empty() {
             continue;
         }
 
+        let preview = render_compact_hunks(&fe.path, &hunks, cfg);
+        if !preview.is_empty() {
+            out.push_str(&preview);
+        }
+    }
+    Ok(out)
+}
+
+/// Per-line node handles for a post-edit line range: `(node_id, node_start)`,
+/// or `None` for a line covered by no indexed node.
+type LineNodeRefs = Vec<Option<(String, usize)>>;
+
+/// Build the post-edit compact diff with inline node addresses on present lines.
+///
+/// Must be called **after** the edit is applied and the session reindexed: it
+/// reads the post-edit content from disk and the pre-edit content from
+/// `originals` (as returned by `TransformPlan::apply`), so node ordinals for the
+/// new lines already exist. `edits` is the snapshot of the applied file edits,
+/// taken before `apply` consumed the plan.
+///
+/// `node_refs(path, lo, hi)` returns, for each 1-based post-edit line in
+/// `lo..=hi`, the innermost `(node_id, node_start_line)` or `None`; an empty Vec
+/// (unindexed file) renders that file without addresses. Present lines (added +
+/// context) are addressed `node_id(offset)`; removed lines have no post-edit
+/// position and stay unaddressed.
+///
+/// # Errors
+/// Returns `Err` if a post-edit file cannot be read.
+pub fn compact_diff_addressed<S: std::hash::BuildHasher>(
+    edits: &[FileEdit],
+    originals: &std::collections::HashMap<std::path::PathBuf, Vec<u8>, S>,
+    cfg: &CompactDiffConfig,
+    node_refs: &mut dyn FnMut(&Path, usize, usize) -> LineNodeRefs,
+) -> Result<String> {
+    let mut out = String::new();
+    for fe in edits {
+        let Some(old_bytes) = originals.get(&fe.path) else {
+            continue;
+        };
+        let new_bytes = file_io::read_bytes(&fe.path)?;
+        let old_str = String::from_utf8_lossy(old_bytes);
+        let new_str = String::from_utf8_lossy(&new_bytes);
+        if old_str == new_str {
+            continue;
+        }
+
+        let old_lines: Vec<&str> = old_str.split('\n').collect();
+        let new_lines: Vec<&str> = new_str.split('\n').collect();
+        let ranges = edit_based_change_ranges(&old_str, &new_str, &fe.edits);
+        if ranges.is_empty() {
+            continue;
+        }
+
+        // 1-based post-edit line span the hunks touch (including context).
+        let mut lo = usize::MAX;
+        let mut hi = 0_usize;
+        for cr in &ranges {
+            lo = lo.min(cr.new_start.saturating_sub(cfg.context_before) + 1);
+            hi = hi.max((cr.new_end + cfg.context_after).min(new_lines.len()));
+        }
+        let refs = if lo >= 1 && lo <= hi {
+            node_refs(&fe.path, lo, hi)
+        } else {
+            Vec::new()
+        };
+
+        let addr_fn = |new_line: usize| -> Option<String> {
+            if new_line < lo {
+                return None;
+            }
+            let (node_id, node_start) = refs.get(new_line - lo)?.as_ref()?;
+            let offset = new_line.saturating_sub(*node_start) + 1;
+            Some(format!("{node_id}({offset})"))
+        };
+        let addr: Option<&dyn Fn(usize) -> Option<String>> = if refs.iter().any(Option::is_some) {
+            Some(&addr_fn)
+        } else {
+            None
+        };
+
+        let hunks = build_compact_hunks(&old_lines, &new_lines, &ranges, cfg, addr);
         let preview = render_compact_hunks(&fe.path, &hunks, cfg);
         if !preview.is_empty() {
             out.push_str(&preview);
@@ -164,7 +245,7 @@ fn compact_diff_preview(old: &str, new: &str, path: &Path, cfg: &CompactDiffConf
     }
 
     // Build per-hunk display blocks (each hunk = changed lines + context-after).
-    let hunks = build_compact_hunks(&old_lines, &new_lines, &ranges, cfg);
+    let hunks = build_compact_hunks(&old_lines, &new_lines, &ranges, cfg, None);
     if hunks.is_empty() {
         return String::new();
     }
@@ -254,23 +335,33 @@ fn build_compact_hunks(
     new: &[&str],
     ranges: &[ChangeRange],
     cfg: &CompactDiffConfig,
+    addr: Option<&dyn Fn(usize) -> Option<String>>,
 ) -> Vec<CompactHunk> {
+    // Render a present (post-edit) line, prefixing its node address when the
+    // addresser resolves one for the line's 1-based post-edit number.
+    let present = |prefix: char, new_line: usize, text: &str| -> String {
+        addr.and_then(|f| f(new_line)).map_or_else(
+            || format!("{prefix}{text}"),
+            |a| format!("{prefix}{a}  {text}"),
+        )
+    };
+
     let mut hunks = Vec::new();
 
     for cr in ranges {
         let mut lines = Vec::new();
 
-        // Context-before: unchanged lines right before this change, from the
-        // old file. Surfaces the line the edit landed against — e.g. the prior
-        // collection element that now needs a trailing separator after an
-        // INSERT (BUG-022), which the bare `+` line alone would hide.
+        // Context-before: unchanged lines just above the change (from old),
+        // mapped to their post-edit line numbers so they can be addressed.
+        // Surfaces the line a mechanical edit landed against (BUG-022).
         let ctx_b_start = cr.old_start.saturating_sub(cfg.context_before);
         for idx in ctx_b_start..cr.old_start {
             let text = old.get(idx).copied().unwrap_or("");
-            lines.push(format!(" {text}"));
+            let new_line = cr.new_start.saturating_sub(cr.old_start - idx) + 1;
+            lines.push(present(' ', new_line, text));
         }
 
-        // Removed lines.
+        // Removed lines: gone post-edit, so no address.
         for idx in cr.old_start..cr.old_end {
             let text = old.get(idx).copied().unwrap_or("");
             lines.push(format!("-{text}"));
@@ -278,14 +369,14 @@ fn build_compact_hunks(
         // Added lines.
         for idx in cr.new_start..cr.new_end {
             let text = new.get(idx).copied().unwrap_or("");
-            lines.push(format!("+{text}"));
+            lines.push(present('+', idx + 1, text));
         }
-        // Context-after: unchanged lines right after this change in the new file.
+        // Context-after: unchanged lines just below the change (from new).
         let ctx_start = cr.new_end;
         let ctx_end = (ctx_start + cfg.context_after).min(new.len());
         for idx in ctx_start..ctx_end {
             let text = new.get(idx).copied().unwrap_or("");
-            lines.push(format!(" {text}"));
+            lines.push(present(' ', idx + 1, text));
         }
 
         hunks.push(CompactHunk { lines });
@@ -965,6 +1056,43 @@ mod tests {
         assert!(
             !result.contains("line_2999"),
             "must not show file tail, got: {result}"
+        );
+    }
+
+    #[test]
+    fn compact_diff_addressed_prefixes_present_lines_with_handles() {
+        // After an INSERT (disk holds the post-edit content, `originals` the
+        // pre-edit), present lines — the inserted line and its context — carry
+        // inline `node_id(offset)` handles. Removed lines stay unaddressed.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.json");
+        let old = "[\n  { \"a\": 1 },\n  { \"b\": 2 }\n]\n";
+        let new = "[\n  { \"a\": 1 },\n  { \"b\": 2 }\n  { \"c\": 3 }\n]\n";
+        std::fs::write(&path, new).unwrap(); // disk = post-edit content
+
+        let mut originals = std::collections::HashMap::new();
+        let _ = originals.insert(path.clone(), old.as_bytes().to_vec());
+
+        // The edit that produced `new`: insert the new element before `]`.
+        let insert_at = old.find(']').unwrap();
+        let edits = vec![FileEdit {
+            path,
+            edits: vec![ByteRangeEdit::new(insert_at..insert_at, "  { \"c\": 3 }\n")],
+        }];
+
+        // Mock addresser: every queried line resolves to node "nABC.0009"
+        // starting at `lo` (so offset = line - lo + 1).
+        let mut node_refs = |_p: &Path, lo: usize, hi: usize| -> Vec<Option<(String, usize)>> {
+            (lo..=hi)
+                .map(|_| Some(("nABC.0009".to_string(), lo)))
+                .collect()
+        };
+
+        let cfg = CompactDiffConfig::default();
+        let out = compact_diff_addressed(&edits, &originals, &cfg, &mut node_refs).unwrap();
+        assert!(
+            out.contains("+nABC.0009("),
+            "the inserted line must carry an inline node address: {out}"
         );
     }
 

@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.80.5] — 2026-06-21 — feat(diff): inline node addresses on the mutation diff (BUG-022)
+
+### Changed
+
+- Every present line of a mutation diff (added + context lines) now carries an
+  inline `node_id(offset)` handle, so the agent can correct the breakage the
+  diff reveals with a copy-paste `CHANGE NODE 'node_id(offset)'` — no follow-up
+  `SHOW LINES` round-trip. Removed lines have no post-edit position and stay
+  unaddressed. Unindexed files degrade gracefully to an unaddressed diff.
+- The mutation diff is now built **after** apply + reindex (previously before),
+  so post-edit node ordinals exist to address against. `apply()`'s captured
+  `originals` supply the pre-edit side; disk supplies the post-edit side. Both
+  mutation paths (`exec_mutation` and `apply_plan`) share one helper,
+  `build_post_edit_diff`, over the new `transforms::diff::compact_diff_addressed`.
+  Test: `compact_diff_addressed_prefixes_present_lines_with_handles`.
+
 ## [0.80.4] — 2026-06-21 — fix(diff): boundary-visible mutation diff (BUG-022)
 
 ### Changed
