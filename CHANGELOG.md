@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.80.0] — 2026-06-21 — feat(engine): RUN verb for allowlisted command templates
+
+### Added
+
+- `RUN '<step>' <args…>` runs a named command template from a new `run_steps:`
+  section in `.forgeql.yaml` — the typed, auth-gateable counterpart to VERIFY's
+  open allowlist. A template declares positional params: `ident` args are
+  substituted into the command (`$name`, validated `[A-Za-z0-9_.-]+`,
+  injection-safe); `string` args are bound to the subprocess **stdin** and are
+  never spliced into the shell, so a payload with quotes/spaces/metacharacters
+  cannot inject shell syntax. `run_steps` are frozen at `USE` like `verify_steps`,
+  so a later CHANGE cannot tamper a template, and the output flows through the
+  `SHOW MORE` buffer. This enables a self-test loop: a `run_fql` template can pipe
+  a query into the freshly built `$FORGEQL_BUILD_DIR/debug/forgeql`. The
+  per-principal capability gate for the HTTP server is deferred; the local stdio
+  path is anonymous + allowlist-only. Tests: `resolve_template` units (ident
+  substitution, longest-name-first, string→stdin, arity, injection) and RUN
+  end-to-end (ident, stdin bind, unknown step, injection) in `tests/commit_gate.rs`.
+
 ## [0.79.0] — 2026-06-20 — feat(verify): typed parameters and per-session env vars for VERIFY steps
 
 ### Added
