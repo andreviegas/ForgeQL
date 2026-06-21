@@ -239,6 +239,7 @@ impl ForgeQLEngine {
             }
             session.frozen_output_config = Some(config.output);
             session.frozen_verify_steps = Some(config.verify_steps);
+            session.frozen_run_steps = Some(config.run_steps);
         }
 
         Ok(self.finalize_use_source(session, &coords, source_name, session_token, wt_existed))

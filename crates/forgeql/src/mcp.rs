@@ -294,6 +294,13 @@ fn buffering_params(
             };
             Some((format!("verify_build '{}'", v.step), dir, v.summary_lines))
         }
+        ForgeQLResult::Run(v) => {
+            let dir = match v.summary_direction {
+                SummaryDirection::Tail => Direction::Tail,
+                SummaryDirection::Head => Direction::Head,
+            };
+            Some((format!("run '{}'", v.step), dir, v.summary_lines))
+        }
         _ => None,
     }
 }

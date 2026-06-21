@@ -447,6 +447,18 @@ pub enum ForgeQLIR {
         /// against the step's declared `params` at execution time.
         args: Vec<String>,
     },
+
+    /// `RUN '<step>' <args…>` — run a named allowlisted command template from
+    /// `.forgeql.yaml` `run_steps` (outside a transaction). `Ident` args are
+    /// substituted into the command; `String` args are bound to the subprocess
+    /// stdin.
+    Run {
+        /// Name of the run step (template) to execute.
+        step: String,
+        /// Positional arguments supplied after the step name; validated against
+        /// the template's declared `params` at execution time.
+        args: Vec<String>,
+    },
 }
 
 /// Serde helper: skip-serializing `Backend` when it holds the `Default` variant.

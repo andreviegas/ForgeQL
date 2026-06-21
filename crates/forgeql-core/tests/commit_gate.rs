@@ -26,7 +26,7 @@ use tempfile::tempdir;
 const FIXTURE_CPP: &str =
     "int calcularPotencia(int velocidad, int carga)\n{\n    return velocidad * carga;\n}\n";
 
-const FIXTURE_YAML: &str = "verify_steps:\n  - name: gate\n    command: \"true\"\n    commit_gate: true\n  - name: nogate\n    command: \"true\"\n  - name: echo-target\n    command: \"printf %s $target\"\n    params:\n      - { name: target, type: ident }\n  - name: env-probe\n    command: \"printf '%s|%s' $FORGEQL_SOURCE $FORGEQL_BUILD_DIR\"\n";
+const FIXTURE_YAML: &str = "verify_steps:\n  - name: gate\n    command: \"true\"\n    commit_gate: true\n  - name: nogate\n    command: \"true\"\n  - name: echo-target\n    command: \"printf %s $target\"\n    params:\n      - { name: target, type: ident }\n  - name: env-probe\n    command: \"printf '%s|%s' $FORGEQL_SOURCE $FORGEQL_BUILD_DIR\"\nrun_steps:\n  - name: echo-it\n    command: \"printf '%s' $msg\"\n    params:\n      - { name: msg, type: ident }\n  - name: cat-stdin\n    command: \"cat\"\n    params:\n      - { name: text, type: string }\n";
 
 fn make_registry() -> Arc<LanguageRegistry> {
     Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
@@ -196,4 +196,44 @@ fn verify_step_sees_forgeql_env_vars() {
         }
         other => panic!("expected VerifyBuild, got {other:?}"),
     }
+}
+
+#[test]
+fn run_step_substitutes_ident_arg() {
+    let (mut engine, sid, _dir) = gated_session();
+    let result = exec(&mut engine, &sid, "RUN 'echo-it' 'hello'");
+    let ForgeQLResult::Run(r) = result else {
+        panic!("expected a Run result");
+    };
+    assert!(r.success, "RUN should succeed: {}", r.output);
+    assert!(r.output.contains("hello"), "output: {}", r.output);
+}
+
+#[test]
+fn run_step_binds_string_arg_to_stdin() {
+    let (mut engine, sid, _dir) = gated_session();
+    // `cat` echoes its stdin; the string arg is piped, never shell-interpolated.
+    let result = exec(&mut engine, &sid, "RUN 'cat-stdin' 'piped via stdin'");
+    let ForgeQLResult::Run(r) = result else {
+        panic!("expected a Run result");
+    };
+    assert!(r.success, "RUN should succeed: {}", r.output);
+    assert!(
+        r.output.contains("piped via stdin"),
+        "stdin not echoed; output: {}",
+        r.output
+    );
+}
+
+#[test]
+fn run_step_unknown_name_is_rejected() {
+    let (mut engine, sid, _dir) = gated_session();
+    try_exec(&mut engine, &sid, "RUN 'nonexistent'").expect_err("an unknown RUN step must error");
+}
+
+#[test]
+fn run_step_rejects_ident_injection() {
+    let (mut engine, sid, _dir) = gated_session();
+    try_exec(&mut engine, &sid, "RUN 'echo-it' 'foo; rm -rf /'")
+        .expect_err("an ident arg with shell metacharacters must be rejected");
 }

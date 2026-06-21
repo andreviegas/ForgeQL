@@ -77,6 +77,7 @@ statement = {
   | rollback_stmt
   | verify_stmt
   | commit_stmt
+  | run_stmt
   | create_source_stmt
   | refresh_source_stmt
   | use_stmt
@@ -235,6 +236,7 @@ transaction_stmt = {
 rollback_stmt = { "ROLLBACK" ~ ("TRANSACTION" ~ any_value)? }
 
 verify_stmt = { "VERIFY" ~ "build" ~ any_value ~ string_literal* }
+run_stmt    = { "RUN" ~ any_value ~ string_literal* }
 commit_stmt = { "COMMIT" ~ "MESSAGE" ~ content_value }
 
 // -----------------------------------------------------------------------

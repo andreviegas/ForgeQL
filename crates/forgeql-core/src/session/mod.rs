@@ -20,7 +20,7 @@ use crate::ast::index::SymbolTable;
 use crate::ast::lang::LanguageRegistry;
 use crate::ast::parse_cache::ParseCache;
 use crate::budget::{BudgetSnapshot, BudgetState};
-use crate::config::{LineBudgetConfig, VerifyStep};
+use crate::config::{LineBudgetConfig, RunStep, VerifyStep};
 use crate::storage::{BackendSet, LegacyMemoryStorage, StorageEngine};
 use crate::workspace::Workspace;
 
@@ -235,6 +235,9 @@ pub struct Session {
     /// VERIFY build uses these instead of re-reading the file, so a CHANGE
     /// command cannot inject malicious commands by overwriting `.forgeql.yaml`.
     pub frozen_verify_steps: Option<Vec<VerifyStep>>,
+    /// Run-step templates frozen from `.forgeql.yaml` at session start, mirroring
+    /// `frozen_verify_steps` — a later CHANGE cannot tamper a `RUN` template.
+    pub frozen_run_steps: Option<Vec<RunStep>>,
     /// Working directory captured alongside `frozen_verify_steps` — the
     /// directory that contained `.forgeql.yaml` when the session was opened.
     pub frozen_workdir: Option<PathBuf>,
@@ -317,6 +320,7 @@ impl Session {
             checkpoints: Vec::new(),
             last_clean_oid: None,
             frozen_verify_steps: None,
+            frozen_run_steps: None,
             frozen_workdir: None,
             frozen_output_config: None,
             satisfied_gates: std::collections::HashSet::new(),

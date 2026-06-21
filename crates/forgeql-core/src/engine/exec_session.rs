@@ -378,6 +378,7 @@ impl ForgeQLEngine {
             session.frozen_workdir = Some(workdir);
             session.frozen_output_config = Some(config.output);
             session.frozen_verify_steps = Some(config.verify_steps);
+            session.frozen_run_steps = Some(config.run_steps);
         }
 
         session.build_index()?;

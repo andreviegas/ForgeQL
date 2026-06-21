@@ -4,7 +4,8 @@ use tracing::warn;
 use crate::{
     git::{self as git},
     result::{
-        BeginTransactionResult, CommitResult, ForgeQLResult, RollbackResult, VerifyBuildResult,
+        BeginTransactionResult, CommitResult, ForgeQLResult, RollbackResult, RunResult,
+        VerifyBuildResult,
     },
     session::Checkpoint,
     verify,
@@ -385,6 +386,69 @@ impl ForgeQLEngine {
             let _ = session.satisfied_gates.insert(step.name);
         }
         Ok(ForgeQLResult::VerifyBuild(VerifyBuildResult {
+            step: result.step,
+            success: result.success,
+            output: result.output,
+            summary_lines: summary.lines,
+            summary_direction: summary.direction,
+        }))
+    }
+
+    /// Run a named `run_steps` template from `.forgeql.yaml` as a standalone
+    /// command (outside a transaction). `Ident` args are substituted into the
+    /// command; `String` args are bound to the subprocess stdin.
+    ///
+    /// # Errors
+    /// Returns `Err` if the step name is not found, or if the supplied args do
+    /// not match the template's declared params.
+    pub(super) fn exec_run(
+        &self,
+        session_id: Option<&str>,
+        step_name: &str,
+        args: &[String],
+    ) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let session = self.require_session(sid)?;
+        // Use the run steps frozen at USE time — prevents config tampering
+        // between session start and RUN execution.
+        let frozen_steps = session.frozen_run_steps.as_deref().unwrap_or(&[]);
+        let workdir = session
+            .frozen_workdir
+            .clone()
+            .unwrap_or_else(|| session.worktree_path.clone());
+        let step = frozen_steps
+            .iter()
+            .find(|s| s.name == step_name)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "RUN step '{step_name}' not found in .forgeql.yaml — add it under run_steps:"
+                )
+            })?;
+        // Same session context as VERIFY; `FORGEQL_BUILD_DIR` is per-worktree so
+        // a RUN template (e.g. run_fql) can locate the freshly built binary.
+        let env: [(&str, String); 6] = [
+            ("FORGEQL_SESSION_ID", sid.to_string()),
+            ("FORGEQL_SOURCE", session.source_name.clone()),
+            ("FORGEQL_BRANCH", session.branch.clone()),
+            ("FORGEQL_ALIAS", session.id.clone()),
+            (
+                "FORGEQL_WORKTREE",
+                session.worktree_path.display().to_string(),
+            ),
+            (
+                "FORGEQL_BUILD_DIR",
+                workdir.join("target").display().to_string(),
+            ),
+        ];
+        // Resolve the template: ident args → command tokens (injection-safe);
+        // string args → subprocess stdin (never spliced into the shell).
+        let (command, stdin) =
+            crate::config::resolve_template(&step.name, &step.command, &step.params, args)
+                .map_err(|e| anyhow::anyhow!("RUN '{step_name}': {e}"))?;
+        let summary = step.summary;
+        let result = verify::run_shell(&step.name, &command, &workdir, &env, stdin.as_deref());
+        Ok(ForgeQLResult::Run(RunResult {
             step: result.step,
             success: result.success,
             output: result.output,

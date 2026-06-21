@@ -27,6 +27,11 @@ pub struct ForgeConfig {
     #[serde(default)]
     pub verify_steps: Vec<VerifyStep>,
 
+    /// Named external command templates used by `RUN '<name>' <args…>`.
+    /// Allowlisted + typed (see [`RunStep`]); frozen at `USE` like verify steps.
+    #[serde(default)]
+    pub run_steps: Vec<RunStep>,
+
     /// Extra glob patterns to ignore on top of `.forgeql-ignore`.
     #[serde(default)]
     pub ignore_patterns: Vec<String>,
@@ -221,6 +226,10 @@ pub enum ParamType {
     /// `[A-Za-z0-9_.-]+` — safe to splice directly into the shell command.
     #[default]
     Ident,
+    /// Arbitrary text — never spliced into the command; bound to the
+    /// subprocess **stdin** instead, so quotes/spaces/metacharacters in the
+    /// argument cannot inject shell syntax. Used by `RUN` templates.
+    String,
 }
 
 /// One declared positional parameter of a [`VerifyStep`].
@@ -233,25 +242,54 @@ pub struct ParamSpec {
     pub kind: ParamType,
 }
 
-/// Validate `args` against `step.params` and substitute them into the command
-/// template. Returns the resolved command or a human-readable error. Each
-/// `Ident` argument must match `[A-Za-z0-9_.-]+`, so substitution into the
-/// shell command cannot inject metacharacters.
-pub(crate) fn resolve_command(step: &VerifyStep, args: &[String]) -> Result<String, String> {
-    if args.len() != step.params.len() {
+/// One named external command runnable via `RUN '<name>' <args…>`.
+///
+/// Unlike [`VerifyStep`] (an open, vetted allowlist), `run_steps` are
+/// allowlisted *templates*: the engine substitutes only declared `Ident`
+/// params into `command` and binds `String` params to the subprocess stdin,
+/// so an agent can parameterise a template but never free-form a command.
+/// Frozen at `USE` like verify steps, so a later CHANGE cannot tamper them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunStep {
+    pub name: String,
+    pub command: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    /// Inline output window; the full output is buffered for `SHOW MORE`.
+    #[serde(default)]
+    pub summary: SummaryConfig,
+    /// Typed positional parameters. `Ident` → substituted as `$name` in
+    /// `command`; `String` → bound to the subprocess stdin (never the command).
+    #[serde(default)]
+    pub params: Vec<ParamSpec>,
+}
+
+/// Validate `args` against `params` and resolve a command template.
+///
+/// `Ident` args (must match `[A-Za-z0-9_.-]+`) are substituted for `$name` in
+/// `command` — injection-safe, since no shell metacharacter can appear. `String`
+/// args are NEVER substituted into the command; they are newline-joined in
+/// declared order and returned as the subprocess **stdin** payload. Returns
+/// `(resolved_command, stdin)` or a human-readable error.
+pub(crate) fn resolve_template(
+    step_name: &str,
+    command: &str,
+    params: &[ParamSpec],
+    args: &[String],
+) -> Result<(String, Option<String>), String> {
+    if args.len() != params.len() {
         return Err(format!(
-            "step '{}' expects {} argument(s), got {}",
-            step.name,
-            step.params.len(),
+            "step '{step_name}' expects {} argument(s), got {}",
+            params.len(),
             args.len()
         ));
     }
-    let mut command = step.command.clone();
-    // Substitute longest names first so `$t` never clobbers `$target`.
-    let mut order: Vec<usize> = (0..step.params.len()).collect();
-    order.sort_by_key(|&i| std::cmp::Reverse(step.params[i].name.len()));
+    let mut resolved = command.to_string();
+    // Substitute longest ident names first so `$t` never clobbers `$target`.
+    let mut order: Vec<usize> = (0..params.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(params[i].name.len()));
     for i in order {
-        let param = &step.params[i];
+        let param = &params[i];
         let arg = &args[i];
         match param.kind {
             ParamType::Ident => {
@@ -265,10 +303,27 @@ pub(crate) fn resolve_command(step: &VerifyStep, args: &[String]) -> Result<Stri
                         param.name
                     ));
                 }
+                resolved = resolved.replace(&format!("${}", param.name), arg);
             }
+            ParamType::String => {}
         }
-        command = command.replace(&format!("${}", param.name), arg);
     }
+    // String params are bound to stdin, collected in DECLARED order (independent
+    // of the longest-first ident substitution order above).
+    let stdin_parts: Vec<String> = params
+        .iter()
+        .zip(args)
+        .filter(|(p, _)| matches!(p.kind, ParamType::String))
+        .map(|(_, a)| a.clone())
+        .collect();
+    let stdin = (!stdin_parts.is_empty()).then(|| stdin_parts.join("\n"));
+    Ok((resolved, stdin))
+}
+
+/// Resolve a [`VerifyStep`] command (ident params only; no stdin). Thin wrapper
+/// over [`resolve_template`] preserving the original `VERIFY build` call site.
+pub(crate) fn resolve_command(step: &VerifyStep, args: &[String]) -> Result<String, String> {
+    let (command, _stdin) = resolve_template(&step.name, &step.command, &step.params, args)?;
     Ok(command)
 }
 
@@ -497,5 +552,72 @@ mod tests {
         .expect("write");
         let config = ForgeConfig::load(&path).expect("should load successfully");
         assert_eq!(config.verify_steps.len(), 2);
+    }
+
+    fn ident(name: &str) -> ParamSpec {
+        ParamSpec {
+            name: name.to_string(),
+            kind: ParamType::Ident,
+        }
+    }
+
+    fn string(name: &str) -> ParamSpec {
+        ParamSpec {
+            name: name.to_string(),
+            kind: ParamType::String,
+        }
+    }
+
+    #[test]
+    fn resolve_template_substitutes_ident_into_command() {
+        let params = vec![ident("target")];
+        let (cmd, stdin) =
+            resolve_template("build", "make $target", &params, &["server".to_string()])
+                .expect("resolve");
+        assert_eq!(cmd, "make server");
+        assert!(stdin.is_none());
+    }
+
+    #[test]
+    fn resolve_template_substitutes_longest_name_first() {
+        // `$t` must not clobber `$target`.
+        let params = vec![ident("t"), ident("target")];
+        let (cmd, _) = resolve_template(
+            "x",
+            "$t-$target",
+            &params,
+            &["A".to_string(), "B".to_string()],
+        )
+        .expect("resolve");
+        assert_eq!(cmd, "A-B");
+    }
+
+    #[test]
+    fn resolve_template_binds_string_to_stdin_never_command() {
+        let params = vec![string("QUERY")];
+        let (cmd, stdin) = resolve_template(
+            "run_fql",
+            "forgeql --data-dir d",
+            &params,
+            &["FIND symbols; rm -rf /".to_string()],
+        )
+        .expect("resolve");
+        // The string arg is NEVER spliced into the command — only stdin.
+        assert_eq!(cmd, "forgeql --data-dir d");
+        assert_eq!(stdin.as_deref(), Some("FIND symbols; rm -rf /"));
+    }
+
+    #[test]
+    fn resolve_template_rejects_wrong_arity() {
+        let params = vec![ident("a")];
+        let err = resolve_template("x", "$a", &params, &[]).unwrap_err();
+        assert!(err.contains("expects 1 argument"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_template_rejects_ident_injection() {
+        let params = vec![ident("a")];
+        let err = resolve_template("x", "$a", &params, &["foo; rm -rf /".to_string()]).unwrap_err();
+        assert!(err.contains("must be an identifier"), "got: {err}");
     }
 }

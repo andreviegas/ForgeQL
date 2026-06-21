@@ -21,31 +21,72 @@ pub struct VerifyResult {
 /// Does **not** roll back anything — use this for standalone `VERIFY build`.
 #[must_use]
 pub fn run_standalone(step: &VerifyStep, workdir: &Path, env: &[(&str, String)]) -> VerifyResult {
-    use std::process::Command;
+    run_shell(&step.name, &step.command, workdir, env, None)
+}
 
-    match Command::new("sh")
-        .args(["-c", &step.command])
+/// Run an arbitrary shell `command` in `workdir` with `env`.
+///
+/// Optionally writes `stdin` to the child's standard input — `RUN` templates use
+/// this to feed a `String` param to the subprocess safely, so it never touches
+/// the shell. Captures stdout+stderr combined; `name` labels the result.
+#[must_use]
+pub fn run_shell(
+    name: &str,
+    command: &str,
+    workdir: &Path,
+    env: &[(&str, String)],
+    stdin: Option<&str>,
+) -> VerifyResult {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let spawned = Command::new("sh")
+        .args(["-c", command])
         .current_dir(workdir)
         .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
-        .output()
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+
+    let mut child = match spawned {
+        Err(e) => {
+            return VerifyResult {
+                step: name.to_string(),
+                success: false,
+                output: format!("failed to spawn: {e}"),
+            };
+        }
+        Ok(c) => c,
+    };
+
+    // Write the stdin payload, then drop the pipe to signal EOF. Inputs are small
+    // (a single FQL query), so writing before reading output cannot deadlock.
+    if let Some(input) = stdin
+        && let Some(mut pipe) = child.stdin.take()
     {
+        let _ = pipe.write_all(input.as_bytes());
+    }
+
+    match child.wait_with_output() {
         Err(e) => VerifyResult {
-            step: step.name.clone(),
+            step: name.to_string(),
             success: false,
-            output: format!("failed to spawn: {e}"),
+            output: format!("failed to wait: {e}"),
         },
-        Ok(output) => {
-            let combined = format!(
+        Ok(output) => VerifyResult {
+            step: name.to_string(),
+            success: output.status.success(),
+            output: format!(
                 "{}{}",
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
-            );
-            VerifyResult {
-                step: step.name.clone(),
-                success: output.status.success(),
-                output: combined,
-            }
-        }
+            ),
+        },
     }
 }
 

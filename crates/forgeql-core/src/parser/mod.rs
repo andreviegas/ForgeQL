@@ -233,6 +233,16 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
             Ok(ForgeQLIR::VerifyBuild { step, args })
         }
 
+        Rule::run_stmt => {
+            let mut inner = pair.into_inner();
+            let step = inner
+                .next()
+                .map(|l| unquote(l.as_str()))
+                .ok_or_else(|| ForgeError::DslParse("run: expected step name".into()))?;
+            let args = inner.map(|l| unquote(l.as_str())).collect();
+            Ok(ForgeQLIR::Run { step, args })
+        }
+
         Rule::commit_stmt => {
             let message = unwrap_content(
                 pair.into_inner()

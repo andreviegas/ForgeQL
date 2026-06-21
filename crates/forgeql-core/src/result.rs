@@ -48,6 +48,8 @@ pub enum ForgeQLResult {
     Rollback(RollbackResult),
     /// Standalone verify: VERIFY build 'step'
     VerifyBuild(VerifyBuildResult),
+    /// Output of a standalone `RUN '<step>' <args…>` command template.
+    Run(RunResult),
     /// Node-addressed lookup: FIND NODE id
     FindNode(FindNodeResult),
 }
@@ -636,6 +638,28 @@ const fn default_summary_lines() -> usize {
     40
 }
 
+/// Result of a standalone `RUN '<step>' <args…>` command.
+///
+/// The output of an allowlisted `run_steps` template. Shape mirrors
+/// [`VerifyBuildResult`]; the distinct type lets the renderer label it `RUN`
+/// and buffer its output for `SHOW MORE`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunResult {
+    /// The run step (template) name that was executed.
+    pub step: String,
+    /// Whether the command exited successfully.
+    pub success: bool,
+    /// Combined stdout + stderr output from the command.
+    pub output: String,
+    /// Number of output lines to show inline before buffering the rest for
+    /// `SHOW MORE`. Resolved from the step's `summary` config at run time.
+    #[serde(default = "default_summary_lines")]
+    pub summary_lines: usize,
+    /// Which end of the output to show inline (tail by default).
+    #[serde(default)]
+    pub summary_direction: crate::config::SummaryDirection,
+}
+
 // -----------------------------------------------------------------------
 // Plan results (DRY_RUN, EXPLAIN)
 // -----------------------------------------------------------------------
@@ -781,6 +805,7 @@ impl ForgeQLResult {
             | Self::Commit(_)
             | Self::SourceOp(_)
             | Self::VerifyBuild(_)
+            | Self::Run(_)
             | Self::Rollback(_) => {}
         }
     }

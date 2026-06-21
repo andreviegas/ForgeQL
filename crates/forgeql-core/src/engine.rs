@@ -343,6 +343,7 @@ impl ForgeQLEngine {
                 | ForgeQLIR::Commit { .. }
                 | ForgeQLIR::Rollback { .. }
                 | ForgeQLIR::VerifyBuild { .. }
+                | ForgeQLIR::Run { .. }
         );
         if needs_worktree
             && let Some(session) = self.sessions.get(mk)
@@ -419,6 +420,7 @@ impl ForgeQLEngine {
             ForgeQLIR::Commit { message } => self.exec_commit(sid, message),
             ForgeQLIR::Rollback { name } => self.exec_rollback(sid, name.as_deref()),
             ForgeQLIR::VerifyBuild { step, args } => self.exec_verify_build(sid, step, args),
+            ForgeQLIR::Run { step, args } => self.exec_run(sid, step, args),
         }
     }
 

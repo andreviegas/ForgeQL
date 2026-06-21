@@ -1,7 +1,7 @@
 //! `fmt::Display` implementations for all `ForgeQL` result types.
 use super::{
     BeginTransactionResult, CommitResult, ForgeQLResult, MutationResult, PlanResult, QueryResult,
-    RollbackResult, ShowContent, ShowResult, SourceOpResult, VerifyBuildResult,
+    RollbackResult, RunResult, ShowContent, ShowResult, SourceOpResult, VerifyBuildResult,
 };
 use std::fmt;
 
@@ -20,6 +20,7 @@ impl fmt::Display for ForgeQLResult {
             Self::Plan(result) => write!(formatter, "{result}"),
             Self::Rollback(result) => write!(formatter, "{result}"),
             Self::VerifyBuild(result) => write!(formatter, "{result}"),
+            Self::Run(result) => write!(formatter, "{result}"),
             Self::FindNode(r) => write!(
                 formatter,
                 "find_node {}\n  {} {} {}:{}-{} rev={}",
@@ -254,6 +255,17 @@ impl fmt::Display for VerifyBuildResult {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let status = if self.success { "PASSED" } else { "FAILED" };
         writeln!(formatter, "VERIFY build '{}': {status}", self.step)?;
+        if !self.output.is_empty() {
+            writeln!(formatter, "{}", self.output.trim_end())?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for RunResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let status = if self.success { "PASSED" } else { "FAILED" };
+        writeln!(formatter, "RUN '{}': {status}", self.step)?;
         if !self.output.is_empty() {
             writeln!(formatter, "{}", self.output.trim_end())?;
         }
