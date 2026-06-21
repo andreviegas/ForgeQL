@@ -6,6 +6,26 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.80.4] — 2026-06-21 — fix(diff): boundary-visible mutation diff (BUG-022)
+
+### Changed
+
+- The compact mutation diff now shows **context-before** lines (the unchanged
+  lines immediately above a change), not just context-after. An `INSERT` after
+  the last element of a collection no longer hides the breakage: the prior
+  element — which a mechanical, language-agnostic splice leaves without the
+  now-required trailing separator (invalid JSON, BUG-022) — is shown directly
+  above the inserted `+` line, so the agent sees the corruption and self-corrects.
+  The engine stays mechanical; only diff *visibility* improved.
+- `max_line_width` widened 40 → 120 so a changed line is no longer truncated
+  mid-content (e.g. `{ hered…teral }`), which hid the actual edit.
+- The many-region render no longer shows only the first and last hunk while
+  **silently dropping every middle region** (a 28-edit rename showed 2 of 28).
+  It now emits leading regions in order until the line budget is reached, then a
+  one-line summary counting the remaining regions and lines — never a silent drop.
+  Tests: `compact_preview_context_before_surfaces_prior_line`,
+  `compact_preview_multi_hunk_shows_leading_regions_and_summary` (`transforms/diff.rs`).
+
 ## [0.80.3] — 2026-06-21 — feat(output): LAST-n ring buffer for SHOW MORE
 
 ### Added

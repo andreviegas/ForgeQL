@@ -1647,7 +1647,7 @@
   },
   {
     "expect_field": {"applied": true, "type": "mutation"},
-    "expect_field_contains": {"diff": "hunks,"},
+    "expect_field_contains": {"diff": "more region(s)"},
     "fql": "CHANGE FILE 'kernel/rw_diff_multi_hunk.c' MATCHING 'old_api' WITH 'new_api'",
     "name": "RWTDIFF04_diff_branch3_multiple_oversized_hunks"
   },

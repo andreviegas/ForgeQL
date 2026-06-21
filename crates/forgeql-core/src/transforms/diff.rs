@@ -80,6 +80,11 @@ pub struct CompactDiffConfig {
     pub max_lines_per_file: usize,
     /// Maximum visible characters per line before truncation.
     pub max_line_width: usize,
+    /// Number of unchanged context lines shown *before* the first changed line
+    /// in each hunk. Surfaces the line a mechanical edit landed against — e.g.
+    /// the prior collection element that now needs a trailing separator after
+    /// an INSERT (BUG-022), which the bare `+` line alone would hide.
+    pub context_before: usize,
     /// Number of unchanged context lines shown after the last changed line
     /// in each hunk (helps the agent detect merge errors).
     pub context_after: usize,
@@ -89,7 +94,8 @@ impl Default for CompactDiffConfig {
     fn default() -> Self {
         Self {
             max_lines_per_file: 14,
-            max_line_width: 40,
+            max_line_width: 120,
+            context_before: 2,
             context_after: 2,
         }
     }
@@ -202,35 +208,32 @@ fn render_compact_hunks(path: &Path, hunks: &[CompactHunk], cfg: &CompactDiffCon
             let _ = writeln!(out, "{}", truncate_line(line, cfg.max_line_width));
         }
     } else {
-        // Multiple oversized hunks: hunk-level head/tail elision.
-        // Show first hunk head lines, elision marker, then last hunk tail lines.
-        let first = &hunks[0];
-        let last = &hunks[hunks.len() - 1];
-
-        // Split the budget: half to the first hunk, half to the last.
-        let first_budget = cfg.max_lines_per_file / 2;
-        let last_budget = cfg.max_lines_per_file - first_budget;
-
-        // First hunk (head lines).
-        for line in first.lines.iter().take(first_budget) {
-            let _ = writeln!(out, "{}", truncate_line(line, cfg.max_line_width));
+        // Multiple oversized hunks: emit whole regions in order until the line
+        // budget is exhausted, then a one-line summary of the remainder.
+        // Unlike the old first+last-only render (which silently dropped every
+        // middle region of a large multi-region edit), no region is dropped
+        // without being counted — each is either shown in full or summarised.
+        let mut emitted_lines = 0_usize;
+        let mut emitted_hunks = 0_usize;
+        for hunk in hunks {
+            // Always emit at least one region; otherwise stop before overrunning.
+            if emitted_hunks > 0 && emitted_lines + hunk.lines.len() > cfg.max_lines_per_file {
+                break;
+            }
+            for line in &hunk.lines {
+                let _ = writeln!(out, "{}", truncate_line(line, cfg.max_line_width));
+            }
+            emitted_lines += hunk.lines.len();
+            emitted_hunks += 1;
         }
-
-        // Elision marker.
-        let elided_hunks = hunks.len() - 2;
-        let elided_lines: usize = hunks[1..hunks.len() - 1]
-            .iter()
-            .map(|h| h.lines.len())
-            .sum();
-        let _ = writeln!(
-            out,
-            "(\u{2026} {elided_hunks} hunks, {elided_lines} lines elided \u{2026})"
-        );
-
-        // Last hunk (tail lines).
-        let skip = last.lines.len().saturating_sub(last_budget);
-        for line in last.lines.iter().skip(skip) {
-            let _ = writeln!(out, "{}", truncate_line(line, cfg.max_line_width));
+        if emitted_hunks < hunks.len() {
+            let remaining_hunks = hunks.len() - emitted_hunks;
+            let remaining_lines: usize = hunks[emitted_hunks..].iter().map(|h| h.lines.len()).sum();
+            let _ = writeln!(
+                out,
+                "(\u{2026} {remaining_hunks} more region(s) \u{b7} {remaining_lines} lines elided \
+                 \u{2014} narrow the CHANGE or read the file for the rest \u{2026})"
+            );
         }
     }
     out
@@ -243,8 +246,9 @@ struct CompactHunk {
 
 /// Build compact display hunks from change ranges.
 ///
-/// Each hunk contains `-`/`+` lines for the change, plus up to
-/// `cfg.context_after` unchanged lines after the last change.
+/// Each hunk shows up to `cfg.context_before` unchanged lines before the
+/// change (surfacing the line a mechanical edit landed against), the `-`/`+`
+/// change lines, then up to `cfg.context_after` unchanged lines after it.
 fn build_compact_hunks(
     old: &[&str],
     new: &[&str],
@@ -255,6 +259,16 @@ fn build_compact_hunks(
 
     for cr in ranges {
         let mut lines = Vec::new();
+
+        // Context-before: unchanged lines right before this change, from the
+        // old file. Surfaces the line the edit landed against — e.g. the prior
+        // collection element that now needs a trailing separator after an
+        // INSERT (BUG-022), which the bare `+` line alone would hide.
+        let ctx_b_start = cr.old_start.saturating_sub(cfg.context_before);
+        for idx in ctx_b_start..cr.old_start {
+            let text = old.get(idx).copied().unwrap_or("");
+            lines.push(format!(" {text}"));
+        }
 
         // Removed lines.
         for idx in cr.old_start..cr.old_end {
@@ -775,6 +789,25 @@ mod tests {
     }
 
     #[test]
+    fn compact_preview_context_before_surfaces_prior_line() {
+        // BUG-022: an INSERT after the last collection element must reveal the
+        // prior element (which now lacks a trailing separator) via context-
+        // before — the bare inserted `+` line alone would hide the breakage.
+        let old = "[\n  { \"a\": 1 },\n  { \"b\": 2 }\n]\n";
+        let new = "[\n  { \"a\": 1 },\n  { \"b\": 2 }\n  { \"c\": 3 }\n]\n";
+        let cfg = CompactDiffConfig::default();
+        let preview = compact_diff_preview(old, new, Path::new("data.json"), &cfg);
+        assert!(
+            preview.contains("+  { \"c\": 3 }"),
+            "must show the inserted line: {preview}"
+        );
+        assert!(
+            preview.contains("{ \"b\": 2 }"),
+            "context-before must reveal the prior element missing a separator: {preview}"
+        );
+    }
+
+    #[test]
     fn compact_preview_truncates_long_lines() {
         let long = format!("line1\n{}\nline3\n", "x".repeat(80));
         let new_long = format!("line1\n{}\nline3\n", "y".repeat(80));
@@ -791,8 +824,10 @@ mod tests {
     }
 
     #[test]
-    fn compact_preview_multi_hunk_elides_middle() {
-        // Many hunks far apart — middle should be elided when total exceeds K.
+    fn compact_preview_multi_hunk_shows_leading_regions_and_summary() {
+        // Many hunks far apart, exceeding the budget. The render shows leading
+        // regions in order and SUMMARISES the remainder — it must never drop a
+        // middle region silently (the old first+last-only behaviour did).
         let mut old_lines = Vec::new();
         let mut new_lines = Vec::new();
         for i in 0..100 {
@@ -812,11 +847,16 @@ mod tests {
             ..CompactDiffConfig::default()
         };
         let preview = compact_diff_preview(&old, &new, Path::new("big.cpp"), &cfg);
-        assert!(preview.contains("new_2"), "first hunk must be visible");
-        assert!(preview.contains("new_80"), "last hunk must be visible");
+        // The leading region is shown in full...
+        assert!(preview.contains("new_2"), "leading region must be visible");
+        // ...and the remainder is explicitly counted, not silently dropped.
         assert!(
-            preview.contains("\u{2026}"),
-            "must have elision marker for middle hunks: {preview}"
+            preview.contains("more region(s)"),
+            "remaining regions must be summarised, never dropped: {preview}"
+        );
+        assert!(
+            preview.contains('\u{2026}'),
+            "must have an elision marker: {preview}"
         );
     }
 
