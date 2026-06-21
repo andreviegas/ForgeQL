@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.80.6] — 2026-06-21 — fix(security): symlink-safe + denylisted path confinement (BUG-018)
+
+### Security
+
+- `Workspace::safe_path` now closes two confinement holes. It previously did
+  only a lexical `starts_with(root)` after `normalise_path`, which (a) does not
+  follow symlinks, so a symlinked directory inside the worktree could point out
+  of it, and (b) had no denylist, so the repo's own `.git` store and ForgeQL's
+  runtime/control files (`.forgeql*`) were readable/writable through a query.
+  Added: a root-level `.git` / `.forgeql*` denylist (precise — `.gitignore`
+  stays allowed; `..` tricks that resolve back to a protected entry are caught
+  after normalisation), and symlink-safe containment that canonicalizes the
+  deepest existing ancestor and verifies it stays inside the canonical root
+  (skipped when the root cannot be canonicalised, e.g. a virtual unit-test
+  root). Tests: `safe_path_rejects_dot_git`,
+  `safe_path_rejects_forgeql_runtime_files`,
+  `safe_path_allows_gitignore_not_dot_git`,
+  `safe_path_dot_dot_into_dot_git_rejected`, `safe_path_rejects_symlink_escape`.
+
 ## [0.80.5] — 2026-06-21 — feat(diff): inline node addresses on the mutation diff (BUG-022)
 
 ### Changed

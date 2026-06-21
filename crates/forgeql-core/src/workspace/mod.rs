@@ -102,16 +102,23 @@ impl Workspace {
     }
 
     /// Resolve `user_path` relative to the workspace root, guarding against
-    /// path traversal attacks:
+    /// path traversal and confinement attacks:
     ///
     /// - **Absolute paths** — Rust's `PathBuf::join` silently replaces the
     ///   base when the right-hand side is absolute.  We reject them early.
     /// - **`..` escape sequences** — normalised without touching the
     ///   filesystem (so new-file targets for CHANGE work), then checked to
     ///   still start with the worktree root.
+    /// - **Protected internals** — a root-level `.git` or `.forgeql*` entry is
+    ///   denied so the repo's git store and `ForgeQL`'s own runtime/control files
+    ///   are never readable or writable through a query.
+    /// - **Symlink escapes** — the deepest existing ancestor is canonicalised
+    ///   and verified to stay inside the canonical root, so a symlinked
+    ///   directory inside the worktree cannot point out of it.
     ///
     /// # Errors
-    /// Returns an error if `user_path` is absolute or escapes the root.
+    /// Returns an error if `user_path` is absolute, escapes the root (lexically
+    /// or via a symlink), or targets a protected internal path.
     pub fn safe_path(&self, user_path: &str) -> anyhow::Result<std::path::PathBuf> {
         let p = std::path::Path::new(user_path);
         if p.is_absolute() {
@@ -124,6 +131,44 @@ impl Workspace {
         if !normalised.starts_with(&self.root) {
             anyhow::bail!("path '{user_path}' escapes the worktree root");
         }
+
+        // Denylist: never expose the repo's own `.git` directory or ForgeQL's
+        // runtime/control files (`.forgeql*`), even though they live inside the
+        // worktree root. Only the first (root-level) component is checked — that
+        // is where these protected entries live.
+        if let Ok(rel) = normalised.strip_prefix(&self.root)
+            && let Some(std::path::Component::Normal(first)) = rel.components().next()
+        {
+            let name = first.to_string_lossy();
+            if name == ".git" || name.starts_with(".forgeql") {
+                anyhow::bail!("path '{user_path}' targets a protected internal path ('{name}')");
+            }
+        }
+
+        // Symlink-safe containment: lexical normalisation does not follow
+        // symlinks, so a symlinked directory inside the worktree could point out
+        // of it. Canonicalize the deepest existing ancestor (the target itself
+        // may not exist yet, e.g. a new-file CHANGE) and verify it is still
+        // inside the canonical root. Skipped when the root cannot be
+        // canonicalised (e.g. a virtual root in unit tests).
+        if let Ok(canon_root) = std::fs::canonicalize(&self.root) {
+            let mut ancestor = normalised.as_path();
+            let canon_ancestor = loop {
+                match std::fs::canonicalize(ancestor) {
+                    Ok(c) => break Some(c),
+                    Err(_) => match ancestor.parent() {
+                        Some(parent) => ancestor = parent,
+                        None => break None,
+                    },
+                }
+            };
+            if let Some(canon_ancestor) = canon_ancestor
+                && !canon_ancestor.starts_with(&canon_root)
+            {
+                anyhow::bail!("path '{user_path}' escapes the worktree root via a symlink");
+            }
+        }
+
         Ok(normalised)
     }
 
@@ -224,5 +269,55 @@ mod tests {
     fn safe_path_sibling_escape_rejected() {
         let err = make_ws().safe_path("../other/file.rs").unwrap_err();
         assert!(err.to_string().contains("escapes"), "got: {err}");
+    }
+
+    #[test]
+    fn safe_path_rejects_dot_git() {
+        let err = make_ws().safe_path(".git/config").unwrap_err();
+        assert!(err.to_string().contains("protected"), "got: {err}");
+    }
+
+    #[test]
+    fn safe_path_rejects_forgeql_runtime_files() {
+        for p in [".forgeql.yaml", ".forgeql-showmore-0", ".forgeql-index"] {
+            let err = make_ws().safe_path(p).unwrap_err();
+            assert!(
+                err.to_string().contains("protected"),
+                "{p} must be denied: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn safe_path_allows_gitignore_not_dot_git() {
+        // `.gitignore` is a normal file; only the `.git` directory is denied.
+        let p = make_ws().safe_path(".gitignore").unwrap();
+        assert_eq!(p, PathBuf::from("/worktree/.gitignore"));
+    }
+
+    #[test]
+    fn safe_path_dot_dot_into_dot_git_rejected() {
+        // `..` tricks that resolve back to the root-level `.git` are still denied.
+        let err = make_ws().safe_path("src/../.git/config").unwrap_err();
+        assert!(err.to_string().contains("protected"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_path_rejects_symlink_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("wt");
+        std::fs::create_dir(&root).unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        // A symlink inside the worktree pointing outside it.
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+
+        let ws = super::Workspace { root };
+        let err = ws.safe_path("link/secret.txt").unwrap_err();
+        assert!(
+            err.to_string().contains("symlink") || err.to_string().contains("escapes"),
+            "symlinked path must be rejected: {err}"
+        );
     }
 }
