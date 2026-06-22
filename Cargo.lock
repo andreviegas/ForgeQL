@@ -622,7 +622,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "forgeql"
-version = "0.80.9"
+version = "0.81.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -634,6 +634,7 @@ dependencies = [
  "forgeql-lang-markdown",
  "forgeql-lang-python",
  "forgeql-lang-rust",
+ "forgeql-lang-toml",
  "forgeql-lang-yaml",
  "libtest-mimic",
  "rmcp",
@@ -649,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-client"
-version = "0.80.9"
+version = "0.81.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -660,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-core"
-version = "0.80.9"
+version = "0.81.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -694,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-c"
-version = "0.80.9"
+version = "0.81.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -703,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-cpp"
-version = "0.80.9"
+version = "0.81.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -712,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-json"
-version = "0.80.9"
+version = "0.81.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -721,7 +722,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-markdown"
-version = "0.80.9"
+version = "0.81.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -730,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-python"
-version = "0.80.9"
+version = "0.81.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -739,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-rust"
-version = "0.80.9"
+version = "0.81.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -747,8 +748,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "forgeql-lang-toml"
+version = "0.81.0"
+dependencies = [
+ "forgeql-core",
+ "tree-sitter",
+ "tree-sitter-toml-ng",
+]
+
+[[package]]
 name = "forgeql-lang-yaml"
-version = "0.80.9"
+version = "0.81.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -757,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-server"
-version = "0.80.9"
+version = "0.81.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2743,6 +2753,16 @@ name = "tree-sitter-rust"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-toml-ng"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9adc2c898ae49730e857d75be403da3f92bb81d8e37a2f918a08dd10de5ebb1"
 dependencies = [
  "cc",
  "tree-sitter-language",

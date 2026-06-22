@@ -32,6 +32,7 @@ forgeql-lang-markdown = { workspace = true }
 forgeql-lang-python = { workspace = true }
 forgeql-lang-rust   = { workspace = true }
 forgeql-lang-yaml   = { workspace = true }
+forgeql-lang-toml   = { workspace = true }
 
 # async (MCP transport)
 tokio = { workspace = true }

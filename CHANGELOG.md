@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.81.0] — 2026-06-22 — feat(lang): TOML support — `Cargo.toml` + `Cargo.lock` node-addressable
+
+### Added
+
+- New `forgeql-lang-toml` crate adds TOML as an indexed language via
+  `tree-sitter-toml-ng`, registered for the `toml` and `lock` extensions. Since
+  `Cargo.lock` is itself TOML (`[[package]]` tables), one grammar makes BOTH
+  Cargo manifests node-addressable: a `version = "…"` pair, or a `[[package]]`
+  entry, can now be located with FIND / SHOW and edited by `CHANGE NODE` instead
+  of raw-text `CHANGE FILE` — so workspace and lockfile version bumps run by node.
+  Each `pair` is indexed under its key; each `[table]` / `[[table-array]]` is
+  named after its `name` / `id` / `key` member when present, else its header key.
+  Config-driven like the other language plugins (`config/toml.json` kind_map),
+  with zero `forgeql-core` changes; registered in the CLI language registry.
+  Tests: `pairs_are_named_by_key`, `tables_named_by_header_or_member`,
+  `embedded_config_is_valid` (parse real TOML, assert the naming).
 ## [0.80.9] — 2026-06-22 — fix(output): surface `lines_removed` in the default CSV output
 
 ### Fixed

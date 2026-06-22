@@ -1,0 +1,15 @@
+[package]
+name        = "forgeql-lang-toml"
+description = "TOML language support for ForgeQL (covers .toml and Cargo.lock)"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[lints]
+workspace = true
+
+[dependencies]
+forgeql-core     = { workspace = true }
+tree-sitter      = { workspace = true }
+tree-sitter-toml = { workspace = true }
