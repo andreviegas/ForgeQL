@@ -82,6 +82,13 @@ impl ForgeQLEngine {
         let diff = self.build_post_edit_diff(sid, &edits_snapshot, &applied.originals);
         let lines_removed = crate::transforms::lines_removed(&edits_snapshot, &applied.originals);
 
+        // Persist the pre-edit bytes to the per-session UNDO ring so this
+        // mutation can be reversed with `UNDO`. Best-effort: a failed write only
+        // means no undo is available, never a failed mutation.
+        if let Ok((ws, _eng)) = self.require_workspace_and_engine(Some(sid)) {
+            let _ = crate::undo::write_snapshot(ws.root(), op_name, &applied.originals);
+        }
+
         Ok(ForgeQLResult::Mutation(MutationResult {
             op: op_name.to_string(),
             applied: true,
@@ -178,6 +185,11 @@ impl ForgeQLEngine {
         let diff = self.build_post_edit_diff(sid, &edits_snapshot, &applied.originals);
         let lines_removed = crate::transforms::lines_removed(&edits_snapshot, &applied.originals);
 
+        // Persist the pre-edit bytes to the per-session UNDO ring (see exec_mutation).
+        if let Ok((ws, _eng)) = self.require_workspace_and_engine(Some(sid)) {
+            let _ = crate::undo::write_snapshot(ws.root(), op_name, &applied.originals);
+        }
+
         Ok(ForgeQLResult::Mutation(MutationResult {
             op: op_name.to_string(),
             applied: true,
@@ -186,6 +198,74 @@ impl ForgeQLEngine {
             lines_written,
             lines_removed,
             diff,
+            suggestions: Vec::new(),
+            new_node_id: None,
+        }))
+    }
+
+    // ===================================================================
+    // UNDO
+    // ===================================================================
+
+    /// Restore the files a recent mutation changed to their pre-edit bytes,
+    /// reading the per-session UNDO ring (`last` = slot, 0 = most recent).
+    ///
+    /// Mechanical and language-agnostic: it rewrites the exact bytes `apply()`
+    /// captured before the edit, reindexes the restored files, and invalidates
+    /// the commit gate like any other mutation. `UNDO LAST-n` restores the slot
+    /// `n` back, reversing the `n + 1` most recent mutations at once.
+    pub(super) fn exec_undo(
+        &mut self,
+        session_id: Option<&str>,
+        last: usize,
+    ) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let root = {
+            let (ws, _eng) = self.require_workspace_and_engine(session_id)?;
+            ws.root().to_path_buf()
+        };
+
+        let Some(snapshot) = crate::undo::read_snapshot(&root, last)? else {
+            bail!(
+                "nothing to undo at LAST-{last}: the undo ring has no snapshot there \
+                 (a mutation writes LAST-0; older mutations shift to LAST-1, LAST-2, …)"
+            );
+        };
+
+        // Restore each captured file to its pre-edit bytes.
+        let mut files_changed: Vec<PathBuf> = Vec::with_capacity(snapshot.files.len());
+        for file in &snapshot.files {
+            let abs = root.join(&file.rel_path);
+            crate::workspace::file_io::write_atomic(&abs, &file.bytes)?;
+            files_changed.push(abs);
+        }
+
+        // The working tree changed: reindex the restored files and invalidate
+        // every commit gate, exactly as a mutation does.
+        self.reindex_session(sid, &files_changed);
+        if let Some(session) = self.sessions.get_mut(sid) {
+            session.satisfied_gates.clear();
+            session.edits_since_gate = session.edits_since_gate.saturating_add(1);
+        }
+
+        let mut summary = format!(
+            "UNDO: restored {} file(s) to the state before '{}'",
+            files_changed.len(),
+            snapshot.op
+        );
+        for path in &files_changed {
+            summary.push_str("\n  ");
+            summary.push_str(&path.display().to_string());
+        }
+
+        Ok(ForgeQLResult::Mutation(MutationResult {
+            op: "undo".to_string(),
+            applied: true,
+            edit_count: snapshot.files.len(),
+            files_changed,
+            lines_written: 0,
+            lines_removed: 0,
+            diff: Some(summary),
             suggestions: Vec::new(),
             new_node_id: None,
         }))

@@ -2726,3 +2726,36 @@ fn show_lines_where_text_matches() {
         other => panic!("expected Lines, got {other:?}"),
     }
 }
+
+// =======================================================================
+// UNDO
+// =======================================================================
+
+#[test]
+fn undo_restores_previous_file_contents() {
+    let (mut e, sid, _dir) = engine_with_session();
+    let root = e.session_worktree(&sid).expect("worktree");
+    let path = root.join("undo_target.txt");
+
+    // First write creates the file; the second changes it.
+    let _ = exec(&mut e, &sid, "CHANGE FILE 'undo_target.txt' WITH 'first'");
+    let _ = exec(&mut e, &sid, "CHANGE FILE 'undo_target.txt' WITH 'second'");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
+
+    // UNDO (LAST-0) reverses the most recent mutation back to 'first'.
+    let r = exec(&mut e, &sid, "UNDO");
+    assert_eq!(as_mutation(&r).op, "undo");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
+
+    // UNDO LAST-1 reverses two mutations back: the file returns to its
+    // pre-creation (empty) state, matching rollback semantics.
+    let _ = exec(&mut e, &sid, "UNDO LAST-1");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+}
+
+#[test]
+fn undo_with_no_snapshot_errors() {
+    let (mut e, sid, _dir) = engine_with_session();
+    let msg = exec_err(&mut e, &sid, "UNDO");
+    assert!(msg.contains("nothing to undo"), "got: {msg}");
+}

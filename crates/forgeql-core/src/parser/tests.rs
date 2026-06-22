@@ -646,6 +646,20 @@ fn parse_show_more_last_n() {
 }
 
 #[test]
+fn parse_undo_last_n() {
+    // Bare UNDO defaults to LAST-0.
+    match &parse("UNDO").unwrap()[0] {
+        ForgeQLIR::Undo { last } => assert_eq!(*last, 0),
+        _ => panic!("wrong variant"),
+    }
+    // LAST-n selector reuses the atomic LAST-<n> token.
+    match &parse("UNDO LAST-3").unwrap()[0] {
+        ForgeQLIR::Undo { last } => assert_eq!(*last, 3),
+        _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
 fn parse_show_more_window_then_where_composes() {
     // WHERE must apply after every window form, not just bare SHOW MORE.
     let ops = parse("SHOW MORE TAIL 40 WHERE text MATCHES 'error|fail'").unwrap();

@@ -38,5 +38,6 @@ pub mod session;
 pub mod showmore;
 pub mod storage;
 pub mod transforms;
+pub mod undo;
 pub mod verify;
 pub mod workspace;

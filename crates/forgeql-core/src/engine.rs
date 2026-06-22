@@ -421,6 +421,7 @@ impl ForgeQLEngine {
             ForgeQLIR::Rollback { name } => self.exec_rollback(sid, name.as_deref()),
             ForgeQLIR::VerifyBuild { step, args } => self.exec_verify_build(sid, step, args),
             ForgeQLIR::Run { step, args } => self.exec_run(sid, step, args),
+            ForgeQLIR::Undo { last } => self.exec_undo(sid, *last),
         }
     }
 

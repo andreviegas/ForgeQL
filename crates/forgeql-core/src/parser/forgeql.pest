@@ -101,6 +101,7 @@ statement = {
   | delete_node_stmt
   | show_node_stmt
   | show_more_stmt
+  | undo_stmt
 }
 
 /// FIND NODE id -- resolve a node_id to its current location, rev, and nav links.
@@ -173,6 +174,12 @@ show_more_window = { show_more_head | show_more_tail | show_more_range }
 show_more_head   = { "HEAD" ~ number }
 show_more_tail   = { "TAIL" ~ number }
 show_more_range  = { number ~ "-" ~ number }
+
+/// `UNDO [LAST-n]` — restore files to their state before the n-th most recent
+/// mutation (LAST-0 = most recent, the default). Reuses the same atomic LAST-n
+/// token shape as SHOW MORE so the ring index parses unambiguously.
+undo_stmt = { "UNDO" ~ undo_last? }
+undo_last = @{ "LAST-" ~ ASCII_DIGIT+ }
 
 // -----------------------------------------------------------------------
 // Queries

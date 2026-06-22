@@ -153,6 +153,22 @@ fn parse_show_more_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQL
     })
 }
 
+/// Parse an `undo_stmt` rule into a [`ForgeQLIR::Undo`].
+fn parse_undo_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
+    let mut last = 0_usize;
+    for child in pair.into_inner() {
+        if child.as_rule() == Rule::undo_last {
+            // Atomic token "LAST-<n>": strip the prefix and parse the index.
+            last = child
+                .as_str()
+                .strip_prefix("LAST-")
+                .and_then(|n| n.parse().ok())
+                .ok_or_else(|| ForgeError::DslParse("undo: invalid LAST-n selector".into()))?;
+        }
+    }
+    Ok(ForgeQLIR::Undo { last })
+}
+
 // parse_statement is inherently long: one match arm per grammar rule.
 #[allow(clippy::too_many_lines)]
 fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
@@ -222,6 +238,7 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         | Rule::delete_node_stmt
         | Rule::show_node_stmt => parse_node_stmt(pair),
         Rule::show_more_stmt => parse_show_more_stmt(pair),
+        Rule::undo_stmt => parse_undo_stmt(pair),
 
         Rule::statement => {
             let inner = pair

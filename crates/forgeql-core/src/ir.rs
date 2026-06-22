@@ -463,6 +463,15 @@ pub enum ForgeQLIR {
         /// the template's declared `params` at execution time.
         args: Vec<String>,
     },
+
+    /// `UNDO [LAST-n]` — restore the files a recent mutation changed to their
+    /// pre-edit bytes. Reverses mutations from the per-session undo ring; `last`
+    /// selects the slot (0 = most recent mutation, the default).
+    Undo {
+        /// Which ring slot to restore (0 = most recent; `LAST-n` = n).
+        #[serde(default)]
+        last: usize,
+    },
 }
 
 /// Serde helper: skip-serializing `Backend` when it holds the `Default` variant.

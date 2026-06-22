@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.80.8] — 2026-06-22 — feat(undo): `UNDO [LAST-n]` command + per-session undo ring
+
+### Added
+
+- `UNDO [LAST-n]` reverses a recent mutation by restoring the exact pre-edit
+  bytes that `apply()` already captures. Every mutation now writes a snapshot of
+  its `TransformResult.originals` to a per-session ring (`.forgeql-undo-<n>`, 10
+  deep, beside the SHOW MORE ring), reusing the same atomic `LAST-n` token as
+  SHOW MORE. `UNDO` (= `LAST-0`) reverses the most recent mutation; `UNDO LAST-1`
+  the two most recent, and so on. The restore reindexes the touched files and
+  invalidates the commit gate exactly like a forward mutation — fully mechanical
+  and language-agnostic, no engine intelligence. The ring is excluded from
+  user-facing commits (`git::is_clean_commit_excluded`) and denied to user paths
+  by the `.forgeql*` confinement, and dies with the worktree. New `undo` module;
+  grammar `undo_stmt` / `undo_last`; `ForgeQLIR::Undo`; `ForgeQLEngine::exec_undo`.
+  Tests: `snapshot_roundtrips_paths_and_bytes`,
+  `ring_pages_previous_snapshots_as_last_n`, `missing_slot_is_none`,
+  `empty_originals_writes_nothing`, `parse_undo_last_n`,
+  `undo_restores_previous_file_contents`, `undo_with_no_snapshot_errors`.
 ## [0.80.7] — 2026-06-22 — feat(mutation): report `lines_removed` (destructive-edit signal)
 
 ### Added

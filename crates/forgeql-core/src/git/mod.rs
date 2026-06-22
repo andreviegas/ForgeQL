@@ -120,6 +120,7 @@ fn is_clean_commit_excluded(path: &std::path::Path) -> bool {
                 // The SHOW MORE ring writes `<prefix>-<n>` slot files — exclude
                 // every slot (and the legacy single-file name) by prefix.
                 || name.starts_with(crate::showmore::SHOWMORE_FILE_NAME)
+                || name.starts_with(crate::undo::UNDO_FILE_NAME)
         })
 }
 
