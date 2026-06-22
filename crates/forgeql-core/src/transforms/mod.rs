@@ -260,6 +260,35 @@ impl TransformPlan {
     }
 }
 
+/// Total number of lines in the original spans replaced or deleted by a set of
+/// edits, counted against the pre-edit `originals` captured by [`TransformPlan::apply`].
+///
+/// Symmetric to [`TransformPlan::lines_written`]: that counts replacement lines,
+/// this counts the original lines each edit overwrote. The pair lets a caller
+/// surface the net line delta of a mutation with no language knowledge — the
+/// loudest mechanical signal that an edit destroyed more than it wrote.
+#[must_use]
+pub fn lines_removed<S: std::hash::BuildHasher>(
+    edits: &[FileEdit],
+    originals: &HashMap<PathBuf, Vec<u8>, S>,
+) -> usize {
+    edits
+        .iter()
+        .flat_map(|fe| fe.edits.iter().map(move |edit| (fe.path.as_path(), edit)))
+        .map(|(path, edit)| {
+            originals.get(path).map_or(0, |original| {
+                let end = edit.end.min(original.len());
+                let start = edit.start.min(end);
+                let span = &original[start..end];
+                if span.is_empty() {
+                    0
+                } else {
+                    String::from_utf8_lossy(span).lines().count()
+                }
+            })
+        })
+        .sum()
+}
 /// What `apply()` returns — enough data to undo every write.
 #[derive(Debug)]
 pub struct TransformResult {
@@ -413,6 +442,36 @@ mod tests {
         let mut buf = source.to_vec();
         apply_edits_to_buffer(&mut buf, &fe.edits);
         assert_eq!(buf, b"void turnOnLight(); turnOnLight();");
+    }
+
+    // --- lines_removed ---------------------------------------------------
+
+    #[test]
+    fn lines_removed_counts_original_span_lines() {
+        // A node spanning 4 source lines replaced by a 1-line signature: the
+        // signal must report the 4 original lines regardless of how few were
+        // written back — the footgun that silently deletes a function body.
+        let original = b"fn f() {\n    a;\n    b;\n}\n".to_vec();
+        let span_len = original.len() - 1; // exclude the trailing newline
+        let edits = vec![FileEdit {
+            path: PathBuf::from("fake.rs"),
+            edits: vec![ByteRangeEdit::new(0..span_len, "fn f() {")],
+        }];
+        let mut originals: HashMap<PathBuf, Vec<u8>> = HashMap::new();
+        drop(originals.insert(PathBuf::from("fake.rs"), original));
+        assert_eq!(lines_removed(&edits, &originals), 4);
+    }
+
+    #[test]
+    fn lines_removed_is_zero_for_pure_insertion() {
+        // A zero-length range inserts without overwriting: nothing is removed.
+        let mut originals: HashMap<PathBuf, Vec<u8>> = HashMap::new();
+        drop(originals.insert(PathBuf::from("fake.rs"), b"a\nb\n".to_vec()));
+        let edits = vec![FileEdit {
+            path: PathBuf::from("fake.rs"),
+            edits: vec![ByteRangeEdit::new(2..2, "x\n")],
+        }];
+        assert_eq!(lines_removed(&edits, &originals), 0);
     }
 
     // --- TransformPlan::merge_by_file ------------------------------------

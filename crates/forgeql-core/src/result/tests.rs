@@ -151,6 +151,7 @@ fn json_non_query_result_uses_serde() {
         files_changed: vec![],
         edit_count: 0,
         lines_written: 0,
+        lines_removed: 0,
         diff: None,
         suggestions: vec![],
         new_node_id: None,
@@ -223,6 +224,7 @@ fn mutation_result_round_trips_through_json() {
         ],
         edit_count: 5,
         lines_written: 0,
+        lines_removed: 0,
         diff: None,
         suggestions: vec![SuggestionEntry {
             path: PathBuf::from("src/signal_controller.cpp"),
@@ -433,6 +435,7 @@ fn display_mutation_result_applied() {
         files_changed: vec![PathBuf::from("src/main.cpp")],
         edit_count: 4,
         lines_written: 0,
+        lines_removed: 0,
         diff: None,
         suggestions: vec![],
         new_node_id: None,

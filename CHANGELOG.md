@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.80.7] — 2026-06-22 — feat(mutation): report `lines_removed` (destructive-edit signal)
+
+### Added
+
+- `MutationResult` now carries `lines_removed` alongside `lines_written`: the
+  number of original source lines each edit overwrote, counted mechanically
+  against the pre-edit bytes `apply()` already captures. Paired with
+  `lines_written` it is the loudest language-agnostic signal of a destructive
+  edit — replacing a 60-line node with a 6-line body reports
+  `lines_removed: 54, lines_written: 6`. This surfaces the
+  CHANGE-NODE-on-a-folded-function footgun (the node byte range spans the whole
+  body even though `DEPTH 0` shows only the signature) as a structured field
+  the agent can assert on, with no language knowledge in the engine. New
+  `transforms::lines_removed` helper; tests
+  `lines_removed_counts_original_span_lines`,
+  `lines_removed_is_zero_for_pure_insertion`.
 ## [0.80.6] — 2026-06-21 — fix(security): symlink-safe + denylisted path confinement (BUG-018)
 
 ### Security

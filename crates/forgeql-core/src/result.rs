@@ -513,6 +513,14 @@ pub struct MutationResult {
     /// Used by the budget system: the agent earns proportional recovery
     /// based on how many lines it actually wrote.
     pub lines_written: usize,
+    /// Total number of lines in the original spans replaced or deleted by this
+    /// mutation. Paired with `lines_written`, it is the loudest mechanical
+    /// signal of a destructive edit: replacing a 60-line node with a 6-line
+    /// body reports `lines_removed: 54, lines_written: 6`. The engine stays
+    /// mechanical — it reports the line arithmetic and leaves the judgement to
+    /// the agent.
+    #[serde(default)]
+    pub lines_removed: usize,
     /// Unified diff (populated for dry-run and explain modes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff: Option<String>,

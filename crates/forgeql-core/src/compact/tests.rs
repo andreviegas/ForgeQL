@@ -564,6 +564,7 @@ fn mutation_falls_back_to_json() {
         files_changed: vec![],
         edit_count: 0,
         lines_written: 0,
+        lines_removed: 0,
         diff: None,
         suggestions: vec![],
         new_node_id: None,

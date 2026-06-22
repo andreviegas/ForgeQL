@@ -80,6 +80,7 @@ impl ForgeQLEngine {
         // inline `node_id(offset)` handle — the agent's BUG-022 self-correction
         // address — instead of an unaddressed pre-apply preview.
         let diff = self.build_post_edit_diff(sid, &edits_snapshot, &applied.originals);
+        let lines_removed = crate::transforms::lines_removed(&edits_snapshot, &applied.originals);
 
         Ok(ForgeQLResult::Mutation(MutationResult {
             op: op_name.to_string(),
@@ -87,6 +88,7 @@ impl ForgeQLEngine {
             files_changed,
             edit_count,
             lines_written,
+            lines_removed,
             diff,
             suggestions,
             new_node_id: None,
@@ -174,6 +176,7 @@ impl ForgeQLEngine {
 
         // Diff built after apply + reindex so it carries inline node addresses.
         let diff = self.build_post_edit_diff(sid, &edits_snapshot, &applied.originals);
+        let lines_removed = crate::transforms::lines_removed(&edits_snapshot, &applied.originals);
 
         Ok(ForgeQLResult::Mutation(MutationResult {
             op: op_name.to_string(),
@@ -181,6 +184,7 @@ impl ForgeQLEngine {
             files_changed,
             edit_count,
             lines_written,
+            lines_removed,
             diff,
             suggestions: Vec::new(),
             new_node_id: None,
