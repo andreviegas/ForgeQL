@@ -573,6 +573,27 @@ fn mutation_falls_back_to_json() {
     assert!(output.contains("rename_symbol"));
     assert!(output.contains("applied"));
 }
+
+#[test]
+fn compact_mutation_surfaces_lines_removed() {
+    // The destructive-edit signal must appear in the DEFAULT (compact CSV)
+    // output, not only in JSON: a signature-only CHANGE NODE that deletes a
+    // function body reports a large lines_removed next to a small lines_written.
+    let result = ForgeQLResult::Mutation(MutationResult {
+        op: "change_content".into(),
+        applied: true,
+        files_changed: vec![],
+        edit_count: 1,
+        lines_written: 6,
+        lines_removed: 26,
+        diff: None,
+        suggestions: vec![],
+        new_node_id: None,
+    });
+    let output = to_compact(&result);
+    assert!(output.contains("lines_removed"), "missing label: {output}");
+    assert!(output.contains("26"), "missing value: {output}");
+}
 // -- Low-level CSV helpers -----------------------------------------
 
 #[test]

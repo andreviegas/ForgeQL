@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.80.9] — 2026-06-22 — fix(output): surface `lines_removed` in the default CSV output
+
+### Fixed
+
+- `compact_mutation` (the default compact-CSV renderer) hardcodes its rows and
+  never emitted the `lines_removed` field added in 0.80.7, so the destructive-edit
+  signal was visible only with `format=JSON` — invisible in the default output an
+  agent actually reads. A signature-only `CHANGE NODE` that deletes a 20-line body
+  now reports `lines_removed: 26` next to `lines_written: 6` in CSV too. Added the
+  row beside `lines_written`; regression test `compact_mutation_surfaces_lines_removed`.
 ## [0.80.8] — 2026-06-22 — feat(undo): `UNDO [LAST-n]` command + per-session undo ring
 
 ### Added

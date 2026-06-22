@@ -467,6 +467,10 @@ fn compact_mutation(r: &MutationResult) -> String {
         &mut out,
         &[&q("lines_written"), &r.lines_written.to_string()],
     );
+    row(
+        &mut out,
+        &[&q("lines_removed"), &r.lines_removed.to_string()],
+    );
     if let Some(ref id) = r.new_node_id {
         row(&mut out, &[&q("new_node_id"), &q(id)]);
     }
