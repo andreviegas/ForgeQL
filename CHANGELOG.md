@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.81.1] — 2026-06-23 — ci(release): drop the hanging macOS build
+
+### Fixed
+
+- The release workflow's `build-macos` job (aarch64 + x86_64 Apple targets on
+  GitHub-hosted macOS runners) hung indefinitely and froze the whole tagged
+  release. Removed the job and dropped it from the `release` job's `needs`, so a
+  `v*` tag now ships Linux (gnu + musl) and `.deb` artifacts without waiting on
+  the Mac runners. No binary change. Notably this is the first release-workflow
+  edit made entirely through `run_fql` — `.github/workflows/release.yml` (YAML)
+  and `Cargo.toml` (TOML) are both node-addressable now. Re-add a
+  timeout-guarded macOS job when the runner issue is resolved.
 ## [0.81.0] — 2026-06-22 — feat(lang): TOML support — `Cargo.toml` + `Cargo.lock` node-addressable
 
 ### Added

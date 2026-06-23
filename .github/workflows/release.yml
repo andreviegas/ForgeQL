@@ -176,45 +176,9 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}.tar.gz
           if-no-files-found: error
-  build-macos:
-    name: Build macOS ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            runner: macos-14
-            artifact_name: forgeql-macos-aarch64
-          - target: x86_64-apple-darwin
-            runner: macos-13
-            artifact_name: forgeql-macos-x86_64
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: '1.94.0'
-          targets: ${{ matrix.target }}
-
-      - name: Build release binaries (forgeql, forgeql-server, forgeql-client)
-        run: cargo build --release --target ${{ matrix.target }} --bin forgeql --bin forgeql-server --bin forgeql-client
-
-      - name: Package (tar.gz)
-        run: |
-          BIN_DIR="target/${{ matrix.target }}/release"
-          tar czf "${{ matrix.artifact_name }}.tar.gz" -C "$BIN_DIR" forgeql forgeql-server forgeql-client
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}.tar.gz
-          if-no-files-found: error
   release:
     name: Create GitHub Release
-    needs: [build, build-musl, deb, build-macos]
+    needs: [build, build-musl, deb]
     runs-on: ubuntu-latest
     permissions:
       contents: write
