@@ -34,5 +34,5 @@ tests/fixtures/**/.forgeql-staging/
 tests/fixtures/**/.forgeql-columnar-delta
 tests/fixtures/**/.forgeql-checkpoints
 .continue/
-.claude/agents/forgeql-server-auth.md
+.claude/
 .mcp.json
