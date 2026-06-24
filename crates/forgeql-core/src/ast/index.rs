@@ -918,6 +918,55 @@ mod tests {
     }
 
     #[test]
+    fn mod_and_type_alias_declarations_are_addressable() {
+        // Regression: `pub mod x;` and `type X = …;` were indexed as
+        // `namespace`/`type_alias` symbols but never received an ordinal/node_id,
+        // so they could not be edited through the node API (CHANGE NODE /
+        // INSERT NODE). Both are semantic items and must be addressable, like
+        // `struct`/`enum`/`import`.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("snippet.rs");
+        let src = "pub mod alpha;\nmod beta;\ntype Handle = u32;\nfn f() {}\n";
+        std::fs::write(&file, src).unwrap();
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .unwrap();
+        let enrichers = default_enrichers();
+        let mut table = SymbolTable::default();
+        {
+            let mut ctx = IndexContext {
+                path: &file,
+                language: &crate::ast::lang::RustLanguageInline,
+                enrichers: &enrichers,
+                macro_table: None,
+                ordinal_remapper: None,
+                table: &mut table,
+            };
+            index_file(&mut parser, &mut ctx, None).unwrap();
+        }
+
+        let addressable = |kind: &str, expected: usize| {
+            let rows: Vec<_> = table
+                .rows
+                .iter()
+                .filter(|r| table.fql_kind_of(r) == kind)
+                .collect();
+            assert_eq!(rows.len(), expected, "expected {expected} `{kind}` row(s)");
+            for row in rows {
+                assert!(
+                    row.ordinal.is_some(),
+                    "`{kind}` declaration '{}' must be addressable (carry an ordinal)",
+                    table.name_of(row)
+                );
+            }
+        };
+        addressable("namespace", 2);
+        addressable("type_alias", 1);
+    }
+
+    #[test]
     fn block_node_ids_survive_deletion_of_a_sibling_block() {
         // Deleting one comment block must not churn another block's node id.
         // Blocks share the constant `comment_block` name, so the reindex relies

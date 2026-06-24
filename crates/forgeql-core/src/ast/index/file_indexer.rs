@@ -130,6 +130,8 @@ fn is_addressable_fql_kind(fql_kind: &str) -> bool {
             | "field"
             | "method"
             | "import"
+            | "namespace"
+            | "type_alias"
             | "macro"
             | "include_group"
             | "variable"
