@@ -394,6 +394,95 @@ impl ForgeQLEngine {
         }))
     }
 
+    /// `JOB START '<label>'` — run a verify step as a detached background job.
+    ///
+    /// Resolves the frozen verify step (same allowlist as `VERIFY build`), then
+    /// runs its command on a worker thread and returns the job id immediately —
+    /// the long build never blocks this request. The step's `weight` is recorded
+    /// on the job for the future scheduler.
+    ///
+    /// # Errors
+    /// Returns `Err` if the step name is not found, or the step declares params
+    /// (parameterized jobs are not supported yet — use `VERIFY build`).
+    pub(super) fn exec_job_start(
+        &self,
+        session_id: Option<&str>,
+        label: &str,
+    ) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let session = self.require_session(sid)?;
+        let frozen_steps = session.frozen_verify_steps.as_deref().unwrap_or(&[]);
+        let workdir = session
+            .frozen_workdir
+            .clone()
+            .unwrap_or_else(|| session.worktree_path.clone());
+        let step = frozen_steps
+            .iter()
+            .find(|s| s.name == label)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "JOB START: verify step '{label}' not found in .forgeql.yaml — add it under verify_steps:"
+                )
+            })?;
+        anyhow::ensure!(
+            step.params.is_empty(),
+            "JOB START '{label}': parameterized steps are not supported yet — use VERIFY build"
+        );
+        let env: Vec<(&'static str, String)> = vec![
+            ("FORGEQL_SESSION_ID", sid.to_string()),
+            ("FORGEQL_SOURCE", session.source_name.clone()),
+            ("FORGEQL_BRANCH", session.branch.clone()),
+            ("FORGEQL_ALIAS", session.id.clone()),
+            (
+                "FORGEQL_WORKTREE",
+                session.worktree_path.display().to_string(),
+            ),
+            (
+                "FORGEQL_BUILD_DIR",
+                workdir.join("target").display().to_string(),
+            ),
+        ];
+        let cost = step.weight.resolve();
+        let label_owned = step.name.clone();
+        let command = step.command.clone();
+        let step_name = step.name;
+        let registry = std::sync::Arc::clone(&self.jobs);
+        let id = registry.start(label_owned.clone(), cost, move || {
+            let result = crate::verify::run_shell(&step_name, &command, &workdir, &env, None);
+            crate::jobs::JobOutcome {
+                success: result.success,
+                output: result.output,
+            }
+        });
+        Ok(ForgeQLResult::JobStarted(crate::result::JobStartedResult {
+            id,
+            label: label_owned,
+        }))
+    }
+
+    /// `JOB STATUS '<id>'` — poll one background job (global; no session needed).
+    ///
+    /// # Errors
+    /// Returns `Err` if no job with that id is known.
+    pub(super) fn exec_job_status(&self, id: &str) -> Result<ForgeQLResult> {
+        self.jobs.status(id).map_or_else(
+            || Err(anyhow::anyhow!("JOB STATUS: unknown job id '{id}'")),
+            |snapshot| Ok(ForgeQLResult::JobStatus(snapshot)),
+        )
+    }
+
+    /// `JOB LIST` — list all known background jobs (global; no session needed).
+    ///
+    /// # Errors
+    /// Never fails today; returns `Result` for dispatch uniformity.
+    #[allow(clippy::unnecessary_wraps)]
+    pub(super) fn exec_job_list(&self) -> Result<ForgeQLResult> {
+        Ok(ForgeQLResult::JobList(crate::result::JobListResult {
+            jobs: self.jobs.list(),
+        }))
+    }
+
     /// Run a named `run_steps` template from `.forgeql.yaml` as a standalone
     /// command (outside a transaction). `Ident` args are substituted into the
     /// command; `String` args are bound to the subprocess stdin.

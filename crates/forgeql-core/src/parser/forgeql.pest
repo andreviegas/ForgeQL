@@ -102,6 +102,7 @@ statement = {
   | show_node_stmt
   | show_more_stmt
   | undo_stmt
+  | job_stmt
 }
 
 /// FIND NODE id -- resolve a node_id to its current location, rev, and nav links.
@@ -245,6 +246,12 @@ rollback_stmt = { "ROLLBACK" ~ ("TRANSACTION" ~ any_value)? }
 
 verify_stmt = { "VERIFY" ~ "build" ~ any_value ~ string_literal* }
 run_stmt    = { "RUN" ~ any_value ~ string_literal* }
+
+/// `JOB START '<label>'` | `JOB STATUS '<id>'` | `JOB LIST`
+job_stmt   = { "JOB" ~ (job_start | job_status | job_list) }
+job_start  = { "START" ~ any_value }
+job_status = { "STATUS" ~ any_value }
+job_list   = { "LIST" }
 commit_stmt = { "COMMIT" ~ "MESSAGE" ~ content_value }
 
 // -----------------------------------------------------------------------

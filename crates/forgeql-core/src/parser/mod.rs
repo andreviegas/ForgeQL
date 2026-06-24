@@ -169,6 +169,35 @@ fn parse_undo_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
     Ok(ForgeQLIR::Undo { last })
 }
 
+fn parse_job_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or_else(|| ForgeError::DslParse("job: expected START | STATUS | LIST".into()))?;
+    match inner.as_rule() {
+        Rule::job_start => {
+            let label = inner
+                .into_inner()
+                .next()
+                .map(|l| unquote(l.as_str()))
+                .ok_or_else(|| ForgeError::DslParse("job start: expected step label".into()))?;
+            Ok(ForgeQLIR::JobStart { label })
+        }
+        Rule::job_status => {
+            let id = inner
+                .into_inner()
+                .next()
+                .map(|l| unquote(l.as_str()))
+                .ok_or_else(|| ForgeError::DslParse("job status: expected job id".into()))?;
+            Ok(ForgeQLIR::JobStatus { id })
+        }
+        Rule::job_list => Ok(ForgeQLIR::JobList),
+        other => Err(ForgeError::DslParse(format!(
+            "job: unexpected rule {other:?}"
+        ))),
+    }
+}
+
 // parse_statement is inherently long: one match arm per grammar rule.
 #[allow(clippy::too_many_lines)]
 fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
@@ -239,6 +268,7 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         | Rule::show_node_stmt => parse_node_stmt(pair),
         Rule::show_more_stmt => parse_show_more_stmt(pair),
         Rule::undo_stmt => parse_undo_stmt(pair),
+        Rule::job_stmt => parse_job_stmt(pair),
 
         Rule::statement => {
             let inner = pair

@@ -215,6 +215,88 @@ pub struct VerifyStep {
     /// `$name` occurrence in `command`. Empty → the step takes no arguments.
     #[serde(default)]
     pub params: Vec<ParamSpec>,
+    /// Resource footprint of this step, consumed by the `JOB` scheduler. Either
+    /// a tier (`light|medium|heavy`) or an explicit
+    /// `{cores, memory_mb, max_seconds}` map. Absent → `medium`.
+    #[serde(default)]
+    pub weight: Weight,
+}
+
+/// Resource footprint of a build job: what the `JOB` scheduler accounts for when
+/// admitting work. Slice 1 records it on each job but does not yet schedule by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceCost {
+    /// CPU cores the command is expected to occupy.
+    pub cores: u32,
+    /// Peak resident memory, in megabytes.
+    pub memory_mb: u64,
+    /// Soft wall-clock budget in seconds (enforced as a timeout in a later slice).
+    pub max_seconds: u64,
+}
+
+/// Coarse cost tier for a verify step — sugar over [`ResourceCost`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WeightLevel {
+    /// Cheap lint / check.
+    Light,
+    /// A normal build or test.
+    Medium,
+    /// A heavy whole-workspace build.
+    Heavy,
+}
+
+impl WeightLevel {
+    /// Map a tier to its resource footprint. Presets are tunable; the scheduler
+    /// always reasons in cores/memory/time, never in tiers.
+    #[must_use]
+    pub const fn cost(self) -> ResourceCost {
+        match self {
+            Self::Light => ResourceCost {
+                cores: 1,
+                memory_mb: 1024,
+                max_seconds: 120,
+            },
+            Self::Medium => ResourceCost {
+                cores: 4,
+                memory_mb: 4096,
+                max_seconds: 600,
+            },
+            Self::Heavy => ResourceCost {
+                cores: 8,
+                memory_mb: 16384,
+                max_seconds: 1800,
+            },
+        }
+    }
+}
+
+/// Declared cost of a verify step in `.forgeql.yaml`: either a tier
+/// (`light|medium|heavy`) or an explicit `{cores, memory_mb, max_seconds}` map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Weight {
+    /// A coarse tier.
+    Level(WeightLevel),
+    /// Exact resource numbers.
+    Explicit(ResourceCost),
+}
+
+impl Default for Weight {
+    fn default() -> Self {
+        Self::Level(WeightLevel::Medium)
+    }
+}
+
+impl Weight {
+    /// Resolve to concrete resource numbers.
+    #[must_use]
+    pub const fn resolve(self) -> ResourceCost {
+        match self {
+            Self::Level(level) => level.cost(),
+            Self::Explicit(cost) => cost,
+        }
+    }
 }
 
 /// Type of a [`VerifyStep`] parameter — constrains how an argument is
@@ -552,6 +634,31 @@ mod tests {
         .expect("write");
         let config = ForgeConfig::load(&path).expect("should load successfully");
         assert_eq!(config.verify_steps.len(), 2);
+    }
+
+    #[test]
+    fn verify_step_weight_levels_and_explicit_resolve() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".forgeql.yaml");
+        std::fs::write(
+            &path,
+            "workspace_root: .\nverify_steps:\n  - name: lite\n    command: lint\n    weight: light\n  - name: heavy\n    command: build\n    weight: heavy\n  - name: exact\n    command: x\n    weight:\n      cores: 2\n      memory_mb: 2048\n      max_seconds: 90\n  - name: plain\n    command: y\n",
+        )
+        .expect("write");
+        let config = ForgeConfig::load(&path).expect("should load");
+        let cost = |n: &str| config.step(n).expect("step exists").weight.resolve();
+        assert_eq!(cost("lite"), WeightLevel::Light.cost());
+        assert_eq!(cost("heavy"), WeightLevel::Heavy.cost());
+        assert_eq!(
+            cost("exact"),
+            ResourceCost {
+                cores: 2,
+                memory_mb: 2048,
+                max_seconds: 90,
+            }
+        );
+        // An absent `weight:` defaults to medium.
+        assert_eq!(cost("plain"), WeightLevel::Medium.cost());
     }
 
     fn ident(name: &str) -> ParamSpec {

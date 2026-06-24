@@ -30,6 +30,7 @@ pub mod error;
 pub mod filter;
 pub mod git;
 pub mod ir;
+pub mod jobs;
 pub mod node_id;
 pub mod parser;
 pub mod query_logger;

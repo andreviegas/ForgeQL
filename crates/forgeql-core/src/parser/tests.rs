@@ -660,6 +660,22 @@ fn parse_undo_last_n() {
 }
 
 #[test]
+fn parse_job_commands() {
+    match &parse("JOB START 'test-all'").unwrap()[0] {
+        ForgeQLIR::JobStart { label } => assert_eq!(label, "test-all"),
+        other => panic!("wrong variant: {other:?}"),
+    }
+    match &parse("JOB STATUS 'j-00001a'").unwrap()[0] {
+        ForgeQLIR::JobStatus { id } => assert_eq!(id, "j-00001a"),
+        other => panic!("wrong variant: {other:?}"),
+    }
+    match &parse("JOB LIST").unwrap()[0] {
+        ForgeQLIR::JobList => {}
+        other => panic!("wrong variant: {other:?}"),
+    }
+}
+
+#[test]
 fn parse_show_more_window_then_where_composes() {
     // WHERE must apply after every window form, not just bare SHOW MORE.
     let ops = parse("SHOW MORE TAIL 40 WHERE text MATCHES 'error|fail'").unwrap();

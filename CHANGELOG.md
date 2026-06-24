@@ -6,6 +6,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.83.0] — 2026-06-29 — feat(jobs): JOB START/STATUS/LIST — background build jobs (scheduler slice 1)
+
+### Added
+
+- `JOB START '<label>'` / `JOB STATUS '<id>'` / `JOB LIST` — run a verify step as a
+  detached background job that returns a job id immediately instead of blocking the
+  request (Slice 1 of the server-side job scheduler). Verify steps gain an optional
+  `weight` in `.forgeql.yaml` — a tier (`light`|`medium`|`heavy`) or an explicit
+  `{cores, memory_mb, max_seconds}` map — recorded on each job for the future
+  scheduler. `VERIFY build` is unchanged and runs alongside.
+
 ## [0.82.0] — 2026-06-24 — fix(index): make `mod` and `type` declarations node-addressable
 
 ### Fixed

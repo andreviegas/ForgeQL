@@ -32,6 +32,30 @@ impl fmt::Display for ForgeQLResult {
                 r.end_line,
                 r.rev
             ),
+            Self::JobStarted(r) => {
+                write!(formatter, "job {} started — {}", r.id, r.label)
+            }
+            Self::JobStatus(s) => write!(
+                formatter,
+                "job {} {} ({} ms)\n{}",
+                s.id,
+                s.state.as_str(),
+                s.elapsed_ms,
+                s.output
+            ),
+            Self::JobList(l) => {
+                for job in &l.jobs {
+                    writeln!(
+                        formatter,
+                        "{} {} {} ({} ms)",
+                        job.id,
+                        job.state.as_str(),
+                        job.label,
+                        job.elapsed_ms
+                    )?;
+                }
+                Ok(())
+            }
         }
     }
 }

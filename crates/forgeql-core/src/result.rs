@@ -52,6 +52,12 @@ pub enum ForgeQLResult {
     Run(RunResult),
     /// Node-addressed lookup: FIND NODE id
     FindNode(FindNodeResult),
+    /// Background job submitted: `JOB START '<label>'`
+    JobStarted(JobStartedResult),
+    /// Background job status: `JOB STATUS '<id>'`
+    JobStatus(crate::jobs::JobSnapshot),
+    /// Background job list: `JOB LIST`
+    JobList(JobListResult),
 }
 
 /// Result of FIND NODE id — resolved node details and navigation links.
@@ -641,6 +647,22 @@ pub struct VerifyBuildResult {
     pub summary_direction: crate::config::SummaryDirection,
 }
 
+/// Result of `JOB START '<label>'` — the submitted job's id and label.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobStartedResult {
+    /// Opaque job id to poll with `JOB STATUS`.
+    pub id: String,
+    /// The verify-step label this job runs.
+    pub label: String,
+}
+
+/// Result of `JOB LIST` — summaries of all known background jobs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobListResult {
+    /// Jobs in submission order (newest last).
+    pub jobs: Vec<crate::jobs::JobSummary>,
+}
+
 /// Serde default for [`VerifyBuildResult::summary_lines`].
 const fn default_summary_lines() -> usize {
     40
@@ -810,6 +832,9 @@ impl ForgeQLResult {
             }
             Self::FindNode(r) => relativize(&mut r.path, worktree_root),
             Self::BeginTransaction(_)
+            | Self::JobStarted(_)
+            | Self::JobStatus(_)
+            | Self::JobList(_)
             | Self::Commit(_)
             | Self::SourceOp(_)
             | Self::VerifyBuild(_)

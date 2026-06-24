@@ -472,6 +472,19 @@ pub enum ForgeQLIR {
         #[serde(default)]
         last: usize,
     },
+    /// `JOB START '<label>'` — run a verify step as a detached background job,
+    /// returning a job id immediately (the build does not block the request).
+    JobStart {
+        /// Verify-step label to run (same labels as `VERIFY build`).
+        label: String,
+    },
+    /// `JOB STATUS '<id>'` — poll a background job's state and output.
+    JobStatus {
+        /// Job id returned by `JOB START`.
+        id: String,
+    },
+    /// `JOB LIST` — list all known background jobs.
+    JobList,
 }
 
 /// Serde helper: skip-serializing `Backend` when it holds the `Default` variant.

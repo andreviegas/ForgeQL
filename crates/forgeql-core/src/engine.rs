@@ -123,6 +123,9 @@ pub struct ForgeQLEngine {
     commands_served: u64,
     /// Language support registry for tree-sitter parsing and enrichment.
     lang_registry: Arc<LanguageRegistry>,
+    /// Background build-job registry (`JOB START / STATUS / LIST`), shared with
+    /// worker threads via `Arc`.
+    jobs: Arc<crate::jobs::JobRegistry>,
 }
 
 // -----------------------------------------------------------------------
@@ -179,6 +182,7 @@ impl ForgeQLEngine {
             data_dir,
             commands_served: 0,
             lang_registry,
+            jobs: Arc::new(crate::jobs::JobRegistry::new()),
         };
         Ok(engine)
     }
@@ -422,6 +426,9 @@ impl ForgeQLEngine {
             ForgeQLIR::VerifyBuild { step, args } => self.exec_verify_build(sid, step, args),
             ForgeQLIR::Run { step, args } => self.exec_run(sid, step, args),
             ForgeQLIR::Undo { last } => self.exec_undo(sid, *last),
+            ForgeQLIR::JobStart { label } => self.exec_job_start(sid, label),
+            ForgeQLIR::JobStatus { id } => self.exec_job_status(id),
+            ForgeQLIR::JobList => self.exec_job_list(),
         }
     }
 
