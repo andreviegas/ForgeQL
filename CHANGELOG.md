@@ -6,6 +6,11 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.82.0] — 2026-06-24 — fix(index): make `mod` and `type` declarations node-addressable
+
+### Fixed
+- `mod` declarations and `type` aliases now carry node_ids, making them node-addressable for mutations (added to `is_addressable_fql_kind`).
+
 ## [0.81.1] — 2026-06-23 — ci(release): drop the hanging macOS build
 
 ### Fixed

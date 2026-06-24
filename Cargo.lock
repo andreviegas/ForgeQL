@@ -243,9 +243,9 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.2.64"
+version = "1.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dad887fd958be91b5098c0248def011f4523ab786cd411be668777e55063501f"
+checksum = "e228eec9be7c17ccb640b59b36a5cd805ea2a564a4c5e162c2f659fea30d3b96"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -622,7 +622,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "forgeql"
-version = "0.81.1"
+version = "0.82.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-client"
-version = "0.81.1"
+version = "0.82.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-core"
-version = "0.81.1"
+version = "0.82.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -695,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-c"
-version = "0.81.1"
+version = "0.82.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-cpp"
-version = "0.81.1"
+version = "0.82.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -713,7 +713,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-json"
-version = "0.81.1"
+version = "0.82.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -722,7 +722,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-markdown"
-version = "0.81.1"
+version = "0.82.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -731,7 +731,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-python"
-version = "0.81.1"
+version = "0.82.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-rust"
-version = "0.81.1"
+version = "0.82.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-toml"
-version = "0.81.1"
+version = "0.82.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-yaml"
-version = "0.81.1"
+version = "0.82.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-server"
-version = "0.81.1"
+version = "0.82.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1454,9 +1454,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.32"
+version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
+checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lru-slab"
@@ -1487,9 +1487,9 @@ checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "memmap2"
-version = "0.9.10"
+version = "0.9.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "714098028fe011992e1c3962653c96b2d578c4b4bce9036e15ff220319b1e0e3"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
 dependencies = [
  "libc",
 ]
@@ -1749,9 +1749,9 @@ dependencies = [
 
 [[package]]
 name = "quinn"
-version = "0.11.9"
+version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9e20a958963c291dc322d98411f541009df2ced7b5a4f2bd52337638cfccf20"
+checksum = "0c1a41e437b6bbd489372cd4971de128e85c855f56c57f283d20ff016cf7c0a8"
 dependencies = [
  "bytes",
  "cfg_aliases",
@@ -1769,9 +1769,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.14"
+version = "0.11.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
+checksum = "4fcb935c5bec503c2f0e306bdd3e58bb9029dcb14fa8d9ac76e3a5256ac0763e"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",
@@ -1804,9 +1804,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.45"
+version = "1.0.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
+checksum = "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
 dependencies = [
  "proc-macro2",
 ]
@@ -2007,9 +2007,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0810a9f717d9828f475fe1f629f4c305c8464b7f496c3a854b58d29e65f4058e"
+checksum = "1d1f571c72940a19d9532fe52dbea8bc9912bf1d766c2970bb824056b86f3f59"
 dependencies = [
  "async-trait",
  "base64",
@@ -2029,9 +2029,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aefac48c364756e97f04c0401ba3231e8607882c7c1d92da0437dc16307904d"
+checksum = "1aad0035b69380782d78ea95b508327e6deaa2235909053e596eea8f27b5e1d5"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -2071,9 +2071,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.40"
+version = "0.23.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef86cd5876211988985292b91c96a8f2d298df24e75989a43a3c73f2d4d8168b"
+checksum = "6b92b125634d9b795e7beca796cc790df15a7fb38323bf3196fda83292d06b1f"
 dependencies = [
  "once_cell",
  "ring",
