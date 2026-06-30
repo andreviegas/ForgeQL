@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.85.0] — 2026-06-30 — chore(release): rollup release (first tag since v0.81.0)
+
+This is the first tagged/published release since `v0.81.0`. It ships the
+previously-merged-but-unreleased work — node-addressable `mod`/`type`
+declarations (0.82.0), the JOB background scheduler slice 1 (0.83.0) and
+slice 2's bounded worker pool + FIFO queue (0.84.0) — together with the change
+below. See the per-version sections that follow for details.
+
+### Changed
+
+- Re-blessed the zephyr/pytorch golden values
+  (`crates/forgeql/tests/golden.json`, 335 entries) to match the drifted
+  external corpora — fixture values only, no engine or test-harness change.
+
 ## [0.84.0] — 2026-06-29 — feat(jobs): bounded worker pool + FIFO queue for JOB (scheduler slice 2)
 
 ### Added
