@@ -6,6 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.84.0] — 2026-06-29 — feat(jobs): bounded worker pool + FIFO queue for JOB (scheduler slice 2)
+
+### Added
+
+- Background jobs now run through a **bounded worker pool**: at most
+  `max_concurrent` jobs execute at once and the rest wait `Queued` in a FIFO
+  queue, starting automatically as slots free. The cap comes from the
+  `FORGEQL_MAX_CONCURRENT_JOBS` environment variable and defaults to `1`, so a
+  burst of `JOB START` builds runs strictly serially instead of all at once —
+  the backpressure that stops many parallel heavy builds from exhausting
+  machine memory (Slice 2 of the server-side job scheduler).
+
+### Changed
+
+- `JobState` gains a `Queued` variant; `JOB STATUS` and `JOB LIST` report it
+  while a job waits for a slot. `VERIFY build` is unchanged and still runs
+  unbounded (deprecation comes later).
+
 ## [0.83.0] — 2026-06-29 — feat(jobs): JOB START/STATUS/LIST — background build jobs (scheduler slice 1)
 
 ### Added

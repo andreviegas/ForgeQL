@@ -1,18 +1,20 @@
 //! Background job system for build-class commands (`JOB START / STATUS / LIST`).
 //!
-//! Slice 1 of the server-side job scheduler. `JOB START '<label>'` resolves a
-//! frozen verify step, runs its command on a background thread, and returns a
-//! short job id immediately — so a long build never holds the calling request
-//! open. `JOB STATUS <id>` and `JOB LIST` poll this in-memory registry.
+//! `JOB START '<label>'` resolves a frozen verify step and submits its command
+//! to a bounded worker pool, returning a short job id immediately — so a long
+//! build never holds the calling request open. `JOB STATUS <id>` and `JOB LIST`
+//! poll this in-memory registry.
 //!
-//! Deliberately NOT in this slice: queueing, concurrency caps, timeout
-//! enforcement, resource-budget admission. Each job still records its
-//! [`ResourceCost`] (resolved from the step's `weight`) so the scheduler added
-//! in later slices can consume it without a data migration.
+//! At most `max_concurrent` jobs (from `FORGEQL_MAX_CONCURRENT_JOBS`, default 1)
+//! run at once; the rest wait `Queued` in a FIFO queue and start as slots free.
+//! This is the backpressure that stops a burst of parallel heavy builds from
+//! exhausting machine memory. Each job records its [`ResourceCost`] (resolved
+//! from the step's `weight`) for the weight-aware admission added in a later
+//! slice. Still deferred: timeout enforcement and resource-budget admission.
 
 #![allow(clippy::module_name_repetitions)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
@@ -24,11 +26,12 @@ use crate::config::ResourceCost;
 /// a long-lived server's registry cannot grow without bound.
 const MAX_RETAINED_JOBS: usize = 256;
 
-/// Lifecycle state of a job. Slice 1 has no `Queued` (jobs run immediately); the
-/// queue arrives in Slice 2.
+/// Lifecycle state of a job: `Queued` → `Running` → `Succeeded`/`Failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobState {
+    /// Accepted and waiting for a free worker slot (concurrency cap reached).
+    Queued,
     /// The command is executing on a background thread.
     Running,
     /// The command exited 0.
@@ -42,6 +45,7 @@ impl JobState {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Queued => "queued",
             Self::Running => "running",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
@@ -57,6 +61,9 @@ pub struct JobOutcome {
     /// Combined stdout + stderr.
     pub output: String,
 }
+
+/// A queued unit of work: runs once on a worker thread, then yields its outcome.
+type BoxedJob = Box<dyn FnOnce() -> JobOutcome + Send + 'static>;
 
 /// Full status of one job, returned by `JOB STATUS`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,17 +101,22 @@ struct Job {
     cost: ResourceCost,
     state: JobState,
     output: String,
-    started: Instant,
+    /// Set when the job actually starts running; `None` while still queued.
+    started: Option<Instant>,
     /// Frozen at completion; while `Running` the elapsed time is computed live.
     elapsed_ms: u64,
+    /// The pending closure, held only while `Queued`; taken when a worker slot
+    /// opens. Boxed so heterogeneous job bodies share one queue.
+    pending: Option<BoxedJob>,
 }
 
 impl Job {
     fn live_elapsed_ms(&self) -> u64 {
         match self.state {
-            JobState::Running => {
-                u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
-            }
+            JobState::Queued => 0,
+            JobState::Running => self.started.map_or(0, |s| {
+                u64::try_from(s.elapsed().as_millis()).unwrap_or(u64::MAX)
+            }),
             JobState::Succeeded | JobState::Failed => self.elapsed_ms,
         }
     }
@@ -131,11 +143,16 @@ impl Job {
 }
 
 /// Mutable registry interior, guarded by the [`JobRegistry`] mutex.
-#[derive(Default)]
 struct Inner {
     jobs: HashMap<String, Job>,
     /// Submission order, for `JOB LIST` and ring eviction.
     order: Vec<String>,
+    /// Ids accepted but not yet running, oldest first (FIFO admission).
+    queue: VecDeque<String>,
+    /// Number of jobs currently executing on a worker thread.
+    running: usize,
+    /// Maximum jobs allowed to run at once (always >= 1).
+    max_concurrent: usize,
     /// Monotonic id counter.
     seq: u64,
 }
@@ -150,7 +167,7 @@ impl Inner {
                 if self
                     .jobs
                     .get(id)
-                    .is_some_and(|j| j.state != JobState::Running)
+                    .is_some_and(|j| matches!(j.state, JobState::Succeeded | JobState::Failed))
                 {
                     victim = Some(i);
                     break;
@@ -168,21 +185,47 @@ impl Inner {
 }
 
 /// Process-wide registry of background jobs. Cheap to share via `Arc`.
-#[derive(Default)]
 pub struct JobRegistry {
     inner: Mutex<Inner>,
 }
 
 impl JobRegistry {
-    /// Create an empty registry.
+    /// Create an empty registry that runs at most `max_concurrent` jobs at
+    /// once (clamped to a minimum of 1); excess submissions queue FIFO.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(max_concurrent: usize) -> Self {
+        Self {
+            inner: Mutex::new(Inner {
+                jobs: HashMap::new(),
+                order: Vec::new(),
+                queue: VecDeque::new(),
+                running: 0,
+                max_concurrent: max_concurrent.max(1),
+                seq: 0,
+            }),
+        }
     }
 
-    /// Spawn `job_fn` on a background thread, record a `Running` job, and return
-    /// its id immediately. The worker updates the record to `Succeeded`/`Failed`
-    /// on completion.
+    /// Construct a registry whose concurrency cap comes from the
+    /// `FORGEQL_MAX_CONCURRENT_JOBS` environment variable. The default of 1
+    /// runs build jobs strictly one at a time — the safe setting that stops a
+    /// burst of heavy `JOB START` builds from exhausting machine memory.
+    /// Missing, unparseable, or zero values fall back to 1.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let cap = std::env::var("FORGEQL_MAX_CONCURRENT_JOBS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n >= 1)
+            .unwrap_or(1);
+        Self::new(cap)
+    }
+
+    /// Accept `job_fn`, record it as `Queued`, and return its id immediately.
+    /// The job starts as soon as a worker slot is free — right away when the
+    /// pool is below its concurrency cap, otherwise it waits FIFO in the queue.
+    /// The worker updates the record to `Succeeded`/`Failed` on completion and
+    /// pumps the next queued job.
     pub fn start<F>(self: &Arc<Self>, label: String, cost: ResourceCost, job_fn: F) -> String
     where
         F: FnOnce() -> JobOutcome + Send + 'static,
@@ -196,37 +239,66 @@ impl JobRegistry {
                 Job {
                     label,
                     cost,
-                    state: JobState::Running,
+                    state: JobState::Queued,
                     output: String::new(),
-                    started: Instant::now(),
+                    started: None,
                     elapsed_ms: 0,
+                    pending: Some(Box::new(job_fn)),
                 },
             );
             inner.order.push(id.clone());
+            inner.queue.push_back(id.clone());
             inner.evict();
             id
         };
-
-        let registry = Arc::clone(self);
-        let thread_id = id.clone();
-        // A std thread (not a tokio task): the work runs blocking `std::process`
-        // commands, and this primitive is independent of the async MCP layer.
-        let spawned = std::thread::Builder::new()
-            .name(format!("forgeql-job-{id}"))
-            .spawn(move || {
-                let outcome = job_fn();
-                registry.complete(&thread_id, &outcome);
-            });
-        if let Err(err) = spawned {
-            self.complete(
-                &id,
-                &JobOutcome {
-                    success: false,
-                    output: format!("failed to spawn job worker thread: {err}"),
-                },
-            );
-        }
+        self.pump();
         id
+    }
+
+    /// Start as many queued jobs as the concurrency cap allows. Called after a
+    /// submission and after every completion. Worker threads are spawned
+    /// *outside* the registry lock so a job that finishes instantly can re-enter
+    /// `complete` (which re-locks) without deadlocking.
+    fn pump(self: &Arc<Self>) {
+        let mut to_spawn: Vec<(String, BoxedJob)> = Vec::new();
+        let mut inner = self.lock();
+        while inner.running < inner.max_concurrent {
+            let Some(id) = inner.queue.pop_front() else {
+                break;
+            };
+            let Some(job) = inner.jobs.get_mut(&id) else {
+                continue;
+            };
+            let Some(job_fn) = job.pending.take() else {
+                continue;
+            };
+            job.state = JobState::Running;
+            job.started = Some(Instant::now());
+            inner.running += 1;
+            to_spawn.push((id, job_fn));
+        }
+        drop(inner);
+        for (id, job_fn) in to_spawn {
+            let registry = Arc::clone(self);
+            let thread_id = id.clone();
+            // A std thread (not a tokio task): the work runs blocking
+            // `std::process` commands and is independent of the async MCP layer.
+            let spawned = std::thread::Builder::new()
+                .name(format!("forgeql-job-{id}"))
+                .spawn(move || {
+                    let outcome = job_fn();
+                    registry.complete(&thread_id, &outcome);
+                });
+            if let Err(err) = spawned {
+                self.complete(
+                    &id,
+                    &JobOutcome {
+                        success: false,
+                        output: format!("failed to spawn job worker thread: {err}"),
+                    },
+                );
+            }
+        }
     }
 
     /// `JOB STATUS <id>` — full snapshot, or `None` if the id is unknown.
@@ -247,7 +319,7 @@ impl JobRegistry {
             .collect()
     }
 
-    fn complete(&self, id: &str, outcome: &JobOutcome) {
+    fn complete(self: &Arc<Self>, id: &str, outcome: &JobOutcome) {
         let mut inner = self.lock();
         if let Some(job) = inner.jobs.get_mut(id) {
             job.state = if outcome.success {
@@ -256,8 +328,14 @@ impl JobRegistry {
                 JobState::Failed
             };
             job.output.clone_from(&outcome.output);
-            job.elapsed_ms = u64::try_from(job.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            job.elapsed_ms = job.started.map_or(0, |s| {
+                u64::try_from(s.elapsed().as_millis()).unwrap_or(u64::MAX)
+            });
+            inner.running = inner.running.saturating_sub(1);
         }
+        drop(inner);
+        // A slot just freed (or a spawn failed) — admit the next queued job.
+        self.pump();
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -288,7 +366,7 @@ mod tests {
 
     #[test]
     fn job_runs_to_success_and_is_queryable() {
-        let reg = Arc::new(JobRegistry::new());
+        let reg = Arc::new(JobRegistry::new(4));
         let id = reg.start("build".to_string(), medium(), || JobOutcome {
             success: true,
             output: "ok\n".to_string(),
@@ -302,7 +380,7 @@ mod tests {
 
     #[test]
     fn failed_job_reports_failed_state() {
-        let reg = Arc::new(JobRegistry::new());
+        let reg = Arc::new(JobRegistry::new(4));
         let id = reg.start("lint".to_string(), medium(), || JobOutcome {
             success: false,
             output: "boom".to_string(),
@@ -312,7 +390,7 @@ mod tests {
 
     #[test]
     fn unknown_id_is_none_and_list_tracks_jobs() {
-        let reg = Arc::new(JobRegistry::new());
+        let reg = Arc::new(JobRegistry::new(4));
         assert!(reg.status("j-nope").is_none());
         let _ = reg.start("a".to_string(), medium(), || JobOutcome {
             success: true,
@@ -324,5 +402,69 @@ mod tests {
         });
         let list = reg.list();
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn cap_of_one_runs_jobs_sequentially() {
+        let reg = Arc::new(JobRegistry::new(1));
+        let running = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let max_seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut ids = Vec::new();
+        for _ in 0..4 {
+            let running = Arc::clone(&running);
+            let max_seen = Arc::clone(&max_seen);
+            let id = reg.start("build".to_string(), medium(), move || {
+                let now = running.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                let _ = max_seen.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(15));
+                let _ = running.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                JobOutcome {
+                    success: true,
+                    output: String::new(),
+                }
+            });
+            ids.push(id);
+        }
+        for id in &ids {
+            assert_eq!(wait_done(&reg, id).state, JobState::Succeeded);
+        }
+        assert_eq!(
+            max_seen.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "cap of 1 must serialise jobs"
+        );
+    }
+
+    #[test]
+    fn queued_job_waits_until_a_slot_frees() {
+        let reg = Arc::new(JobRegistry::new(1));
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let first = reg.start("a".to_string(), medium(), move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+            JobOutcome {
+                success: true,
+                output: String::new(),
+            }
+        });
+        let second = reg.start("b".to_string(), medium(), || JobOutcome {
+            success: true,
+            output: String::new(),
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("first job should start");
+        assert_eq!(
+            reg.status(&first).expect("first job exists").state,
+            JobState::Running
+        );
+        assert_eq!(
+            reg.status(&second).expect("second job exists").state,
+            JobState::Queued
+        );
+        let _ = release_tx.send(());
+        assert_eq!(wait_done(&reg, &first).state, JobState::Succeeded);
+        assert_eq!(wait_done(&reg, &second).state, JobState::Succeeded);
     }
 }

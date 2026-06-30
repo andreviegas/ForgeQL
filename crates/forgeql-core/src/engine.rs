@@ -182,7 +182,7 @@ impl ForgeQLEngine {
             data_dir,
             commands_served: 0,
             lang_registry,
-            jobs: Arc::new(crate::jobs::JobRegistry::new()),
+            jobs: Arc::new(crate::jobs::JobRegistry::from_env()),
         };
         Ok(engine)
     }
