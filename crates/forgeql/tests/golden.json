@@ -1,7 +1,7 @@
 [
   {
     "alias": "golden",
-    "expect_symbols_indexed": 2829244,
+    "expect_symbols_indexed": 2830615,
     "use": "zephyr-andre.zephyr-main"
   },
   {
@@ -75,11 +75,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"line": 52,   "name": "__init__",                           "path": "scripts/west_commands/runners/openocd.py"},
-      {"line": 50,   "name": "__init__",                           "path": "scripts/west_commands/runners/jlink.py"},
-      {"line": 1463, "name": "test_projectbuilder_process",        "path": "scripts/tests/twister/test_runner.py"},
-      {"line": 23,   "name": "__init__",                           "path": "scripts/west_commands/runners/intel_cyclonev.py"},
-      {"line": 640,  "name": "test_filterbuilder_parse_generated", "path": "scripts/tests/twister/test_runner.py"}
+      {"line": 52, "name": "__init__", "path": "scripts/west_commands/runners/openocd.py"},
+      {"line": 50, "name": "__init__", "path": "scripts/west_commands/runners/jlink.py"},
+      {"line": 23, "name": "__init__", "path": "scripts/west_commands/runners/intel_cyclonev.py"},
+      {"line": 31, "name": "__init__", "path": "scripts/west_commands/runners/stm32cubeprogrammer.py"},
+      {"line": 14, "name": "__init__", "path": "scripts/west_commands/runners/probe_rs.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE param_count >= 5 IN 'scripts/**' ORDER BY param_count DESC LIMIT 5",
     "name": "G8_top5_functions_by_param_count"
@@ -352,11 +352,10 @@
     "name": "G32_python_shadow_functions_in_scripts"
   },
   {
-    "expect_row_count": 3,
+    "expect_row_count": 2,
     "expect_rows": [
-      {"line": 319, "name": "download_and_extract",        "path": "scripts/west_commands/sdk.py"},
-      {"line": 451, "name": "exec_op",                     "path": "scripts/west_commands/runners/nrf_common.py"},
-      {"line": 213, "name": "test_allow_installed_plugin", "path": "scripts/tests/twister_blackbox/test_addon.py"}
+      {"line": 319, "name": "download_and_extract", "path": "scripts/west_commands/sdk.py"},
+      {"line": 451, "name": "exec_op",              "path": "scripts/west_commands/runners/nrf_common.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE has_shadow = 'true' WHERE param_count >= 4 IN 'scripts/**' ORDER BY name ASC LIMIT 3",
     "name": "G33_python_shadow_param4_functions_in_scripts"
@@ -545,7 +544,7 @@
     "expect_rows": [
       {"line": 25,  "name": "AccessManager", "path": "modules/thrift/src/thrift/transport/TSSLSocket.h"},
       {"line": 390, "name": "AccessManager", "path": "modules/thrift/src/thrift/transport/TSSLSocket.h"},
-      {"line": 71,  "name": "AddedProperty", "path": "scripts/release/list_devicetree_bindings_changes.py"}
+      {"line": 70,  "name": "AddedProperty", "path": "scripts/release/list_devicetree_bindings_changes.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'class' ORDER BY name ASC LIMIT 3",
     "name": "GST5_class_alphabetical_asc_limit3"
@@ -657,11 +656,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"line": 538,  "name": "i3c_driver_api",                  "path": "include/zephyr/drivers/i3c.h"},
-      {"line": 106,  "name": "frag_transport_package_callback", "path": "subsys/lorawan/services/frag_transport.c"},
-      {"line": 153,  "name": "register_service",                "path": "tests/bluetooth/tester/src/btp_core.c"},
-      {"line": 321,  "name": "unregister_service",              "path": "tests/bluetooth/tester/src/btp_core.c"},
-      {"line": 110,  "name": "multicast_package_callback",      "path": "subsys/lorawan/services/multicast.c"}
+      {"line": 538, "name": "i3c_driver_api",                  "path": "include/zephyr/drivers/i3c.h"},
+      {"line": 106, "name": "frag_transport_package_callback", "path": "subsys/lorawan/services/frag_transport.c"},
+      {"line": 153, "name": "register_service",                "path": "tests/bluetooth/tester/src/btp_core.c"},
+      {"line": 321, "name": "unregister_service",              "path": "tests/bluetooth/tester/src/btp_core.c"},
+      {"line": 110, "name": "multicast_package_callback",      "path": "subsys/lorawan/services/multicast.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_unused_param = 'true' WHERE unused_param_count >= 3 ORDER BY lines DESC LIMIT 5",
     "name": "GST15_unused_param_metric_combos_limit5"
@@ -1032,8 +1031,8 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 69,  "metric_value": "1", "name": "handle_flush",              "path": "kernel/work.c"},
-      {"line": 545, "metric_value": "3", "name": "k_object_wordlist_foreach", "path": "kernel/userspace.c"},
+      {"line": 69,  "metric_value": "1", "name": "handle_flush",                    "path": "kernel/work.c"},
+      {"line": 545, "metric_value": "3", "name": "k_object_wordlist_foreach",       "path": "kernel/userspace.c"},
       {"line": 535, "metric_value": "3", "name": "z_object_gperf_wordlist_foreach", "path": "kernel/userspace.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines <= 3 IN 'kernel/**' ORDER BY lines ASC LIMIT 3",
@@ -1062,9 +1061,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 96,   "metric_value": "16", "name": "mspi_set_freq",                            "path": "drivers/mspi/mspi_ambiq_ap5.c"},
-      {"line": 228,  "metric_value": "14", "name": "is_valid_gatt_packet_len",                 "path": "tests/bsim/bluetooth/tester/src/bsim_btp.c"},
-      {"line": 1508, "metric_value": "9",  "name": "_add_instance_testcases_to_status_counts", "path": "scripts/pylib/twister/twisterlib/runner.py"}
+      {"line": 96,  "metric_value": "16", "name": "mspi_set_freq",            "path": "drivers/mspi/mspi_ambiq_ap5.c"},
+      {"line": 228, "metric_value": "14", "name": "is_valid_gatt_packet_len", "path": "tests/bsim/bluetooth/tester/src/bsim_btp.c"},
+      {"line": 233, "metric_value": "7",  "name": "cbvprintf_package",        "path": "lib/os/cbprintf_packaged.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_fallthrough = 'true' WHERE fallthrough_count >= 2 ORDER BY fallthrough_count DESC LIMIT 3",
     "name": "GST50_fallthrough_count_gte2"
@@ -1082,10 +1081,10 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"line": 7,  "name": "* @file…", "path": "arch/arc/core/arc_connect.c"},
-      {"line": 10, "name": "* @file…", "path": "arch/arc/core/cache.c"},
-      {"line": 7,  "name": "* @file…", "path": "arch/arc/core/dsp/dsp_offsets.c"},
-      {"line": 7,  "name": "* @file…", "path": "arch/arc/core/dsp/swap_dsp_macros.h"},
+      {"line": 7,  "name": "* @file…",                                                           "path": "arch/arc/core/arc_connect.c"},
+      {"line": 10, "name": "* @file…",                                                           "path": "arch/arc/core/cache.c"},
+      {"line": 7,  "name": "* @file…",                                                           "path": "arch/arc/core/dsp/dsp_offsets.c"},
+      {"line": 7,  "name": "* @file…",                                                           "path": "arch/arc/core/dsp/swap_dsp_macros.h"},
       {"line": 25, "name": "* @brief Architecture specific function for relocating shared elf…", "path": "arch/arc/core/elf.c"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE comment_style = 'doc_block' ORDER BY path ASC LIMIT 5",
@@ -1094,9 +1093,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"path": "scripts/kconfig/kconfiglib.py", "size": 265708},
+      {"path": "scripts/kconfig/kconfiglib.py",                          "size": 265708},
       {"path": "scripts/dts/python-devicetree/src/devicetree/edtlib.py", "size": 135186},
-      {"path": "scripts/ci/check_compliance.py", "size": 106031}
+      {"path": "scripts/ci/check_compliance.py",                         "size": 106031}
     ],
     "fql": "FIND files WHERE extension = 'py' IN 'scripts/**' ORDER BY size DESC LIMIT 3",
     "name": "GFF1_find_files_py_scripts_by_size"
@@ -1105,8 +1104,8 @@
     "expect_row_count": 3,
     "expect_rows": [
       {"path": "kernel/include/kernel_arch_interface.h", "size": 25212},
-      {"path": "kernel/include/mmu.h", "size": 13098},
-      {"path": "kernel/include/ksched.h", "size": 12830}
+      {"path": "kernel/include/mmu.h",                   "size": 13098},
+      {"path": "kernel/include/ksched.h",                "size": 12830}
     ],
     "fql": "FIND files WHERE extension = 'h' IN 'kernel/**' ORDER BY size DESC LIMIT 3",
     "name": "GFF2_find_files_h_kernel_by_size"
@@ -1114,8 +1113,8 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"path": "modules/thrift/src/thrift/transport/TSSLSocket.cpp", "size": 17356},
-      {"path": "modules/thrift/src/thrift/server/TServerFramework.cpp", "size": 8028},
+      {"path": "modules/thrift/src/thrift/transport/TSSLSocket.cpp",       "size": 17356},
+      {"path": "modules/thrift/src/thrift/server/TServerFramework.cpp",    "size": 8028},
       {"path": "modules/thrift/src/thrift/transport/TSSLServerSocket.cpp", "size": 7052}
     ],
     "fql": "FIND files WHERE extension = 'cpp' IN 'modules/thrift/**' ORDER BY size DESC LIMIT 3",
@@ -1124,10 +1123,10 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"path": "tests/lib/cmsis_dsp/transform/src/cf64.pat", "size": 1609359},
-      {"path": "tests/lib/cmsis_dsp/transform/src/cq31.pat", "size": 1278339},
+      {"path": "tests/lib/cmsis_dsp/transform/src/cf64.pat",       "size": 1609359},
+      {"path": "tests/lib/cmsis_dsp/transform/src/cq31.pat",       "size": 1278339},
       {"path": "doc/connectivity/bluetooth/autopts/devices_2.png", "size": 1101077},
-      {"path": "tests/lib/cmsis_dsp/transform/src/cf32.pat", "size": 1020831},
+      {"path": "tests/lib/cmsis_dsp/transform/src/cf32.pat",       "size": 1020831},
       {"path": "doc/connectivity/bluetooth/autopts/devices_1.png", "size": 994343}
     ],
     "fql": "FIND files WHERE size > 50000 ORDER BY size DESC LIMIT 5",
@@ -1144,20 +1143,20 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"path": "doc/releases/release-notes-3.3.rst", "size": 208357},
+      {"path": "doc/releases/release-notes-3.3.rst",  "size": 208357},
       {"path": "doc/releases/release-notes-1.14.rst", "size": 156859},
-      {"path": "doc/releases/release-notes-3.2.rst", "size": 150273}
+      {"path": "doc/releases/release-notes-3.2.rst",  "size": 150273}
     ],
     "fql": "FIND files WHERE extension = 'rst' ORDER BY size DESC LIMIT 3",
     "name": "GFF6_find_files_rst_docs_by_size"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'md-probe-zephyr'",
     "name": "GFF10a_begin_md_probe_transaction_zephyr"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE FILE 'doc/md_probe_content.md' WITH <<MD\n# Markdown Probe\n\nThis paragraph includes token mdprobealpha and mdprobebeta.\n\nAnother paragraph includes mdprobealpha again for LIKE and MATCHES verification.\nMD",
     "name": "GFF10b_create_md_probe_file_zephyr"
   },
@@ -1171,7 +1170,7 @@
     "name": "GFF11_find_md_paragraph_like_zephyr"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'md-probe-zephyr'",
     "name": "GFF11b_rollback_md_probe_transaction_zephyr"
   },
@@ -1179,8 +1178,8 @@
     "expect_row_count": 3,
     "expect_rows": [
       {"path": "kernel/dynamic_disabled.c", "size": 393},
-      {"path": "kernel/version.c", "size": 476},
-      {"path": "kernel/irq_offload.c", "size": 588}
+      {"path": "kernel/version.c",          "size": 476},
+      {"path": "kernel/irq_offload.c",      "size": 588}
     ],
     "fql": "FIND files WHERE extension = 'c' IN 'kernel/**' ORDER BY size ASC LIMIT 3",
     "name": "GFF7_find_files_c_kernel_smallest"
@@ -1188,11 +1187,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"path": "boards/",   "size": 80008892},
-      {"path": "drivers/",  "size": 42648123},
-      {"path": "tests/",    "size": 40047912},
-      {"path": "doc/",      "size": 23790713},
-      {"path": "subsys/",   "size": 23301428}
+      {"path": "boards/",  "size": 80008892},
+      {"path": "drivers/", "size": 42648123},
+      {"path": "tests/",   "size": 40047912},
+      {"path": "doc/",     "size": 23790713},
+      {"path": "subsys/",  "size": 23301428}
     ],
     "fql": "FIND files DEPTH 1 ORDER BY size DESC LIMIT 5",
     "name": "GFF8_depth1_top5_dirs_by_size"
@@ -1200,20 +1199,20 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"path": "include/zephyr/",    "size": 18650304},
-      {"path": "tests/lib/",         "size": 17081917},
-      {"path": "boards/st/",         "size": 12595192},
-      {"path": "subsys/bluetooth/",  "size": 11163960},
-      {"path": "doc/connectivity/",  "size":  9466200}
+      {"path": "include/zephyr/",   "size": 18650304},
+      {"path": "tests/lib/",        "size": 17081917},
+      {"path": "boards/st/",        "size": 12595192},
+      {"path": "subsys/bluetooth/", "size": 11163960},
+      {"path": "doc/connectivity/", "size": 9466200}
     ],
     "fql": "FIND files DEPTH 2 ORDER BY size DESC LIMIT 5",
     "name": "GFF9_depth2_top5_dirs_by_size"
   },
   {
-    "expect_total": 1,
     "expect_rows": [
       {"name": "k_mutex_lock"}
     ],
+    "expect_total": 1,
     "fql": "FIND symbols WHERE name = <<SYM\nk_mutex_lock\nSYM",
     "name": "GHD1_heredoc_where_eq_predicate"
   },
@@ -1460,12 +1459,7 @@
   {
     "expect_row_count": 1,
     "expect_rows": [
-      {
-        "line": 12,
-        "name": "z_priq_rb_lessthan",
-        "node_id": "nd8d2f5532cd6.0005",
-        "path": "kernel/priority_queues.c"
-      }
+      {"line": 12, "name": "z_priq_rb_lessthan", "node_id": "nd8d2f5532cd6.0005", "path": "kernel/priority_queues.c"}
     ],
     "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'function' WHERE name = 'z_priq_rb_lessthan'",
     "name": "NID01_function_has_expected_node_id"
@@ -1490,18 +1484,12 @@
     "name": "NID04_number_rows_do_not_surface_node_id_in_find_symbols"
   },
   {
-    "expect_field": {
-      "type": "begin_transaction"
-    },
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'node-id-regression'",
     "name": "NID05_begin_node_id_regression_transaction"
   },
   {
-    "expect_field": {
-      "applied": true,
-      "edit_count": 1,
-      "type": "mutation"
-    },
+    "expect_field": {"applied":true,"edit_count":1,"type":"mutation"},
     "fql": "CHANGE FILE 'kernel/priority_queues.c' MATCHING 'bool z_priq_rb_lessthan(struct rbnode *a, struct rbnode *b)' WITH '/* node-id drift marker */\nbool z_priq_rb_lessthan(struct rbnode *a, struct rbnode *b)'",
     "name": "NID06_insert_line_drift_marker_before_function"
   },
@@ -1528,11 +1516,7 @@
     "name": "NID09_number_rows_count_stable_after_line_drift"
   },
   {
-    "expect_field": {
-      "applied": true,
-      "edit_count": 1,
-      "type": "mutation"
-    },
+    "expect_field": {"applied":true,"edit_count":1,"type":"mutation"},
     "fql": "CHANGE FILE 'kernel/priority_queues.c' MATCHING 'bool z_priq_rb_lessthan(struct rbnode *a, struct rbnode *b)' WITH 'bool z_priq_rb_lessthan_renamed(struct rbnode *a, struct rbnode *b)'",
     "name": "NID10_rename_function_through_forgeql"
   },
@@ -1552,9 +1536,7 @@
     "name": "NID13_number_rows_count_stable_after_rename"
   },
   {
-    "expect_field": {
-      "type": "rollback"
-    },
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'node-id-regression'",
     "name": "NID14_rollback_node_id_regression_transaction"
   },
@@ -1572,18 +1554,20 @@
     "name": "NID16_renamed_function_removed_after_rollback"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'rw-outer'",
     "name": "RWT00_begin_outer_transaction"
   },
   {
-    "expect_field": {"applied": true, "edit_count": 1, "type": "mutation"},
+    "expect_field": {"applied":true,"edit_count":1,"type":"mutation"},
     "fql": "CHANGE FILE 'kernel/banner.c' MATCHING 'boot_banner' WITH 'boot_banner_v2'",
     "name": "RWT01_change_file_rename_boot_banner"
   },
   {
     "expect_row_count": 1,
-    "expect_rows": [{"name": "boot_banner_v2", "path": "kernel/banner.c"}],
+    "expect_rows": [
+      {"name": "boot_banner_v2", "path": "kernel/banner.c"}
+    ],
     "fql": "FIND symbols WHERE name = 'boot_banner_v2' IN 'kernel/banner.c'",
     "name": "RWT02_find_renamed_symbol_visible"
   },
@@ -1593,7 +1577,7 @@
     "name": "RWT03_find_old_name_gone"
   },
   {
-    "expect_pointer": {"/content/signature": "void boot_banner_v2(void)"},
+    "expect_pointer": {"/content/signature":"void boot_banner_v2(void)"},
     "fql": "SHOW signature OF 'boot_banner_v2'",
     "name": "RWT04_show_signature_reflects_rename_bug6"
   },
@@ -1603,62 +1587,66 @@
     "name": "RWT05_show_callees_boot_banner_v2"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'rw-inner'",
     "name": "RWT06_begin_inner_transaction"
   },
   {
-    "expect_field": {"applied": true, "edit_count": 1, "type": "mutation"},
+    "expect_field": {"applied":true,"edit_count":1,"type":"mutation"},
     "fql": "CHANGE FILE 'kernel/banner.c' MATCHING 'boot_banner_v2' WITH 'boot_banner_v3'",
     "name": "RWT07_inner_rename_v2_to_v3"
   },
   {
     "expect_row_count": 1,
-    "expect_rows": [{"name": "boot_banner_v3", "path": "kernel/banner.c"}],
+    "expect_rows": [
+      {"name": "boot_banner_v3", "path": "kernel/banner.c"}
+    ],
     "fql": "FIND symbols WHERE name = 'boot_banner_v3' IN 'kernel/banner.c'",
     "name": "RWT08_find_v3_visible_inside_inner_tx"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'rw-inner'",
     "name": "RWT09_rollback_inner_transaction"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'rw-diff-tests'",
     "name": "RWTDIFF00_begin_diff_tests_transaction"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE FILE 'kernel/rw_diff_multi_hunk.c' WITH <<BODY\n/* rw test: multi-hunk diff fixture */\nvoid func_a(void) { old_api(); }\n/* 3 */\n/* 4 */\n/* 5 */\nvoid func_b(void) { old_api(); }\n/* 7 */\n/* 8 */\n/* 9 */\nvoid func_c(void) { old_api(); }\n/* 11 */\n/* 12 */\n/* 13 */\nvoid func_d(void) { old_api(); }\n/* 15 */\n/* 16 */\n/* 17 */\nvoid func_e(void) { old_api(); }\n/* 19 */\n/* 20 */\nBODY",
     "name": "RWTDIFF01_create_multi_hunk_fixture"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
-    "expect_field_contains": {"diff": "kernel/banner.c"},
+    "expect_field": {"applied":true,"type":"mutation"},
+    "expect_field_contains": {"diff":"kernel/banner.c"},
     "fql": "CHANGE FILE 'kernel/banner.c' MATCHING 'boot_banner_v2' WITH 'boot_banner_v2_x'",
     "name": "RWTDIFF02_diff_branch1_normal_single_hunk"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
-    "expect_field_contains": {"diff": "lines elided"},
+    "expect_field": {"applied":true,"type":"mutation"},
+    "expect_field_contains": {"diff":"lines elided"},
     "fql": "CHANGE FILE 'kernel/system_work_q.c' LINES 22-36 WITH 'static int k_sys_work_q_init(void) { return 0; }'",
     "name": "RWTDIFF03_diff_branch2_single_oversized_hunk"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
-    "expect_field_contains": {"diff": "more region(s)"},
+    "expect_field": {"applied":true,"type":"mutation"},
+    "expect_field_contains": {"diff":"more region(s)"},
     "fql": "CHANGE FILE 'kernel/rw_diff_multi_hunk.c' MATCHING 'old_api' WITH 'new_api'",
     "name": "RWTDIFF04_diff_branch3_multiple_oversized_hunks"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'rw-diff-tests'",
     "name": "RWTDIFF05_rollback_diff_tests"
   },
   {
     "expect_row_count": 1,
-    "expect_rows": [{"name": "boot_banner_v2", "path": "kernel/banner.c"}],
+    "expect_rows": [
+      {"name": "boot_banner_v2", "path": "kernel/banner.c"}
+    ],
     "fql": "FIND symbols WHERE name = 'boot_banner_v2' IN 'kernel/banner.c'",
     "name": "RWT10_outer_rename_preserved_after_inner_rollback"
   },
@@ -1668,30 +1656,36 @@
     "name": "RWT11_inner_rename_gone_after_rollback"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "COPY LINES 22-36 OF 'kernel/system_work_q.c' TO 'kernel/rw_copy_test.c'",
     "name": "RWT12_copy_lines_to_new_file"
   },
   {
     "expect_row_count": 1,
-    "expect_rows": [{"name": "k_sys_work_q_init", "path": "kernel/rw_copy_test.c"}],
+    "expect_rows": [
+      {"name": "k_sys_work_q_init", "path": "kernel/rw_copy_test.c"}
+    ],
     "fql": "FIND symbols WHERE name = 'k_sys_work_q_init' IN 'kernel/rw_copy_test.c'",
     "name": "RWT13_copied_function_visible_in_dest"
   },
   {
     "expect_row_count": 1,
-    "expect_rows": [{"name": "k_sys_work_q_init", "path": "kernel/system_work_q.c"}],
+    "expect_rows": [
+      {"name": "k_sys_work_q_init", "path": "kernel/system_work_q.c"}
+    ],
     "fql": "FIND symbols WHERE name = 'k_sys_work_q_init' IN 'kernel/system_work_q.c'",
     "name": "RWT14_source_function_untouched_after_copy"
   },
   {
     "expect_line_count": 15,
-    "expect_lines": [{"text": "static int k_sys_work_q_init(void)"}],
+    "expect_lines": [
+      {"text": "static int k_sys_work_q_init(void)"}
+    ],
     "fql": "SHOW LINES 1-15 OF 'kernel/rw_copy_test.c'",
     "name": "RWT15_show_lines_copied_content"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "COPY LINES 1-5 OF 'kernel/banner.c' TO 'kernel/rw_copy_test.c' AT LINE 1",
     "name": "RWT16_copy_lines_at_line_prepend"
   },
@@ -1705,7 +1699,7 @@
     "name": "RWT17_show_lines_after_prepend_copy"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "MOVE LINES 27-48 OF 'kernel/banner.c' TO 'kernel/rw_move_test.c'",
     "name": "RWT18_move_function_to_new_file"
   },
@@ -1716,18 +1710,22 @@
   },
   {
     "expect_row_count": 1,
-    "expect_rows": [{"name": "boot_banner_v2", "path": "kernel/rw_move_test.c"}],
+    "expect_rows": [
+      {"name": "boot_banner_v2", "path": "kernel/rw_move_test.c"}
+    ],
     "fql": "FIND symbols WHERE name = 'boot_banner_v2' IN 'kernel/rw_move_test.c'",
     "name": "RWT20_moved_function_present_in_dest"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE FILE 'lib/rw_golden_test/new_module/placeholder.c' WITH 'void rw_test_placeholder(void) {}'",
     "name": "RWT21_create_file_in_new_folder"
   },
   {
     "expect_row_count": 1,
-    "expect_rows": [{"name": "rw_test_placeholder", "path": "lib/rw_golden_test/new_module/placeholder.c"}],
+    "expect_rows": [
+      {"name": "rw_test_placeholder", "path": "lib/rw_golden_test/new_module/placeholder.c"}
+    ],
     "fql": "FIND symbols WHERE name = 'rw_test_placeholder'",
     "name": "RWT22_new_file_symbol_indexed"
   },
@@ -1737,19 +1735,23 @@
     "name": "RWT23_new_folder_contains_one_file"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE FILES 'kernel/rw_copy_test.c', 'kernel/system_work_q.c' MATCHING 'k_sys_work_q_init' WITH 'k_sys_work_q_init_renamed'",
     "name": "RWT24_change_files_multi_explicit"
   },
   {
     "expect_row_count": 1,
-    "expect_rows": [{"name": "k_sys_work_q_init_renamed", "path": "kernel/rw_copy_test.c"}],
+    "expect_rows": [
+      {"name": "k_sys_work_q_init_renamed", "path": "kernel/rw_copy_test.c"}
+    ],
     "fql": "FIND symbols WHERE name = 'k_sys_work_q_init_renamed' IN 'kernel/rw_copy_test.c'",
     "name": "RWT25_multi_change_reflected_in_first_file"
   },
   {
     "expect_row_count": 1,
-    "expect_rows": [{"name": "k_sys_work_q_init_renamed", "path": "kernel/system_work_q.c"}],
+    "expect_rows": [
+      {"name": "k_sys_work_q_init_renamed", "path": "kernel/system_work_q.c"}
+    ],
     "fql": "FIND symbols WHERE name = 'k_sys_work_q_init_renamed' IN 'kernel/system_work_q.c'",
     "name": "RWT26_multi_change_reflected_in_second_file"
   },
@@ -1759,13 +1761,15 @@
     "name": "RWT27_old_name_gone_after_multi_change"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'rw-outer'",
     "name": "RWT28_final_rollback_outer"
   },
   {
     "expect_row_count": 1,
-    "expect_rows": [{"name": "boot_banner", "path": "kernel/banner.c"}],
+    "expect_rows": [
+      {"name": "boot_banner", "path": "kernel/banner.c"}
+    ],
     "fql": "FIND symbols WHERE name = 'boot_banner' IN 'kernel/banner.c'",
     "name": "RWT29_boot_banner_restored_after_final_rollback"
   },
@@ -1790,7 +1794,7 @@
     "name": "RWT33_new_folder_not_cleaned_up_by_rollback"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'rw-enrich-stale'",
     "name": "RWTE00_begin_enrichment_stale_transaction"
   },
@@ -1860,12 +1864,12 @@
     "name": "RWTE13_baseline_no_has_unused_param"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE FILE 'kernel/banner.c' MATCHING 'void boot_banner(void)' WITH 'static inline void boot_banner(int enrich_a, int enrich_b)'",
     "name": "RWTE14_mutate_signature_static_inline_two_params"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE FILE 'kernel/banner.c' MATCHING '#endif /* CONFIG_BOOT_BANNER */\n}' WITH '#endif /* CONFIG_BOOT_BANNER */\n\t/* TODO: enrichment-test */\n\tint x = (int)(enrich_a);\n\tif (enrich_a > 0) { goto done; }\n\treturn;\n\tdone:;\n\tprintk(\"enrichment_test\");\n\tboot_banner(enrich_a, 0);\n}'",
     "name": "RWTE15_mutate_body_add_todo_cast_branch_goto_return_string_recursion"
   },
@@ -1935,7 +1939,7 @@
     "name": "RWTE28_max_condition_tests_updates_after_mutation"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'rw-enrich-stale'",
     "name": "RWTE29_rollback_enrichment_stale_transaction"
   },
@@ -1945,68 +1949,38 @@
     "name": "RWTE30_lines_restored_after_rollback"
   },
   {
-    "expect_field": {"type": "find_node"},
-    "expect_pointer": {
-      "/fql_kind": "function",
-      "/name": "thread_runq",
-      "/path": "kernel/sched.c",
-      "/line": 51
-    },
+    "expect_field": {"type":"find_node"},
+    "expect_pointer": {"/fql_kind":"function","/line":51,"/name":"thread_runq","/path":"kernel/sched.c"},
     "fql": "FIND NODE 'n097e974b9c6e.0035'",
     "name": "FN01_find_node_function_thread_runq"
   },
   {
-    "expect_field": {"type": "find_node"},
-    "expect_pointer": {
-      "/fql_kind": "function",
-      "/name": "curr_cpu_runq",
-      "/path": "kernel/sched.c",
-      "/line": 71,
-      "/node_id": "n097e974b9c6e.0042"
-    },
+    "expect_field": {"type":"find_node"},
+    "expect_pointer": {"/fql_kind":"function","/line":71,"/name":"curr_cpu_runq","/node_id":"n097e974b9c6e.0042","/path":"kernel/sched.c"},
     "fql": "FIND NODE 'n097e974b9c6e.0042'",
     "name": "FN02_find_node_node_id_roundtrip"
   },
   {
-    "expect_field": {"type": "find_node"},
-    "expect_pointer": {
-      "/fql_kind": "function",
-      "/name": "runq_add",
-      "/path": "kernel/sched.c",
-      "/line": 80
-    },
+    "expect_field": {"type":"find_node"},
+    "expect_pointer": {"/fql_kind":"function","/line":80,"/name":"runq_add","/path":"kernel/sched.c"},
     "fql": "FIND NODE 'n097e974b9c6e.0044'",
     "name": "FN03_find_node_runq_add"
   },
   {
-    "expect_field": {"type": "find_node"},
-    "expect_pointer": {
-      "/fql_kind": "field",
-      "/name": "k_mutex_lock",
-      "/path": "include/zephyr/kernel.h",
-      "/line": 3525,
-      "/node_id": "n6050e1e382ae.0824"
-    },
+    "expect_field": {"type":"find_node"},
+    "expect_pointer": {"/fql_kind":"field","/line":3525,"/name":"k_mutex_lock","/node_id":"n6050e1e382ae.0824","/path":"include/zephyr/kernel.h"},
     "fql": "FIND NODE 'n6050e1e382ae.0824'",
     "name": "FN04_find_node_field_k_mutex_lock"
   },
   {
-    "expect_field": {"type": "find_node"},
-    "expect_pointer": {
-      "/fql_kind": "function",
-      "/name": "z_impl___ztest_set_test_result",
-      "/path": "subsys/testsuite/ztest/src/ztest.c",
-      "/line": 1111
-    },
+    "expect_field": {"type":"find_node"},
+    "expect_pointer": {"/fql_kind":"function","/line":1111,"/name":"z_impl___ztest_set_test_result","/path":"subsys/testsuite/ztest/src/ztest.c"},
     "fql": "FIND NODE 'nb603fcd516ee.0462'",
     "name": "FN05_find_node_ztest_function"
   },
   {
-    "expect_field": {"type": "find_node"},
-    "expect_pointer": {
-      "/node_id": "n097e974b9c6e.0035",
-      "/name": "thread_runq"
-    },
+    "expect_field": {"type":"find_node"},
+    "expect_pointer": {"/name":"thread_runq","/node_id":"n097e974b9c6e.0035"},
     "fql": "FIND NODE 'n097e974b9c6e.0035'",
     "name": "FN06_find_node_id_in_response"
   },
@@ -2019,10 +1993,7 @@
     "name": "FN07_find_symbols_returns_node_id_in_results"
   },
   {
-    "expect_pointer": {
-      "/content/entries/0/node_id": "n097e974b9c6e.0035",
-      "/content/entries/0/name": "thread_runq"
-    },
+    "expect_pointer": {"/content/entries/0/name":"thread_runq","/content/entries/0/node_id":"n097e974b9c6e.0035"},
     "fql": "SHOW outline OF 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq'",
     "name": "FN08_show_outline_node_id_present"
   },
@@ -2039,24 +2010,24 @@
     "name": "FN09_find_node_id_five_sched_functions"
   },
   {
-    "expect_field": {"type": "find_node"},
-    "expect_pointer": {"/line": 51, "/end_line": 69},
+    "expect_field": {"type":"find_node"},
+    "expect_pointer": {"/end_line":69,"/line":51},
     "fql": "FIND NODE 'n097e974b9c6e.0035'",
     "name": "FCN01_find_node_returns_end_line"
   },
   {
-    "expect_field": {"type": "find_node"},
-    "expect_pointer": {"/line": 71, "/end_line": 78},
+    "expect_field": {"type":"find_node"},
+    "expect_pointer": {"/end_line":78,"/line":71},
     "fql": "FIND NODE 'n097e974b9c6e.0042'",
     "name": "FCN02_find_node_end_line_curr_cpu_runq"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'phc-change'",
     "name": "FCN03_begin_change_node_transaction"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE NODE 'n097e974b9c6e.0035' WITH <<C\nstatic void thread_runq_golden(void) {}\nC",
     "name": "FCN04_change_node_returns_mutation"
   },
@@ -2066,7 +2037,7 @@
     "name": "FCN05_changed_symbol_indexable_after_change_node"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'phc-change'",
     "name": "FCN06_rollback_change_node_transaction"
   },
@@ -2076,12 +2047,12 @@
     "name": "FCN07_thread_runq_restored_after_rollback"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'phc-delete'",
     "name": "FCN08_begin_delete_node_transaction"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "DELETE NODE 'n097e974b9c6e.0044'",
     "name": "FCN09_delete_node_returns_mutation"
   },
@@ -2091,7 +2062,7 @@
     "name": "FCN10_symbol_absent_after_delete_node"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'phc-delete'",
     "name": "FCN11_rollback_delete_node_transaction"
   },
@@ -2101,44 +2072,48 @@
     "name": "FCN12_runq_add_restored_after_rollback"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'phc-insert-before'",
     "name": "FCN13_begin_insert_before_transaction"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "INSERT BEFORE NODE 'n097e974b9c6e.0042' WITH '/* fcn14 before curr_cpu_runq */'",
     "name": "FCN14_insert_before_node_returns_mutation"
   },
   {
     "expect_line_count": 1,
-    "expect_lines": [{"line": 71, "text": "/* fcn14 before curr_cpu_runq */"}],
+    "expect_lines": [
+      {"line": 71, "text": "/* fcn14 before curr_cpu_runq */"}
+    ],
     "fql": "SHOW LINES 71-71 OF 'kernel/sched.c'",
     "name": "FCN15_insert_before_content_verified"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'phc-insert-before'",
     "name": "FCN16_rollback_insert_before_transaction"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'phc-insert-after'",
     "name": "FCN17_begin_insert_after_transaction"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "INSERT AFTER NODE 'n097e974b9c6e.0042' WITH '/* fcn18 after curr_cpu_runq */'",
     "name": "FCN18_insert_after_node_returns_mutation"
   },
   {
     "expect_line_count": 1,
-    "expect_lines": [{"line": 79, "text": "/* fcn18 after curr_cpu_runq */"}],
+    "expect_lines": [
+      {"line": 79, "text": "/* fcn18 after curr_cpu_runq */"}
+    ],
     "fql": "SHOW LINES 79-79 OF 'kernel/sched.c'",
     "name": "FCN19_insert_after_content_verified"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'phc-insert-after'",
     "name": "FCN20_rollback_insert_after_transaction"
   },
@@ -2148,59 +2123,65 @@
     "name": "FCN21_curr_cpu_runq_line_restored_after_rollback"
   },
   {
-    "expect_field": {"type": "find_node"},
-    "expect_pointer": {"/line": 51, "/end_line": 69},
+    "expect_field": {"type":"find_node"},
+    "expect_pointer": {"/end_line":69,"/line":51},
     "fql": "FIND NODE 'n097e974b9c6e.0035'",
     "name": "FSD00_find_node_csv_includes_end_line"
   },
   {
     "expect_line_count": 19,
-    "expect_lines": [{"line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"}],
+    "expect_lines": [
+      {"line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"}
+    ],
     "fql": "SHOW NODE 'n097e974b9c6e.0035'",
     "name": "FSD01_show_node_default_returns_source_lines"
   },
   {
     "expect_line_count": 8,
-    "expect_lines": [{"line": 71, "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)"}],
+    "expect_lines": [
+      {"line": 71, "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)"}
+    ],
     "fql": "SHOW NODE 'n097e974b9c6e.0042' CONTENT",
     "name": "FSD02_show_node_content_explicit_keyword"
   },
   {
-    "expect_field": {"type": "find_node"},
-    "expect_pointer": {"/line": 51, "/end_line": 69, "/fql_kind": "function", "/name": "thread_runq"},
+    "expect_field": {"type":"find_node"},
+    "expect_pointer": {"/end_line":69,"/fql_kind":"function","/line":51,"/name":"thread_runq"},
     "fql": "SHOW NODE 'n097e974b9c6e.0035' METADATA",
     "name": "FSD03_show_node_metadata_returns_find_node_result"
   },
   {
     "expect_line_count": 1,
-    "expect_lines": [{"line": 66, "text": "\tARG_UNUSED(thread);"}],
+    "expect_lines": [
+      {"line": 66, "text": "\tARG_UNUSED(thread);"}
+    ],
     "fql": "SHOW NODE 'n097e974b9c6e.0035' WHERE text LIKE '%ARG_UNUSED%'",
     "name": "FSD04_show_node_where_filter_on_source_lines"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'phe-change'",
     "name": "FE01_begin_change_node_transaction"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
-    "expect_pointer": {"/new_node_id": "n097e974b9c6e.0035"},
+    "expect_field": {"applied":true,"type":"mutation"},
+    "expect_pointer": {"/new_node_id":"n097e974b9c6e.0035"},
     "fql": "CHANGE NODE 'n097e974b9c6e.0035' WITH 'static ALWAYS_INLINE void *thread_runq(struct k_thread *t) { return NULL; }'",
     "name": "FE02_change_node_response_includes_new_node_id"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'phe-change'",
     "name": "FE03_rollback_change_node_transaction"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'phe-insert'",
     "name": "FE04_begin_insert_after_transaction"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
-    "expect_field_contains": {"new_node_id": "n097e974b9c6e"},
+    "expect_field": {"applied":true,"type":"mutation"},
+    "expect_field_contains": {"new_node_id":"n097e974b9c6e"},
     "fql": "INSERT AFTER NODE 'n097e974b9c6e.0042' WITH 'static void phe05_test(void) {}'",
     "name": "FE05_insert_after_node_includes_new_node_id"
   },
@@ -2210,7 +2191,7 @@
     "name": "FE06_inserted_symbol_is_findable"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'phe-insert'",
     "name": "FE07_rollback_insert_transaction"
   },
@@ -2220,12 +2201,12 @@
     "name": "FE08_inserted_symbol_absent_after_rollback"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'ff-sequential-change'",
     "name": "FF01_begin_sequential_change_transaction"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE NODE 'n097e974b9c6e.0035' WITH 'static ALWAYS_INLINE void *thread_runq(struct k_thread *thread) { ARG_UNUSED(thread); return &_kernel.ready_q.runq; }'",
     "name": "FF02_change_thread_runq_removes_internal_indexed_nodes"
   },
@@ -2235,7 +2216,7 @@
     "name": "FF03_thread_runq_appears_exactly_once"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE NODE 'n097e974b9c6e.0044' WITH 'static ALWAYS_INLINE void runq_add(struct k_thread *thread) { _priq_run_add(thread_runq(thread), thread); }'",
     "name": "FF04_change_runq_add_in_same_transaction_after_ordinal_shift"
   },
@@ -2245,7 +2226,7 @@
     "name": "FF05_runq_add_not_duplicated_regression_0_60_2"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'ff-sequential-change'",
     "name": "FF06_rollback_sequential_change_transaction"
   },
@@ -2256,16 +2237,16 @@
   },
   {
     "alias": "golden-python",
-    "expect_symbols_indexed": 3108613,
+    "expect_symbols_indexed": 3109089,
     "use": "pytorch-andre.pytorch-frozen"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'md-probe-pytorch'",
     "name": "GP0a_begin_md_probe_transaction_pytorch"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE FILE 'docs/md_probe_content.md' WITH <<MD\n# Markdown Probe PT\n\nThis paragraph includes token mdprobealpha and mdprobegamma.\n\nAnother paragraph includes mdprobealpha again for LIKE and MATCHES verification.\nMD",
     "name": "GP0b_create_md_probe_file_pytorch"
   },
@@ -2279,28 +2260,28 @@
     "name": "GP0c_find_md_paragraph_matches_pytorch"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'md-probe-pytorch'",
     "name": "GP0d_rollback_md_probe_transaction_pytorch"
   },
   {
-    "expect_field": {"type": "begin_transaction"},
+    "expect_field": {"type":"begin_transaction"},
     "fql": "BEGIN TRANSACTION 'reduce-noise-slices-pytorch'",
     "name": "GS3a_begin_change_node_offsets_pytorch"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE FILE 'docs/zz_slice3_offsets.rs' WITH <<RUST\nfn sample() -> i32 {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    a + b + c\n}\nRUST",
     "name": "GS3b_create_fixture_pytorch"
   },
   {
-    "expect_field": {"node_id": "n67ea16fed12f.0000", "name": "sample", "line": 1, "end_line": 6},
-    "expect_field_contains": {"rev": "h"},
+    "expect_field": {"end_line":6,"line":1,"name":"sample","node_id":"n67ea16fed12f.0000"},
+    "expect_field_contains": {"rev":"h"},
     "fql": "FIND NODE 'n67ea16fed12f.0000'",
     "name": "GS3c_find_node_rev_populated_pytorch"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE NODE 'n67ea16fed12f.0000(2)' WITH '    let a = 100;'",
     "name": "GS3d_change_node_single_offset_pytorch"
   },
@@ -2314,7 +2295,7 @@
     "name": "GS3e_verify_single_offset_pytorch"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE NODE 'n67ea16fed12f.0000(3-4)' WITH <<RUST\n    let b = 20;\n    let c = 30;\nRUST",
     "name": "GS3f_change_node_range_offset_pytorch"
   },
@@ -2330,7 +2311,7 @@
     "name": "GS3g_verify_range_offset_pytorch"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE FILE 'docs/zz_slice4_shownode.rs' WITH <<RUST\nfn greet() -> i32 {\n    let a = 1;\n    let b = 2;\n    a + b\n}\nRUST",
     "name": "GS4b_create_fixture_pytorch"
   },
@@ -2361,25 +2342,25 @@
     "name": "GS4e_show_node_content_range_offset_pytorch"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE FILE 'docs/zz_slice5_outline.py' WITH <<PY\nclass Calc:\n    def add(self, a, b):\n        return a + b\n\n    def sub(self, a, b):\n        return a - b\n\n\ndef helper():\n    return 0\nPY",
     "name": "GS5b_create_fixture_pytorch"
   },
   {
     "expect_row_count": 4,
     "expect_rows": [
-      {"name": "Calc", "fql_kind": "class", "line": 1, "depth": 0, "node_id": "nbf602da9b4c9.0000"},
-      {"name": "add", "fql_kind": "function", "line": 2, "depth": 1},
-      {"name": "sub", "fql_kind": "function", "line": 5, "depth": 1},
-      {"name": "helper", "fql_kind": "function", "line": 9, "depth": 0}
+      {"depth": 0, "fql_kind": "class",    "line": 1, "name": "Calc",   "node_id": "nbf602da9b4c9.0000"},
+      {"depth": 1, "fql_kind": "function", "line": 2, "name": "add"},
+      {"depth": 1, "fql_kind": "function", "line": 5, "name": "sub"},
+      {"depth": 0, "fql_kind": "function", "line": 9, "name": "helper"}
     ],
     "fql": "SHOW outline OF 'docs/zz_slice5_outline.py'",
     "name": "GS5c_outline_structural_tree_pytorch"
   },
   {
     "expect_rows": [
-      {"name": "Calc", "fql_kind": "class", "line": 1, "depth": 0},
-      {"name": "add", "fql_kind": "function", "line": 2, "depth": 1}
+      {"depth": 0, "fql_kind": "class",    "line": 1, "name": "Calc"},
+      {"depth": 1, "fql_kind": "function", "line": 2, "name": "add"}
     ],
     "fql": "SHOW outline OF 'nbf602da9b4c9.0000'",
     "name": "GS5d_outline_subtree_pytorch"
@@ -2387,54 +2368,54 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"name": "add", "line": 2},
-      {"name": "sub", "line": 5},
-      {"name": "helper", "line": 9}
+      {"line": 2, "name": "add"},
+      {"line": 5, "name": "sub"},
+      {"line": 9, "name": "helper"}
     ],
     "fql": "SHOW outline OF 'docs/zz_slice5_outline.py' WHERE fql_kind = 'function' ORDER BY line ASC",
     "name": "GS5e_outline_explicit_kind_pytorch"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation"},
+    "expect_field": {"applied":true,"type":"mutation"},
     "fql": "CHANGE FILE 'docs/zz_secd.md' WITH <<MD\n# Project Title\n\nIntro paragraph.\n\n## Alpha Section\n\nAlpha paragraph one.\n\n## Beta Section\n\nBeta paragraph one.\n\n## Gamma Section\n\nGamma paragraph one.\nMD",
     "name": "MDID1_create_markdown_fixture"
   },
   {
-    "expect_field": {"type": "find_node", "name": "Beta Section", "line": 9, "node_id": "ne857f72d306c.0007"},
+    "expect_field": {"line":9,"name":"Beta Section","node_id":"ne857f72d306c.0007","type":"find_node"},
     "fql": "FIND NODE 'ne857f72d306c.0007'",
     "name": "MDID2_baseline_beta_heading_id"
   },
   {
-    "expect_field": {"type": "find_node", "name": "Gamma Section", "line": 13, "node_id": "ne857f72d306c.0010"},
+    "expect_field": {"line":13,"name":"Gamma Section","node_id":"ne857f72d306c.0010","type":"find_node"},
     "fql": "FIND NODE 'ne857f72d306c.0010'",
     "name": "MDID3_baseline_gamma_heading_id"
   },
   {
-    "expect_field": {"applied": true, "type": "mutation", "new_node_id": "ne857f72d306c.0012"},
+    "expect_field": {"applied":true,"new_node_id":"ne857f72d306c.0012","type":"mutation"},
     "fql": "INSERT BEFORE NODE 'ne857f72d306c.0006' WITH <<MD\n## Delta Section\n\nDelta paragraph one.\n\nMD",
     "name": "MDID4_insert_before_beta_section"
   },
   {
-    "expect_field": {"type": "find_node", "name": "Beta Section", "line": 12, "node_id": "ne857f72d306c.0007"},
+    "expect_field": {"line":12,"name":"Beta Section","node_id":"ne857f72d306c.0007","type":"find_node"},
     "fql": "FIND NODE 'ne857f72d306c.0007'",
     "name": "MDID5_beta_node_id_survives_reparse_and_drift"
   },
   {
-    "expect_field": {"type": "find_node", "name": "Gamma Section", "line": 16, "node_id": "ne857f72d306c.0010"},
+    "expect_field": {"line":16,"name":"Gamma Section","node_id":"ne857f72d306c.0010","type":"find_node"},
     "fql": "FIND NODE 'ne857f72d306c.0010'",
     "name": "MDID6_gamma_node_id_survives_reparse_and_drift"
   },
   {
-    "expect_field": {"type": "rollback"},
+    "expect_field": {"type":"rollback"},
     "fql": "ROLLBACK TRANSACTION 'reduce-noise-slices-pytorch'",
     "name": "GS5f_rollback_pytorch"
   },
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"count": 136, "path": "torch/nn/functional.py"},
-      {"count": 113, "path": "torch/nn/modules/container.py"},
-      {"count": 102, "path": "torch/nn/modules/module.py"}
+      {"count": 124, "path": "torch/nn/functional.py"},
+      {"count": 97,  "path": "torch/nn/modules/module.py"},
+      {"count": 94,  "path": "torch/nn/modules/container.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' GROUP BY file IN 'torch/nn/**' ORDER BY count DESC LIMIT 3",
     "name": "GP1_functions_group_by_file_top3"
@@ -2454,9 +2435,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 6435, "name": "multi_head_attention_forward", "path": "torch/nn/functional.py"},
+      {"line": 6435, "name": "multi_head_attention_forward",      "path": "torch/nn/functional.py"},
       {"line": 391,  "name": "_fa3_flash_attention_forward_impl", "path": "torch/nn/attention/_fa3.py"},
-      {"line": 816,  "name": "__init__", "path": "torch/nn/parallel/distributed.py"}
+      {"line": 816,  "name": "__init__",                          "path": "torch/nn/parallel/distributed.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE param_count >= 21 IN 'torch/nn/**' ORDER BY param_count DESC LIMIT 3",
     "name": "GP3_top3_functions_by_param_count"
@@ -2466,7 +2447,7 @@
     "expect_rows": [
       {"line": 6435, "name": "multi_head_attention_forward", "path": "torch/nn/functional.py"},
       {"line": 4775, "name": "interpolate",                  "path": "torch/nn/functional.py"},
-      {"line": 816,  "name": "__init__",                    "path": "torch/nn/parallel/distributed.py"}
+      {"line": 816,  "name": "__init__",                     "path": "torch/nn/parallel/distributed.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE lines >= 340 IN 'torch/nn/**' ORDER BY lines DESC LIMIT 3",
     "name": "GP4_top3_functions_by_line_span"
@@ -2474,9 +2455,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 4775, "name": "interpolate",                   "path": "torch/nn/functional.py"},
-      {"line": 6435, "name": "multi_head_attention_forward",  "path": "torch/nn/functional.py"},
-      {"line": 118,  "name": "replicate",                     "path": "torch/nn/parallel/replicate.py"}
+      {"line": 4775, "name": "interpolate",                  "path": "torch/nn/functional.py"},
+      {"line": 6435, "name": "multi_head_attention_forward", "path": "torch/nn/functional.py"},
+      {"line": 118,  "name": "replicate",                    "path": "torch/nn/parallel/replicate.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE branch_count >= 33 IN 'torch/nn/**' ORDER BY branch_count DESC LIMIT 3",
     "name": "GP5_top3_functions_by_branch_count"
@@ -2484,19 +2465,18 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 4775, "name": "interpolate",                      "path": "torch/nn/functional.py"},
-      {"line": 304,  "name": "_dump_DDP_relevant_env_vars",      "path": "torch/nn/parallel/distributed.py"},
-      {"line": 1945, "name": "flex_attention",                   "path": "torch/nn/attention/flex_attention.py"}
+      {"line": 4775, "name": "interpolate",                 "path": "torch/nn/functional.py"},
+      {"line": 304,  "name": "_dump_DDP_relevant_env_vars", "path": "torch/nn/parallel/distributed.py"},
+      {"line": 1945, "name": "flex_attention",              "path": "torch/nn/attention/flex_attention.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE string_count >= 50 IN 'torch/nn/**' ORDER BY string_count DESC LIMIT 3",
     "name": "GP6_top3_functions_by_string_count"
   },
   {
-    "expect_row_count": 3,
+    "expect_row_count": 2,
     "expect_rows": [
-      {"line": 1036, "name": "meta_tensor",                      "path": "torch/_subclasses/meta_utils.py"},
-      {"line": 1396, "name": "insert_observers_for_model",       "path": "torch/ao/quantization/fx/prepare.py"},
-      {"line": 883,  "name": "_get_handlers",                    "path": "torch/_dynamo/variables/torch.py"}
+      {"line": 1036, "name": "meta_tensor",                "path": "torch/_subclasses/meta_utils.py"},
+      {"line": 1396, "name": "insert_observers_for_model", "path": "torch/ao/quantization/fx/prepare.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE todo_count >= 7 IN 'torch/**' ORDER BY todo_count DESC LIMIT 3",
     "name": "GP7_top3_functions_by_todo_count"
@@ -2504,9 +2484,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 6,  "name": "__init__",   "path": "torch/nn/parameter.pyi"},
-      {"line": 13, "name": "__init__",   "path": "torch/nn/parameter.pyi"},
-      {"line": 14, "name": "materialize","path": "torch/nn/parameter.pyi"}
+      {"line": 6,  "name": "__init__",    "path": "torch/nn/parameter.pyi"},
+      {"line": 13, "name": "__init__",    "path": "torch/nn/parameter.pyi"},
+      {"line": 14, "name": "materialize", "path": "torch/nn/parameter.pyi"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE unused_param_count >= 2 IN 'torch/nn/**' ORDER BY line ASC LIMIT 3",
     "name": "GP8_functions_with_unused_params"
@@ -2524,9 +2504,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 376, "name": "__getitem__", "path": "torch/nn/modules/container.py"},
-      {"line": 379, "name": "__getitem__", "path": "torch/nn/modules/container.py"},
-      {"line": 692, "name": "__getitem__", "path": "torch/nn/modules/container.py"}
+      {"line": 696, "name": "__getitem__", "path": "torch/nn/modules/container.py"},
+      {"line": 6,   "name": "__init__",    "path": "torch/nn/parameter.pyi"},
+      {"line": 13,  "name": "__init__",    "path": "torch/nn/parameter.pyi"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE lines <= 3 IN 'torch/nn/**' ORDER BY lines ASC LIMIT 3",
     "name": "GP10_short_functions"
@@ -2535,8 +2515,8 @@
     "expect_row_count": 3,
     "expect_rows": [
       {"line": 686, "name": "_fa3_scaled_dot_product_flash_attention_forward_impl_default", "path": "torch/nn/attention/_fa3.py"},
-      {"line": 710, "name": "_fa3_scaled_dot_product_flash_attention_backward_impl",       "path": "torch/nn/attention/_fa3.py"},
-      {"line": 487, "name": "_fa4_scaled_dot_product_flash_attention_backward_impl",       "path": "torch/nn/attention/_fa4.py"}
+      {"line": 710, "name": "_fa3_scaled_dot_product_flash_attention_backward_impl",        "path": "torch/nn/attention/_fa3.py"},
+      {"line": 487, "name": "_fa4_scaled_dot_product_flash_attention_backward_impl",        "path": "torch/nn/attention/_fa4.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE name_length >= 40 IN 'torch/nn/**' ORDER BY name_length DESC LIMIT 3",
     "name": "GP11_longest_function_names"
@@ -2544,9 +2524,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 4775, "name": "interpolate",                   "path": "torch/nn/functional.py"},
-      {"line": 115,  "name": "_fa4_forward_support_error",   "path": "torch/nn/attention/_fa4.py"},
-      {"line": 158,  "name": "_fa3_forward_support_error",   "path": "torch/nn/attention/_fa3.py"}
+      {"line": 4775, "name": "interpolate",                "path": "torch/nn/functional.py"},
+      {"line": 115,  "name": "_fa4_forward_support_error", "path": "torch/nn/attention/_fa4.py"},
+      {"line": 158,  "name": "_fa3_forward_support_error", "path": "torch/nn/attention/_fa3.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE return_count >= 9 IN 'torch/nn/**' ORDER BY return_count DESC LIMIT 3",
     "name": "GP12_top3_functions_by_return_count"
@@ -2554,9 +2534,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 273, "name": "walk",          "path": "torch/fx/_graph_pickler.py"},
-      {"line": 487, "name": "go",            "path": "torch/fx/passes/runtime_assert.py"},
-      {"line": 404, "name": "try_ann_to_type","path": "torch/jit/annotations.py"}
+      {"line": 273, "name": "walk",            "path": "torch/fx/_graph_pickler.py"},
+      {"line": 487, "name": "go",              "path": "torch/fx/passes/runtime_assert.py"},
+      {"line": 404, "name": "try_ann_to_type", "path": "torch/jit/annotations.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE language = 'python' WHERE recursion_count >= 9 IN 'torch/**' ORDER BY recursion_count DESC LIMIT 3",
     "name": "GP13_top3_recursive_functions"
@@ -2598,9 +2578,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"enclosing_fn": "_call_impl",                "line": 1786, "path": "torch/nn/modules/module.py"},
-      {"enclosing_fn": "__init__",                  "line": 138,  "path": "torch/nn/modules/adaptive.py"},
-      {"enclosing_fn": "_validate_pruning_amount_init","line": 1277,"path": "torch/nn/utils/prune.py"}
+      {"enclosing_fn": "_call_impl",                    "line": 1786, "path": "torch/nn/modules/module.py"},
+      {"enclosing_fn": "__init__",                      "line": 138,  "path": "torch/nn/modules/adaptive.py"},
+      {"enclosing_fn": "_validate_pruning_amount_init", "line": 1277, "path": "torch/nn/utils/prune.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'if' WHERE condition_tests >= 5 IN 'torch/nn/**' ORDER BY condition_tests DESC LIMIT 3",
     "name": "GP17_complex_if_conditions"
@@ -2632,11 +2612,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"text": "def __add__(self, other) -> Sequential:", "line": 161},
-      {"text": "def __delitem__(self, idx: slice | int) -> None:", "line": 144},
-      {"text": "def __iadd__(self, other) -> Self:", "line": 183},
-      {"text": "def __imul__(self, other: int) -> Self:", "line": 216},
-      {"text": "def __init__(self, *args):", "line": 115}
+      {"line": 161, "text": "def __add__(self, other) -> Sequential:"},
+      {"line": 144, "text": "def __delitem__(self, idx: slice | int) -> None:"},
+      {"line": 183, "text": "def __iadd__(self, other) -> Self:"},
+      {"line": 216, "text": "def __imul__(self, other: int) -> Self:"},
+      {"line": 115, "text": "def __init__(self, *args):"}
     ],
     "fql": "SHOW members OF 'Sequential' ORDER BY name ASC LIMIT 5",
     "name": "GP20_show_members_sequential"
@@ -2707,11 +2687,11 @@
     "name": "P1_show_lines_surfaces_block_alias"
   },
   {
-    "expect_total": 1,
     "expect_row_count": 1,
     "expect_rows": [
       {"line": 91, "name": "convert_show_content"}
     ],
+    "expect_total": 1,
     "fql": "FIND symbols WHERE name = 'convert_show_content' WHERE has_doc = 'true' IN 'crates/forgeql-core/src/engine/convert.rs'",
     "name": "P6_has_doc_true_with_interposed_attribute"
   },
@@ -2727,22 +2707,22 @@
   {
     "expect_row_count": 9,
     "expect_rows": [
-      {"line": 83, "depth": 0, "fql_kind": "comment_block"},
-      {"line": 83, "depth": 1, "fql_kind": "comment"},
-      {"line": 84, "depth": 1, "fql_kind": "comment"},
-      {"line": 85, "depth": 1},
-      {"line": 86, "depth": 1},
-      {"line": 87, "depth": 1, "fql_kind": "comment"},
-      {"line": 88, "depth": 1},
-      {"line": 89, "depth": 1},
-      {"line": 90, "depth": 1}
+      {"depth": 0, "fql_kind": "comment_block", "line": 83},
+      {"depth": 1, "fql_kind": "comment",       "line": 83},
+      {"depth": 1, "fql_kind": "comment",       "line": 84},
+      {"depth": 1, "line": 85},
+      {"depth": 1, "line": 86},
+      {"depth": 1, "fql_kind": "comment",       "line": 87},
+      {"depth": 1, "line": 88},
+      {"depth": 1, "line": 89},
+      {"depth": 1, "line": 90}
     ],
     "fql": "SHOW outline OF 'need66ca6e801.0031' ALL",
     "name": "P4_outline_all_nests_in_source_order"
   },
   {
     "expect_rows": [
-      {"line": 83, "depth": 0, "fql_kind": "comment_block", "name": "/// Convert the inner content of a SHOW … (×8)"}
+      {"depth": 0, "fql_kind": "comment_block", "line": 83, "name": "/// Convert the inner content of a SHOW … (×8)"}
     ],
     "fql": "SHOW outline OF 'need66ca6e801.0031' ALL",
     "name": "P5_comment_block_label"
