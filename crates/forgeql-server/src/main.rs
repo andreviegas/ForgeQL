@@ -31,7 +31,11 @@ use crate::http::AppState;
 
 /// Command-line arguments for `forgeql-server`.
 #[derive(Parser, Debug)]
-#[command(name = "forgeql-server", about = "ForgeQL multi-tenant MCP daemon")]
+#[command(
+    name = "forgeql-server",
+    version,
+    about = "ForgeQL multi-tenant MCP daemon"
+)]
 struct Cli {
     /// Address to bind the HTTP listener to.
     #[arg(long, default_value = "0.0.0.0")]

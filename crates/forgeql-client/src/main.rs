@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 /// Command-line arguments for `forgeql-client`.
 #[derive(Parser, Debug)]
-#[command(name = "forgeql-client", about = "ForgeQL terminal client")]
+#[command(name = "forgeql-client", version, about = "ForgeQL terminal client")]
 struct Cli {
     /// Server host to connect to.
     #[arg(long, env = "FORGEQL_HOST", default_value = "localhost")]

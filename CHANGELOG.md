@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.86.0] — 2026-07-01 — feat(cli): --version for client/server + publish full binary set
+
+### Added
+
+- `forgeql-client` and `forgeql-server` now support `--version`, printing the
+  workspace version (e.g. `forgeql-client 0.86.0`) like the `forgeql` tool
+  already did.
+
+### Fixed
+
+- `ci-check.sh` now publishes the **full binary set** to the canonical bins
+  directory on a green run. `cargo build --workspace` always built
+  `forgeql-client` and `forgeql-server`, but the publish step only copied
+  `forgeql`, so the client/server binaries in `/sstate-forgeql/bins/` went stale.
+  The publish helper (`bc_publish_mcp_binary`) now atomically publishes
+  `forgeql`, `forgeql-client`, and `forgeql-server` in lockstep.
+
 ## [0.85.0] — 2026-06-30 — chore(release): rollup release (first tag since v0.81.0)
 
 This is the first tagged/published release since `v0.81.0`. It ships the
