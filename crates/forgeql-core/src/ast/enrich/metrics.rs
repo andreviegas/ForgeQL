@@ -153,71 +153,79 @@ pub(crate) fn first_absorbed_toplevel_in_compound(
 ) -> Option<usize> {
     let mut min_row: Option<usize> = None;
 
-    if config.is_block_kind(node.kind()) {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            let is_absorbed = if config.is_function_kind(child.kind()) {
-                true
-            } else if config.is_declaration_kind(child.kind()) {
-                // Multi-line declaration with struct/array initializer — the
-                // canonical shape of absorbed file-scope driver tables.
-                // Single-line local declarations (`int x = 5;`) are excluded.
-                // Legitimate local variables are also excluded: they are always
-                // followed by executable statements (calls, returns, etc.) in
-                // the same compound_statement, whereas absorbed file-scope
-                // globals are the last meaningful node in the function body.
-                child.start_position().row != child.end_position().row
-                    && declaration_has_initializer_list(child, config)
-                    && !has_executable_after(node, child.end_byte(), config)
-            } else if child.kind() == "ERROR" {
-                // tree-sitter-cpp 0.23.x fails on `static DEVICE_API(gpio, name) = {…}`
-                // (macro in type position) and emits ERROR instead of `declaration`.
-                // Guard: multi-line AND first named child is storage_class_specifier.
-                // `"ERROR"` and `"storage_class_specifier"` are tree-sitter built-ins
-                // with no language-config equivalent — kept as literals intentionally.
-                child.start_position().row != child.end_position().row
-                    && child
-                        .named_child(0)
-                        .is_some_and(|c| c.kind() == "storage_class_specifier")
-            } else {
-                false
-            };
-            if is_absorbed {
-                let row = child.start_position().row;
-                min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
+    // Iterative traversal with an explicit heap stack. Recursing over the AST is a
+    // stack-overflow hazard: the tree depth of real-world source (deeply nested
+    // expressions, large macro expansions, big match arms) can exceed the native
+    // thread stack on large corpora — observed overflowing on the rustc tree and
+    // large C/C++ trees. A heap work stack keeps traversal depth off the call stack.
+    let mut stack: Vec<tree_sitter::Node<'_>> = vec![node];
+    while let Some(node) = stack.pop() {
+        if config.is_block_kind(node.kind()) {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                let is_absorbed = if config.is_function_kind(child.kind()) {
+                    true
+                } else if config.is_declaration_kind(child.kind()) {
+                    // Multi-line declaration with struct/array initializer — the
+                    // canonical shape of absorbed file-scope driver tables.
+                    // Single-line local declarations (`int x = 5;`) are excluded.
+                    // Legitimate local variables are also excluded: they are always
+                    // followed by executable statements (calls, returns, etc.) in
+                    // the same compound_statement, whereas absorbed file-scope
+                    // globals are the last meaningful node in the function body.
+                    child.start_position().row != child.end_position().row
+                        && declaration_has_initializer_list(child, config)
+                        && !has_executable_after(node, child.end_byte(), config)
+                } else if child.kind() == "ERROR" {
+                    // tree-sitter-cpp 0.23.x fails on `static DEVICE_API(gpio, name) = {…}`
+                    // (macro in type position) and emits ERROR instead of `declaration`.
+                    // Guard: multi-line AND first named child is storage_class_specifier.
+                    // "ERROR" and "storage_class_specifier" are tree-sitter built-ins
+                    // with no language-config equivalent — kept as literals intentionally.
+                    child.start_position().row != child.end_position().row
+                        && child
+                            .named_child(0)
+                            .is_some_and(|c| c.kind() == "storage_class_specifier")
+                } else {
+                    false
+                };
+                if is_absorbed {
+                    let row = child.start_position().row;
+                    min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
+                }
             }
         }
-    }
 
-    // Recurse into children to find nested compound_statements (inside for/while/if
-    // bodies and preprocessor blocks such as preproc_ifdef).
-    //
-    // - function_kind children: an absorbed sibling found inside a preprocessor
-    //   block or nested control-flow body — record its start row and skip its
-    //   body to avoid false positives from the sibling's own content.
-    // - matching `ERROR` children: same treatment as above.
-    // - everything else: recurse normally.
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if config.is_function_kind(child.kind()) {
-            // Absorbed sibling inside a preproc_ifdef / for / if body — record row,
-            // do NOT descend into its block body.
-            let row = child.start_position().row;
-            min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
-            continue;
-        }
-        if child.kind() == "ERROR"
-            && child.start_position().row != child.end_position().row
-            && child
-                .named_child(0)
-                .is_some_and(|c| c.kind() == "storage_class_specifier")
-        {
-            let row = child.start_position().row;
-            min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
-            continue;
-        }
-        if let Some(row) = first_absorbed_toplevel_in_compound(child, config) {
-            min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
+        // Enqueue children for traversal to find nested compound_statements (inside
+        // for/while/if bodies and preprocessor blocks such as preproc_ifdef).
+        //
+        // - function_kind children: an absorbed sibling found inside a preprocessor
+        //   block or nested control-flow body — record its start row and skip its
+        //   body to avoid false positives from the sibling's own content.
+        // - matching `ERROR` children: same treatment as above.
+        // - everything else: push onto the work stack to visit later.
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if config.is_function_kind(child.kind()) {
+                // Absorbed sibling inside a preproc_ifdef / for / if body — record row,
+                // do NOT descend into its block body.
+                let row = child.start_position().row;
+                min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
+                continue;
+            }
+            if child.kind() == "ERROR"
+                && child.start_position().row != child.end_position().row
+                && child
+                    .named_child(0)
+                    .is_some_and(|c| c.kind() == "storage_class_specifier")
+            {
+                let row = child.start_position().row;
+                min_row = Some(min_row.map_or(row, |m: usize| m.min(row)));
+                continue;
+            }
+            // Descend into non-absorbed children by pushing them onto the work stack
+            // instead of recursing — recursion here previously overflowed the stack.
+            stack.push(child);
         }
     }
 

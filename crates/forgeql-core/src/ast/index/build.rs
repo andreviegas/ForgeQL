@@ -84,9 +84,14 @@ impl SymbolTable {
         debug!(files = paths.len(), "indexing files in parallel");
 
         // Pass 1 — collect macro definitions (parallel, per-file, then merged).
+        // All parallel parse+enrich passes run on `indexing_pool()`, whose workers
+        // have a large stack — AST enrichers recurse over the syntax tree and would
+        // otherwise overflow rayon's default ~2 MiB worker stack on deeply nested
+        // source (see `indexing_pool`).
         let t_build = std::time::Instant::now();
         let t_step = std::time::Instant::now();
-        let macro_table = Self::collect_macro_table(&paths, lang_registry);
+        let macro_table =
+            Self::indexing_pool().install(|| Self::collect_macro_table(&paths, lang_registry));
 
         info!(
             ms = t_step.elapsed().as_millis(),
@@ -102,7 +107,9 @@ impl SymbolTable {
         // This eliminates the ~2-minute sequential bottleneck on large repos.
         if seg_ctx.is_some() {
             let t_fast = std::time::Instant::now();
-            Self::build_columnar_segments(&paths, lang_registry, &macro_table, seg_ctx);
+            Self::indexing_pool().install(|| {
+                Self::build_columnar_segments(&paths, lang_registry, &macro_table, seg_ctx);
+            });
             info!(
                 ms = t_fast.elapsed().as_millis(),
                 files = paths.len(),
@@ -114,8 +121,9 @@ impl SymbolTable {
         // Pass 2 — parse + enrich each file in parallel, merging via tree
         // reduction so merges also happen across multiple cores.
         let t_step = std::time::Instant::now();
-        let mut table =
-            Self::parse_and_reduce(&paths, lang_registry, &macro_table, seg_ctx, workspace);
+        let mut table = Self::indexing_pool().install(|| {
+            Self::parse_and_reduce(&paths, lang_registry, &macro_table, seg_ctx, workspace)
+        });
 
         info!(
             ms = t_step.elapsed().as_millis(),
@@ -147,6 +155,29 @@ impl SymbolTable {
             "TIMING build total: SymbolTable::build"
         );
         Ok((table, macro_table))
+    }
+
+    /// Dedicated rayon thread pool for the parallel parse + enrich passes, whose
+    /// worker threads are given a large stack.
+    ///
+    /// AST enrichers (`casts`, `metrics`, `escape`, `recursion`, `fallthrough`,
+    /// `todo`, …) walk the syntax tree recursively. The tree depth of real-world
+    /// source — deeply nested expressions, long macro expansions, generated data
+    /// tables — can exceed rayon's default ~2 MiB worker stack and abort the whole
+    /// process with `fatal runtime error: stack overflow`. Reserving a generous
+    /// per-worker stack (virtual address space, paged in on demand) makes indexing
+    /// robust to depth without asking users to raise their ambient `ulimit -s`.
+    ///
+    /// Initialised once and reused for every build.
+    fn indexing_pool() -> &'static rayon::ThreadPool {
+        static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+        POOL.get_or_init(|| {
+            rayon::ThreadPoolBuilder::new()
+                .stack_size(256 * 1024 * 1024)
+                .thread_name(|i| format!("forgeql-index-{i}"))
+                .build()
+                .expect("failed to build forgeql indexing thread pool")
+        })
     }
 
     /// Merge another `SymbolTable` into this one.
