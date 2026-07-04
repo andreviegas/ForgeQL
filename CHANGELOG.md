@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.86.2] — 2026-07-04 — fix(enrich): decl_distance O(n) on deeply-nested functions
+
+### Fixed
+
+- Indexing no longer spends unbounded single-core time on functions with very
+  deep ASTs. `DeclDistanceEnricher` called `is_inside_parameter_list` for every
+  identifier in a function body, and that predicate walks the ancestor chain up
+  to the enclosing function — O(depth) per identifier, i.e. O(n²) on deeply
+  nested bodies. The rustc parser stress test `survive-peano-lesson-queue.rs`
+  (8 MB of thousands-deep nested `if/else`) pinned one core for over an hour.
+  The body walk now skips parameter-list subtrees entirely (parameter
+  identifiers were only visited to be excluded), removing the per-identifier
+  ancestor walk. Results are unchanged; indexing that file's worst function
+  drops from >90 s to 0.4 s.
+
 ## [0.86.1] — 2026-07-04 — fix(index): stack-overflow-safe indexing of deeply-nested source
 
 ### Fixed
