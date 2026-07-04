@@ -27,13 +27,9 @@ workspace = true
 forgeql-core        = { workspace = true }
 forgeql-lang-c      = { workspace = true }
 forgeql-lang-cpp    = { workspace = true }
-forgeql-lang-json   = { workspace = true }
-forgeql-lang-markdown = { workspace = true }
 forgeql-lang-python = { workspace = true }
 forgeql-lang-rust   = { workspace = true }
-forgeql-lang-yaml   = { workspace = true }
-forgeql-lang-toml   = { workspace = true }
-forgeql-lang-xml    = { workspace = true }
+forgeql-lang-text   = { workspace = true }
 
 # async (MCP transport)
 tokio = { workspace = true }

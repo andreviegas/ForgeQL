@@ -34,18 +34,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use forgeql_core::ast::lang::LanguageRegistry;
+use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::query_logger::QueryLogger;
 use forgeql_lang_c::CLanguage;
 use forgeql_lang_cpp::CppLanguage;
-use forgeql_lang_json::JsonLanguage;
-use forgeql_lang_markdown::MarkdownLanguage;
 use forgeql_lang_python::PythonLanguage;
 use forgeql_lang_rust::RustLanguage;
-use forgeql_lang_toml::TomlLanguage;
-use forgeql_lang_xml::XmlLanguage;
-use forgeql_lang_yaml::YamlLanguage;
+use forgeql_lang_text::text_languages;
 
 use cli::{Cli, Mode, detect_mode};
 
@@ -71,17 +67,16 @@ async fn main() -> Result<()> {
 
     let data_dir = path_utils::resolve_data_dir(&cli.data_dir);
 
-    let lang_registry = Arc::new(LanguageRegistry::new(vec![
+    // Code languages, plus every structured-text language in one call — new
+    // text formats added to forgeql-lang-text are picked up automatically.
+    let mut languages: Vec<Arc<dyn LanguageSupport>> = vec![
         Arc::new(CLanguage),
         Arc::new(CppLanguage),
-        Arc::new(JsonLanguage),
-        Arc::new(MarkdownLanguage),
         Arc::new(PythonLanguage),
         Arc::new(RustLanguage),
-        Arc::new(YamlLanguage),
-        Arc::new(TomlLanguage),
-        Arc::new(XmlLanguage),
-    ]));
+    ];
+    languages.extend(text_languages());
+    let lang_registry = Arc::new(LanguageRegistry::new(languages));
 
     let engine = ForgeQLEngine::new(data_dir.clone(), lang_registry)
         .with_context(|| format!("initialising engine with data_dir '{}'", data_dir.display()))?;

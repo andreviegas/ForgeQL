@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use forgeql_core::ast::enrich::default_enrichers;
 use forgeql_core::ast::index::{IndexContext, SymbolTable, index_file};
 use forgeql_core::ast::lang::LanguageSupport;
-use forgeql_lang_xml::XmlLanguage;
+use forgeql_lang_text::XmlLanguage;
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

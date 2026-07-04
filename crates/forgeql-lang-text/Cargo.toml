@@ -1,0 +1,19 @@
+[package]
+name        = "forgeql-lang-text"
+description = "Structured-text language support for ForgeQL — one crate for every text/data/markup format (JSON, YAML, TOML, Markdown, XML incl. AUTOSAR/tresos dialects)"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[lints]
+workspace = true
+
+[dependencies]
+forgeql-core     = { workspace = true }
+tree-sitter      = { workspace = true }
+tree-sitter-json = { workspace = true }
+tree-sitter-md   = { workspace = true }
+tree-sitter-toml = { workspace = true }
+tree-sitter-xml  = { workspace = true }
+tree-sitter-yaml = { workspace = true }

@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.88.0] — 2026-07-04 — refactor(lang): one forgeql-lang-text crate for all structured-text formats
+
+### Changed
+
+- Consolidated the five structured-text language crates (`forgeql-lang-json`,
+  `-yaml`, `-toml`, `-markdown`, `-xml`) into one **`forgeql-lang-text`**
+  crate. Each format is now a module plus a `config/<lang>.json` kind map, so
+  adding a new text extension is a three-step recipe in a single place. The
+  `forgeql` and `forgeql-server` registries splice all text formats in with
+  one `text_languages()` call — new formats are picked up automatically by
+  both binaries. No behavior change: same extensions, same kinds, same names.
+
 ## [0.87.0] — 2026-07-04 — feat(lang): XML family support (arxml/xdm/ecuc)
 
 ### Added

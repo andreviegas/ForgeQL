@@ -4,13 +4,9 @@ members = [
     "crates/forgeql-core",
     "crates/forgeql-lang-c",
     "crates/forgeql-lang-cpp",
-    "crates/forgeql-lang-json",
-    "crates/forgeql-lang-markdown",
     "crates/forgeql-lang-python",
     "crates/forgeql-lang-rust",
-    "crates/forgeql-lang-yaml",
-    "crates/forgeql-lang-toml",
-    "crates/forgeql-lang-xml",
+    "crates/forgeql-lang-text",
     "crates/forgeql",
     "crates/forgeql-server",
     "crates/forgeql-client",
@@ -23,20 +19,16 @@ default-members = [
     "crates/forgeql-core",
     "crates/forgeql-lang-c",
     "crates/forgeql-lang-cpp",
-    "crates/forgeql-lang-json",
-    "crates/forgeql-lang-markdown",
     "crates/forgeql-lang-python",
     "crates/forgeql-lang-rust",
-    "crates/forgeql-lang-yaml",
-    "crates/forgeql-lang-toml",
-    "crates/forgeql-lang-xml",
+    "crates/forgeql-lang-text",
     "crates/forgeql",
     "crates/forgeql-server",
     "crates/forgeql-client",
 ]
 
 [workspace.package]
-version   = "0.87.0"
+version   = "0.88.0"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"
@@ -154,13 +146,9 @@ dirs             = "5"
 forgeql-core        = { path = "crates/forgeql-core" }
 forgeql-lang-c      = { path = "crates/forgeql-lang-c" }
 forgeql-lang-cpp    = { path = "crates/forgeql-lang-cpp" }
-forgeql-lang-json   = { path = "crates/forgeql-lang-json" }
-forgeql-lang-markdown = { path = "crates/forgeql-lang-markdown" }
 forgeql-lang-python = { path = "crates/forgeql-lang-python" }
 forgeql-lang-rust   = { path = "crates/forgeql-lang-rust" }
-forgeql-lang-yaml   = { path = "crates/forgeql-lang-yaml" }
-forgeql-lang-toml   = { path = "crates/forgeql-lang-toml" }
-forgeql-lang-xml    = { path = "crates/forgeql-lang-xml" }
+forgeql-lang-text   = { path = "crates/forgeql-lang-text" }
 
 # --- allocator (replaces glibc malloc; returns pages to OS after large frees) ---
 tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
