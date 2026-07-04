@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::data_flow_utils::{
     LocalDecl, collect_local_declarations, collect_parameter_names, is_compound_assign_or_update,
-    is_in_declaration, is_inside_parameter_list, is_write_context,
+    is_in_declaration, is_write_context,
 };
 use super::guard_utils::{
     GuardFrame, GuardInfo, are_guards_exclusive, guard_info_from_stack, update_guard_stack,
@@ -166,8 +166,17 @@ where
             tracker.record_identifier(ctx, node, branch_depth, &mini_guard_stack, &local_names);
 
             // Try to descend.  Record whether we are crossing a branch/loop boundary.
+            //
+            // Do NOT descend into parameter-list subtrees: their identifiers are
+            // declarations, not body uses, so they must be excluded from the use
+            // analysis. Skipping them structurally (O(1)) replaces a per-identifier
+            // `is_inside_parameter_list` ancestor walk that was O(depth) — i.e.
+            // O(n^2) on deeply-nested functions (observed hanging indexing on the
+            // rustc `survive-peano-lesson-queue.rs` parser stress test).
             let is_branch = config.is_branch_kind(kind) || config.is_loop_kind(kind);
-            if cursor.goto_first_child() {
+            let is_param_subtree =
+                config.is_parameter_list_kind(kind) || config.is_parameter_kind(kind);
+            if !is_param_subtree && cursor.goto_first_child() {
                 depth_stack.push(is_branch);
                 if is_branch {
                     branch_depth += 1;
@@ -313,10 +322,10 @@ impl<'a: 'l, 'l> UseTracker<'a, 'l> {
         let config = ctx.language_config;
         let kind = node.kind();
 
-        if !config.is_identifier_kind(kind)
-            || node == func
-            || is_inside_parameter_list(node, config)
-        {
+        // Parameter identifiers are never visited: `analyse_uses` does not descend
+        // into parameter-list subtrees (see there), so no `is_inside_parameter_list`
+        // ancestor walk is needed here.
+        if !config.is_identifier_kind(kind) || node == func {
             return;
         }
         let text = std::str::from_utf8(&source[node.byte_range()]).unwrap_or("");
