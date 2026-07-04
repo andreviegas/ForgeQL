@@ -28,7 +28,7 @@ default-members = [
 ]
 
 [workspace.package]
-version   = "0.88.0"
+version   = "0.89.0"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"
@@ -95,6 +95,8 @@ tree-sitter-toml = { package = "tree-sitter-toml-ng", version = "0.7" }
 # One grammar covers the whole XML family: plain .xml plus the automotive
 # dialects (AUTOSAR .arxml, tresos .xdm/.epc/.epd, .ecuc, .odx).
 tree-sitter-xml  = "0.7"
+# Vector CAN database (.dbc) bus descriptions.
+tree-sitter-dbc  = "0.1"
 
 # --- DSL parsing ---
 pest             = "2"

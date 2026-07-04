@@ -622,7 +622,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "forgeql"
-version = "0.88.0"
+version = "0.89.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-client"
-version = "0.88.0"
+version = "0.89.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-core"
-version = "0.88.0"
+version = "0.89.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-c"
-version = "0.88.0"
+version = "0.89.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -701,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-cpp"
-version = "0.88.0"
+version = "0.89.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-python"
-version = "0.88.0"
+version = "0.89.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-rust"
-version = "0.88.0"
+version = "0.89.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -728,10 +728,11 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-text"
-version = "0.88.0"
+version = "0.89.0"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
+ "tree-sitter-dbc",
  "tree-sitter-json",
  "tree-sitter-md",
  "tree-sitter-toml-ng",
@@ -741,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-server"
-version = "0.88.0"
+version = "0.89.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2681,6 +2682,16 @@ name = "tree-sitter-cpp"
 version = "0.23.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df2196ea9d47b4ab4a31b9297eaa5a5d19a0b121dceb9f118f6790ad0ab94743"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-dbc"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b81359da27b8e4cc5c5e57617f3c24260789ca31753e690f225b080168c55c1"
 dependencies = [
  "cc",
  "tree-sitter-language",

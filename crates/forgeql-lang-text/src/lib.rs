@@ -15,6 +15,7 @@
 //! | [`toml`]   | `toml`, `lock` (Cargo.lock)                       |
 //! | [`markdown`] | `md`, `markdown`                                |
 //! | [`xml`]    | `xml`, `arxml`, `xdm`, `epc`, `epd`, `ecuc`, `odx`|
+//! | [`dbc`]    | `dbc` (Vector CAN database)                       |
 //!
 //! All of them map onto the same generic addressable kinds (`object`,
 //! `pair`, `array`, `section`, `heading`, `comment`, …), so the core engine
@@ -23,6 +24,7 @@
 
 #![allow(clippy::doc_markdown)]
 
+pub mod dbc;
 pub mod json;
 pub mod markdown;
 pub mod toml;
@@ -33,6 +35,7 @@ use std::sync::Arc;
 
 use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
 
+pub use dbc::DbcLanguage;
 pub use json::JsonLanguage;
 pub use markdown::MarkdownLanguage;
 pub use toml::TomlLanguage;
@@ -44,6 +47,7 @@ pub use yaml::YamlLanguage;
 #[must_use]
 pub fn text_languages() -> Vec<Arc<dyn LanguageSupport>> {
     vec![
+        Arc::new(DbcLanguage),
         Arc::new(JsonLanguage),
         Arc::new(MarkdownLanguage),
         Arc::new(TomlLanguage),

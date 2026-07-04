@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.89.0] — 2026-07-04 — feat(lang): DBC (Vector CAN database) support
+
+### Added
+
+- **DBC support** (`.dbc`, slice 2 of structured-text addressing): CAN bus
+  descriptions are now node-addressable. `BO_` messages index as `object`
+  named by message name; `SG_` signals nest inside their message as `field`
+  rows (one nested `node_id` per signal); `VAL_TABLE_`/`VAL_` enumerations
+  as `enum`; `BA_DEF_`/`BA_` attributes as `pair`; `EV_` environment
+  variables as `variable`. An agent can edit one signal of one message by
+  handle without touching the rest of the file.
+
 ## [0.88.0] — 2026-07-04 — refactor(lang): one forgeql-lang-text crate for all structured-text formats
 
 ### Changed

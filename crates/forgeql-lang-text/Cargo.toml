@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 forgeql-core     = { workspace = true }
 tree-sitter      = { workspace = true }
+tree-sitter-dbc  = { workspace = true }
 tree-sitter-json = { workspace = true }
 tree-sitter-md   = { workspace = true }
 tree-sitter-toml = { workspace = true }
