@@ -169,7 +169,18 @@ impl SymbolTable {
     /// robust to depth without asking users to raise their ambient `ulimit -s`.
     ///
     /// Initialised once and reused for every build.
-    fn indexing_pool() -> &'static rayon::ThreadPool {
+    ///
+    /// `pub(crate)` so the incremental reindex paths (`SymbolTable::reindex_files`
+    /// and `ColumnarStorage::reindex_files_impl`) can run their per-file
+    /// parse+enrich on the same big-stack workers — they call `index_file` too and
+    /// would otherwise overflow the small default stack when a single edited file
+    /// is deeply nested.
+    #[expect(
+        clippy::expect_used,
+        reason = "pool construction only fails on OS thread-spawn exhaustion; \
+                  indexing cannot proceed without it, and this runs once at startup"
+    )]
+    pub(crate) fn indexing_pool() -> &'static rayon::ThreadPool {
         static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
         POOL.get_or_init(|| {
             rayon::ThreadPoolBuilder::new()
@@ -593,6 +604,18 @@ impl SymbolTable {
     /// # Errors
     /// Returns an error if parsing fails for any of the provided paths.
     pub fn reindex_files(
+        &mut self,
+        paths: &[PathBuf],
+        lang_registry: &LanguageRegistry,
+    ) -> Result<()> {
+        // Run the per-file parse+enrich on the big-stack indexing pool: `index_file`
+        // walks the AST recursively and a single deeply-nested edited file would
+        // otherwise overflow rayon's default ~2 MiB stack. The full build already
+        // does this (see `indexing_pool`); the incremental path needs it too.
+        Self::indexing_pool().install(|| self.reindex_files_inner(paths, lang_registry))
+    }
+
+    fn reindex_files_inner(
         &mut self,
         paths: &[PathBuf],
         lang_registry: &LanguageRegistry,

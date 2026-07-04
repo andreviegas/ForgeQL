@@ -17,8 +17,16 @@ use crate::storage::columnar::segment_reader::SegmentReader;
 use crate::storage::git_sha1_provider::git_blob_sha1;
 
 impl ColumnarStorage {
-    #[allow(clippy::too_many_lines)]
     pub(super) fn reindex_files_impl(&mut self, paths: &[PathBuf]) -> Result<()> {
+        // Run the per-file parse+enrich on the big-stack indexing pool: `index_file`
+        // walks the AST recursively and a single deeply-nested edited file would
+        // otherwise overflow rayon's default ~2 MiB stack. The full build already
+        // does this (see `SymbolTable::indexing_pool`); reindex needs it too.
+        SymbolTable::indexing_pool().install(|| self.reindex_files_on_pool(paths))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn reindex_files_on_pool(&mut self, paths: &[PathBuf]) -> Result<()> {
         std::fs::create_dir_all(&self.staging_dir)?;
         let mut parser = tree_sitter::Parser::new();
         let enrichers = default_enrichers();
