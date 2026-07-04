@@ -13,6 +13,8 @@
 //! slice. Still deferred: timeout enforcement and resource-budget admission.
 
 #![allow(clippy::module_name_repetitions)]
+// Tests use unwrap/expect intentionally — the pedantic lints are for library code.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -344,7 +346,6 @@ impl JobRegistry {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

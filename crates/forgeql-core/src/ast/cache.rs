@@ -63,6 +63,9 @@ use crate::ast::lang::MacroDef;
 ///       `false` for numbers whose direct parent is `enumerator` or `init_declarator`
 ///       (C++ named-constant contexts). Driven by new `constant_def_parent_kinds` and
 ///       `nested_function_body_kinds` config arrays in `cpp.json`.
+///   28. Language registry expansion (0.87–0.91): structured-text formats (XML
+///       family, DBC, INI, justfile, Make, `CMake`, reStructuredText) are now
+///       indexed — caches built by older binaries are missing all their rows.
 ///
 /// # ⚠ DEAD CODE — NOT IN USE (as of 0.49.10)
 ///
@@ -76,7 +79,7 @@ use crate::ast::lang::MacroDef;
 /// TODO: remove `CachedIndex`, `CURRENT_VERSION`, `persist_to_cache`, and the
 /// entire `.forgeql-index` on-disk format once the legacy `SymbolTable` build
 /// path is fully retired.
-pub const CURRENT_VERSION: u32 = 27;
+pub const CURRENT_VERSION: u32 = 28;
 
 // -----------------------------------------------------------------------
 // CachedIndex

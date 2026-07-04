@@ -1,7 +1,7 @@
 [
   {
     "alias": "golden",
-    "expect_symbols_indexed": 2830615,
+    "expect_symbols_indexed": 3084394,
     "use": "zephyr-andre.zephyr-main"
   },
   {
@@ -204,11 +204,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"line": 64,   "name": "AGC_IRQHandler",    "path": "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c"},
-      {"line": 82,   "name": "ARM_MPU_ClrRegion", "path": "arch/arm/core/mpu/cortex_a_r/arm_mpu_internal.h"},
-      {"line": 70,   "name": "AddedProperty",     "path": "scripts/release/list_devicetree_bindings_changes.py"},
-      {"line": 1287, "name": "AddressRegion",     "path": "modules/hal_nordic/ironside/se/scripts/periphconf/builder.py"},
-      {"line": 37,   "name": "Argus_Free",        "path": "modules/hal_afbr/platform_malloc.c"}
+      {"line": 34,  "name": "$(GENSRC)",                       "path": "samples/modules/thrift/hello/client/Makefile"},
+      {"line": 35,  "name": "$(GENSRC)",                       "path": "samples/modules/thrift/hello/server/Makefile"},
+      {"line": 107, "name": "${NSI_BUILD_PATH}",               "path": "scripts/native_simulator/Makefile"},
+      {"line": 127, "name": "${NSI_BUILD_PATH}/${RUNNER_LIB}", "path": "scripts/native_simulator/Makefile"},
+      {"line": 131, "name": "${NSI_BUILD_PATH}/%.loc_cpusw.o", "path": "scripts/native_simulator/Makefile"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 5",
     "name": "G20_functions_order_by_name_asc"
@@ -228,9 +228,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 13, "name": "Argus_GetHandle", "path": "modules/hal_afbr/platform_misc.c"},
-      {"line": 23, "name": "Argus_Malloc",    "path": "modules/hal_afbr/platform_malloc.c"},
-      {"line": 63, "name": "BENCH_START",     "path": "tests/benchmarks/sys_kernel/src/syskernel.h"}
+      {"line": 111, "name": "${NSI_BUILD_PATH}/%.o", "path": "scripts/native_simulator/Makefile"},
+      {"line": 116, "name": "${NSI_BUILD_PATH}/%.o", "path": "scripts/native_simulator/Makefile"},
+      {"line": 120, "name": "${NSI_BUILD_PATH}/%.o", "path": "scripts/native_simulator/Makefile"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 3 OFFSET 5",
     "name": "G22_functions_order_by_name_asc_offset5"
@@ -239,10 +239,10 @@
     "expect_row_count": 7,
     "expect_rows": [
       {"count": 534177, "kind": "number"},
-      {"count": 444941, "kind": "variable"},
+      {"count": 445100, "kind": "variable"},
+      {"count": 294914, "kind": "macro_call"},
       {"count": 282718, "kind": "comment"},
-      {"count": 279509, "kind": "macro_call"},
-      {"count": 254172, "kind": "macro"},
+      {"count": 254241, "kind": "macro"},
       {"count": 214108, "kind": "struct"},
       {"count": 160701, "kind": "if"}
     ],
@@ -491,16 +491,16 @@
   {
     "expect_row_count": 10,
     "expect_rows": [
-      {"line": 64,   "name": "AGC_IRQHandler",    "path": "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c"},
-      {"line": 82,   "name": "ARM_MPU_ClrRegion", "path": "arch/arm/core/mpu/cortex_a_r/arm_mpu_internal.h"},
-      {"line": 70,   "name": "AddedProperty",     "path": "scripts/release/list_devicetree_bindings_changes.py"},
-      {"line": 1287, "name": "AddressRegion",     "path": "modules/hal_nordic/ironside/se/scripts/periphconf/builder.py"},
-      {"line": 37,   "name": "Argus_Free",        "path": "modules/hal_afbr/platform_malloc.c"},
-      {"line": 13,   "name": "Argus_GetHandle",   "path": "modules/hal_afbr/platform_misc.c"},
-      {"line": 23,   "name": "Argus_Malloc",      "path": "modules/hal_afbr/platform_malloc.c"},
-      {"line": 63,   "name": "BENCH_START",       "path": "tests/benchmarks/sys_kernel/src/syskernel.h"},
-      {"line": 615,  "name": "BICR",              "path": "soc/nordic/nrf54h/bicr/bicrgen.py"},
-      {"line": 183,  "name": "BL702_Delay_MS",    "path": "soc/bflb/bl70x/bflb_platform_shim.c"}
+      {"line": 34,  "name": "$(GENSRC)",                          "path": "samples/modules/thrift/hello/client/Makefile"},
+      {"line": 35,  "name": "$(GENSRC)",                          "path": "samples/modules/thrift/hello/server/Makefile"},
+      {"line": 107, "name": "${NSI_BUILD_PATH}",                  "path": "scripts/native_simulator/Makefile"},
+      {"line": 127, "name": "${NSI_BUILD_PATH}/${RUNNER_LIB}",    "path": "scripts/native_simulator/Makefile"},
+      {"line": 131, "name": "${NSI_BUILD_PATH}/%.loc_cpusw.o",    "path": "scripts/native_simulator/Makefile"},
+      {"line": 111, "name": "${NSI_BUILD_PATH}/%.o",              "path": "scripts/native_simulator/Makefile"},
+      {"line": 116, "name": "${NSI_BUILD_PATH}/%.o",              "path": "scripts/native_simulator/Makefile"},
+      {"line": 120, "name": "${NSI_BUILD_PATH}/%.o",              "path": "scripts/native_simulator/Makefile"},
+      {"line": 124, "name": "${NSI_BUILD_PATH}/linker_script.ld", "path": "scripts/native_simulator/Makefile"},
+      {"line": 140, "name": "${NSI_EXE}",                         "path": "scripts/native_simulator/Makefile"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 10",
     "name": "GST1_function_alphabetic_asc_limit10"
@@ -2237,7 +2237,7 @@
   },
   {
     "alias": "golden-python",
-    "expect_symbols_indexed": 3109089,
+    "expect_symbols_indexed": 3116758,
     "use": "pytorch-andre.pytorch-frozen"
   },
   {
@@ -2673,7 +2673,7 @@
   },
   {
     "alias": "golden-rust",
-    "expect_symbols_indexed": 55775,
+    "expect_symbols_indexed": 58305,
     "use": "forgeql-pub.frozen"
   },
   {

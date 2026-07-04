@@ -6,6 +6,28 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.91.1] — 2026-07-04 — fix(index): invalidate cached indexes built without the new text formats
+
+### Fixed
+
+- Overlays and index caches built by pre-0.87 binaries were **silently
+  reused**: the freshness check compares only the corpus commit, so adding
+  the structured-text languages (0.87–0.91) never triggered a re-index and
+  `USE` kept serving indexes that had never walked a `CMakeLists.txt` or
+  `.rst` file. Bumped the overlay `SCHEMA_VERSION` (8 → 9) and the legacy
+  `CachedIndex` `CURRENT_VERSION` (27 → 28), so every cached index rebuilds
+  once with the full registry. Measured on the reference corpora: zephyr
+  2,830,615 → 3,084,394 symbols (+253k from the new formats), pytorch
+  3,109,089 → 3,116,758, forgeql-pub 55,775 → 58,305.
+
+### Changed
+
+- Re-blessed the zephyr/pytorch golden values (63 assertions) to the
+  post-re-index baselines above.
+- `jobs.rs`: the test module's blanket `#[allow(clippy::unwrap_used, …)]`
+  (flagged by the gate's clippy-allowlist phase) converted to the
+  test-scoped `#![cfg_attr(test, allow(…))]` convention used everywhere else.
+
 ## [0.91.0] — 2026-07-04 — feat(lang): Makefile, CMake, and reStructuredText support
 
 ### Added

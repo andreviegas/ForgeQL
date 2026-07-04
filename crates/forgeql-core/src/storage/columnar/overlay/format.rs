@@ -30,7 +30,12 @@ pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 ///   docs, build artefacts, …) are tracked as path+size pairs so that
 ///   `FIND files WHERE extension = 'cmake'` (and any other type) can use the
 ///   overlay fast path without a filesystem walk.
-pub(crate) const SCHEMA_VERSION: u32 = 8;
+/// - **9**: no layout change — content invalidation. The language registry
+///   gained the structured-text formats (XML family, DBC, INI, justfile,
+///   Make, CMake, reStructuredText in 0.87–0.91), so overlays built by older
+///   binaries are missing every row those files now contribute. Bumping the
+///   version forces `warm_or_open` to rebuild them with the full registry.
+pub(crate) const SCHEMA_VERSION: u32 = 9;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;
