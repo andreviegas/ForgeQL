@@ -6,6 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.86.1] — 2026-07-04 — fix(index): stack-overflow-safe indexing of deeply-nested source
+
+### Fixed
+
+- Indexing no longer aborts the whole process with a fatal stack overflow on
+  deeply-nested source (the rustc tree, large C/C++). AST enrichers recurse over
+  the syntax tree on rayon workers, whose default ~2 MiB stack could be exhausted
+  by real-world tree depth. All parse+enrich passes now run on a dedicated
+  `indexing_pool` whose workers get a 256 MiB stack, and the hottest recursive
+  walker (`first_absorbed_toplevel_in_compound`) was rewritten to an explicit
+  heap work stack.
+- The **incremental reindex** paths (`SymbolTable::reindex_files` and
+  `ColumnarStorage::reindex_files_impl`) now run their per-file parse+enrich on
+  the same big-stack pool. Previously only the full initial build was protected,
+  so a deeply-nested file that indexed fine on `USE` could still overflow the
+  stack and crash the process when re-indexed after a `CHANGE`/`MOVE` edit or on
+  `USE` reconnect.
+
 ## [0.86.0] — 2026-07-01 — feat(cli): --version for client/server + publish full binary set
 
 ### Added
