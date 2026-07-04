@@ -611,10 +611,20 @@ impl LanguageRegistry {
     }
 
     /// Look up the language for a file path by its extension.
+    ///
+    /// Extensionless files fall back to their file name — lowercased, with
+    /// any leading dot stripped — matched against the same key table. A
+    /// language that lists `"justfile"` in [`LanguageSupport::extensions`]
+    /// therefore claims `justfile`, `.justfile`, `Justfile`, and `x.justfile`
+    /// alike. The registry itself knows nothing about any specific file name.
     #[must_use]
     pub fn language_for_path(&self, path: &Path) -> Option<Arc<dyn LanguageSupport>> {
-        let ext = path.extension()?.to_str()?;
-        self.by_extension.get(ext).cloned()
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            return self.by_extension.get(ext).cloned();
+        }
+        let name = path.file_name()?.to_str()?;
+        let key = name.trim_start_matches('.').to_ascii_lowercase();
+        self.by_extension.get(key.as_str()).cloned()
     }
 
     /// Look up the language for a file extension string.
@@ -715,6 +725,23 @@ mod tests {
     fn registry_returns_none_for_unknown_extension() {
         let registry = LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]);
         let path = std::path::PathBuf::from("test.rs");
+        assert!(registry.language_for_path(&path).is_none());
+    }
+
+    #[test]
+    fn registry_falls_back_to_file_name_for_extensionless_paths() {
+        // A registered key doubles as a well-known file name: extensionless
+        // paths match by lowercased name with any leading dot stripped.
+        let registry = LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]);
+        for name in ["cpp", ".cpp", "CPP", "dir/.cpp"] {
+            let path = std::path::PathBuf::from(name);
+            assert!(
+                registry.language_for_path(&path).is_some(),
+                "extensionless '{name}' should resolve by file name"
+            );
+        }
+        // A path WITH an unknown extension must not fall back to its name.
+        let path = std::path::PathBuf::from("cpp.unknown");
         assert!(registry.language_for_path(&path).is_none());
     }
 

@@ -1,0 +1,25 @@
+{
+  "language": {
+    "name": "ini",
+    "extensions": ["ini", "cfg", "editorconfig", "gitconfig"],
+    "tree_sitter_grammar": "tree-sitter-ini"
+  },
+
+  "syntax": {
+    "root_node": "document",
+    "skip_node_kinds": []
+  },
+
+  "capabilities": {
+    "has_goto": false,
+    "has_increment_decrement": false,
+    "has_implicit_truthiness": false,
+    "params_share_body_scope": false
+  },
+
+  "kind_map": {
+    "section": "object",
+    "setting": "pair",
+    "comment": "comment"
+  }
+}

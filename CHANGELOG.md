@@ -6,6 +6,30 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.90.0] — 2026-07-04 — feat(lang): justfile + INI support; extensionless file-name matching
+
+### Added
+
+- **justfile support** (slice 3 of structured-text addressing): recipes index
+  as `function` rows named by recipe name, `:=` assignments and `alias` lines
+  as `variable`, `set` lines as `pair`, `mod` as `namespace`, `import` as
+  `import` — one `node_id` per recipe.
+- **INI support**: `.ini`/`.cfg` plus the well-known `.editorconfig` and
+  `.gitconfig` file names. `[section]` blocks index as `object`; `key = value`
+  settings nest inside their section as `pair` — the same object/pair shape
+  as the JSON/YAML/TOML family.
+- **Extensionless file-name matching**: `LanguageRegistry::language_for_path`
+  now falls back, for paths with no extension, to the lowercased file name
+  with any leading dot stripped, matched against the same key table. A
+  language that claims `"justfile"` therefore matches `justfile`,
+  `.justfile`, `Justfile`, and `x.justfile` alike. The registry itself learns
+  no file-name knowledge — plugins declare their own names.
+
+### Known gap
+
+- `.gitignore` has no published tree-sitter grammar on crates.io yet; it
+  stays raw-text (`CHANGE FILE`) for now.
+
 ## [0.89.0] — 2026-07-04 — feat(lang): DBC (Vector CAN database) support
 
 ### Added
