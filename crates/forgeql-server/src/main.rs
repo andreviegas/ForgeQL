@@ -20,9 +20,13 @@ use forgeql_core::ast::lang::LanguageRegistry;
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_lang_c::CLanguage;
 use forgeql_lang_cpp::CppLanguage;
+use forgeql_lang_json::JsonLanguage;
 use forgeql_lang_markdown::MarkdownLanguage;
 use forgeql_lang_python::PythonLanguage;
 use forgeql_lang_rust::RustLanguage;
+use forgeql_lang_toml::TomlLanguage;
+use forgeql_lang_xml::XmlLanguage;
+use forgeql_lang_yaml::YamlLanguage;
 use tokio::sync::Mutex as TokioMutex;
 use tracing::info;
 
@@ -82,12 +86,18 @@ async fn main() -> Result<()> {
         .clone()
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
+    // Full parity with the `forgeql` binary's registry — the server must be
+    // able to index every language the MCP tool can.
     let lang_registry = Arc::new(LanguageRegistry::new(vec![
         Arc::new(CLanguage),
         Arc::new(CppLanguage),
+        Arc::new(JsonLanguage),
         Arc::new(MarkdownLanguage),
         Arc::new(PythonLanguage),
         Arc::new(RustLanguage),
+        Arc::new(YamlLanguage),
+        Arc::new(TomlLanguage),
+        Arc::new(XmlLanguage),
     ]));
 
     let engine = ForgeQLEngine::new(data_dir.clone(), lang_registry)

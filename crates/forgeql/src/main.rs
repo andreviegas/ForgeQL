@@ -44,6 +44,7 @@ use forgeql_lang_markdown::MarkdownLanguage;
 use forgeql_lang_python::PythonLanguage;
 use forgeql_lang_rust::RustLanguage;
 use forgeql_lang_toml::TomlLanguage;
+use forgeql_lang_xml::XmlLanguage;
 use forgeql_lang_yaml::YamlLanguage;
 
 use cli::{Cli, Mode, detect_mode};
@@ -79,6 +80,7 @@ async fn main() -> Result<()> {
         Arc::new(RustLanguage),
         Arc::new(YamlLanguage),
         Arc::new(TomlLanguage),
+        Arc::new(XmlLanguage),
     ]));
 
     let engine = ForgeQLEngine::new(data_dir.clone(), lang_registry)

@@ -6,6 +6,26 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.87.0] — 2026-07-04 — feat(lang): XML family support (arxml/xdm/ecuc)
+
+### Added
+
+- **XML family support** (`forgeql-lang-xml`, slice 1 of structured-text
+  addressing): `.xml`, AUTOSAR `.arxml`, EB tresos `.xdm`/`.epc`/`.epd`,
+  `.ecuc`, and `.odx` files are now node-addressable. Every element gets a
+  nested `node_id` (like nested `if`/`for` blocks), named by a mechanical
+  cascade: identifier attribute (`name`/`id`/`key`/`title`/`alias`,
+  case-insensitive) → AUTOSAR `SHORT-NAME` child element → tag-name fallback,
+  so ECU configuration containers can be located with `FIND symbols` and
+  edited with `CHANGE NODE`/`INSERT NODE` instead of through a GUI.
+  Attributes are not indexed as separate rows (token thrift on large arxml).
+
+### Fixed
+
+- `forgeql-server` now registers the same language set as the `forgeql`
+  binary — JSON, YAML, and TOML were missing from the server registry, so it
+  could not index files the MCP tool could.
+
 ## [0.86.2] — 2026-07-04 — fix(enrich): decl_distance O(n) on deeply-nested functions
 
 ### Fixed

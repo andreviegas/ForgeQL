@@ -1,0 +1,23 @@
+<?xml version='1.0'?>
+<datamodel version="7.0"
+           xmlns:d="http://www.tresos.de/_projects/DataModel2/06/data.xsd"
+           xmlns:a="http://www.tresos.de/_projects/DataModel2/06/attribute.xsd">
+  <d:ctr type="AUTOSAR" factory="autosar">
+    <d:ctr name="Adc" type="AR-ELEMENT">
+      <d:var name="AdcDevErrorDetect" type="BOOLEAN" value="false"/>
+      <d:ctr name="AdcConfigSet" type="IDENTIFIABLE">
+        <d:lst name="AdcHwUnit" type="MAP">
+          <d:ctr name="AdcHwUnit_0" type="IDENTIFIABLE">
+            <d:var name="AdcPrescale" type="INTEGER" value="4"/>
+            <d:var name="AdcPriority" type="INTEGER" value="0"/>
+            <d:lst name="AdcChannel" type="MAP">
+              <d:ctr name="AdcChannel_0" type="IDENTIFIABLE">
+                <d:var name="AdcChannelId" type="INTEGER" value="0"/>
+              </d:ctr>
+            </d:lst>
+          </d:ctr>
+        </d:lst>
+      </d:ctr>
+    </d:ctr>
+  </d:ctr>
+</datamodel>
