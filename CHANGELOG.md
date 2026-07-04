@@ -6,6 +6,30 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.91.0] — 2026-07-04 — feat(lang): Makefile, CMake, and reStructuredText support
+
+### Added
+
+- **Makefile support** (`.mk`, `Makefile`/`makefile`/`GNUmakefile`): rules
+  index as `function` named by their target list, `VAR = value` assignments
+  as `variable`, `define` blocks as `macro`, `include` lines as `import`,
+  `ifeq`/`ifdef` blocks as `if`.
+- **CMake support** (`.cmake`, `CMakeLists.txt`): `function()`/`macro()`
+  definitions named by their first argument; every command call (`set`,
+  `add_library`, …) as `call_statement` named by the command identifier;
+  `if`/`foreach`/`while` blocks get nested control-flow node ids like code.
+- **reStructuredText support** (`.rst`, `.rest`): sections named by title
+  (nested sections nest), paragraphs/list items by normalized text snippet,
+  `.. directive::` blocks as `macro_call`, `:field:` entries as `pair`,
+  substitution definitions as `variable` — documentation that mentions a
+  symbol is reachable by the same `FIND` sweep that finds it in code.
+
+### Changed
+
+- The registry's file-name fallback now also applies when a path's extension
+  is *unclaimed* (not just missing), so a plugin can claim the full
+  `cmakelists.txt` name without owning the `txt` extension.
+
 ## [0.90.0] — 2026-07-04 — feat(lang): justfile + INI support; extensionless file-name matching
 
 ### Added

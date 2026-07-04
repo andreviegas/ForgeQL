@@ -28,7 +28,7 @@ default-members = [
 ]
 
 [workspace.package]
-version   = "0.90.0"
+version   = "0.91.0"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"
@@ -101,6 +101,12 @@ tree-sitter-dbc  = "0.1"
 tree-sitter-ini  = "1.4"
 # just command-runner files (justfile).
 tree-sitter-just = "0.2"
+# GNU Make (Makefile, GNUmakefile, *.mk).
+tree-sitter-make = "1.1"
+# CMake (CMakeLists.txt, *.cmake).
+tree-sitter-cmake = "0.7"
+# reStructuredText (.rst) documentation.
+tree-sitter-rst  = "0.2"
 
 # --- DSL parsing ---
 pest             = "2"

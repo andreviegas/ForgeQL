@@ -1,0 +1,33 @@
+{
+  "language": {
+    "name": "rst",
+    "extensions": ["rst", "rest"],
+    "tree_sitter_grammar": "tree-sitter-rst"
+  },
+
+  "syntax": {
+    "root_node": "document",
+    "skip_node_kinds": []
+  },
+
+  "capabilities": {
+    "has_goto": false,
+    "has_increment_decrement": false,
+    "has_implicit_truthiness": false,
+    "params_share_body_scope": false
+  },
+
+  "kind_map": {
+    "section": "section",
+    "title": "heading",
+    "paragraph": "paragraph",
+    "directive": "macro_call",
+    "literal_block": "code_block",
+    "doctest_block": "code_block",
+    "block_quote": "block_quote",
+    "list_item": "list_item",
+    "field": "pair",
+    "substitution_definition": "variable",
+    "comment": "comment"
+  }
+}

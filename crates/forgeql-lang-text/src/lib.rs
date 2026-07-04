@@ -18,6 +18,9 @@
 //! | [`dbc`]    | `dbc` (Vector CAN database)                       |
 //! | [`ini`]    | `ini`, `cfg`, `.editorconfig`, `.gitconfig`       |
 //! | [`just`]   | `just`, `justfile` / `.justfile` / `Justfile`     |
+//! | [`make`]   | `mk`, `Makefile` / `makefile` / `GNUmakefile`     |
+//! | [`cmake`]  | `cmake`, `CMakeLists.txt`                         |
+//! | [`rst`]    | `rst`, `rest` (reStructuredText)                  |
 //!
 //! All of them map onto the same generic addressable kinds (`object`,
 //! `pair`, `array`, `section`, `heading`, `comment`, …), so the core engine
@@ -26,11 +29,14 @@
 
 #![allow(clippy::doc_markdown)]
 
+pub mod cmake;
 pub mod dbc;
 pub mod ini;
 pub mod json;
 pub mod just;
+pub mod make;
 pub mod markdown;
+pub mod rst;
 pub mod toml;
 pub mod xml;
 pub mod yaml;
@@ -39,11 +45,14 @@ use std::sync::Arc;
 
 use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
 
+pub use cmake::CmakeLanguage;
 pub use dbc::DbcLanguage;
 pub use ini::IniLanguage;
 pub use json::JsonLanguage;
 pub use just::JustLanguage;
+pub use make::MakeLanguage;
 pub use markdown::MarkdownLanguage;
+pub use rst::RstLanguage;
 pub use toml::TomlLanguage;
 pub use xml::XmlLanguage;
 pub use yaml::YamlLanguage;
@@ -53,11 +62,14 @@ pub use yaml::YamlLanguage;
 #[must_use]
 pub fn text_languages() -> Vec<Arc<dyn LanguageSupport>> {
     vec![
+        Arc::new(CmakeLanguage),
         Arc::new(DbcLanguage),
         Arc::new(IniLanguage),
         Arc::new(JsonLanguage),
         Arc::new(JustLanguage),
+        Arc::new(MakeLanguage),
         Arc::new(MarkdownLanguage),
+        Arc::new(RstLanguage),
         Arc::new(TomlLanguage),
         Arc::new(XmlLanguage),
         Arc::new(YamlLanguage),

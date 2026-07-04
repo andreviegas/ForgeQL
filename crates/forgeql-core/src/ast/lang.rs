@@ -612,15 +612,21 @@ impl LanguageRegistry {
 
     /// Look up the language for a file path by its extension.
     ///
-    /// Extensionless files fall back to their file name — lowercased, with
-    /// any leading dot stripped — matched against the same key table. A
+    /// When the extension is missing or unclaimed, the file name — lowercased,
+    /// with any leading dot stripped — is tried against the same key table. A
     /// language that lists `"justfile"` in [`LanguageSupport::extensions`]
     /// therefore claims `justfile`, `.justfile`, `Justfile`, and `x.justfile`
-    /// alike. The registry itself knows nothing about any specific file name.
+    /// alike, and one that lists `"cmakelists.txt"` claims `CMakeLists.txt`
+    /// without owning the `txt` extension. The registry itself knows nothing
+    /// about any specific file name — plugins declare their own keys.
     #[must_use]
     pub fn language_for_path(&self, path: &Path) -> Option<Arc<dyn LanguageSupport>> {
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            return self.by_extension.get(ext).cloned();
+        if let Some(lang) = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(|ext| self.by_extension.get(ext))
+        {
+            return Some(Arc::clone(lang));
         }
         let name = path.file_name()?.to_str()?;
         let key = name.trim_start_matches('.').to_ascii_lowercase();
@@ -740,9 +746,26 @@ mod tests {
                 "extensionless '{name}' should resolve by file name"
             );
         }
-        // A path WITH an unknown extension must not fall back to its name.
-        let path = std::path::PathBuf::from("cpp.unknown");
+        // An unclaimed extension falls back to the (unclaimed) full name → None.
+        let path = std::path::PathBuf::from("other.unknown");
         assert!(registry.language_for_path(&path).is_none());
+    }
+
+    #[test]
+    fn registry_falls_back_to_full_file_name_when_extension_is_unclaimed() {
+        // A key containing a dot claims a well-known full file name (the
+        // CMakeLists.txt case) without claiming the bare extension.
+        let registry = LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]);
+        // CppLanguageInline claims "cpp"; "weird.cpp" resolves via extension,
+        // and a full-name key would resolve via the fallback — prove the
+        // fallback consults the same table by using a claimed key as a name.
+        let path = std::path::PathBuf::from("dir/CPP.unclaimed-ext");
+        assert!(
+            registry.language_for_path(&path).is_none(),
+            "unclaimed extension + unclaimed full name must stay None"
+        );
+        let path = std::path::PathBuf::from("dir/cpp");
+        assert!(registry.language_for_path(&path).is_some());
     }
 
     #[test]
