@@ -1726,3 +1726,47 @@ fn find_symbols_matches_case_insensitive_flag_returns_all_matches() {
         other => panic!("expected Query, got: {other:?}"),
     }
 }
+
+/// BUG-016 residual: a purely numeric `TO` destination is rejected with
+/// guidance instead of silently creating a file named after the number.
+#[test]
+fn move_lines_to_numeric_dest_rejected() {
+    let (mut engine, session_id, dir) = engine_with_session();
+    let ops = parser::parse("MOVE LINES 1-2 OF 'motor_control.cpp' TO 3").expect("parse");
+    let coords = SessionCoords::from_session_id(&session_id).expect("valid session_id");
+    let err = engine
+        .execute(auth(AuthContext::Tester), Some(&coords), &ops[0])
+        .expect_err("numeric TO destination must be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("must be a file path, not a number"),
+        "unexpected error: {msg}"
+    );
+    assert!(
+        !dir.path().join("3").exists(),
+        "no file named '3' may be created"
+    );
+}
+
+/// BUG-014 residual: whole-file deletion (`CHANGE FILE … WITH NOTHING`) is
+/// exempt from the indexed-file gate — a ForgeQL-created file can be removed
+/// from within ForgeQL.
+#[test]
+fn change_file_with_nothing_deletes_indexed_file() {
+    let (mut engine, session_id, dir) = engine_with_session();
+    let _ = execute_fql(
+        &mut engine,
+        &session_id,
+        "COPY LINES 1-2 OF 'motor_control.cpp' TO '_scratch_delete_me.rs'",
+    );
+    assert!(dir.path().join("_scratch_delete_me.rs").exists());
+    let _ = execute_fql(
+        &mut engine,
+        &session_id,
+        "CHANGE FILE '_scratch_delete_me.rs' WITH NOTHING",
+    );
+    assert!(
+        !dir.path().join("_scratch_delete_me.rs").exists(),
+        "WITH NOTHING must delete the file even though it is indexed"
+    );
+}

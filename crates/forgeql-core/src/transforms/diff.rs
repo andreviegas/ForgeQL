@@ -839,6 +839,7 @@ mod tests {
         let fe = FileEdit {
             path,
             edits: vec![ByteRangeEdit::new(4..14, "turnOnLight")],
+            delete: false,
         };
         let plan = TransformPlan {
             file_edits: vec![fe],
@@ -1032,6 +1033,7 @@ mod tests {
             file_edits: vec![FileEdit {
                 path,
                 edits: vec![ByteRangeEdit::new(byte_start..byte_end, replacement)],
+                delete: false,
             }],
             suggestions: vec![],
         };
@@ -1078,6 +1080,7 @@ mod tests {
         let edits = vec![FileEdit {
             path,
             edits: vec![ByteRangeEdit::new(insert_at..insert_at, "  { \"c\": 3 }\n")],
+            delete: false,
         }];
 
         // Mock addresser: every queried line resolves to node "nABC.0009"

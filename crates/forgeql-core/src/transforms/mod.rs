@@ -53,6 +53,11 @@ impl ByteRangeEdit {
 pub struct FileEdit {
     pub path: PathBuf,
     pub edits: Vec<ByteRangeEdit>,
+    /// When true, `apply()` removes the file from disk instead of writing the
+    /// edited buffer (`CHANGE FILE … WITH NOTHING`). The `edits` still carry
+    /// the full-content removal so the boundary diff shows what was deleted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub delete: bool,
 }
 
 impl FileEdit {
@@ -175,12 +180,16 @@ impl TransformPlan {
     pub fn merge_by_file(&mut self) -> anyhow::Result<()> {
         use std::collections::HashMap;
 
-        let mut by_path: HashMap<PathBuf, Vec<ByteRangeEdit>> = HashMap::new();
+        let mut by_path: HashMap<PathBuf, (Vec<ByteRangeEdit>, bool)> = HashMap::new();
         for fe in self.file_edits.drain(..) {
-            by_path.entry(fe.path).or_default().extend(fe.edits);
+            let entry = by_path.entry(fe.path).or_default();
+            entry.0.extend(fe.edits);
+            // A whole-file deletion must survive the merge (BUG-014): any
+            // FileEdit flagged delete keeps the merged edit a deletion.
+            entry.1 |= fe.delete;
         }
 
-        for (path, mut edits) in by_path {
+        for (path, (mut edits, delete)) in by_path {
             // Sort descending by start offset.
             edits.sort_by(|a, b| b.start.cmp(&a.start));
 
@@ -202,7 +211,11 @@ impl TransformPlan {
                 }
             }
 
-            self.file_edits.push(FileEdit { path, edits });
+            self.file_edits.push(FileEdit {
+                path,
+                edits,
+                delete,
+            });
         }
 
         Ok(())
@@ -246,9 +259,15 @@ impl TransformPlan {
             } else {
                 Vec::new()
             };
-            let mut buf = original.clone();
-            apply_edits_to_buffer(&mut buf, &file_edit.edits);
-            crate::workspace::file_io::write_atomic(&file_edit.path, &buf)?;
+            if file_edit.delete {
+                // `CHANGE FILE … WITH NOTHING`: remove the file instead of
+                // writing an emptied buffer. `original` is kept for rollback.
+                std::fs::remove_file(&file_edit.path)?;
+            } else {
+                let mut buf = original.clone();
+                apply_edits_to_buffer(&mut buf, &file_edit.edits);
+                crate::workspace::file_io::write_atomic(&file_edit.path, &buf)?;
+            }
 
             drop(originals.insert(file_edit.path.clone(), original));
         }
@@ -417,6 +436,7 @@ mod tests {
                 ByteRangeEdit::new(8..11, "b"),
                 ByteRangeEdit::new(4..6, "c"),
             ],
+            delete: false,
         };
         fe.sort_reverse();
         assert_eq!(fe.edits[0].start, 8);
@@ -437,6 +457,7 @@ mod tests {
                 ByteRangeEdit::new(5..15, "turnOnLight"), // first occurrence
                 ByteRangeEdit::new(19..29, "turnOnLight"), // second occurrence
             ],
+            delete: false,
         };
         fe.sort_reverse(); // puts 19..29 before 5..15
         let mut buf = source.to_vec();
@@ -456,6 +477,7 @@ mod tests {
         let edits = vec![FileEdit {
             path: PathBuf::from("fake.rs"),
             edits: vec![ByteRangeEdit::new(0..span_len, "fn f() {")],
+            delete: false,
         }];
         let mut originals: HashMap<PathBuf, Vec<u8>> = HashMap::new();
         drop(originals.insert(PathBuf::from("fake.rs"), original));
@@ -470,6 +492,7 @@ mod tests {
         let edits = vec![FileEdit {
             path: PathBuf::from("fake.rs"),
             edits: vec![ByteRangeEdit::new(2..2, "x\n")],
+            delete: false,
         }];
         assert_eq!(lines_removed(&edits, &originals), 0);
     }
@@ -483,14 +506,17 @@ mod tests {
                 FileEdit {
                     path: "file.cpp".into(),
                     edits: vec![ByteRangeEdit::new(0..3, "AAA")],
+                    delete: false,
                 },
                 FileEdit {
                     path: "other.cpp".into(),
                     edits: vec![ByteRangeEdit::new(0..5, "BBB")],
+                    delete: false,
                 },
                 FileEdit {
                     path: "file.cpp".into(),
                     edits: vec![ByteRangeEdit::new(10..15, "CCC")],
+                    delete: false,
                 },
             ],
             suggestions: vec![],
@@ -510,16 +536,39 @@ mod tests {
     }
 
     #[test]
+    fn merge_by_file_preserves_delete_flag() {
+        // BUG-014 regression: merge_by_file used to rebuild FileEdits with a
+        // hardcoded `delete: false`, silently downgrading a whole-file
+        // deletion into a truncation.
+        let mut plan = TransformPlan {
+            file_edits: vec![FileEdit {
+                path: "gone.cpp".into(),
+                edits: vec![ByteRangeEdit::new(0..5, "")],
+                delete: true,
+            }],
+            suggestions: Vec::new(),
+        };
+        plan.merge_by_file().expect("merge should succeed");
+        assert_eq!(plan.file_edits.len(), 1);
+        assert!(
+            plan.file_edits[0].delete,
+            "delete flag must survive merge_by_file"
+        );
+    }
+
+    #[test]
     fn merge_by_file_detects_overlap() {
         let mut plan = TransformPlan {
             file_edits: vec![
                 FileEdit {
                     path: "file.cpp".into(),
                     edits: vec![ByteRangeEdit::new(5..15, "X")],
+                    delete: false,
                 },
                 FileEdit {
                     path: "file.cpp".into(),
                     edits: vec![ByteRangeEdit::new(10..20, "Y")], // overlaps 5..15
+                    delete: false,
                 },
             ],
             suggestions: vec![],
@@ -539,10 +588,12 @@ mod tests {
                 FileEdit {
                     path: "file.cpp".into(),
                     edits: vec![ByteRangeEdit::new(0..5, "A")],
+                    delete: false,
                 },
                 FileEdit {
                     path: "file.cpp".into(),
                     edits: vec![ByteRangeEdit::new(5..10, "B")],
+                    delete: false,
                 },
             ],
             suggestions: vec![],
@@ -561,6 +612,7 @@ mod tests {
                     ByteRangeEdit::new(0..10, "line1\nline2\nline3\n"),
                     ByteRangeEdit::new(20..30, "single_line"),
                 ],
+                delete: false,
             }],
             suggestions: vec![],
         };
@@ -574,6 +626,7 @@ mod tests {
             file_edits: vec![FileEdit {
                 path: "file.cpp".into(),
                 edits: vec![ByteRangeEdit::new(0..10, "")],
+                delete: false,
             }],
             suggestions: vec![],
         };

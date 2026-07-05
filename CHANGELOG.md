@@ -6,6 +6,30 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.91.7] — 2026-07-05 — fix(mutate): MOVE/COPY numeric-dest validation; WITH NOTHING deletes indexed files; condition_text doc relabel
+
+### Fixed
+
+- **BUG-016 residual**: `MOVE LINES … TO 3` (or any purely numeric `TO`
+  destination) silently created a file literally named `3`. Both `MOVE LINES`
+  and `COPY LINES` now reject a numeric destination with guidance pointing at
+  `TO '<path>' AT <line>` — input validation, not path policy.
+- **BUG-014 residual**: `CHANGE FILE … WITH NOTHING` now actually deletes.
+  Three layers were broken: the indexed-file gate blocked the verb entirely;
+  beneath that `resolve_delete` only *truncated* the file to 0 bytes (the
+  original ghost-file bug) — it never unlinked; and `merge_by_file()` rebuilt
+  every `FileEdit` with a hardcoded `delete: false`, silently downgrading the
+  deletion again. Deletion is now exempt from the gate (naming a file
+  explicitly for removal is not raw-text editing; the diff shows the deleted
+  content), the merge preserves the flag, `apply()` removes the file from
+  disk (`FileEdit.delete`), and COMMIT stages the removal
+  (`index.remove_path`) instead of failing on the missing path.
+- **BUG-023 (docs)**: the enrichment tables in `doc/syntax.md` and the agent
+  guides described `condition_text` as "raw condition expression text". It is
+  a normalized *skeleton* (operands alpha-renamed for shape comparison,
+  e.g. `a||b&&c`); grammars without a `condition` field (CMake, Make, C++
+  range-`for`) name rows by the raw first line instead. Docs now say so.
+
 ## [0.91.6] — 2026-07-05 — fix(find): string/boolean WHERE fields projected into FIND output (BUG-024)
 
 ### Fixed

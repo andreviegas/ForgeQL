@@ -169,6 +169,7 @@ fn resolve_with_content(abs_path: &Path, content: &str) -> Result<FileEdit> {
     Ok(FileEdit {
         path: abs_path.to_path_buf(),
         edits: vec![ByteRangeEdit::new(0..len, content)],
+        delete: false,
     })
 }
 
@@ -200,6 +201,7 @@ fn resolve_matching(
         return Ok(FileEdit {
             path: abs_path.to_path_buf(),
             edits: vec![],
+            delete: false,
         });
     }
 
@@ -217,6 +219,7 @@ fn resolve_matching(
     Ok(FileEdit {
         path: abs_path.to_path_buf(),
         edits,
+        delete: false,
     })
 }
 
@@ -244,6 +247,7 @@ fn resolve_lines(
     Ok(FileEdit {
         path: abs_path.to_path_buf(),
         edits: vec![ByteRangeEdit::new(byte_start..byte_end, content)],
+        delete: false,
     })
 }
 
@@ -254,7 +258,10 @@ fn resolve_delete(rel_path: &str, abs_path: &Path) -> Result<FileEdit> {
     let source = crate::workspace::file_io::read_bytes(abs_path)?;
     Ok(FileEdit {
         path: abs_path.to_path_buf(),
+        // Full-content removal edit: kept so the boundary diff shows the
+        // deleted lines; `delete: true` makes apply() unlink the file.
         edits: vec![ByteRangeEdit::new(0..source.len(), "")],
+        delete: true,
     })
 }
 

@@ -210,7 +210,7 @@ Computed at index time. Use in `WHERE` clauses like any other field.
 |---|---|---|
 | `condition_tests` | `if`, `while`, `for`, `do` | Count of boolean sub-expressions |
 | `paren_depth` | `if`, `while`, `for`, `do` | Max parentheses nesting |
-| `condition_text` | `if`, `while`, `for`, `do` | Raw condition expression text |
+| `condition_text` | `if`, `while`, `for`, `do` | Normalized condition *skeleton* (operands alpha-renamed: `a||b&&c`) — NOT raw source; grammars without a `condition` field use the raw first line |
 | `has_catch_all` | `switch` | `"true"` if has a catch-all case |
 | `catch_all_kind` | `switch` | e.g. `"default"` |
 | `for_style` | `for` | `"traditional"` or `"range"` |

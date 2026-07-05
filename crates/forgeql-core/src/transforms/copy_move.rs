@@ -140,6 +140,7 @@ pub fn plan_move_lines(
     plan.file_edits.push(FileEdit {
         path: dst_abs.to_path_buf(),
         edits: vec![ByteRangeEdit::new(ins_byte..ins_byte, payload)],
+        delete: false,
     });
 
     // Deletion edit.  For same-file moves this is a second FileEdit on the
@@ -149,6 +150,7 @@ pub fn plan_move_lines(
     plan.file_edits.push(FileEdit {
         path: src_abs.to_path_buf(),
         edits: vec![ByteRangeEdit::new(del_start..del_end, "")],
+        delete: false,
     });
 
     Ok(plan)
@@ -189,6 +191,7 @@ fn insertion_plan(
         file_edits: vec![FileEdit {
             path: dst.to_path_buf(),
             edits: vec![ByteRangeEdit::new(ins_byte..ins_byte, payload)],
+            delete: false,
         }],
         suggestions: Vec::new(),
     }

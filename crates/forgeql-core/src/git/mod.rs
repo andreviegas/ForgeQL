@@ -294,7 +294,13 @@ pub fn stage_paths_and_commit(
                 worktree_root.display()
             )
         })?;
-        index.add_path(rel)?;
+        // A path that no longer exists on disk was deleted by the mutation
+        // (`CHANGE FILE … WITH NOTHING`) — stage the removal instead.
+        if abs.exists() {
+            index.add_path(rel)?;
+        } else {
+            index.remove_path(rel)?;
+        }
     }
     index.write()?;
     let tree_id = index.write_tree()?;

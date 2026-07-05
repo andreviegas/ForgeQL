@@ -34,7 +34,17 @@ impl ForgeQLEngine {
         // mutations (CHANGE NODE / DELETE NODE) route through here too but pass
         // gate_indexed = false, so they are never blocked. Override the block with
         // FORGEQL_ALLOW_CHANGE_FILE_INDEXED=1 (set by the VERIFY pre-commit script).
+        // BUG-014: whole-file DELETION (`WITH NOTHING`) is exempt — it is not
+        // raw-text editing of indexed content; the agent names the file
+        // explicitly, the diff reports the deletion, and reindex prunes it.
         if gate_indexed
+            && !matches!(
+                op,
+                ForgeQLIR::ChangeContent {
+                    target: crate::ir::ChangeTarget::Delete,
+                    ..
+                }
+            )
             && let Some(path) = first_blocked_indexed_path(
                 plan.file_edits.iter().map(|fe| fe.path.as_path()),
                 &self.lang_registry,
@@ -106,6 +116,19 @@ impl ForgeQLEngine {
     // COPY / MOVE lines
     // ===================================================================
 
+    /// Reject a `TO <dest>` argument that is purely numeric (BUG-016 footgun):
+    /// `MOVE LINES 25-30 OF 'f.rs' TO 3` would create a file literally named
+    /// `3` — a bare number almost certainly meant a line position, which is
+    /// spelled `AT <line>`. Mechanical input validation, not path policy.
+    fn reject_numeric_dest(dst: &str, verb: &str) -> Result<()> {
+        if !dst.is_empty() && dst.chars().all(|c| c.is_ascii_digit()) {
+            bail!(
+                "{verb} TO '{dst}': destination must be a file path, not a number. \
+             To position the lines within a file use {verb} … TO '<path>' AT {dst}."
+            );
+        }
+        Ok(())
+    }
     pub(super) fn exec_copy_lines(
         &mut self,
         session_id: Option<&str>,
@@ -126,6 +149,7 @@ impl ForgeQLEngine {
         };
 
         let src_abs = workspace.safe_path(src)?;
+        Self::reject_numeric_dest(dst, "COPY LINES")?;
         let dst_abs = workspace.safe_path(dst)?;
 
         let plan = match at {
@@ -156,6 +180,7 @@ impl ForgeQLEngine {
         };
 
         let src_abs = workspace.safe_path(src)?;
+        Self::reject_numeric_dest(dst, "MOVE LINES")?;
         let dst_abs = workspace.safe_path(dst)?;
 
         let plan = plan_move_lines(src, &src_abs, start, end, &dst_abs, at)?;
@@ -396,6 +421,7 @@ impl ForgeQLEngine {
             file_edits: vec![FileEdit {
                 path: abs_path,
                 edits: vec![ByteRangeEdit::new(insert_offset..insert_offset, insertion)],
+                delete: false,
             }],
             suggestions: Vec::new(),
         };

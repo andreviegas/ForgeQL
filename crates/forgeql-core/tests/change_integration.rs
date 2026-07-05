@@ -151,7 +151,7 @@ fn change_with_content_overwrites_existing_file() {
 // -----------------------------------------------------------------------
 
 #[test]
-fn change_delete_empties_file() {
+fn change_delete_removes_file() {
     let (_dir, ws) = setup_workspace();
     let cpp_rel = "motor_control.h";
     let abs_path = ws.root().join(cpp_rel);
@@ -161,11 +161,11 @@ fn change_delete_empties_file() {
     let plan = c.plan(&ws).expect("plan");
     let result = plan.apply().expect("apply");
 
-    // File is emptied (apply writes empty content).
-    let after = fs::read_to_string(&abs_path).expect("read");
-    assert!(after.is_empty());
+    // BUG-014: WITH NOTHING deletes the file from disk (it used to only
+    // truncate to 0 bytes, leaving a ghost entry).
+    assert!(!abs_path.exists(), "file must be removed from disk");
 
-    // Rollback restores it.
+    // Rollback restores the original content (write_atomic recreates it).
     result.rollback().expect("rollback");
     let restored = fs::read_to_string(&abs_path).expect("read");
     assert!(!restored.is_empty());
