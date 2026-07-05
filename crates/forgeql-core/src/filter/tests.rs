@@ -989,3 +989,90 @@ fn apply_clauses_exclude_combined_with_where() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name, "bar");
 }
+
+// -----------------------------------------------------------------------
+// FileEntry field resolution (FIND files predicates)
+// -----------------------------------------------------------------------
+
+fn make_file_entry(path: &str, size: u64) -> crate::result::FileEntry {
+    let path = PathBuf::from(path);
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_string();
+    crate::result::FileEntry {
+        path,
+        depth: None,
+        extension,
+        size,
+        count: None,
+    }
+}
+
+#[test]
+fn file_entry_where_name_matches_bare_file_name() {
+    // `FIND files WHERE name = 'Kconfig'` — the idiomatic first guess.
+    let mut items = vec![
+        make_file_entry("kernel/Kconfig", 100),
+        make_file_entry("kernel/Kconfig.smp", 200),
+        make_file_entry("kernel/sched.c", 300),
+    ];
+    let clauses = Clauses {
+        where_predicates: vec![Predicate {
+            field: "name".into(),
+            op: CompareOp::Eq,
+            value: PredicateValue::String("Kconfig".into()),
+        }],
+        ..Default::default()
+    };
+    apply_clauses(&mut items, &clauses);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].path, PathBuf::from("kernel/Kconfig"));
+}
+
+#[test]
+fn file_entry_where_name_like_matches_pattern() {
+    let mut items = vec![
+        make_file_entry("kernel/Kconfig", 100),
+        make_file_entry("kernel/Kconfig.smp", 200),
+        make_file_entry("kernel/sched.c", 300),
+    ];
+    let clauses = Clauses {
+        where_predicates: vec![Predicate {
+            field: "name".into(),
+            op: CompareOp::Like,
+            value: PredicateValue::String("Kconfig%".into()),
+        }],
+        ..Default::default()
+    };
+    apply_clauses(&mut items, &clauses);
+    assert_eq!(items.len(), 2);
+}
+
+#[test]
+fn file_entry_runtime_artifacts_detected() {
+    use crate::result::FileEntry;
+    for name in [
+        ".git",
+        ".forgeql-session",
+        ".forgeql-index",
+        "dir/.forgeql-columnar-delta",
+    ] {
+        assert!(
+            FileEntry::is_runtime_artifact(std::path::Path::new(name)),
+            "{name} should be a runtime artifact"
+        );
+    }
+    for name in [
+        ".gitignore",
+        ".gitattributes",
+        "Kconfig",
+        "src/.editorconfig",
+    ] {
+        assert!(
+            !FileEntry::is_runtime_artifact(std::path::Path::new(name)),
+            "{name} must NOT be filtered"
+        );
+    }
+}

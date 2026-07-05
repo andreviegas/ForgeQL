@@ -65,6 +65,7 @@ pub fn find_files(
 ) -> Vec<serde_json::Value> {
     workspace
         .files()
+        .filter(|p| !crate::result::FileEntry::is_runtime_artifact(p))
         .filter(|p| relative_glob_matches(p, glob, workspace.root()))
         .filter(|p| exclude.is_none_or(|ex| !relative_glob_matches(p, ex, workspace.root())))
         .map(|p| {

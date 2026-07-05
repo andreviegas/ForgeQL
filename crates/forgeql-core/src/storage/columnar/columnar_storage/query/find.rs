@@ -118,6 +118,11 @@ impl ColumnarStorage {
         // only for path + size.  These are never shadowed by the dirty overlay
         // because the dirty overlay only holds symbol segments.
         for (rel_path, size) in file_only {
+            // Session infrastructure, not source: the worktree gitfile pointer
+            // and forgeql's own runtime artifacts (`.forgeql-session`, …).
+            if crate::result::FileEntry::is_runtime_artifact(rel_path) {
+                continue;
+            }
             let ext = rel_path
                 .extension()
                 .and_then(|e| e.to_str())

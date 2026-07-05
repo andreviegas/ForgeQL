@@ -83,6 +83,9 @@ impl ClauseTarget for crate::result::FileEntry {
         match field {
             "path" | "file" => self.path.to_str(),
             "extension" | "ext" => Some(&self.extension),
+            // The bare file name — `FIND files WHERE name = 'Kconfig'` is the
+            // idiomatic first guess (mirrors `FIND symbols WHERE name`).
+            "name" => self.path.file_name().and_then(|n| n.to_str()),
             _ => None,
         }
     }

@@ -460,6 +460,19 @@ pub struct FileEntry {
     pub count: Option<usize>,
 }
 
+impl FileEntry {
+    /// True for session infrastructure that should never surface in a
+    /// `FIND files` listing: the worktree gitfile pointer (`.git`) and
+    /// forgeql's own runtime artifacts (`.forgeql-session`,
+    /// `.forgeql-index`, …). `COMMIT` already excludes the same set.
+    #[must_use]
+    pub fn is_runtime_artifact(path: &std::path::Path) -> bool {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n == ".git" || n.starts_with(".forgeql-"))
+    }
+}
+
 /// Internal stats for one loaded session, produced by `SHOW STATS`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStats {

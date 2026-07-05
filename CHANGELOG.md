@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.91.3] — 2026-07-05 — fix(find): FIND files WHERE name; hide runtime artifacts
+
+### Fixed
+
+- **`FIND files WHERE name = 'Kconfig'` now works.** File rows only exposed
+  `path`/`file` and `extension`/`ext` fields; `name` — the idiomatic first
+  guess, mirroring `FIND symbols WHERE name` — silently matched nothing
+  (agents reported "FIND files can't find some files"; non-indexed files were
+  in fact tracked since FQOV v8, but the natural predicate didn't resolve).
+  `name` now matches the bare file name and works with `LIKE`/`MATCHES`.
+- `FIND files` no longer lists session infrastructure: the worktree gitfile
+  pointer (`.git`) and forgeql runtime artifacts (`.forgeql-session`, …) are
+  filtered from both the overlay fast path and the filesystem-walk path
+  (query-time only — no re-index needed). `COMMIT` already excluded the same
+  set.
+
 ## [0.91.2] — 2026-07-05 — fix(lang): gaps found exercising the text formats live on zephyr
 
 Found by exercising every new format through `run_fql` against the zephyr
