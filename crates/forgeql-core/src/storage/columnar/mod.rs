@@ -102,7 +102,14 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///          item with an interposed `#[...]` attribute is still detected as documented
 ///  20 — comment_block rows carry a `block_label` field (first-member snippet +
 ///          member count) for SHOW outline display; identity name stays `comment_block`
-pub const ENRICH_VER: u32 = 20;
+///  21 — CMake/Make control-flow rows: `control_flow` config sections added, and
+///          control-flow rows from grammars without a `condition` field are named
+///          by the construct's first line (previously nameless → unfindable).
+///          v20 segments for .cmake/Makefile files lack these rows entirely —
+///          this is the constant to bump when a change alters WHICH ROWS a file
+///          produces (segments cache per blob under `{provider}-v{ENRICH_VER}/`;
+///          the overlay SCHEMA_VERSION alone does not re-index cached segments).
+pub const ENRICH_VER: u32 = 21;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

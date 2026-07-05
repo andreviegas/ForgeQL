@@ -164,6 +164,10 @@ fn outline_is_structural(kind: &str) -> bool {
             // visible only with the `ALL` flag.
             | "object"
             | "array"
+            // Document containers (Markdown/reStructuredText) — sections ARE
+            // the document structure, so a plain `SHOW outline` on a doc file
+            // shows its heading tree rather than nothing.
+            | "section"
     )
 }
 

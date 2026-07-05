@@ -1,7 +1,7 @@
 [
   {
     "alias": "golden",
-    "expect_symbols_indexed": 3084394,
+    "expect_symbols_indexed": 3089142,
     "use": "zephyr-andre.zephyr-main"
   },
   {
@@ -115,7 +115,7 @@
     "name": "G11_group_by_kind_top3"
   },
   {
-    "expect_row_count": 8,
+    "expect_row_count": 9,
     "expect_rows": [
       {"count": 810, "kind": "variable"},
       {"count": 524, "kind": "macro_call"},
@@ -244,7 +244,7 @@
       {"count": 282718, "kind": "comment"},
       {"count": 254241, "kind": "macro"},
       {"count": 214108, "kind": "struct"},
-      {"count": 160701, "kind": "if"}
+      {"count": 165057, "kind": "if"}
     ],
     "fql": "FIND symbols GROUP BY fql_kind ORDER BY count DESC LIMIT 7",
     "name": "G23_group_by_kind_whole_repo_top7"
@@ -270,7 +270,7 @@
       {"count": 1004, "kind": "struct"},
       {"count": 825,  "kind": "function"},
       {"count": 784,  "kind": "number"},
-      {"count": 746,  "kind": "if"}
+      {"count": 761,  "kind": "if"}
     ],
     "fql": "FIND symbols GROUP BY fql_kind IN 'kernel/**' HAVING count >= 100 ORDER BY count DESC",
     "name": "G25_group_by_kind_kernel_having_100"
@@ -931,8 +931,8 @@
   },
   {
     "expect_rows": [
-      {"enclosing_fn": "read_virt",                    "kind": "for", "line": 83,  "name": "", "path": "modules/thrift/src/thrift/server/TFDServer.cpp"},
-      {"enclosing_fn": "TFDServer::interruptChildren", "kind": "for", "line": 214, "name": "", "path": "modules/thrift/src/thrift/server/TFDServer.cpp"}
+      {"enclosing_fn": "read_virt",                    "kind": "for", "line": 83,  "name": "for (auto &pfd : pollfds) {", "path": "modules/thrift/src/thrift/server/TFDServer.cpp"},
+      {"enclosing_fn": "TFDServer::interruptChildren", "kind": "for", "line": 214, "name": "for (auto c : children) {",   "path": "modules/thrift/src/thrift/server/TFDServer.cpp"}
     ],
     "expect_total": 2,
     "fql": "FIND symbols WHERE for_style = 'range' IN 'modules/thrift/**' ORDER BY line ASC LIMIT 2",
@@ -2237,7 +2237,7 @@
   },
   {
     "alias": "golden-python",
-    "expect_symbols_indexed": 3116758,
+    "expect_symbols_indexed": 3118871,
     "use": "pytorch-andre.pytorch-frozen"
   },
   {

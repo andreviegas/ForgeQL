@@ -10,6 +10,10 @@
     "skip_node_kinds": []
   },
 
+  "definitions": {
+    "function_kinds": ["message"]
+  },
+
   "capabilities": {
     "has_goto": false,
     "has_increment_decrement": false,

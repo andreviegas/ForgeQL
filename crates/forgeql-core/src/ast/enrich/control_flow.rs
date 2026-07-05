@@ -90,10 +90,18 @@ impl NodeEnricher for ControlFlowEnricher {
         }
 
         // Name = the skeleton (or raw condition text if no condition)
-        let name = fields
+        let mut name = fields
             .get("condition_text")
             .cloned()
             .unwrap_or_else(|| condition_text_raw.clone());
+        // Grammars whose control-flow nodes carry no `condition` field
+        // (CMake `if_condition`, Make `conditional`, …) would otherwise
+        // produce a nameless row that FIND cannot match. Fall back to the
+        // construct's own first line — mechanical and language-agnostic.
+        if name.trim().is_empty() {
+            let text = node_text(ctx.source, ctx.node);
+            name = text.lines().next().unwrap_or_default().trim().to_string();
+        }
 
         vec![ExtraRow {
             name,

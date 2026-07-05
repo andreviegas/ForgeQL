@@ -10,6 +10,15 @@
     "skip_node_kinds": []
   },
 
+  "definitions": {
+    "function_kinds": ["function_def", "macro_def"]
+  },
+
+  "control_flow": {
+    "kinds": ["if_condition", "foreach_loop", "while_loop"],
+    "for_style_map": [["foreach_loop", "range"]]
+  },
+
   "capabilities": {
     "has_goto": false,
     "has_increment_decrement": false,

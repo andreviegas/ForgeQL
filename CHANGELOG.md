@@ -6,6 +6,49 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.91.2] — 2026-07-05 — fix(lang): gaps found exercising the text formats live on zephyr
+
+Found by exercising every new format through `run_fql` against the zephyr
+corpus (mutations under `BEGIN TRANSACTION`, rolled back).
+
+### Fixed
+
+- **CMake/Make control flow was not addressable**: `if()`/`foreach()`/
+  `while()` blocks and Make conditionals had `kind_map` entries but no
+  `control_flow` config section — and only that section makes the indexer
+  emit control-flow rows. Both configs now declare it. Two follow-on gaps
+  surfaced while verifying at zephyr scale:
+  - control-flow rows from grammars without a `condition` field (CMake,
+    Make) were emitted **nameless** — unfindable by `FIND`. The enricher now
+    falls back to naming them by the construct's first line
+    (`if(CONFIG_USERSPACE OR CONFIG_DEVICE_DEPS)`).
+  - bumping the overlay `SCHEMA_VERSION` alone did **not** re-index: per-file
+    segments cache under `{provider}-v{ENRICH_VER}/` keyed by blob hash, so
+    rebuilt overlays reassembled the stale segments. `ENRICH_VER` (20 → 21)
+    is the constant that invalidates row *content*; the overlay version
+    (9 → 11) and `CachedIndex` version (27 → 30) invalidate their own layers.
+  Result on zephyr: +4,748 control-flow rows (3,084,394 → 3,089,142).
+- **`SHOW body` could not resolve text-format definitions**: `FIND` reported
+  a Makefile rule as a `function`, but `SHOW body OF 'clean'` failed —
+  body resolution reads `definitions.function_kinds`, which none of the new
+  configs declared. Now: Make `rule`, CMake `function_def`/`macro_def`,
+  just `recipe`, DBC `message`.
+- **Default `SHOW outline` was empty for Markdown/reStructuredText**:
+  `section` was missing from the structural-kind filter (pre-existing for
+  Markdown), so doc files outlined as nothing without an explicit
+  `WHERE fql_kind` or `ALL`. Sections now outline by default.
+
+### Verified working live (zephyr, 0.91.1 binary)
+
+- `.editorconfig` (extensionless dotfile) fully indexed via file-name
+  fallback; CHANGE NODE on its pairs works.
+- CHANGE/INSERT/DELETE NODE on `.cmake`, Makefile rules (tabs and `$(VAR)`
+  preserved through heredocs), `.rst` paragraphs (text-named nodes get a
+  fresh `node_id`, surfaced via `new_node_id`); ordinal remapping stays
+  consistent across sibling inserts/deletes; ROLLBACK TRANSACTION restores.
+- One `FIND` returns Makefile rules and C functions side by side;
+  `FIND usages OF 'zephyr_library_sources_ifdef'` sweeps all CMakeLists.txt.
+
 ## [0.91.1] — 2026-07-04 — fix(index): invalidate cached indexes built without the new text formats
 
 ### Fixed

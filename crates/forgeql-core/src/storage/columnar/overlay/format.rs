@@ -35,7 +35,15 @@ pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 ///   Make, CMake, reStructuredText in 0.87–0.91), so overlays built by older
 ///   binaries are missing every row those files now contribute. Bumping the
 ///   version forces `warm_or_open` to rebuild them with the full registry.
-pub(crate) const SCHEMA_VERSION: u32 = 9;
+/// - **10**: no layout change — content invalidation. CMake and Make gained
+///   `control_flow` config sections, so `if()`/`foreach()`/`while()` blocks
+///   and Make conditionals now emit addressable control-flow rows that v9
+///   overlays are missing.
+/// - **11**: no layout change — content invalidation. Control-flow rows from
+///   grammars without a `condition` field (CMake, Make) were emitted nameless
+///   in v10 (unfindable by FIND); they are now named by the construct's first
+///   line.
+pub(crate) const SCHEMA_VERSION: u32 = 11;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;

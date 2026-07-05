@@ -66,6 +66,10 @@ use crate::ast::lang::MacroDef;
 ///   28. Language registry expansion (0.87–0.91): structured-text formats (XML
 ///       family, DBC, INI, justfile, Make, `CMake`, reStructuredText) are now
 ///       indexed — caches built by older binaries are missing all their rows.
+///   29. `CMake`/Make `control_flow` config sections added: `if()`/`foreach()`/
+///       `while()` blocks and Make conditionals now emit addressable rows.
+///   30. Control-flow rows from grammars without a `condition` field are now
+///       named by the construct's first line instead of being nameless.
 ///
 /// # ⚠ DEAD CODE — NOT IN USE (as of 0.49.10)
 ///
@@ -79,7 +83,7 @@ use crate::ast::lang::MacroDef;
 /// TODO: remove `CachedIndex`, `CURRENT_VERSION`, `persist_to_cache`, and the
 /// entire `.forgeql-index` on-disk format once the legacy `SymbolTable` build
 /// path is fully retired.
-pub const CURRENT_VERSION: u32 = 28;
+pub const CURRENT_VERSION: u32 = 30;
 
 // -----------------------------------------------------------------------
 // CachedIndex
