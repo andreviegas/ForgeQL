@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.91.6] — 2026-07-05 — fix(find): string/boolean WHERE fields projected into FIND output (BUG-024)
+
+### Fixed
+
+- **BUG-024**: filtering on a string or boolean enrichment field
+  (`WHERE mixed_logic = 'true'`, `WHERE cast_style = 'as_cast'`) returned rows
+  that never showed the filtered value — only numeric filters projected their
+  field. `detect_metric_hint` now falls back to any remaining non-core WHERE
+  field after the numeric and ORDER BY priorities, so the value you filtered
+  on is always visible in the output row (the display path was already
+  string-safe). Core row-identity fields (`fql_kind`, `language`, `path`, …)
+  are excluded from metric projection.
+
 ## [0.91.5] — 2026-07-05 — fix(query): multiple EXCLUDE clauses are all honored (BUG-017)
 
 ### Fixed

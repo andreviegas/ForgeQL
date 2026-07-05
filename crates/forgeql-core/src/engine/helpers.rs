@@ -81,13 +81,29 @@ pub(crate) const fn mutation_op_name(op: &ForgeQLIR) -> &'static str {
     }
 }
 
-/// Detect the first numeric WHERE predicate on a non-core enrichment field.
+/// Detect the enrichment field whose value should surface as the metric column.
 ///
-/// Returns the field name (e.g. `"member_count"`, `"param_count"`) so the
-/// compact renderer can show that value instead of `usages`.  Falls back
-/// to `ORDER BY` field when no numeric WHERE is present.
+/// Returns the field name (e.g. `"member_count"`, `"cast_style"`) so the
+/// compact renderer shows that value instead of `usages`. Priority: first
+/// numeric WHERE predicate on a non-core field, then the `ORDER BY` field,
+/// then (BUG-024) any remaining string/boolean WHERE on a non-core field —
+/// so the value you filtered on is always visible in the output row.
 pub(crate) fn detect_metric_hint(clauses: &Clauses) -> Option<String> {
-    const CORE_FIELDS: &[&str] = &["name", "node_kind", "path", "line", "usages"];
+    // Row-identity fields that already have their own output column — never
+    // hijack the metric column for these.
+    const CORE_FIELDS: &[&str] = &[
+        "name",
+        "node_kind",
+        "fql_kind",
+        "kind",
+        "language",
+        "lang",
+        "path",
+        "file",
+        "extension",
+        "line",
+        "usages",
+    ];
 
     // Priority 1: numeric WHERE on enrichment field.
     for pred in &clauses.where_predicates {
@@ -103,6 +119,17 @@ pub(crate) fn detect_metric_hint(clauses: &Clauses) -> Option<String> {
         && !CORE_FIELDS.contains(&order.field.as_str())
     {
         return Some(order.field.clone());
+    }
+
+    // Priority 3: any remaining (string/boolean) WHERE on an enrichment field —
+    // BUG-024: `WHERE mixed_logic = 'true'` / `WHERE cast_style = 'as_cast'`
+    // now echo the filtered field back as the metric column, exactly like
+    // numeric filters always did. The display path is string-safe
+    // (`SymbolRow::metric_value` carries the verbatim field value).
+    for pred in &clauses.where_predicates {
+        if !CORE_FIELDS.contains(&pred.field.as_str()) {
+            return Some(pred.field.clone());
+        }
     }
 
     None
@@ -123,4 +150,56 @@ pub(crate) fn reject_text_filter(clauses: &Clauses) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::{CompareOp, OrderBy, Predicate, PredicateValue, SortDirection};
+
+    fn pred(field: &str, value: PredicateValue) -> Predicate {
+        Predicate {
+            field: field.into(),
+            op: CompareOp::Eq,
+            value,
+        }
+    }
+
+    #[test]
+    fn string_where_sets_metric_hint() {
+        // BUG-024: string/bool filters project their field like numeric ones.
+        let clauses = Clauses {
+            where_predicates: vec![
+                pred("fql_kind", PredicateValue::String("if".into())),
+                pred("mixed_logic", PredicateValue::String("true".into())),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(detect_metric_hint(&clauses).as_deref(), Some("mixed_logic"));
+    }
+
+    #[test]
+    fn numeric_where_takes_priority_over_string() {
+        let clauses = Clauses {
+            where_predicates: vec![
+                pred("cast_style", PredicateValue::String("as_cast".into())),
+                pred("lines", PredicateValue::Number(60)),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(detect_metric_hint(&clauses).as_deref(), Some("lines"));
+    }
+
+    #[test]
+    fn core_fields_never_become_the_metric() {
+        let clauses = Clauses {
+            where_predicates: vec![pred("fql_kind", PredicateValue::String("function".into()))],
+            order_by: Some(OrderBy {
+                field: "name".into(),
+                direction: SortDirection::Asc,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(detect_metric_hint(&clauses), None);
+    }
 }
