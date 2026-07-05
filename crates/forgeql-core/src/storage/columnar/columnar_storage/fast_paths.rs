@@ -75,7 +75,7 @@ impl ColumnarStorage {
         let mut no_group = clauses.clone();
         no_group.group_by = None;
         no_group.in_glob = None;
-        no_group.exclude_glob = None;
+        no_group.exclude_globs.clear();
         no_group.where_predicates.clear();
         apply_clauses(&mut results, &no_group);
         results
@@ -89,7 +89,7 @@ impl ColumnarStorage {
     pub(super) fn fast_group_by_kind(&self, clauses: &Clauses) -> Vec<SymbolMatch> {
         // Build an optional path mask for IN/EXCLUDE glob filtering.
         let path_mask: Option<RoaringBitmap> =
-            if clauses.in_glob.is_some() || clauses.exclude_glob.is_some() {
+            if clauses.in_glob.is_some() || !clauses.exclude_globs.is_empty() {
                 let bm: RoaringBitmap = self
                     .overlay
                     .segments()
@@ -121,7 +121,7 @@ impl ColumnarStorage {
         let mut no_group = clauses.clone();
         no_group.group_by = None;
         no_group.in_glob = None;
-        no_group.exclude_glob = None;
+        no_group.exclude_globs.clear();
         apply_clauses(&mut results, &no_group);
         results
     }
@@ -311,13 +311,13 @@ impl ColumnarStorage {
         if any_had_index { Some(result) } else { None }
     }
     /// Return the set of segment indices whose `source_path` passes
-    /// `clauses.in_glob` AND `clauses.exclude_glob`.
+    /// `clauses.in_glob` AND every `clauses.exclude_globs` pattern.
     ///
     /// Returns `None` when neither filter is set (caller should treat as
     /// "all segments allowed").  Used to prune non-matching segments
     /// *before* `group_by_segment` so they are never opened or materialised.
     pub(super) fn segments_passing_path_filter(&self, clauses: &Clauses) -> Option<HashSet<u32>> {
-        if clauses.in_glob.is_none() && clauses.exclude_glob.is_none() {
+        if clauses.in_glob.is_none() && clauses.exclude_globs.is_empty() {
             return None;
         }
         let mut allowed = HashSet::new();
@@ -660,7 +660,7 @@ pub(super) fn order_by_name_kind_fast_path(clauses: &Clauses) -> Option<&str> {
     if clauses.limit.is_none()
         || clauses.group_by.is_some()
         || clauses.in_glob.is_some()
-        || clauses.exclude_glob.is_some()
+        || !clauses.exclude_globs.is_empty()
     {
         return None;
     }
@@ -689,7 +689,7 @@ pub(super) fn order_by_name_kind_desc_fast_path(clauses: &Clauses) -> Option<&st
     if clauses.limit.is_none()
         || clauses.group_by.is_some()
         || clauses.in_glob.is_some()
-        || clauses.exclude_glob.is_some()
+        || !clauses.exclude_globs.is_empty()
     {
         return None;
     }
@@ -748,7 +748,7 @@ pub(super) fn order_by_name_fast_path(clauses: &Clauses) -> bool {
         && clauses.group_by.is_none()
         && clauses.where_predicates.is_empty()
         && clauses.in_glob.is_none()
-        && clauses.exclude_glob.is_none()
+        && clauses.exclude_globs.is_empty()
 }
 
 pub(super) fn order_by_name_desc_fast_path(clauses: &Clauses) -> bool {
@@ -759,7 +759,7 @@ pub(super) fn order_by_name_desc_fast_path(clauses: &Clauses) -> bool {
         && clauses.group_by.is_none()
         && clauses.where_predicates.is_empty()
         && clauses.in_glob.is_none()
-        && clauses.exclude_glob.is_none()
+        && clauses.exclude_globs.is_empty()
 }
 
 pub(super) fn has_any_indexed_predicate(clauses: &Clauses, overlay: &Overlay) -> bool {
@@ -777,9 +777,9 @@ pub(super) fn passes_resolve_glob(relative_path: &Path, clauses: &Clauses) -> bo
         .in_glob
         .as_deref()
         .is_none_or(|glob| glob_matches(relative_path, glob));
-    let excl_ok = clauses
-        .exclude_glob
-        .as_deref()
-        .is_none_or(|glob| !glob_matches(relative_path, glob));
+    let excl_ok = !clauses
+        .exclude_globs
+        .iter()
+        .any(|glob| glob_matches(relative_path, glob));
     in_ok && excl_ok
 }

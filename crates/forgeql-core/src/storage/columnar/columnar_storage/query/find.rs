@@ -207,7 +207,7 @@ impl ColumnarStorage {
     /// the global prefilter and per-segment grouping. Normal path: global
     /// prefilter, group by segment, then IN / EXCLUDE path prune.
     fn build_candidate_segments(&self, clauses: &Clauses) -> HashMap<u32, RoaringBitmap> {
-        let has_path_filter = clauses.in_glob.is_some() || clauses.exclude_glob.is_some();
+        let has_path_filter = clauses.in_glob.is_some() || !clauses.exclude_globs.is_empty();
         if has_path_filter && !has_any_indexed_predicate(clauses, &self.overlay) {
             let mut map: HashMap<u32, RoaringBitmap> = HashMap::new();
             for (idx, meta) in self.overlay.segments().iter().enumerate() {

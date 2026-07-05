@@ -27,10 +27,13 @@ pub(super) fn parse_clauses(pairs: pest::iterators::Pairs<'_, Rule>) -> Clauses 
                     .and_then(|p| unwrap_any_value(p).ok());
             }
             Rule::exclude_clause => {
-                clauses.exclude_glob = pair
+                if let Some(glob) = pair
                     .into_inner()
                     .next()
-                    .and_then(|p| unwrap_any_value(p).ok());
+                    .and_then(|p| unwrap_any_value(p).ok())
+                {
+                    clauses.exclude_globs.push(glob);
+                }
             }
             Rule::order_clause => {
                 // order_clause = { "ORDER" ~ "BY" ~ field_name ~ sort_dir? }

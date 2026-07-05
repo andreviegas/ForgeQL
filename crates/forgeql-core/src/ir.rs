@@ -125,7 +125,7 @@ pub enum GroupBy {
 ///
 /// Embedded via `#[serde(flatten)]` in each query IR variant so the JSON
 /// wire format stays flat:
-/// `{"op":"find_symbols","pattern":"set%","exclude_glob":"tests/**"}`.
+/// `{"op":"find_symbols","pattern":"set%","exclude_globs":["tests/**"]}`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Clauses {
     /// `WHERE <field> <op> <value>` predicates — all must match (AND semantics).
@@ -143,9 +143,9 @@ pub struct Clauses {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub in_glob: Option<String>,
 
-    /// `EXCLUDE 'glob'` — remove files matching this glob.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exclude_glob: Option<String>,
+    /// `EXCLUDE <glob>` clauses — remove files matching ANY of these globs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_globs: Vec<String>,
 
     /// `ORDER BY <field> [ASC|DESC]` — sort before `LIMIT`.
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -188,12 +188,41 @@ fn apply_clauses_exclude_glob() {
         },
     ];
     let clauses = Clauses {
-        exclude_glob: Some("tests/**".into()),
+        exclude_globs: vec!["tests/**".into()],
         ..Default::default()
     };
     apply_clauses(&mut items, &clauses);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].name, "a");
+}
+
+#[test]
+fn apply_clauses_multiple_exclude_globs_all_applied() {
+    // BUG-017 regression: a row is dropped when ANY exclude glob matches.
+    let mut items: Vec<SymbolMatch> = vec![
+        {
+            let mut s = make_symbol("a_test", "function", 0);
+            s.path = Some(PathBuf::from("crates/a/tests/x.rs"));
+            s
+        },
+        {
+            let mut s = make_symbol("b_test", "function", 0);
+            s.path = Some(PathBuf::from("crates/b/tests/y.rs"));
+            s
+        },
+        {
+            let mut s = make_symbol("keeper", "function", 0);
+            s.path = Some(PathBuf::from("crates/a/src/z.rs"));
+            s
+        },
+    ];
+    let clauses = Clauses {
+        exclude_globs: vec!["crates/a/tests/**".into(), "crates/b/tests/**".into()],
+        ..Default::default()
+    };
+    apply_clauses(&mut items, &clauses);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name, "keeper");
 }
 
 #[test]
@@ -977,7 +1006,7 @@ fn apply_clauses_exclude_combined_with_where() {
         },
     ];
     let clauses = Clauses {
-        exclude_glob: Some("src/**".into()),
+        exclude_globs: vec!["src/**".into()],
         where_predicates: vec![Predicate {
             field: "fql_kind".into(),
             op: CompareOp::Eq,

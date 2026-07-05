@@ -324,8 +324,8 @@ fn apply_clauses_inner<T: ClauseTarget>(
         results.retain(|item| item.path().is_some_and(|p| path_glob_matches(p, glob)));
     }
 
-    // 2. EXCLUDE glob
-    if let Some(ref glob) = clauses.exclude_glob {
+    // 2. EXCLUDE globs — a row is dropped when ANY pattern matches its path.
+    for glob in &clauses.exclude_globs {
         results.retain(|item| item.path().is_none_or(|p| !path_glob_matches(p, glob)));
     }
 

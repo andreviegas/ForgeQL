@@ -15,8 +15,10 @@ pub(super) fn passes_glob_filter(path: &Path, clauses: &Clauses, root: &Path) ->
     {
         return false;
     }
-    if let Some(ref glob) = clauses.exclude_glob
-        && crate::ast::query::relative_glob_matches(path, glob, root)
+    if clauses
+        .exclude_globs
+        .iter()
+        .any(|glob| crate::ast::query::relative_glob_matches(path, glob, root))
     {
         return false;
     }

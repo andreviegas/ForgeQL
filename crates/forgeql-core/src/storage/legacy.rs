@@ -114,7 +114,7 @@ fn try_group_by_stats_fast_path(
     // Must have a GROUP BY on a supported field, no WHERE filters, no globs.
     if !clauses.where_predicates.is_empty()
         || clauses.in_glob.is_some()
-        || clauses.exclude_glob.is_some()
+        || !clauses.exclude_globs.is_empty()
     {
         return None;
     }
@@ -176,7 +176,7 @@ fn try_group_by_stats_fast_path(
         limit: clauses.limit,
         offset: clauses.offset,
         in_glob: None,
-        exclude_glob: None,
+        exclude_globs: Vec::new(),
         depth: None,
     };
 
@@ -244,7 +244,7 @@ impl StorageEngine for LegacyMemoryStorage {
         // Strip IN/EXCLUDE from clauses — already applied above.
         let remaining = Clauses {
             in_glob: None,
-            exclude_glob: None,
+            exclude_globs: Vec::new(),
             ..clauses.clone()
         };
 

@@ -653,7 +653,7 @@ impl ForgeQLEngine {
             )]
             indexed_opt.unwrap()
         } else {
-            let raw = query::find_files(workspace, glob, clauses.exclude_glob.as_deref());
+            let raw = query::find_files(workspace, glob, &clauses.exclude_globs);
             raw.iter()
                 .filter_map(|v| {
                     let path = v.get("path").and_then(|p| p.as_str()).map(PathBuf::from)?;

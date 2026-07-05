@@ -18,7 +18,7 @@ fn parse_find_symbols() {
             assert_eq!(p.op, CompareOp::Like);
             assert_eq!(p.value, PredicateValue::String("set%".into()));
             assert_eq!(clauses.in_glob.as_deref(), Some("src/**/*.cpp"));
-            assert!(clauses.exclude_glob.is_none());
+            assert!(clauses.exclude_globs.is_empty());
         }
         _ => panic!("wrong variant"),
     }
@@ -35,7 +35,29 @@ fn parse_find_with_exclude() {
             assert_eq!(p.op, CompareOp::Like);
             assert_eq!(p.value, PredicateValue::String("set%".into()));
             assert!(clauses.in_glob.is_none());
-            assert_eq!(clauses.exclude_glob.as_deref(), Some("tests/**"));
+            assert_eq!(clauses.exclude_globs, vec!["tests/**".to_string()]);
+        }
+        _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
+fn parse_find_with_multiple_excludes_collects_all() {
+    // BUG-017: the grammar accepts N EXCLUDE clauses; all must be honored
+    // (previously Clauses.exclude_glob was an Option and the last one won).
+    let ops = parse(
+        "FIND symbols WHERE name LIKE 'set%' EXCLUDE 'crates/a/tests/**' EXCLUDE 'crates/b/tests/**'",
+    )
+    .unwrap();
+    match &ops[0] {
+        ForgeQLIR::FindSymbols { clauses, .. } => {
+            assert_eq!(
+                clauses.exclude_globs,
+                vec![
+                    "crates/a/tests/**".to_string(),
+                    "crates/b/tests/**".to_string()
+                ]
+            );
         }
         _ => panic!("wrong variant"),
     }
@@ -47,7 +69,7 @@ fn parse_find_usages_with_exclude() {
     match &ops[0] {
         ForgeQLIR::FindUsages { of, clauses, .. } => {
             assert_eq!(of, "showCode");
-            assert_eq!(clauses.exclude_glob.as_deref(), Some("tests/**"));
+            assert_eq!(clauses.exclude_globs, vec!["tests/**".to_string()]);
         }
         _ => panic!("wrong variant"),
     }
@@ -737,7 +759,7 @@ fn parse_find_files() {
     match &ops[0] {
         ForgeQLIR::FindFiles { clauses, .. } => {
             assert_eq!(clauses.in_glob.as_deref(), Some("include/**"));
-            assert!(clauses.exclude_glob.is_none());
+            assert!(clauses.exclude_globs.is_empty());
             assert!(clauses.depth.is_none());
         }
         _ => panic!("wrong variant"),
@@ -750,7 +772,7 @@ fn parse_find_files_with_exclude() {
     match &ops[0] {
         ForgeQLIR::FindFiles { clauses, .. } => {
             assert_eq!(clauses.in_glob.as_deref(), Some("src/**"));
-            assert_eq!(clauses.exclude_glob.as_deref(), Some("src/legacy/**"));
+            assert_eq!(clauses.exclude_globs, vec!["src/legacy/**".to_string()]);
         }
         _ => panic!("wrong variant"),
     }
@@ -774,7 +796,7 @@ fn parse_find_files_with_depth_and_exclude() {
     match &ops[0] {
         ForgeQLIR::FindFiles { clauses, .. } => {
             assert_eq!(clauses.in_glob.as_deref(), Some("src/**"));
-            assert_eq!(clauses.exclude_glob.as_deref(), Some("src/legacy/**"));
+            assert_eq!(clauses.exclude_globs, vec!["src/legacy/**".to_string()]);
             assert_eq!(clauses.depth, Some(0));
         }
         _ => panic!("wrong variant"),

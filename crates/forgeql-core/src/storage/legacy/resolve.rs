@@ -136,7 +136,7 @@ pub(super) fn resolve_symbol<'a>(
         if let Some(ref glob) = clauses.in_glob {
             let _ = write!(hint, " IN '{glob}' excluded all matches.");
         }
-        if let Some(ref glob) = clauses.exclude_glob {
+        for glob in &clauses.exclude_globs {
             let _ = write!(hint, " EXCLUDE '{glob}' removed matches.");
         }
         if !clauses.where_predicates.is_empty() {

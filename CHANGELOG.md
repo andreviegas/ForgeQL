@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.91.5] — 2026-07-05 — fix(query): multiple EXCLUDE clauses are all honored (BUG-017)
+
+### Fixed
+
+- **BUG-017**: a query with more than one `EXCLUDE '<glob>'` clause silently
+  applied only the last one — `Clauses.exclude_glob` was an `Option<String>`,
+  so the parser overwrote earlier clauses. Now `exclude_globs: Vec<String>`:
+  every clause is collected and a row is dropped when ANY pattern matches its
+  path. All readers updated (filter pipeline, FIND files walk, legacy
+  prefilter/resolve hints, columnar fast paths and segment pruning).
+- Re-diagnosis note: the glob matcher itself was already correct and
+  gitignore-consistent (patterns anchor at the path root unless they start
+  with `**/`; the documented invariant `kernel/**` must NOT match
+  `tests/kernel/…` stands). The old "EXCLUDE doesn't filter tests/**" report
+  was this multi-clause bug plus anchoring expectations.
+
 ## [0.91.4] — 2026-07-05 — fix(enrich): C/Rust shift expressions get fql_kind = shift_expression (BUG-019)
 
 ### Fixed

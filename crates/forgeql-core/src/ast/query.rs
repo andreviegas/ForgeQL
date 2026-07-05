@@ -30,7 +30,7 @@ pub fn find_usages<'a>(table: &'a SymbolTable, name: &str) -> &'a [UsageSite] {
 }
 
 /// Find all usage sites of a specific symbol name, optionally excluding files
-/// that match `exclude_glob` (e.g. `"tests/**"`).
+/// that match any of `exclude_globs` (e.g. `"tests/**"`).
 ///
 /// Further filtering (WHERE predicates, ORDER BY, LIMIT, etc.) is handled
 /// downstream by `apply_clauses` in the engine.
@@ -38,18 +38,16 @@ pub fn find_usages<'a>(table: &'a SymbolTable, name: &str) -> &'a [UsageSite] {
 pub fn find_usages_filtered<'a>(
     table: &'a SymbolTable,
     name: &str,
-    exclude_glob: Option<&str>,
+    exclude_globs: &[String],
 ) -> Vec<&'a UsageSite> {
     let sites = table.find_usages(name);
-    exclude_glob.map_or_else(
-        || sites.iter().collect(),
-        |exc| {
-            sites
-                .iter()
-                .filter(|s| !glob_matches(table.strings.paths.get(s.path_id), exc))
-                .collect()
-        },
-    )
+    sites
+        .iter()
+        .filter(|s| {
+            let path = table.strings.paths.get(s.path_id);
+            !exclude_globs.iter().any(|exc| glob_matches(path, exc))
+        })
+        .collect()
 }
 
 /// `FIND files IN 'glob' [EXCLUDE 'glob']` — enumerate workspace files.
@@ -58,16 +56,16 @@ pub fn find_usages_filtered<'a>(
 /// returns every regular file whose path matches `glob`.  When `exclude` is
 /// supplied any path matching it is omitted.
 #[must_use]
-pub fn find_files(
-    workspace: &Workspace,
-    glob: &str,
-    exclude: Option<&str>,
-) -> Vec<serde_json::Value> {
+pub fn find_files(workspace: &Workspace, glob: &str, exclude: &[String]) -> Vec<serde_json::Value> {
     workspace
         .files()
         .filter(|p| !crate::result::FileEntry::is_runtime_artifact(p))
         .filter(|p| relative_glob_matches(p, glob, workspace.root()))
-        .filter(|p| exclude.is_none_or(|ex| !relative_glob_matches(p, ex, workspace.root())))
+        .filter(|p| {
+            !exclude
+                .iter()
+                .any(|ex| relative_glob_matches(p, ex, workspace.root()))
+        })
         .map(|p| {
             let size = p.metadata().map(|m| m.len()).unwrap_or(0);
             let ext = p

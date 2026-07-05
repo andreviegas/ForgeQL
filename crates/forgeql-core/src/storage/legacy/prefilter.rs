@@ -504,7 +504,7 @@ pub(super) fn find_symbols_prefilter(
         limit: clauses.limit,
         offset: clauses.offset,
         in_glob: None,
-        exclude_glob: None,
+        exclude_globs: Vec::new(),
         depth: None,
     };
 
