@@ -45,7 +45,9 @@ pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 ///   line.
 /// - **12**: no layout change — content invalidation for ENRICH_VER 22
 ///   (BUG-019: C/Rust shift rows gain `fql_kind = "shift_expression"`).
-pub(crate) const SCHEMA_VERSION: u32 = 12;
+/// - **13**: no layout change — content invalidation for ENRICH_VER 23
+///   (BUG-006 U1: segments gain `usages_fst`/`usages_postings` blobs).
+pub(crate) const SCHEMA_VERSION: u32 = 13;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;

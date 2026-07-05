@@ -260,6 +260,19 @@ impl ColumnarBuildContext {
                 builder.set_field(row_id, &key, value);
             }
         }
+
+        // Usage postings (BUG-006): the inline path receives a per-file table,
+        // so its usages map holds exactly this file's sites — but filter by
+        // the file's path_id anyway so a shared table stays correct.
+        if let Some(first_row) = table.rows.get(rows_start) {
+            let path_id = first_row.path_id;
+            for (name, sites) in &table.usages {
+                for site in sites.iter().filter(|s| s.path_id == path_id) {
+                    builder.add_usage(name, u32::try_from(site.line).unwrap_or(u32::MAX));
+                }
+            }
+        }
+
         (local_cols, ordinal_row)
     }
 

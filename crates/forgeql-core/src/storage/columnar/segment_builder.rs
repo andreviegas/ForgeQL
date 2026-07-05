@@ -82,7 +82,7 @@ pub const ZONEMAP_NUMERIC_FIELDS: &[(&str, bool)] = &[
     ("byte_end", false),
 ];
 /// Current on-disk schema version.  Bump when the format changes.
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 /// Type-tag for dense `u32` columns (core columns).
 const TYPE_TAG_U32: u8 = 3;
 /// Type-tag for optional string columns — dense `[u32]` array where
@@ -251,6 +251,10 @@ pub struct SegmentBuilder {
     kind_postings: HashMap<u32, RoaringBitmap>,
     // symbol name → list of row indices, sorted by key for FST insertion.
     name_to_rows: BTreeMap<String, Vec<u32>>,
+    /// Usage postings (BUG-006 reference index): identifier text → 1-based
+    /// source lines where it occurs in this file. Same FST wire format as
+    /// `name_to_rows`, but postings hold LINES, not row ids.
+    usage_to_lines: BTreeMap<String, Vec<u32>>,
     /// Optional enrichment columns, keyed by field name.
     /// Each column is a parallel array with one slot per row.
     extra_cols: HashMap<String, ColumnDraft>,
@@ -295,6 +299,7 @@ impl SegmentBuilder {
             col_language_id: Vec::new(),
             kind_postings: HashMap::new(),
             name_to_rows: BTreeMap::new(),
+            usage_to_lines: BTreeMap::new(),
             extra_cols: HashMap::new(),
         }
     }
@@ -359,6 +364,18 @@ impl SegmentBuilder {
     /// fields via [`set_field`](Self::set_field).
     pub fn add_row(&mut self, row: SymbolRow<'_>) {
         let _ = self.emit_row(row);
+    }
+
+    /// Record one usage site: `name` occurs at 1-based source `line`.
+    ///
+    /// Usage postings are written to the `usages_fst` / `usages_postings`
+    /// blobs at flush time (BUG-006 reference index). Lines are stored in
+    /// insertion order; callers emit them in document order.
+    pub fn add_usage(&mut self, name: &str, line: u32) {
+        self.usage_to_lines
+            .entry(name.to_owned())
+            .or_default()
+            .push(line);
     }
 
     /// Attach the stable row ordinal for node-id projection.
@@ -466,6 +483,14 @@ impl SegmentBuilder {
         let kind_postings_bytes = encode_kind_postings(&self.kind_postings)?;
         let (fst_bytes, name_post_bytes) = encode_name_fst(&self.name_to_rows)?;
         let name_prefix_bytes = encode_name_prefix(&self.name_to_rows)?;
+        // Usage postings (BUG-006): same wire format as the name FST, but the
+        // postings hold 1-based source LINES instead of row ids. Omitted
+        // entirely when the file produced no usage sites.
+        let usage_blobs = if self.usage_to_lines.is_empty() {
+            None
+        } else {
+            Some(encode_name_fst(&self.usage_to_lines)?)
+        };
 
         let mut blobs = self.core_column_blobs();
         blobs.extend([
@@ -476,6 +501,10 @@ impl SegmentBuilder {
             ("name_postings".to_owned(), name_post_bytes),
             ("name_prefix".to_owned(), name_prefix_bytes),
         ]);
+        if let Some((usages_fst_bytes, usages_post_bytes)) = usage_blobs {
+            blobs.push(("usages_fst".to_owned(), usages_fst_bytes));
+            blobs.push(("usages_postings".to_owned(), usages_post_bytes));
+        }
 
         // Extra enrichment columns.
         for (name, ids) in &extra_arrays {
@@ -1108,6 +1137,47 @@ mod tests {
         // File must be large enough to hold 3 rows of column data (+TOC +header blob).
         // 3 rows × 7 core columns × 4 bytes = 84 bytes minimum of column data.
         assert!(file_bytes.len() > 200, "file too small for 3 rows");
+    }
+
+    #[test]
+    fn usage_postings_roundtrip() {
+        use super::super::segment_reader::SegmentReader;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("seg.fqsf");
+
+        let mut builder = make_builder();
+        builder.add_row(SymbolRow {
+            name: "foo",
+            fql_kind: "function",
+            language: "rust",
+            line: 10,
+            byte_start: 0,
+            byte_end: 100,
+            usages_count: 2,
+        });
+        builder.add_usage("foo", 12);
+        builder.add_usage("foo", 40);
+        builder.add_usage("helper", 15);
+        builder.flush(&target).expect("flush");
+
+        let reader = SegmentReader::open(&target).expect("open");
+        assert_eq!(reader.lookup_usage_lines("foo"), vec![12, 40]);
+        assert_eq!(reader.lookup_usage_lines("helper"), vec![15]);
+        assert!(reader.lookup_usage_lines("absent").is_empty());
+    }
+
+    #[test]
+    fn segment_without_usages_reads_empty() {
+        use super::super::segment_reader::SegmentReader;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("seg.fqsf");
+        let builder = make_builder();
+        builder.flush(&target).expect("flush");
+
+        let reader = SegmentReader::open(&target).expect("open");
+        assert!(reader.lookup_usage_lines("anything").is_empty());
     }
 
     #[test]

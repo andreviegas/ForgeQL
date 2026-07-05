@@ -143,6 +143,20 @@ impl<'a> ShadowWriter<'a> {
         let hash_content = self.hash_content;
         let pre_computed = &self.pre_computed;
 
+        // Usage postings (BUG-006): group the merged table's usage sites by
+        // path_id ONCE up front — scanning the whole usages map per file
+        // inside the parallel loop would be quadratic at repo scale.
+        let mut usages_by_path: HashMap<u32, Vec<(&str, u32)>> = HashMap::new();
+        for (name, sites) in &table.usages {
+            for site in sites {
+                usages_by_path
+                    .entry(site.path_id)
+                    .or_default()
+                    .push((name.as_str(), u32::try_from(site.line).unwrap_or(u32::MAX)));
+            }
+        }
+        let usages_by_path = &usages_by_path;
+
         let results: Vec<WorkResult> = by_path
             .values()
             .collect::<Vec<_>>()
@@ -154,6 +168,7 @@ impl<'a> ShadowWriter<'a> {
                     provider_id,
                     hash_content,
                     pre_computed,
+                    usages_by_path,
                     &provider_dir,
                 )
             })
@@ -215,6 +230,7 @@ fn build_file_segment(
     provider_id: &str,
     hash_content: &(dyn Fn(&[u8]) -> Vec<u8> + Send + Sync),
     pre_computed: &HashMap<PathBuf, Vec<u8>>,
+    usages_by_path: &HashMap<u32, Vec<(&str, u32)>>,
     provider_dir: &Path,
 ) -> Option<WorkResult> {
     // row_indices is non-empty by construction.
@@ -285,6 +301,13 @@ fn build_file_segment(
     }
 
     fill_navigation(&mut builder, &ordinal_row);
+
+    // Usage postings (BUG-006): pre-grouped by path_id in ShadowWriter::run.
+    if let Some(sites) = usages_by_path.get(&first_row.path_id) {
+        for &(name, line) in sites {
+            builder.add_usage(name, line);
+        }
+    }
 
     // Flush to disk inside the worker.
     match builder.flush(&target_path) {

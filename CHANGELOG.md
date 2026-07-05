@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.92.0] — 2026-07-06 — feat(index): usage postings in segments (BUG-006 slice U1, reference-index storage)
+
+### Added
+
+- **Usage postings** (BUG-006 U1): every `.fqsf` segment now carries
+  `usages_fst` / `usages_postings` blobs mapping identifier text to the
+  1-based source lines where it occurs — the storage half of the reference
+  index. Same FST wire format as the definitions name-FST, but postings hold
+  lines, not row ids; files with no usage sites omit the blobs entirely.
+  `SegmentBuilder::add_usage` + `SegmentReader::lookup_usage_lines` are the
+  new API surface. All three segment writers feed it: the inline per-file
+  emit, the shadow writer (usage sites pre-grouped by `path_id` once, not
+  per-file — the merged-table scan would be quadratic), and the
+  post-mutation reindex path.
+- Cache invalidation: segment schema 1→2, `ENRICH_VER` 22→23 (segments
+  cache per blob under `{provider}-v{N}`), overlay `SCHEMA_VERSION` 12→13,
+  legacy `CachedIndex` 31→32. v22 segments lack the blobs and would
+  silently report zero usages, so a full re-index is forced.
+- Query side (`FIND usages OF` reading the postings, real `usages_count`)
+  lands in slices U2/U3.
+
 ## [0.91.7] — 2026-07-05 — fix(mutate): MOVE/COPY numeric-dest validation; WITH NOTHING deletes indexed files; condition_text doc relabel
 
 ### Fixed

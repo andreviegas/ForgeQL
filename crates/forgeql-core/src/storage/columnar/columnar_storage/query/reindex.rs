@@ -191,6 +191,14 @@ fn populate_builder(builder: &mut SegmentBuilder, table: &SymbolTable) {
         }
     }
 
+    // Usage postings (BUG-006): `table` is a fresh per-file table on the
+    // reindex path, so its usages map holds exactly this file's sites.
+    for (name, sites) in &table.usages {
+        for site in sites {
+            builder.add_usage(name, u32::try_from(site.line).unwrap_or(u32::MAX));
+        }
+    }
+
     let mut by_parent: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
     let mut ord_to_row: HashMap<u32, u32> = HashMap::new();
     for &(ord, rid, parent) in &ordinal_row {

@@ -113,7 +113,11 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///          `fql_kind = "shift_expression"` (config-only: `shift_kinds` +
 ///          `kind_map` entries mirrored from cpp.json); v21 segments carry
 ///          those rows with an empty fql_kind.
-pub const ENRICH_VER: u32 = 22;
+///  23 — BUG-006 U1: segments gain `usages_fst` / `usages_postings` blobs
+///          (identifier text → 1-based source lines, the reference index).
+///          v22 segments lack the blobs, so readers would silently report
+///          zero usages — the bump forces a full re-index.
+pub const ENRICH_VER: u32 = 23;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

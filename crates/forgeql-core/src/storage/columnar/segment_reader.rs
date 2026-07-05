@@ -51,7 +51,7 @@ use load::{
 // Format constants (must match segment_builder.rs)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SEGMENT_SCHEMA_VERSION: u32 = 1;
+const SEGMENT_SCHEMA_VERSION: u32 = 2;
 const TYPE_TAG_STR_OPT: u8 = 5;
 const CORE_COLUMN_NAMES: &[&str] = &[
     "name_id",
@@ -234,6 +234,9 @@ pub struct SegmentReader {
     pub(crate) zone_maps: HashMap<String, (u32, u32)>,
     pub(crate) name_prefix: HashMap<Vec<u8>, RoaringBitmap>,
     pub(crate) name_fst: FstMap<MmapSlice>,
+    /// Usage postings FST (BUG-006): identifier text → 1-based source lines.
+    /// `None` when the file produced no usage sites (blob omitted at flush).
+    pub(crate) usages_fst: Option<FstMap<MmapSlice>>,
 }
 
 impl SegmentReader {
@@ -283,6 +286,19 @@ impl SegmentReader {
             load_name_prefix(data)?
         };
 
+        // ── 8b. Usage postings FST (BUG-006; blob absent = no usages) ─────
+        let usages_fst = match blobs.get("usages_fst").copied() {
+            Some((start, end)) if end > start => Some(
+                FstMap::new(MmapSlice {
+                    mmap: Arc::clone(&mmap),
+                    start,
+                    end,
+                })
+                .context("parsing usages_fst blob")?,
+            ),
+            _ => None,
+        };
+
         Ok(Self {
             mmap,
             blobs,
@@ -297,6 +313,7 @@ impl SegmentReader {
             zone_maps,
             name_prefix,
             name_fst,
+            usages_fst,
         })
     }
 
@@ -458,6 +475,21 @@ impl SegmentReader {
             return Vec::new();
         };
         decode_name_postings(encoded, self.name_postings_bytes())
+    }
+
+    /// Return the 1-based source lines where identifier `name` occurs in
+    /// this file (usage postings, BUG-006).
+    ///
+    /// Returns an empty `Vec` when the segment has no usage blobs (file
+    /// produced no usage sites) or the name never occurs.
+    pub fn lookup_usage_lines(&self, name: &str) -> Vec<u32> {
+        let Some(fst) = &self.usages_fst else {
+            return Vec::new();
+        };
+        let Some(encoded) = fst.get(name.as_bytes()) else {
+            return Vec::new();
+        };
+        decode_name_postings(encoded, self.blob_bytes("usages_postings"))
     }
 
     /// Return the raw bytes of the `name_postings` blob (used by overlay builder).
