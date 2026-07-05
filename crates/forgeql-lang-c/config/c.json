@@ -99,7 +99,7 @@
     "comma": "comma_expression",
     "address_of": "pointer_expression",
     "address_of_operator": "&",
-    "shift_kinds": [],
+    "shift_kinds": ["shift_expression"],
     "compound_assignment": "compound_assignment"
   },
 
@@ -182,6 +182,7 @@
 
   "kind_map": {
     "function_definition": "function",
+    "shift_expression": "shift_expression",
     "struct_specifier": "struct",
     "enum_specifier": "enum",
     "declaration": "variable",

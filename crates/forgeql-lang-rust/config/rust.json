@@ -81,7 +81,7 @@
     "comma": "",
     "address_of": "reference_expression",
     "address_of_operator": "&",
-    "shift_kinds": ["binary_expression"],
+    "shift_kinds": ["shift_expression"],
     "compound_assignment": "compound_assignment_expr"
   },
 
@@ -171,6 +171,7 @@
 
   "kind_map": {
     "function_item": "function",
+    "shift_expression": "shift_expression",
     "struct_item": "struct",
     "enum_item": "enum",
     "trait_item": "interface",

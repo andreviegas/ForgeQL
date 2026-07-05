@@ -70,6 +70,8 @@ use crate::ast::lang::MacroDef;
 ///       `while()` blocks and Make conditionals now emit addressable rows.
 ///   30. Control-flow rows from grammars without a `condition` field are now
 ///       named by the construct's first line instead of being nameless.
+///   31. BUG-019: C and Rust shift expressions resolve to `fql_kind =
+///       "shift_expression"` (config-only `shift_kinds`/`kind_map` fix).
 ///
 /// # ⚠ DEAD CODE — NOT IN USE (as of 0.49.10)
 ///
@@ -83,7 +85,7 @@ use crate::ast::lang::MacroDef;
 /// TODO: remove `CachedIndex`, `CURRENT_VERSION`, `persist_to_cache`, and the
 /// entire `.forgeql-index` on-disk format once the legacy `SymbolTable` build
 /// path is fully retired.
-pub const CURRENT_VERSION: u32 = 30;
+pub const CURRENT_VERSION: u32 = 31;
 
 // -----------------------------------------------------------------------
 // CachedIndex

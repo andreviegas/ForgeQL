@@ -43,7 +43,9 @@ pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 ///   grammars without a `condition` field (CMake, Make) were emitted nameless
 ///   in v10 (unfindable by FIND); they are now named by the construct's first
 ///   line.
-pub(crate) const SCHEMA_VERSION: u32 = 11;
+/// - **12**: no layout change — content invalidation for ENRICH_VER 22
+///   (BUG-019: C/Rust shift rows gain `fql_kind = "shift_expression"`).
+pub(crate) const SCHEMA_VERSION: u32 = 12;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;

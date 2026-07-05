@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.91.4] — 2026-07-05 — fix(enrich): C/Rust shift expressions get fql_kind = shift_expression (BUG-019)
+
+### Fixed
+
+- **BUG-019**: `<<`/`>>` shift expressions in C and Rust indexed with an empty
+  `fql_kind` — `FIND symbols WHERE fql_kind = 'shift_expression'` returned
+  nothing for those languages while working for C++. Config-only fix mirroring
+  `cpp.json`: `expressions.shift_kinds = ["shift_expression"]` (the canonical
+  output label) plus the `"shift_expression": "shift_expression"` `kind_map`
+  entry in `c.json` and `rust.json`. The `shift_direction`/`shift_amount`
+  enrichment fields were always attached; now the rows are queryable by kind.
+  `ENRICH_VER` 21 → 22 (+ overlay 11 → 12, `CachedIndex` 30 → 31) force the
+  one-time re-index.
+
 ## [0.91.3] — 2026-07-05 — fix(find): FIND files WHERE name; hide runtime artifacts
 
 ### Fixed

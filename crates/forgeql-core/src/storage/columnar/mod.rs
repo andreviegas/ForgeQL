@@ -109,7 +109,11 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///          this is the constant to bump when a change alters WHICH ROWS a file
 ///          produces (segments cache per blob under `{provider}-v{ENRICH_VER}/`;
 ///          the overlay SCHEMA_VERSION alone does not re-index cached segments).
-pub const ENRICH_VER: u32 = 21;
+///  22 — BUG-019: C and Rust shift expressions now resolve to
+///          `fql_kind = "shift_expression"` (config-only: `shift_kinds` +
+///          `kind_map` entries mirrored from cpp.json); v21 segments carry
+///          those rows with an empty fql_kind.
+pub const ENRICH_VER: u32 = 22;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";
