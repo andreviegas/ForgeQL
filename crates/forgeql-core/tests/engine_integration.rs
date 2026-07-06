@@ -1770,3 +1770,26 @@ fn change_file_with_nothing_deletes_indexed_file() {
         "WITH NOTHING must delete the file even though it is indexed"
     );
 }
+
+/// BUG-006 U2: `FIND usages OF` must return usage SITES read from the
+/// segment usage postings, not just definition rows. `encenderMotor` is
+/// assigned to a function pointer at motor_control.cpp:34 — an occurrence
+/// with no call parentheses that grep-style discovery misses.
+#[test]
+fn find_usages_returns_usage_sites_not_definitions() {
+    let (mut engine, session_id, _dir) = engine_with_session();
+    let result = execute_fql(&mut engine, &session_id, "FIND usages OF 'encenderMotor'");
+    let ForgeQLResult::Query(qr) = result else {
+        panic!("expected Query result from FIND usages");
+    };
+    let lines: Vec<usize> = qr.results.iter().filter_map(|r| r.line).collect();
+    assert!(
+        lines.contains(&34),
+        "function-pointer assignment site (line 34) missing from usages: {lines:?}"
+    );
+    assert!(
+        qr.results.len() >= 2,
+        "expected multiple usage sites, got {}",
+        qr.results.len()
+    );
+}

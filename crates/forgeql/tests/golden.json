@@ -706,8 +706,10 @@
     "name": "GEXTBb_shift_expression_not_indexed"
   },
   {
-    "expect_rows": [],
-    "expect_total": 0,
+    "expect_rows": [
+      {"line": 679, "name": "encode_node", "path": "subsys/bluetooth/controller/hci/hci_driver.c"}
+    ],
+    "expect_total": 1,
     "fql": "FIND usages OF 'encode_node' IN 'subsys/bluetooth/controller/hci/hci_driver.c' WHERE line = 679 LIMIT 1",
     "name": "GBUG11a_usages_encode_node_call_at_679"
   },

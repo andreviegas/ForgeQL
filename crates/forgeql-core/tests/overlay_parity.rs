@@ -1948,6 +1948,30 @@ fn build_dirty_segment(
     SegmentReader::open(dir).expect("dirty SegmentReader::open")
 }
 
+/// Like [`build_dirty_segment`], but records a usage posting per row
+/// (BUG-006 U2: `find_usages` reads usage postings, not definition rows).
+fn build_dirty_segment_with_usages(
+    rows: &[(&str, &str, u32)],
+    content_id_bytes: &[u8],
+    dir: &std::path::Path,
+) -> SegmentReader {
+    let mut builder = SegmentBuilder::new("test", content_id_bytes);
+    for &(name, kind, line) in rows {
+        let _ = builder.emit_row(SymbolRow {
+            name,
+            fql_kind: kind,
+            language: "rust",
+            line,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
+        builder.add_usage(name, line);
+    }
+    builder.flush(dir).expect("dirty segment flush");
+    SegmentReader::open(dir).expect("dirty SegmentReader::open")
+}
+
 /// PhaseFT1 gate: dirty overlay shadows persistent segment and unions dirty rows.
 ///
 /// Setup:
@@ -2171,6 +2195,9 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
             byte_end: 10,
             usages_count: 0,
         });
+        // BUG-006 U2: find_usages reads usage POSTINGS, not definition rows —
+        // give SymbolA a usage site so the shadow assertion is meaningful.
+        builder.add_usage("SymbolA", 3);
         builder
             .flush(
                 &seg_dir
@@ -2218,7 +2245,8 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
     // Dirty: file1.cpp changed — SymbolA replaced by SymbolB.
     let dirty_cid: Vec<u8> = vec![0xBBu8; 8];
     let dirty_dir = tmp.path().join("staging").join("d1");
-    let dirty_reader = build_dirty_segment(&[("SymbolB", "function", 1)], &dirty_cid, &dirty_dir);
+    let dirty_reader =
+        build_dirty_segment_with_usages(&[("SymbolB", "function", 1)], &dirty_cid, &dirty_dir);
     storage.dirty_mut().add_segment(
         Arc::new(dirty_reader),
         std::path::PathBuf::from("file1.cpp"),

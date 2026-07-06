@@ -6,6 +6,28 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.93.0] — 2026-07-06 — feat(query): FIND usages OF returns real usage sites (BUG-006 slice U2)
+
+### Fixed
+
+- **BUG-006**: `FIND usages OF '<name>'` on the columnar backend returned
+  only definition rows (it read the definitions name-FST), so every
+  blast-radius query came back empty or definition-only. It now reads the
+  per-segment usage postings written at index time (0.92.0's
+  `usages_fst`/`usages_postings`), scanning the persistent overlay
+  (dirty-shadow aware) plus the dirty overlay, and returns one row per
+  usage site — name + path + line, matching the legacy backend's row
+  shape. Occurrences without call parentheses (function-pointer
+  assignments, type positions) are included; `GROUP BY file` counts are
+  now real. Regression test pins the `encenderMotor` function-pointer
+  site at motor_control.cpp:34 — the exact case grep-style discovery
+  misses.
+- Zephyr golden `GBUG11a_usages_encode_node_call_at_679` re-blessed: it
+  documented the bug (expected 0 rows for the call site at
+  `hci_driver.c:679`); the site is found now (1 row, line 679).
+- Remaining slices: U3 populates `usages_count` on FIND symbols rows;
+  U4 audits collection completeness (`Point::new` path segments).
+
 ## [0.92.0] — 2026-07-06 — feat(index): usage postings in segments (BUG-006 slice U1, reference-index storage)
 
 ### Added

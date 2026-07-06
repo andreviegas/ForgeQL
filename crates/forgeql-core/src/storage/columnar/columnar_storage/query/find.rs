@@ -60,24 +60,45 @@ impl ColumnarStorage {
         clauses: &Clauses,
         _root: &Path,
     ) -> Vec<SymbolMatch> {
-        // Phase 05 scope: exact-name FST lookup on persistent overlay.
-        let candidates = self.overlay.lookup_name_bitmap(name);
-        // Drop persistent segments shadowed by the dirty overlay.
-        let mut by_segment = self.group_by_segment(&candidates);
-        if !self.dirty.is_empty() {
-            by_segment.retain(|&seg_idx, _| {
-                self.overlay
-                    .segments()
-                    .get(seg_idx as usize)
-                    .is_none_or(|meta| !self.dirty.shadows(&meta.hex_content_id))
-            });
+        // BUG-006 U2: read the per-segment usage postings written at index
+        // time (`usages_fst` / `usages_postings`, ENRICH_VER 23) instead of
+        // the definitions name-FST, which only ever yielded definition rows.
+        // Row shape matches the legacy backend's find_usages: name + path +
+        // line, everything else empty — the agent interprets the sites.
+        let usage_row = |path: &Path, line: u32| SymbolMatch {
+            name: name.to_string(),
+            node_kind: None,
+            fql_kind: None,
+            language: None,
+            path: Some(path.to_path_buf()),
+            line: Some(usize::try_from(line).unwrap_or(usize::MAX)),
+            usages_count: None,
+            fields: HashMap::new(),
+            count: None,
+            node_id: None,
+        };
+
+        let mut results: Vec<SymbolMatch> = Vec::new();
+        // Persistent overlay segments, skipping any shadowed by the dirty
+        // overlay (their replacement is scanned below).
+        for (idx, meta) in self.overlay.segments().iter().enumerate() {
+            if self.dirty.shadows(&meta.hex_content_id) {
+                continue;
+            }
+            let Some(seg) = self.segments.get(idx) else {
+                continue;
+            };
+            for line in seg.lookup_usage_lines(name) {
+                results.push(usage_row(&meta.source_path, line));
+            }
         }
-        let mut results = self.materialize_all(&by_segment, clauses);
-        // Union dirty overlay rows for this name.
-        if !self.dirty.is_empty() {
-            let mut dirty_results = self.dirty.lookup_name_results(name, clauses);
-            results.append(&mut dirty_results);
+        // Dirty overlay: freshly (re)indexed segments not yet promoted.
+        for ds in &self.dirty.added {
+            for line in ds.reader.lookup_usage_lines(name) {
+                results.push(usage_row(&ds.source_path, line));
+            }
         }
+
         apply_clauses(&mut results, clauses);
         results
     }
