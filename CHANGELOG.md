@@ -6,6 +6,17 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.100.0] — 2026-07-06 — release: memory-bounded indexing rollup
+
+Release marker for the three changes shipped as 0.99.0–0.99.2, so a single
+tag carries the complete set. No functional changes beyond 0.99.2.
+
+- The mechanical rename sweep (`CHANGE NODE … MATCHING`,
+  `CHANGE NODES LAST MATCHING`) — see 0.99.0.
+- Peak indexing memory bounded by a size-aware admission queue — see 0.99.1.
+- Cold `USE` reuses existing per-file segments instead of re-parsing — see
+  0.99.2.
+
 ## [0.99.2] — 2026-07-06 — fix(index): reuse per-file segments instead of re-parsing
 
 ### Fixed
