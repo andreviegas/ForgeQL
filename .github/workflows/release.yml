@@ -163,6 +163,12 @@ jobs:
         run: cargo install cargo-zigbuild --locked
 
       - name: Build static binaries (forgeql, forgeql-server, forgeql-client)
+        # zig cc implicitly defines NDEBUG at -O3; tree-sitter-just's
+        # scanner.c refuses to compile with assertions disabled. The trailing
+        # -UNDEBUG wins over zig's implicit define and matches the native
+        # gcc/mingw builds, which never define NDEBUG in the first place.
+        env:
+          CFLAGS: -UNDEBUG
         run: cargo zigbuild --release --target ${{ matrix.target }} --bin forgeql --bin forgeql-server --bin forgeql-client
 
       - name: Package (tar.gz)
