@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use rayon::prelude::*;
@@ -720,43 +721,137 @@ impl SymbolTable {
             })
     }
 
-    /// Columnar fast-path: segments are written inline per-file during
-    /// `index_file` (including per-file `post_pass`), so no merge / full-table
-    /// `post_pass` / usage-count population is needed — the columnar engine never
-    /// queries the in-memory `SymbolTable` after build.
+    /// Parse and emit one file into the columnar segment store: segments are
+    /// written inline during `index_file` (including per-file `post_pass`), so
+    /// no merge / full-table `post_pass` / usage-count population is needed —
+    /// the columnar engine never queries the in-memory `SymbolTable` after build.
+    fn index_columnar_file(
+        path: &Path,
+        lang_registry: &LanguageRegistry,
+        macro_table: &MacroTable,
+        seg_ctx: Option<&SegmentBuildCtx>,
+    ) {
+        let Some(lang) = lang_registry.language_for_path(path) else {
+            return;
+        };
+        let mut parser = tree_sitter::Parser::new();
+        if parser.set_language(&lang.tree_sitter_language()).is_err() {
+            warn!(path = %path.display(), "columnar fast-path: failed to set language");
+            return;
+        }
+        let enrichers = default_enrichers();
+        let mut file_table = Self::default();
+        let mut ctx = IndexContext {
+            path,
+            language: lang.as_ref(),
+            enrichers: &enrichers,
+            macro_table: Some(macro_table),
+            ordinal_remapper: None,
+            table: &mut file_table,
+        };
+        match index_file(&mut parser, &mut ctx, seg_ctx) {
+            Ok(count) => {
+                debug!(path = %path.display(), rows = count, "indexed (columnar fast-path)");
+            }
+            Err(e) => warn!(path = %path.display(), "skipping file: {e}"),
+        }
+        // file_table dropped here — no merge needed for columnar.
+    }
+
+    /// Parse a positive integer knob; zero, empty, or malformed falls back to
+    /// the default so a bad environment value can never disable indexing.
+    fn parse_size_knob(raw: Option<&str>, default: u64) -> u64 {
+        raw.and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(default)
+    }
+
+    /// File size (bytes) at or above which a file is parsed on the bounded
+    /// queue instead of the fully parallel pool. `FORGEQL_BIG_FILE_MB`
+    /// overrides the default of 4 MB.
+    fn big_file_threshold_bytes() -> u64 {
+        Self::parse_size_knob(std::env::var("FORGEQL_BIG_FILE_MB").ok().as_deref(), 4)
+            .saturating_mul(1024 * 1024)
+    }
+
+    /// Number of workers draining the big-file queue. `FORGEQL_BIG_FILE_SLOTS`
+    /// overrides the default of 2.
+    fn big_file_slots() -> usize {
+        usize::try_from(Self::parse_size_knob(
+            std::env::var("FORGEQL_BIG_FILE_SLOTS").ok().as_deref(),
+            2,
+        ))
+        .unwrap_or(2)
+    }
+
+    /// One filesystem-metadata pass: split `paths` into (big, small) at
+    /// `threshold` bytes. Big files are sorted largest-first so the most
+    /// expensive parse starts earliest and the queue never ends on a straggler.
+    fn partition_by_size(paths: &[PathBuf], threshold: u64) -> (Vec<&PathBuf>, Vec<&PathBuf>) {
+        let mut big: Vec<(u64, &PathBuf)> = Vec::new();
+        let mut small: Vec<&PathBuf> = Vec::new();
+        for path in paths {
+            let size = std::fs::metadata(path).map_or(0, |m| m.len());
+            if size >= threshold {
+                big.push((size, path));
+            } else {
+                small.push(path);
+            }
+        }
+        big.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        (big.into_iter().map(|(_, p)| p).collect(), small)
+    }
+
+    /// Pass 2 (columnar): parse + emit per-file segments with size-aware
+    /// admission.
+    ///
+    /// Peak indexing memory is dominated by parse trees, whose size is
+    /// proportional to file size — running every file at full parallelism
+    /// keeps one huge tree alive per CPU and can exhaust RAM on corpora with
+    /// many large files. Small files keep full parallelism; files at or above
+    /// the size threshold drain a dedicated largest-first queue with a bounded
+    /// number of workers, so at most `slots` big parse trees exist at once.
+    /// Both lanes run concurrently on the same pool via `rayon::join`.
     fn build_columnar_segments(
         paths: &[PathBuf],
         lang_registry: &LanguageRegistry,
         macro_table: &MacroTable,
         seg_ctx: Option<&SegmentBuildCtx>,
     ) {
-        paths.par_iter().for_each(|path| {
-            let Some(lang) = lang_registry.language_for_path(path) else {
-                return;
-            };
-            let mut parser = tree_sitter::Parser::new();
-            if parser.set_language(&lang.tree_sitter_language()).is_err() {
-                warn!(path = %path.display(), "columnar fast-path: failed to set language");
-                return;
-            }
-            let enrichers = default_enrichers();
-            let mut file_table = Self::default();
-            let mut ctx = IndexContext {
-                path,
-                language: lang.as_ref(),
-                enrichers: &enrichers,
-                macro_table: Some(macro_table),
-                ordinal_remapper: None,
-                table: &mut file_table,
-            };
-            match index_file(&mut parser, &mut ctx, seg_ctx) {
-                Ok(count) => {
-                    debug!(path = %path.display(), rows = count, "indexed (columnar fast-path)");
-                }
-                Err(e) => warn!(path = %path.display(), "skipping file: {e}"),
-            }
-            // file_table dropped here — no merge needed for columnar.
-        });
+        let (big, small) = Self::partition_by_size(paths, Self::big_file_threshold_bytes());
+        let slots = Self::big_file_slots().min(big.len());
+        if !big.is_empty() {
+            info!(
+                big_files = big.len(),
+                slots, "size-aware indexing: large files on a bounded queue"
+            );
+        }
+        rayon::join(
+            || {
+                let next = AtomicUsize::new(0);
+                rayon::scope(|s| {
+                    for _ in 0..slots {
+                        s.spawn(|_| {
+                            loop {
+                                let i = next.fetch_add(1, Ordering::Relaxed);
+                                let Some(path) = big.get(i) else { break };
+                                Self::index_columnar_file(
+                                    path,
+                                    lang_registry,
+                                    macro_table,
+                                    seg_ctx,
+                                );
+                            }
+                        });
+                    }
+                });
+            },
+            || {
+                small.par_iter().for_each(|path| {
+                    Self::index_columnar_file(path, lang_registry, macro_table, seg_ctx);
+                });
+            },
+        );
     }
 
     /// Pass 2: parse + enrich each file in parallel into a per-file table, then
@@ -843,5 +938,54 @@ impl SymbolTable {
             rev: 0,
             fields,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_size_knob_falls_back_on_bad_input() {
+        assert_eq!(SymbolTable::parse_size_knob(None, 4), 4);
+        assert_eq!(SymbolTable::parse_size_knob(Some(""), 4), 4);
+        assert_eq!(SymbolTable::parse_size_knob(Some("abc"), 4), 4);
+        assert_eq!(SymbolTable::parse_size_knob(Some("0"), 4), 4);
+        assert_eq!(SymbolTable::parse_size_knob(Some("-3"), 4), 4);
+        assert_eq!(SymbolTable::parse_size_knob(Some(" 16 "), 4), 16);
+    }
+
+    #[test]
+    fn partition_by_size_splits_and_sorts_largest_first() {
+        let dir = std::env::temp_dir().join(format!("fql-partition-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mk = |name: &str, bytes: usize| {
+            let p = dir.join(name);
+            std::fs::write(&p, vec![b'x'; bytes]).unwrap();
+            p
+        };
+        let paths = vec![
+            mk("small_a.rs", 10),
+            mk("big_mid.arxml", 2_000),
+            mk("small_b.rs", 500),
+            mk("big_top.arxml", 5_000),
+        ];
+        let (big, small) = SymbolTable::partition_by_size(&paths, 1_000);
+        assert_eq!(
+            big.iter()
+                .map(|p| p.file_name().unwrap())
+                .collect::<Vec<_>>(),
+            ["big_top.arxml", "big_mid.arxml"]
+        );
+        assert_eq!(small.len(), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn partition_by_size_missing_file_counts_as_small() {
+        let paths = vec![PathBuf::from("/nonexistent/fql-partition-test-ghost.rs")];
+        let (big, small) = SymbolTable::partition_by_size(&paths, 1);
+        assert!(big.is_empty());
+        assert_eq!(small.len(), 1);
     }
 }

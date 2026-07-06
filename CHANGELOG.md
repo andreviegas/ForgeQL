@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.99.1] — 2026-07-06 — fix(index): bound peak memory during initial indexing
+
+### Fixed
+
+- Initial indexing could exhaust system memory on repositories containing
+  many large files (for example generated automotive XML of 50–100 MB each).
+  Peak memory during indexing is dominated by parse trees, whose size is
+  proportional to file size, and every file was parsed at full parallelism —
+  one huge tree alive per CPU core, observed to exceed 25 GB of RAM and OOM
+  the host. Indexing now takes one filesystem-metadata pass up front and
+  splits files at a size threshold: small files keep full parallelism, while
+  large files drain a dedicated largest-first queue with a bounded number of
+  workers, so at most a few large parse trees exist at any moment. Both lanes
+  run concurrently on the same thread pool, so small-file throughput is
+  unchanged. Tunables: `FORGEQL_BIG_FILE_MB` (size threshold, default 4 MB)
+  and `FORGEQL_BIG_FILE_SLOTS` (large-file workers, default 2).
+
 ## [0.99.0] — 2026-07-06 — feat(mutate): the mechanical rename sweep
 
 ### Added
