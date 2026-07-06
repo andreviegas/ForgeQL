@@ -18,6 +18,7 @@ use crate::workspace::Workspace;
 
 use super::file_indexer::{
     IndexContext, OrdinalHint, OrdinalRemapper, collect_macro_defs_for_file, index_file,
+    index_file_from_source,
 };
 use super::{
     IndexRow, IndexStats, MemEstimate, SegmentBuildCtx, SymbolTable, UsageSite, reassign_intern_ids,
@@ -734,6 +735,24 @@ impl SymbolTable {
         let Some(lang) = lang_registry.language_for_path(path) else {
             return;
         };
+        let source = match crate::workspace::file_io::read_bytes(path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                warn!(path = %path.display(), "skipping file: {e}");
+                return;
+            }
+        };
+        // Pre-parse reuse: hash the raw bytes; if this exact content already
+        // has a valid segment on disk, register it for the overlay build and
+        // skip the parse. Sound here because this path discards the per-file
+        // table — the segment is the only output.
+        if let Some(seg) = seg_ctx {
+            let content_id = (seg.hash_fn)(&source);
+            if (seg.reuse_fn)(path, &content_id) {
+                debug!(path = %path.display(), "segment reuse: parse skipped");
+                return;
+            }
+        }
         let mut parser = tree_sitter::Parser::new();
         if parser.set_language(&lang.tree_sitter_language()).is_err() {
             warn!(path = %path.display(), "columnar fast-path: failed to set language");
@@ -749,7 +768,7 @@ impl SymbolTable {
             ordinal_remapper: None,
             table: &mut file_table,
         };
-        match index_file(&mut parser, &mut ctx, seg_ctx) {
+        match index_file_from_source(&mut parser, &mut ctx, seg_ctx, &source) {
             Ok(count) => {
                 debug!(path = %path.display(), rows = count, "indexed (columnar fast-path)");
             }

@@ -124,7 +124,7 @@ impl ColumnarBuildContext {
         reason = "mirrors reindex_files / ShadowWriter::run"
     )]
     pub fn make_inline_ctx(&self) -> (crate::ast::index::SegmentBuildCtx, Arc<InlineCtxState>) {
-        use crate::ast::index::{SegEmitFn, SegmentBuildCtx};
+        use crate::ast::index::{SegEmitFn, SegReuseFn, SegmentBuildCtx};
 
         let state = Arc::new(InlineCtxState {
             segment_map: Mutex::new(HashMap::new()),
@@ -148,15 +148,61 @@ impl ColumnarBuildContext {
             },
         );
 
+        let reuse_segments_dir = self.segments_dir.clone();
+        let reuse_provider = self.provider_id.clone();
+        let reuse_state = Arc::clone(&state);
+        let reuse_fn: SegReuseFn =
+            Arc::new(move |abs_path: &std::path::Path, content_id: &[u8]| {
+                Self::register_existing_segment(
+                    abs_path,
+                    content_id,
+                    &reuse_segments_dir,
+                    &reuse_provider,
+                    &reuse_state,
+                )
+            });
+
         let ctx = SegmentBuildCtx {
             provider_id: self.provider_id.clone(),
             hash_fn: Arc::clone(&self.hash_fn),
             emit_fn,
+            reuse_fn,
         };
 
         (ctx, state)
     }
 
+    /// Reuse-hook body: if a valid segment for `content_id` already exists on
+    /// disk, register `(abs_path, content_id)` in the shared `segment_map`
+    /// exactly as `emit_inline_segment` would and report `true` so the caller
+    /// can skip parsing. No columns are merged — the overlay build reads
+    /// everything it needs from the segment itself (matching the idempotent
+    /// skip inside `emit_inline_segment`).
+    fn register_existing_segment(
+        abs_path: &std::path::Path,
+        content_id: &[u8],
+        segments_dir: &std::path::Path,
+        provider_id: &str,
+        state: &InlineCtxState,
+    ) -> bool {
+        use super::bytes_to_hex;
+        use super::segment_builder::is_valid_segment;
+
+        let hex = bytes_to_hex(content_id);
+        let target_path = segments_dir
+            .join(format!("{provider_id}-v{}", super::ENRICH_VER))
+            .join(&hex[..2])
+            .join(format!("{}.fqsf", &hex[2..]));
+        if !is_valid_segment(&target_path) {
+            return false;
+        }
+        let mut map = state
+            .segment_map
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = map.insert(abs_path.to_path_buf(), content_id.to_vec());
+        true
+    }
     /// Inline `emit_fn` body: write (or idempotently skip) the `.fqsf` segment for
     /// one file's rows `[rows_start..]`, registering it in the shared `segment_map`
     /// and merging its column set into `all_columns` on success.
@@ -432,6 +478,59 @@ mod tests {
             }
         }
         assert!(checked, "heading row (ordinal 1) present in segment");
+        Ok(())
+    }
+
+    /// The pre-parse reuse hook must reject unknown content, and must
+    /// register an existing segment in `segment_map` exactly like the emit
+    /// path so the overlay build sees reused files without re-parsing them.
+    #[test]
+    fn reuse_fn_skips_unknown_and_registers_existing() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let file_path = tmp.path().join("doc.md");
+
+        let mut table = SymbolTable::default();
+        let (n0, k0, f0, l0, p0) = table
+            .strings
+            .intern_row("Title", "section", "section", "markdown", &file_path);
+        let fields0 = table.strings.intern_fields(HashMap::new());
+        table.push_row(IndexRow {
+            byte_range: 0..7,
+            line: 1,
+            usages_count: 0,
+            ordinal: Some(0),
+            parent_ordinal: u32::MAX,
+            rev: 0,
+            fields: fields0,
+            name_id: n0,
+            node_kind_id: k0,
+            fql_kind_id: f0,
+            language_id: l0,
+            path_id: p0,
+        });
+
+        let hash_fn: HashFn = Arc::new(|b: &[u8]| identity_hash(b));
+        let cbc = ColumnarBuildContext::new(
+            tmp.path().join("segments"),
+            tmp.path().join("overlays"),
+            "test",
+            hash_fn,
+        );
+        let content_id = identity_hash(b"# Title\n");
+
+        // Before any emit: nothing to reuse.
+        let (ctx, state) = cbc.make_inline_ctx();
+        assert!(!(ctx.reuse_fn)(&file_path, &content_id));
+        assert!(state.segment_map.lock().unwrap().is_empty());
+
+        // Write the segment, then a fresh context must reuse it.
+        (ctx.emit_fn)(&content_id, &table, 0);
+        let (ctx2, state2) = cbc.make_inline_ctx();
+        assert!((ctx2.reuse_fn)(&file_path, &content_id));
+        assert_eq!(
+            state2.segment_map.lock().unwrap().get(&file_path),
+            Some(&content_id)
+        );
         Ok(())
     }
 }

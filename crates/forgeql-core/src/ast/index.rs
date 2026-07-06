@@ -7,6 +7,7 @@
 /// Always extract byte ranges and store `Range<usize>`.
 use std::collections::HashMap;
 use std::ops::Range;
+use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,13 @@ pub type SegHashFn = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 
 /// Type alias for the per-file emit callback in [`SegmentBuildCtx`].
 pub type SegEmitFn = Arc<dyn Fn(&[u8], &SymbolTable, usize) + Send + Sync>;
+
+/// Type alias for the pre-parse segment-reuse hook in [`SegmentBuildCtx`].
+///
+/// Arguments: `(abs_path: &Path, content_id: &[u8])`. Returns `true` when a
+/// valid segment for this exact content already exists on disk and has been
+/// registered for the overlay build — the caller may skip parsing entirely.
+pub type SegReuseFn = Arc<dyn Fn(&Path, &[u8]) -> bool + Send + Sync>;
 
 /// Context threaded into [`index_file`] for per-file columnar shadow-write.
 ///
@@ -47,6 +55,13 @@ pub struct SegmentBuildCtx {
     /// `rows_start` is always `0` for a fresh per-file table (the common path
     /// in `build()`), but may be `> 0` for future incremental re-index paths.
     pub emit_fn: SegEmitFn,
+    /// Pre-parse reuse hook: when it returns `true` the segment for this
+    /// exact content already exists and is registered — skip the parse.
+    ///
+    /// Only sound for build paths that discard the per-file `SymbolTable`
+    /// (the columnar fast-path); paths that need the parsed rows must not
+    /// consult it.
+    pub reuse_fn: SegReuseFn,
 }
 // IndexRow — the universal row type
 // -----------------------------------------------------------------------

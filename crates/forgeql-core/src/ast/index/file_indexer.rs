@@ -309,9 +309,25 @@ pub fn index_file(
     seg_ctx: Option<&SegmentBuildCtx>,
 ) -> Result<usize> {
     let source = crate::workspace::file_io::read_bytes(ctx.path)?;
+    index_file_from_source(parser, ctx, seg_ctx, &source)
+}
 
+/// [`index_file`] body operating on already-read source bytes.
+///
+/// Split out so callers that must read the file anyway (for example the
+/// columnar fast-path's pre-parse segment-reuse check) can avoid a second
+/// read of the same content.
+///
+/// # Errors
+/// Returns an error if tree-sitter parsing fails.
+pub(super) fn index_file_from_source(
+    parser: &mut tree_sitter::Parser,
+    ctx: &mut IndexContext<'_>,
+    seg_ctx: Option<&SegmentBuildCtx>,
+    source: &[u8],
+) -> Result<usize> {
     let tree = parser
-        .parse(&source, None)
+        .parse(source, None)
         .ok_or_else(|| ForgeError::AstParse {
             path: ctx.path.to_path_buf(),
         })?;
@@ -320,7 +336,7 @@ pub fn index_file(
     let before = ctx.table.rows.len();
 
     let mut cursor = tree.root_node().walk();
-    collect_nodes(&source, ctx, &mut cursor, &ts_lang);
+    collect_nodes(source, ctx, &mut cursor, &ts_lang);
 
     // Per-file columnar shadow-write: hash the already-read source bytes and
     // emit a SegmentBuilder for the rows added to this per-file table.
@@ -334,7 +350,7 @@ pub fn index_file(
         for enricher in ctx.enrichers {
             enricher.post_pass(ctx.table, None);
         }
-        let content_id = (seg.hash_fn)(&source);
+        let content_id = (seg.hash_fn)(source);
         (seg.emit_fn)(&content_id, ctx.table, before);
     }
 

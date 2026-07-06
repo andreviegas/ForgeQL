@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.99.2] — 2026-07-06 — fix(index): reuse per-file segments instead of re-parsing
+
+### Fixed
+
+- A cold `USE` re-parsed every file even when its per-file segment already
+  existed on disk: existing segments only skipped the final write, after the
+  full parse cost had been paid. Any overlay-cache miss — a new commit on the
+  branch, or a lost/failed overlay — therefore re-parsed the whole
+  repository. Indexing now hashes each file's raw bytes first (a cheap read,
+  no parse) and, when a valid segment for that exact content already exists,
+  registers it for the overlay build and skips the parse entirely. An
+  incremental commit now re-parses only the files it changed, and rebuilding
+  a lost overlay from intact segments costs seconds instead of a full
+  re-index. Combined with the bounded large-file queue from 0.99.1, initial
+  indexing memory stays flat across repeated `USE` calls.
+
 ## [0.99.1] — 2026-07-06 — fix(index): bound peak memory during initial indexing
 
 ### Fixed
