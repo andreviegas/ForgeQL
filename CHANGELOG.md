@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.98.0] — 2026-07-06 — feat(hints): oversized-response and unknown-field guidance
+
+### Added
+
+- Responses estimated above ~2,000 tokens now carry a one-line hint with
+  the narrowing tools (WHERE / IN / EXCLUDE, LIMIT with OFFSET paging, or
+  GROUP BY aggregation). Motivated by usage-log analysis: a single
+  unbounded directory walk once returned a 50,000-token response.
+- A WHERE clause naming a field that no row type carries used to match
+  nothing silently. FIND results that come back empty with such a field
+  now include a hint naming the unknown field and pointing at the core
+  and enrichment field lists. Valid enrichment fields that merely have no
+  matching rows stay hint-free; both behaviors are regression-tested.
+- Query results gain an optional `hint` value (omitted unless populated),
+  rendered as a final row in the compact output.
+
 ## [0.97.0] — 2026-07-06 — feat(hints): targeted guidance on common command mistakes and oversized reads
 
 ### Added

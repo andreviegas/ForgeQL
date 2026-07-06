@@ -22,6 +22,7 @@ fn query_result_json_contains_projected_fields() {
         total: 1,
         metric_hint: None,
         group_by_field: None,
+        hint: None,
     });
 
     let json_string = result.to_json();
@@ -60,6 +61,7 @@ fn json_find_result_includes_usages() {
         total: 1,
         metric_hint: None,
         group_by_field: None,
+        hint: None,
     });
     let json = result.to_json();
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -97,6 +99,7 @@ fn json_find_result_excludes_raw_fields() {
         total: 1,
         metric_hint: None,
         group_by_field: None,
+        hint: None,
     });
     let json = result.to_json();
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -137,6 +140,7 @@ fn json_count_group_by_includes_count() {
         total: 1,
         metric_hint: None,
         group_by_field: None,
+        hint: None,
     });
     let json = result.to_json();
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -344,6 +348,7 @@ fn display_query_result_empty() {
         total: 0,
         metric_hint: None,
         group_by_field: None,
+        hint: None,
     };
     let output = format!("{result}");
     assert!(output.contains("No results"));
@@ -368,6 +373,7 @@ fn display_query_result_with_items() {
         total: 1,
         metric_hint: None,
         group_by_field: None,
+        hint: None,
     };
     let output = format!("{result}");
     assert!(output.contains("setPeakLevel"));
@@ -397,6 +403,7 @@ fn display_query_result_shows_enclosing_fn() {
         total: 1,
         metric_hint: None,
         group_by_field: None,
+        hint: None,
     };
     let output = format!("{result}");
     assert!(output.contains("via traverse_trees"));
@@ -422,6 +429,7 @@ fn display_query_result_shows_truncation_notice() {
         total: 100,
         metric_hint: None,
         group_by_field: None,
+        hint: None,
     };
     let output = format!("{result}");
     assert!(output.contains("1 of 100 shown"));
@@ -522,6 +530,7 @@ fn source_lines_count_zero_for_query_result() {
         total: 0,
         metric_hint: None,
         group_by_field: None,
+        hint: None,
     });
     assert_eq!(r.source_lines_count(), 0);
 }

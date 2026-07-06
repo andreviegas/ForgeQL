@@ -252,6 +252,7 @@ mod tests {
             total: 0,
             metric_hint: None,
             group_by_field: None,
+            hint: None,
         })
     }
 

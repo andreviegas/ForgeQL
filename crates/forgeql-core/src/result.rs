@@ -104,6 +104,12 @@ pub struct QueryResult {
     /// stores the field name so the compact renderer can group by it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_by_field: Option<String>,
+    /// One-line guidance appended by the engine when the query shape is a
+    /// known footgun (e.g. a WHERE field that no row type carries — the
+    /// query silently matches nothing). Static text keyed on the observed
+    /// input; never populated on ordinary results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 impl QueryResult {

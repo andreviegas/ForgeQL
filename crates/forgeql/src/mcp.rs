@@ -181,15 +181,30 @@ fn append_meta(output: &str, budget_line: Option<&str>) -> String {
     /// already `None` unless the session budget is in a warning/critical state
     /// (gated by the caller), so both footers now appear only when actionable.
     const TOKENS_FOOTER_THRESHOLD: usize = 500;
+    /// Above this estimate the response is large enough that the agent almost
+    /// certainly wanted a narrower query — append a one-line hint with the
+    /// narrowing tools. (Usage logs: single responses have reached 50k+
+    /// tokens from an unbounded FIND files DEPTH walk.)
+    const BIG_RESPONSE_HINT_THRESHOLD: usize = 2000;
+    /// The narrowing hint appended past `BIG_RESPONSE_HINT_THRESHOLD`.
+    const NARROW_HINT: &str = "large response — narrow with WHERE / IN / EXCLUDE, \
+                               add LIMIT N (page with OFFSET), or aggregate with \
+                               GROUP BY … ORDER BY … LIMIT";
 
     let tokens_approx = output.len().div_ceil(CHARS_PER_TOKEN);
     let show_tokens = tokens_approx >= TOKENS_FOOTER_THRESHOLD;
+    let show_hint = tokens_approx >= BIG_RESPONSE_HINT_THRESHOLD;
 
     let budget_csv = budget_line
         .map(|b| format!("\n\"line_budget\",\"{b}\""))
         .unwrap_or_default();
     let tokens_csv = if show_tokens {
         format!("\n\"tokens_approx\",{tokens_approx}")
+    } else {
+        String::new()
+    };
+    let hint_csv = if show_hint {
+        format!("\n\"hint\",\"{NARROW_HINT}\"")
     } else {
         String::new()
     };
@@ -201,12 +216,17 @@ fn append_meta(output: &str, budget_line: Option<&str>) -> String {
     } else {
         String::new()
     };
+    let hint_json = if show_hint {
+        format!(",\"hint\":\"{NARROW_HINT}\"")
+    } else {
+        String::new()
+    };
 
     output.strip_suffix('}').map_or_else(
         // Compact CSV — append as final rows.
-        || format!("{output}{budget_csv}{tokens_csv}"),
+        || format!("{output}{budget_csv}{tokens_csv}{hint_csv}"),
         // JSON object — splice fields before closing brace.
-        |prefix| format!("{prefix}{budget_json}{tokens_json}}}"),
+        |prefix| format!("{prefix}{budget_json}{tokens_json}{hint_json}}}"),
     )
 }
 
@@ -715,11 +735,26 @@ mod tests {
             "no budget configured must omit line_budget: {small}"
         );
 
-        // Large CSV output (> threshold): tokens_approx is restored as a hint.
+        // Large CSV output (> threshold): tokens_approx is restored as a hint,
+        // but the narrowing hint only fires past the big-response threshold.
         let big = super::append_meta(&format!("\"find_symbols\",0\n{}", "x".repeat(4096)), None);
         assert!(
             big.contains("tokens_approx"),
             "large output must keep tokens_approx as a narrowing hint"
+        );
+        assert!(
+            !big.contains("\"hint\""),
+            "mid-size output must not carry the narrowing hint: {}",
+            &big[big.len().saturating_sub(200)..]
+        );
+
+        // Very large output (> big-response threshold): the narrowing hint
+        // row is appended.
+        let huge = super::append_meta(&format!("\"find_files\",0\n{}", "x".repeat(9000)), None);
+        assert!(
+            huge.contains("\"hint\",\"large response"),
+            "huge output must carry the narrowing hint: {}",
+            &huge[huge.len().saturating_sub(300)..]
         );
 
         // A budget line (the caller only passes Some when warning/critical) is
@@ -742,6 +777,7 @@ mod tests {
             total: 0,
             metric_hint: None,
             group_by_field: None,
+            hint: None,
         });
         assert!(
             buffering_params(&query, 40).is_some(),

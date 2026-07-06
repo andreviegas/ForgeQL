@@ -36,6 +36,7 @@ impl ForgeQLEngine {
             Some(GroupBy::Field(f)) if f != "fql_kind" && f != "file" => Some(f.clone()),
             _ => None,
         };
+        let hint = Self::unknown_where_field_hint(clauses, &results);
 
         Ok(ForgeQLResult::Query(QueryResult {
             op: "find_symbols".to_string(),
@@ -43,7 +44,56 @@ impl ForgeQLEngine {
             total,
             metric_hint,
             group_by_field,
+            hint,
         }))
+    }
+
+    /// A one-line hint when the result set is empty and a WHERE field is not
+    /// a core field, not an enrichment field of any registered language, and
+    /// not carried by any row — the classic silent-empty-match footgun.
+    /// Static text keyed on the observed input; no inference.
+    fn unknown_where_field_hint(
+        clauses: &Clauses,
+        results: &[crate::result::SymbolMatch],
+    ) -> Option<String> {
+        const CORE_WHERE_FIELDS: &[&str] = &[
+            "name",
+            "fql_kind",
+            "kind",
+            "node_kind",
+            "path",
+            "file",
+            "line",
+            "usages",
+            "count",
+            "language",
+            "lang",
+            "extension",
+            "size",
+            "depth",
+            "signature",
+            "value",
+            "type",
+            "body",
+        ];
+        if !results.is_empty() {
+            return None;
+        }
+        for pred in &clauses.where_predicates {
+            let field = pred.field.as_str();
+            if CORE_WHERE_FIELDS.contains(&field) {
+                continue;
+            }
+            if !crate::storage::legacy::is_known_enrichment_field(field) {
+                return Some(format!(
+                    "no rows carry a field named '{field}' — unknown WHERE fields \
+                     match nothing. Check the spelling against the core fields \
+                     (name, fql_kind, path, line, usages, …) and the enrichment \
+                     fields in the syntax reference."
+                ));
+            }
+        }
+        None
     }
 
     /// `FIND usages OF 'symbol' ...`
@@ -74,6 +124,7 @@ impl ForgeQLEngine {
             total,
             metric_hint: None,
             group_by_field: None,
+            hint: None,
         }))
     }
 

@@ -1828,3 +1828,36 @@ fn find_symbols_usages_count_is_real() {
         "WHERE usages > 0 must not be pruned by the stale zone map"
     );
 }
+
+/// A WHERE field that no row type carries silently matches nothing; the
+/// query result must carry a one-line hint naming the unknown field. A
+/// valid enrichment field that merely has no matches must NOT hint.
+#[test]
+fn unknown_where_field_gets_hint() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let r = execute_fql(&mut engine, &sid, "FIND symbols WHERE nmae = 'x'");
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    assert_eq!(qr.total, 0);
+    assert!(
+        qr.hint.as_deref().unwrap_or("").contains("'nmae'"),
+        "hint should name the unknown field: {:?}",
+        qr.hint
+    );
+
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE has_todo = 'true' WHERE name = 'no_such_fn_zz'",
+    );
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    assert!(
+        qr.hint.is_none(),
+        "a valid enrichment field must not hint: {:?}",
+        qr.hint
+    );
+}

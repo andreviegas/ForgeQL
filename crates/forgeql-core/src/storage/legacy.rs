@@ -14,6 +14,16 @@
 
 mod helpers;
 mod prefilter;
+
+/// Whether `field` is a known enrichment field name for ANY language.
+///
+/// Used by the engine to tell a misspelled WHERE field (matches nothing,
+/// worth a hint) apart from a valid enrichment field with no matching rows.
+#[must_use]
+pub fn is_known_enrichment_field(field: &str) -> bool {
+    prefilter::is_known_enrichment_field(field)
+}
+
 mod resolve;
 
 use std::collections::HashMap;

@@ -257,6 +257,14 @@ fn field_to_kinds(configs: &[&LanguageConfig], field: &str) -> Option<Vec<String
     }
 }
 
+/// Whether `field` is a known enrichment field name for ANY language —
+/// membership in the static field→kind map. Used by the engine to tell a
+/// misspelled WHERE field (matches nothing, worth a hint) apart from a
+/// valid enrichment field that simply has no matching rows.
+pub(super) fn is_known_enrichment_field(field: &str) -> bool {
+    get_field_kind_map().contains_key(field)
+}
+
 /// Inspect WHERE predicates for enrichment fields and, when all resolvable
 /// fields agree on the same set of kinds, return that set.
 ///

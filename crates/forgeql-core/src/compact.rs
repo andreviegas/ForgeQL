@@ -502,11 +502,17 @@ fn compact_verify(v: &VerifyBuildResult) -> String {
 // -----------------------------------------------------------------------
 
 fn compact_query(query: &QueryResult) -> String {
-    match query.op.as_str() {
+    let mut out = match query.op.as_str() {
         "find_usages" => compact_find_usages(query),
         "count_usages" => compact_count_usages(query),
         _ => compact_find_grouped_by_kind(query),
+    };
+    // Engine-attached guidance (e.g. a WHERE field no row type carries):
+    // one CSV row so the caller sees it next to the (usually empty) results.
+    if let Some(hint) = &query.hint {
+        row(&mut out, &[&q("hint"), &q(hint)]);
     }
+    out
 }
 
 /// FIND usages → grouped by file, values are comma-separated line numbers.
