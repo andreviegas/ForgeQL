@@ -180,8 +180,8 @@ pub(super) fn parse_toc_entries(mmap: &[u8], toc_count: usize) -> Result<Vec<Toc
     Ok(toc)
 }
 
-/// Locate all ten named blobs and return their byte ranges in TOC order.
-pub(super) fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; 12]> {
+/// Locate all named blobs (TOC_COUNT of them) and return their byte ranges in TOC order.
+pub(super) fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; TOC_COUNT]> {
     let find_one = |name: &[u8]| -> Result<Range<usize>> {
         for entry in toc {
             let stored = entry
@@ -212,6 +212,7 @@ pub(super) fn find_blob_ranges(toc: &[TocEntry]) -> Result<[Range<usize>; 12]> {
         find_one(b"index_files")?,
         find_one(b"enrich_bitmaps")?,
         find_one(b"file_entries")?,
+        find_one(b"usages_count_fst")?,
     ])
 }
 
@@ -285,6 +286,7 @@ pub(super) fn validate_blob_layout(
         index_files_r,
         _, // enrich_bitmaps: no size constraint
         _, // file_entries: variable-length, validated during parse
+        _, // usages_count_fst: FST bytes, no fixed record size (v14)
     ] = blobs;
     let max_end = blobs.iter().map(|r| r.end).max().unwrap_or(0);
     ensure!(

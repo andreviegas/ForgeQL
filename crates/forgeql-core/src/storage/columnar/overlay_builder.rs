@@ -151,6 +151,9 @@ impl OverlayBuilder {
         // 7.6. File-only entries blob.
         let file_entries_bytes = self.step76_build_file_entries(&file_only);
 
+        // 6.5. Usages-count FST (BUG-006 U3): name → total usage-site count.
+        let usages_count_fst_bytes = Self::step65_build_usages_count_fst(&segs)?;
+
         // 8. Atomic overlay write.
         Self::step8_write_overlay(
             overlay_path,
@@ -165,6 +168,7 @@ impl OverlayBuilder {
                 index_files_bytes,
                 enrich_bitmaps_bytes: &enrich_bitmaps_bytes,
                 file_entries_bytes: &file_entries_bytes,
+                usages_count_fst_bytes: &usages_count_fst_bytes,
             },
         )?;
 
@@ -658,6 +662,47 @@ impl OverlayBuilder {
             "TIMING step6: name FST + trigrams",
         );
         Ok((name_fst_bytes, name_postings_bytes, name_trigram_postings))
+    }
+
+    /// Step 6.5 (BUG-006 U3): merge every segment's usage postings into one
+    /// FST mapping symbol name → total usage-site count across the workspace.
+    ///
+    /// Each segment `usages_fst` value encodes `count | (byte_offset << 32)`;
+    /// the aggregate needs only the count (low 32 bits), so the postings
+    /// bytes are never touched. Returns an empty vec when no segment carries
+    /// usage postings (the overlay blob is then zero-length).
+    fn step65_build_usages_count_fst(segs: &[(PathBuf, String, SegmentReader)]) -> Result<Vec<u8>> {
+        let t_step = std::time::Instant::now();
+        let mut counts: BTreeMap<Vec<u8>, u64> = BTreeMap::new();
+        for (_, _, reader) in segs {
+            let Some(fst) = &reader.usages_fst else {
+                continue;
+            };
+            let mut stream = fst.stream();
+            while let Some((name_bytes, encoded)) = stream.next() {
+                *counts.entry(name_bytes.to_vec()).or_default() += encoded & 0xFFFF_FFFF;
+            }
+        }
+        if counts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let names = counts.len();
+        let mut fst_builder = MapBuilder::memory();
+        for (name, count) in &counts {
+            fst_builder
+                .insert(name, *count)
+                .context("usages_count_fst insert")?;
+        }
+        let bytes = fst_builder
+            .into_inner()
+            .context("finalising usages_count FST")?;
+        info!(
+            ms = t_step.elapsed().as_millis(),
+            names,
+            bytes = bytes.len(),
+            "TIMING step6.5: usages-count FST"
+        );
+        Ok(bytes)
     }
 
     // ── Steps 7.5 + 7.6 ─────────────────────────────────────────────────────

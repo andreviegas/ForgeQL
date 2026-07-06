@@ -25,6 +25,9 @@ impl ColumnarStorage {
         //             path globs, dirty-overlay shadows, and numeric zone maps.
         //   Stage 3 — materialise the surviving rows, then union the dirty overlay.
         //   Stage 4 — deduplicate on (name, fql_kind, path, line).
+        //   Stage 4b — stamp usages_count from the overlay usages aggregate
+        //             (BUG-006 U3) so WHERE usages / ORDER BY usages see real
+        //             values in Stage 5.
         //   Stage 5 — apply residual WHERE, ORDER BY, LIMIT, OFFSET.
         // GROUP BY and ORDER BY name fast-paths short-circuit the pipeline. The
         // count-based GROUP BY paths are only valid when source paths are unique;
@@ -36,7 +39,8 @@ impl ColumnarStorage {
         if group_by_file_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
             return self.fast_group_by_file(clauses);
         }
-        if let Some(results) = self.try_order_by_name_fast_paths(clauses) {
+        if let Some(mut results) = self.try_order_by_name_fast_paths(clauses) {
+            self.stamp_usage_counts(&mut results);
             return results;
         }
 
@@ -50,8 +54,22 @@ impl ColumnarStorage {
             results.append(&mut dirty_results);
         }
         dedupe_symbol_matches(&mut results);
+        self.stamp_usage_counts(&mut results);
         apply_clauses(&mut results, clauses);
         results
+    }
+
+    /// Stage 4b (BUG-006 U3): overwrite each row's `usages_count` with the
+    /// workspace-total usage-site count from the overlay usages aggregate.
+    ///
+    /// The per-segment `usages_count` column is a legacy always-zero field;
+    /// the overlay FST is the source of truth. One O(log n) FST lookup per
+    /// materialised row, before LIMIT — bounded by the candidate set size.
+    fn stamp_usage_counts(&self, results: &mut [SymbolMatch]) {
+        for row in results.iter_mut() {
+            let count = self.overlay.usage_count(&row.name);
+            row.usages_count = Some(usize::try_from(count).unwrap_or(usize::MAX));
+        }
     }
 
     pub(super) fn find_usages_impl(
@@ -283,12 +301,14 @@ impl ColumnarStorage {
         }
         for pred in &clauses.where_predicates {
             if let PredicateValue::Number(val_i64) = &pred.value {
-                // The FQL parser emits "usages" but the zone-map column is
-                // written as "usages_count" by the segment builder.
-                let col = match pred.field.as_str() {
-                    "usages" => "usages_count",
-                    other => other,
-                };
+                let col = pred.field.as_str();
+                // BUG-006 U3: `usages` is stamped at query time from the
+                // overlay usages aggregate; the per-segment `usages_count`
+                // zone map is a stale all-zeros column and must NOT prune
+                // candidates. All other numeric columns keep zone-map pruning.
+                if col == "usages" || col == "usages_count" {
+                    continue;
+                }
                 // Impossible-predicate short-circuit for u32 columns: no stored
                 // value satisfies col < 0, col <= negative, or col = negative.
                 let impossible = ZONEMAP_NUMERIC_FIELDS.iter().any(|(f, _)| *f == col)

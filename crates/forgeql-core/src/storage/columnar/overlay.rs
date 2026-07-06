@@ -108,6 +108,11 @@ pub struct Overlay {
     /// Zero-copy FST backed by a slice of the mmap.
     name_fst: FstMap<MmapSlice>,
 
+    /// Zero-copy usages-count FST (FQOV v14, BUG-006 U3): symbol name →
+    /// total usage-site count across all segments. `None` when the blob is
+    /// zero-length (no usage postings anywhere in the workspace).
+    usages_count_fst: Option<FstMap<MmapSlice>>,
+
     /// Reverse-lookup index: `(sha256, seg_idx)` pairs sorted by `sha256`.
     ///
     /// Binary-search this array to find a segment by its node_id hex prefix
@@ -154,6 +159,7 @@ impl Overlay {
             index_files_range,
             enrich_bitmaps_range,
             file_entries_range,
+            usages_count_fst_range,
         ] = blobs;
 
         let row_count = u32::try_from(row_table_range.len() / std::mem::size_of::<RowPtr>())
@@ -190,6 +196,21 @@ impl Overlay {
         ))
         .context("loading name FST from overlay")?;
 
+        // Usages-count FST (FQOV v14, BUG-006 U3): zero-length blob means no
+        // segment carries usage postings.
+        let usages_count_fst = if usages_count_fst_range.is_empty() {
+            None
+        } else {
+            Some(
+                FstMap::new(MmapSlice::new(
+                    Arc::clone(&mmap),
+                    usages_count_fst_range.start,
+                    usages_count_fst_range.end,
+                ))
+                .context("loading usages-count FST from overlay")?,
+            )
+        };
+
         // Detect duplicate source paths — signals that the overlay contains
         // redundant rows that the query pipeline deduplicates but raw counts
         // (row_count, kind bitmap lengths) do not.
@@ -225,6 +246,7 @@ impl Overlay {
             file_entries,
             has_duplicate_paths,
             name_fst,
+            usages_count_fst,
             seg_id_index,
         }))
     }
@@ -573,6 +595,19 @@ impl Overlay {
             return RoaringBitmap::new();
         };
         self.decode_postings(encoded)
+    }
+
+    /// Total usage-site count for `name` across all segments (BUG-006 U3).
+    ///
+    /// Read from the `usages_count_fst` overlay blob. Returns 0 when the
+    /// overlay carries no usage postings or the name never occurs as a
+    /// usage site.
+    #[must_use]
+    pub fn usage_count(&self, name: &str) -> u64 {
+        self.usages_count_fst
+            .as_ref()
+            .and_then(|fst| fst.get(name.as_bytes()))
+            .unwrap_or(0)
     }
 
     /// Trigram-based candidate prefilter for substring search over names.
@@ -968,6 +1003,7 @@ mod tests {
                     index_files_bytes: &[],
                     enrich_bitmaps_bytes: &[],
                     file_entries_bytes: &[],
+                    usages_count_fst_bytes: &[],
                 },
             )
             .expect("write_v3");

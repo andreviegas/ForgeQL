@@ -6,6 +6,31 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.94.0] — 2026-07-06 — feat(query): real usages_count on FIND symbols rows (BUG-006 slice U3)
+
+### Added
+
+- **Overlay usages aggregate** (BUG-006 U3): the overlay gains a 13th TOC
+  blob, `usages_count_fst` — an FST mapping symbol name → total usage-site
+  count, summed across every segment's `usages_fst` values at overlay-build
+  time (the count is the low 32 bits of each FST value; postings bytes are
+  never decoded). Zero-length blob when no segment carries postings.
+  Overlay `SCHEMA_VERSION` 13→14 (existing v23 segments rebuild the overlay
+  on next USE — no re-index).
+
+### Fixed
+
+- `FIND symbols` rows reported `usages = 0` forever: `usages_count` is now
+  stamped at query time from the overlay aggregate (main pipeline + ORDER BY
+  name fast paths), so `ORDER BY usages DESC` and `WHERE usages > N` return
+  real results.
+- `WHERE usages > N` silently returned nothing: the per-segment
+  `usages_count` zone map (an all-zeros legacy column) pruned every
+  candidate segment. Zone-map pruning is skipped for the `usages` field;
+  all other numeric columns keep it.
+- Remaining slice: U4 audits collection completeness (`Point::new` path
+  segments).
+
 ## [0.93.0] — 2026-07-06 — feat(query): FIND usages OF returns real usage sites (BUG-006 slice U2)
 
 ### Fixed

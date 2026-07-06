@@ -1793,3 +1793,38 @@ fn find_usages_returns_usage_sites_not_definitions() {
         qr.results.len()
     );
 }
+
+/// BUG-006 U3: `FIND symbols` rows carry a real `usages_count` stamped from
+/// the overlay usages aggregate (it was perpetually 0), and `WHERE usages`
+/// predicates are no longer pruned to empty by the stale all-zeros zone map.
+#[test]
+fn find_symbols_usages_count_is_real() {
+    let (mut engine, session_id, _dir) = engine_with_session();
+    let result = execute_fql(
+        &mut engine,
+        &session_id,
+        "FIND symbols WHERE name = 'encenderMotor' WHERE fql_kind = 'function'",
+    );
+    let ForgeQLResult::Query(qr) = result else {
+        panic!("expected Query result");
+    };
+    let row = qr.results.first().expect("encenderMotor row");
+    assert!(
+        row.usages_count.unwrap_or(0) >= 2,
+        "usages_count must come from the usages aggregate, got {:?}",
+        row.usages_count
+    );
+
+    let filtered = execute_fql(
+        &mut engine,
+        &session_id,
+        "FIND symbols WHERE name = 'encenderMotor' WHERE usages > 0",
+    );
+    let ForgeQLResult::Query(fq) = filtered else {
+        panic!("expected Query result");
+    };
+    assert!(
+        !fq.results.is_empty(),
+        "WHERE usages > 0 must not be pruned by the stale zone map"
+    );
+}

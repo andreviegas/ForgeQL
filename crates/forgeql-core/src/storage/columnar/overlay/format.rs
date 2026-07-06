@@ -47,7 +47,9 @@ pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 ///   (BUG-019: C/Rust shift rows gain `fql_kind = "shift_expression"`).
 /// - **13**: no layout change — content invalidation for ENRICH_VER 23
 ///   (BUG-006 U1: segments gain `usages_fst`/`usages_postings` blobs).
-pub(crate) const SCHEMA_VERSION: u32 = 13;
+/// - **14**: TOC gains blob 13 `usages_count_fst` (BUG-006 U3): FST mapping
+///   symbol name → total usage-site count aggregated across all segments.
+pub(crate) const SCHEMA_VERSION: u32 = 14;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;
@@ -58,10 +60,11 @@ pub(crate) const TOC_ENTRY_SIZE: usize = 64;
 /// Max byte length of a blob name within a `TocEntry`.
 pub(crate) const TOC_ENTRY_NAME_LEN: usize = 56;
 
-/// Number of named blobs in an FQOV v8 file (11 original + `file_entries`).
-pub(crate) const TOC_COUNT: usize = 12;
+/// Number of named blobs in an FQOV file (11 original + `file_entries` +
+/// `usages_count_fst`).
+pub(crate) const TOC_COUNT: usize = 13;
 
-/// Total byte size of the header + TOC region (= 24 + 12 * 64 = 792).
+/// Total byte size of the header + TOC region (= 24 + 13 * 64 = 856).
 pub(crate) const HEADER_V3_LEN: usize = HEADER_LEN + TOC_COUNT * TOC_ENTRY_SIZE;
 
 // ─────────────────────────────────────────────────────────────────────────────

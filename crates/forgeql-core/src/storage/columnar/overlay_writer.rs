@@ -28,11 +28,12 @@ const BLOB_SEGMENT_STRINGS: &[u8] = b"segment_strings";
 const BLOB_INDEX_FILES: &[u8] = b"index_files";
 const BLOB_ENRICH_BITMAPS: &[u8] = b"enrich_bitmaps";
 const BLOB_FILE_ENTRIES: &[u8] = b"file_entries";
+const BLOB_USAGES_COUNT_FST: &[u8] = b"usages_count_fst";
 
 // On-disk header constants as u32, expressed with u32 literals to avoid usize→u32 casts.
 // Compile-time assertions below keep these in sync with the usize originals in overlay.rs.
-const HEADER_V3_LEN_U32: u32 = 24_u32 + 12_u32 * 64_u32; // = HEADER_LEN + TOC_COUNT * TOC_ENTRY_SIZE
-const TOC_COUNT_U32: u32 = 12_u32; // = TOC_COUNT
+const HEADER_V3_LEN_U32: u32 = 24_u32 + 13_u32 * 64_u32; // = HEADER_LEN + TOC_COUNT * TOC_ENTRY_SIZE
+const TOC_COUNT_U32: u32 = 13_u32; // = TOC_COUNT
 const _: () = assert!(
     HEADER_V3_LEN_U32 as usize == HEADER_V3_LEN,
     "HEADER_V3_LEN_U32 out of sync with overlay.rs"
@@ -62,6 +63,10 @@ pub(super) struct WriteV3Params<'a> {
     /// Format: `[u32 count][repeated: [u32 size][u16 path_len][u8; path_len]]`.
     /// Pass `&[]` when no file-only entries are present.
     pub(super) file_entries_bytes: &'a [u8],
+    /// Serialised usages-count FST blob (FQOV v14, BUG-006 U3).
+    /// FST mapping symbol name → total usage-site count across all segments.
+    /// Pass `&[]` when no usage postings exist.
+    pub(super) usages_count_fst_bytes: &'a [u8],
 }
 struct ComputedBlobs {
     kind_strings: Vec<u8>,
@@ -190,6 +195,7 @@ pub(super) fn write_v3(out: &mut impl Write, params: &WriteV3Params<'_>) -> io::
         (BLOB_INDEX_FILES, params.index_files_bytes),
         (BLOB_ENRICH_BITMAPS, params.enrich_bitmaps_bytes),
         (BLOB_FILE_ENTRIES, params.file_entries_bytes),
+        (BLOB_USAGES_COUNT_FST, params.usages_count_fst_bytes),
     ];
 
     // ── Compute TOC offsets ───────────────────────────────────────────────
