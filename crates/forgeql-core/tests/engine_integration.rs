@@ -1861,3 +1861,55 @@ fn unknown_where_field_gets_hint() {
         qr.hint
     );
 }
+
+/// The mechanical rename sweep: FIND aims at the usage sites, CHANGE NODES
+/// LAST sweeps the replacement across exactly those lines. Occurrences in
+/// string literals and comments are NOT usage sites, so they survive — the
+/// fixture's classic sed-trap lines prove the precision.
+#[test]
+fn rename_sweep_via_find_then_change_nodes_last() {
+    let (mut engine, sid, dir) = engine_with_session();
+
+    let r = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    assert!(!qr.results.is_empty(), "usage sites expected");
+
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        "CHANGE NODES LAST MATCHING WORD 'encenderMotor' WITH 'startMotor'",
+    );
+    let ForgeQLResult::Mutation(mr) = r else {
+        panic!("expected Mutation result");
+    };
+    assert!(mr.applied);
+    assert!(
+        mr.edit_count >= 2,
+        "multiple sites swept: {}",
+        mr.edit_count
+    );
+
+    let cpp = fs::read_to_string(dir.path().join("motor_control.cpp")).expect("read cpp");
+    assert!(cpp.contains("startMotor"), "rename applied");
+    assert!(
+        cpp.contains("encenderMotor: velocidad"),
+        "string-literal occurrence must survive (not a usage site)"
+    );
+}
+
+/// `CHANGE NODES LAST` without a previous FIND fails with guidance.
+#[test]
+fn change_nodes_last_without_find_errors() {
+    let (mut engine, sid, _dir) = engine_with_session();
+    let ops = parser::parse("CHANGE NODES LAST MATCHING 'a' WITH 'b'").expect("parse");
+    let coords = SessionCoords::from_session_id(&sid).expect("valid session_id");
+    let err = engine
+        .execute(auth(AuthContext::Tester), Some(&coords), &ops[0])
+        .expect_err("must fail without a previous FIND");
+    assert!(
+        err.to_string().contains("no previous FIND result"),
+        "guidance expected: {err}"
+    );
+}

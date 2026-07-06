@@ -293,6 +293,7 @@ impl ForgeQLEngine {
             let target_node: Option<String> = match op {
                 ForgeQLIR::FindNode { node_id }
                 | ForgeQLIR::ChangeNode { node_id, .. }
+                | ForgeQLIR::ChangeNodeMatching { node_id, .. }
                 | ForgeQLIR::InsertNode { node_id, .. }
                 | ForgeQLIR::DeleteNode { node_id, .. }
                 | ForgeQLIR::ShowNode { node_id, .. } => Some(node_id.clone()),
@@ -341,6 +342,8 @@ impl ForgeQLEngine {
                 | ForgeQLIR::ShowNode { .. }
                 | ForgeQLIR::ShowMore { .. }
                 | ForgeQLIR::ChangeNode { .. }
+                | ForgeQLIR::ChangeNodeMatching { .. }
+                | ForgeQLIR::ChangeNodesLast { .. }
                 | ForgeQLIR::InsertNode { .. }
                 | ForgeQLIR::DeleteNode { .. }
                 | ForgeQLIR::BeginTransaction { .. }
@@ -415,6 +418,8 @@ impl ForgeQLEngine {
             // --- Mutations ---
             ForgeQLIR::ChangeContent { .. } => self.exec_mutation(sid, op, true),
             ForgeQLIR::ChangeNode { .. } => self.exec_change_node(sid, op),
+            ForgeQLIR::ChangeNodeMatching { .. } => self.exec_change_node_matching(sid, op),
+            ForgeQLIR::ChangeNodesLast { .. } => self.exec_change_nodes_last(sid, op),
             ForgeQLIR::InsertNode { .. } => self.exec_insert_node(sid, op),
             ForgeQLIR::DeleteNode { .. } => self.exec_delete_node(sid, op),
             ForgeQLIR::CopyLines { .. } => self.exec_copy_lines(sid, op),

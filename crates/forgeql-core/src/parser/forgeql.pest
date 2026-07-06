@@ -96,6 +96,7 @@ statement = {
   | move_stmt
   | find_stmt
   | find_node_stmt
+  | change_nodes_last_stmt
   | change_node_stmt
   | insert_node_stmt
   | delete_node_stmt
@@ -109,7 +110,13 @@ statement = {
 find_node_stmt = { "FIND" ~ "NODE" ~ any_value }
 
 /// `CHANGE NODE 'id' [IF REV 'rev'] WITH content` — replace node source lines.
-change_node_stmt = { "CHANGE" ~ "NODE" ~ any_value ~ if_rev_clause? ~ "WITH" ~ content_value }
+/// `CHANGE NODE 'id' [IF REV 'rev'] MATCHING [WORD] 'a' WITH 'b'` — replace
+/// pattern occurrences inside the node only (node-scoped mechanical rename).
+change_node_stmt = { "CHANGE" ~ "NODE" ~ any_value ~ if_rev_clause? ~ (change_matching | ("WITH" ~ content_value)) }
+
+/// `CHANGE NODES LAST MATCHING [WORD] 'a' WITH 'b'` — apply the replacement
+/// on every line of the previous FIND result (the mechanical rename sweep).
+change_nodes_last_stmt = { "CHANGE" ~ "NODES" ~ "LAST" ~ change_matching }
 
 /// `INSERT BEFORE|AFTER NODE 'id' WITH content` — insert lines around a node.
 insert_node_stmt = { "INSERT" ~ insert_position ~ "NODE" ~ any_value ~ "WITH" ~ content_value }

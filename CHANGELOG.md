@@ -6,6 +6,37 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.99.0] — 2026-07-06 — feat(mutate): the mechanical rename sweep
+
+### Added
+
+- `CHANGE NODE '<id>' [IF REV '<rev>'] MATCHING [WORD] 'old' WITH 'new'` —
+  replace pattern occurrences inside one node's span only. Same matching
+  semantics as the file-level form (plain substring, or `WORD` for
+  whole-word boundaries), scoped to the node's current lines.
+- `CHANGE NODES LAST MATCHING [WORD] 'old' WITH 'new'` — apply the
+  replacement on every line of the previous FIND result in the session.
+  This completes the two-step rename workflow: `FIND usages OF 'old'`
+  aims at the exact occurrence sites (string literals and comments are
+  not usage sites, so they survive untouched), then the sweep replaces
+  only on those lines across every file, in one mutation with one
+  boundary diff. Works across every indexed format — code, AUTOSAR XML,
+  CMake, DBC, reStructuredText.
+- Sessions remember the `(path, line)` sites of the most recent FIND
+  result; a sweep without a previous FIND fails with guidance, and a
+  pattern that matches none of the remembered lines is an error rather
+  than a silent no-op. Any mutation (including UNDO) invalidates the
+  remembered sites — line numbers may have shifted, so the sweep must
+  re-aim with a fresh FIND.
+
+### Fixed
+
+- Node insertions and deletions did not invalidate the commit gate: a
+  gated VERIFY pass stayed "satisfied" across a subsequent INSERT NODE /
+  DELETE NODE, so COMMIT could accept unverified edits. All plan-based
+  mutations now share the same bookkeeping (gate invalidation, edit
+  counter, FIND-site invalidation).
+
 ## [0.98.0] — 2026-07-06 — feat(hints): oversized-response and unknown-field guidance
 
 ### Added

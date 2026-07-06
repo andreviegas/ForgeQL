@@ -255,6 +255,28 @@ pub enum ForgeQLIR {
         content: String,
     },
 
+    /// `CHANGE NODE 'id' [IF REV 'rev'] MATCHING [WORD] 'a' WITH 'b'` —
+    /// replace pattern occurrences inside the node's span only.
+    ChangeNodeMatching {
+        node_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        if_rev: Option<String>,
+        pattern: String,
+        replacement: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        word_boundary: bool,
+    },
+
+    /// `CHANGE NODES LAST MATCHING [WORD] 'a' WITH 'b'` — apply the
+    /// replacement on every line of the previous FIND result in this
+    /// session (the mechanical rename sweep).
+    ChangeNodesLast {
+        pattern: String,
+        replacement: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        word_boundary: bool,
+    },
+
     /// `INSERT BEFORE NODE 'id' WITH content` / `INSERT AFTER NODE 'id' WITH content`
     InsertNode {
         node_id: String,

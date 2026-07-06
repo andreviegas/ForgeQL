@@ -9,7 +9,7 @@ use super::ForgeQLEngine;
 use super::{detect_metric_hint, reject_text_filter, require_session_id};
 impl ForgeQLEngine {
     pub(super) fn find_symbols(
-        &self,
+        &mut self,
         session_id: Option<&str>,
         backend: &Backend,
         clauses: &Clauses,
@@ -37,6 +37,7 @@ impl ForgeQLEngine {
             _ => None,
         };
         let hint = Self::unknown_where_field_hint(clauses, &results);
+        self.record_find_sites(sid, &results);
 
         Ok(ForgeQLResult::Query(QueryResult {
             op: "find_symbols".to_string(),
@@ -98,7 +99,7 @@ impl ForgeQLEngine {
 
     /// `FIND usages OF 'symbol' ...`
     pub(super) fn find_usages(
-        &self,
+        &mut self,
         session_id: Option<&str>,
         of: &str,
         backend: &Backend,
@@ -117,6 +118,7 @@ impl ForgeQLEngine {
         if clauses.limit.is_none() {
             results.truncate(session.output_config().find_limit);
         }
+        self.record_find_sites(sid, &results);
 
         Ok(ForgeQLResult::Query(QueryResult {
             op: "find_usages".to_string(),
@@ -126,6 +128,32 @@ impl ForgeQLEngine {
             group_by_field: None,
             hint: None,
         }))
+    }
+
+    /// Remember `(rel_path, line)` for every result row carrying both — the
+    /// target set consumed by `CHANGE NODES LAST MATCHING …`. Rows without a
+    /// path or line (GROUP BY aggregates, source listings) record nothing,
+    /// leaving the previous target set intact.
+    fn record_find_sites(&mut self, sid: &str, results: &[crate::result::SymbolMatch]) {
+        let Some(session) = self.sessions.get_mut(sid) else {
+            return;
+        };
+        let root = session.worktree_path.clone();
+        let sites: Vec<(String, usize)> = results
+            .iter()
+            .filter_map(|r| {
+                let path = r.path.as_ref()?;
+                let line = r.line?;
+                // Backends may return worktree-absolute paths; store
+                // worktree-relative so the sweep can resolve them safely.
+                let rel = path.strip_prefix(&root).unwrap_or(path);
+                Some((rel.to_string_lossy().into_owned(), line))
+            })
+            .collect();
+        if sites.is_empty() {
+            return;
+        }
+        session.last_find_sites = sites;
     }
 
     /// FIND NODE id — resolve a `node_id` to its location, rev, and nav links.

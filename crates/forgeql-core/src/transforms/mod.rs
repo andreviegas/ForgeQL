@@ -308,6 +308,25 @@ pub fn lines_removed<S: std::hash::BuildHasher>(
         })
         .sum()
 }
+
+/// Collect replacement edits for `pattern` restricted to a byte `range` of
+/// `source` — the node- and line-scoped mechanical rename primitive.
+///
+/// Returns an empty vec when the pattern does not occur inside the range;
+/// the caller decides whether that is an error.
+///
+/// # Errors
+/// Returns `Err` when the range is out of bounds, the slice is not valid
+/// UTF-8, or the WORD pattern cannot be compiled.
+pub fn matching_edits_in_range(
+    source: &[u8],
+    pattern: &str,
+    replacement: &str,
+    word_boundary: bool,
+    range: std::ops::Range<usize>,
+) -> anyhow::Result<Vec<ByteRangeEdit>> {
+    change::matching_edits_in_range(source, pattern, replacement, word_boundary, range)
+}
 /// What `apply()` returns — enough data to undo every write.
 #[derive(Debug)]
 pub struct TransformResult {

@@ -253,6 +253,10 @@ pub struct Session {
     /// Mutations applied since the last successful gated `VERIFY build`,
     /// surfaced only to enrich the COMMIT-blocked message.
     pub edits_since_gate: usize,
+    /// `(rel_path, line)` for every row of the most recent FIND result that
+    /// carried both a path and a line — the target set for
+    /// `CHANGE NODES LAST MATCHING …` (the mechanical rename sweep).
+    pub last_find_sites: Vec<(String, usize)>,
     /// Optional line-budget tracker.  `None` when the `.forgeql.yaml` does
     /// not contain a `line_budget` section.
     budget: Option<BudgetState>,
@@ -325,6 +329,7 @@ impl Session {
             frozen_output_config: None,
             satisfied_gates: std::collections::HashSet::new(),
             edits_since_gate: 0,
+            last_find_sites: Vec::new(),
             budget: None,
             budget_data_dir: None,
             budget_branch: None,

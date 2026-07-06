@@ -223,6 +223,44 @@ fn resolve_matching(
     })
 }
 
+/// Collect replacement edits for `pattern` restricted to `range` (byte
+/// offsets) of `source` — the node- and line-scoped mechanical rename.
+///
+/// Mirrors [`resolve_matching`]'s match collection; returns an empty vec
+/// when the pattern does not occur inside the range (the caller decides
+/// whether that is an error).
+pub(super) fn matching_edits_in_range(
+    source: &[u8],
+    pattern: &str,
+    replacement: &str,
+    word_boundary: bool,
+    range: std::ops::Range<usize>,
+) -> Result<Vec<ByteRangeEdit>> {
+    let slice = source
+        .get(range.clone())
+        .ok_or_else(|| anyhow!("byte range {range:?} out of bounds"))?;
+    let text = std::str::from_utf8(slice).map_err(|e| anyhow!("not valid UTF-8: {e}"))?;
+    let base = range.start;
+
+    let ranges: Vec<std::ops::Range<usize>> = if word_boundary {
+        let escaped = regex::escape(pattern);
+        let re = regex::Regex::new(&format!(r"\b{escaped}\b"))
+            .map_err(|e| anyhow!("invalid WORD pattern: {e}"))?;
+        re.find_iter(text)
+            .map(|m| base + m.start()..base + m.end())
+            .collect()
+    } else {
+        text.match_indices(pattern)
+            .map(|(start, _)| base + start..base + start + pattern.len())
+            .collect()
+    };
+
+    Ok(ranges
+        .into_iter()
+        .map(|r| ByteRangeEdit::new(r, replacement))
+        .collect())
+}
+
 fn resolve_lines(
     rel_path: &str,
     abs_path: &Path,

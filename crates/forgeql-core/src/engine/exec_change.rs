@@ -84,6 +84,9 @@ impl ForgeQLEngine {
         if let Some(session) = self.sessions.get_mut(sid) {
             session.satisfied_gates.clear();
             session.edits_since_gate = session.edits_since_gate.saturating_add(1);
+            // Line numbers may have shifted: any mutation invalidates the
+            // remembered FIND sites so a sweep must re-aim with a fresh FIND.
+            session.last_find_sites.clear();
         }
 
         // Build the diff AFTER apply + reindex so each present line carries an
@@ -206,6 +209,16 @@ impl ForgeQLEngine {
         let applied = plan.apply()?;
         self.reindex_session(sid, &files_changed);
 
+        // A successful mutation invalidates every commit gate and the
+        // remembered FIND sites (line numbers may have shifted). This is the
+        // shared bookkeeping for every plan-based mutation (insert/delete
+        // node, node-scoped matching, the rename sweep).
+        if let Some(session) = self.sessions.get_mut(sid) {
+            session.satisfied_gates.clear();
+            session.edits_since_gate = session.edits_since_gate.saturating_add(1);
+            session.last_find_sites.clear();
+        }
+
         // Diff built after apply + reindex so it carries inline node addresses.
         let diff = self.build_post_edit_diff(sid, &edits_snapshot, &applied.originals);
         let lines_removed = crate::transforms::lines_removed(&edits_snapshot, &applied.originals);
@@ -271,6 +284,8 @@ impl ForgeQLEngine {
         if let Some(session) = self.sessions.get_mut(sid) {
             session.satisfied_gates.clear();
             session.edits_since_gate = session.edits_since_gate.saturating_add(1);
+            // UNDO shifts lines back too — remembered FIND sites are stale.
+            session.last_find_sites.clear();
         }
 
         let mut summary = format!(
@@ -378,6 +393,156 @@ impl ForgeQLEngine {
             m.new_node_id = new_node_id;
         }
         Ok(result)
+    }
+
+    /// `CHANGE NODE 'id' [IF REV] MATCHING [WORD] 'a' WITH 'b'` — replace
+    /// pattern occurrences inside the node's current line span only.
+    pub(super) fn exec_change_node_matching(
+        &mut self,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        let (node_id, if_rev, pattern, replacement, word_boundary) = match op {
+            ForgeQLIR::ChangeNodeMatching {
+                node_id,
+                if_rev,
+                pattern,
+                replacement,
+                word_boundary,
+            } => (
+                node_id.as_str(),
+                if_rev.as_deref(),
+                pattern.as_str(),
+                replacement.as_str(),
+                *word_boundary,
+            ),
+            _ => bail!("exec_change_node_matching called with wrong IR variant"),
+        };
+        let NodeSpan {
+            rel_path,
+            node_line,
+            start,
+            end,
+            ..
+        } = self.resolve_node_span(session_id, node_id, if_rev)?;
+        let sid = require_session_id(session_id)?;
+
+        let plan = {
+            let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
+            let abs_path = workspace.safe_path(&rel_path)?;
+            let file_bytes = crate::workspace::file_io::read_bytes(&abs_path)?;
+            let (span_start, span_end) = lines_to_byte_range(&file_bytes, start, end)?;
+            let edits = crate::transforms::matching_edits_in_range(
+                &file_bytes,
+                pattern,
+                replacement,
+                word_boundary,
+                span_start..span_end,
+            )?;
+            if edits.is_empty() {
+                bail!(
+                    "no occurrences of '{pattern}' inside node {node_id} \
+                     ({rel_path} lines {start}-{end})"
+                );
+            }
+            TransformPlan {
+                file_edits: vec![FileEdit {
+                    path: abs_path,
+                    edits,
+                    delete: false,
+                }],
+                suggestions: Vec::new(),
+            }
+        };
+
+        let mut result = self.apply_plan(sid, plan, "change_node_matching")?;
+        let new_node_id = {
+            let session = self.require_session(sid)?;
+            session
+                .engine_for(&crate::ir::Backend::Default)?
+                .find_node_id_at_line(&rel_path, node_line)
+        };
+        if let ForgeQLResult::Mutation(ref mut m) = result {
+            m.new_node_id = new_node_id;
+        }
+        Ok(result)
+    }
+
+    /// `CHANGE NODES LAST MATCHING [WORD] 'a' WITH 'b'` — apply the replace
+    /// on every line of the previous FIND result in this session: the
+    /// mechanical rename sweep. The agent aims (FIND), the engine sweeps.
+    pub(super) fn exec_change_nodes_last(
+        &mut self,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        let (pattern, replacement, word_boundary) = match op {
+            ForgeQLIR::ChangeNodesLast {
+                pattern,
+                replacement,
+                word_boundary,
+            } => (pattern.as_str(), replacement.as_str(), *word_boundary),
+            _ => bail!("exec_change_nodes_last called with wrong IR variant"),
+        };
+        let sid = require_session_id(session_id)?;
+        let sites = {
+            let session = self.require_session(sid)?;
+            session.last_find_sites.clone()
+        };
+        if sites.is_empty() {
+            bail!(
+                "no previous FIND result in this session — run FIND symbols/usages \
+                 first, then CHANGE NODES LAST MATCHING '<old>' WITH '<new>'"
+            );
+        }
+        let site_count = sites.len();
+
+        let plan = {
+            let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
+            let mut by_file: std::collections::BTreeMap<String, Vec<usize>> =
+                std::collections::BTreeMap::new();
+            for (path, line) in sites {
+                by_file.entry(path).or_default().push(line);
+            }
+            let mut file_edits = Vec::new();
+            for (rel_path, mut lines) in by_file {
+                lines.sort_unstable();
+                lines.dedup();
+                let abs_path = workspace.safe_path(&rel_path)?;
+                let file_bytes = crate::workspace::file_io::read_bytes(&abs_path)?;
+                let mut edits = Vec::new();
+                for line in lines {
+                    let (line_start, line_end) = lines_to_byte_range(&file_bytes, line, line)?;
+                    edits.extend(crate::transforms::matching_edits_in_range(
+                        &file_bytes,
+                        pattern,
+                        replacement,
+                        word_boundary,
+                        line_start..line_end,
+                    )?);
+                }
+                if edits.is_empty() {
+                    continue;
+                }
+                file_edits.push(FileEdit {
+                    path: abs_path,
+                    edits,
+                    delete: false,
+                });
+            }
+            if file_edits.is_empty() {
+                bail!(
+                    "no occurrences of '{pattern}' on any of the {site_count} line(s) \
+                     of the previous FIND result"
+                );
+            }
+            TransformPlan {
+                file_edits,
+                suggestions: Vec::new(),
+            }
+        };
+
+        self.apply_plan(sid, plan, "change_nodes_last")
     }
 
     pub(super) fn exec_insert_node(

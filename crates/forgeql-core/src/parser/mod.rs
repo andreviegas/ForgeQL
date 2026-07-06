@@ -263,6 +263,7 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         }
 
         Rule::change_node_stmt
+        | Rule::change_nodes_last_stmt
         | Rule::insert_node_stmt
         | Rule::delete_node_stmt
         | Rule::show_node_stmt => parse_node_stmt(pair),
@@ -449,38 +450,81 @@ fn parse_symbol_backend_clauses(
     Ok((symbol, backend, clauses))
 }
 
+/// Extract `(pattern, replacement, word_boundary)` from a `change_matching`
+/// pair: `MATCHING [WORD] 'pattern' WITH 'replacement'`.
+fn parse_matching_parts(
+    matching: pest::iterators::Pair<'_, Rule>,
+) -> Result<(String, String, bool), ForgeError> {
+    let mut m = matching.into_inner();
+    let word_boundary = m.peek().is_some_and(|p| p.as_rule() == Rule::word_modifier);
+    if word_boundary {
+        let _ = m.next(); // consume the WORD token
+    }
+    let pattern = next_str(&mut m, "change_matching: expected pattern")?;
+    let replacement = m
+        .next()
+        .ok_or_else(|| ForgeError::DslParse("change_matching: expected replacement".into()))
+        .and_then(unwrap_content)?;
+    Ok((pattern, replacement, word_boundary))
+}
+/// Parse `CHANGE NODE 'id' [IF REV] (WITH content | MATCHING [WORD] 'a' WITH 'b')`.
+fn parse_change_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
+    let mut inner = pair.into_inner();
+    let node_id = next_str(&mut inner, "change_node: expected node_id")?;
+    let mut if_rev = None;
+    let mut content = None;
+    let mut matching = None;
+    for child in inner {
+        match child.as_rule() {
+            Rule::if_rev_clause => {
+                if_rev = child
+                    .into_inner()
+                    .next()
+                    .map(unwrap_any_value)
+                    .transpose()?;
+            }
+            Rule::change_matching => {
+                matching = Some(parse_matching_parts(child)?);
+            }
+            Rule::content_value => {
+                content = Some(unwrap_content(child)?);
+            }
+            _ => {}
+        }
+    }
+    if let Some((pattern, replacement, word_boundary)) = matching {
+        return Ok(ForgeQLIR::ChangeNodeMatching {
+            node_id,
+            if_rev,
+            pattern,
+            replacement,
+            word_boundary,
+        });
+    }
+    Ok(ForgeQLIR::ChangeNode {
+        node_id,
+        if_rev,
+        content: content
+            .ok_or_else(|| ForgeError::DslParse("change_node: missing content".into()))?,
+    })
+}
 /// Parse the node-handle statements (CHANGE / INSERT / DELETE / SHOW NODE),
 /// each addressing an indexed node by its stable id.
 fn parse_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
     match pair.as_rule() {
-        Rule::change_node_stmt => {
-            let mut inner = pair.into_inner();
-            let node_id = next_str(&mut inner, "change_node: expected node_id")?;
-            let mut if_rev = None;
-            let mut content = None;
-            for child in inner {
-                match child.as_rule() {
-                    Rule::if_rev_clause => {
-                        if_rev = child
-                            .into_inner()
-                            .next()
-                            .map(unwrap_any_value)
-                            .transpose()?;
-                    }
-                    Rule::content_value => {
-                        content = Some(unwrap_content(child)?);
-                    }
-                    _ => {}
-                }
-            }
-            Ok(ForgeQLIR::ChangeNode {
-                node_id,
-                if_rev,
-                content: content
-                    .ok_or_else(|| ForgeError::DslParse("change_node: missing content".into()))?,
+        Rule::change_node_stmt => parse_change_node_stmt(pair),
+
+        Rule::change_nodes_last_stmt => {
+            let matching = pair.into_inner().next().ok_or_else(|| {
+                ForgeError::DslParse("change_nodes_last: expected MATCHING clause".into())
+            })?;
+            let (pattern, replacement, word_boundary) = parse_matching_parts(matching)?;
+            Ok(ForgeQLIR::ChangeNodesLast {
+                pattern,
+                replacement,
+                word_boundary,
             })
         }
-
         Rule::insert_node_stmt => {
             let mut inner = pair.into_inner();
             let pos_pair = inner
