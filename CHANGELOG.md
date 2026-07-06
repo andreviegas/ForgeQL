@@ -6,6 +6,31 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.97.0] — 2026-07-06 — feat(hints): targeted guidance on common command mistakes and oversized reads
+
+### Added
+
+- The parse-error hint table now covers more common mistakes, each answered
+  with the correct command instead of a bare grammar error:
+  `CHANGE NODE … WITH NOTHING` → use `DELETE NODE '<id>'`;
+  `INSERT NODE AFTER` → the position keyword comes first
+  (`INSERT AFTER NODE`); `ROLLBACK` without a name → name the transaction;
+  an unknown `FIND` target → the four valid targets with examples;
+  `REFRESH` without `SOURCE` → the correct admin statement.
+- The output-windowing footer on oversized SHOW results now also teaches
+  the cheaper alternatives — filtering with `WHERE text MATCHES` or
+  addressing the construct directly with `SHOW NODE '<node_id>'` /
+  `SHOW body OF 'symbol'` — instead of only offering to page through
+  everything. Motivated by usage logs: raw line reads over 100-line spans
+  were the second-largest token consumer.
+
+### Fixed
+
+- The MCP tool instructions described oversized SHOW output as blocked
+  with zero lines returned; they now describe the shipped behavior (the
+  output is windowed and the remainder is available via `SHOW MORE`) and
+  recommend narrowing before paging.
+
 ## [0.96.0] — 2026-07-06 — docs: node-handle editing is the documented default across all documentation
 
 ### Changed

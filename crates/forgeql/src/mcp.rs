@@ -517,12 +517,12 @@ impl ServerHandler for ForgeQlMcp {
                parsing fields programmatically.\n\
              - FIND queries without LIMIT default to {DEFAULT_QUERY_LIMIT} rows. \
                Add LIMIT N to override. When total > results.len(), more rows exist.\n\
-             - SHOW commands that return more than {DEFAULT_SHOW_LINE_LIMIT} source lines \
-               WITHOUT an explicit LIMIT clause are BLOCKED — zero lines are returned, \
-               only a guidance message. Use FIND symbols WHERE to locate the exact symbol \
-               — it returns file path and line numbers — then SHOW LINES n-m OF 'file' \
-               to read only those lines. Add LIMIT N only if you consciously need more \
-               than {DEFAULT_SHOW_LINE_LIMIT} lines.\n\
+             - SHOW output beyond {DEFAULT_SHOW_LINE_LIMIT} source lines without an explicit \
+               LIMIT is WINDOWED: you get the first {DEFAULT_SHOW_LINE_LIMIT} lines plus a \
+               SHOW MORE footer for the rest. Prefer narrowing over paging: filter with \
+               WHERE text MATCHES '…' / LIKE '…', or address the exact construct with \
+               SHOW NODE '<node_id>' or SHOW body OF 'symbol'. Add LIMIT N only when you \
+               consciously need more than {DEFAULT_SHOW_LINE_LIMIT} lines.\n\
              - Every response includes tokens_approx — if large, narrow the query \
                with WHERE, IN, EXCLUDE, or lower LIMIT.\n\
              - SHOW body defaults to DEPTH {DEFAULT_BODY_DEPTH} (signature only). \

@@ -269,7 +269,8 @@ pub fn finalize(
         text,
         "\n\"show_more\",\"{total} lines total; showing {dir_word} {cap} ({first}-{last}). \
          SHOW MORE 1-{total} for all, HEAD n | TAIL n for an end, or \
-         WHERE text MATCHES '…' to filter.\""
+         WHERE text MATCHES '…' to filter. Cheaper: address the construct \
+         directly — SHOW NODE '<node_id>' or SHOW body OF 'symbol' DEPTH n.\""
     );
     Ok(Finalized {
         text,

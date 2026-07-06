@@ -143,8 +143,9 @@ pub(super) fn parse_using_clause(
 // Error enrichment
 // -----------------------------------------------------------------------
 
-/// Detect common SQL-isms that don't exist in `ForgeQL` and append a helpful
-/// hint to the pest parse error.
+/// Translate common command mistakes into targeted hints appended to the
+/// pest parse error — the agent-facing "you probably meant" table. Every
+/// entry is a static input-pattern → hint mapping; no inference.
 pub(super) fn enrich_parse_error(input: &str, mut msg: String) -> String {
     let upper = input.to_uppercase();
     if upper.contains(" OR ") {
@@ -175,6 +176,48 @@ pub(super) fn enrich_parse_error(input: &str, mut msg: String) -> String {
             ));
         }
     }
+    // Deleting node content: there is no CHANGE … WITH NOTHING for nodes.
+    if upper.contains("CHANGE NODE") && upper.contains("WITH NOTHING") {
+        msg.push_str(
+            "\n\nHint: To delete a node use DELETE NODE '<id>' \
+             (or DELETE NODE '<id>(n-m)' for a line range inside the node). \
+             CHANGE NODE always replaces with new content.",
+        );
+    }
+    // Keyword order: the position comes before NODE.
+    if upper.contains("INSERT NODE") {
+        msg.push_str(
+            "\n\nHint: The position keyword comes first: \
+             INSERT AFTER NODE '<id>' WITH '…' or INSERT BEFORE NODE '<id>' WITH '…'.",
+        );
+    }
+    // ROLLBACK without a transaction name.
+    if upper.contains("ROLLBACK") && !upper.contains("ROLLBACK TRANSACTION '") {
+        msg.push_str(
+            "\n\nHint: ROLLBACK needs the transaction's name: \
+             ROLLBACK TRANSACTION '<name>' (the name given to BEGIN TRANSACTION).",
+        );
+    }
+    // FIND has a fixed set of targets.
+    if upper.starts_with("FIND ")
+        && !upper.starts_with("FIND SYMBOLS")
+        && !upper.starts_with("FIND USAGES")
+        && !upper.starts_with("FIND FILES")
+        && !upper.starts_with("FIND NODE ")
+    {
+        msg.push_str(
+            "\n\nHint: FIND targets are symbols, usages, files, or node.\n\
+             Examples: FIND symbols WHERE name = 'foo' · FIND usages OF 'foo' \
+             · FIND files IN 'src/**' · FIND node 'foo' (single symbol + node_id).",
+        );
+    }
+    // Refreshing a source is an admin REPL statement with a SOURCE keyword.
+    if upper.starts_with("REFRESH") && !upper.contains("REFRESH SOURCE") {
+        msg.push_str(
+            "\n\nHint: The refresh statement is REFRESH SOURCE '<name>' \
+             (admin/REPL only — re-run USE to pick up new commits in a session).",
+        );
+    }
     msg
 }
 
@@ -200,5 +243,43 @@ mod tests {
     fn unquote_handles_empty_and_unquoted() {
         assert_eq!(unquote("''"), "");
         assert_eq!(unquote("bare"), "bare");
+    }
+
+    #[test]
+    fn parse_hints_map_common_mistakes_to_commands() {
+        use super::enrich_parse_error;
+        let cases: &[(&str, &str)] = &[
+            ("CHANGE NODE 'n1.0001' WITH NOTHING", "DELETE NODE '<id>'"),
+            ("INSERT NODE AFTER 'n1.0001' WITH 'x'", "INSERT AFTER NODE"),
+            ("ROLLBACK TRANSACTION", "ROLLBACK TRANSACTION '<name>'"),
+            (
+                "FIND functions WHERE name = 'x'",
+                "FIND targets are symbols",
+            ),
+            ("REFRESH forgeql-pub", "REFRESH SOURCE '<name>'"),
+        ];
+        for (input, expected) in cases {
+            let msg = enrich_parse_error(input, "parse error".to_string());
+            assert!(
+                msg.contains(expected),
+                "input {input:?} should hint {expected:?}, got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_hints_stay_silent_on_valid_shapes() {
+        use super::enrich_parse_error;
+        // Correct forms must not accumulate misleading hints.
+        for input in [
+            "DELETE NODE 'n1.0001'",
+            "INSERT AFTER NODE 'n1.0001' WITH 'x'",
+            "ROLLBACK TRANSACTION 'tx1'",
+            "FIND symbols WHERE name = 'x'",
+            "REFRESH SOURCE 'repo'",
+        ] {
+            let msg = enrich_parse_error(input, "parse error".to_string());
+            assert_eq!(msg, "parse error", "no hint expected for {input:?}");
+        }
     }
 }
