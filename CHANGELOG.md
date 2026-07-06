@@ -6,6 +6,35 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.96.0] — 2026-07-06 — docs: node-handle editing is the documented default across all documentation
+
+### Changed
+
+- Documentation overhaul (README, syntax reference, architecture, all agent
+  guides, cursor rules): node-handle editing (`CHANGE NODE` / `INSERT
+  BEFORE|AFTER NODE` / `DELETE NODE`, node-relative line offsets, `IF REV`)
+  is now the primary documented editing model everywhere. Raw line and file
+  operations (`CHANGE FILE … LINES`, `MOVE LINES`, `COPY LINES`,
+  `CHANGE FILES MATCHING`) are compressed into one legacy chapter scoped to
+  non-indexed files and file scaffolding.
+- New documentation for shipped features: mutation responses and the
+  boundary-diff contract (`new_node_id`, `lines_written`, `lines_removed`,
+  inline node handles in diff context; the engine never auto-corrects
+  syntax — the caller reads the diff and fixes seams), usage-site queries
+  and real `usages` counts (`FIND usages OF`, `ORDER BY usages`), the
+  structured-text format family (XML/AUTOSAR/tresos naming cascade, DBC,
+  INI, justfile, Make, CMake, reStructuredText, TOML, JSON, YAML,
+  Markdown), `UNDO LAST-n`, `VERIFY` typed params, background `JOB`
+  commands, and the commit gate.
+- Architecture guide now describes the columnar store: content-addressed
+  per-file segments with name FST and usage postings, the memory-mapped
+  workspace overlay with the usage-count aggregate, the dirty overlay for
+  in-transaction edits, and reindex-on-mutation with stable node ids.
+- Corrected stale statements: `DISCONNECT` (never existed) removed from the
+  README; `CHANGE FILE … WITH NOTHING` deletes the file (docs said it only
+  cleared the content); oversized `SHOW` output is windowed through the
+  `SHOW MORE` buffer (docs described a hard block).
+
 ## [0.95.0] — 2026-07-06 — feat(xml): AUTOSAR ECUC parameter values named by their definition reference
 
 ### Fixed

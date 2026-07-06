@@ -36,8 +36,6 @@ The agent will appear in Copilot's agent picker as **"ForgeQL code explorer"**.
 
 **Key feature:** `tools: [forgeql/*]` in the frontmatter restricts the agent to ForgeQL MCP tools only — it cannot fall back to grep/find/cat. This is intentional; the agent has no need for local filesystem access because all content is inlined in the file.
 
-> **Note:** The `references/` folder in this repo is human-readable documentation. The agent does not load those files at runtime.
-
 ### Claude Code
 
 Copy the instructions file to your project root:
@@ -83,10 +81,6 @@ doc/agents/
 ├── forgeql.agent.md              # VS Code Copilot Custom Agent (tools locked)
 ├── AGENTS.md                     # Platform-agnostic workspace instructions
 ├── README.md                     # This file
-├── references/
-│   ├── query-strategy.md         # Decision tree + anti-patterns
-│   ├── recipes.md                # Workflow templates (dead code, refactoring, audits)
-│   └── syntax-quick-ref.md       # Condensed command and field reference
 ├── claude-code/
 │   └── CLAUDE.md                 # Claude Code adapter
 └── cursor/
@@ -112,6 +106,6 @@ Three layers of defense against agent drift:
 
 1. **Tool restriction** (`forgeql.agent.md`): The agent literally cannot call grep/find/cat — only `forgeql/*` tools are available.
 
-2. **Behavioral instructions** (all files): Clear rules like "never fall back to local filesystem" and the two-step workflow: FIND → SHOW NODE.
+2. **Behavioral instructions** (all files): Clear rules like "never fall back to local filesystem", the two-step workflow FIND → SHOW NODE, and node-handle-only editing (read the returned diff after every mutation).
 
-3. **MCP server blocking** (built into ForgeQL): SHOW commands returning more than 40 lines without explicit LIMIT are blocked with a guidance message. This teaches the agent on first contact, even without any agent files installed.
+3. **MCP server capping** (built into ForgeQL): SHOW commands returning more than 40 lines without explicit LIMIT are capped to the first window with a guidance message (`SHOW MORE` pages the rest). This teaches the agent on first contact, even without any agent files installed.

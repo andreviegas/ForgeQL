@@ -5,36 +5,49 @@ The local workspace may be empty — never fall back to local filesystem tools (
 
 ## Critical Rules
 
-1. Always start with `USE source.branch` before any query.
+1. Always start with `USE source.branch AS 'alias'` before any query.
 2. Never use local filesystem tools for code reading. ForgeQL manages all code access.
-3. Never brute-force read code. Use FIND to locate symbols, then SHOW LINES for exact ranges.
-4. SHOW body and SHOW context without LIMIT are blocked beyond 40 lines. Follow the guidance message. SHOW LINES n-m always returns the full requested range — explicit line ranges bypass the cap.
+3. Never brute-force read code. Use FIND to locate symbols, then SHOW NODE to read them by stable handle.
+4. SHOW body and SHOW context without LIMIT are capped at 40 lines. If capped, use FIND to get the symbol's node_id, then `SHOW NODE '<id>'` — it returns the node's full span. Page buffered output with `SHOW MORE`.
+5. Edit by node handle only. `CHANGE FILE` on indexed files is disabled. Config files (TOML, YAML, JSON, XML/arxml, DBC, Makefile, CMake, INI, justfile, Markdown) are indexed and edited by node handle like code.
+6. The diff is the contract. Mutations are mechanical — the engine never fixes commas, wraps braces, or re-indents. Every mutation returns `new_node_id`, `lines_written`, `lines_removed`, and a boundary diff with inline `node_id(offset)` handles: read it and self-correct any seam with `CHANGE NODE '<id>(off)'`. A large `lines_removed` on a small edit means you clobbered more than intended — `UNDO` reverses it.
 
 ## Query Workflow
 
 The right way to find and read code:
 
-1. `FIND symbols WHERE ...` → get name, file, line number
-2. `SHOW LINES n-m OF 'file'` → read only those lines
+1. `FIND symbols WHERE ...` → get name, file, line, and stable node_id
+2. `SHOW NODE '<node_id>'` → read the located node by its handle
 
 ## Query Strategy
 
 - Find a symbol: `FIND symbols WHERE name LIKE 'pattern' [WHERE fql_kind = '...']`
-- Read specific lines: `SHOW LINES n-m OF 'file'`
+- Read a located node: `SHOW NODE '<node_id>'` — `'<id>(n-m)'` narrows to lines within the node
 - Function signature (+ metadata): `SHOW body OF 'name' DEPTH 0`
 - Qualified symbol: `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'`
 - Control flow: `SHOW body OF 'name' DEPTH 1`
-- Blast radius: `FIND usages OF 'name' GROUP BY file ORDER BY count DESC`
+- Blast radius: `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references
+- Hotspots: `FIND symbols ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count
 - File structure: `SHOW outline OF 'file'`
 - Class members: `SHOW members OF 'type'`
 - Call graph: `SHOW callees OF 'name'`
-- File listing: `FIND files [IN 'path/**'] [WHERE extension = '...']`
+- File listing: `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...']`
+
+## Mutations
+
+- Replace a node: `CHANGE NODE '<id>' [IF REV '<rev>'] WITH '...'` — `'<id>(n-m)'` splices lines within the node; heredoc `WITH <<TAG … TAG` when content has quotes
+- Insert around a node: `INSERT BEFORE/AFTER NODE '<id>' WITH '...'`
+- Delete a node: `DELETE NODE '<id>'` — `'<id>(n-m)'` deletes lines within it
+- Reverse a bad edit: `UNDO` (most recent) · `UNDO LAST-n`
+- Rename = mechanical sweep: `FIND usages OF 'old'` → one targeted `CHANGE NODE` per site
+- Gate then commit: `BEGIN TRANSACTION` → edits → `VERIFY build 'step'` (or `JOB START 'step'` for long gates; poll `JOB STATUS <id>`) → `COMMIT MESSAGE 'msg'`. Steps marked `commit_gate: true` must pass after the last edit or COMMIT is refused.
+- Raw-text `CHANGE FILE` / line-range copy/move: non-indexed files only (see the syntax reference).
 
 ## Efficiency
 
 - All commands accept WHERE, GROUP BY, ORDER BY, LIMIT, OFFSET — combine freely.
 - `IN 'src'` and `IN 'crates/'` auto-expand to `IN 'src/**'` — bare paths are always safe.
-- Multiple WHERE clauses combine as AND — stack them to narrow results.
+- Multiple WHERE clauses combine as AND — stack them to narrow results. Every EXCLUDE clause applies.
 - FIND defaults to 20 rows. Add LIMIT N for more.
 - SHOW body defaults to DEPTH 0 (signature only). Increment progressively.
 - Format defaults to CSV (~60% fewer tokens).

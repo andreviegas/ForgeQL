@@ -41,7 +41,8 @@ This document describes the internal design of ForgeQL for contributors and for 
                        │  git / filesystem
               ┌────────▼──────────────┐
               │  Source Worktrees     │
-              │  + .forgeql-index     │
+              │  + index caches       │
+              │    (segments/overlay) │
               └───────────────────────┘
 ```
 
@@ -72,6 +73,7 @@ pub enum ForgeQLIR {
     FindSymbols { clauses },
     FindUsages { of, clauses },
     FindFiles { clauses },
+    FindNode { node_id },
 
     // Content — all carry Clauses
     ShowBody { symbol, clauses },
@@ -81,14 +83,27 @@ pub enum ForgeQLIR {
     ShowContext { symbol, clauses },
     ShowCallees { symbol, clauses },
     ShowLines { file, start_line, end_line, clauses },
+    ShowNode { node_id, mode, clauses },
 
-    // Mutations
+    // Node mutations (primary editing path)
+    ChangeNode { node_id, if_rev, content },
+    InsertNode { node_id, position, content },
+    DeleteNode { node_id, if_rev },
+
+    // Raw-text mutations (non-indexed files)
     ChangeContent { files, target, clauses },
     CopyLines { src, start, end, dst, at },
     MoveLines { src, start, end, dst, at },
-    // Composite operations
+
+    // Workflow
     Transaction { name, ops, verify, message },
     Rollback { name },
+    Verify { step, args },
+    Run { step, args },
+    Undo { last },
+    JobStart { label },
+    JobStatus { id },
+    JobList,
 }
 ```
 
@@ -135,6 +150,20 @@ The serialised index is cached on disk as a bincode file (`.forgeql-index`) next
 
 ---
 
+### Columnar Store
+
+Alongside the in-memory backend, ForgeQL has an on-disk **columnar storage engine** (`crates/forgeql-core/src/storage/columnar/`), enabled automatically when the source has a `.forgeql.yaml`. It is built from three layers:
+
+**Per-file segments** — each source file's index rows are written as one segment directory, keyed by the file's **content id** (git blob SHA) and the enrichment-logic version. Content addressing means an unchanged file never re-indexes: the same blob always resolves to the same segment, across branches and sessions. A segment stores typed columns (`name`, `fql_kind`, `line`, byte ranges, `usages_count`, …), a name FST for symbol lookup, and **usage postings** — an FST mapping identifier text to the source lines where it occurs. The postings are the reference index behind `FIND usages OF`.
+
+**Workspace overlay** — one mmap-backed file per commit SHA merges all segments into a single queryable index shared by every session on that commit (the OS reference-counts the pages, so RSS does not multiply per session). The overlay carries a global name FST, kind/trigram bitmaps for fast pruning, and a workspace-total **usage-count aggregate** (symbol name → summed usage-site count) — the source of the real `usages` value on every `FIND symbols` row.
+
+**Dirty overlay** — per-session, in-RAM segments for files changed inside the session. Query results are the union of persistent overlay rows and dirty rows, with dirty rows taking precedence, so uncommitted edits are immediately queryable without rebuilding the shared overlay.
+
+**Reindex on mutation** — every successful mutation re-indexes the touched files. An ordinal remapper matches the new parse against the old rows by content hash, so existing nodes keep their `node_id` even as line numbers shift; only genuinely new or rewritten nodes receive fresh ordinals (surfaced as `new_node_id` in the mutation response). This is what makes node handles drift-proof.
+
+---
+
 ### Clause Pipeline
 
 All filtering, sorting, grouping, and pagination is handled by a single `apply_clauses()` function that operates on any type implementing the `ClauseTarget` trait. The pipeline always runs in this fixed order:
@@ -162,7 +191,7 @@ The MCP layer exposes a **single tool** to the agent via the MCP JSON-RPC protoc
 
 | Tool | Purpose |
 |---|---|
-| `run_fql` | Execute any ForgeQL statement — `USE`, `FIND`, `SHOW`, `CHANGE`, `BEGIN TRANSACTION`, `COMMIT`, `ROLLBACK`, `VERIFY`, `SHOW SOURCES`, `SHOW BRANCHES` |
+| `run_fql` | Execute any ForgeQL statement — `USE`, `FIND`, `SHOW`, `CHANGE NODE` / `INSERT NODE` / `DELETE NODE`, `BEGIN TRANSACTION`, `COMMIT`, `ROLLBACK`, `VERIFY`, `JOB`, `UNDO`, `SHOW SOURCES`, `SHOW BRANCHES` |
 
 Every ForgeQL operation is accessible through `run_fql`. There are no separate tools for individual operations — one tool, one mental model, no ambiguity about which tool to reach for.
 
@@ -180,17 +209,35 @@ The MCP layer includes two mechanisms that prevent AI agents from misusing Forge
 
 **`with_instructions()`** — The server's `get_info()` response includes a structured instruction text that is injected into the agent's system prompt during the MCP `initialize` handshake. This text contains:
 - Critical rules (never use local filesystem, always start with `USE`)
-- Query strategy decision tree (FIND → SHOW LINES workflow)
+- Query strategy decision tree (FIND → SHOW NODE workflow)
 - Efficiency rules (default limits, progressive depth)
 
 These instructions reach the agent regardless of which editor or platform it runs on — they are part of the MCP protocol itself.
 
-**SHOW line blocking** — SHOW commands that return source lines (`body`, `lines`, `context`) are subject to a default line limit (`DEFAULT_SHOW_LINE_LIMIT = 40`). When output exceeds this limit and the agent did not include an explicit `LIMIT` clause:
-- Zero lines are returned
-- A guidance message tells the agent to use `FIND symbols WHERE` to locate the exact symbol, then `SHOW LINES n-m OF 'file'` for targeted reading
-- If the agent genuinely needs more lines, it can re-run with an explicit `LIMIT N`
+**SHOW line capping** — SHOW and FIND output is subject to a default inline cap (`DEFAULT_SHOW_LINE_LIMIT = 40` lines). When output exceeds the cap and the agent did not include an explicit `LIMIT` clause:
+- The first window of lines is returned, with the full output buffered server-side (a 5-slot `LAST-n` ring in the session worktree)
+- A guidance message tells the agent to page the rest with `SHOW MORE` — or better, to use `FIND symbols WHERE` to locate the exact symbol and read it by handle with `SHOW NODE '<id>'`
+- If the agent genuinely needs more lines inline, it can re-run with an explicit `LIMIT N`
 
-This creates a teaching moment on first contact — after hitting the block once, agents learn the precision workflow.
+This creates a teaching moment on first contact — after hitting the cap once, agents learn the precision workflow.
+
+### Mechanical Mutations
+
+The engine never auto-corrects the text it splices — no comma fixing, no brace balancing, no re-indentation. The safety mechanisms are all *visibility* and *reversal*, not intelligence:
+
+- every mutation reindexes the touched files and answers with `new_node_id`, `lines_written`, and `lines_removed` (the destructive-edit signal);
+- the response includes a **boundary diff** — context lines above and below the change, each carrying an inline `node_id(offset)` handle — built *after* apply + reindex so the handles address the post-edit tree;
+- an optimistic-concurrency guard (`IF REV`) rejects a mutation when the node changed since it was read, returning the node's current content;
+- `UNDO [LAST-n]` restores the pre-edit bytes from a 10-slot per-session ring;
+- transactions checkpoint the worktree and `ROLLBACK` restores it wholesale.
+
+### Verify, Commit Gate, and Background Jobs
+
+`VERIFY build '<step>'` runs a vetted command from `.forgeql.yaml` (`verify_steps`), with optional typed positional params substituted only after arity/type validation. Steps are frozen at `USE` so an edit cannot tamper with a gate command.
+
+Steps marked `commit_gate: true` gate `COMMIT`: the step must have passed **since the most recent mutation**, and every successful mutation invalidates prior passes. Multiple gated steps AND together.
+
+`JOB START '<step>'` runs the same verify steps as detached background jobs (`jobs.rs`): the request returns a job id immediately; `JOB STATUS` / `JOB LIST` poll state and output. Jobs execute through a bounded worker pool with a FIFO queue — at most `FORGEQL_MAX_CONCURRENT_JOBS` (default 1) run at once, the rest wait `Queued` — so a burst of heavy builds is serialized instead of exhausting machine memory.
 
 ### Agent Distribution
 
@@ -226,27 +273,25 @@ Agent sends:  FIND symbols WHERE fql_kind = 'function' LIMIT 5
 
 ---
 
-## Data Flow: a CHANGE transaction
+## Data Flow: a CHANGE NODE mutation
 
 ```
-BEGIN TRANSACTION 'rename-process'
-  CHANGE FILES 'src/**/*.cpp' MATCHING 'process' WITH 'run'
-  VERIFY build 'test'
-COMMIT MESSAGE 'rename process to run'
+Agent sends:  CHANGE NODE 'nb1be37eea3f0.0124' IF REV 'h0123456789abcdef'
+                WITH 'fn run(buf: &mut [u8]) { buf.fill(0); }'
 
-1. Parser    → ForgeQLIR::Transaction {
-                 ops: [ChangeContent { files: ["src/**/*.cpp"],
-                                       target: Matching { "process", "run" } }],
-                 verify: Some("test"),
-                 message: Some("rename process to run")
-               }
-2. Engine    → snapshot all matched files (in-memory backup)
-3. Engine    → for each op:
-                 glob expand → read file → apply replacement → write file
-4. Engine    → run verify target (looked up from .forgeql.yaml)
-               on failure → restore all snapshots, return error
-               on success → return Ok
-5. MCP layer → return result to agent
+1. Parser    → ForgeQLIR::ChangeNode { node_id, if_rev, content }
+2. Engine    → resolve node_id → file + byte/line span
+               check rev guard: mismatch → reject with the node's
+               current rev + content (self-healing payload)
+3. Engine    → snapshot pre-edit bytes (undo ring slot LAST-0)
+               splice the replacement text over the node's span —
+               byte-exact, no syntax correction
+4. Engine    → reindex the touched file; ordinal remapper keeps
+               unchanged nodes' ids stable, resolves new_node_id
+5. Engine    → build the boundary diff (pre-edit bytes vs. disk),
+               annotate present lines with node_id(offset) handles;
+               invalidate any commit-gate passes
+6. MCP layer → return { new_node_id, lines_written, lines_removed, diff }
 ```
 
 ---
@@ -260,12 +305,15 @@ ForgeQL/
 │   │   └── src/
 │   │       ├── main.rs
 │   │       ├── mcp.rs            # MCP tools + with_instructions() + guardrails
+│   │       ├── cli.rs / execute.rs / session.rs
 │   │       └── path_utils.rs
+│   ├── forgeql-client/           # Thin client binary (remote server mode)
+│   ├── forgeql-server/           # HTTP server binary (bearer-token auth)
 │   ├── forgeql-core/             # All core logic (no binary, no language grammars)
 │   │   └── src/
 │   │       ├── ast/
 │   │       │   ├── lang.rs       # LanguageSupport trait, LanguageConfig, LanguageRegistry
-│   │       │   ├── index.rs      # IndexRow, SymbolTable, collect_nodes
+│   │       │   ├── index.rs      # IndexRow, SymbolTable, collect_nodes, node-id assignment
 │   │       │   ├── query.rs      # find_symbols, find_usages
 │   │       │   ├── show.rs       # show_body, show_signature, show_outline, …
 │   │       │   ├── cache.rs      # Index serialization/deserialization (bincode)
@@ -282,43 +330,50 @@ ForgeQL/
 │   │       │   ├── mod.rs        # Branch, stage, commit via git2
 │   │       │   ├── source.rs     # Source + SourceRegistry (bare repo management)
 │   │       │   └── worktree.rs   # Worktree lifecycle: create, list, remove
-│   │       ├── session/
-│   │       │   └── mod.rs        # Session management (user → worktree → index)
+│   │       ├── session/          # Session management (user → worktree → index)
+│   │       ├── storage/
+│   │       │   ├── mod.rs        # StorageEngine trait (backend boundary)
+│   │       │   ├── source_provider.rs  # SourceProvider trait (content addressing)
+│   │       │   ├── legacy.rs     # In-memory SymbolTable backend
+│   │       │   └── columnar/     # Segments, overlay, dirty overlay, reindex
 │   │       ├── transforms/
 │   │       │   ├── mod.rs        # TransformPlan, ByteRangeEdit, FileEdit
 │   │       │   ├── change.rs     # File mutation: matching, lines, with, delete
 │   │       │   ├── copy_move.rs  # COPY LINES / MOVE LINES planning and execution
-│   │       │   └── diff.rs       # Pure-Rust LCS unified diff generator
-│   │       ├── verify/
-│   │       │   └── mod.rs        # Run build/test verification steps
+│   │       │   └── diff.rs       # Boundary diff with inline node_id(offset) handles
+│   │       ├── verify/           # Run build/test verification steps + typed params
 │   │       ├── workspace/
-│   │       │   ├── mod.rs        # Workspace root discovery, file enumeration
+│   │       │   ├── mod.rs        # Workspace root discovery, safe_path confinement
 │   │       │   └── file_io.rs    # Atomic write, .forgeql-ignore support
-│   │       ├── engine.rs         # Command dispatch + session management + SHOW guardrails
+│   │       ├── engine.rs + engine/  # Command dispatch, node mutations, commit gate
+│   │       ├── jobs.rs           # Background job scheduler (worker pool + FIFO queue)
+│   │       ├── undo.rs           # Per-session undo ring (pre-edit byte snapshots)
+│   │       ├── node_id.rs        # Node handle encoding (segment prefix + ordinal)
+│   │       ├── showmore.rs       # SHOW MORE output ring (LAST-n slots)
 │   │       ├── budget.rs         # BudgetState: deduction, recovery, persistence, sweep
 │   │       ├── compact.rs        # Compact CSV output renderer (MCP mode)
 │   │       ├── filter.rs         # apply_clauses(), ClauseTarget trait
 │   │       ├── ir.rs             # ForgeQLIR, Clauses, Predicate, ChangeTarget
 │   │       ├── result.rs         # ForgeQLResult, SymbolMatch, ShowResult
 │   │       ├── config.rs         # .forgeql.yaml deserialization
-│   │       ├── context.rs        # RequestContext + Permission
+│   │       ├── auth.rs           # Bearer-token authentication (server mode)
 │   │       ├── error.rs          # ForgeError (thiserror)
 │   │       └── query_logger.rs   # FQL statement logging (--log-queries)
+│   ├── forgeql-lang-c/           # C language support crate (config/c.json)
 │   ├── forgeql-lang-cpp/         # C++ language support crate
 │   │   └── src/
 │   │       ├── lib.rs            # CppLanguage, CPP_CONFIG, map_kind(), cpp_registry()
 │   │       └── macro_expand.rs   # CppMacroExpander — extract_def, extract_args, substitute
-│   ├── forgeql-lang-python/      # Python language support crate
+│   ├── forgeql-lang-python/      # Python language support crate (config/python.json)
+│   ├── forgeql-lang-rust/        # Rust language support crate
 │   │   ├── config/
-│   │   │   └── python.json       # kind_map, enricher hints, node kind sets, env_guard_patterns
+│   │   │   └── rust.json         # kind_map, enricher hints, node kind sets, macros section
 │   │   └── src/
-│   │       └── lib.rs            # PythonLanguage, PYTHON_CONFIG, python_registry()
-│   └── forgeql-lang-rust/        # Rust language support crate
-│       ├── config/
-│       │   └── rust.json         # kind_map, enricher hints, node kind sets, macros section
-│       └── src/
-│           ├── lib.rs            # RustLanguage, RUST_CONFIG, rust_registry()
-│           └── macro_expand.rs   # RustMacroExpander — macro_rules! extraction + expansion
+│   │       ├── lib.rs            # RustLanguage, RUST_CONFIG, rust_registry()
+│   │       └── macro_expand.rs   # RustMacroExpander — macro_rules! extraction + expansion
+│   └── forgeql-lang-text/        # ALL structured-text formats, one module each:
+│       ├── config/               #   xml, dbc, toml, json, yaml, ini, just, make,
+│       └── src/                  #   cmake, markdown, rst — plus config/<lang>.json
 ├── doc/
 │   ├── syntax.md                 # Command and clause reference
 │   ├── architecture.md           # This file
@@ -369,18 +424,21 @@ Always use `WHERE fql_kind = 'function'` rather than `WHERE node_kind = 'functio
 ```
 forgeql (binary)
 ├── forgeql-core          zero language grammars
+├── forgeql-lang-c        tree-sitter-c + CLanguage
 ├── forgeql-lang-cpp      tree-sitter-cpp + CppLanguage + CppMacroExpander
 ├── forgeql-lang-python   tree-sitter-python + PythonLanguage
-└── forgeql-lang-rust     tree-sitter-rust + RustLanguage + RustMacroExpander
+├── forgeql-lang-rust     tree-sitter-rust + RustLanguage + RustMacroExpander
+└── forgeql-lang-text     all structured-text grammars (XML, DBC, TOML, JSON,
+                          YAML, INI, justfile, Make, CMake, Markdown, reST)
 ```
 
-`forgeql-core` depends on `tree-sitter` (the library) but NOT on any grammar crate. Grammar dependencies live exclusively in language crates.
+`forgeql-core` depends on `tree-sitter` (the library) but NOT on any grammar crate. Grammar dependencies live exclusively in language crates. The `forgeql` and `forgeql-server` registries splice every text format in with one `text_languages()` call, so a new text format is picked up by both binaries automatically.
 
 ---
 
 ## Adding a New Language
 
-Adding a new language requires a single new crate with no changes to `forgeql-core`:
+For a structured-text format, add a module + `config/<lang>.json` kind map inside `forgeql-lang-text` — no new crate needed. For a full programming language, add a single new crate with no changes to `forgeql-core`:
 
 1. **Create `crates/forgeql-lang-<name>/`** with `Cargo.toml` depending on `forgeql-core` + `tree-sitter-<name>`.
 

@@ -25,9 +25,9 @@ Do **not** create the file if nothing significant was discovered. Keep bullets s
 
 ## Setup
 
-Always start a session with:
+Always start a session with (the `AS` clause is mandatory — the alias becomes the session id):
 ```sql
-USE source_name.branch
+USE source_name.branch AS 'alias'
 ```
 
 ## Query Workflow
@@ -53,11 +53,12 @@ USE source_name.branch
 | Function signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
-| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` |
+| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references |
 | File structure | `SHOW outline OF 'file'` |
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
-| File listing | `FIND files [IN 'path/**'] [WHERE extension = '...']` |
+| File listing | `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...']` |
+| Hotspots | `FIND symbols WHERE fql_kind = 'function' ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count |
 
 ## Efficiency
 
@@ -65,7 +66,7 @@ USE source_name.branch
 - `IN 'src'` and `IN 'crates/'` auto-expand to `IN 'src/**'` — bare directory paths are always safe.
 - Multiple `WHERE` clauses combine as AND.
 - FIND defaults to 20 rows. Add LIMIT N for more.
-- SHOW body and SHOW context returning more than 40 lines without explicit LIMIT are blocked. **`SHOW NODE '<id>'` returns a node's full span** — read a located node by its handle, at any size.
+- SHOW body and SHOW context returning more than 40 lines without explicit LIMIT are capped to the first window (`SHOW MORE` pages the rest). **`SHOW NODE '<id>'` returns a node's full span** — read a located node by its handle, at any size.
 - Format defaults to CSV (~60% fewer tokens).
 - Every response includes `tokens_approx` — if large, narrow with WHERE, IN, EXCLUDE.
 
@@ -91,20 +92,27 @@ ForgeQL indexes code quality metrics at parse time. Use them in WHERE clauses:
 
 ## Mutations
 
-Edit indexed code by stable `node_id`: `CHANGE NODE` replaces a node, `INSERT BEFORE/AFTER NODE` adds around it, `DELETE NODE` removes it. Raw-text file edits (`CHANGE FILE`, line-range copy and move) are reserved for non-indexed files — see the syntax reference.
+Edit indexed code by stable `node_id` **only**: `CHANGE NODE` replaces a node, `INSERT BEFORE/AFTER NODE` adds around it, `DELETE NODE` removes it. `CHANGE FILE` on indexed files is disabled; raw-text file edits (`CHANGE FILE`, line-range copy and move) exist for non-indexed files and file scaffolding — see the syntax reference. This applies to config too: TOML, YAML, JSON, XML/arxml, DBC, Makefiles, CMake, INI, justfiles, and Markdown are all node-addressable.
 
 | Command | Effect |
 |---|---|
-| `CHANGE NODE '<id>' WITH '...'` | Replace the node's source span |
+| `CHANGE NODE '<id>' WITH '...'` | Replace the node's source span (heredoc `WITH <<TAG … TAG` when content has quotes) |
 | `CHANGE NODE '<id>(n-m)' WITH '...'` | Replace lines n–m within the node |
 | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` | Insert lines around the node |
-| `DELETE NODE '<id>'` | Delete the node's source span |
+| `DELETE NODE '<id>'` / `DELETE NODE '<id>(n-m)'` | Delete the node, or lines n–m within it |
 | `<mutation> IF REV '<rev>'` | Guard a mutation on the node's content rev |
+| `UNDO` / `UNDO LAST-n` | Reverse recent mutations from the per-session undo ring |
 | Raw-text `CHANGE FILE` / copy / move | Non-indexed files only — see the syntax reference |
 
-Wrap mutations in a transaction for atomic rollback:
+**The diff is the contract.** Mutations are mechanical — the engine never fixes commas, wraps braces, or re-indents. Every mutation returns `new_node_id`, `lines_written`, `lines_removed`, and a boundary diff whose context lines carry inline `node_id(offset)` handles. Read the diff after every mutation: if it shows a seam you created, issue the follow-up `CHANGE NODE '<id>(off)'` yourself. A large `lines_removed` on a small edit means you clobbered more than intended — `UNDO` reverses it.
+
+**Renames** are a composition: `FIND usages OF 'old'` → inspect sites → one targeted `CHANGE NODE` per site.
+
+Wrap mutations in a transaction and gate the commit:
 
     BEGIN TRANSACTION 'name'
       CHANGE NODE '<node_id>' WITH 'fixed'
-      VERIFY build 'test'
+      VERIFY build 'test'          -- or JOB START 'test' for long gates
     COMMIT MESSAGE 'fix: ...'
+
+Verify steps marked `commit_gate: true` in `.forgeql.yaml` must pass **after** the last edit or COMMIT is refused — re-run the gate after every fix. For long-running gates use `JOB START '<step>'` (returns a job id; poll with `JOB STATUS <id>`) instead of blocking on `VERIFY`.

@@ -8,13 +8,14 @@ The local workspace may be empty — never fall back to local filesystem tools (
 1. Always start with `USE source.branch AS 'alias'` before any query. The `AS` clause is mandatory.
 2. Never use Bash tools (grep, find, cat, less) or Read File for source code. ForgeQL manages all code access.
 3. Never brute-force read code. Use FIND to locate symbols, then SHOW NODE to read them by stable handle.
-4. **SHOW body and SHOW context** without LIMIT are blocked beyond 40 lines. If blocked, use FIND to get the symbol's node_id, then `SHOW NODE '<id>'`. **`SHOW NODE` returns the node's full span** regardless of size.
+4. **SHOW body and SHOW context** without LIMIT are capped at 40 lines (`SHOW MORE` pages the rest). If capped, use FIND to get the symbol's node_id, then `SHOW NODE '<id>'`. **`SHOW NODE` returns the node's full span** regardless of size.
 5. Stack WHERE clauses aggressively before executing. Multiple WHERE clauses combine as AND — filter first, read later.
 6. Filter inside the read — never read then grep. `SHOW body OF 'fn' DEPTH 99 WHERE text LIKE '%pattern%'` returns only matching lines.
 7. Always ORDER BY in GROUP BY queries. Use `ORDER BY count ASC` to surface lowest-scope candidates first. Add HAVING constraints to filter at aggregate level.
 8. Verify structural assumptions before mutating. Check includes and structure before refactoring, not after.
 9. Numbers have no symbolic usages — use text search. Use `FIND symbols WHERE name = 'value' WHERE is_magic = 'true'` or `SHOW body ... WHERE text LIKE '%value%'` for literal search.
 10. Persist key findings in `HINTS.md`. After completing a task, append short bullet points of key codebase facts discovered (file locations, naming conventions, architectural decisions) to `HINTS.md` in the workspace root.
+11. **Edit by node handle only; the diff is the contract.** Mutations are mechanical — the engine never fixes commas, wraps braces, or re-indents. Every mutation returns `new_node_id`, `lines_written`, `lines_removed`, and a boundary diff with inline `node_id(offset)` handles: read it after every mutation and self-correct any seam with `CHANGE NODE '<id>(off)'`. A large `lines_removed` on a small edit means you clobbered more than intended — `UNDO` reverses it. `CHANGE FILE` on indexed files is disabled. Config files (TOML, YAML, JSON, XML/arxml, DBC, Makefile, CMake, INI, justfile, Markdown) are indexed and edited by node handle like code.
 
 ## Query Workflow
 
@@ -38,7 +39,8 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
-| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` |
+| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references |
+| Hotspots | `FIND symbols ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count |
 | File structure (tree) | `SHOW outline OF 'file'` — structural decls only, `depth` per row; add `ALL` for every node, or `WHERE fql_kind = '...'` |
 | Subtree outline | `SHOW outline OF '<node_id>'` |
 | Class members | `SHOW members OF 'type'` |
@@ -49,8 +51,11 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Page a truncated/buffered output | `SHOW MORE [HEAD n \| TAIL n \| n-m] [WHERE text MATCHES '...']` |
 | Grep the last `VERIFY` log (no rebuild) | `SHOW MORE WHERE text MATCHES 'error\|warning'` |
 | Repo top-level dirs | `FIND files` (returns depth-1 entries) |
+| Find a file by name | `FIND files WHERE name = 'Kconfig'` (also `LIKE`/`MATCHES`) |
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
-| Delete a node | `DELETE NODE '<id>' [IF REV '<rev>']` |
+| Delete a node | `DELETE NODE '<id>' [IF REV '<rev>']` — `'<id>(n-m)'` deletes lines within it |
+| Reverse a bad edit | `UNDO` (most recent) · `UNDO LAST-n` |
+| Long test gate | `JOB START 'step'` → `JOB STATUS <id>` / `JOB LIST` (background, FIFO-queued) |
 
 ## Anti-Patterns
 
@@ -118,20 +123,30 @@ SHOW NODE '<node_id>' [CONTENT | METADATA] [clauses]   -- '<id>(n)' / '<id>(n-m)
 
 ### CHANGE & Transactions
 ```sql
--- Indexed code is edited by node handle (below); raw-text CHANGE FILE is in the syntax reference
+-- Indexed code is edited by node handle (below); CHANGE FILE on indexed files
+-- is disabled. Raw-text CHANGE FILE / copy / move: non-indexed files only.
 
 CHANGE NODE '<node_id>' [IF REV '<rev>'] WITH 'text'   -- '<id>(n)' / '<id>(n-m)' splices node lines
 INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'text'
-DELETE NODE '<node_id>' [IF REV '<rev>']
+DELETE NODE '<node_id>' [IF REV '<rev>']               -- '<id>(n-m)' deletes lines within the node
 
--- Raw-text line-range copy/move: non-indexed files only (see syntax reference)
+-- Heredoc form when content contains quotes: WITH <<TAG … TAG (tag uppercase, own line)
+
+UNDO                     -- reverse the most recent mutation
+UNDO LAST-n              -- restore the state from n mutations back
 
 BEGIN TRANSACTION 'name'
   -- CHANGE / INSERT / DELETE NODE / VERIFY commands
 COMMIT MESSAGE 'msg'
-VERIFY build 'step'
+VERIFY build 'step'      -- synchronous; grep the buffered log: SHOW MORE WHERE text MATCHES '^error|-->'
+JOB START 'step'         -- background job for long gates; JOB STATUS <id> / JOB LIST
 ROLLBACK [TRANSACTION 'name']
 ```
+
+Every mutation answers with `new_node_id`, `lines_written`, `lines_removed`, and a
+boundary diff (context lines carry `node_id(offset)` handles) — read it, then fix
+any seam yourself. Steps marked `commit_gate: true` in `.forgeql.yaml` must pass
+**after** the last edit or COMMIT is refused.
 
 ### Universal Clauses (applied in this order)
 `IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIMIT`
@@ -346,12 +361,18 @@ Detects local variables that escape their declaring function — via return, add
 FIND symbols WHERE fql_kind = 'function' WHERE usages = 0 EXCLUDE 'tests/**' ORDER BY path ASC LIMIT 30
 ```
 
-### Rename / Refactor
+### Rename / Refactor (the mechanical sweep)
 ```sql
+-- 1. Definition + blast radius: one row per usage SITE (includes non-call references)
 FIND symbols WHERE name = 'oldFunction'
 FIND usages OF 'oldFunction' GROUP BY file ORDER BY count DESC
+FIND usages OF 'oldFunction' LIMIT 50
+
+-- 2. One targeted CHANGE NODE per site, each confirmed by its returned diff
 BEGIN TRANSACTION 'rename-oldFunction'
-  CHANGE FILES 'src/**/*.cpp','include/**/*.h' MATCHING 'oldFunction' WITH 'newFunction'
+  CHANGE NODE '<definition_id>' WITH '...renamed definition...'
+  CHANGE NODE '<site_id>(off)' WITH '    newFunction(args);'
+  -- …repeat per site
   VERIFY build 'test'
 COMMIT MESSAGE 'refactor: rename oldFunction → newFunction'
 ```
@@ -496,11 +517,12 @@ FIND symbols WHERE fql_kind = 'macro' WHERE value = '30U'
 -- Step 6: Find common header
 SHOW outline OF 'subsys/sd/mmc.c' WHERE fql_kind = 'import' LIMIT 8
 
--- Step 7: Apply atomically
+-- Step 7: Apply atomically — insert the constant, then splice each occurrence
+--         by node handle (each occurrence's enclosing node came from step 3)
 BEGIN TRANSACTION 'sd-csd-struct-shift'
-  INSERT AFTER NODE '<node_id>' WITH '#define SDMMC_CSD_STRUCT_SHIFT 30U'
-  CHANGE FILE 'subsys/sd/mmc.c' MATCHING '>> 30U' WITH '>> SDMMC_CSD_STRUCT_SHIFT'
-  CHANGE FILE 'subsys/sd/sd_ops.c' MATCHING '>> 30U' WITH '>> SDMMC_CSD_STRUCT_SHIFT'
+  INSERT AFTER NODE '<header_anchor_id>' WITH '#define SDMMC_CSD_STRUCT_SHIFT 30U'
+  CHANGE NODE '<mmc_site_id>(off)' WITH '    csd->csd_structure = raw >> SDMMC_CSD_STRUCT_SHIFT;'
+  CHANGE NODE '<sd_ops_site_id>(off)' WITH '    version = resp >> SDMMC_CSD_STRUCT_SHIFT;'
   VERIFY build 'test'
 COMMIT MESSAGE 'refactor: name CSD structure field bit shift constant'
 ```

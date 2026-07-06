@@ -12,9 +12,12 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
    - [Session Commands](#session-commands)
    - [FIND Commands](#find-commands)
    - [SHOW Commands](#show-commands)
-   - [CHANGE Commands](#change-commands)
+   - [Editing Commands (node handles)](#editing-commands-node-handles)
    - [Node Addressing](#node-addressing)
+   - [Mutation Responses — the diff is the contract](#mutation-responses--the-diff-is-the-contract)
+   - [UNDO](#undo)
    - [Transaction Commands](#transaction-commands)
+   - [VERIFY, RUN, and Background JOBs](#verify-run-and-background-jobs)
 3. [Universal Clauses](#universal-clauses)
 4. [Operators and Values](#operators-and-values)
 5. [Filterable Fields](#filterable-fields)
@@ -24,8 +27,9 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
    - [File Fields](#file-fields)
    - [Dynamic Fields](#dynamic-fields)
    - [Enrichment Fields](#enrichment-fields)
-6. [Advanced Patterns](#advanced-patterns)
-7. [Raw-text commands (non-indexed files)](#raw-text-commands-non-indexed-files)
+6. [Structured-Text and Config Formats](#structured-text-and-config-formats)
+7. [Advanced Patterns](#advanced-patterns)
+8. [Raw line and file operations (legacy, non-indexed files)](#raw-line-and-file-operations-legacy-non-indexed-files)
 
 ---
 
@@ -93,11 +97,11 @@ FIND files [clauses]
 
 | Command | Returns |
 |---|---|
-| `FIND symbols` | All indexed AST nodes. Use `WHERE fql_kind = '...'` to narrow. |
+| `FIND symbols` | All indexed AST nodes. Use `WHERE fql_kind = '...'` to narrow. Every row carries a stable `node_id` and a real workspace-total `usages` count — `ORDER BY usages DESC` and `WHERE usages > N` work. |
 | `FIND globals` | Shorthand for `WHERE fql_kind = 'variable'` — file-scope variables, constants, and statics across all supported languages. |
-| `FIND usages OF` | Every identifier reference to the named symbol. |
+| `FIND usages OF` | One row per usage **site** of the named symbol (name + path + line), read from usage postings collected at index time. Includes occurrences without call parentheses — function-pointer assignments, references, type positions. `GROUP BY file` gives real per-file counts; combine with `IN`/`EXCLUDE`/`WHERE`/`ORDER BY`/`LIMIT`. |
 | `FIND callees OF` | Symbols called from inside the named function body. Alias for `SHOW callees OF`. |
-| `FIND files` | Files in the worktree. Supports `WHERE`, `DEPTH`, `ORDER BY size`, etc. |
+| `FIND files` | Files in the worktree. Supports `WHERE name = '…'` / `name LIKE`, `DEPTH`, `ORDER BY size`, etc. ForgeQL runtime artifacts are hidden from the listing. |
 
 > **Use `fql_kind` for all filtering.** It is language-agnostic and portable across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific and **deprecated**.
 
@@ -121,7 +125,7 @@ SHOW callees OF 'symbol_name' [clauses]
 
 SHOW NODE '<node_id>' [CONTENT | METADATA] [clauses]
 
-SHOW MORE [HEAD n | TAIL n | n-m] [clauses]
+SHOW MORE [LAST-k] [HEAD n | TAIL n | n-m] [clauses]
 ```
 | Command | Returns |
 |---|---|
@@ -153,9 +157,11 @@ SHOW MORE TAIL 80 WHERE text LIKE '%warning%' LIMIT 10
 Every window form composes with `WHERE text` (`MATCHES` regex or `LIKE`) and
 `LIMIT`/`OFFSET`; filtering runs over the windowed lines. Each returned line
 keeps its **original buffer index** so a precise follow-up range can be
-requested. The buffer holds the most recent buffered output and is overwritten
-by the next over-cap command. It lives in the session worktree and is restored
-by `ROLLBACK` along with the rest of the worktree state.
+requested. The buffer is a `LAST-n` ring (5 slots): a bare `SHOW MORE` pages the
+most recent buffered output (`LAST-0`), `SHOW MORE LAST-1` the one before it —
+so a mutation diff survives a subsequent over-cap SHOW/FIND. The ring lives in
+the session worktree and is restored by `ROLLBACK` along with the rest of the
+worktree state.
 
 The highest-value use is filtering a long `VERIFY build` log without re-running
 the build: `SHOW MORE WHERE text MATCHES 'error|warning'`.
@@ -164,7 +170,12 @@ the build: `SHOW MORE WHERE text MATCHES 'error|warning'`.
 
 ---
 
-### CHANGE Commands
+### Editing Commands (node handles)
+
+Node handles are **the** way to edit indexed source. Raw line-range and whole-file
+editing of indexed files is disabled (the engine returns guidance pointing here);
+the surviving raw-text forms are collected in
+[Raw line and file operations](#raw-line-and-file-operations-legacy-non-indexed-files).
 
 ```sql
 CHANGE NODE '<node_id>' [IF REV '<rev>'] WITH 'new_content'
@@ -174,6 +185,8 @@ CHANGE NODE '<node_id>(n-m)' WITH 'new_content'
 INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'new_content'
 
 DELETE NODE '<node_id>' [IF REV '<rev>']
+
+DELETE NODE '<node_id>(n-m)'
 ```
 `<node_id>` is a stable handle from `FIND symbols`, `SHOW outline`, `FIND NODE`, or the CSV form of `SHOW body` (see [Node Addressing](#node-addressing)). Editing by handle is drift-proof: a node_id stays valid across edits that shift line numbers, so you read once and mutate by handle.
 
@@ -184,6 +197,7 @@ DELETE NODE '<node_id>' [IF REV '<rev>']
 | `INSERT BEFORE NODE … WITH …` | Insert new lines immediately before the node |
 | `INSERT AFTER NODE … WITH …` | Insert new lines immediately after the node |
 | `DELETE NODE … [IF REV '<rev>']` | Delete the node's source span (optionally rev-guarded) |
+| `DELETE NODE '<id>(n-m)'` | Delete only lines n–m within the node (node-relative offset) |
 
 #### Heredoc syntax
 
@@ -215,10 +229,17 @@ DELETE NODE '<node_id>' IF REV 'h0123456789abcdef'
 ### Node Addressing
 
 Every indexed symbol has a **stable node handle** — a `node_id` of the form
-`n<segment>.<ordinal>`. `<segment>` is a hash prefix of the file path; `<ordinal>`
-is a per-file counter assigned in source order. A node_id stays valid across edits
-that shift line numbers, so it is the drift-proof way to target code: read once,
-then mutate by handle instead of by absolute line.
+`n<segment>.<ordinal>` (e.g. `nb1be37eea3f0.0124`). `<segment>` is a hash prefix
+of the file path; `<ordinal>` is a per-file counter assigned in source order.
+Node ids are content-addressed per file: they survive line drift, unrelated edits
+elsewhere in the file, and re-parse — the drift-proof way to target code. Read
+once, then mutate by handle instead of by absolute line.
+
+Comments — including doc comments — index as their own addressable nodes
+(`comment`, and runs of adjacent comments as `comment_block`), separate from the
+item they document, so a doc comment can be edited without touching the code
+below it. An item's span and `rev` fold in its contiguous leading attributes
+(`#[...]`), so an `IF REV` guard protects the attributes along with the item.
 
 ```sql
 FIND NODE '<node_id>'                      -- metadata: name, kind, line, end_line, rev, nav
@@ -276,6 +297,46 @@ payload** so you can re-target without another read:
 
 ---
 
+### Mutation Responses — the diff is the contract
+
+Mutations are **mechanical**: the engine splices exactly the bytes you supply and
+never auto-corrects syntax — no comma fixing, no `{ }` wrapping, no
+re-indentation. What it does instead is show you exactly what happened. Every
+successful mutation returns:
+
+| Field | Meaning |
+|---|---|
+| `new_node_id` | The node's current handle after the edit (an edit can change a node's identity) |
+| `lines_written` | Number of source lines the edit wrote |
+| `lines_removed` | Number of original source lines the edit overwrote — the **destructive-edit signal**: a large value on a small edit means you clobbered more than intended (e.g. a `CHANGE NODE` on a node whose span covers a whole folded body) |
+| boundary diff | A compact diff including the unchanged **context lines directly above and below** the change, so a seam the splice created (a missing separator, an unbalanced brace) is visible immediately |
+
+Every present line of the diff (added + context) carries an inline
+`node_id(offset)` handle, so a follow-up correction is a copy-paste
+`CHANGE NODE '<id>(off)' WITH '…'` — no re-read round-trip. Read the diff after
+**every** mutation: if it shows a seam, the fix is yours to issue; the engine
+will not issue it for you.
+
+---
+
+### UNDO
+
+```sql
+UNDO
+
+UNDO LAST-n
+```
+
+Every mutation snapshots the pre-edit bytes of the files it touched into a
+per-session **undo ring** (10 slots deep). `UNDO` restores the most recent
+mutation's pre-edit state; `UNDO LAST-n` restores the state from `n` mutations
+further back (reversing the last `n+1` mutations at once). The restore reindexes
+the touched files and invalidates the commit gate exactly like a forward
+mutation. The ring lives in the session worktree, is excluded from commits, and
+dies with the worktree.
+
+---
+
 ### Transaction Commands
 
 ```sql
@@ -283,17 +344,50 @@ BEGIN TRANSACTION 'name'
 
 COMMIT MESSAGE 'message'
 
-VERIFY build 'step'
-
 ROLLBACK [TRANSACTION 'name']
 ```
 
 | Command | Effect |
 |---|---|
 | `BEGIN TRANSACTION` | Create a named git checkpoint. Dirty state is auto-committed first. Checkpoints stack — multiple `BEGIN` calls push; `ROLLBACK` pops. |
-| `COMMIT MESSAGE` | Stage all changes and create a git commit. |
-| `VERIFY build` | Run a named step from `.forgeql.yaml` `verify_steps`. Returns `success` + `output`. Does **not** auto-rollback on failure. |
+| `COMMIT MESSAGE` | Stage all changes and create a git commit. Also accepts a heredoc body (`COMMIT MESSAGE <<MSG … MSG`) for multi-line messages. ForgeQL runtime files are auto-excluded and file deletions are staged correctly. |
 | `ROLLBACK` | Revert to the most recent checkpoint, or to a named one (discards later checkpoints). |
+
+**Commit gate:** verify steps in `.forgeql.yaml` may set `commit_gate: true`.
+When set, `COMMIT` is refused until that step has passed **since the most recent
+mutation** — any edit after a pass re-blocks the commit until the step is re-run.
+Several steps may be gated; every gated step must pass. A commit can therefore
+never record an unvalidated tree.
+
+---
+
+### VERIFY, RUN, and Background JOBs
+
+```sql
+VERIFY build 'step' ['arg']…
+
+RUN 'template' ['arg']…
+
+JOB START 'step'
+JOB STATUS '<job-id>'
+JOB LIST
+```
+
+| Command | Effect |
+|---|---|
+| `VERIFY build` | Run a named step from `.forgeql.yaml` `verify_steps`, synchronously. Returns `success` + `output`. Does **not** auto-rollback on failure. Steps may declare typed positional params (`params: [{ name: target, type: ident }]`); each `$name` in the step's command is substituted after arity and type validation, so a value can never inject shell syntax. |
+| `RUN` | Run a named allowlisted command template from `.forgeql.yaml` `run_steps`. `ident` args substitute into the command; `string` args bind to the subprocess stdin and are never spliced into the shell. |
+| `JOB START` | Run a verify step as a detached **background job** — returns a job id immediately instead of blocking the request. Use for long test gates. |
+| `JOB STATUS` / `JOB LIST` | Poll one job's state and output, or list all jobs. |
+
+Background jobs run through a **bounded worker pool**: at most
+`FORGEQL_MAX_CONCURRENT_JOBS` jobs execute at once (default `1`) and the rest
+wait `Queued` in a FIFO queue, starting automatically as slots free — a burst of
+`JOB START` builds runs serially instead of exhausting machine memory.
+
+VERIFY/RUN output that exceeds the inline cap is buffered; page or grep it with
+`SHOW MORE` — e.g. `SHOW MORE WHERE text MATCHES '^error|-->'` triages a
+compiler log without re-running the build.
 
 **`.forgeql.yaml`** may be in the repo root **or** in the directory directly above it (sidecar, outside the tracked tree):
 
@@ -303,6 +397,7 @@ verify_steps:
   - name: test
     command: "cmake --build build && ctest --test-dir build"
     timeout_secs: 120
+    commit_gate: true       # COMMIT refused until this passes after the last edit
 line_budget:
   ceiling: 5000           # max lines per session
   warning_pct: 20         # warning state below 20% remaining
@@ -311,6 +406,9 @@ line_budget:
   recovery_window_secs: 60
   idle_reset_secs: 300    # auto-delete budget file after idle gap
 ```
+
+Steps and templates are frozen at `USE`, so a later edit cannot tamper with a
+command the gate will run.
 
 **Line budget:** when `line_budget` is present, each session tracks how many source
 lines the agent has consumed. Budget status (`remaining/ceiling (delta)`) is returned
@@ -348,7 +446,7 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 | `WHERE` | Filter rows. Repeatable (implicit AND); `AND` is an accepted synonym for a repeated `WHERE`. Works on all field types including dynamic and enrichment fields. |
 | `HAVING` | Filter after `GROUP BY` aggregation. Operates on `count`. |
 | `IN` | Restrict to files matching glob pattern. |
-| `EXCLUDE` | Remove files matching glob pattern. |
+| `EXCLUDE` | Remove files matching glob pattern. Repeatable — every `EXCLUDE` clause applies; a row is dropped when **any** pattern matches its path. |
 | `ORDER BY` | Sort results. Default `ASC`. Any filterable field including enrichment fields (numeric values like `shadow_count`, `escape_count` sort numerically). |
 | `GROUP BY` | Aggregate by field. Adds `count` to each group. |
 | `LIMIT` | Maximum rows returned. Implicit cap of 20 when omitted on `FIND`. |
@@ -397,7 +495,12 @@ Applies to: `FIND symbols`, `FIND usages OF`, `FIND callees OF`
 | `language` | string | Language name: `cpp`, `rust`, `python`, etc. |
 | `path` | string | Relative file path (also used by `IN`/`EXCLUDE` globs) |
 | `line` | integer | 1-based start line |
-| `usages` | integer | Reference count across the index |
+| `usages` | integer | Workspace-total usage-site count, aggregated from the reference index at index time. `ORDER BY usages DESC` and `WHERE usages > N` are real queries, not heuristics. |
+
+**Filtered-field projection:** when a `WHERE` clause targets a non-core field —
+numeric, string, or boolean (e.g. `WHERE has_assignment_in_condition = 'true'`,
+`WHERE member_count > 10`) — that field's value is projected into the output
+rows, so the value you filtered on is always visible in the result.
 
 ### Outline Fields
 
@@ -429,6 +532,7 @@ Applies to: `FIND files`
 | Field | Type | Description |
 |---|---|---|
 | `path` / `file` | string | Relative file path |
+| `name` | string | Bare file name (e.g. `Kconfig`, `CMakeLists.txt`). Works with `=`, `LIKE`, `MATCHES`. |
 | `extension` / `ext` | string | Extension without `.` (empty for extension-less files) |
 | `size` | integer | File size in bytes |
 | `depth` | integer | Directory depth from workspace root |
@@ -622,11 +726,10 @@ Detects variables declared in inner scopes that shadow an outer-scope variable o
 | `shadow_count` | `function` | Number of shadowing declarations |
 | `shadow_vars` | `function` | Comma-separated names of shadowed variables |
 
-> **Note — `#ifdef` blocks:** As of Phase 1, the ShadowEnricher uses
-> structural guard exclusivity (`guard_group_id` + `guard_branch`) to
-> suppress false positives from `#ifdef`/`#else` siblings.  Variables
-> declared in opposite arms of the same guard group are no longer reported
-> as shadows.
+> **Note — `#ifdef` blocks:** The ShadowEnricher uses structural guard
+> exclusivity (`guard_group_id` + `guard_branch`) to suppress false
+> positives from `#ifdef`/`#else` siblings.  Variables declared in
+> opposite arms of the same guard group are not reported as shadows.
 
 #### UnusedParamEnricher
 
@@ -738,6 +841,53 @@ pipeline.
 | `expansion_failure_reason` | `macro_call` | Reason for failure (e.g. `"definition not found"`) |
 
 **Supported languages:** C/C++ (`CppMacroExpander`) and Rust (`RustMacroExpander` for `macro_rules!`).
+
+---
+
+## Structured-Text and Config Formats
+
+Structured-text and configuration files are indexed like code: every element
+gets a stable `node_id` and the **same commands apply** — `FIND symbols`,
+`SHOW NODE`, `CHANGE NODE`, `INSERT BEFORE/AFTER NODE`, `DELETE NODE`. A single
+`FIND` sweep returns Makefile rules, CMake calls, and C functions side by side.
+
+| Format | Files | Indexed as |
+|---|---|---|
+| XML family | `.xml`, `.arxml` (AUTOSAR), `.xdm`/`.epc`/`.epd` (EB tresos), `.ecuc`, `.odx` | Every element is a nested node, named by the cascade below |
+| Vector CAN | `.dbc` | `BO_` messages as `object`; `SG_` signals nested as `field`; `VAL_TABLE_`/`VAL_` as `enum`; attributes as `pair`; `EV_` as `variable` |
+| TOML | `.toml` (`Cargo.toml`), `.lock` (`Cargo.lock`) | Each `pair` under its key; each `[table]`/`[[table-array]]` by its `name`/`id`/`key` member or header key |
+| JSON / YAML | `.json`, `.jsonc`, `.yaml`, `.yml` | `object`/`array`/`pair`; objects named by an identifier-like member |
+| INI | `.ini`, `.cfg`, `.editorconfig`, `.gitconfig` | `[section]` as `object`; `key = value` nested as `pair` |
+| justfile | `justfile` (any casing, with or without dot) | Recipes as `function`; `:=` assignments and `alias` as `variable`; `set` as `pair`; `mod` as `namespace` |
+| Make | `Makefile`/`makefile`/`GNUmakefile`, `*.mk` | Rules as `function` named by target list; assignments as `variable`; `define` as `macro`; `ifeq`/`ifdef` as `if` |
+| CMake | `CMakeLists.txt`, `*.cmake` | `function()`/`macro()` definitions; every command call as `call_statement`; `if`/`foreach`/`while` as nested control flow |
+| Markdown | `.md` | Sections, headings, paragraphs, tables, code blocks — each addressable |
+| reStructuredText | `.rst`, `.rest` | Sections by title; paragraphs/list items by text snippet; directives as `macro_call` |
+
+Well-known extensionless file names (`justfile`, `Makefile`, `.editorconfig`, …)
+are matched by lowercased file name, leading dot stripped.
+
+**XML element naming cascade** — each element is named by the first rule that
+applies:
+
+1. An identifier-like attribute: `name`, `id`, `key`, `title`, or `alias`
+   (case-insensitive).
+2. The text of a `SHORT-NAME` child element (AUTOSAR containers).
+3. The last `/`-segment of a `DEFINITION-REF` child's text — AUTOSAR ECUC
+   parameter and reference values become findable by their parameter name
+   (e.g. `…/CanIfPublicCfg/CanIfPublicTxBuffering` → `CanIfPublicTxBuffering`).
+4. The tag name — anonymous wrapper elements stay addressable as `INSERT`
+   anchors.
+
+Attributes are not indexed as separate rows; edit them through their element's
+node. The practical effect: ECU-configuration formats that normally require GUI
+tooling can be queried by parameter name and edited by node handle:
+
+```sql
+FIND symbols WHERE name = 'CanIfPublicTxBuffering' IN 'config/**'
+SHOW NODE '<node_id>'
+CHANGE NODE '<node_id>(2)' WITH '      <VALUE>true</VALUE>'
+```
 
 ---
 
@@ -940,25 +1090,33 @@ FIND symbols
   LIMIT 10
 ```
 
-### Safe multi-step refactoring
+### The mechanical rename sweep
 
-Each statement executes independently — the agent sees every result and decides whether to proceed.
+A rename is a composition of usage sites, not a text substitution: enumerate the
+sites, then issue a targeted `CHANGE NODE` per site. Each statement executes
+independently — the agent sees every result (and every diff) and decides whether
+to proceed.
 
 ```sql
 -- 1. Checkpoint
 BEGIN TRANSACTION 'rename-process'
 
--- 2. Rename across all translation units
-CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
-  MATCHING 'PiscoCode::process' WITH 'PiscoCode::run'
+-- 2. Blast radius — one row per usage SITE (includes non-call references)
+FIND usages OF 'PiscoCode::process' GROUP BY file ORDER BY count DESC
+FIND usages OF 'PiscoCode::process' LIMIT 50
 
--- 3. Verify the build
+-- 3. For each site: read the enclosing node, splice the reference by handle
+SHOW NODE '<node_id>' WHERE text LIKE '%process%'
+CHANGE NODE '<node_id>(off)' WITH '    PiscoCode::run(sample);'
+-- …repeat per site; each response's diff confirms the splice
+
+-- 4. Verify the build
 VERIFY build 'test'
 
--- 4a. Success → commit
+-- 5a. Success → commit
 COMMIT MESSAGE 'rename PiscoCode::process to PiscoCode::run'
 
--- 4b. Failure → rollback
+-- 5b. Failure → rollback
 ROLLBACK TRANSACTION 'rename-process'
 ```
 
@@ -967,15 +1125,13 @@ ROLLBACK TRANSACTION 'rename-process'
 ```sql
 -- Phase 1
 BEGIN TRANSACTION 'phase-1-rename'
-CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
-  MATCHING 'OldName' WITH 'NewName'
+-- …rename sweep as above…
 VERIFY build 'test'
 COMMIT MESSAGE 'rename OldName to NewName'
 
 -- Phase 2
 BEGIN TRANSACTION 'phase-2-add-param'
-CHANGE FILE 'include/NewName.h'
-  LINES 12-12
+CHANGE NODE '<declaration_node_id>'
   WITH 'void NewName::run(Buffer& buf, int flags);'
 VERIFY build 'test'
 
@@ -1109,13 +1265,19 @@ Mutations, transactions, and source ops keep their JSON format (already small).
 
 ---
 
-## Raw-text commands (non-indexed files)
+## Raw line and file operations (legacy, non-indexed files)
 
 The commands in this chapter operate on **raw byte ranges** and never touch the
-index. Reach for them **only** on files ForgeQL does not index — config, fixtures,
-generated output, plain text. For any indexed source file use the node commands
-above (`SHOW NODE`, `CHANGE NODE`, `INSERT … NODE`, `DELETE NODE`): a node handle
-survives edits that shift line numbers; a line range does not.
+index. They are **not** the way to edit indexed source — `CHANGE FILE` on an
+indexed file is disabled and returns guidance pointing at the node commands
+(`CHANGE NODE`, `INSERT … NODE`, `DELETE NODE`): a node handle survives edits
+that shift line numbers; a line range does not. What remains legitimate here:
+
+- editing files ForgeQL does not index (fixtures, generated output, plain text);
+- file scaffolding — `COPY LINES` to seed a brand-new file, `MOVE LINES` to
+  relocate content across files;
+- deleting a file (`CHANGE FILE '<f>' WITH NOTHING` — works on indexed files
+  too; `ROLLBACK` restores it).
 
 ### SHOW LINES
 
@@ -1142,7 +1304,12 @@ CHANGE FILE 'file_path' WITH NOTHING
 | `LINES n-m WITH '…'` | Replace a specific line range |
 | `LINES n-m WITH NOTHING` | Delete a specific line range |
 | `WITH '…'` | Replace entire file content (creates the file if absent) |
-| `WITH NOTHING` | Clear file content (file remains on disk, empty) |
+| `WITH NOTHING` | **Delete the file** — the removal is staged on `COMMIT`; `ROLLBACK` restores it |
+
+All variants are refused on indexed source files — with guidance to use the
+node commands instead — except the whole-file `WITH NOTHING` deletion: naming a
+file explicitly for removal is not raw-text editing, and the returned diff shows
+the deleted content.
 
 `file_list` is one or more comma-separated single-quoted globs; `FILE` and `FILES`
 are interchangeable. Every `WITH 'content'` form also accepts a heredoc block
@@ -1158,4 +1325,6 @@ MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]
 
 Copies (or moves) source lines `n..=m` into `dst` before line `k`; the range is
 appended when `AT LINE k` is omitted. **COPY** leaves `src` untouched; **MOVE**
-deletes the range from `src` after inserting. Same-file moves are atomic.
+deletes the range from `src` after inserting. Same-file moves are atomic. A
+purely numeric `TO` destination is rejected (write `TO '<path>' AT LINE k`, not
+`TO 3`).

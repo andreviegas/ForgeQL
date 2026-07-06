@@ -22,6 +22,12 @@ ForgeQL is a **declarative, code-aware transformation tool**. You describe *what
 
 Think of it as **SQL for source code**: a small, expressive query language backed by real syntax trees (tree-sitter), not fragile regular expressions.
 
+Three ideas define it:
+
+- **Edit by node handle.** Every indexed symbol carries a stable `node_id` (e.g. `nb1be37eea3f0.0124`) that survives line drift, unrelated edits, and re-parse. You locate a node once with `FIND`, then read it (`SHOW NODE`) and rewrite it (`CHANGE NODE`) by handle — no line numbers to recompute, ever.
+- **Real reference queries.** Usage sites are collected at index time, so `FIND usages OF 'name'` returns every reference — including ones without call parentheses — and `ORDER BY usages DESC` ranks symbols by real workspace-wide counts.
+- **Not just code.** Structured-text formats index like code: AUTOSAR `.arxml`, EB tresos `.xdm`, Vector CAN `.dbc`, `Cargo.toml`/`Cargo.lock`, `CMakeLists.txt`, Makefiles, justfiles, INI, JSON, YAML, XML, Markdown, reStructuredText. Config that normally requires GUI tools becomes findable by name and editable by node handle.
+
 It works in two modes:
 - **MCP server** — connects directly to AI coding agents (GitHub Copilot, Claude, etc.) inside VS Code or any MCP-capable editor.
 - **Interpreter** — pipe a FQL statement into the binary from a terminal or script.
@@ -76,14 +82,15 @@ SHOW body OF 'PiscoCode::process' DEPTH 99
 
 ### 1. Small Command Surface
 
-ForgeQL is intentionally minimal. Everything is built from four command families:
+ForgeQL is intentionally minimal. Everything is built from five command families:
 
 | Family | Commands |
 |---|---|
-| **Session** | `CREATE SOURCE` · `REFRESH SOURCE` · `USE` · `SHOW SOURCES` · `SHOW BRANCHES` · `DISCONNECT` |
+| **Session** | `CREATE SOURCE` · `REFRESH SOURCE` · `USE` · `SHOW SOURCES` · `SHOW BRANCHES` |
 | **Queries** | `FIND symbols` · `FIND usages OF` · `FIND callees OF` · `FIND files` |
 | **Content** | `SHOW body` · `SHOW signature` · `SHOW outline` · `SHOW members` · `SHOW context` · `SHOW NODE` |
-| **Mutations** | `CHANGE NODE` · `INSERT BEFORE/AFTER NODE` · `DELETE NODE` — addressed by stable `node_id`, optional `IF REV` guard. Raw-text file edits (`CHANGE FILE`, line-range copy/move) live in the syntax reference for non-indexed files |
+| **Mutations** | `CHANGE NODE` · `INSERT BEFORE/AFTER NODE` · `DELETE NODE` — addressed by stable `node_id`, optional `IF REV` guard. Every mutation answers with a boundary diff, `lines_written`, and `lines_removed`. Raw-text file edits (`CHANGE FILE`, line-range copy/move) live in the syntax reference for non-indexed files |
+| **Workflow** | `VERIFY build` · `JOB START/STATUS/LIST` (background builds) · `COMMIT MESSAGE` · `BEGIN TRANSACTION` / `ROLLBACK` · `UNDO` · `RUN` (allowlisted templates) |
 
 Complex workflows — renaming a symbol, applying a coding standard, migrating a pattern — are **composed by the agent** from these primitives. ForgeQL provides the precision tools; the agent decides the strategy.
 
@@ -275,16 +282,44 @@ FIND usages OF 'PiscoCode::process'
   ORDER BY count DESC
 ```
 
+### Edit by node handle
+
+The editing flow is always the same four steps: **find → show → change → read the diff**.
+
+```sql
+-- 1. Locate — every FIND row carries a stable node_id
+FIND symbols WHERE name = 'PiscoCode::init'
+
+-- 2. Read the node by its handle
+SHOW NODE '<node_id>'
+
+-- 3. Rewrite it by handle — drift-proof, no line numbers
+CHANGE NODE '<node_id>'
+  WITH 'void PiscoCode::init(Buffer& buffer) {
+    for (auto& sample : buffer) {
+        sample = this->pipeline.apply(sample);
+    }
+}'
+
+-- 4. The response IS the review: new_node_id, lines_written, lines_removed,
+--    and a boundary diff whose context lines carry node_id(offset) handles.
+--    A large lines_removed on a small edit means you clobbered more than
+--    intended — UNDO reverses the mutation.
+```
+
+The engine is deliberately mechanical: it splices exactly what you send and never auto-corrects syntax. If the returned diff shows a seam — a missing comma, an unbalanced brace — the follow-up edit is yours to issue, and the diff's inline `node_id(offset)` handles make it a one-liner.
+
 ### Make changes inside a transaction
 
-Transactions group multiple commands atomically. If `VERIFY` fails, every modified file is restored automatically.
+Transactions group multiple commands atomically. A rename is a composition of usage sites: enumerate them, then issue a targeted `CHANGE NODE` per site.
 
 ```sql
 BEGIN TRANSACTION 'rename-process'
-  CHANGE FILES 'src/**/*.cpp', 'include/**/*.h'
-    MATCHING 'PiscoCode::process' WITH 'PiscoCode::run'
+  FIND usages OF 'PiscoCode::process' GROUP BY file ORDER BY count DESC
+  -- one CHANGE NODE per usage site, each confirmed by its diff…
   VERIFY build 'test'
 COMMIT MESSAGE 'rename PiscoCode::process to PiscoCode::run'
+-- or: ROLLBACK TRANSACTION 'rename-process' to restore every file
 ```
 
 
@@ -302,22 +337,30 @@ VERIFY build 'test'
 verify_steps:
   - name: test
     command: "cmake --build build && ctest --test-dir build -R unit"
+    commit_gate: true   # COMMIT refused until this passes after the last edit
 ```
 
-### Edit a specific function body
+Long steps can run as **background jobs**: `JOB START 'test'` returns a job id immediately; poll with `JOB STATUS <id>` / `JOB LIST`. Jobs queue through a bounded worker pool (`FORGEQL_MAX_CONCURRENT_JOBS`, default 1), so parallel heavy builds never exhaust the machine. A step marked `commit_gate: true` must pass *after* the last edit or `COMMIT` is refused — a commit can never record an unvalidated tree.
+
+Verify output is buffered and queryable — triage a compiler log without re-running the build:
 
 ```sql
--- Step 1: locate the node — SHOW body's CSV header carries its node_id
-SHOW body OF 'PiscoCode::init'
-
--- Step 2: replace the whole node by handle (drift-proof, no line numbers)
-CHANGE NODE '<node_id>'
-  WITH 'void PiscoCode::run(Buffer& buffer) {
-    for (auto& sample : buffer) {
-        sample = this->pipeline.apply(sample);
-    }
-}'
+SHOW MORE WHERE text MATCHES '^error|-->'
 ```
+
+### Edit configuration the same way
+
+Structured-text files are indexed like code — the same `FIND` → `SHOW NODE` → `CHANGE NODE` flow edits `Cargo.toml`, a CMakeLists, or an AUTOSAR ECU configuration:
+
+```sql
+-- Find an ECUC parameter by its real name (no GUI tool needed)
+FIND symbols WHERE name = 'CanIfPublicTxBuffering' IN 'config/**'
+
+-- Read and edit it by handle
+SHOW NODE '<node_id>'
+CHANGE NODE '<node_id>(2)' WITH '      <VALUE>true</VALUE>'
+```
+
 ### Remove a deprecated function
 
 ```sql
@@ -356,7 +399,7 @@ ForgeQL ships with distributable agent configuration files that teach AI agents 
 
 1. **Tool restriction** — the VS Code Custom Agent locks the agent to `forgeql/*` tools only. It literally cannot call grep, find, or cat.
 2. **Behavioral instructions** — every platform adapter includes the two-step workflow: `FIND symbols WHERE` → `SHOW NODE` — no brute-force reading.
-3. **MCP server guardrails** — SHOW commands returning more than 40 lines without an explicit `LIMIT` clause are **blocked**. The agent gets zero lines and a guidance message redirecting it to precision queries. This teaches the right pattern on first contact, even without any agent files installed.
+3. **MCP server guardrails** — SHOW commands returning more than 40 lines without an explicit `LIMIT` clause are **capped**: the agent gets the first window plus a guidance message (`SHOW MORE` pages the rest; precision queries avoid the cap entirely). This teaches the right pattern on first contact, even without any agent files installed.
 
 | Platform | File | Tool Lock |
 |---|---|---|
