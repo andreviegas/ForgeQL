@@ -113,11 +113,15 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///          `fql_kind = "shift_expression"` (config-only: `shift_kinds` +
 ///          `kind_map` entries mirrored from cpp.json); v21 segments carry
 ///          those rows with an empty fql_kind.
-///  23 — BUG-006 U1: segments gain `usages_fst` / `usages_postings` blobs
+///  23 — segments gain `usages_fst` / `usages_postings` blobs
 ///          (identifier text → 1-based source lines, the reference index).
 ///          v22 segments lack the blobs, so readers would silently report
 ///          zero usages — the bump forces a full re-index.
-pub const ENRICH_VER: u32 = 23;
+///  24 — AUTOSAR ECUC parameter/reference values (XML family) are now named
+///          by their DEFINITION-REF's last path segment instead of the bare
+///          tag name; v23 segments carry those rows named
+///          "ECUC-NUMERICAL-PARAM-VALUE" etc., unfindable by parameter name.
+pub const ENRICH_VER: u32 = 24;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

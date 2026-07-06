@@ -47,9 +47,11 @@ pub(crate) const MAGIC: [u8; 4] = *b"FQOV";
 ///   (BUG-019: C/Rust shift rows gain `fql_kind = "shift_expression"`).
 /// - **13**: no layout change — content invalidation for ENRICH_VER 23
 ///   (BUG-006 U1: segments gain `usages_fst`/`usages_postings` blobs).
-/// - **14**: TOC gains blob 13 `usages_count_fst` (BUG-006 U3): FST mapping
-///   symbol name → total usage-site count aggregated across all segments.
-pub(crate) const SCHEMA_VERSION: u32 = 14;
+/// - **14**: TOC gains blob 13 `usages_count_fst`: FST mapping symbol name →
+///   total usage-site count aggregated across all segments.
+/// - **15**: no layout change — content invalidation for ENRICH_VER 24
+///   (ECUC parameter/reference values named by DEFINITION-REF last segment).
+pub(crate) const SCHEMA_VERSION: u32 = 15;
 
 /// Number of bytes in the fixed header (before the TOC).
 pub(crate) const HEADER_LEN: usize = 24;

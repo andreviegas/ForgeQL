@@ -805,4 +805,75 @@ mod tests {
             "buffer must hold the full rendered output"
         );
     }
+
+    /// Automotive structured-XML end-to-end through the MCP tool: AUTOSAR
+    /// ECUC parameter values and tresos datamodel entries are findable by
+    /// their real names — the discovery half of the workflow that replaces
+    /// GUI round-trips through vendor configuration tools.
+    #[tokio::test]
+    async fn run_fql_automotive_xml_find_by_real_names() {
+        use forgeql_lang_text::xml::XmlLanguage;
+
+        let dir = tempdir().expect("tempdir");
+        let src = fixtures_dir();
+        for fixture in ["EcucCanIf.arxml", "TresosAdc.xdm"] {
+            let _ = fs::copy(src.join(fixture), dir.path().join(fixture)).expect("copy fixture");
+        }
+        let registry = Arc::new(LanguageRegistry::new(vec![
+            Arc::new(CLanguage),
+            Arc::new(CppLanguage),
+            Arc::new(XmlLanguage),
+        ]));
+        let mut engine = ForgeQLEngine::new(dir.path().join("data"), registry).expect("engine");
+        let session_id = engine
+            .register_local_session_for(auth(AuthContext::Mcp), dir.path())
+            .expect("register session");
+        let mcp = ForgeQlMcp::new(Arc::new(TokioMutex::new(engine)), None);
+
+        let run = |fql: &str, sid: String| {
+            mcp.run_fql(Parameters(RunFqlParams {
+                fql: fql.to_string(),
+                session_id: Some(sid),
+                format: None,
+            }))
+        };
+
+        // An ECUC parameter value carries no SHORT-NAME and no identifying
+        // attribute; it must be findable by its DEFINITION-REF's last path
+        // segment. (Node-handle mutation on XML elements is covered by the
+        // golden node-mutation suites against the git-backed corpora.)
+        let result = run(
+            "FIND symbols WHERE name = 'CanIfPublicTxBuffering'",
+            session_id.clone(),
+        )
+        .await
+        .expect("find param should succeed");
+        let text = first_text(&result);
+        assert!(
+            text.contains("CanIfPublicTxBuffering") && text.contains("EcucCanIf.arxml"),
+            "ECUC param must be findable by name: {text}"
+        );
+
+        // A deeply nested sub-container keeps its SHORT-NAME identity.
+        let result = run(
+            "FIND symbols WHERE name = 'CanIfBufferCfg_0'",
+            session_id.clone(),
+        )
+        .await
+        .expect("find container should succeed");
+        let text = first_text(&result);
+        assert!(
+            text.contains("CanIfBufferCfg_0"),
+            "nested container findable by SHORT-NAME: {text}"
+        );
+
+        // A tresos datamodel variable is named by its `name` attribute, deep
+        // inside namespaced (`d:ctr`/`d:var`) nesting.
+        let result = run("FIND symbols WHERE name = 'AdcPrescale'", session_id)
+            .await
+            .expect("find tresos var should succeed");
+        let text = first_text(&result);
+        assert!(text.contains("AdcPrescale"), "tresos var findable: {text}");
+        assert!(text.contains("TresosAdc.xdm"), "path present: {text}");
+    }
 }

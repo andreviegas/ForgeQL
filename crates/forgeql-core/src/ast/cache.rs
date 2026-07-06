@@ -72,8 +72,10 @@ use crate::ast::lang::MacroDef;
 ///       named by the construct's first line instead of being nameless.
 ///   31. BUG-019: C and Rust shift expressions resolve to `fql_kind =
 ///       "shift_expression"` (config-only `shift_kinds`/`kind_map` fix).
-///   32. BUG-006 U1: usage postings (`usages_fst`/`usages_postings` segment
-///       blobs) — identifier text → source lines, the reference index.
+///   32. Usage postings (`usages_fst`/`usages_postings` segment blobs) —
+///       identifier text → source lines, the reference index.
+///   33. ECUC parameter/reference values (XML family) named by their
+///       DEFINITION-REF's last path segment instead of the bare tag name.
 ///
 /// # ⚠ DEAD CODE — NOT IN USE (as of 0.49.10)
 ///
@@ -87,7 +89,7 @@ use crate::ast::lang::MacroDef;
 /// TODO: remove `CachedIndex`, `CURRENT_VERSION`, `persist_to_cache`, and the
 /// entire `.forgeql-index` on-disk format once the legacy `SymbolTable` build
 /// path is fully retired.
-pub const CURRENT_VERSION: u32 = 32;
+pub const CURRENT_VERSION: u32 = 33;
 
 // -----------------------------------------------------------------------
 // CachedIndex

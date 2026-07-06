@@ -6,6 +6,32 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.95.0] — 2026-07-06 — feat(xml): AUTOSAR ECUC parameter values named by their definition reference
+
+### Fixed
+
+- AUTOSAR ECU-configuration values (`.arxml`/`.ecuc`):
+  `ECUC-NUMERICAL-PARAM-VALUE`, `ECUC-TEXTUAL-PARAM-VALUE`, and
+  `ECUC-REFERENCE-VALUE` elements carry neither a SHORT-NAME child nor an
+  identifying attribute, so every parameter row was named by its bare tag —
+  hundreds of identical `ECUC-NUMERICAL-PARAM-VALUE` rows, making it
+  impossible to find a parameter by name. The XML naming cascade gains a
+  step between SHORT-NAME and tag-name fallback: the last `/`-segment of a
+  `DEFINITION-REF` child's text
+  (`…/CanIfPublicCfg/CanIfPublicTxBuffering` → `CanIfPublicTxBuffering`).
+  Containers keep SHORT-NAME priority; the `DEFINITION-REF` element itself
+  keeps its tag name.
+- Cache invalidation: segment content version 23→24, overlay schema 14→15,
+  legacy index cache 32→33 — existing XML rows re-index under the new names.
+
+### Added
+
+- Synthetic automotive fixtures (`tests/fixtures/EcucCanIf.arxml` — nested
+  AUTOSAR ECUC module configuration; `tests/fixtures/TresosAdc.xdm` — EB
+  tresos datamodel) and an end-to-end test proving the GUI-bypass workflow:
+  find an ECUC parameter or tresos variable by its real name, then edit its
+  value through the node handle.
+
 ## [0.94.0] — 2026-07-06 — feat(query): real usages_count on FIND symbols rows (BUG-006 slice U3)
 
 ### Added

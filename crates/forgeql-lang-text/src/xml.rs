@@ -15,7 +15,11 @@
 //!    case-insensitive (tresos: `<d:ctr name="AdcConfigSet">`);
 //! 2. a `SHORT-NAME` child element's text (AUTOSAR:
 //!    `<ECUC-CONTAINER-VALUE><SHORT-NAME>AdcHwUnit0</SHORT-NAME>…`);
-//! 3. the tag name itself — so anonymous structural wrappers such as
+//! 3. the last `/`-segment of a `DEFINITION-REF` child's text (AUTOSAR ECUC
+//!    parameter/reference values carry neither attribute nor SHORT-NAME —
+//!    their identity is the referenced definition, e.g.
+//!    `…/CanIfPublicCfg/CanIfPublicTxBuffering` → `CanIfPublicTxBuffering`);
+//! 4. the tag name itself — so anonymous structural wrappers such as
 //!    `<CONTAINERS>` or `<ELEMENTS>` stay addressable for INSERT targets.
 //!
 //! Attributes are NOT indexed as separate nodes: they live on the element's
@@ -43,6 +47,11 @@ const IDENTIFIER_ATTRS: &[&str] = &["name", "id", "key", "title", "alias"];
 
 /// Child-element tag whose text names its parent container (AUTOSAR).
 const SHORT_NAME_TAG: &str = "SHORT-NAME";
+
+/// Child-element tag holding an ECUC definition reference (AUTOSAR
+/// configuration values). Its text is a slash-separated definition path;
+/// the last segment names the parameter/reference value.
+const DEFINITION_REF_TAG: &str = "DEFINITION-REF";
 
 /// Start-tag node kinds (`<a …>` and the self-closing `<a …/>`).
 const TAG_KINDS: &[&str] = &["STag", "EmptyElemTag"];
@@ -135,8 +144,9 @@ fn attr_identifier(tag: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> 
     None
 }
 
-/// The text of a `SHORT-NAME` child element, if `element` has one (AUTOSAR).
-fn short_name_child(element: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+/// The trimmed text of the first child element whose tag equals `tag`
+/// (case-insensitive), if `element` has one.
+fn child_element_text(element: tree_sitter::Node<'_>, tag: &str, source: &[u8]) -> Option<String> {
     let mut cursor = element.walk();
     let content = element
         .named_children(&mut cursor)
@@ -146,12 +156,12 @@ fn short_name_child(element: tree_sitter::Node<'_>, source: &[u8]) -> Option<Str
         if child.kind() != "element" {
             continue;
         }
-        let Some(tag) = start_tag(child) else {
+        let Some(child_tag) = start_tag(child) else {
             continue;
         };
-        let is_short_name =
-            tag_name(tag, source).is_some_and(|name| name.eq_ignore_ascii_case(SHORT_NAME_TAG));
-        if !is_short_name {
+        let matches =
+            tag_name(child_tag, source).is_some_and(|name| name.eq_ignore_ascii_case(tag));
+        if !matches {
             continue;
         }
         let mut child_cursor = child.walk();
@@ -164,6 +174,26 @@ fn short_name_child(element: tree_sitter::Node<'_>, source: &[u8]) -> Option<Str
         }
     }
     None
+}
+
+/// The text of a `SHORT-NAME` child element, if `element` has one (AUTOSAR).
+fn short_name_child(element: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    child_element_text(element, SHORT_NAME_TAG, source)
+}
+
+/// The last `/`-segment of a `DEFINITION-REF` child's text, if `element`
+/// has one (AUTOSAR ECUC configuration values).
+///
+/// Parameter and reference values (`ECUC-NUMERICAL-PARAM-VALUE`,
+/// `ECUC-TEXTUAL-PARAM-VALUE`, `ECUC-REFERENCE-VALUE`, …) carry no
+/// SHORT-NAME and no identifying attribute; their identity is the referenced
+/// definition path, e.g.
+/// `/AUTOSAR/EcucDefs/CanIf/CanIfPublicCfg/CanIfPublicTxBuffering` —
+/// whose last segment is the parameter name a user searches for.
+fn definition_ref_last_segment(element: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let text = child_element_text(element, DEFINITION_REF_TAG, source)?;
+    let segment = text.rsplit('/').next()?.trim();
+    (!segment.is_empty()).then(|| segment.to_string())
 }
 
 impl LanguageSupport for XmlLanguage {
@@ -186,6 +216,7 @@ impl LanguageSupport for XmlLanguage {
         let tag = start_tag(node)?;
         attr_identifier(tag, source)
             .or_else(|| short_name_child(node, source))
+            .or_else(|| definition_ref_last_segment(node, source))
             .or_else(|| tag_name(tag, source))
     }
 
@@ -333,5 +364,49 @@ mod tests {
         let src = "<node id='n42'/>";
         let got = just_names(src);
         assert!(got.contains(&"n42".to_string()), "names: {got:?}");
+    }
+
+    #[test]
+    fn ecuc_param_values_are_named_by_definition_ref_last_segment() {
+        // AUTOSAR ECUC values carry neither an identifying attribute nor a
+        // SHORT-NAME; their DEFINITION-REF's last path segment is the name a
+        // user searches for.
+        let src = r#"<PARAMETER-VALUES>
+  <ECUC-NUMERICAL-PARAM-VALUE>
+    <DEFINITION-REF DEST="ECUC-BOOLEAN-PARAM-DEF">/AUTOSAR/EcucDefs/CanIf/CanIfPublicCfg/CanIfPublicTxBuffering</DEFINITION-REF>
+    <VALUE>true</VALUE>
+  </ECUC-NUMERICAL-PARAM-VALUE>
+  <ECUC-REFERENCE-VALUE>
+    <DEFINITION-REF DEST="ECUC-REFERENCE-DEF">/AUTOSAR/EcucDefs/CanIf/CanIfInitCfg/CanIfBufferCfg/CanIfBufferHthIdRef</DEFINITION-REF>
+    <VALUE-REF DEST="ECUC-CONTAINER-VALUE">/ActiveEcuC/CanIf/CanIfHthCfg_0</VALUE-REF>
+  </ECUC-REFERENCE-VALUE>
+</PARAMETER-VALUES>"#;
+        let names = just_names(src);
+        assert!(
+            names.contains(&"CanIfPublicTxBuffering".to_string()),
+            "param value must be named by DEFINITION-REF last segment: {names:?}"
+        );
+        assert!(
+            names.contains(&"CanIfBufferHthIdRef".to_string()),
+            "reference value must be named by DEFINITION-REF last segment: {names:?}"
+        );
+        // The DEFINITION-REF element itself keeps its tag name.
+        assert!(names.contains(&"DEFINITION-REF".to_string()));
+    }
+
+    #[test]
+    fn short_name_still_wins_over_definition_ref() {
+        // Containers carry BOTH a SHORT-NAME and a DEFINITION-REF; the
+        // SHORT-NAME (the instance name) must win over the definition name.
+        let src = r#"<ECUC-CONTAINER-VALUE>
+  <SHORT-NAME>CanIfBufferCfg_0</SHORT-NAME>
+  <DEFINITION-REF DEST="ECUC-PARAM-CONF-CONTAINER-DEF">/AUTOSAR/EcucDefs/CanIf/CanIfInitCfg/CanIfBufferCfg</DEFINITION-REF>
+</ECUC-CONTAINER-VALUE>"#;
+        let names = just_names(src);
+        assert!(names.contains(&"CanIfBufferCfg_0".to_string()));
+        assert!(
+            !names.contains(&"CanIfBufferCfg".to_string()),
+            "SHORT-NAME must take priority over DEFINITION-REF: {names:?}"
+        );
     }
 }

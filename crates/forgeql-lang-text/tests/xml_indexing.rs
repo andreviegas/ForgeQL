@@ -113,12 +113,23 @@ fn arxml_wrappers_are_addressable_by_tag() {
     }
 }
 
-/// Repeated same-tag siblings (two parameter values named by tag fallback)
-/// receive distinct ordinals — unique node_ids across the whole file.
+/// Parameter values are found by their DEFINITION-REF names; their repeated
+/// same-tag <VALUE> children receive distinct ordinals — unique node_ids
+/// across the whole file.
 #[test]
 fn repeated_tags_get_distinct_ordinals() {
     let table = index_fixture("adc_ecuc.arxml");
-    let rows = table.find_all_defs("ECUC-NUMERICAL-PARAM-VALUE");
+
+    // The two parameter values are named by their DEFINITION-REF's last
+    // path segment — each is individually findable.
+    for name in ["AdcPrescale", "AdcPriority"] {
+        let _ = object_ordinal(&table, name);
+    }
+
+    // Their repeated same-tag <VALUE> children fall back to the tag name;
+    // siblings must still receive distinct ordinals — unique node_ids
+    // across the whole file.
+    let rows = table.find_all_defs("VALUE");
     let ordinals: Vec<u32> = rows
         .iter()
         .filter(|r| table.fql_kind_of(r) == "object")
@@ -127,7 +138,7 @@ fn repeated_tags_get_distinct_ordinals() {
     assert_eq!(
         ordinals.len(),
         2,
-        "both parameter-value elements should be indexed"
+        "both tag-named VALUE elements should be indexed"
     );
     assert_ne!(
         ordinals[0], ordinals[1],
