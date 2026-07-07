@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.100.1] — 2026-07-07 — fix(session): compatibility symlink at the old worktree path
+
+### Fixed
+
+- Session worktrees moved from `worktrees/{source}.{branch}.{alias}` to a
+  per-user layout `worktrees/{user}/{source}.{branch}.{alias}`, which broke
+  host tooling that resolves the old path — container runners and mount
+  scripts used by `VERIFY`/`JOB` steps failed with "worktree not found"
+  even though the session itself worked, blocking every build gate. `USE`
+  now maintains a compatibility symlink at the old location (never
+  clobbering a real directory or another session's link), and session
+  teardown removes it. Scripts should still prefer the `FORGEQL_WORKTREE`
+  environment variable, which always carries the session's real worktree
+  path.
+
 ## [0.100.0] — 2026-07-06 — release: memory-bounded indexing rollup
 
 Release marker for the three changes shipped as 0.99.0–0.99.2, so a single

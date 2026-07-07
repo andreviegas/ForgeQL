@@ -199,6 +199,19 @@ impl SessionCoords {
         Self::worktrees_root(data_dir).join(user)
     }
 
+    /// Pre-user-segment location of this session's worktree:
+    /// `{data_dir}/worktrees/{worktree_dir}`.
+    ///
+    /// Worktrees used to live here before the per-user subdirectory was
+    /// introduced. Host tooling (container runners, mount scripts) built
+    /// against that layout still resolves this path, so session setup
+    /// maintains a compatibility symlink at it — see
+    /// `git::worktree::ensure_legacy_link`.
+    #[must_use]
+    pub fn legacy_worktree_path(&self, data_dir: &Path) -> PathBuf {
+        Self::worktrees_root(data_dir).join(self.worktree_dir())
+    }
+
     // -----------------------------------------------------------------------
     // Predicates
     // -----------------------------------------------------------------------

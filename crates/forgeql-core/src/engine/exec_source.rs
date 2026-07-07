@@ -205,7 +205,10 @@ impl ForgeQLEngine {
             &wt_path,
             Some(&git_branch),
         )?);
-
+        // Host tooling built against the pre-user-segment layout resolves
+        // worktrees/{dir}; keep a compatibility symlink there so container
+        // runners and mount scripts keep working (see ensure_legacy_link).
+        worktree::ensure_legacy_link(&coords.legacy_worktree_path(&self.data_dir), &wt_path);
         let mut session = Session::from_coords(&coords, wt_path, &Arc::clone(&self.lang_registry));
         session.custom_branch = Some(git_branch);
         session.worktree_name = wt_name;

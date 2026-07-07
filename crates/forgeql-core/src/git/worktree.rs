@@ -287,6 +287,78 @@ fn resolve_teardown_branch(wt_path: &Path, name: &str, known: Option<&str>) -> S
         .unwrap_or_else(|| format!("forgeql/{name}"))
 }
 
+/// Maintain a compatibility symlink at the pre-user-segment worktree path.
+///
+/// Worktrees moved from `worktrees/{dir}` to `worktrees/{user}/{dir}`, but
+/// host tooling (container runners, mount scripts) built against the old
+/// layout still resolves the un-nested path. This creates
+/// `legacy_path -> {user}/{dir}` (relative target, so a relocated data dir
+/// stays consistent) unless something already exists there — a real
+/// directory from the old layout, or another user's link, is never
+/// clobbered. Best-effort; Unix only (symlink creation needs no privilege
+/// there).
+pub fn ensure_legacy_link(legacy_path: &Path, wt_path: &Path) {
+    #[cfg(unix)]
+    {
+        if legacy_path.symlink_metadata().is_ok() {
+            return; // occupied: old-layout worktree, or an existing link
+        }
+        let Some(user_dir) = wt_path.parent().and_then(Path::file_name) else {
+            return;
+        };
+        let Some(wt_name) = wt_path.file_name() else {
+            return;
+        };
+        let target = PathBuf::from(user_dir).join(wt_name);
+        if let Err(e) = std::os::unix::fs::symlink(&target, legacy_path) {
+            tracing::debug!(
+                legacy = %legacy_path.display(),
+                error = %e,
+                "legacy worktree link not created (non-fatal)"
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (legacy_path, wt_path);
+    }
+}
+
+/// Remove the compatibility symlink left by [`ensure_legacy_link`], if any.
+///
+/// Only removes `worktrees/{dir}` when it is a symlink whose target resolves
+/// to `wt_path` (`worktrees/{user}/{dir}`); a real directory or a link owned
+/// by another session is left untouched. Best-effort.
+pub fn remove_legacy_link(wt_path: &Path) {
+    let Some(user_root) = wt_path.parent() else {
+        return;
+    };
+    let Some(worktrees_root) = user_root.parent() else {
+        return;
+    };
+    let Some(wt_name) = wt_path.file_name() else {
+        return;
+    };
+    let legacy = worktrees_root.join(wt_name);
+    let Ok(meta) = legacy.symlink_metadata() else {
+        return;
+    };
+    if !meta.file_type().is_symlink() {
+        return;
+    }
+    let Ok(target) = std::fs::read_link(&legacy) else {
+        return;
+    };
+    // Relative targets resolve against the link's own directory.
+    let resolved = if target.is_absolute() {
+        target
+    } else {
+        worktrees_root.join(target)
+    };
+    if resolved == wt_path {
+        let _ = std::fs::remove_file(&legacy);
+    }
+}
 /// Remove a worktree **and** delete its backing branch in one call.
 ///
 /// This is the single teardown entry point for every worktree the server
@@ -302,7 +374,8 @@ fn resolve_teardown_branch(wt_path: &Path, name: &str, known: Option<&str>) -> S
 /// Best-effort: both the worktree removal and the branch deletion are always
 /// attempted; the first error is returned for the caller to log. Callers that
 /// intentionally keep a branch (e.g. a named session retained for review) must
-/// call [`remove`] directly instead.
+/// call [`remove`] directly instead. The compatibility symlink left by
+/// [`ensure_legacy_link`] is removed alongside the worktree.
 ///
 /// # Errors
 /// Returns the first of the worktree-removal or branch-deletion errors, if any.
@@ -315,6 +388,7 @@ pub fn remove_with_branch(
     // Resolve the branch BEFORE remove() deletes the checkout — once the
     // directory is gone, HEAD can no longer be read.
     let branch = resolve_teardown_branch(wt_path, name, known_branch);
+    remove_legacy_link(wt_path);
     let remove_res = remove(repo_path, name);
     let branch_res = delete_branch(repo_path, &branch);
     remove_res.and(branch_res)
@@ -772,5 +846,55 @@ mod tests {
             err_msg.contains("does not belong to bare repo"),
             "error must mention cross-source corruption, got: {err_msg}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_link_created_and_removed_with_worktree() {
+        let tmp = tempdir().unwrap();
+        let worktrees = tmp.path().join("worktrees");
+        let wt_path = worktrees.join("anonymous").join("src.main.alias");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        let legacy = worktrees.join("src.main.alias");
+
+        ensure_legacy_link(&legacy, &wt_path);
+        assert!(legacy.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            legacy.canonicalize().unwrap(),
+            wt_path.canonicalize().unwrap()
+        );
+
+        // Idempotent: a second call leaves the existing link alone.
+        ensure_legacy_link(&legacy, &wt_path);
+        assert!(legacy.symlink_metadata().unwrap().file_type().is_symlink());
+
+        remove_legacy_link(&wt_path);
+        assert!(legacy.symlink_metadata().is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_link_never_clobbers_real_directory_or_foreign_link() {
+        let tmp = tempdir().unwrap();
+        let worktrees = tmp.path().join("worktrees");
+        let wt_path = worktrees.join("anonymous").join("src.main.alias");
+        std::fs::create_dir_all(&wt_path).unwrap();
+
+        // A real old-layout directory at the legacy path is left untouched.
+        let legacy = worktrees.join("src.main.alias");
+        std::fs::create_dir_all(&legacy).unwrap();
+        ensure_legacy_link(&legacy, &wt_path);
+        assert!(legacy.symlink_metadata().unwrap().file_type().is_dir());
+        remove_legacy_link(&wt_path);
+        assert!(legacy.symlink_metadata().unwrap().file_type().is_dir());
+        std::fs::remove_dir(&legacy).unwrap();
+
+        // A link owned by another user's session is not removed.
+        let other = worktrees.join("bob").join("src.main.alias");
+        std::fs::create_dir_all(&other).unwrap();
+        std::os::unix::fs::symlink(std::path::Path::new("bob").join("src.main.alias"), &legacy)
+            .unwrap();
+        remove_legacy_link(&wt_path);
+        assert!(legacy.symlink_metadata().unwrap().file_type().is_symlink());
     }
 }
