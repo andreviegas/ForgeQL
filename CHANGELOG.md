@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.101.2] — 2026-07-07 — docs(config): generated template and syntax reference catch up with VERIFY/RUN
+
+### Changed
+
+- The generated `.forgeql.yaml` template now documents everything a step can
+  declare — `commit_gate`, typed `params` (`ident` substituted, `string`
+  stdin-bound), `weight` tiers and explicit cost maps, `summary` windows,
+  `run_steps` templates — plus the `FORGEQL_*` environment contract every
+  VERIFY/RUN/JOB subprocess receives (in particular `FORGEQL_WORKTREE` and
+  the per-worktree `FORGEQL_BUILD_DIR`). A test keeps the template loadable
+  and its feature list in sync.
+- The syntax reference no longer claims the alias *is* the `session_id`: `USE`
+  returns an opaque composite token that must be passed back verbatim. The
+  worktree naming scheme, the `.forgeql.yaml` example (which used line-budget
+  keys that never existed), and the environment contract are now documented
+  as implemented.
+
 ## [0.101.1] — 2026-07-07 — fix(output): FIND files duplicate rows + COPY/MOVE line counts
 
 ### Fixed

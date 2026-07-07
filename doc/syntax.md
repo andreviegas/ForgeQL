@@ -65,17 +65,20 @@ SHOW BRANCHES
 
 `source_name` is an unquoted identifier that may contain hyphens (e.g. `pisco-code`).
 `branch` is an unquoted identifier that may contain hyphens (e.g. `main`, `v1_3_0`, `line-budget`).
-`alias` is the worktree branch name — single/double-quoted or bare (unquoted).
-**The alias you choose becomes the `session_id`** for all subsequent `run_fql` calls on that
-session. It is deterministic and reconstructable: if you forget the session_id, simply
-re-issue the same `USE` command with the same alias to reconnect.
+`alias` is your session's worktree name — single/double-quoted or bare (unquoted).
+**The `USE` response returns an opaque `session_id` token** (a composite of user,
+source, branch, and alias). Store it exactly as returned and pass it verbatim in
+every subsequent `run_fql` call — do not reconstruct it from the alias. If you
+lose it, re-issue the same `USE` command with the same alias: you reconnect to
+the same worktree and receive the same token.
 
 Sessions start automatically on the first `USE` and persist until the worktree has been
 idle for 48 hours (server-side TTL). There is no explicit disconnect command — multiple
 agents can reconnect to the same worktree at any time with the same `USE` command.
 
-Worktree identity uses a composite key: filesystem directory = `branch.alias` (flat),
-git branch = `fql/branch/alias` (under the `fql/` namespace).
+Worktree identity uses a composite key: filesystem directory =
+`{user}/{source}.{branch}.{alias}`, git branch = `fql/{user}/{source}/{branch}/{alias}`
+(under the `fql/` namespace).
 
 ---
 
@@ -397,18 +400,47 @@ verify_steps:
   - name: test
     command: "cmake --build build && ctest --test-dir build"
     timeout_secs: 120
-    commit_gate: true       # COMMIT refused until this passes after the last edit
+    commit_gate: true     # COMMIT refused until this passes after the last
+                          # edit; several gated steps must ALL pass
+    weight: medium        # JOB scheduler cost: light | medium | heavy, or
+                          # explicit {cores: 4, memory_mb: 4096, max_seconds: 600}
+    summary:              # inline output window; full log kept for SHOW MORE
+      direction: tail     # head | tail
+      lines: 40
+  - name: build-one       # typed args: VERIFY build 'build-one' 'core_b1'
+    command: "cmake -U PROJECT -D PROJECT=$project -B build && cmake --build build"
+    params:
+      - name: project
+        type: ident       # ident = [A-Za-z0-9_.-]+, substituted for $project;
+                          # string = bound to stdin, never spliced
+    weight: heavy
+run_steps:                # allowlisted templates for RUN '<name>' ['arg']…
+  - name: grep-cache
+    command: "grep -m1 $key $FORGEQL_BUILD_DIR/CMakeCache.txt"
+    params:
+      - name: key
+        type: ident
+    timeout_secs: 30
 line_budget:
-  ceiling: 5000           # max lines per session
-  warning_pct: 20         # warning state below 20% remaining
-  critical_pct: 5         # critical state below 5% — caps SHOW LINES output
-  recovery_pct: 2         # recovery per qualifying command (% of ceiling)
-  recovery_window_secs: 60
-  idle_reset_secs: 300    # auto-delete budget file after idle gap
+  initial: 3000           # starting allowance
+  ceiling: 9000           # hard ceiling; budget never exceeds this
+  recovery_base: 200       # lines credited per recovery (halved on repeats)
+  recovery_window_secs: 30
+  warning_threshold: 250  # warn agent when budget falls below this
+  critical_threshold: 50  # critical state — caps SHOW LINES output
+  critical_max_lines: 20  # max lines returned in critical state
+  idle_reset_secs: 120    # auto-delete budget file after idle gap; 0 = never
 ```
 
 Steps and templates are frozen at `USE`, so a later edit cannot tamper with a
 command the gate will run.
+
+Every VERIFY/RUN/JOB subprocess receives the **session environment contract**:
+`FORGEQL_SESSION_ID` (full token), `FORGEQL_SOURCE`, `FORGEQL_BRANCH`,
+`FORGEQL_ALIAS`, `FORGEQL_WORKTREE` (absolute path of the session worktree —
+scripts must build *this* tree, never a hardcoded checkout), and
+`FORGEQL_BUILD_DIR` (a per-worktree build directory so concurrent sessions
+never share build artifacts, e.g. `cargo --target-dir $FORGEQL_BUILD_DIR`).
 
 **Line budget:** when `line_budget` is present, each session tracks how many source
 lines the agent has consumed. Budget status (`remaining/ceiling (delta)`) is returned

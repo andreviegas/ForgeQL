@@ -559,7 +559,10 @@ impl ForgeConfig {
             "\
 # .forgeql.yaml — ForgeQL config for source '{source_name}'
 #
-# Sidecar file: lives in the ForgeQL data dir, not inside the repo.
+# Sidecar file: lives in the ForgeQL data dir, not inside the repo.  A repo
+# may also carry its own .forgeql.yaml in the workspace root.  Steps and
+# templates are frozen at USE, so a later edit cannot tamper with a command
+# the gate will run.
 # Defaults shown — delete lines you don't need, remove a block to disable it.
 # Docs: https://github.com/andreviegas/ForgeQL
 
@@ -578,16 +581,51 @@ line_budget:
   idle_reset_secs: 120      # idle seconds before budget resets; 0 = never
 
 # ── Verify Steps ──────────────────────────────────────────────────────────────
-# Named commands run by `VERIFY '<name>'`. Uncomment and adapt to your project.
+# Named commands run synchronously by `VERIFY build '<name>' ['arg']…` or as
+# background jobs by `JOB START '<name>'`. Uncomment and adapt to your project.
+#
+# Every step's process receives the session environment contract:
+#   FORGEQL_SESSION_ID  full session token        FORGEQL_SOURCE   source name
+#   FORGEQL_BRANCH      base branch               FORGEQL_ALIAS    session alias
+#   FORGEQL_WORKTREE    absolute path of the session worktree — build THIS
+#                       tree, never a hardcoded checkout
+#   FORGEQL_BUILD_DIR   per-worktree build dir so concurrent sessions never
+#                       share build artifacts (e.g. cargo --target-dir)
 #
 # verify_steps:
 #   - name: test
 #     command: \"cargo test\"
 #     timeout_secs: 120
+#     commit_gate: true     # COMMIT refused until this passes after the last
+#                           # edit; several gated steps must ALL pass
+#     weight: medium        # JOB scheduler cost: light | medium | heavy, or
+#                           # explicit {{cores: 4, memory_mb: 4096, max_seconds: 600}}
+#     summary:              # inline output window; full log kept for SHOW MORE
+#       direction: tail     # head | tail
+#       lines: 40
 #
-#   - name: build
-#     command: \"cargo build --release\"
-#     timeout_secs: 300
+#   - name: build-one       # typed args: VERIFY build 'build-one' 'core_b1'
+#     command: \"cmake -U PROJECT -D PROJECT=$project -B build && cmake --build build\"
+#     params:
+#       - name: project
+#         type: ident       # ident = [A-Za-z0-9_.-]+, substituted for $project;
+#                           # string = bound to stdin, never spliced
+#     timeout_secs: 1800
+#     weight: heavy
+
+# ── Run Templates ─────────────────────────────────────────────────────────────
+# Allowlisted command templates run by `RUN '<name>' ['arg']…`. The agent can
+# parameterise a template but never free-form a command: ident params are
+# validated and substituted, string params are newline-joined onto stdin.
+# Same environment contract as verify steps.
+#
+# run_steps:
+#   - name: grep-cache
+#     command: \"grep -m1 $key $FORGEQL_BUILD_DIR/CMakeCache.txt\"
+#     params:
+#       - name: key
+#         type: ident
+#     timeout_secs: 30
 
 # ── Columnar Storage ──────────────────────────────────────────────────────────
 # Columnar indexing is always on. The section below controls optional
@@ -634,6 +672,37 @@ mod tests {
         .expect("write");
         let config = ForgeConfig::load(&path).expect("should load successfully");
         assert_eq!(config.verify_steps.len(), 2);
+    }
+
+    /// The generated sidecar template must stay loadable (its uncommented
+    /// YAML parses) and document every step feature an agent can use.
+    #[test]
+    fn sidecar_template_parses_and_documents_step_features() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = ForgeConfig::write_sidecar_template(dir.path(), "demo")
+            .expect("template should be created");
+        let config = ForgeConfig::load(&path).expect("generated template must load");
+        assert!(
+            config.verify_steps.is_empty(),
+            "examples stay commented out"
+        );
+
+        let text = std::fs::read_to_string(&path).expect("read template");
+        for needle in [
+            "run_steps:",
+            "commit_gate:",
+            "params:",
+            "type: ident",
+            "weight:",
+            "summary:",
+            "FORGEQL_WORKTREE",
+            "FORGEQL_BUILD_DIR",
+        ] {
+            assert!(text.contains(needle), "template must document '{needle}'");
+        }
+
+        // Idempotent: a second call must not overwrite an existing file.
+        assert!(ForgeConfig::write_sidecar_template(dir.path(), "demo").is_none());
     }
 
     #[test]
