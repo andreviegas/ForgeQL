@@ -659,7 +659,13 @@ impl ForgeQLEngine {
             },
             clauses: crate::ir::Clauses::default(),
         };
-        self.exec_mutation(session_id, &ir, false)
+        let mut result = self.exec_mutation(session_id, &ir, false)?;
+        // The line-delete plumbing reuses ChangeContent, but the agent issued
+        // DELETE NODE — report it under its own op name.
+        if let ForgeQLResult::Mutation(ref mut m) = result {
+            m.op = "delete_node".to_string();
+        }
+        Ok(result)
     }
 
     /// Resolve `node_id` → (`rel_path`, `line`, `end_line`) and optionally check IF REV guard.

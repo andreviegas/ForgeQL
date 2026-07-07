@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.101.3] — 2026-07-07 — fix(mcp): structured rejections as tool results + DELETE NODE op label
+
+### Fixed
+
+- Structured engine rejections that carry a self-healing JSON payload — a
+  rejected `IF REV` guard returning the node's current rev, line range, and
+  source, or a `node_not_found` lookup — arrived as MCP protocol errors with
+  the JSON buried inside the error string. They are now returned as
+  error-flagged tool results, so a client parses the payload directly instead
+  of unwrapping a protocol error.
+- `DELETE NODE` responses reported the op as `change_content` (the
+  line-delete plumbing it reuses); they now report `delete_node`.
+
 ## [0.101.2] — 2026-07-07 — docs(config): generated template and syntax reference catch up with VERIFY/RUN
 
 ### Changed

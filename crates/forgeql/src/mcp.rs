@@ -160,6 +160,24 @@ fn engine_error(err: anyhow::Error) -> ErrorData {
     ErrorData::internal_error(format!("{err:#}"), None)
 }
 
+/// Return the error's message when it is itself a JSON object — the engine's
+/// structured self-healing rejections (e.g. `rev_mismatch` carrying the
+/// current rev, line range, and source; `node_not_found`).
+///
+/// Such payloads are results the agent is meant to parse and act on, so the
+/// transport returns them as an error-flagged tool result instead of burying
+/// the JSON inside a protocol-error string.
+fn json_object_message(err: &ErrorData) -> Option<String> {
+    let msg = err.message.trim();
+    if !msg.starts_with('{') {
+        return None;
+    }
+    serde_json::from_str::<serde_json::Value>(msg)
+        .ok()
+        .filter(serde_json::Value::is_object)
+        .map(|_| msg.to_owned())
+}
+
 /// Build a successful `CallToolResult` containing JSON text.
 fn json_result(json: &str) -> CallToolResult {
     CallToolResult::success(vec![Content::text(json)])
@@ -424,7 +442,18 @@ impl ForgeQlMcp {
         for (source_text, op) in &ops {
             let t0 = std::time::Instant::now();
             let (result, budget_snap, worktree, inline_cap) =
-                exec_engine(&self.engine, user_id, params.session_id.as_deref(), op).await?;
+                match exec_engine(&self.engine, user_id, params.session_id.as_deref(), op).await {
+                    Ok(parts) => parts,
+                    // Structured engine rejections are tool results the agent
+                    // parses and acts on — return them error-flagged instead
+                    // of wrapping the JSON inside a protocol error.
+                    Err(e) => {
+                        if let Some(payload) = json_object_message(&e) {
+                            return Ok(CallToolResult::error(vec![Content::text(payload)]));
+                        }
+                        return Err(e);
+                    }
+                };
             let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
             if let ForgeQLIR::UseSource { source, .. } = op {
                 log_source.clone_from(source);
@@ -667,6 +696,46 @@ mod tests {
             }))
             .await;
         assert!(result.is_err(), "invalid FQL should return ErrorData");
+    }
+
+    #[test]
+    fn json_object_message_extracts_only_json_objects() {
+        let json_err = ErrorData::internal_error(
+            r#"{"error":"rev_mismatch","expected":"h1","actual":"h2"}"#.to_string(),
+            None,
+        );
+        let payload = json_object_message(&json_err).expect("JSON object message");
+        assert!(payload.contains("rev_mismatch"));
+
+        let plain = ErrorData::internal_error("no session named 'x'".to_string(), None);
+        assert!(json_object_message(&plain).is_none());
+
+        let brace_but_not_json = ErrorData::internal_error("{not json".to_string(), None);
+        assert!(json_object_message(&brace_but_not_json).is_none());
+    }
+
+    /// A rejected `IF REV` guard is a structured self-healing payload the
+    /// agent parses — it must arrive as an error-flagged tool result, not as
+    /// a protocol error with the JSON buried in the message string.
+    #[tokio::test]
+    async fn structured_rejection_returns_error_flagged_tool_result() {
+        let (mcp, session_id, _dir) = mcp_with_session();
+        let result = mcp
+            .run_fql(Parameters(RunFqlParams {
+                fql: "DELETE NODE 'nffffffffffff.0001' IF REV 'h0000000000000000'".to_string(),
+                session_id: Some(session_id),
+                format: None,
+            }))
+            .await
+            .expect("a structured rejection must be a tool result, not a protocol error");
+        assert_eq!(result.is_error, Some(true), "result must be error-flagged");
+        let text = first_text(&result);
+        let payload: serde_json::Value =
+            serde_json::from_str(text).expect("payload must be parseable JSON");
+        assert_eq!(
+            payload["error"], "node_not_found",
+            "payload should be the structured rejection: {text}"
+        );
     }
 
     #[tokio::test]
