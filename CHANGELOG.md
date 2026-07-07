@@ -6,6 +6,35 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.101.0] — 2026-07-07 — feat(query): memory-bounded FIND — unknown-field refusal, per-segment filtering, row budget
+
+### Added
+
+- `FIND symbols` now rejects a WHERE field that is neither a core field nor an
+  enrichment column present anywhere in the index, with an error that names
+  the field, lists the core fields, and points at `SHOW LINES … WHERE text
+  MATCHES` for content search. Previously such a query silently matched
+  nothing — after materialising every candidate row, which on a
+  42-million-symbol index could exhaust host memory and take the machine down.
+- `FORGEQL_FIND_MAX_ROWS` (default 5 000 000, `0` disables): a hard budget on
+  the rows one FIND may materialise before ORDER BY / GROUP BY / LIMIT apply.
+  Queries that exceed it fail fast with guidance to narrow the scan instead of
+  growing without bound.
+
+### Changed
+
+- Residual WHERE predicates are now applied per segment during
+  materialisation, so non-matching rows are dropped as each segment is read
+  instead of accumulating across the whole index. Result sets are unchanged;
+  peak query memory now scales with matching rows, not candidate rows.
+
+### Fixed
+
+- `WHERE usages …` and `ORDER BY usages` compared against a stale always-zero
+  per-segment column when an explicit `LIMIT` enabled the early-exit or top-K
+  paths, returning wrong (usually empty) results. Workspace usage counts are
+  now stamped onto rows before any predicate or ordering decision.
+
 ## [0.100.2] — 2026-07-07 — fix(git): keep runtime artifacts out of commits and git status
 
 ### Fixed

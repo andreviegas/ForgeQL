@@ -4613,3 +4613,62 @@ fn show_outline_reflects_dirty_deletions() {
         "SHOW outline must list the surviving functions; got {names:?}"
     );
 }
+
+/// A WHERE field that is neither a core field nor an enrichment column of
+/// any segment is rejected upfront with guidance — never silently scanned.
+#[test]
+fn unknown_where_field_is_rejected_with_guidance() {
+    use forgeql_core::ir::{CompareOp, Predicate, PredicateValue};
+    use forgeql_core::storage::StorageEngine;
+
+    let (_table, _tmp, storage) = single_segment_cpp_overlay();
+
+    let clauses = forgeql_core::ir::Clauses {
+        where_predicates: vec![Predicate {
+            field: "fql_grep".to_owned(),
+            op: CompareOp::Matches,
+            value: PredicateValue::String("anything".to_owned()),
+        }],
+        ..forgeql_core::ir::Clauses::default()
+    };
+
+    let err = storage
+        .find_symbols(&clauses, std::path::Path::new("."))
+        .expect_err("unknown WHERE field must be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unknown WHERE field 'fql_grep'"),
+        "error should name the field: {msg}"
+    );
+    assert!(
+        msg.contains("Core fields"),
+        "error should list core fields: {msg}"
+    );
+}
+
+/// `naming` is written by the universal naming enricher but is absent from
+/// the static field→kind map — it must be accepted because the segments
+/// store it as an enrichment column.
+#[test]
+fn segment_backed_enrichment_column_is_accepted() {
+    use forgeql_core::ir::{CompareOp, Predicate, PredicateValue};
+    use forgeql_core::storage::StorageEngine;
+
+    let (_table, _tmp, storage) = single_segment_cpp_overlay();
+
+    let clauses = forgeql_core::ir::Clauses {
+        where_predicates: vec![Predicate {
+            field: "naming".to_owned(),
+            op: CompareOp::Eq,
+            value: PredicateValue::String("snake_case".to_owned()),
+        }],
+        ..forgeql_core::ir::Clauses::default()
+    };
+
+    let result = storage.find_symbols(&clauses, std::path::Path::new("."));
+    assert!(
+        result.is_ok(),
+        "segment-backed enrichment column must not be rejected: {:?}",
+        result.err()
+    );
+}

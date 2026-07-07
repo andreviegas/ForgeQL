@@ -503,6 +503,12 @@ impl SegmentReader {
         self.extra_col_names.len()
     }
 
+    /// Whether this segment stores an enrichment column named `name`.
+    #[must_use]
+    pub fn has_extra_col(&self, name: &str) -> bool {
+        self.extra_col_names.iter().any(|c| c == name)
+    }
+
     /// Return the hex-encoded content ID of this segment.
     ///
     /// Used by [`DirtyOverlay::staged_hex_ids`] to enumerate the hex IDs of

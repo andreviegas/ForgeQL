@@ -35,6 +35,37 @@ pub trait ClauseTarget {
     fn set_count(&mut self, _count: usize) {}
 }
 
+/// Core (non-enrichment) WHERE field names across FIND / SHOW result shapes.
+///
+/// One shared universe so the engine's empty-result hint and the columnar
+/// backend's unknown-field guard can never disagree about which fields exist.
+pub const CORE_WHERE_FIELDS: &[&str] = &[
+    "name",
+    "fql_kind",
+    "kind",
+    "node_kind",
+    "node_id",
+    "path",
+    "file",
+    "line",
+    "usages",
+    "count",
+    "language",
+    "lang",
+    "extension",
+    "ext",
+    "size",
+    "depth",
+    "signature",
+    "value",
+    "type",
+    "body",
+    "text",
+    "content",
+    "marker",
+    "declaration",
+];
+
 // -----------------------------------------------------------------------
 // Glob matching
 // -----------------------------------------------------------------------
@@ -330,7 +361,7 @@ fn apply_clauses_inner<T: ClauseTarget>(
     }
 
     // 3. WHERE predicates
-    apply_where_predicates(results, clauses);
+    apply_where_predicates(results, &clauses.where_predicates);
 
     // 4. GROUP BY — deduplicate by group key and store per-group count in .count
     apply_group_by(results, clauses);
@@ -345,12 +376,21 @@ fn apply_clauses_inner<T: ClauseTarget>(
     apply_ordering(results, clauses, default_sort);
 }
 
-/// Apply WHERE predicates.  MATCHES / NOT MATCHES are optimised: `.{N,}`
-/// collapses to a `len >= N` check, and every other pattern is compiled once
-/// per predicate (not once per item) to avoid millions of redundant regex
-/// compilations on large symbol tables (e.g. a 29 M+ symbol kernel).
-fn apply_where_predicates<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
-    for predicate in &clauses.where_predicates {
+/// Apply WHERE predicates with compile-once MATCHES / NOT MATCHES handling.
+///
+/// `.{N,}` collapses to a `len >= N` check, and every other regex pattern is
+/// compiled once per predicate (not once per item) to avoid millions of
+/// redundant regex compilations on large symbol tables (e.g. a 29 M+ symbol
+/// kernel).
+///
+/// Public so storage backends can run the same compile-once residual filter
+/// per segment (bounding memory to matching rows) before the final
+/// [`apply_clauses`] pass — AND semantics make the early pass idempotent.
+pub fn apply_where_predicates<T: ClauseTarget>(
+    results: &mut Vec<T>,
+    predicates: &[crate::ir::Predicate],
+) {
+    for predicate in predicates {
         if let (CompareOp::Matches | CompareOp::NotMatches, PredicateValue::String(pat)) =
             (&predicate.op, &predicate.value)
         {

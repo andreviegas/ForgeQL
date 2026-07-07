@@ -15,6 +15,24 @@ use super::ColumnarStorage;
 /// Over-fetch factor for the running top-K trim in [`ColumnarStorage::materialize_all`].
 const TOPK_OVER_FETCH: usize = 4;
 
+/// Default hard bound on rows one FIND may materialise before
+/// ORDER/GROUP/LIMIT apply.  At a few hundred bytes per row this keeps peak
+/// query memory in the low gigabytes even on multi-ten-million-symbol indexes.
+const DEFAULT_FIND_MAX_ROWS: usize = 5_000_000;
+
+/// Row budget for [`ColumnarStorage::materialize_all`], read per query.
+/// `FORGEQL_FIND_MAX_ROWS` overrides the default; `0` disables the bound.
+fn find_max_rows() -> usize {
+    match std::env::var("FORGEQL_FIND_MAX_ROWS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
+        Some(0) => usize::MAX,
+        Some(n) => n,
+        None => DEFAULT_FIND_MAX_ROWS,
+    }
+}
+
 impl ColumnarStorage {
     // ─────────────────────────────────────────────────────────────────────
     // Phase 9 — GROUP BY / ORDER BY fast-path methods
@@ -402,11 +420,20 @@ impl ColumnarStorage {
         &self,
         by_segment: &HashMap<u32, RoaringBitmap>,
         clauses: &Clauses,
-    ) -> Vec<SymbolMatch> {
+    ) -> anyhow::Result<Vec<SymbolMatch>> {
         let seg_order = self.ordered_segments(by_segment);
         let fetch_cap = Self::fetch_cap_for(clauses);
         let topk_trim = Self::topk_trim_for(clauses);
-        let prefilter_where = fetch_cap.is_some() || topk_trim.is_some();
+        // Residual WHERE runs per segment so non-matching rows never
+        // accumulate.  `count` is excluded: it is only assigned by GROUP BY
+        // in Stage 5, so no materialised row carries it yet.
+        let seg_predicates: Vec<crate::ir::Predicate> = clauses
+            .where_predicates
+            .iter()
+            .filter(|p| p.field != "count")
+            .cloned()
+            .collect();
+        let max_rows = find_max_rows();
 
         let mut results = Vec::new();
         for seg_idx in seg_order {
@@ -421,7 +448,7 @@ impl ColumnarStorage {
                 clauses,
                 fetch_cap,
                 results.len(),
-                prefilter_where,
+                &seg_predicates,
             ) else {
                 continue;
             };
@@ -438,8 +465,20 @@ impl ColumnarStorage {
                     });
                 }
             }
+
+            // Hard memory bound: refuse to grow past the row budget instead of
+            // exhausting host RAM on an unscoped scan (a 42 M-symbol index can
+            // otherwise materialise >25 GB before ORDER/GROUP/LIMIT applies).
+            if results.len() > max_rows {
+                anyhow::bail!(
+                    "query materialised more than {max_rows} rows before \
+                     ORDER/GROUP/LIMIT.  Narrow the scan with IN 'path/**', a \
+                     more selective WHERE, or an explicit LIMIT — or raise \
+                     FORGEQL_FIND_MAX_ROWS (0 disables the bound)."
+                );
+            }
         }
-        results
+        Ok(results)
     }
 
     /// Segment indices sorted by source path (then line) — matches the legacy
@@ -489,8 +528,9 @@ impl ColumnarStorage {
     }
 
     /// Materialise one segment's matching rows: enrichment-posting prefilter →
-    /// row materialisation → (optional) per-segment WHERE filter → fetch-budget
-    /// trim.  Returns `None` to skip the segment (missing data or empty result).
+    /// row materialisation → usage-count stamping → per-segment WHERE filter →
+    /// fetch-budget trim.  Returns `None` to skip the segment (missing data or
+    /// empty result).
     fn materialize_one_segment(
         &self,
         seg_idx: u32,
@@ -498,7 +538,7 @@ impl ColumnarStorage {
         clauses: &Clauses,
         fetch_cap: Option<usize>,
         results_len: usize,
-        prefilter_where: bool,
+        seg_predicates: &[crate::ir::Predicate],
     ) -> Option<Vec<SymbolMatch>> {
         let local_rows = by_segment.get(&seg_idx)?;
         let seg = self.segments.get(seg_idx as usize)?;
@@ -517,14 +557,16 @@ impl ColumnarStorage {
         // stores.  Do NOT join with worktree_root here.
         let mut seg_results = seg.materialize_rows(&narrowed, Some(&seg_meta.source_path));
 
-        // Apply WHERE predicates per-segment before counting toward the fetch
-        // cap, filtering enrichment-posting and trigram false positives that
-        // would otherwise exhaust the cap with non-matching rows.
-        if prefilter_where {
-            for predicate in &clauses.where_predicates {
-                let pred = predicate.clone();
-                seg_results.retain(|item| eval_predicate(item, &pred));
-            }
+        // Stamp workspace usage counts before any predicate or top-K decision:
+        // the per-segment `usages_count` column is a stale always-zero legacy
+        // field, so WHERE usages / ORDER BY usages must see the overlay value.
+        self.stamp_usage_counts(&mut seg_results);
+
+        // Apply WHERE predicates per-segment so that only matching rows count
+        // toward the fetch cap and the accumulated working set — non-matching
+        // rows are dropped before they can pile up across segments.
+        if !seg_predicates.is_empty() {
+            crate::filter::apply_where_predicates(&mut seg_results, seg_predicates);
         }
 
         // Trim within this segment to avoid overshooting the fetch budget.

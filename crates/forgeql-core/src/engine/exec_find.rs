@@ -57,40 +57,20 @@ impl ForgeQLEngine {
         clauses: &Clauses,
         results: &[crate::result::SymbolMatch],
     ) -> Option<String> {
-        const CORE_WHERE_FIELDS: &[&str] = &[
-            "name",
-            "fql_kind",
-            "kind",
-            "node_kind",
-            "path",
-            "file",
-            "line",
-            "usages",
-            "count",
-            "language",
-            "lang",
-            "extension",
-            "size",
-            "depth",
-            "signature",
-            "value",
-            "type",
-            "body",
-        ];
         if !results.is_empty() {
             return None;
         }
         for pred in &clauses.where_predicates {
             let field = pred.field.as_str();
-            if CORE_WHERE_FIELDS.contains(&field) {
+            if crate::filter::CORE_WHERE_FIELDS.contains(&field) {
                 continue;
             }
             if !crate::storage::legacy::is_known_enrichment_field(field) {
                 return Some(format!(
                     "no rows carry a field named '{field}' — unknown WHERE fields \
-                     match nothing. Check the spelling against the core fields \
-                     (name, fql_kind, path, line, usages, …) and the enrichment \
-                     fields in the syntax reference."
+                 match nothing. Check the spelling against the core fields \
+                 (name, fql_kind, path, line, usages, …) and the enrichment \
+                 fields in the syntax reference."
                 ));
             }
         }

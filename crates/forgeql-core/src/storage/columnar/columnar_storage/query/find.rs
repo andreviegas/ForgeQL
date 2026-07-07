@@ -16,47 +16,96 @@ use crate::storage::columnar::columnar_storage::fast_paths::{
 use crate::storage::columnar::segment_builder::ZONEMAP_NUMERIC_FIELDS;
 
 impl ColumnarStorage {
-    pub(super) fn find_symbols_impl(&self, clauses: &Clauses, _root: &Path) -> Vec<SymbolMatch> {
+    pub(super) fn find_symbols_impl(
+        &self,
+        clauses: &Clauses,
+        _root: &Path,
+    ) -> anyhow::Result<Vec<SymbolMatch>> {
         // Query pipeline:
+        //   Stage 0 — reject WHERE fields that exist neither as core fields nor
+        //             as enrichment columns anywhere in this index: they can
+        //             never match, and scanning millions of rows to find that
+        //             out can exhaust host memory.
         //   Stage 1 — prefilter_global: intersect indexed predicates (kind
         //             bitmap, name FST, trigram / short-prefix LIKE index) into a
         //             candidate global row-ID bitmap.
         //   Stage 2 — partition by segment, then prune the survivors: IN/EXCLUDE
         //             path globs, dirty-overlay shadows, and numeric zone maps.
-        //   Stage 3 — materialise the surviving rows, then union the dirty overlay.
+        //   Stage 3 — materialise the surviving rows per segment: stamp usage
+        //             counts, apply residual WHERE, enforce the row budget
+        //             (FORGEQL_FIND_MAX_ROWS) — then union the dirty overlay.
         //   Stage 4 — deduplicate on (name, fql_kind, path, line).
-        //   Stage 4b — stamp usages_count from the overlay usages aggregate
-        //             (BUG-006 U3) so WHERE usages / ORDER BY usages see real
-        //             values in Stage 5.
         //   Stage 5 — apply residual WHERE, ORDER BY, LIMIT, OFFSET.
         // GROUP BY and ORDER BY name fast-paths short-circuit the pipeline. The
         // count-based GROUP BY paths are only valid when source paths are unique;
         // duplicates overcount, so fall through to the deduplicating pipeline.
+        self.reject_unknown_where_fields(clauses)?;
         let no_dup_paths = !self.overlay.has_duplicate_paths();
         if group_by_kind_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
-            return self.fast_group_by_kind(clauses);
+            return Ok(self.fast_group_by_kind(clauses));
         }
         if group_by_file_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
-            return self.fast_group_by_file(clauses);
+            return Ok(self.fast_group_by_file(clauses));
         }
         if let Some(mut results) = self.try_order_by_name_fast_paths(clauses) {
             self.stamp_usage_counts(&mut results);
-            return results;
+            return Ok(results);
         }
 
         let mut by_segment = self.build_candidate_segments(clauses);
         self.prune_candidate_segments(&mut by_segment, clauses);
 
-        let mut results = self.materialize_all(&by_segment, clauses);
+        let mut results = self.materialize_all(&by_segment, clauses)?;
         // Stage 3b — union dirty overlay rows (empty when the overlay is empty).
+        // Persistent rows were stamped during materialisation; dirty rows still
+        // need their workspace usage counts before Stage 5 evaluates them.
         if !self.dirty.is_empty() {
             let mut dirty_results = self.dirty.materialize_all(clauses);
+            self.stamp_usage_counts(&mut dirty_results);
             results.append(&mut dirty_results);
         }
         dedupe_symbol_matches(&mut results);
-        self.stamp_usage_counts(&mut results);
         apply_clauses(&mut results, clauses);
-        results
+        Ok(results)
+    }
+
+    /// Stage 0 — fail fast on WHERE fields that cannot match anything.
+    ///
+    /// A field is accepted when it is a core field, a known enrichment field
+    /// of any registered language, or an enrichment column stored by at least
+    /// one segment (persistent or dirty) of this index.  Anything else — a
+    /// typo or an invented field — is rejected with guidance instead of
+    /// silently matching nothing after a full-index scan.
+    fn reject_unknown_where_fields(&self, clauses: &Clauses) -> anyhow::Result<()> {
+        for pred in &clauses.where_predicates {
+            let field = pred.field.as_str();
+            if crate::filter::CORE_WHERE_FIELDS.contains(&field) {
+                continue;
+            }
+            if crate::storage::legacy::is_known_enrichment_field(field) {
+                continue;
+            }
+            if self.segments.iter().any(|s| s.has_extra_col(field)) {
+                continue;
+            }
+            if self
+                .dirty
+                .added
+                .iter()
+                .any(|ds| ds.reader.has_extra_col(field))
+            {
+                continue;
+            }
+            anyhow::bail!(
+                "unknown WHERE field '{field}': it is not a core field and no \
+                 indexed row carries an enrichment column with that name, so it \
+                 can never match.  Core fields: name, fql_kind, path, file, \
+                 line, usages, language, extension, size, depth.  To search \
+                 file contents use SHOW LINES OF '<file>' WHERE text MATCHES \
+                 '…' on specific files instead of FIND symbols."
+            );
+        }
+        Ok(())
     }
 
     /// Stage 4b (BUG-006 U3): overwrite each row's `usages_count` with the
@@ -65,7 +114,7 @@ impl ColumnarStorage {
     /// The per-segment `usages_count` column is a legacy always-zero field;
     /// the overlay FST is the source of truth. One O(log n) FST lookup per
     /// materialised row, before LIMIT — bounded by the candidate set size.
-    fn stamp_usage_counts(&self, results: &mut [SymbolMatch]) {
+    pub(in super::super) fn stamp_usage_counts(&self, results: &mut [SymbolMatch]) {
         for row in results.iter_mut() {
             let count = self.overlay.usage_count(&row.name);
             row.usages_count = Some(usize::try_from(count).unwrap_or(usize::MAX));

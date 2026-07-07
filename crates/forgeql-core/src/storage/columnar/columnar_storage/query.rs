@@ -50,7 +50,7 @@ impl StorageEngine for ColumnarStorage {
     }
 
     fn find_symbols(&self, clauses: &Clauses, root: &Path) -> Result<Vec<SymbolMatch>> {
-        Ok(self.find_symbols_impl(clauses, root))
+        self.find_symbols_impl(clauses, root)
     }
 
     fn find_usages(&self, name: &str, clauses: &Clauses, root: &Path) -> Result<Vec<SymbolMatch>> {
