@@ -442,6 +442,37 @@ scripts must build *this* tree, never a hardcoded checkout), and
 `FORGEQL_BUILD_DIR` (a per-worktree build directory so concurrent sessions
 never share build artifacts, e.g. `cargo --target-dir $FORGEQL_BUILD_DIR`).
 
+**Typed parameters:** a step declares positional parameters in its `params`
+list; the call site passes values in the same order and the engine validates
+count and type before running anything.
+
+```yaml
+verify_steps:
+  - name: build-one
+    command: "cmake -U PROJECT -D PROJECT=tresos/$project -B $FORGEQL_BUILD_DIR && cmake --build $FORGEQL_BUILD_DIR"
+    params:
+      - name: project
+        type: ident
+run_steps:
+  - name: annotate
+    command: "tee -a $FORGEQL_BUILD_DIR/notes.txt"
+    params:
+      - name: note
+        type: string
+```
+
+```sql
+VERIFY build 'build-one' 'core_b1'
+RUN 'annotate' 'free text; quotes & spaces are fine'
+```
+
+An `ident` argument must match `[A-Za-z0-9_.-]+` and replaces every `$name`
+occurrence in `command` — no shell metacharacter can pass validation, so a
+value can never inject shell syntax. A `string` argument is **never** placed
+in the command line: all string args are newline-joined in declared order and
+bound to the subprocess **stdin**. Wrong arity or a malformed value fails
+before the command starts.
+
 **Line budget:** when `line_budget` is present, each session tracks how many source
 lines the agent has consumed. Budget status (`remaining/ceiling (delta)`) is returned
 in every MCP response via the `line_budget` metadata field. Budget files are persisted
