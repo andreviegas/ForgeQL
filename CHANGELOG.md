@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.102.0] — 2026-07-07 — release: field-report fixes rollup
+
+Release marker for the changes shipped as 0.100.1–0.101.3, so a single tag
+carries the complete set. No functional changes beyond 0.101.3.
+
+- Worktree paths restored at their pre-0.100 location via a compat symlink —
+  see 0.100.1.
+- Runtime artifacts kept out of commits and git status; startup scan made
+  symlink-safe — see 0.100.2.
+- Memory-bounded FIND: unknown-field refusal, per-segment filtering, and the
+  `FORGEQL_FIND_MAX_ROWS` budget — see 0.101.0.
+- `FIND files` duplicate rows and COPY/MOVE line counts — see 0.101.1.
+- Generated config template and syntax reference caught up with VERIFY/RUN —
+  see 0.101.2.
+- Structured rejections as error-flagged tool results; `DELETE NODE` op
+  label — see 0.101.3.
+
 ## [0.101.3] — 2026-07-07 — fix(mcp): structured rejections as tool results + DELETE NODE op label
 
 ### Fixed
