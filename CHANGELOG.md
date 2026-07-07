@@ -6,6 +6,34 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.100.2] — 2026-07-07 — fix(git): keep runtime artifacts out of commits and git status
+
+### Fixed
+
+- `COMMIT` staged the contents of the mutation staging area into user-facing
+  commits: the exclusion check looked only at leaf file names, and staging
+  entries live at `.forgeql-staging/<hex>/<name>` with ordinary leaf names —
+  a commit could gain a hundred-plus binary segment files, which ForgeQL then
+  deleted, leaving staged-deletion noise in `git status`. The check is now
+  component-wise, matching the checkpoint path's behaviour.
+- Transaction checkpoints committed the `SHOW MORE` paging buffers as tracked
+  files, which let host pre-commit hooks (e.g. trailing-whitespace fixers)
+  rewrite ForgeQL's own runtime state during later verify runs and fail the
+  build. Checkpoints now exclude the paging buffers; the index cache, undo
+  ring, and columnar delta remain checkpoint-committed by design so
+  `ROLLBACK` restores them instantly.
+- `USE` now writes the never-committed runtime artifacts
+  (`.forgeql-session`, `.forgeql-staging/`, `.forgeql-showmore*`) to the
+  repository's `info/exclude` (idempotent managed block), so they stay out
+  of `git status` and host tooling for every worktree of the source.
+- The startup session-restore scan could follow the compatibility symlinks
+  introduced at the old worktree location and misread a worktree's own
+  contents as session directories — pruning every subdirectory that lacked a
+  session sentinel. The scan now inspects entry types without following
+  symlinks, and the pruner refuses to touch any directory that does not
+  contain a `.git` entry (a stray directory under `worktrees/` is never
+  deleted, whatever the scan thinks of it).
+
 ## [0.100.1] — 2026-07-07 — fix(session): compatibility symlink at the old worktree path
 
 ### Fixed

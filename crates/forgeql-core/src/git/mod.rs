@@ -113,25 +113,85 @@ const CHECKPOINT_EXCLUDED: &[&str] = &[
 ];
 
 fn is_clean_commit_excluded(path: &std::path::Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|name| {
-            CLEAN_COMMIT_EXCLUDED.contains(&name)
-                // The SHOW MORE ring writes `<prefix>-<n>` slot files — exclude
-                // every slot (and the legacy single-file name) by prefix.
-                || name.starts_with(crate::showmore::SHOWMORE_FILE_NAME)
-                || name.starts_with(crate::undo::UNDO_FILE_NAME)
-        })
+    // Leaf-name checks cover single control files; the staging directory is
+    // checked component-wise because its entries (`.forgeql-staging/<hex>/…`)
+    // have ordinary leaf names like `names.col` and previously slipped into
+    // user-facing commits as a block of binary segment files.
+    is_in_staging_dir(path)
+        || path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|name| {
+                CLEAN_COMMIT_EXCLUDED.contains(&name)
+                    // The SHOW MORE ring writes `<prefix>-<n>` slot files — exclude
+                    // every slot (and the legacy single-file name) by prefix.
+                    || name.starts_with(crate::showmore::SHOWMORE_FILE_NAME)
+                    || name.starts_with(crate::undo::UNDO_FILE_NAME)
+            })
+}
+
+/// `true` when any component of `path` is the mutation staging directory.
+/// Files inside `.forgeql-staging/<hex>/` have ordinary leaf names, so the
+/// whole path must be inspected, not just `file_name()`.
+fn is_in_staging_dir(path: &std::path::Path) -> bool {
+    path.components().any(|c| {
+        matches!(c, std::path::Component::Normal(n)
+            if n.to_str() == Some(crate::storage::columnar::STAGING_DIR_NAME))
+    })
 }
 
 fn is_checkpoint_excluded(path: &std::path::Path) -> bool {
     // Check every path component, not just the leaf name, so that files
     // inside `.forgeql-staging/<hex>/` are excluded even though their
-    // own file_name() is something like `names.col`.
+    // own file_name() is something like `names.col`. SHOW MORE paging
+    // buffers are also kept out: committing them makes host pre-commit
+    // hooks (e.g. trailing-whitespace fixers) rewrite ForgeQL's own
+    // runtime state during later verify runs.
     path.components().any(|c| {
         matches!(c, std::path::Component::Normal(n)
             if n.to_str().is_some_and(|s| CHECKPOINT_EXCLUDED.contains(&s)))
-    })
+    }) || path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.starts_with(crate::showmore::SHOWMORE_FILE_NAME))
+}
+
+/// Marker heading for the runtime-artifact block in `info/exclude`.
+const RUNTIME_EXCLUDE_MARKER: &str = "# ForgeQL runtime artifacts (managed block)";
+
+/// Write `ForgeQL`'s never-committed runtime artifacts to the repository's
+/// `info/exclude` so they stay out of `git status`, host pre-commit hooks,
+/// and any tooling that walks untracked files.
+///
+/// Only artifacts that **no** commit path wants are listed. Checkpoint
+/// commits intentionally include `.forgeql-index`, `.forgeql-undo`, and the
+/// columnar delta so `git reset --hard` restores them — those must NOT be
+/// ignored here, because `add_all` honours ignore rules.
+///
+/// `repo_path` is the bare repository; linked worktrees share its
+/// `info/exclude` via the common git dir. Idempotent and best-effort.
+pub fn ensure_runtime_excludes(repo_path: &Path) {
+    let info_dir = repo_path.join("info");
+    let exclude = info_dir.join("exclude");
+    let existing = std::fs::read_to_string(&exclude).unwrap_or_default();
+    if existing.contains(RUNTIME_EXCLUDE_MARKER) {
+        return;
+    }
+    let block = format!(
+        "{RUNTIME_EXCLUDE_MARKER}\n.forgeql-session\n{}/\n{}*\n",
+        crate::storage::columnar::STAGING_DIR_NAME,
+        crate::showmore::SHOWMORE_FILE_NAME,
+    );
+    let updated = if existing.is_empty() || existing.ends_with('\n') {
+        format!("{existing}{block}")
+    } else {
+        format!("{existing}\n{block}")
+    };
+    if std::fs::create_dir_all(&info_dir).is_ok()
+        && let Err(e) = std::fs::write(&exclude, updated)
+    {
+        debug!(path = %exclude.display(), "info/exclude not updated (non-fatal): {e}");
+    }
 }
 
 /// Stage all modified files and commit as an internal checkpoint.
@@ -685,5 +745,46 @@ mod tests {
             source_changes(&bare, "main", "ctrl").unwrap().is_empty(),
             "a branch touching only control files must report no reviewable work"
         );
+    }
+
+    #[test]
+    fn clean_commit_excludes_staging_contents_and_runtime_files() {
+        use std::path::Path;
+        // Entries inside the staging dir have ordinary leaf names — the
+        // component-wise check must still exclude them.
+        assert!(is_clean_commit_excluded(Path::new(
+            ".forgeql-staging/ab/cdef0123.fqsf"
+        )));
+        assert!(is_clean_commit_excluded(Path::new(".forgeql-showmore-3")));
+        assert!(is_clean_commit_excluded(Path::new(".forgeql-index")));
+        assert!(!is_clean_commit_excluded(Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn checkpoint_excludes_showmore_but_keeps_index() {
+        use std::path::Path;
+        assert!(is_checkpoint_excluded(Path::new(".forgeql-showmore-0")));
+        assert!(is_checkpoint_excluded(Path::new(
+            ".forgeql-staging/ab/cdef0123.fqsf"
+        )));
+        // The index cache is intentionally checkpoint-committed so
+        // `git reset --hard` restores it without a re-index.
+        assert!(!is_checkpoint_excluded(Path::new(".forgeql-index")));
+        assert!(!is_checkpoint_excluded(Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn runtime_excludes_written_once_and_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_runtime_excludes(dir.path());
+        ensure_runtime_excludes(dir.path());
+        let content = std::fs::read_to_string(dir.path().join("info/exclude")).unwrap();
+        assert_eq!(content.matches(RUNTIME_EXCLUDE_MARKER).count(), 1);
+        assert!(content.contains(".forgeql-session"));
+        assert!(content.contains(".forgeql-staging/"));
+        assert!(content.contains(".forgeql-showmore*"));
+        // Checkpoint-committed files must never be git-ignored.
+        assert!(!content.contains(".forgeql-index"));
+        assert!(!content.contains(".forgeql-undo"));
     }
 }

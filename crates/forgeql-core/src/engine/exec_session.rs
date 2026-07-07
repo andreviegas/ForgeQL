@@ -122,7 +122,13 @@ impl ForgeQLEngine {
 
         for user_entry in user_entries.flatten() {
             let user_dir = user_entry.path();
-            if !user_dir.is_dir() {
+            // file_type() from read_dir does NOT follow symlinks. The
+            // compatibility links that USE leaves at worktrees/{dir} (see
+            // git::worktree::ensure_legacy_link) must never be traversed
+            // here: following one would scan a worktree's own contents as
+            // if they were session dirs and prune every subdirectory that
+            // lacks a session sentinel.
+            if !user_entry.file_type().is_ok_and(|t| t.is_dir()) {
                 continue;
             }
             let Ok(wt_entries) = std::fs::read_dir(&user_dir) else {
@@ -130,7 +136,7 @@ impl ForgeQLEngine {
             };
             for entry in wt_entries.flatten() {
                 let wt_path = entry.path();
-                if !wt_path.is_dir() {
+                if !entry.file_type().is_ok_and(|t| t.is_dir()) {
                     continue;
                 }
                 let wt_name = entry.file_name().to_string_lossy().to_string();
@@ -157,6 +163,14 @@ impl ForgeQLEngine {
         registered: &mut u32,
         pruned: &mut u32,
     ) {
+        // Defense in depth: only ever prune something that is actually a git
+        // worktree (contains a `.git` entry). A scanner bug or a stray
+        // directory under worktrees/ must never lead to deleting arbitrary
+        // content.
+        if !wt_path.join(".git").exists() {
+            warn!(%wt_name, "startup: not a git worktree, leaving untouched");
+            return;
+        }
         match read_sentinel(wt_path) {
             None => {
                 // No readable sentinel — orphan from an older version or a

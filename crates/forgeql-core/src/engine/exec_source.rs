@@ -209,6 +209,9 @@ impl ForgeQLEngine {
         // worktrees/{dir}; keep a compatibility symlink there so container
         // runners and mount scripts keep working (see ensure_legacy_link).
         worktree::ensure_legacy_link(&coords.legacy_worktree_path(&self.data_dir), &wt_path);
+        // Keep never-committed runtime artifacts out of git status and host
+        // pre-commit hooks for every worktree of this source.
+        crate::git::ensure_runtime_excludes(&repo_path);
         let mut session = Session::from_coords(&coords, wt_path, &Arc::clone(&self.lang_registry));
         session.custom_branch = Some(git_branch);
         session.worktree_name = wt_name;
