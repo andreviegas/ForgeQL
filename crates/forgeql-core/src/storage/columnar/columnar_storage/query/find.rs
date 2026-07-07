@@ -251,6 +251,7 @@ impl ColumnarStorage {
             });
         }
 
+        dedupe_file_entries(&mut entries);
         entries
     }
 }
@@ -403,4 +404,57 @@ fn dedupe_symbol_matches(results: &mut Vec<SymbolMatch>) {
     );
     let mut seen: HashSet<DedupeKey> = HashSet::new();
     results.retain(|r| seen.insert((r.name.clone(), r.fql_kind.clone(), r.path.clone(), r.line)));
+}
+
+/// Deduplicate file entries on path, keeping the freshest occurrence.
+///
+/// The list is built persistent → file-only → dirty, so for a duplicated
+/// path the later entry carries the newer size.  Duplicate paths can enter
+/// the overlay through commit/promote turbulence (the symbol pipeline guards
+/// its GROUP BY fast paths with `has_duplicate_paths` for the same reason);
+/// without this pass every affected file lists twice in `FIND files`.
+fn dedupe_file_entries(entries: &mut Vec<crate::result::FileEntry>) {
+    let mut seen: HashSet<std::path::PathBuf> = HashSet::new();
+    entries.reverse();
+    entries.retain(|e| seen.insert(e.path.clone()));
+    entries.reverse();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dedupe_file_entries;
+    use crate::result::FileEntry;
+
+    fn entry(path: &str, size: u64) -> FileEntry {
+        FileEntry {
+            path: path.into(),
+            extension: "rs".to_owned(),
+            size,
+            depth: None,
+            count: None,
+        }
+    }
+
+    #[test]
+    fn dedupe_keeps_last_entry_per_path_and_preserves_order() {
+        let mut entries = vec![
+            entry("a.rs", 10),
+            entry("b.rs", 20),
+            entry("a.rs", 30),
+            entry("c.rs", 40),
+        ];
+        dedupe_file_entries(&mut entries);
+        let got: Vec<(String, u64)> = entries
+            .iter()
+            .map(|e| (e.path.display().to_string(), e.size))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("b.rs".to_owned(), 20),
+                ("a.rs".to_owned(), 30),
+                ("c.rs".to_owned(), 40)
+            ]
+        );
+    }
 }

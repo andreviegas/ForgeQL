@@ -160,7 +160,7 @@ impl ForgeQLEngine {
             Some(at_line) => plan_copy_lines_at(src, &src_abs, start, end, &dst_abs, at_line)?,
         };
 
-        self.apply_plan(sid, plan, "copy_lines")
+        self.apply_plan(sid, plan, "copy_lines", Some((start, end)))
     }
 
     pub(super) fn exec_move_lines(
@@ -187,20 +187,31 @@ impl ForgeQLEngine {
         let dst_abs = workspace.safe_path(dst)?;
 
         let plan = plan_move_lines(src, &src_abs, start, end, &dst_abs, at)?;
-        self.apply_plan(sid, plan, "move_lines")
+        self.apply_plan(sid, plan, "move_lines", Some((start, end)))
     }
 
-    /// Shared plan → diff → apply → reindex helper used by COPY and MOVE.
+    /// Shared plan → diff → apply → reindex helper for plan-based mutations.
+    ///
+    /// `line_range` is the inclusive source line range the agent addressed
+    /// (COPY/MOVE LINES); `None` keeps the payload-based line count.  When
+    /// set, the reported `lines_written` (and, for MOVE, `lines_removed`) is
+    /// the range's length rather than a count of the payload's text lines:
+    /// the line-addressing model treats the position after a final newline
+    /// as an addressable (zero-byte) line, so a whole-file copy addressed as
+    /// `1-<count>` would otherwise report one line fewer than requested and
+    /// read like data loss.
     fn apply_plan(
         &mut self,
         sid: &str,
         mut plan: TransformPlan,
         op_name: &str,
+        line_range: Option<(usize, usize)>,
     ) -> Result<ForgeQLResult> {
         let files_changed: Vec<PathBuf> =
             plan.file_edits.iter().map(|fe| fe.path.clone()).collect();
         let edit_count = plan.edit_count();
-        let lines_written = plan.lines_written();
+        let range_len = line_range.map(|(start, end)| end.saturating_sub(start).saturating_add(1));
+        let lines_written = range_len.unwrap_or_else(|| plan.lines_written());
 
         plan.merge_by_file()?;
 
@@ -221,7 +232,13 @@ impl ForgeQLEngine {
 
         // Diff built after apply + reindex so it carries inline node addresses.
         let diff = self.build_post_edit_diff(sid, &edits_snapshot, &applied.originals);
-        let lines_removed = crate::transforms::lines_removed(&edits_snapshot, &applied.originals);
+        // MOVE deletes exactly the addressed source range; report the same
+        // range length on both counters so written == removed for a clean
+        // move.  Every other op keeps the payload-based count.
+        let lines_removed = match range_len {
+            Some(len) if op_name == "move_lines" => len,
+            _ => crate::transforms::lines_removed(&edits_snapshot, &applied.originals),
+        };
 
         // Persist the pre-edit bytes to the per-session UNDO ring (see exec_mutation).
         if let Ok((ws, _eng)) = self.require_workspace_and_engine(Some(sid)) {
@@ -455,7 +472,7 @@ impl ForgeQLEngine {
             }
         };
 
-        let mut result = self.apply_plan(sid, plan, "change_node_matching")?;
+        let mut result = self.apply_plan(sid, plan, "change_node_matching", None)?;
         let new_node_id = {
             let session = self.require_session(sid)?;
             session
@@ -542,7 +559,7 @@ impl ForgeQLEngine {
             }
         };
 
-        self.apply_plan(sid, plan, "change_nodes_last")
+        self.apply_plan(sid, plan, "change_nodes_last", None)
     }
 
     pub(super) fn exec_insert_node(
@@ -590,7 +607,7 @@ impl ForgeQLEngine {
             }],
             suggestions: Vec::new(),
         };
-        let mut result = self.apply_plan(sid, plan, "insert_node")?;
+        let mut result = self.apply_plan(sid, plan, "insert_node", None)?;
 
         // After reindex, find the first symbol at the insertion line.
         let new_node_id = {

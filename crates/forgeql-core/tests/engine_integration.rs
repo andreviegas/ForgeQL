@@ -1913,3 +1913,54 @@ fn change_nodes_last_without_find_errors() {
         "guidance expected: {err}"
     );
 }
+
+/// COPY LINES reports the addressed range length, not the payload's text-line
+/// count: the line model treats the position after a final newline as an
+/// addressable zero-byte line, so a whole-file copy `1-<count>` used to say
+/// one line fewer than requested and read like data loss.
+#[test]
+fn copy_lines_reports_addressed_range_length() {
+    let (mut engine, session_id, dir) = engine_with_session();
+    let content =
+        std::fs::read_to_string(dir.path().join("motor_control.cpp")).expect("read fixture");
+    // The engine's line-addressing model: a trailing newline opens a final
+    // addressable empty line, so the line count is split('\n').count().
+    let model_lines = content.split('\n').count();
+
+    let result = execute_fql(
+        &mut engine,
+        &session_id,
+        &format!("COPY LINES 1-{model_lines} OF 'motor_control.cpp' TO 'dupes/copy.cpp'"),
+    );
+    let ForgeQLResult::Mutation(m) = result else {
+        panic!("expected Mutation result from COPY LINES");
+    };
+    assert_eq!(
+        m.lines_written, model_lines,
+        "whole-file copy must report the addressed range length"
+    );
+
+    // Byte-for-byte identical copy — the count difference was presentation only.
+    let copied = std::fs::read_to_string(dir.path().join("dupes/copy.cpp")).expect("read copy");
+    assert_eq!(copied, content, "copied bytes must equal the source");
+}
+
+/// MOVE LINES reports the same addressed range length on both counters — a
+/// clean move must never look like net line loss.
+#[test]
+fn move_lines_reports_symmetric_range_counts() {
+    let (mut engine, session_id, _dir) = engine_with_session();
+    let result = execute_fql(
+        &mut engine,
+        &session_id,
+        "MOVE LINES 1-3 OF 'motor_control.cpp' TO 'dupes/moved.cpp'",
+    );
+    let ForgeQLResult::Mutation(m) = result else {
+        panic!("expected Mutation result from MOVE LINES");
+    };
+    assert_eq!(m.lines_written, 3, "moved range length");
+    assert_eq!(
+        m.lines_removed, m.lines_written,
+        "a clean move reports written == removed"
+    );
+}

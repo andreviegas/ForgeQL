@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.101.1] — 2026-07-07 — fix(output): FIND files duplicate rows + COPY/MOVE line counts
+
+### Fixed
+
+- `FIND files` could return the same path twice (same path and size,
+  consecutive rows) when the workspace overlay held duplicate path entries —
+  a state the symbol pipeline already guards its GROUP BY fast paths against.
+  File listings are now deduplicated on path, keeping the freshest entry.
+- `COPY LINES` / `MOVE LINES` reported one line fewer than the addressed
+  range on whole-file copies: the line-addressing model counts the position
+  after a final newline as an addressable (zero-byte) line, but the counter
+  counted the payload's text lines. Both ops now report the addressed range
+  length, and a clean MOVE reports the same number written and removed. File
+  bytes were always correct — the mismatch was presentation only.
+
 ## [0.101.0] — 2026-07-07 — feat(query): memory-bounded FIND — unknown-field refusal, per-segment filtering, row budget
 
 ### Added
