@@ -121,7 +121,12 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///          by their DEFINITION-REF's last path segment instead of the bare
 ///          tag name; v23 segments carry those rows named
 ///          "ECUC-NUMERICAL-PARAM-VALUE" etc., unfindable by parameter name.
-pub const ENRICH_VER: u32 = 24;
+///  25 — C and C++ `union` types, `typedef` aliases (scalar, function-pointer,
+///          and the anonymous `typedef struct/enum { … } Name;` forms), and
+///          enum constants are now indexed as `union` / `type_alias` /
+///          `enumerator` rows with node ids; v24 segments lack those rows, so
+///          the bump forces a full re-index.
+pub const ENRICH_VER: u32 = 25;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

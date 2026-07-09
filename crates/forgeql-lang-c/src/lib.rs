@@ -116,6 +116,12 @@ impl LanguageSupport for CLanguage {
                 .map(|n| node_text(source, n))
                 .filter(|s| !s.is_empty()),
 
+            "type_definition" => node
+                .child_by_field_name("declarator")
+                .and_then(find_type_alias_name)
+                .map(|n| node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
             _ => None,
         }
     }
@@ -155,6 +161,30 @@ fn find_function_name(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'
     }
 }
 
+/// Find the name node a `type_definition` introduces. Unlike a variable
+/// declarator (whose name is an `identifier`), a typedef's new name is a
+/// `type_identifier`, optionally wrapped in pointer / array / function
+/// declarators (function-pointer and array typedefs). Kept separate from
+/// `find_function_name` so the typedef case never perturbs variable /
+/// parameter / field name extraction.
+fn find_type_alias_name(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+    if matches!(node.kind(), "type_identifier" | "identifier") {
+        return Some(node);
+    }
+    if let Some(found) = node
+        .child_by_field_name("declarator")
+        .and_then(find_type_alias_name)
+    {
+        return Some(found);
+    }
+    for i in 0..node.named_child_count() {
+        if let Some(found) = node.named_child(i).and_then(find_type_alias_name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 fn contains_function_declarator(node: tree_sitter::Node<'_>) -> bool {
     if node.kind() == "function_declarator" {
         return true;
@@ -184,6 +214,7 @@ pub fn c_registry() -> LanguageRegistry {
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
+#[expect(clippy::expect_used, reason = "test code")]
 mod tests {
     use super::*;
 
@@ -193,6 +224,8 @@ mod tests {
         assert_eq!(lang.map_kind("function_definition"), Some("function"));
         assert_eq!(lang.map_kind("struct_specifier"), Some("struct"));
         assert_eq!(lang.map_kind("enum_specifier"), Some("enum"));
+        assert_eq!(lang.map_kind("union_specifier"), Some("union"));
+        assert_eq!(lang.map_kind("enumerator"), Some("enumerator"));
         assert_eq!(lang.map_kind("declaration"), Some("variable"));
         assert_eq!(lang.map_kind("field_declaration"), Some("field"));
         assert_eq!(lang.map_kind("comment"), Some("comment"));
@@ -259,5 +292,22 @@ mod tests {
                 "extension {ext} should not resolve in C-only registry"
             );
         }
+    }
+
+    #[test]
+    fn extract_name_typedef_alias() {
+        let lang = CLanguage;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&lang.tree_sitter_language())
+            .expect("set language");
+
+        let source = b"typedef unsigned int paddr_t;";
+        let tree = parser.parse(source, None).expect("parse");
+        let root = tree.root_node();
+
+        let td = root.child(0).expect("type_definition");
+        assert_eq!(td.kind(), "type_definition");
+        assert_eq!(lang.extract_name(td, source).as_deref(), Some("paddr_t"));
     }
 }

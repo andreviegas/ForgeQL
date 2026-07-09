@@ -124,9 +124,11 @@ fn is_addressable_fql_kind(fql_kind: &str) -> bool {
         fql_kind,
         "function"
             | "struct"
+            | "union"
             | "class"
             | "interface"
             | "enum"
+            | "enumerator"
             | "field"
             | "method"
             | "import"

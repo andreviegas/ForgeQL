@@ -1,7 +1,7 @@
 [
   {
     "alias": "golden",
-    "expect_symbols_indexed": 3089142,
+    "expect_symbols_indexed": 3091863,
     "use": "zephyr-andre.zephyr-main"
   },
   {
@@ -1970,14 +1970,14 @@
   },
   {
     "expect_field": {"type":"find_node"},
-    "expect_pointer": {"/fql_kind":"field","/line":3525,"/name":"k_mutex_lock","/node_id":"n6050e1e382ae.0824","/path":"include/zephyr/kernel.h"},
-    "fql": "FIND NODE 'n6050e1e382ae.0824'",
+    "expect_pointer": {"/fql_kind":"field","/line":3525,"/name":"k_mutex_lock","/node_id":"n6050e1e382ae.0833","/path":"include/zephyr/kernel.h"},
+    "fql": "FIND NODE 'n6050e1e382ae.0833'",
     "name": "FN04_find_node_field_k_mutex_lock"
   },
   {
     "expect_field": {"type":"find_node"},
     "expect_pointer": {"/fql_kind":"function","/line":1111,"/name":"z_impl___ztest_set_test_result","/path":"subsys/testsuite/ztest/src/ztest.c"},
-    "fql": "FIND NODE 'nb603fcd516ee.0462'",
+    "fql": "FIND NODE 'nb603fcd516ee.0465'",
     "name": "FN05_find_node_ztest_function"
   },
   {
@@ -2239,7 +2239,7 @@
   },
   {
     "alias": "golden-python",
-    "expect_symbols_indexed": 3118871,
+    "expect_symbols_indexed": 3119431,
     "use": "pytorch-andre.pytorch-frozen"
   },
   {
@@ -2675,7 +2675,7 @@
   },
   {
     "alias": "golden-rust",
-    "expect_symbols_indexed": 58305,
+    "expect_symbols_indexed": 58307,
     "use": "forgeql-pub.frozen"
   },
   {

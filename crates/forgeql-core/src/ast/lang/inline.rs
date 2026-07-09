@@ -121,6 +121,12 @@ impl LanguageSupport for CppLanguageInline {
                 .map(|n| cpp_node_text(source, n))
                 .filter(|s| !s.is_empty()),
 
+            "type_definition" => node
+                .child_by_field_name("declarator")
+                .and_then(cpp_find_type_alias_name)
+                .map(|n| cpp_node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
             _ => None,
         }
     }
@@ -168,6 +174,27 @@ fn cpp_find_function_name(node: tree_sitter::Node<'_>) -> Option<tree_sitter::No
             None
         }
     }
+}
+
+/// Find the name node a `type_definition` introduces (typedef alias). Kept
+/// separate from `cpp_find_function_name` so the typedef case never perturbs
+/// variable / parameter / field name extraction.
+fn cpp_find_type_alias_name(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+    if matches!(node.kind(), "type_identifier" | "identifier") {
+        return Some(node);
+    }
+    if let Some(found) = node
+        .child_by_field_name("declarator")
+        .and_then(cpp_find_type_alias_name)
+    {
+        return Some(found);
+    }
+    for i in 0..node.named_child_count() {
+        if let Some(found) = node.named_child(i).and_then(cpp_find_type_alias_name) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 #[cfg(any(test, feature = "test-helpers"))]

@@ -1,0 +1,40 @@
+{
+  "suite": "cpp_struct_coverage",
+  "description": "C/C++ enum-constant and typedef-alias coverage + node-id addressability. Grounded on forgeql-pub.frozen (tests/fixtures/motor_control.h: two enums, an anonymous `typedef struct { ... } EstadoMotor_s;`, and a function-pointer `typedef void (*FnCallback)(void);`). Guards the fix that made enum constants and typedef aliases both indexable (real fql_kind) and addressable (node_id).",
+  "cases": [
+    { "name": "enumerators_indexed", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/motor_control.h' WHERE fql_kind='enumerator' ORDER BY line ASC LIMIT 20",
+      "assert": { "total": 6, "row_count": 6, "rows": [
+        {"name":"OK","line":57},{"name":"TIMEOUT","line":58},{"name":"FALLO","line":59},
+        {"name":"OK","line":67},{"name":"SIN_DATOS","line":68},{"name":"SATURADO","line":69}
+      ] } },
+
+    { "name": "enumerator_is_addressable", "use": "forgeql-pub.frozen",
+      "steps": [
+        { "fql": "FIND symbols IN 'tests/fixtures/motor_control.h' WHERE fql_kind='enumerator' WHERE name='TIMEOUT' LIMIT 1",
+          "assert": { "row_count": 1 }, "capture": { "N": "results.0.node_id" } },
+        { "fql": "FIND NODE '${N}'",
+          "assert": { "pointer": {"/fql_kind":"enumerator","/name":"TIMEOUT","/line":58} } }
+      ] },
+
+    { "name": "anonymous_typedef_struct_alias_indexed", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/motor_control.h' WHERE fql_kind='type_alias' WHERE name='EstadoMotor_s' LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{"name":"EstadoMotor_s","line":78}] } },
+
+    { "name": "function_pointer_typedef_alias_indexed", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'tests/fixtures/motor_control.h' WHERE fql_kind='type_alias' WHERE name='FnCallback' LIMIT 5",
+      "assert": { "row_count": 1, "rows": [{"name":"FnCallback","line":87}] } },
+
+    { "name": "typedef_alias_is_addressable", "use": "forgeql-pub.frozen",
+      "steps": [
+        { "fql": "FIND symbols IN 'tests/fixtures/motor_control.h' WHERE fql_kind='type_alias' WHERE name='FnCallback' LIMIT 1",
+          "assert": { "row_count": 1 }, "capture": { "N": "results.0.node_id" } },
+        { "fql": "FIND NODE '${N}'",
+          "assert": { "pointer": {"/fql_kind":"type_alias","/name":"FnCallback","/line":87} } }
+      ] },
+
+    { "name": "named_enum_members_listed", "use": "forgeql-pub.frozen",
+      "fql": "SHOW members OF 'ErrorMotor'",
+      "assert": { "row_count": 3 } }
+  ]
+}

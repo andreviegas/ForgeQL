@@ -5,6 +5,29 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.104.0] — 2026-07-09 — feat(cpp): index unions, typedef aliases, and enum constants
+
+### Fixed
+
+- C and C++ `union` types were not indexed. A `union Name { … }` produced no
+  `union` symbol: it could not be found by type name, carried no node id, and
+  `SHOW members` on it returned nothing. Unions are now first-class symbols
+  with node ids and member listing, matching structs — for both the named
+  `union Name { … }` and the `typedef union { … } Name;` forms.
+- `typedef` aliases were invisible to the index. A scalar
+  `typedef unsigned int paddr_t;`, a function-pointer typedef, and the name
+  introduced by `typedef struct { … } Name;` / `typedef enum { … } Name;`
+  each produced no symbol, so the only name a caller has for the type could
+  not be located or edited by node handle. Typedef aliases are now indexed as
+  `type_alias` symbols with node ids, including the anonymous struct and enum
+  forms.
+- Enumerator constants inside an enum body had no node id and an empty kind,
+  so there was no supported way to insert or change an enumerator through a
+  node handle. Each enumerator is now an addressable `enumerator` symbol.
+- Bumped `ENRICH_VER` 24 → 25 (`storage/columnar/mod.rs`): the new `union`,
+  `type_alias`, and `enumerator` rows change index output, so cached per-file
+  segments and overlays are rebuilt on next use instead of being silently
+  reused with the old (incomplete) rows.
 
 ## [0.103.0] — 2026-07-08 — feat(export): EXPORT PATCH — git am-ready patches from session commits
 

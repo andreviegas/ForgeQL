@@ -596,6 +596,50 @@ mod tests {
     }
 
     #[test]
+    fn cpp_struct_coverage_union_enum_typedef() {
+        // Named unions, enum constants, and typedef aliases (including the
+        // anonymous `typedef enum { .. } Name;` form) must each be indexed with
+        // a real fql_kind and an addressable node_id (ordinal).
+        let src = concat!(
+            "typedef enum { COUNTER_IRQ_NONE, COUNTER_IRQ_ALL } counter_event_t;\n",
+            "union acpi_id { unsigned int raw; };\n",
+            "typedef unsigned int paddr_t;\n",
+            "typedef void (*cb_t)(int);\n",
+        );
+        let table = index_snippet(src);
+
+        let addressable = |kind: &str, name: &str| {
+            table.rows.iter().any(|r| {
+                table.fql_kind_of(r) == kind && table.name_of(r) == name && r.ordinal.is_some()
+            })
+        };
+
+        assert!(
+            addressable("union", "acpi_id"),
+            "named union must be addressable"
+        );
+        assert!(
+            addressable("type_alias", "counter_event_t"),
+            "anonymous typedef enum alias must be addressable"
+        );
+        assert!(
+            addressable("type_alias", "cb_t"),
+            "function-pointer typedef alias must be addressable"
+        );
+        assert!(
+            addressable("type_alias", "paddr_t"),
+            "scalar typedef alias must be addressable"
+        );
+        assert!(
+            table
+                .rows
+                .iter()
+                .any(|r| table.fql_kind_of(r) == "enumerator" && r.ordinal.is_some()),
+            "enum constants must be addressable"
+        );
+    }
+
+    #[test]
     fn leading_attribute_folds_into_node_span() {
         // A Rust item's span (line / byte_range / rev) should start at its
         // leading `#[...]` attribute, not at the `fn`/`struct` keyword.

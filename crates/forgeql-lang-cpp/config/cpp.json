@@ -41,19 +41,20 @@
 
   "definitions": {
     "function_kinds": ["function_definition"],
-    "type_kinds": ["class_specifier", "struct_specifier", "enum_specifier"],
+    "type_kinds": ["class_specifier", "struct_specifier", "enum_specifier", "union_specifier"],
     "definition_kinds": [
       "function_definition",
       "class_specifier",
       "struct_specifier",
-      "enum_specifier"
+      "enum_specifier",
+      "union_specifier"
     ],
     "declaration_kinds": ["declaration"],
     "field_kinds": ["field_declaration"],
     "parameter_kind": "parameter_declaration",
     "member_body_kind": "field_declaration_list",
     "member_kinds": ["field_declaration"],
-    "owner_container_kinds": ["class_specifier", "struct_specifier"],
+    "owner_container_kinds": ["class_specifier", "struct_specifier", "union_specifier"],
     "nested_function_body_kinds": ["lambda_expression", "function_definition"],
     "constant_def_parent_kinds": ["preproc_def", "enumerator", "init_declarator"]
   },
@@ -227,6 +228,8 @@
     "class_specifier": "class",
     "struct_specifier": "struct",
     "enum_specifier": "enum",
+    "union_specifier": "union",
+    "enumerator": "enumerator",
     "declaration": "variable",
     "parameter_declaration": "variable",
     "field_declaration": "field",
