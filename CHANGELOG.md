@@ -6,6 +6,26 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.103.0] — 2026-07-08 — feat(export): EXPORT PATCH — git am-ready patches from session commits
+
+### Added
+
+- `EXPORT PATCH [LAST n]`: writes the session's commits as `git am`-ready
+  mbox files under `.forgeql-patches/` in the worktree and returns them
+  inline — exported range, one row per file with absolute path, size and
+  sha256 (verify after transfer with `sha256sum`), then the patch text,
+  windowed through `SHOW MORE`. Without `LAST` the range is everything the
+  session committed over its base branch; `LAST n` exports the last n
+  source-touching commits. Patches are generated with `--binary`, so binary
+  files survive `git am`.
+- The export is transaction-safe: `.forgeql-*` paths are excluded from every
+  patch, so transaction checkpoint commits produce no patch, a commit mixing
+  source with runtime files exports only its source part, and the series
+  still applies in order. Uncommitted worktree edits are surfaced as a hint,
+  never silently dropped into a patch. `.forgeql-patches/` itself is kept
+  out of commits, checkpoints, and `git status` (existing deployments gain
+  the ignore entry automatically on the next `USE`).
+
 ## [0.102.0] — 2026-07-07 — release: field-report fixes rollup
 
 Release marker for the changes shipped as 0.100.1–0.101.3, so a single tag

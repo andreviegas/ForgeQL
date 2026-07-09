@@ -1,0 +1,22 @@
+{
+  "suite": "export_patch",
+  "description": "EXPORT PATCH on a throwaway rw worktree off forgeql-pub.frozen. A fresh session has no commits over its base branch, so the bare form errors with guidance; LAST 1 exports the branch tip's source part. Checkpoint/runtime-file exclusion is covered deterministically by the git module unit tests.",
+  "cases": [
+    {
+      "name": "export_patch_without_session_commits_errors",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "steps": [
+        { "fql": "EXPORT PATCH", "assert": { "error": true } }
+      ]
+    },
+    {
+      "name": "export_patch_last_one_exports_branch_tip",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "steps": [
+        { "fql": "EXPORT PATCH LAST 1", "assert": { "field": { "type": "export_patch", "range": "last 1 commit(s)" } } }
+      ]
+    }
+  ]
+}

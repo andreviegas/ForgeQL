@@ -18,6 +18,7 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
    - [UNDO](#undo)
    - [Transaction Commands](#transaction-commands)
    - [VERIFY, RUN, and Background JOBs](#verify-run-and-background-jobs)
+   - [EXPORT PATCH](#export-patch)
 3. [Universal Clauses](#universal-clauses)
 4. [Operators and Values](#operators-and-values)
 5. [Filterable Fields](#filterable-fields)
@@ -478,6 +479,30 @@ lines the agent has consumed. Budget status (`remaining/ceiling (delta)`) is ret
 in every MCP response via the `line_budget` metadata field. Budget files are persisted
 to `.budgets/{source}@{branch}.json` under the ForgeQL data directory. Expired files
 are auto-deleted on the next `USE` via `sweep_expired()`.
+
+---
+
+### EXPORT PATCH
+
+```sql
+EXPORT PATCH            -- everything this session committed over its base branch
+EXPORT PATCH LAST n     -- the last n source-touching commits
+```
+
+Writes the session's commits as `git am`-ready mbox files under
+`.forgeql-patches/` in the worktree and returns them inline: a header row
+with the exported range, one row per file (absolute path, size, **sha256**),
+then the concatenated patch text (windowed — page with `SHOW MORE`). Copy a
+small patch straight from the response, or fetch the files from the worktree
+path; either way, verify the sha256 with `sha256sum` before `git am`.
+
+`ForgeQL` runtime files (`.forgeql-*` at any depth) are excluded from every
+patch, so the export is safe mid-transaction: checkpoint commits that touch
+only runtime files produce no patch at all, and a commit mixing source with
+runtime files exports only its source part — the series still applies in
+order with `git am`. `LAST n` counts source-touching commits, so checkpoints
+never consume the count. Uncommitted worktree edits belong to no commit and
+are never exported; the response says so in a hint when any exist.
 
 ---
 

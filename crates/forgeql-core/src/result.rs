@@ -58,6 +58,8 @@ pub enum ForgeQLResult {
     JobStatus(crate::jobs::JobSnapshot),
     /// Background job list: `JOB LIST`
     JobList(JobListResult),
+    /// Patch export: `EXPORT PATCH [LAST n]`
+    ExportPatch(ExportPatchResult),
 }
 
 /// Result of FIND NODE id — resolved node details and navigation links.
@@ -682,6 +684,35 @@ pub struct JobListResult {
     pub jobs: Vec<crate::jobs::JobSummary>,
 }
 
+/// One patch file produced by `EXPORT PATCH`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatchFileEntry {
+    /// Absolute path of the mbox file inside the session worktree.
+    pub path: PathBuf,
+    /// File size in bytes.
+    pub bytes: u64,
+    /// SHA-256 of the file contents (hex). Verify after transferring the
+    /// file — or after copying the inline text — before running `git am`.
+    pub sha256: String,
+}
+
+/// Result of `EXPORT PATCH [LAST n]`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportPatchResult {
+    /// The commit range that was exported (e.g. `a1b2c3d..HEAD` or
+    /// `last 3 commit(s)`).
+    pub range: String,
+    /// Patch files in series order (apply with `git am` in this order).
+    pub files: Vec<PatchFileEntry>,
+    /// Concatenated mbox content of every patch file, inlined for copying;
+    /// over-cap output is windowed and pageable via `SHOW MORE`.
+    pub content: String,
+    /// Caution the agent should surface (uncommitted changes not exported,
+    /// or a range whose commits carried only runtime files).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
 /// Serde default for [`VerifyBuildResult::summary_lines`].
 const fn default_summary_lines() -> usize {
     40
@@ -858,7 +889,11 @@ impl ForgeQLResult {
             | Self::SourceOp(_)
             | Self::VerifyBuild(_)
             | Self::Run(_)
-            | Self::Rollback(_) => {}
+            | Self::Rollback(_)
+            // ExportPatch paths deliberately stay absolute: the patch files
+            // are transfer artifacts the user fetches from outside the
+            // session, so the full worktree path is the deliverable.
+            | Self::ExportPatch(_) => {}
         }
     }
 

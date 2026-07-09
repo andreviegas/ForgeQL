@@ -2127,6 +2127,23 @@ fn parse_copy_lines_at() {
 }
 
 #[test]
+fn parse_export_patch_forms() {
+    let ops = parser::parse("EXPORT PATCH").expect("parse EXPORT PATCH");
+    assert!(matches!(
+        ops[0],
+        forgeql_core::ir::ForgeQLIR::ExportPatch { last: None }
+    ));
+
+    let ops = parser::parse("EXPORT PATCH LAST 3").expect("parse EXPORT PATCH LAST n");
+    assert!(matches!(
+        ops[0],
+        forgeql_core::ir::ForgeQLIR::ExportPatch { last: Some(3) }
+    ));
+
+    parser::parse("EXPORT PATCH LAST").expect_err("LAST without a count must not parse");
+}
+
+#[test]
 fn parse_move_lines_append() {
     parser::parse("MOVE LINES 1-5 OF 'src/lib.rs' TO 'dst/lib.rs'")
         .expect("parse MOVE LINES (append)");

@@ -369,6 +369,11 @@ fn buffering_params(
         // small results pass through inline and unchanged.
         ForgeQLResult::Show(_) => Some(("show".to_string(), Direction::Head, inline_cap)),
         ForgeQLResult::Query(_) => Some(("find".to_string(), Direction::Head, inline_cap)),
+        // Patch exports inline the whole mbox series; page from the top so
+        // the file list and first patch arrive first.
+        ForgeQLResult::ExportPatch(_) => {
+            Some(("export_patch".to_string(), Direction::Head, inline_cap))
+        }
         _ => None,
     }
 }

@@ -16,9 +16,9 @@
 /// Result types that are already small (mutations, transactions, source ops)
 /// fall back to `to_json()`.
 use crate::result::{
-    CallDirection, FileEntry, FindNodeResult, ForgeQLResult, MemberEntry, MutationResult,
-    OutlineEntry, QueryResult, SessionStats, ShowContent, ShowResult, SourceLine, SymbolRow,
-    VerifyBuildResult,
+    CallDirection, ExportPatchResult, FileEntry, FindNodeResult, ForgeQLResult, MemberEntry,
+    MutationResult, OutlineEntry, QueryResult, SessionStats, ShowContent, ShowResult, SourceLine,
+    SymbolRow, VerifyBuildResult,
 };
 
 // -----------------------------------------------------------------------
@@ -37,6 +37,7 @@ pub fn to_compact(result: &ForgeQLResult) -> String {
         ForgeQLResult::FindNode(r) => compact_find_node(r),
         ForgeQLResult::Mutation(m) => compact_mutation(m),
         ForgeQLResult::VerifyBuild(v) => compact_verify(v),
+        ForgeQLResult::ExportPatch(e) => compact_export_patch(e),
         // These are already small — keep JSON.
         _ => result.to_json(),
     }
@@ -494,6 +495,36 @@ fn compact_verify(v: &VerifyBuildResult) -> String {
     let mut out = String::with_capacity(v.output.len() + 64);
     row(&mut out, &[&q("verify_build"), &q(&v.step), &q(verdict)]);
     out.push_str(v.output.trim_end_matches('\n'));
+    out
+}
+
+/// EXPORT PATCH → header, one row per patch file, then the raw mbox content.
+///
+/// The content is emitted verbatim (not CSV-quoted) so each patch line maps
+/// to one buffer line, letting `SHOW MORE` page it and letting the agent copy
+/// it byte-exact. The per-file `sha256` rows let the receiver verify the
+/// transfer before `git am`.
+fn compact_export_patch(e: &ExportPatchResult) -> String {
+    let mut out = String::with_capacity(e.content.len() + 256);
+    row(
+        &mut out,
+        &[&q("export_patch"), &q(&e.range), &e.files.len().to_string()],
+    );
+    row(&mut out, &[&q("file"), &q("bytes"), &q("sha256")]);
+    for f in &e.files {
+        row(
+            &mut out,
+            &[
+                &q(&f.path.display().to_string()),
+                &f.bytes.to_string(),
+                &q(&f.sha256),
+            ],
+        );
+    }
+    if let Some(hint) = &e.hint {
+        row(&mut out, &[&q("hint"), &q(hint)]);
+    }
+    out.push_str(e.content.trim_end_matches('\n'));
     out
 }
 

@@ -104,6 +104,7 @@ statement = {
   | show_more_stmt
   | undo_stmt
   | job_stmt
+  | export_patch_stmt
 }
 
 /// FIND NODE id -- resolve a node_id to its current location, rev, and nav links.
@@ -188,6 +189,14 @@ show_more_range  = { number ~ "-" ~ number }
 /// token shape as SHOW MORE so the ring index parses unambiguously.
 undo_stmt = { "UNDO" ~ undo_last? }
 undo_last = @{ "LAST-" ~ ASCII_DIGIT+ }
+
+/// `EXPORT PATCH [LAST n]` — write the session's commits as `git am`-ready
+/// mbox patch files under `.forgeql-patches/`. Without LAST the range is
+/// everything the session branch added over its base branch; LAST n exports
+/// the last n commits. ForgeQL runtime files (`.forgeql-*`) are excluded
+/// from every patch, so transaction checkpoint commits drop out.
+export_patch_stmt = { "EXPORT" ~ "PATCH" ~ export_last? }
+export_last = { "LAST" ~ number }
 
 // -----------------------------------------------------------------------
 // Queries

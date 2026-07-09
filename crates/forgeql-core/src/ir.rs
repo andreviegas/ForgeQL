@@ -507,6 +507,16 @@ pub enum ForgeQLIR {
     },
     /// `JOB LIST` — list all known background jobs.
     JobList,
+    /// `EXPORT PATCH [LAST n]` — write the session's commits as `git am`-ready
+    /// mbox patch files under `.forgeql-patches/` in the worktree. `last`
+    /// selects the last n commits; `None` exports everything the session
+    /// branch added over its base branch.
+    ExportPatch {
+        /// How many trailing commits to export; `None` = the whole session
+        /// range (merge-base with the base branch up to HEAD).
+        #[serde(default)]
+        last: Option<usize>,
+    },
 }
 
 /// Serde helper: skip-serializing `Backend` when it holds the `Default` variant.

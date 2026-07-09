@@ -434,6 +434,7 @@ impl ForgeQLEngine {
             ForgeQLIR::JobStart { label } => self.exec_job_start(sid, label),
             ForgeQLIR::JobStatus { id } => self.exec_job_status(id),
             ForgeQLIR::JobList => self.exec_job_list(),
+            ForgeQLIR::ExportPatch { last } => self.exec_export_patch(sid, *last),
         }
     }
 

@@ -11,7 +11,7 @@ pub mod worktree;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use git2::{BranchType, Repository};
 use tracing::debug;
 
@@ -110,14 +110,23 @@ const CLEAN_COMMIT_EXCLUDED: &[&str] = &[
 const CHECKPOINT_EXCLUDED: &[&str] = &[
     ".forgeql-session",
     crate::storage::columnar::STAGING_DIR_NAME,
+    PATCHES_DIR_NAME,
 ];
 
+/// Directory (inside a worktree) where `EXPORT PATCH` writes its mbox files.
+///
+/// Never committed by any path: patch files are transfer artifacts, not
+/// source, and exporting them into history would nest patches in patches.
+pub const PATCHES_DIR_NAME: &str = ".forgeql-patches";
+
 fn is_clean_commit_excluded(path: &std::path::Path) -> bool {
-    // Leaf-name checks cover single control files; the staging directory is
-    // checked component-wise because its entries (`.forgeql-staging/<hex>/…`)
-    // have ordinary leaf names like `names.col` and previously slipped into
-    // user-facing commits as a block of binary segment files.
-    is_in_staging_dir(path)
+    // Leaf-name checks cover single control files; the staging and patch
+    // directories are checked component-wise because their entries
+    // (`.forgeql-staging/<hex>/…`, `.forgeql-patches/0001-….patch`) have
+    // ordinary leaf names and previously (staging) slipped into user-facing
+    // commits as a block of binary segment files.
+    is_in_component_dir(path, crate::storage::columnar::STAGING_DIR_NAME)
+        || is_in_component_dir(path, PATCHES_DIR_NAME)
         || path
             .file_name()
             .and_then(|n| n.to_str())
@@ -130,14 +139,12 @@ fn is_clean_commit_excluded(path: &std::path::Path) -> bool {
             })
 }
 
-/// `true` when any component of `path` is the mutation staging directory.
-/// Files inside `.forgeql-staging/<hex>/` have ordinary leaf names, so the
-/// whole path must be inspected, not just `file_name()`.
-fn is_in_staging_dir(path: &std::path::Path) -> bool {
-    path.components().any(|c| {
-        matches!(c, std::path::Component::Normal(n)
-            if n.to_str() == Some(crate::storage::columnar::STAGING_DIR_NAME))
-    })
+/// `true` when any component of `path` is the directory named `dir`.
+/// Files inside runtime directories have ordinary leaf names, so the whole
+/// path must be inspected, not just `file_name()`.
+fn is_in_component_dir(path: &std::path::Path, dir: &str) -> bool {
+    path.components()
+        .any(|c| matches!(c, std::path::Component::Normal(n) if n.to_str() == Some(dir)))
 }
 
 fn is_checkpoint_excluded(path: &std::path::Path) -> bool {
@@ -174,24 +181,35 @@ pub fn ensure_runtime_excludes(repo_path: &Path) {
     let info_dir = repo_path.join("info");
     let exclude = info_dir.join("exclude");
     let existing = std::fs::read_to_string(&exclude).unwrap_or_default();
-    if existing.contains(RUNTIME_EXCLUDE_MARKER) {
-        return;
-    }
-    let block = format!(
-        "{RUNTIME_EXCLUDE_MARKER}\n.forgeql-session\n{}/\n{}*\n",
-        crate::storage::columnar::STAGING_DIR_NAME,
-        crate::showmore::SHOWMORE_FILE_NAME,
-    );
-    let updated = if existing.is_empty() || existing.ends_with('\n') {
-        format!("{existing}{block}")
+    let patches_line = format!("{PATCHES_DIR_NAME}/");
+    let updated = if existing.contains(RUNTIME_EXCLUDE_MARKER) {
+        // Block already present (written by an earlier version). Entries added
+        // since then are appended individually so upgrades pick them up.
+        if existing.contains(&patches_line) {
+            return;
+        }
+        format!("{}{patches_line}\n", ensure_trailing_newline(existing))
     } else {
-        format!("{existing}\n{block}")
+        let block = format!(
+            "{RUNTIME_EXCLUDE_MARKER}\n.forgeql-session\n{}/\n{}*\n{patches_line}\n",
+            crate::storage::columnar::STAGING_DIR_NAME,
+            crate::showmore::SHOWMORE_FILE_NAME,
+        );
+        format!("{}{block}", ensure_trailing_newline(existing))
     };
     if std::fs::create_dir_all(&info_dir).is_ok()
         && let Err(e) = std::fs::write(&exclude, updated)
     {
         debug!(path = %exclude.display(), "info/exclude not updated (non-fatal): {e}");
     }
+}
+
+/// Append a trailing newline when `text` is non-empty and lacks one.
+fn ensure_trailing_newline(mut text: String) -> String {
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
 }
 
 /// Stage all modified files and commit as an internal checkpoint.
@@ -538,6 +556,138 @@ pub fn diff_head_to_worktree(worktree_path: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+// -----------------------------------------------------------------------
+// EXPORT PATCH — format-patch export of session commits
+// -----------------------------------------------------------------------
+
+/// One mbox patch file produced by [`export_patches`].
+#[derive(Debug, Clone)]
+pub struct ExportedPatch {
+    /// Absolute path of the patch file inside the worktree.
+    pub path: std::path::PathBuf,
+    /// File size in bytes.
+    pub bytes: u64,
+    /// SHA-256 of the file contents (hex) — verify after transfer with
+    /// `sha256sum` before `git am`.
+    pub sha256: String,
+}
+
+/// Run one git subcommand in `worktree` and return its stdout as a string.
+///
+/// Arguments are passed as separate argv entries (no shell), so nothing the
+/// engine splices can be interpreted as shell syntax.
+fn run_git(worktree: &Path, args: &[&str]) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(args)
+        .output()
+        .with_context(|| format!("failed to spawn git {}", args.join(" ")))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The commit the session branch grew from: `merge-base(<base_ref>, HEAD)`.
+///
+/// # Errors
+/// Returns an error when git cannot be spawned or the merge-base fails
+/// (e.g. `base_ref` does not name a commit).
+pub fn merge_base_with(worktree: &Path, base_ref: &str) -> Result<String> {
+    Ok(run_git(worktree, &["merge-base", base_ref, "HEAD"])?
+        .trim()
+        .to_owned())
+}
+
+/// The worktree's current HEAD commit id.
+///
+/// # Errors
+/// Returns an error when git cannot be spawned or HEAD cannot be resolved.
+pub fn head_oid_of(worktree: &Path) -> Result<String> {
+    Ok(run_git(worktree, &["rev-parse", "HEAD"])?.trim().to_owned())
+}
+
+/// Count of uncommitted worktree changes, ignoring `ForgeQL` runtime files.
+///
+/// `EXPORT PATCH` is commit-based; a non-zero count means edits exist that no
+/// patch will carry, which the response surfaces as a hint.
+///
+/// # Errors
+/// Returns an error when git cannot be spawned or `git status` fails.
+pub fn uncommitted_source_changes(worktree: &Path) -> Result<usize> {
+    let status = run_git(worktree, &["status", "--porcelain"])?;
+    Ok(status
+        .lines()
+        .filter(|line| {
+            // Porcelain v1: two status chars, a space, then the path
+            // (possibly `old -> new` for renames — the new path decides).
+            let path = line
+                .get(3..)
+                .unwrap_or("")
+                .split(" -> ")
+                .last()
+                .unwrap_or("");
+            let p = Path::new(path);
+            !is_clean_commit_excluded(p)
+                && !p.components().any(|c| {
+                    matches!(c, std::path::Component::Normal(n)
+                        if n.to_str().is_some_and(|s| s.starts_with(".forgeql-")))
+                })
+        })
+        .count())
+}
+
+/// Write `git am`-ready mbox files for `range_args` into
+/// `.forgeql-patches/` in `worktree` (the directory is cleared first).
+///
+/// Every patch is generated with an exclude pathspec for `.forgeql-*` paths
+/// at any depth, so commits touching only `ForgeQL` runtime files — such as
+/// transaction checkpoints — produce no patch at all, and commits mixing
+/// source and runtime files export only their source part. `--binary`
+/// includes base85 literal data so binary files survive `git am`.
+///
+/// `range_args` is either `["<oid>..HEAD"]` or `["-<n>", "HEAD"]`, always
+/// engine-computed — never user text.
+///
+/// # Errors
+/// Returns an error when the output directory cannot be cleared, git cannot
+/// be spawned, `format-patch` fails, or a produced file cannot be read back.
+pub fn export_patches(worktree: &Path, range_args: &[String]) -> Result<Vec<ExportedPatch>> {
+    use sha2::{Digest, Sha256};
+
+    let out_dir = worktree.join(PATCHES_DIR_NAME);
+    if out_dir.exists() {
+        std::fs::remove_dir_all(&out_dir)
+            .with_context(|| format!("could not clear {}", out_dir.display()))?;
+    }
+
+    let mut args: Vec<&str> = vec!["format-patch", "--binary", "-o", PATCHES_DIR_NAME];
+    args.extend(range_args.iter().map(String::as_str));
+    args.extend(["--", ":(exclude,glob)**/.forgeql-*"]);
+    let stdout = run_git(worktree, &args)?;
+
+    // format-patch prints one created file per line, in series order.
+    let mut files = Vec::new();
+    for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let abs = worktree.join(line);
+        let data =
+            std::fs::read(&abs).with_context(|| format!("could not read {}", abs.display()))?;
+        let bytes = u64::try_from(data.len()).unwrap_or(u64::MAX);
+        let sha256 = format!("{:x}", Sha256::digest(&data));
+        files.push(ExportedPatch {
+            path: abs,
+            bytes,
+            sha256,
+        });
+    }
+    Ok(files)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -783,8 +933,121 @@ mod tests {
         assert!(content.contains(".forgeql-session"));
         assert!(content.contains(".forgeql-staging/"));
         assert!(content.contains(".forgeql-showmore*"));
+        assert!(content.contains(".forgeql-patches/"));
         // Checkpoint-committed files must never be git-ignored.
         assert!(!content.contains(".forgeql-index"));
         assert!(!content.contains(".forgeql-undo"));
+    }
+
+    /// A block written by an earlier version (no patches entry) gains the
+    /// missing line on the next call — exactly once.
+    #[test]
+    fn runtime_excludes_upgrades_existing_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let info = dir.path().join("info");
+        std::fs::create_dir_all(&info).unwrap();
+        let old_block = format!("{RUNTIME_EXCLUDE_MARKER}\n.forgeql-session\n");
+        std::fs::write(info.join("exclude"), &old_block).unwrap();
+
+        ensure_runtime_excludes(dir.path());
+        ensure_runtime_excludes(dir.path());
+        let content = std::fs::read_to_string(info.join("exclude")).unwrap();
+        assert_eq!(content.matches(RUNTIME_EXCLUDE_MARKER).count(), 1);
+        assert_eq!(content.matches(".forgeql-patches/").count(), 1);
+        assert!(
+            content.starts_with(&old_block),
+            "existing entries preserved"
+        );
+    }
+
+    /// Stage everything (runtime files included) and commit — a raw commit
+    /// like the ones transaction checkpoints or older releases produced.
+    fn raw_commit_all(worktree: &Path, msg: &str) {
+        run_git(worktree, &["add", "-A"]).unwrap();
+        run_git(worktree, &["commit", "-m", msg]).unwrap();
+    }
+
+    /// The transaction-safety contract of EXPORT PATCH: commits touching only
+    /// `ForgeQL` runtime files (transaction checkpoints) produce no patch, and
+    /// commits mixing source with runtime files export only the source part.
+    #[test]
+    fn export_patches_excludes_runtime_files_and_checkpoint_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let _repo = make_normal_repo(dir.path());
+
+        std::fs::write(dir.path().join("file.cpp"), b"int main(){return 1;}\n").unwrap();
+        raw_commit_all(dir.path(), "user change 1");
+
+        // Checkpoint-style commit: runtime files only (top-level and nested).
+        std::fs::write(dir.path().join(".forgeql-index"), b"idx").unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/.forgeql-columnar-delta"), b"d").unwrap();
+        raw_commit_all(dir.path(), "forgeql: checkpoint 'txn'");
+
+        // Mixed commit: source + runtime file in one commit.
+        std::fs::write(dir.path().join("file.cpp"), b"int main(){return 2;}\n").unwrap();
+        std::fs::write(dir.path().join(".forgeql-index"), b"idx2").unwrap();
+        raw_commit_all(dir.path(), "user change 2");
+
+        // Explicit range (the session merge-base..HEAD form): 3 commits in
+        // range, the checkpoint-only one drops out of the series entirely.
+        let files = export_patches(dir.path(), &["HEAD~3..HEAD".to_string()]).unwrap();
+        assert_eq!(
+            files.len(),
+            2,
+            "checkpoint-only commit must produce no patch"
+        );
+        for f in &files {
+            assert!(f.bytes > 0);
+            assert_eq!(f.sha256.len(), 64, "sha256 hex digest");
+            let text = std::fs::read_to_string(&f.path).unwrap();
+            assert!(
+                !text.contains(".forgeql-"),
+                "runtime files leaked into {}",
+                f.path.display()
+            );
+        }
+
+        // `-<n>` counts pathspec-matching commits, so LAST n means the last
+        // n commits that touched source — checkpoints never consume the
+        // count. -1 therefore yields the mixed commit's source part.
+        let last = export_patches(dir.path(), &["-1".to_string(), "HEAD".to_string()]).unwrap();
+        assert_eq!(last.len(), 1);
+        let text = std::fs::read_to_string(&last[0].path).unwrap();
+        assert!(text.contains("user change 2"));
+        assert!(!text.contains(".forgeql-"));
+
+        // Re-running cleared the directory instead of accumulating series.
+        let on_disk = std::fs::read_dir(dir.path().join(PATCHES_DIR_NAME))
+            .unwrap()
+            .count();
+        assert_eq!(on_disk, 1, "stale patches from earlier exports removed");
+    }
+
+    /// Range helpers and the uncommitted-changes probe used by EXPORT PATCH.
+    #[test]
+    fn export_patch_range_helpers_and_dirty_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let _repo = make_normal_repo(dir.path());
+        run_git(dir.path(), &["branch", "base"]).unwrap();
+
+        assert_eq!(uncommitted_source_changes(dir.path()).unwrap(), 0);
+
+        // Runtime-only dirt is invisible to the probe; source dirt counts.
+        std::fs::write(dir.path().join(".forgeql-session"), b"s").unwrap();
+        assert_eq!(uncommitted_source_changes(dir.path()).unwrap(), 0);
+        std::fs::write(dir.path().join("new.cpp"), b"int x;\n").unwrap();
+        assert_eq!(uncommitted_source_changes(dir.path()).unwrap(), 1);
+
+        // No commits over the base branch: merge-base == HEAD.
+        let mb = merge_base_with(dir.path(), "base").unwrap();
+        let head = head_oid_of(dir.path()).unwrap();
+        assert_eq!(mb, head);
+
+        // One commit later the range opens up.
+        raw_commit_all(dir.path(), "work");
+        let mb2 = merge_base_with(dir.path(), "base").unwrap();
+        assert_eq!(mb2, mb, "merge-base stays at the fork point");
+        assert_ne!(head_oid_of(dir.path()).unwrap(), mb2);
     }
 }

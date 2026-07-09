@@ -545,4 +545,88 @@ impl ForgeQLEngine {
             summary_direction: summary.direction,
         }))
     }
+
+    /// `EXPORT PATCH [LAST n]` — write the session's commits as
+    /// `git am`-ready mbox files and return them (paths, sizes, sha256,
+    /// inline content).
+    ///
+    /// The range is engine-computed: `LAST n` exports the last n commits on
+    /// the session branch; without it, everything the session added over its
+    /// base branch (merge-base..HEAD). `ForgeQL` runtime files are excluded
+    /// from every patch (see [`git::export_patches`]), so transaction
+    /// checkpoint commits drop out of the series and the export is safe to
+    /// run mid-transaction. Uncommitted worktree changes are commit-less and
+    /// therefore never exported — surfaced as a hint instead.
+    pub(super) fn exec_export_patch(
+        &self,
+        session_id: Option<&str>,
+        last: Option<usize>,
+    ) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let session = self.require_session(sid)?;
+        let worktree = session.worktree_path.clone();
+        let base_branch = session.branch.clone();
+
+        let (range_args, range) = match last {
+            Some(0) => anyhow::bail!(
+                "EXPORT PATCH LAST 0: nothing to export — LAST takes a positive commit count"
+            ),
+            Some(n) => (
+                vec![format!("-{n}"), "HEAD".to_string()],
+                format!("last {n} commit(s)"),
+            ),
+            None => {
+                let base = git::merge_base_with(&worktree, &base_branch)?;
+                let head = git::head_oid_of(&worktree)?;
+                if base == head {
+                    anyhow::bail!(
+                        "nothing to export: the session branch has no commits over \
+                         '{base_branch}' — run COMMIT first, or use EXPORT PATCH LAST n \
+                         to export existing branch commits"
+                    );
+                }
+                let short = base.get(..12).unwrap_or(&base);
+                (vec![format!("{base}..HEAD")], format!("{short}..HEAD"))
+            }
+        };
+
+        let files = git::export_patches(&worktree, &range_args)?;
+        let mut content = String::new();
+        for f in &files {
+            content.push_str(&std::fs::read_to_string(&f.path)?);
+        }
+
+        let mut hints: Vec<String> = Vec::new();
+        if files.is_empty() {
+            hints.push(
+                "no patches produced: every commit in the range touched only \
+                 ForgeQL runtime files (e.g. transaction checkpoints)"
+                    .to_string(),
+            );
+        }
+        match git::uncommitted_source_changes(&worktree) {
+            Ok(0) => {}
+            Ok(n) => hints.push(format!(
+                "{n} uncommitted change(s) in the worktree are not part of any \
+                 commit and were not exported"
+            )),
+            Err(e) => warn!("EXPORT PATCH: could not check worktree status: {e}"),
+        }
+
+        Ok(ForgeQLResult::ExportPatch(
+            crate::result::ExportPatchResult {
+                range,
+                files: files
+                    .into_iter()
+                    .map(|f| crate::result::PatchFileEntry {
+                        path: f.path,
+                        bytes: f.bytes,
+                        sha256: f.sha256,
+                    })
+                    .collect(),
+                content,
+                hint: (!hints.is_empty()).then(|| hints.join("; ")),
+            },
+        ))
+    }
 }

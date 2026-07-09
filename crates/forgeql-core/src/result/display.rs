@@ -21,6 +21,27 @@ impl fmt::Display for ForgeQLResult {
             Self::Rollback(result) => write!(formatter, "{result}"),
             Self::VerifyBuild(result) => write!(formatter, "{result}"),
             Self::Run(result) => write!(formatter, "{result}"),
+            Self::ExportPatch(r) => {
+                writeln!(
+                    formatter,
+                    "export_patch {} — {} file(s)",
+                    r.range,
+                    r.files.len()
+                )?;
+                for f in &r.files {
+                    writeln!(
+                        formatter,
+                        "  {} ({} bytes, sha256 {})",
+                        f.path.display(),
+                        f.bytes,
+                        f.sha256
+                    )?;
+                }
+                if let Some(hint) = &r.hint {
+                    writeln!(formatter, "  hint: {hint}")?;
+                }
+                write!(formatter, "{}", r.content)
+            }
             Self::FindNode(r) => write!(
                 formatter,
                 "find_node {}\n  {} {} {}:{}-{} rev={}",
