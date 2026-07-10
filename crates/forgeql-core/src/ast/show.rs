@@ -270,9 +270,11 @@ pub(super) fn find_type_node_by_name<'t>(
         source: &[u8],
         name: &str,
         type_kinds: &[String],
+        require_body: bool,
     ) -> Option<tree_sitter::Node<'t>> {
         let node = cursor.node();
         if type_kinds.iter().any(|s| s == node.kind())
+            && (!require_body || node.child_by_field_name("body").is_some())
             && let Some(name_node) = node.child_by_field_name("name")
         {
             let node_name = std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("");
@@ -282,7 +284,7 @@ pub(super) fn find_type_node_by_name<'t>(
         }
         if cursor.goto_first_child() {
             loop {
-                if let Some(found) = walk(cursor, source, name, type_kinds) {
+                if let Some(found) = walk(cursor, source, name, type_kinds, require_body) {
                     while cursor.goto_parent() {}
                     return Some(found);
                 }
@@ -295,8 +297,16 @@ pub(super) fn find_type_node_by_name<'t>(
         None
     }
 
+    // Prefer the definition (a matching type node that actually has a body)
+    // over a bodyless forward declaration or type reference of the same name,
+    // so `SHOW members` reads the members even when a reference is visited
+    // before the definition in the file.
+    let type_kinds = config.type_kinds();
     let mut cursor = root.walk();
-    walk(&mut cursor, source, name, config.type_kinds())
+    walk(&mut cursor, source, name, type_kinds, true).or_else(|| {
+        let mut cursor = root.walk();
+        walk(&mut cursor, source, name, type_kinds, false)
+    })
 }
 
 /// Recursively collect the byte ranges of block nodes that

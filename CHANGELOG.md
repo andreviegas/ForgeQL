@@ -5,6 +5,28 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.105.0] — 2026-07-10 — fix(c/c++): SHOW members resolves struct/union definitions
+
+### Fixed
+
+- `SHOW members OF '<type>'` returned nothing for many C and C++ structs and
+  unions. A `struct Foo` used only as a type reference (`struct Foo *p;`, a
+  function parameter or return type) or written as a forward declaration
+  (`struct Foo;`) was indexed as its own `struct`/`union`/`enum` symbol, even
+  though it has no body and no members. When a type was referenced in more
+  files (or later in the same file) than it was defined, symbol resolution
+  could land on one of these bodyless references, so `SHOW members` — and any
+  lookup that resolves a type by name — saw an empty body. References and
+  forward declarations of `struct`/`class`/`union`/`enum` are no longer
+  indexed as type symbols: only the definition, which carries the members, is.
+  As a result `SHOW members` and type resolution always reach the definition.
+- Independently, when a bodyless reference to a type appeared before its
+  definition within the same file, the member lookup walked to the reference
+  first and stopped there. The lookup now prefers the definition (the matching
+  node that actually has a body) over a bodyless reference of the same name.
+- Bumped `ENRICH_VER` 25 → 26 (`storage/columnar/mod.rs`): dropping the
+  reference rows changes index output, so cached per-file segments and
+  overlays are rebuilt on next use instead of being reused with the old rows.
 ## [0.104.0] — 2026-07-09 — feat(cpp): index unions, typedef aliases, and enum constants
 
 ### Fixed

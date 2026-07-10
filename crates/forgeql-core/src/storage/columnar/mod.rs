@@ -126,7 +126,13 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///          enum constants are now indexed as `union` / `type_alias` /
 ///          `enumerator` rows with node ids; v24 segments lack those rows, so
 ///          the bump forces a full re-index.
-pub const ENRICH_VER: u32 = 25;
+///  26 — C and C++ struct/class/union/enum *references* and forward
+///          declarations (`struct Foo *p;`, `struct Foo;`) are no longer
+///          indexed as type symbols — only the definition (which carries a
+///          body) is. This lets `SHOW members` and type resolution reach the
+///          definition instead of a bodyless reference; v25 segments carry
+///          the spurious reference rows.
+pub const ENRICH_VER: u32 = 26;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

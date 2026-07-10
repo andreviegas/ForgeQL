@@ -76,6 +76,17 @@ impl LanguageSupport for CppLanguage {
             return None;
         }
 
+        // A class/struct/union/enum reference or forward declaration
+        // (`struct Foo *p;`, `class Foo;`) exposes a `name` field but no
+        // `body`: it is a use, not a definition. Skip it so only the
+        // definition — which carries the members — is indexed under the name.
+        if matches!(
+            node.kind(),
+            "class_specifier" | "struct_specifier" | "union_specifier" | "enum_specifier"
+        ) && node.child_by_field_name("body").is_none()
+        {
+            return None;
+        }
         // Universal: most grammars expose a "name" field on definition nodes.
         if let Some(name_node) = node.child_by_field_name("name") {
             let text = node_text(source, name_node);

@@ -66,6 +66,17 @@ impl LanguageSupport for CLanguage {
     }
 
     fn extract_name(&self, node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+        // A struct/union/enum reference or forward declaration
+        // (`struct Foo *p;`, `struct Foo;`) exposes a `name` field but no
+        // `body`: it is a use, not a definition. Skip it so only the
+        // definition — which carries the members — is indexed under the name.
+        if matches!(
+            node.kind(),
+            "struct_specifier" | "union_specifier" | "enum_specifier"
+        ) && node.child_by_field_name("body").is_none()
+        {
+            return None;
+        }
         // Universal: most grammars expose a "name" field on definition nodes.
         if let Some(name_node) = node.child_by_field_name("name") {
             let text = node_text(source, name_node);

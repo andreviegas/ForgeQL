@@ -1,7 +1,7 @@
 [
   {
     "alias": "golden",
-    "expect_symbols_indexed": 3091863,
+    "expect_symbols_indexed": 2874572,
     "use": "zephyr-andre.zephyr-main"
   },
   {
@@ -147,11 +147,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"count": 869, "path": "kernel/mmu.c"},
-      {"count": 829, "path": "kernel/sched.c"},
-      {"count": 789, "path": "kernel/thread.c"},
-      {"count": 605, "path": "kernel/userspace.c"},
-      {"count": 604, "path": "kernel/work.c"}
+      {"count": 838, "path": "kernel/mmu.c"},
+      {"count": 762, "path": "kernel/sched.c"},
+      {"count": 752, "path": "kernel/thread.c"},
+      {"count": 535, "path": "kernel/userspace.c"},
+      {"count": 515, "path": "kernel/work.c"}
     ],
     "fql": "FIND symbols GROUP BY file IN 'kernel/**' ORDER BY count DESC LIMIT 5",
     "name": "G15_group_by_file_kernel_top5"
@@ -183,11 +183,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"count": 869, "path": "kernel/mmu.c"},
-      {"count": 829, "path": "kernel/sched.c"},
-      {"count": 789, "path": "kernel/thread.c"},
-      {"count": 605, "path": "kernel/userspace.c"},
-      {"count": 604, "path": "kernel/work.c"}
+      {"count": 838, "path": "kernel/mmu.c"},
+      {"count": 762, "path": "kernel/sched.c"},
+      {"count": 752, "path": "kernel/thread.c"},
+      {"count": 535, "path": "kernel/userspace.c"},
+      {"count": 515, "path": "kernel/work.c"}
     ],
     "fql": "FIND symbols GROUP BY file IN 'kernel/**' HAVING count >= 500 ORDER BY count DESC",
     "name": "G18_group_by_file_kernel_having_500"
@@ -243,8 +243,8 @@
       {"count": 294914, "kind": "macro_call"},
       {"count": 282718, "kind": "comment"},
       {"count": 254241, "kind": "macro"},
-      {"count": 214108, "kind": "struct"},
-      {"count": 165057, "kind": "if"}
+      {"count": 165057, "kind": "if"},
+      {"count": 124816, "kind": "pair"}
     ],
     "fql": "FIND symbols GROUP BY fql_kind ORDER BY count DESC LIMIT 7",
     "name": "G23_group_by_kind_whole_repo_top7"
@@ -254,23 +254,23 @@
     "expect_rows": [
       {"count": 168599, "kind": "variable"},
       {"count": 150135, "kind": "number"},
-      {"count": 96900,  "kind": "struct"},
       {"count": 85781,  "kind": "macro_call"},
-      {"count": 82733,  "kind": "comment"}
+      {"count": 82733,  "kind": "comment"},
+      {"count": 70989,  "kind": "if"}
     ],
     "fql": "FIND symbols GROUP BY fql_kind IN 'drivers/**' ORDER BY count DESC LIMIT 5",
     "name": "G24_group_by_kind_drivers_top5"
   },
   {
-    "expect_row_count": 11,
+    "expect_row_count": 10,
     "expect_rows": [
       {"count": 2541, "kind": "variable"},
       {"count": 1591, "kind": "comment"},
       {"count": 1569, "kind": "macro_call"},
-      {"count": 1004, "kind": "struct"},
       {"count": 825,  "kind": "function"},
       {"count": 784,  "kind": "number"},
-      {"count": 761,  "kind": "if"}
+      {"count": 761,  "kind": "if"},
+      {"count": 558,  "kind": "import"}
     ],
     "fql": "FIND symbols GROUP BY fql_kind IN 'kernel/**' HAVING count >= 100 ORDER BY count DESC",
     "name": "G25_group_by_kind_kernel_having_100"
@@ -315,8 +315,8 @@
       {"line": 67,  "name": "__basic_sf",       "path": "include/zephyr/arch/arm/cortex_a_r/exception.h"},
       {"line": 113, "name": "__basic_sf",       "path": "include/zephyr/arch/arm/cortex_m/exception.h"},
       {"line": 89,  "name": "__cpu_context",    "path": "include/zephyr/arch/arm/cortex_m/cpu.h"},
-      {"line": 109, "name": "__cpu_context",    "path": "include/zephyr/arch/arm/cortex_m/cpu.h"},
-      {"line": 50,  "name": "__extra_esf_info", "path": "include/zephyr/arch/arm/cortex_a_r/exception.h"}
+      {"line": 50,  "name": "__extra_esf_info", "path": "include/zephyr/arch/arm/cortex_a_r/exception.h"},
+      {"line": 99,  "name": "__extra_esf_info", "path": "include/zephyr/arch/arm/cortex_m/exception.h"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'struct' IN 'include/zephyr/**' ORDER BY name ASC LIMIT 5",
     "name": "G29_structs_in_include_zephyr_name_asc"
@@ -542,9 +542,9 @@
   {
     "expect_row_count": 3,
     "expect_rows": [
-      {"line": 25,  "name": "AccessManager", "path": "modules/thrift/src/thrift/transport/TSSLSocket.h"},
-      {"line": 390, "name": "AccessManager", "path": "modules/thrift/src/thrift/transport/TSSLSocket.h"},
-      {"line": 70,  "name": "AddedProperty", "path": "scripts/release/list_devicetree_bindings_changes.py"}
+      {"line": 390,  "name": "AccessManager", "path": "modules/thrift/src/thrift/transport/TSSLSocket.h"},
+      {"line": 70,   "name": "AddedProperty", "path": "scripts/release/list_devicetree_bindings_changes.py"},
+      {"line": 1320, "name": "Address",       "path": "modules/hal_nordic/ironside/se/scripts/periphconf/builder.py"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'class' ORDER BY name ASC LIMIT 3",
     "name": "GST5_class_alphabetical_asc_limit3"
@@ -588,11 +588,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"count": 43, "path": "include/zephyr/drivers/modem/hl78xx_apis.h"},
-      {"count": 35, "path": "include/zephyr/drivers/usb_c/usbc_tcpc.h"},
-      {"count": 33, "path": "include/zephyr/drivers/mspi.h"},
-      {"count": 29, "path": "include/zephyr/drivers/espi.h"},
-      {"count": 27, "path": "include/zephyr/drivers/sensor.h"}
+      {"count": 15, "path": "include/zephyr/drivers/modem/hl78xx_apis.h"},
+      {"count": 15, "path": "include/zephyr/drivers/mspi.h"},
+      {"count": 12, "path": "include/zephyr/drivers/modem/hl7800.h"},
+      {"count": 10, "path": "include/zephyr/drivers/misc/max2221x/max2221x.h"},
+      {"count": 10, "path": "include/zephyr/drivers/usb_c/usbc_tc.h"}
     ],
     "fql": "FIND symbols WHERE fql_kind = 'enum' IN 'include/zephyr/drivers/**' GROUP BY file ORDER BY count DESC LIMIT 5",
     "name": "GST9_enum_group_by_file_zephyr_drivers_limit5"
@@ -1372,6 +1372,26 @@
     "name": "GSMB1_show_members_cpu_start_cb"
   },
   {
+    "expect_row_count": 5,
+    "expect_rows": [
+      {"fql_kind": "field", "line": 44, "text": "ACPI_DEVICE_INFO *dev_info"},
+      {"fql_kind": "field", "line": 40, "text": "ACPI_HANDLE handle"},
+      {"fql_kind": "field", "line": 42, "text": "ACPI_RESOURCE *res_lst"},
+      {"fql_kind": "field", "line": 41, "text": "char *path"},
+      {"fql_kind": "field", "line": 43, "text": "int res_type"}
+    ],
+    "fql": "SHOW members OF 'acpi_dev'",
+    "name": "GSMB2_show_members_acpi_dev_resolves_definition_over_reference"
+  },
+  {
+    "expect_row_count": 1,
+    "expect_rows": [
+      {"line": 39, "name": "acpi_dev", "path": "include/zephyr/acpi/acpi.h"}
+    ],
+    "fql": "FIND symbols WHERE fql_kind = 'struct' WHERE name = 'acpi_dev'",
+    "name": "GSTREF1_struct_acpi_dev_indexed_once_not_its_references"
+  },
+  {
     "fql": "SHOW signature OF 'k_sys_work_q_init'",
     "name": "GSS1_show_signature_k_sys_work_q_init_smoke"
   },
@@ -1469,8 +1489,8 @@
   {
     "expect_row_count": 2,
     "expect_rows": [
-      {"line": 22, "name": "(a>b)", "node_id": "nd8d2f5532cd6.0015"},
-      {"line": 24, "name": "(a<b)", "node_id": "nd8d2f5532cd6.0016"}
+      {"line": 22, "name": "(a>b)", "node_id": "nd8d2f5532cd6.0012"},
+      {"line": 24, "name": "(a<b)", "node_id": "nd8d2f5532cd6.0013"}
     ],
     "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'if' ORDER BY line ASC",
     "name": "NID02_if_rows_are_addressable_and_have_node_id"
@@ -1506,8 +1526,8 @@
   {
     "expect_row_count": 2,
     "expect_rows": [
-      {"line": 23, "name": "(a>b)", "node_id": "nd8d2f5532cd6.0015"},
-      {"line": 25, "name": "(a<b)", "node_id": "nd8d2f5532cd6.0016"}
+      {"line": 23, "name": "(a>b)", "node_id": "nd8d2f5532cd6.0012"},
+      {"line": 25, "name": "(a<b)", "node_id": "nd8d2f5532cd6.0013"}
     ],
     "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'if' ORDER BY line ASC",
     "name": "NID08_if_node_ids_survive_line_drift"
@@ -1953,37 +1973,37 @@
   {
     "expect_field": {"type":"find_node"},
     "expect_pointer": {"/fql_kind":"function","/line":51,"/name":"thread_runq","/path":"kernel/sched.c"},
-    "fql": "FIND NODE 'n097e974b9c6e.0035'",
+    "fql": "FIND NODE 'n097e974b9c6e.0031'",
     "name": "FN01_find_node_function_thread_runq"
   },
   {
     "expect_field": {"type":"find_node"},
-    "expect_pointer": {"/fql_kind":"function","/line":71,"/name":"curr_cpu_runq","/node_id":"n097e974b9c6e.0042","/path":"kernel/sched.c"},
-    "fql": "FIND NODE 'n097e974b9c6e.0042'",
+    "expect_pointer": {"/fql_kind":"function","/line":71,"/name":"curr_cpu_runq","/node_id":"n097e974b9c6e.0037","/path":"kernel/sched.c"},
+    "fql": "FIND NODE 'n097e974b9c6e.0037'",
     "name": "FN02_find_node_node_id_roundtrip"
   },
   {
     "expect_field": {"type":"find_node"},
     "expect_pointer": {"/fql_kind":"function","/line":80,"/name":"runq_add","/path":"kernel/sched.c"},
-    "fql": "FIND NODE 'n097e974b9c6e.0044'",
+    "fql": "FIND NODE 'n097e974b9c6e.0039'",
     "name": "FN03_find_node_runq_add"
   },
   {
     "expect_field": {"type":"find_node"},
-    "expect_pointer": {"/fql_kind":"field","/line":3525,"/name":"k_mutex_lock","/node_id":"n6050e1e382ae.0833","/path":"include/zephyr/kernel.h"},
-    "fql": "FIND NODE 'n6050e1e382ae.0833'",
+    "expect_pointer": {"/fql_kind":"field","/line":3525,"/name":"k_mutex_lock","/node_id":"n6050e1e382ae.0718","/path":"include/zephyr/kernel.h"},
+    "fql": "FIND NODE 'n6050e1e382ae.0718'",
     "name": "FN04_find_node_field_k_mutex_lock"
   },
   {
     "expect_field": {"type":"find_node"},
     "expect_pointer": {"/fql_kind":"function","/line":1111,"/name":"z_impl___ztest_set_test_result","/path":"subsys/testsuite/ztest/src/ztest.c"},
-    "fql": "FIND NODE 'nb603fcd516ee.0465'",
+    "fql": "FIND NODE 'nb603fcd516ee.0421'",
     "name": "FN05_find_node_ztest_function"
   },
   {
     "expect_field": {"type":"find_node"},
-    "expect_pointer": {"/name":"thread_runq","/node_id":"n097e974b9c6e.0035"},
-    "fql": "FIND NODE 'n097e974b9c6e.0035'",
+    "expect_pointer": {"/name":"thread_runq","/node_id":"n097e974b9c6e.0031"},
+    "fql": "FIND NODE 'n097e974b9c6e.0031'",
     "name": "FN06_find_node_id_in_response"
   },
   {
@@ -1995,7 +2015,7 @@
     "name": "FN07_find_symbols_returns_node_id_in_results"
   },
   {
-    "expect_pointer": {"/content/entries/0/name":"thread_runq","/content/entries/0/node_id":"n097e974b9c6e.0035"},
+    "expect_pointer": {"/content/entries/0/name":"thread_runq","/content/entries/0/node_id":"n097e974b9c6e.0031"},
     "fql": "SHOW outline OF 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq'",
     "name": "FN08_show_outline_node_id_present"
   },
@@ -2014,13 +2034,13 @@
   {
     "expect_field": {"type":"find_node"},
     "expect_pointer": {"/end_line":69,"/line":51},
-    "fql": "FIND NODE 'n097e974b9c6e.0035'",
+    "fql": "FIND NODE 'n097e974b9c6e.0031'",
     "name": "FCN01_find_node_returns_end_line"
   },
   {
     "expect_field": {"type":"find_node"},
     "expect_pointer": {"/end_line":78,"/line":71},
-    "fql": "FIND NODE 'n097e974b9c6e.0042'",
+    "fql": "FIND NODE 'n097e974b9c6e.0037'",
     "name": "FCN02_find_node_end_line_curr_cpu_runq"
   },
   {
@@ -2030,7 +2050,7 @@
   },
   {
     "expect_field": {"applied":true,"type":"mutation"},
-    "fql": "CHANGE NODE 'n097e974b9c6e.0035' WITH <<C\nstatic void thread_runq_golden(void) {}\nC",
+    "fql": "CHANGE NODE 'n097e974b9c6e.0031' WITH <<C\nstatic void thread_runq_golden(void) {}\nC",
     "name": "FCN04_change_node_returns_mutation"
   },
   {
@@ -2055,7 +2075,7 @@
   },
   {
     "expect_field": {"applied":true,"type":"mutation"},
-    "fql": "DELETE NODE 'n097e974b9c6e.0044'",
+    "fql": "DELETE NODE 'n097e974b9c6e.0039'",
     "name": "FCN09_delete_node_returns_mutation"
   },
   {
@@ -2080,7 +2100,7 @@
   },
   {
     "expect_field": {"applied":true,"type":"mutation"},
-    "fql": "INSERT BEFORE NODE 'n097e974b9c6e.0042' WITH '/* fcn14 before curr_cpu_runq */'",
+    "fql": "INSERT BEFORE NODE 'n097e974b9c6e.0037' WITH '/* fcn14 before curr_cpu_runq */'",
     "name": "FCN14_insert_before_node_returns_mutation"
   },
   {
@@ -2103,7 +2123,7 @@
   },
   {
     "expect_field": {"applied":true,"type":"mutation"},
-    "fql": "INSERT AFTER NODE 'n097e974b9c6e.0042' WITH '/* fcn18 after curr_cpu_runq */'",
+    "fql": "INSERT AFTER NODE 'n097e974b9c6e.0037' WITH '/* fcn18 after curr_cpu_runq */'",
     "name": "FCN18_insert_after_node_returns_mutation"
   },
   {
@@ -2127,7 +2147,7 @@
   {
     "expect_field": {"type":"find_node"},
     "expect_pointer": {"/end_line":69,"/line":51},
-    "fql": "FIND NODE 'n097e974b9c6e.0035'",
+    "fql": "FIND NODE 'n097e974b9c6e.0031'",
     "name": "FSD00_find_node_csv_includes_end_line"
   },
   {
@@ -2135,7 +2155,7 @@
     "expect_lines": [
       {"line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"}
     ],
-    "fql": "SHOW NODE 'n097e974b9c6e.0035'",
+    "fql": "SHOW NODE 'n097e974b9c6e.0031'",
     "name": "FSD01_show_node_default_returns_source_lines"
   },
   {
@@ -2143,13 +2163,13 @@
     "expect_lines": [
       {"line": 71, "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)"}
     ],
-    "fql": "SHOW NODE 'n097e974b9c6e.0042' CONTENT",
+    "fql": "SHOW NODE 'n097e974b9c6e.0037' CONTENT",
     "name": "FSD02_show_node_content_explicit_keyword"
   },
   {
     "expect_field": {"type":"find_node"},
     "expect_pointer": {"/end_line":69,"/fql_kind":"function","/line":51,"/name":"thread_runq"},
-    "fql": "SHOW NODE 'n097e974b9c6e.0035' METADATA",
+    "fql": "SHOW NODE 'n097e974b9c6e.0031' METADATA",
     "name": "FSD03_show_node_metadata_returns_find_node_result"
   },
   {
@@ -2157,7 +2177,7 @@
     "expect_lines": [
       {"line": 66, "text": "\tARG_UNUSED(thread);"}
     ],
-    "fql": "SHOW NODE 'n097e974b9c6e.0035' WHERE text LIKE '%ARG_UNUSED%'",
+    "fql": "SHOW NODE 'n097e974b9c6e.0031' WHERE text LIKE '%ARG_UNUSED%'",
     "name": "FSD04_show_node_where_filter_on_source_lines"
   },
   {
@@ -2167,8 +2187,8 @@
   },
   {
     "expect_field": {"applied":true,"type":"mutation"},
-    "expect_pointer": {"/new_node_id":"n097e974b9c6e.0035"},
-    "fql": "CHANGE NODE 'n097e974b9c6e.0035' WITH 'static ALWAYS_INLINE void *thread_runq(struct k_thread *t) { return NULL; }'",
+    "expect_pointer": {"/new_node_id":"n097e974b9c6e.0031"},
+    "fql": "CHANGE NODE 'n097e974b9c6e.0031' WITH 'static ALWAYS_INLINE void *thread_runq(struct k_thread *t) { return NULL; }'",
     "name": "FE02_change_node_response_includes_new_node_id"
   },
   {
@@ -2184,7 +2204,7 @@
   {
     "expect_field": {"applied":true,"type":"mutation"},
     "expect_field_contains": {"new_node_id":"n097e974b9c6e"},
-    "fql": "INSERT AFTER NODE 'n097e974b9c6e.0042' WITH 'static void phe05_test(void) {}'",
+    "fql": "INSERT AFTER NODE 'n097e974b9c6e.0037' WITH 'static void phe05_test(void) {}'",
     "name": "FE05_insert_after_node_includes_new_node_id"
   },
   {
@@ -2209,7 +2229,7 @@
   },
   {
     "expect_field": {"applied":true,"type":"mutation"},
-    "fql": "CHANGE NODE 'n097e974b9c6e.0035' WITH 'static ALWAYS_INLINE void *thread_runq(struct k_thread *thread) { ARG_UNUSED(thread); return &_kernel.ready_q.runq; }'",
+    "fql": "CHANGE NODE 'n097e974b9c6e.0031' WITH 'static ALWAYS_INLINE void *thread_runq(struct k_thread *thread) { ARG_UNUSED(thread); return &_kernel.ready_q.runq; }'",
     "name": "FF02_change_thread_runq_removes_internal_indexed_nodes"
   },
   {
@@ -2219,7 +2239,7 @@
   },
   {
     "expect_field": {"applied":true,"type":"mutation"},
-    "fql": "CHANGE NODE 'n097e974b9c6e.0044' WITH 'static ALWAYS_INLINE void runq_add(struct k_thread *thread) { _priq_run_add(thread_runq(thread), thread); }'",
+    "fql": "CHANGE NODE 'n097e974b9c6e.0039' WITH 'static ALWAYS_INLINE void runq_add(struct k_thread *thread) { _priq_run_add(thread_runq(thread), thread); }'",
     "name": "FF04_change_runq_add_in_same_transaction_after_ordinal_shift"
   },
   {
@@ -2239,7 +2259,7 @@
   },
   {
     "alias": "golden-python",
-    "expect_symbols_indexed": 3119431,
+    "expect_symbols_indexed": 3116476,
     "use": "pytorch-andre.pytorch-frozen"
   },
   {
