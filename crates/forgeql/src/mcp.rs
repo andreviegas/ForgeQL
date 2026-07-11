@@ -424,10 +424,12 @@ impl ForgeQlMcp {
         for (_, op) in &ops {
             if matches!(
                 op,
-                ForgeQLIR::CreateSource { .. } | ForgeQLIR::RefreshSource { .. }
+                ForgeQLIR::CreateSource { .. }
+                    | ForgeQLIR::RefreshSource { .. }
+                    | ForgeQLIR::Vacuum { .. }
             ) {
                 return Err(ErrorData::invalid_params(
-                    "CREATE SOURCE and REFRESH SOURCE are not permitted via MCP. \
+                    "CREATE SOURCE, REFRESH SOURCE, and VACUUM are not permitted via MCP. \
                      Sources are managed by the server administrator. \
                      Use USE to connect to an existing source.",
                     None,

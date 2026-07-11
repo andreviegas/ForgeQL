@@ -144,6 +144,178 @@ impl ForgeQLEngine {
         }))
     }
 
+    /// `VACUUM [SOURCE 'name'] [KEEP n] [ALL] [APPLY]` — reclaim disk space by
+    /// removing stale columnar cache version directories. See [`ForgeQLIR::Vacuum`].
+    ///
+    /// Previews by default: every in-scope `<provider>-v<N>` directory is
+    /// reported with an `action` of `keep` or `delete` and nothing is removed.
+    /// Pass `apply = true` to delete the selected directories. `source = None`
+    /// scans every registered source. Classification ignores the provider prefix
+    /// and keys purely on `<N>` versus `ENRICH_VER` (see [`gc`]).
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn vacuum(
+        &self,
+        source: Option<&str>,
+        keep: usize,
+        all: bool,
+        apply: bool,
+    ) -> Result<ForgeQLResult> {
+        use crate::storage::columnar::gc;
+        use std::fmt::Write as _;
+
+        #[allow(clippy::cast_precision_loss)]
+        fn human_bytes(bytes: u64) -> String {
+            const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+            let mut val = bytes as f64;
+            let mut unit = 0;
+            while val >= 1024.0 && unit < UNITS.len() - 1 {
+                val /= 1024.0;
+                unit += 1;
+            }
+            if unit == 0 {
+                format!("{bytes} B")
+            } else {
+                format!("{val:.1} {}", UNITS[unit])
+            }
+        }
+
+        // Resolve the repositories to scan.
+        let names: Vec<String> = match source {
+            Some(name) => {
+                if self.registry.get(name).is_none() {
+                    anyhow::bail!("source '{name}' not found — run SHOW SOURCES to list sources");
+                }
+                vec![name.to_string()]
+            }
+            None => self
+                .registry
+                .names()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        };
+
+        let opts = gc::VacuumOptions { keep, all };
+        let mut rows: Vec<SymbolMatch> = Vec::new();
+        let mut delete_count = 0usize;
+        let mut delete_bytes = 0u64;
+        let mut errors = 0usize;
+
+        for name in &names {
+            let Some(src) = self.registry.get(name) else {
+                continue;
+            };
+            let forgeql = src.path().join("forgeql");
+
+            // Both cache roots share one plan so KEEP/version rules apply per repo.
+            let mut dirs = gc::scan_cache_root(&forgeql.join("overlays"));
+            dirs.extend(gc::scan_cache_root(&forgeql.join("segments")));
+            if dirs.is_empty() {
+                continue;
+            }
+
+            let to_delete: std::collections::HashSet<usize> =
+                gc::plan_deletions(&dirs, opts).into_iter().collect();
+
+            for (i, d) in dirs.iter().enumerate() {
+                let selected = to_delete.contains(&i);
+                let mut action = if selected { "delete" } else { "keep" };
+                if selected {
+                    if apply {
+                        match std::fs::remove_dir_all(&d.path) {
+                            Ok(()) => {
+                                delete_count += 1;
+                                delete_bytes += d.size_bytes;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    path = %d.path.display(),
+                                    error = %e,
+                                    "vacuum: failed to remove version dir"
+                                );
+                                action = "error";
+                                errors += 1;
+                            }
+                        }
+                    } else {
+                        delete_count += 1;
+                        delete_bytes += d.size_bytes;
+                    }
+                }
+
+                let class = match d.class {
+                    gc::VersionClass::Current => "current",
+                    gc::VersionClass::Newer => "newer",
+                    gc::VersionClass::Older => "older",
+                };
+                let fields = std::collections::HashMap::from([
+                    ("source".to_string(), name.clone()),
+                    ("version".to_string(), d.version.to_string()),
+                    ("class".to_string(), class.to_string()),
+                    ("action".to_string(), action.to_string()),
+                    ("size".to_string(), human_bytes(d.size_bytes)),
+                    ("bytes".to_string(), d.size_bytes.to_string()),
+                ]);
+                rows.push(SymbolMatch {
+                    name: d.name.clone(),
+                    node_kind: Some("cache_version".to_string()),
+                    fql_kind: Some(action.to_string()),
+                    language: None,
+                    path: Some(d.path.clone()),
+                    line: None,
+                    usages_count: Some(usize::try_from(d.size_bytes).unwrap_or(usize::MAX)),
+                    fields,
+                    count: None,
+                    node_id: None,
+                });
+            }
+        }
+
+        // Deletions first, then by source and version, for a stable report.
+        rows.sort_by(|a, b| {
+            let key = |m: &SymbolMatch| {
+                (
+                    m.fields.get("action").map(String::as_str) != Some("delete"),
+                    m.fields.get("source").cloned().unwrap_or_default(),
+                    m.name.clone(),
+                )
+            };
+            key(a).cmp(&key(b))
+        });
+
+        let total = rows.len();
+        // Cap the per-directory rows like any FIND query: the actionable totals
+        // (count + reclaimable bytes) ride in `hint`, and keeping `total` at the
+        // full count makes `total > results.len()` signal that more rows exist.
+        rows.truncate(crate::engine::DEFAULT_QUERY_LIMIT);
+        let hint = Some(if apply {
+            let mut msg = format!(
+                "vacuum applied: removed {delete_count} version dir(s), reclaimed {} across {} source(s)",
+                human_bytes(delete_bytes),
+                names.len()
+            );
+            if errors > 0 {
+                let _ = write!(msg, "; {errors} deletion error(s) — see logs");
+            }
+            msg
+        } else {
+            format!(
+                "vacuum preview: {delete_count} version dir(s) / {} would be deleted across {} source(s). Add APPLY to execute.",
+                human_bytes(delete_bytes),
+                names.len()
+            )
+        });
+
+        Ok(ForgeQLResult::Query(QueryResult {
+            op: "vacuum".to_string(),
+            results: rows,
+            total,
+            metric_hint: Some("size_bytes".to_string()),
+            group_by_field: None,
+            hint,
+        }))
+    }
+
     /// `USE source.branch [AS 'custom-branch']` — create or resume a session.
     #[allow(clippy::too_many_lines)]
     pub(super) fn use_source(

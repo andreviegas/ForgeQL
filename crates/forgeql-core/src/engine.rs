@@ -379,6 +379,12 @@ impl ForgeQLEngine {
             // --- Source / session management ---
             ForgeQLIR::CreateSource { name, url } => self.create_source(name, url),
             ForgeQLIR::RefreshSource { name } => self.refresh_source(name),
+            ForgeQLIR::Vacuum {
+                source,
+                keep,
+                all,
+                apply,
+            } => self.vacuum(source.as_deref(), *keep, *all, *apply),
             ForgeQLIR::UseSource {
                 source,
                 branch,
@@ -447,6 +453,7 @@ impl ForgeQLEngine {
             op,
             ForgeQLIR::CreateSource { .. }
                 | ForgeQLIR::RefreshSource { .. }
+                | ForgeQLIR::Vacuum { .. }
                 | ForgeQLIR::ShowSources
                 | ForgeQLIR::ShowBranches
                 | ForgeQLIR::ShowStats { .. }

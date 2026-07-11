@@ -96,5 +96,22 @@ async fn main() -> Result<()> {
             runner::one_shot::run_one_shot(engine, &fql, session.as_deref(), logger, cli.format);
             Ok(())
         }
+        Mode::Gc {
+            source,
+            keep,
+            all,
+            yes,
+        } => {
+            runner::one_shot::run_gc(
+                engine,
+                source.as_deref(),
+                keep,
+                all,
+                yes,
+                logger,
+                cli.format,
+            );
+            Ok(())
+        }
     }
 }

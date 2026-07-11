@@ -2070,6 +2070,14 @@ fn parse_refresh_source() {
 }
 
 #[test]
+fn parse_vacuum() {
+    parser::parse("VACUUM").expect("parse VACUUM");
+    parser::parse("VACUUM APPLY").expect("parse VACUUM APPLY");
+    parser::parse("VACUUM ALL APPLY").expect("parse VACUUM ALL APPLY");
+    parser::parse("VACUUM SOURCE 'my-source' KEEP 2 APPLY").expect("parse VACUUM with all clauses");
+}
+
+#[test]
 fn parse_use_stmt_basic_without_as_is_error() {
     parser::parse("USE my-source.main").expect_err("USE without AS should be a parse error");
 }

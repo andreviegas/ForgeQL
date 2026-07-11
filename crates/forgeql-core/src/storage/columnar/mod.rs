@@ -35,6 +35,7 @@ pub mod build_context;
 pub mod columnar_storage;
 pub mod delta_file;
 pub mod dirty_overlay;
+pub mod gc;
 pub mod manifest;
 pub mod overlay;
 pub mod overlay_builder;

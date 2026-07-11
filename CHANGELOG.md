@@ -5,6 +5,32 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.106.0] — 2026-07-11 — feat(vacuum): VACUUM verb and `forgeql gc` to reclaim stale cache versions
+
+### Added
+
+- `VACUUM [SOURCE 'name'] [KEEP n] [ALL] [APPLY]` — a new admin-only statement
+  that reclaims disk space by deleting stale columnar cache version directories.
+  Each indexed repository accumulates `<provider>-v<N>` directories under
+  `forgeql/overlays/` and `forgeql/segments/` on every enrichment-version bump;
+  only the current version is live and the rest are dead weight that never got
+  cleaned up. VACUUM previews by default — it reports the in-scope version
+  directories grouped by whether each will be kept or deleted (with per-directory
+  sizes) plus a summary line carrying the count and total reclaimable bytes, and
+  removes nothing unless `APPLY` is given.
+  Classification keys purely on the parsed `<N>` versus the current enrichment
+  version, ignoring the provider prefix, so a future content-hashing scheme is
+  handled identically with no code change. By default only versions older than
+  the current one are removed; the current version and any newer ones (which
+  belong to a newer binary) are preserved. `KEEP n` retains the n newest older
+  versions, and `ALL` removes every version including the current one. With no
+  `SOURCE` the command spans every registered source.
+- `forgeql gc [--source NAME] [--keep N] [--all] [--yes]` — a CLI wrapper over
+  `VACUUM` that previews, prompts for confirmation, then applies. `VACUUM`
+  carries the same clearance as source management: it is rejected over the MCP
+  surface and requires an admin token over HTTP, exactly like `CREATE SOURCE`.
+
 ## [0.105.0] — 2026-07-10 — fix(c/c++): SHOW members resolves struct/union definitions
 
 ### Fixed

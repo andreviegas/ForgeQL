@@ -105,6 +105,7 @@ statement = {
   | undo_stmt
   | job_stmt
   | export_patch_stmt
+  | vacuum_stmt
 }
 
 /// FIND NODE id -- resolve a node_id to its current location, rev, and nav links.
@@ -139,6 +140,16 @@ show_node_mode = { "CONTENT" | "METADATA" }
 create_source_stmt  = { "CREATE" ~ "SOURCE" ~ string_literal ~ "FROM" ~ string_literal }
 refresh_source_stmt = { "REFRESH" ~ "SOURCE" ~ string_literal }
 
+/// `VACUUM [SOURCE 'name'] [KEEP n] [ALL] [APPLY]` — reclaim disk by deleting
+/// stale columnar cache version directories (`<provider>-v<N>` dirs whose N is
+/// older than the current ENRICH_VER). Preview by default; APPLY deletes. ALL
+/// includes the current and newer versions; KEEP n retains the n newest older
+/// versions; SOURCE scopes to one source (omitted = every source).
+vacuum_stmt   = { "VACUUM" ~ vacuum_source? ~ vacuum_keep? ~ vacuum_all? ~ vacuum_apply? }
+vacuum_source = { "SOURCE" ~ string_literal }
+vacuum_keep   = { "KEEP" ~ number }
+vacuum_all    = { "ALL" }
+vacuum_apply  = { "APPLY" }
 /// `USE pisco-code.main AS 'agent/refactor-signal-api'`
 /// Source names allow hyphens; AS target is string_literal to allow '/' in branch names.
 /// Note: AS 'branch-name' is MANDATORY — USE without AS is a parse error.

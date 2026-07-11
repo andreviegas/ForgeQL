@@ -232,6 +232,38 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
             Ok(ForgeQLIR::RefreshSource { name })
         }
 
+        Rule::vacuum_stmt => {
+            let mut source = None;
+            let mut keep = 0usize;
+            let mut all = false;
+            let mut apply = false;
+            for part in pair.into_inner() {
+                match part.as_rule() {
+                    Rule::vacuum_source => {
+                        let mut inner = part.into_inner();
+                        source = Some(next_str(&mut inner, "vacuum: expected source name")?);
+                    }
+                    Rule::vacuum_keep => {
+                        let n = part.into_inner().next().ok_or_else(|| {
+                            ForgeError::DslParse("vacuum: expected KEEP number".into())
+                        })?;
+                        keep = n.as_str().parse().map_err(|_| {
+                            ForgeError::DslParse("vacuum: invalid KEEP number".into())
+                        })?;
+                    }
+                    Rule::vacuum_all => all = true,
+                    Rule::vacuum_apply => apply = true,
+                    _ => {}
+                }
+            }
+            Ok(ForgeQLIR::Vacuum {
+                source,
+                keep,
+                all,
+                apply,
+            })
+        }
+
         Rule::use_stmt => {
             let mut inner = pair.into_inner();
             let source = inner

@@ -184,6 +184,25 @@ pub enum ForgeQLIR {
     /// moved will be re-indexed automatically on the next command.
     RefreshSource { name: String },
 
+    /// `VACUUM [SOURCE 'name'] [KEEP n] [ALL] [APPLY]` — reclaim disk space by
+    /// deleting stale columnar cache version directories.
+    ///
+    /// Cache directories are named `<provider>-v<N>`; classification keys purely
+    /// on `<N>` versus the current `ENRICH_VER`, ignoring the provider prefix, so
+    /// a `git-sha256-v20` dir is treated exactly like `git-sha1-v20`. By default
+    /// only versions OLDER than current are removed; the current version and any
+    /// newer ones are kept (a newer version belongs to a newer binary). `keep`
+    /// additionally retains the `keep` highest older versions. `all` removes every
+    /// version including the current and newer. `apply` performs the deletion;
+    /// without it the command previews what would be removed and deletes nothing.
+    /// `source` scopes to one registered source; `None` covers every source.
+    Vacuum {
+        source: Option<String>,
+        keep: usize,
+        all: bool,
+        apply: bool,
+    },
+
     /// `USE source.branch [AS 'custom-branch']` — create (or resume) a session.
     ///
     /// `as_branch` is the git branch name used for this session instead of the

@@ -154,11 +154,15 @@ async fn execute_fql(
         for (_, op) in &ops {
             if matches!(
                 op,
-                ForgeQLIR::CreateSource { .. } | ForgeQLIR::RefreshSource { .. }
+                ForgeQLIR::CreateSource { .. }
+                    | ForgeQLIR::RefreshSource { .. }
+                    | ForgeQLIR::Vacuum { .. }
             ) {
-                return Err("CREATE SOURCE and REFRESH SOURCE require an admin token; \
+                return Err(
+                    "CREATE SOURCE, REFRESH SOURCE, and VACUUM require an admin token; \
                         use USE to connect to an existing source"
-                    .to_string());
+                        .to_string(),
+                );
             }
         }
     }

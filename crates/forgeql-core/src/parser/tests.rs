@@ -144,6 +144,41 @@ fn parse_refresh_source() {
 }
 
 #[test]
+fn parse_vacuum() {
+    let ops = parse("VACUUM SOURCE 'pisco-code' KEEP 2 ALL APPLY").unwrap();
+    match &ops[0] {
+        ForgeQLIR::Vacuum {
+            source,
+            keep,
+            all,
+            apply,
+        } => {
+            assert_eq!(source.as_deref(), Some("pisco-code"));
+            assert_eq!(*keep, 2);
+            assert!(*all);
+            assert!(*apply);
+        }
+        _ => panic!("wrong variant"),
+    }
+    // Bare VACUUM previews every source with conservative defaults.
+    let ops = parse("VACUUM").unwrap();
+    match &ops[0] {
+        ForgeQLIR::Vacuum {
+            source,
+            keep,
+            all,
+            apply,
+        } => {
+            assert_eq!(*source, None);
+            assert_eq!(*keep, 0);
+            assert!(!*all);
+            assert!(!*apply);
+        }
+        _ => panic!("wrong variant"),
+    }
+}
+
+#[test]
 fn parse_use_source_without_as_is_error() {
     // USE without AS 'branch-name' must be a parse error (grammar enforces it)
     assert!(

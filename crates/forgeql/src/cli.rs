@@ -71,6 +71,22 @@ pub(crate) enum Commands {
         #[arg(long, env = "FORGEQL_SESSION")]
         session: Option<String>,
     },
+
+    /// Delete stale columnar cache version directories to reclaim disk.
+    Gc {
+        /// Restrict to one source (default: every registered source).
+        #[arg(long)]
+        source: Option<String>,
+        /// Keep the N newest older versions in addition to the current one.
+        #[arg(long, default_value_t = 0)]
+        keep: usize,
+        /// Delete every version, including the current and any newer ones.
+        #[arg(long)]
+        all: bool,
+        /// Skip the confirmation prompt.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 // -----------------------------------------------------------------------
@@ -89,6 +105,13 @@ pub(crate) enum Mode {
     OneShot {
         fql: String,
         session: Option<String>,
+    },
+    /// `gc` subcommand: preview, then delete stale cache version dirs.
+    Gc {
+        source: Option<String>,
+        keep: usize,
+        all: bool,
+        yes: bool,
     },
 }
 
@@ -119,6 +142,21 @@ pub(crate) fn detect_mode_impl(cli: &Cli, stdin_is_terminal: bool) -> Mode {
         return Mode::OneShot {
             fql: fql.clone(),
             session: session.clone(),
+        };
+    }
+
+    if let Some(Commands::Gc {
+        ref source,
+        keep,
+        all,
+        yes,
+    }) = cli.command
+    {
+        return Mode::Gc {
+            source: source.clone(),
+            keep,
+            all,
+            yes,
         };
     }
     if !stdin_is_terminal {
