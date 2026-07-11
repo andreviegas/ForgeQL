@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.109.0] — 2026-07-11 — feat(server): --log-queries CSV query log
+
+### Added
+
+- **`forgeql-server --log-queries`** — the HTTP daemon can now write the same
+  per-statement CSV query log as the `forgeql` binary: one row per executed
+  statement in `{data-dir}/log/{source}.csv` with timestamp, clipped command,
+  lines returned, and approximate token counts. Rows are keyed to the
+  session that executed them (a `USE` earlier in a batch keys the following
+  statements to the new session), so multi-tenant agent activity over HTTP is
+  auditable exactly like stdio sessions.
+
 ## [0.108.0] — 2026-07-11 — feat(server): full MCP handshake over HTTP
 
 ### Added

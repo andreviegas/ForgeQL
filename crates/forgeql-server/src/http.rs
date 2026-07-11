@@ -25,6 +25,7 @@ use forgeql_core::compact;
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::parser;
+use forgeql_core::query_logger::QueryLogger;
 use forgeql_core::result::ForgeQLResult;
 use forgeql_core::session::SessionCoords;
 use serde_json::{Value, json};
@@ -39,6 +40,8 @@ pub(crate) struct AppState {
     pub(crate) engine: Arc<TokioMutex<ForgeQLEngine>>,
     /// Bearer-token to principal lookup used to authorise each request.
     pub(crate) auth: Arc<TokenStore>,
+    /// CSV query logger (`--log-queries`); one row per executed statement.
+    pub(crate) query_logger: Option<Arc<QueryLogger>>,
 }
 
 /// Build the application router.
@@ -198,7 +201,7 @@ async fn tools_call(state: &AppState, headers: &HeaderMap, id: &Value, req: &Val
     let principal = state.auth.resolve(bearer_token(headers).as_deref());
     debug!(%fql, ?session_id, %format, user = %principal.user, "run_fql");
 
-    match execute_fql(&state.engine, &principal, fql, session_id, format).await {
+    match execute_fql(state, &principal, fql, session_id, format).await {
         Ok((text, new_session)) => {
             let mut result = json!({
                 "content": [{ "type": "text", "text": text }],
@@ -246,7 +249,7 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> Value {
 /// each statement is executed individually. `CREATE SOURCE` and `REFRESH SOURCE`
 /// are rejected — sources are administrator-managed.
 async fn execute_fql(
-    engine: &TokioMutex<ForgeQLEngine>,
+    state: &AppState,
     principal: &Principal,
     fql: &str,
     session_id: Option<&str>,
@@ -284,8 +287,9 @@ async fn execute_fql(
 
     let mut outputs = Vec::with_capacity(ops.len());
     let mut new_session: Option<String> = None;
-    let mut guard = engine.lock().await;
-    for (_, op) in &ops {
+    let mut guard = state.engine.lock().await;
+    for (text, op) in &ops {
+        let started = std::time::Instant::now();
         let result = guard
             .execute(user_id, coords.as_ref(), op)
             .map_err(|e| e.to_string())?;
@@ -299,6 +303,16 @@ async fn execute_fql(
         } else {
             compact::to_compact(&result)
         };
+        // One log row per executed statement, mirroring the stdio MCP handler.
+        // A USE earlier in the batch updates the session the row is keyed to.
+        if let Some(logger) = state.query_logger.as_ref() {
+            let sid = new_session.as_deref().or(session_id).unwrap_or("");
+            let source = guard
+                .source_name_for_session(sid)
+                .map_or_else(|| "unknown".to_string(), str::to_owned);
+            let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            logger.log(text, &result, &rendered, elapsed, &source, sid, None);
+        }
         outputs.push(rendered);
     }
     drop(guard);

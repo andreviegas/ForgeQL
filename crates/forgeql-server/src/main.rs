@@ -18,6 +18,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
 use forgeql_core::engine::ForgeQLEngine;
+use forgeql_core::query_logger::QueryLogger;
 use forgeql_lang_c::CLanguage;
 use forgeql_lang_cpp::CppLanguage;
 use forgeql_lang_python::PythonLanguage;
@@ -57,6 +58,14 @@ struct Cli {
     /// Without it, every request is anonymous and CREATE/REFRESH SOURCE is rejected.
     #[arg(long, env = "FORGEQL_AUTH_FILE")]
     auth_file: Option<std::path::PathBuf>,
+
+    /// Write a CSV query-log to `{data-dir}/log/{source}.csv`.
+    ///
+    /// Each executed statement appends one row with timestamp, clipped command
+    /// (first 80 chars), lines returned, approximate tokens sent and received —
+    /// the same format the `forgeql` binary's `--log-queries` produces.
+    #[arg(long)]
+    log_queries: bool,
 }
 
 #[tokio::main]
@@ -107,9 +116,13 @@ async fn main() -> Result<()> {
         TokenStore::empty()
     };
     let admin_tokens = auth.token_count();
+    let query_logger = cli
+        .log_queries
+        .then(|| Arc::new(QueryLogger::new(data_dir.clone())));
     let state = AppState {
         engine: Arc::new(TokioMutex::new(engine)),
         auth: Arc::new(auth),
+        query_logger,
     };
 
     let app = http::router(state);
