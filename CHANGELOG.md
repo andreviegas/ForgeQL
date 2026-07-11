@@ -6,6 +6,38 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.107.0] — 2026-07-11 — feat(gc): clearer `forgeql gc` output and CLI ergonomics
+
+### Changed
+
+- `forgeql gc` now prints a purpose-built human report in every output format.
+  Previously, with `--format text`, the summary line was dropped entirely and
+  the per-directory size was mislabeled as `usages:` with a stray `:0`, so it
+  was impossible to tell how much would be reclaimed — the deletion still worked
+  (a single run removes every stale version at once), but the feedback hid that.
+  It now lists only the directories that will be deleted (each with its size),
+  followed by an explicit total (`N directories, X reclaimable`), and reports
+  `Deleted N directories, reclaimed X` after applying. When nothing is stale it
+  says so. `--format json` emits the structured report for scripting.
+- The CLI now defaults to human-readable `text` output. Agents on the MCP
+  surface still receive compact CSV independently of this flag; pass
+  `--format compact` for token-efficient CSV in scripts.
+- `--data-dir` is now a global flag, so it is accepted after a subcommand
+  (`forgeql gc --data-dir …`), not only before it.
+- The top-level `--help` now lists the run modes and points to per-command help
+  (`forgeql <command> --help`).
+
+### Removed
+
+- Deleted a stray `docs/zz_blankrepro.md` reproduction file that was publicly
+  visible in the repository.
+
+### Internal
+
+- Extracted `ForgeQLEngine::vacuum_report`, a public method returning the full
+  (uncapped) `VacuumReport`, shared by the `VACUUM` DSL verb and the CLI so both
+  read the same structured totals.
+
 ## [0.106.0] — 2026-07-11 — feat(vacuum): VACUUM verb and `forgeql gc` to reclaim stale cache versions
 
 ### Added

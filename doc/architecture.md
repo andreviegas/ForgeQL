@@ -201,7 +201,7 @@ The **alias you supply in `AS '...'` is the `session_id`** — it is determinist
 
 **Auto-reconnect:** if the server restarts and a client passes a `session_id` whose worktree still exists on disk, the engine transparently re-creates the in-memory session — no `USE` command required. The source name and branch are derived from the worktree directory name and git metadata.
 
-`CREATE SOURCE` and `REFRESH SOURCE` are intentionally blocked through MCP — they must be run via the interpreter or CLI.
+`CREATE SOURCE`, `REFRESH SOURCE`, and `VACUUM` are intentionally blocked through MCP — they must be run via the interpreter or CLI.
 
 ### Agent Guardrails
 

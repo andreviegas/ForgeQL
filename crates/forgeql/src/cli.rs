@@ -9,12 +9,32 @@ use clap::{Parser, Subcommand, ValueEnum};
 // CLI structs
 // -----------------------------------------------------------------------
 
-/// `ForgeQL` — AST-aware code transformation.
+/// `ForgeQL` — AST-aware code search and transformation over indexed repos.
 #[derive(Parser, Debug)]
-#[command(name = "forgeql", version, about)]
+#[command(
+    name = "forgeql",
+    version,
+    about,
+    long_about = "ForgeQL — AST-aware code search and transformation over indexed repositories.\n\n\
+Modes:\n  \
+  forgeql run '<FQL>'   Execute one ForgeQL statement and exit\n  \
+  forgeql gc            Reclaim disk by deleting stale cache versions\n  \
+  forgeql               Interactive REPL (stdin is a terminal)\n  \
+  forgeql < file.fql    Pipe mode (stdin is not a terminal)\n  \
+  forgeql --mcp         Run as an MCP server over stdio (for AI agents)\n\n\
+Run `forgeql <command> --help` for command-specific options (e.g. `forgeql gc --help`)."
+)]
 pub(crate) struct Cli {
     /// Root directory for bare repos and worktrees (created if absent).
-    #[arg(short, long, default_value = "./data", env = "FORGEQL_DATA_DIR")]
+    ///
+    /// Global: accepted before or after a subcommand (e.g. `forgeql gc --data-dir …`).
+    #[arg(
+        short,
+        long,
+        default_value = "./data",
+        env = "FORGEQL_DATA_DIR",
+        global = true
+    )]
     pub(crate) data_dir: PathBuf,
 
     /// Run as MCP server over stdio (for AI agents).
@@ -40,8 +60,12 @@ pub(crate) struct Cli {
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     pub(crate) verbose: u8,
 
-    /// Output format: compact (default), text, json.
-    #[arg(long, default_value = "compact", global = true)]
+    /// Output format: text (default, human), compact (CSV), json.
+    ///
+    /// The CLI defaults to human-readable `text`; agents on the MCP surface get
+    /// compact CSV independently of this flag. Pass `--format compact` for
+    /// token-efficient CSV in scripts.
+    #[arg(long, default_value = "text", global = true)]
     pub(crate) format: CliFormat,
 
     #[command(subcommand)]

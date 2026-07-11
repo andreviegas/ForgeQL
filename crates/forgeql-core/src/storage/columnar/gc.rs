@@ -20,7 +20,8 @@ use std::path::{Path, PathBuf};
 use super::ENRICH_VER;
 
 /// How a discovered version directory relates to the current [`ENRICH_VER`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum VersionClass {
     /// `N == ENRICH_VER` — the live cache.
     Current,
@@ -169,6 +170,89 @@ pub fn plan_deletions(dirs: &[VersionDir], opts: VacuumOptions) -> Vec<usize> {
         .filter(|(_, d)| d.class == VersionClass::Older && !retained.contains(&d.version))
         .map(|(i, _)| i)
         .collect()
+}
+
+/// What `vacuum` will do (or did) to one version directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VacuumAction {
+    /// Selected for deletion (removed, when applied).
+    Delete,
+    /// Retained — the current version or a newer one.
+    Keep,
+    /// Selected for deletion but removal failed (apply only).
+    Error,
+}
+
+impl VacuumAction {
+    /// Stable lowercase label (`"delete"` / `"keep"` / `"error"`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Delete => "delete",
+            Self::Keep => "keep",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// One version directory described by a [`VacuumReport`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VacuumEntry {
+    /// Source (repository) name the directory belongs to.
+    pub source: String,
+    /// Directory leaf name (e.g. `git-sha1-v24`).
+    pub name: String,
+    /// Absolute path to the directory.
+    pub path: PathBuf,
+    /// Parsed version number.
+    pub version: u32,
+    /// Classification against the current [`ENRICH_VER`].
+    pub class: VersionClass,
+    /// What vacuum did / would do to this directory.
+    pub action: VacuumAction,
+    /// Directory size on disk, in bytes.
+    pub size_bytes: u64,
+}
+
+/// The outcome of a vacuum scan (and optional apply) across one or more sources.
+///
+/// `entries` is the full, untruncated list (sorted deletions-first, then by
+/// source and name); callers cap it for display as they see fit. The totals
+/// are authoritative regardless of any display cap.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct VacuumReport {
+    /// Every discovered version directory across the scanned sources.
+    pub entries: Vec<VacuumEntry>,
+    /// Directories selected for deletion (successfully removed, when applied;
+    /// removal failures are counted in `errors`, not here).
+    pub delete_count: usize,
+    /// Total bytes across the deleted (or to-be-deleted) directories.
+    pub delete_bytes: u64,
+    /// Number of sources scanned.
+    pub source_count: usize,
+    /// Whether the deletion was applied (`true`) or only previewed (`false`).
+    pub applied: bool,
+    /// Directories whose removal failed during apply.
+    pub errors: usize,
+}
+
+/// Format a byte count as a human-readable size (e.g. `1.5 GiB`).
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut val = bytes as f64;
+    let mut unit = 0;
+    while val >= 1024.0 && unit < UNITS.len() - 1 {
+        val /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{val:.1} {}", UNITS[unit])
+    }
 }
 
 #[cfg(test)]

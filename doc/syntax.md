@@ -10,6 +10,7 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
 1. [Notation](#notation)
 2. [Command Syntax](#command-syntax)
    - [Session Commands](#session-commands)
+   - [Maintenance Commands](#maintenance-commands)
    - [FIND Commands](#find-commands)
    - [SHOW Commands](#show-commands)
    - [Editing Commands (node handles)](#editing-commands-node-handles)
@@ -80,6 +81,33 @@ agents can reconnect to the same worktree at any time with the same `USE` comman
 Worktree identity uses a composite key: filesystem directory =
 `{user}/{source}.{branch}.{alias}`, git branch = `fql/{user}/{source}/{branch}/{alias}`
 (under the `fql/` namespace).
+
+---
+
+### Maintenance Commands
+
+```sql
+VACUUM [SOURCE 'name'] [KEEP n] [ALL] [APPLY]
+```
+
+`VACUUM` reclaims disk space by deleting stale columnar-cache version
+directories (`<provider>-v<N>` folders under `forgeql/overlays` and
+`forgeql/segments`) that accumulate every time the enrichment version bumps. It
+**previews by default** — reporting the in-scope directories grouped into
+kept/deleted with per-directory sizes and the total reclaimable — and removes
+nothing unless `APPLY` is given.
+
+- Classification keys purely on the parsed `<N>` versus the current enrichment
+  version, ignoring the provider prefix (so `git-sha256-v20` is treated exactly
+  like `git-sha1-v20`).
+- By default only versions **older** than the current one are removed; the
+  current version and any newer ones are kept. `KEEP n` retains the `n` newest
+  older versions; `ALL` removes every version including the current one (forcing
+  a re-index). With no `SOURCE` the command spans every registered source.
+- Like `CREATE SOURCE` / `REFRESH SOURCE`, `VACUUM` is admin-only: blocked over
+  MCP, admin-token over HTTP. The CLI wrapper is
+  `forgeql gc [--source NAME] [--keep N] [--all] [--yes]`, which previews,
+  prompts for confirmation, then applies.
 
 ---
 

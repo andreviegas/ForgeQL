@@ -82,11 +82,12 @@ SHOW body OF 'PiscoCode::process' DEPTH 99
 
 ### 1. Small Command Surface
 
-ForgeQL is intentionally minimal. Everything is built from five command families:
+ForgeQL is intentionally minimal. Everything is built from six command families:
 
 | Family | Commands |
 |---|---|
 | **Session** | `CREATE SOURCE` · `REFRESH SOURCE` · `USE` · `SHOW SOURCES` · `SHOW BRANCHES` |
+| **Maintenance** | `VACUUM` — reclaim disk by deleting stale cache versions (admin-only; CLI: `forgeql gc`) |
 | **Queries** | `FIND symbols` · `FIND usages OF` · `FIND callees OF` · `FIND files` |
 | **Content** | `SHOW body` · `SHOW signature` · `SHOW outline` · `SHOW members` · `SHOW context` · `SHOW NODE` |
 | **Mutations** | `CHANGE NODE` · `INSERT BEFORE/AFTER NODE` · `DELETE NODE` — addressed by stable `node_id`, optional `IF REV` guard. Every mutation answers with a boundary diff, `lines_written`, and `lines_removed`. Raw-text file edits (`CHANGE FILE`, line-range copy/move) live in the syntax reference for non-indexed files |

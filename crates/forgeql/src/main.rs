@@ -102,15 +102,8 @@ async fn main() -> Result<()> {
             all,
             yes,
         } => {
-            runner::one_shot::run_gc(
-                engine,
-                source.as_deref(),
-                keep,
-                all,
-                yes,
-                logger,
-                cli.format,
-            );
+            let _ = logger; // gc renders its own output; no query log
+            runner::one_shot::run_gc(&engine, source.as_deref(), keep, all, yes, cli.format);
             Ok(())
         }
     }
