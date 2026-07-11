@@ -187,7 +187,7 @@ Clauses that do not apply to a given result type are silently skipped. There is 
 
 ### MCP Layer
 
-The MCP layer exposes a **single tool** to the agent via the MCP JSON-RPC protocol over stdio:
+The MCP layer exposes a **single tool** to the agent via the MCP JSON-RPC protocol, over two transports: stdio (`forgeql --mcp`) and streamable HTTP (`forgeql-server`, `POST /mcp`). The HTTP daemon implements the client-to-server half of the MCP handshake — `initialize` (with version negotiation and connect-time instructions), `notifications/*` (acknowledged with `202 Accepted`), `tools/list`, and `ping` — so remote MCP clients such as Claude Code connect to it directly with no local binary:
 
 | Tool | Purpose |
 |---|---|
@@ -197,11 +197,11 @@ Every ForgeQL operation is accessible through `run_fql`. There are no separate t
 
 Sessions start with `USE source.branch AS 'alias'` and are cleaned up automatically: worktrees idle for more than 48 hours are removed by a server-side background task. Multiple agents can work on the same branch by reconnecting with the same `USE` command — the worktree and any uncommitted changes are preserved.
 
-The **alias you supply in `AS '...'` is the `session_id`** — it is deterministic and reconstructable from the `USE` command the model already knows. There is no opaque generated token to track across calls; if a model forgets its `session_id` it simply re-issues `USE source.branch AS 'same-alias'` to reconnect.
+**Over stdio, the alias you supply in `AS '...'` is the `session_id`** — it is deterministic and reconstructable from the `USE` command the model already knows; if a model forgets its `session_id` it simply re-issues `USE source.branch AS 'same-alias'` to reconnect. **Over HTTP (`forgeql-server`), the `session_id` is a server-issued token** scoped by the authenticated user and returned in the `USE` response — clients store it and pass it verbatim in every subsequent call instead of reconstructing it from the alias.
 
 **Auto-reconnect:** if the server restarts and a client passes a `session_id` whose worktree still exists on disk, the engine transparently re-creates the in-memory session — no `USE` command required. The source name and branch are derived from the worktree directory name and git metadata.
 
-`CREATE SOURCE`, `REFRESH SOURCE`, and `VACUUM` are intentionally blocked through MCP — they must be run via the interpreter or CLI.
+`CREATE SOURCE`, `REFRESH SOURCE`, and `VACUUM` are intentionally blocked through stdio MCP — they must be run via the interpreter or CLI. On `forgeql-server` they additionally require an admin bearer token from the `--auth-file` token store; normal and anonymous principals can only `USE` existing sources.
 
 ### Agent Guardrails
 

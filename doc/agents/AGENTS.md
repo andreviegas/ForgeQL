@@ -30,6 +30,11 @@ Always start a session with (the `AS` clause is mandatory — the alias becomes 
 USE source_name.branch AS 'alias'
 ```
 
+When connected to `forgeql-server` over HTTP, the `USE` response returns a
+server-issued `session_id` token scoped to the authenticated user — store it
+and pass it verbatim in every subsequent call; do not reconstruct it from the
+alias.
+
 ## Query Workflow
 
 **The right way to find and read code:**

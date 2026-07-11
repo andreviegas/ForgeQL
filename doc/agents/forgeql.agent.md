@@ -116,6 +116,11 @@ Sessions persist across server restarts — the worktree and any uncommitted cha
 preserved. To reconnect (or hand off to another agent), use the same `USE` command.
 Worktrees idle for more than 48 hours are cleaned up automatically by the server.
 
+When connected to `forgeql-server` over HTTP, the `USE` response returns a
+server-issued `session_id` token scoped to the authenticated user — store it
+and pass it verbatim in every subsequent call; do not reconstruct it from the
+alias.
+
 Worktree identity uses a composite key: filesystem = `branch.alias`, git branch =
 `fql/branch/alias`. The `fql/` namespace avoids git loose-ref collisions.
 

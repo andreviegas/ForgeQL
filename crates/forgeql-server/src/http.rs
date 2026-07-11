@@ -1,19 +1,25 @@
 //! HTTP transport for `forgeql-server`.
 //!
-//! `GET /health` (liveness) and `POST /mcp` (MCP JSON-RPC `tools/call` for the
-//! `run_fql` tool, no auth yet). The engine is reached through the same path the
-//! stdio MCP handler uses: parse → execute → compact-CSV/JSON render. When a
+//! `GET /health` (liveness) and `POST /mcp` (MCP JSON-RPC over streamable
+//! HTTP). The endpoint implements the client-to-server half of the MCP
+//! handshake — `initialize`, `notifications/*` (acknowledged with `202
+//! Accepted`), `tools/list`, `ping` — plus `tools/call` for the `run_fql`
+//! tool, so MCP clients such as Claude Code can connect to it directly as a
+//! remote HTTP server. The engine is reached through the same path the stdio
+//! MCP handler uses: parse → execute → compact-CSV/JSON render. When a
 //! statement opens a session (`USE`), the engine-issued `session_id` token is
-//! returned in the JSON-RPC result so the client can thread it into later calls.
-//! Auth, streaming (SSE), and the session registry arrive in later increments.
+//! returned in the result envelope and in the response text so clients can
+//! thread it into later calls. Server-initiated streaming (SSE) is not
+//! implemented; `GET /mcp` answers `405 Method Not Allowed`, which
+//! streamable-HTTP clients treat as "no server stream".
 
 use std::sync::Arc;
 
 use crate::auth::{Principal, TokenStore};
 use axum::Router;
 use axum::extract::State;
-use axum::http::HeaderMap;
-use axum::response::Json;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use forgeql_core::compact;
 use forgeql_core::engine::ForgeQLEngine;
@@ -50,43 +56,146 @@ async fn health() -> Json<Value> {
 
 /// Handle one MCP JSON-RPC request.
 ///
-/// Supports `tools/call` for the `run_fql` tool only. Any other method or tool
-/// returns a JSON-RPC error.
+/// Dispatches the MCP lifecycle methods (`initialize`, `notifications/*`,
+/// `tools/list`, `ping`) and `tools/call` for the `run_fql` tool. Unknown
+/// methods and tools return a JSON-RPC error.
 async fn mcp_post(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<Value>,
-) -> Json<Value> {
-    let id = req.get("id").cloned().unwrap_or(Value::Null);
+) -> Response {
     let method = req
         .get("method")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if method != "tools/call" {
-        return Json(rpc_error(
-            &id,
-            -32601,
-            &format!("method not supported: {method}"),
-        ));
+
+    // Notifications carry no id and expect no body — acknowledge with 202.
+    if method.starts_with("notifications/") {
+        return StatusCode::ACCEPTED.into_response();
     }
 
+    let id = req.get("id").cloned().unwrap_or(Value::Null);
+    let reply = match method {
+        "initialize" => initialize_result(&id, &req),
+        "ping" => json!({ "jsonrpc": "2.0", "id": id, "result": {} }),
+        "tools/list" => tools_list_result(&id),
+        "tools/call" => tools_call(&state, &headers, &id, &req).await,
+        other => rpc_error(&id, -32601, &format!("method not supported: {other}")),
+    };
+    Json(reply).into_response()
+}
+
+/// Fixed protocol revision this server speaks by default. Known revisions the
+/// client asks for are echoed back; anything else falls back to this one, per
+/// the MCP version-negotiation rules.
+const PROTOCOL_VERSION: &str = "2025-06-18";
+
+/// Protocol revisions this server accepts from a client. The tool surface is
+/// identical across them, so echoing the client's choice is always safe.
+const KNOWN_PROTOCOL_VERSIONS: [&str; 3] = ["2024-11-05", "2025-03-26", "2025-06-18"];
+
+/// Instructions surfaced to MCP clients at `initialize` — a condensed version
+/// of the stdio server's guidance plus the multi-tenant specifics (opaque
+/// `session_id` token, admin-gated source management).
+const SERVER_INSTRUCTIONS: &str = "ForgeQL — AST-aware code transformation server. \
+    All source code is accessed EXCLUSIVELY through ForgeQL queries via the run_fql tool.\n\
+    - Always start with USE source.branch AS 'alias'. The response contains a session_id \
+    token — store it and pass it verbatim in every subsequent run_fql call.\n\
+    - Locate code with FIND symbols WHERE name LIKE '...' and read it with \
+    SHOW body OF 'name' DEPTH N; never scan files by line ranges.\n\
+    - Never fall back to local filesystem tools (grep, find, cat); ForgeQL manages \
+    all code access and the local workspace may be empty.\n\
+    - CREATE SOURCE, REFRESH SOURCE, and VACUUM require an admin token.";
+
+/// Tool description shown in `tools/list`; mirrors the stdio server's
+/// `run_fql` tool so agents get identical guidance on both transports.
+const RUN_FQL_DESCRIPTION: &str = "Execute any ForgeQL statement. CONNECT FIRST: \
+    USE source.branch AS 'alias' — the response returns an opaque session_id token; \
+    store it and pass it verbatim in ALL subsequent calls. OUTPUT: format defaults to \
+    CSV (pass format=JSON only when parsing fields programmatically). LIMIT: FIND \
+    queries without LIMIT default to 20 rows; add LIMIT N to override; when total > \
+    results.len() more rows exist. WORKFLOW: start narrow (WHERE/IN/LIMIT), verify, then widen.";
+
+/// Build the `initialize` result: negotiated protocol version, tools
+/// capability, server identity, and the connect-time instructions.
+fn initialize_result(id: &Value, req: &Value) -> Value {
+    let requested = req
+        .pointer("/params/protocolVersion")
+        .and_then(Value::as_str)
+        .unwrap_or(PROTOCOL_VERSION);
+    let version = if KNOWN_PROTOCOL_VERSIONS.contains(&requested) {
+        requested
+    } else {
+        PROTOCOL_VERSION
+    };
+    json!({
+        "jsonrpc": "2.0",
+        "id": id.clone(),
+        "result": {
+            "protocolVersion": version,
+            "capabilities": { "tools": {} },
+            "serverInfo": {
+                "name": "forgeql-server",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+            "instructions": SERVER_INSTRUCTIONS,
+        },
+    })
+}
+
+/// Build the `tools/list` result: the single `run_fql` tool with an input
+/// schema matching the stdio MCP server's.
+fn tools_list_result(id: &Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id.clone(),
+        "result": {
+            "tools": [{
+                "name": "run_fql",
+                "description": RUN_FQL_DESCRIPTION,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "fql": {
+                            "type": "string",
+                            "description": "The ForgeQL statement to execute (e.g. \"FIND symbols WHERE name LIKE 'set%'\").",
+                        },
+                        "session_id": {
+                            "type": ["string", "null"],
+                            "description": "The opaque session token returned by USE in the response. Required for all queries and mutations after the initial USE. Pass it verbatim — do not reconstruct it.",
+                        },
+                        "format": {
+                            "type": ["string", "null"],
+                            "enum": ["CSV", "JSON", null],
+                            "description": "Output format: \"CSV\" (default, compact grouped CSV) or \"JSON\" (full structured).",
+                        },
+                    },
+                    "required": ["fql"],
+                },
+            }],
+        },
+    })
+}
+
+/// Handle a `tools/call` request for the `run_fql` tool.
+async fn tools_call(state: &AppState, headers: &HeaderMap, id: &Value, req: &Value) -> Value {
     let params = req.get("params").cloned().unwrap_or(Value::Null);
     let tool = params
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or_default();
     if tool != "run_fql" {
-        return Json(rpc_error(&id, -32602, &format!("unknown tool: {tool}")));
+        return rpc_error(id, -32602, &format!("unknown tool: {tool}"));
     }
 
     let args = params.get("arguments").cloned().unwrap_or(Value::Null);
     let Some(fql) = args.get("fql").and_then(Value::as_str) else {
-        return Json(rpc_error(&id, -32602, "missing required argument: fql"));
+        return rpc_error(id, -32602, "missing required argument: fql");
     };
     let session_id = args.get("session_id").and_then(Value::as_str);
     let format = args.get("format").and_then(Value::as_str).unwrap_or("CSV");
 
-    let principal = state.auth.resolve(bearer_token(&headers).as_deref());
+    let principal = state.auth.resolve(bearer_token(headers).as_deref());
     debug!(%fql, ?session_id, %format, user = %principal.user, "run_fql");
 
     match execute_fql(&state.engine, &principal, fql, session_id, format).await {
@@ -98,9 +207,9 @@ async fn mcp_post(
             if let Some(sid) = new_session {
                 result["session_id"] = Value::String(sid);
             }
-            Json(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+            json!({ "jsonrpc": "2.0", "id": id.clone(), "result": result })
         }
-        Err(msg) => Json(rpc_error(&id, -32603, &msg)),
+        Err(msg) => rpc_error(id, -32603, &msg),
     }
 }
 
@@ -195,4 +304,56 @@ async fn execute_fql(
     drop(guard);
 
     Ok((outputs.join("\n"), new_session))
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used, reason = "test code")]
+    use super::*;
+
+    #[test]
+    fn initialize_echoes_known_protocol_version() {
+        let req = json!({ "params": { "protocolVersion": "2025-03-26" } });
+        let resp = initialize_result(&Value::from(1), &req);
+        assert_eq!(
+            resp.pointer("/result/protocolVersion").unwrap(),
+            "2025-03-26"
+        );
+        assert!(resp.pointer("/result/capabilities/tools").is_some());
+        assert_eq!(
+            resp.pointer("/result/serverInfo/name").unwrap(),
+            "forgeql-server"
+        );
+    }
+
+    #[test]
+    fn initialize_falls_back_on_unknown_version() {
+        let req = json!({ "params": { "protocolVersion": "1999-01-01" } });
+        let resp = initialize_result(&Value::from(1), &req);
+        assert_eq!(
+            resp.pointer("/result/protocolVersion").unwrap(),
+            PROTOCOL_VERSION
+        );
+    }
+
+    #[test]
+    fn initialize_without_params_uses_default_version() {
+        let resp = initialize_result(&Value::Null, &json!({}));
+        assert_eq!(
+            resp.pointer("/result/protocolVersion").unwrap(),
+            PROTOCOL_VERSION
+        );
+    }
+
+    #[test]
+    fn tools_list_exposes_run_fql() {
+        let resp = tools_list_result(&Value::from(7));
+        assert_eq!(resp["id"], 7);
+        assert_eq!(resp.pointer("/result/tools/0/name").unwrap(), "run_fql");
+        assert_eq!(
+            resp.pointer("/result/tools/0/inputSchema/required/0")
+                .unwrap(),
+            "fql"
+        );
+    }
 }

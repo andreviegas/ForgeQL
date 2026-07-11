@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.108.0] — 2026-07-11 — feat(server): full MCP handshake over HTTP
+
+### Added
+
+- **`forgeql-server` now speaks the complete client-to-server half of the
+  MCP streamable-HTTP protocol.** `POST /mcp` handles `initialize` (protocol
+  version negotiation, tools capability, server identity, and connect-time
+  usage instructions), `notifications/*` (acknowledged with `202 Accepted`
+  and no body), `tools/list` (the `run_fql` tool with an input schema matching
+  the stdio server's), and `ping` — in addition to the existing `tools/call`.
+  Remote MCP clients such as Claude Code can now connect to the daemon
+  directly over HTTP with a bearer token, with no local binary required.
+
 ## [0.107.0] — 2026-07-11 — feat(gc): clearer `forgeql gc` output and CLI ergonomics
 
 ### Changed

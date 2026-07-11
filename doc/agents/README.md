@@ -50,6 +50,33 @@ Or use the platform-agnostic version:
 cp doc/agents/AGENTS.md .
 ```
 
+### Remote connection (`forgeql-server` over HTTP)
+
+Agents can also connect to a running `forgeql-server` over the MCP
+streamable-HTTP transport instead of spawning a local binary. In Claude Code,
+point the project's `.mcp.json` at the daemon:
+
+```json
+{
+  "mcpServers": {
+    "forgeql": {
+      "type": "http",
+      "url": "http://<host>:<port>/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+Differences from the stdio setup:
+
+- The `session_id` returned by `USE` is a server-issued token scoped to the
+  authenticated user — store it and pass it verbatim in every call; do not
+  reconstruct it from the alias.
+- `CREATE SOURCE`, `REFRESH SOURCE`, and `VACUUM` require an admin bearer
+  token (see `forgeql-server --auth-file`); normal and anonymous tokens can
+  only `USE` sources that already exist.
+
 ### Cursor
 
 Copy the rules file to your project root:
