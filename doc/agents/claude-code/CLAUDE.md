@@ -50,6 +50,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Read + filter a node | `SHOW body OF 'name' DEPTH 99 WHERE text LIKE '%pattern%'` |
 | Page a truncated/buffered output | `SHOW MORE [HEAD n \| TAIL n \| n-m] [WHERE text MATCHES '...']` |
 | Grep the last `VERIFY` log (no rebuild) | `SHOW MORE WHERE text MATCHES 'error\|warning'` |
+| Review an uncommitted change | `SHOW DIFF STAT` for the file map, then `SHOW DIFF IN 'path/**'` |
 | Repo top-level dirs | `FIND files` (returns depth-1 entries) |
 | Find a file by name | `FIND files WHERE name = 'Kconfig'` (also `LIKE`/`MATCHES`) |
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
@@ -122,8 +123,8 @@ SHOW outline OF '<node_id>' [clauses]    -- outline a node's subtree
 SHOW members OF 'type' [clauses]
 SHOW context OF 'name' [clauses]
 SHOW callees OF 'name' [clauses]
-SHOW NODE '<node_id>' [CONTENT | METADATA] [clauses]
 SHOW NODE '<node_id>' [CONTENT | METADATA] [clauses]   -- '<id>(n)' / '<id>(n-m)' narrows CONTENT
+SHOW DIFF [STAT] [clauses]               -- the worktree's UNCOMMITTED diff, inline
 ```
 
 ### CHANGE & Transactions

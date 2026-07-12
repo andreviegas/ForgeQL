@@ -635,4 +635,95 @@ impl ForgeQLEngine {
             },
         ))
     }
+
+    /// `SHOW DIFF [STAT]` — the session worktree's **uncommitted** diff.
+    ///
+    /// Mechanical: the bytes git reports, filtered and windowed. The engine
+    /// neither interprets nor repairs them.
+    ///
+    /// Clause split, mirroring `SHOW body`: a `WHERE text …` predicate filters
+    /// the diff's own **lines**; every other clause (`IN`, `EXCLUDE`, `WHERE
+    /// path/status/added/removed`, `ORDER BY`, `LIMIT`, …) applies to the
+    /// per-file **rows**.
+    pub(super) fn exec_show_diff(
+        &self,
+        session_id: Option<&str>,
+        stat: bool,
+        clauses: &crate::ir::Clauses,
+    ) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let session = self.require_session(sid)?;
+        let worktree = session.worktree_path.clone();
+
+        let diff = git::worktree_diff(&worktree)?;
+
+        // Split the predicates: `text` targets diff lines, everything else
+        // targets the file rows.
+        let (text_preds, row_preds): (Vec<_>, Vec<_>) = clauses
+            .where_predicates
+            .iter()
+            .cloned()
+            .partition(|p| p.field == "text");
+
+        let mut row_clauses = clauses.clone();
+        row_clauses.where_predicates = row_preds;
+
+        let mut rows: Vec<crate::result::DiffFileEntry> = diff
+            .iter()
+            .map(|f| crate::result::DiffFileEntry {
+                path: f.path.clone(),
+                status: f.status.to_string(),
+                added: f.added,
+                removed: f.removed,
+            })
+            .collect();
+        crate::filter::apply_clauses(&mut rows, &row_clauses);
+
+        // Keep only the hunks of files that survived the row filter, in row order.
+        let mut content = String::new();
+        if !stat {
+            for row in &rows {
+                let Some(file) = diff.iter().find(|f| f.path == row.path) else {
+                    continue;
+                };
+                if text_preds.is_empty() {
+                    content.push_str(&file.patch);
+                } else {
+                    // Filter the file's diff lines, exactly as SHOW body filters
+                    // source lines — before any cap is applied.
+                    let mut kept: Vec<crate::result::SourceLine> = file
+                        .patch
+                        .lines()
+                        .enumerate()
+                        .map(|(i, l)| crate::result::SourceLine {
+                            line: i + 1,
+                            text: l.to_string(),
+                            marker: None,
+                            node_id: None,
+                            node_offset: None,
+                        })
+                        .collect();
+                    crate::filter::apply_where_predicates(&mut kept, &text_preds);
+                    for l in kept {
+                        content.push_str(&l.text);
+                        content.push('\n');
+                    }
+                }
+            }
+        }
+
+        let hint = if diff.is_empty() {
+            Some("worktree is clean — no uncommitted changes".to_string())
+        } else if rows.is_empty() {
+            Some("every changed file was filtered out by the clauses".to_string())
+        } else {
+            None
+        };
+
+        Ok(ForgeQLResult::ShowDiff(crate::result::ShowDiffResult {
+            files: rows,
+            content,
+            hint,
+        }))
+    }
 }

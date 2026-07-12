@@ -6,6 +6,58 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.111.0] — 2026-07-13 — feat(dsl): SHOW DIFF — see an uncommitted change
+
+### Added
+
+- **`SHOW DIFF [STAT] [clauses]`** — the session worktree's **uncommitted** diff
+  against `HEAD`, returned inline.
+
+  `EXPORT PATCH` exports *committed* work only ("uncommitted worktree edits
+  belong to no commit and are never exported"), and a reviewer agent may have no
+  filesystem access to the worktree at all — so a pending change was, until now,
+  **impossible to see through ForgeQL**. A pre-commit reviewer was structurally
+  blind: it could either guess or refuse.
+
+  - Leads with the **file map** (`status`, `added`, `removed`, `file`), then the
+    unified-diff text.
+  - **Untracked files are included**, as whole-file additions. `git diff HEAD`
+    omits them, which would have hidden every newly added source file from a
+    review — the exact silent omission the mutation layer's boundary diff exists
+    to prevent.
+  - `ForgeQL` runtime files (`.forgeql-*`) are excluded, as in `EXPORT PATCH`.
+  - Clauses apply to the per-file rows (`path`, `name`, `status`, `added`,
+    `removed`, `changed`) via the standard `ClauseTarget` pipeline — no new
+    filtering machinery. `WHERE text` instead filters the diff's own **lines**,
+    exactly as for `SHOW body` / `SHOW NODE`, and runs **before** the inline cap,
+    so grepping a 50 000-line diff costs no more than grepping a 50-line one.
+  - Output routes through the existing `SHOW MORE` ring: the file map arrives
+    inline, hunks page from the top.
+
+  A reviewer's whole triage now collapses to three cheap queries:
+
+  ```sql
+  SHOW DIFF STAT                              -- what changed at all?
+  SHOW DIFF STAT IN 'crates/forgeql-core/**'  -- was the engine touched?
+  SHOW DIFF STAT IN 'doc/**'                  -- did the docs move with it?
+  ```
+
+- `git::worktree_diff()` — libgit2 `diff_tree_to_workdir_with_index` with
+  `include_untracked` + `show_untracked_content`, per-file `+`/`-` counts and
+  hunk text. Covered by `worktree_diff_includes_untracked_files` (the one that
+  matters), `..._reports_modified_tracked_file`, `..._excludes_runtime_files`,
+  and `..._is_empty_for_a_clean_worktree`.
+
+### Notes
+
+- **Mechanical (P1).** `SHOW DIFF` reports the bytes git already computed,
+  filtered and windowed. It does not interpret, validate, or repair them — it
+  exists so the *agent* can see, which is the same principle as `lines_removed`
+  and the boundary diff.
+- Deliberately a `SHOW`, not an `EXPORT`: `EXPORT PATCH` writes mbox files to
+  disk, which is useless to a reviewer that cannot read the disk. `SHOW DIFF`
+  returns bytes inline and rides the `SHOW MORE` ring.
+
 ## [0.110.0] — 2026-07-13 — feat: VERIFY/RUN through the job pool; agent hints
 
 ### Changed

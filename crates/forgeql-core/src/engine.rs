@@ -572,6 +572,7 @@ impl ForgeQLEngine {
             ForgeQLIR::JobStatus { id } => self.exec_job_status(id),
             ForgeQLIR::JobList => self.exec_job_list(),
             ForgeQLIR::ExportPatch { last } => self.exec_export_patch(sid, *last),
+            ForgeQLIR::ShowDiff { stat, clauses } => self.exec_show_diff(sid, *stat, clauses),
         }
     }
 

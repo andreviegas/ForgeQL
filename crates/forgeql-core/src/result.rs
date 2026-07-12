@@ -64,6 +64,8 @@ pub enum ForgeQLResult {
     PendingExec(PendingExecResult),
     /// Patch export: `EXPORT PATCH [LAST n]`
     ExportPatch(ExportPatchResult),
+    /// Uncommitted worktree diff: `SHOW DIFF [STAT]`
+    ShowDiff(ShowDiffResult),
 }
 
 /// Result of FIND NODE id — resolved node details and navigation links.
@@ -717,6 +719,37 @@ pub struct ExportPatchResult {
     pub hint: Option<String>,
 }
 
+/// One file's entry in a [`ShowDiffResult`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffFileEntry {
+    /// Path relative to the worktree root.
+    pub path: std::path::PathBuf,
+    /// Single-letter git status: `A`dded (incl. untracked), `M`odified,
+    /// `D`eleted, `R`enamed, `T`ypechange.
+    pub status: String,
+    /// Count of added (`+`) lines.
+    pub added: usize,
+    /// Count of removed (`-`) lines.
+    pub removed: usize,
+}
+
+/// Result of `SHOW DIFF [STAT]` — the session worktree's **uncommitted** diff.
+///
+/// `EXPORT PATCH` covers committed work only, so this is the one way an agent
+/// (in particular a pre-commit reviewer that cannot read the worktree from the
+/// filesystem) can see a pending change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShowDiffResult {
+    /// The file map — one row per changed file, after clause filtering.
+    pub files: Vec<DiffFileEntry>,
+    /// Unified-diff text for the surviving files; empty for `STAT`.
+    /// Over-cap output is windowed and pageable via `SHOW MORE`.
+    pub content: String,
+    /// Caution the agent should surface (e.g. a clean worktree).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
 /// Serde default for [`VerifyBuildResult::summary_lines`].
 const fn default_summary_lines() -> usize {
     40
@@ -931,7 +964,10 @@ impl ForgeQLResult {
             // ExportPatch paths deliberately stay absolute: the patch files
             // are transfer artifacts the user fetches from outside the
             // session, so the full worktree path is the deliverable.
-            | Self::ExportPatch(_) => {}
+            | Self::ExportPatch(_)
+            // ShowDiff paths arrive from git already relative to the worktree
+            // root, so there is no prefix to strip.
+            | Self::ShowDiff(_) => {}
         }
     }
 

@@ -20,6 +20,7 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
    - [Transaction Commands](#transaction-commands)
    - [VERIFY, RUN, and Background JOBs](#verify-run-and-background-jobs)
    - [EXPORT PATCH](#export-patch)
+   - [SHOW DIFF](#show-diff)
 3. [Universal Clauses](#universal-clauses)
 4. [Operators and Values](#operators-and-values)
 5. [Filterable Fields](#filterable-fields)
@@ -534,6 +535,52 @@ order with `git am`. `LAST n` counts source-touching commits, so checkpoints
 never consume the count. Uncommitted worktree edits belong to no commit and
 are never exported; the response says so in a hint when any exist.
 
+The counterpart for *uncommitted* work is [`SHOW DIFF`](#show-diff).
+
+---
+
+### SHOW DIFF
+
+```sql
+SHOW DIFF                 -- file map + hunks for every uncommitted change
+SHOW DIFF STAT            -- the file map alone (cheapest; no hunk text)
+SHOW DIFF [clauses]       -- IN / EXCLUDE / WHERE / ORDER BY / LIMIT
+```
+
+The session worktree's **uncommitted** diff against `HEAD`, returned inline.
+`EXPORT PATCH` covers committed work only, so this is the way to see a change
+that has not been committed yet — in particular for a **pre-commit reviewer
+agent**, which may have no filesystem access to the worktree at all.
+
+The response leads with the **file map** — one row per changed file
+(`status`, `added`, `removed`, `file`) — and then the unified-diff text.
+
+**Untracked files are included**, rendered as whole-file additions: a review
+that could not see newly added files would miss the most important part of most
+changes. `ForgeQL` runtime files (`.forgeql-*` at any depth) are excluded, as in
+`EXPORT PATCH`.
+
+**Clause targets.** Every clause applies to the per-file rows — `path` / `file`,
+`name`, `status`, `added`, `removed`, `changed` — *except* `WHERE text`, which
+filters the diff's own **lines**, exactly as it does for `SHOW body` and
+`SHOW NODE`. Line filtering runs **before** the inline cap, so grepping a
+50 000-line diff costs no more than grepping a 50-line one.
+
+Output routes through the `SHOW MORE` ring: the file map arrives inline and the
+hunks page from the top.
+
+```sql
+-- a reviewer's triage, in three cheap queries
+SHOW DIFF STAT                                  -- what changed at all?
+SHOW DIFF STAT IN 'crates/forgeql-core/**'      -- was the engine touched?
+SHOW DIFF STAT IN 'doc/**'                      -- did the docs move with it?
+
+-- then read only what matters
+SHOW DIFF IN 'crates/forgeql-lang-text/**'
+SHOW DIFF WHERE text MATCHES '^\+.*(unsafe|unwrap)'
+SHOW MORE HEAD 40
+```
+
 ---
 
 ## Universal Clauses
@@ -655,9 +702,28 @@ Applies to: `FIND files`
 | `size` | integer | File size in bytes |
 | `depth` | integer | Directory depth from workspace root |
 
+### Diff Fields
+
+Applies to: `SHOW DIFF`
+
+One row per changed file in the session worktree's uncommitted diff.
+
+| Field | Type | Description |
+|---|---|---|
+| `path` / `file` | string | Path relative to the worktree root |
+| `name` | string | Bare file name |
+| `status` | string | `A` added (incl. untracked), `M` modified, `D` deleted, `R` renamed, `T` typechange |
+| `added` | integer | Count of `+` lines in this file's hunks |
+| `removed` | integer | Count of `-` lines in this file's hunks |
+| `changed` | integer | `added + removed` — sort by it to find the biggest edits |
+
+`WHERE text …` does **not** filter these rows: it filters the diff's own source
+lines instead (see [Source Line Fields](#source-line-fields)), so a `SHOW DIFF`
+can select files by path or size *and* grep their hunks in one statement.
+
 ### Source Line Fields
 
-Applies to: `SHOW body OF`, `SHOW LINES n-m OF`, `SHOW context OF`
+Applies to: `SHOW body OF`, `SHOW LINES n-m OF`, `SHOW context OF`, `SHOW NODE`, and `SHOW DIFF` (where it filters the diff's own lines)
 
 | Field | Type | Description |
 |---|---|---|

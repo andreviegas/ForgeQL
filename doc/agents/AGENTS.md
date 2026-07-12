@@ -63,6 +63,7 @@ alias.
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
 | File listing | `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...']` |
+| Review an uncommitted change | `SHOW DIFF STAT` — the file map; then `SHOW DIFF IN 'path/**'` for hunks. `EXPORT PATCH` covers **committed** work only. |
 | Hotspots | `FIND symbols WHERE fql_kind = 'function' ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count |
 
 ## Efficiency

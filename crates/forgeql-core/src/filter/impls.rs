@@ -108,6 +108,32 @@ impl ClauseTarget for crate::result::FileEntry {
     }
 }
 
+impl ClauseTarget for crate::result::DiffFileEntry {
+    fn field_str(&self, field: &str) -> Option<&str> {
+        match field {
+            "path" | "file" => self.path.to_str(),
+            "name" => self.path.file_name().and_then(|n| n.to_str()),
+            "status" => Some(&self.status),
+            _ => None,
+        }
+    }
+
+    fn field_num(&self, field: &str) -> Option<i64> {
+        match field {
+            "added" => Some(i64::try_from(self.added).unwrap_or(i64::MAX)),
+            "removed" => Some(i64::try_from(self.removed).unwrap_or(i64::MAX)),
+            "changed" => {
+                Some(i64::try_from(self.added.saturating_add(self.removed)).unwrap_or(i64::MAX))
+            }
+            _ => None,
+        }
+    }
+
+    fn path(&self) -> Option<&Path> {
+        Some(&self.path)
+    }
+}
+
 impl ClauseTarget for crate::result::OutlineEntry {
     fn field_str(&self, field: &str) -> Option<&str> {
         match field {

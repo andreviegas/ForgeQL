@@ -18,7 +18,8 @@
 use crate::result::{
     CallDirection, ExportPatchResult, FileEntry, FindNodeResult, ForgeQLResult, JobListResult,
     JobStartedResult, MemberEntry, MutationResult, OutlineEntry, PendingExecResult, QueryResult,
-    RunResult, SessionStats, ShowContent, ShowResult, SourceLine, SymbolRow, VerifyBuildResult,
+    RunResult, SessionStats, ShowContent, ShowDiffResult, ShowResult, SourceLine, SymbolRow,
+    VerifyBuildResult,
 };
 
 // -----------------------------------------------------------------------
@@ -43,6 +44,7 @@ pub fn to_compact(result: &ForgeQLResult) -> String {
         ForgeQLResult::JobList(l) => compact_job_list(l),
         ForgeQLResult::PendingExec(p) => compact_pending_exec(p),
         ForgeQLResult::ExportPatch(e) => compact_export_patch(e),
+        ForgeQLResult::ShowDiff(d) => compact_show_diff(d),
         // These are already small — keep JSON.
         _ => result.to_json(),
     }
@@ -632,6 +634,33 @@ fn compact_export_patch(e: &ExportPatchResult) -> String {
         row(&mut out, &[&q("hint"), &q(hint)]);
     }
     out.push_str(e.content.trim_end_matches('\n'));
+    out
+}
+
+/// Render `SHOW DIFF` — the file map first (that is the reviewer's triage
+/// question), then the hunks. Over-cap output is buffered by the SHOW MORE ring.
+fn compact_show_diff(d: &ShowDiffResult) -> String {
+    let mut out = String::with_capacity(d.content.len() + 256);
+    row(&mut out, &[&q("show_diff"), &d.files.len().to_string()]);
+    row(
+        &mut out,
+        &[&q("status"), &q("added"), &q("removed"), &q("file")],
+    );
+    for f in &d.files {
+        row(
+            &mut out,
+            &[
+                &q(&f.status),
+                &f.added.to_string(),
+                &f.removed.to_string(),
+                &q(&f.path.display().to_string()),
+            ],
+        );
+    }
+    if let Some(hint) = &d.hint {
+        row(&mut out, &[&q("hint"), &q(hint)]);
+    }
+    out.push_str(d.content.trim_end_matches('\n'));
     out
 }
 

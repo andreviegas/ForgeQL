@@ -147,6 +147,7 @@ SHOW members OF 'type' [clauses]
 SHOW context OF 'name' [clauses]
 SHOW callees OF 'name' [clauses]
 SHOW NODE '<node_id>' [CONTENT | METADATA] [clauses]
+SHOW DIFF [STAT] [clauses]    -- the worktree's UNCOMMITTED diff, inline
 ```
 
 ### Mutations & Transactions
@@ -372,6 +373,39 @@ FIND symbols WHERE fql_kind = 'function' WHERE is_recursive = 'true' ORDER BY re
 SHOW callees OF 'functionName'
 FIND usages OF 'functionName' GROUP BY file ORDER BY count DESC
 ```
+
+### Review a Pending (Uncommitted) Change
+
+`EXPORT PATCH` exports **committed** work only. To see a change that has not been
+committed yet — the pre-commit review case — use `SHOW DIFF`. It returns the
+worktree's uncommitted diff **inline**, so it works even when you have no
+filesystem access to the worktree.
+
+Triage by file map first; read hunks only where they matter.
+
+```sql
+-- 1. What changed at all? (cheap — no hunk text)
+SHOW DIFF STAT
+
+-- 2. Scope questions, one query each
+SHOW DIFF STAT IN 'crates/forgeql-core/**'   -- was the engine touched?
+SHOW DIFF STAT IN 'doc/**'                   -- did the docs move with it?
+SHOW DIFF STAT ORDER BY changed DESC LIMIT 5 -- where is the bulk of the edit?
+
+-- 3. Read only what matters
+SHOW DIFF IN 'crates/forgeql-lang-text/**'
+
+-- 4. Grep the whole diff without reading it — `WHERE text` filters diff lines
+--    BEFORE the inline cap, so this is cheap even on a huge diff.
+SHOW DIFF WHERE text MATCHES '^\+.*(unsafe|unwrap|todo!)'
+
+-- 5. Page the rest
+SHOW MORE HEAD 40
+```
+
+Untracked files appear as whole-file additions (`status = 'A'`) — a review that
+could not see newly added files would miss the most important part of most
+changes.
 
 ## fql_kind Values
 

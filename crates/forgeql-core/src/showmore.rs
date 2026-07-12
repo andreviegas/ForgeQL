@@ -323,6 +323,10 @@ pub fn buffering_params(
         ForgeQLResult::ExportPatch(_) => {
             Some(("export_patch".to_string(), Direction::Head, inline_cap))
         }
+        // The uncommitted diff can be arbitrarily large. Page it from the top so
+        // the file map — the reviewer's first question — always arrives inline,
+        // and buffer the hunks for SHOW MORE.
+        ForgeQLResult::ShowDiff(_) => Some(("show_diff".to_string(), Direction::Head, inline_cap)),
         _ => None,
     }
 }

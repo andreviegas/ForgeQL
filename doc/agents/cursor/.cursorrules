@@ -32,6 +32,7 @@ The right way to find and read code:
 - Class members: `SHOW members OF 'type'`
 - Call graph: `SHOW callees OF 'name'`
 - File listing: `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...']`
+- Review an uncommitted change: `SHOW DIFF STAT` for the file map, then `SHOW DIFF IN 'path/**'` for hunks (`EXPORT PATCH` covers committed work only)
 
 ## Mutations
 

@@ -80,6 +80,23 @@ impl fmt::Display for ForgeQLResult {
             Self::PendingExec(p) => {
                 write!(formatter, "job {} started — {}", p.job_id, p.step)
             }
+            Self::ShowDiff(d) => {
+                writeln!(formatter, "show_diff — {} file(s)", d.files.len())?;
+                for f in &d.files {
+                    writeln!(
+                        formatter,
+                        "  {} {} +{} -{}",
+                        f.status,
+                        f.path.display(),
+                        f.added,
+                        f.removed
+                    )?;
+                }
+                if let Some(hint) = &d.hint {
+                    writeln!(formatter, "  hint: {hint}")?;
+                }
+                write!(formatter, "{}", d.content)
+            }
         }
     }
 }

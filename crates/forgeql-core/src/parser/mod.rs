@@ -186,6 +186,19 @@ fn parse_export_patch_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<Forg
     Ok(ForgeQLIR::ExportPatch { last })
 }
 
+/// Parse a `show_diff_stmt` rule into a [`ForgeQLIR::ShowDiff`].
+fn parse_show_diff_stmt(pair: pest::iterators::Pair<'_, Rule>) -> ForgeQLIR {
+    let mut inner = pair.into_inner();
+    let stat = inner
+        .peek()
+        .is_some_and(|p| p.as_rule() == Rule::show_diff_stat);
+    if stat {
+        let _ = inner.next();
+    }
+    let clauses = parse_clauses(inner);
+    ForgeQLIR::ShowDiff { stat, clauses }
+}
+
 fn parse_job_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
     let inner = pair
         .into_inner()
@@ -321,6 +334,7 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         Rule::undo_stmt => parse_undo_stmt(pair),
         Rule::job_stmt => parse_job_stmt(pair),
         Rule::export_patch_stmt => parse_export_patch_stmt(pair),
+        Rule::show_diff_stmt => Ok(parse_show_diff_stmt(pair)),
 
         Rule::statement => {
             let inner = pair

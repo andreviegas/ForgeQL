@@ -557,6 +557,121 @@ pub fn diff_head_to_worktree(worktree_path: &Path) -> Result<Vec<PathBuf>> {
 }
 
 // -----------------------------------------------------------------------
+// SHOW DIFF — the uncommitted worktree diff, inline
+// -----------------------------------------------------------------------
+
+/// One file's worth of the uncommitted worktree diff.
+#[derive(Debug, Clone)]
+pub struct DiffFile {
+    /// Path relative to the worktree root.
+    pub path: PathBuf,
+    /// Single-letter status: `A`dded (incl. untracked), `M`odified,
+    /// `D`eleted, `R`enamed, `T`ypechange.
+    pub status: char,
+    /// Count of `+` lines in this file's hunks.
+    pub added: usize,
+    /// Count of `-` lines in this file's hunks.
+    pub removed: usize,
+    /// This file's unified-diff text (header + hunks).
+    pub patch: String,
+}
+
+/// Map a libgit2 delta status to its one-letter git status code.
+const fn delta_status_char(status: git2::Delta) -> char {
+    match status {
+        git2::Delta::Added | git2::Delta::Untracked => 'A',
+        git2::Delta::Deleted => 'D',
+        git2::Delta::Renamed => 'R',
+        git2::Delta::Typechange => 'T',
+        _ => 'M',
+    }
+}
+
+/// The **uncommitted** diff of `worktree` against `HEAD`, one entry per file.
+///
+/// Includes staged *and* unstaged edits, and — critically — **untracked files**,
+/// rendered as whole-file additions. A reviewer that could not see untracked
+/// files would miss every newly added source file, which is exactly the kind of
+/// silent omission a review must never suffer.
+///
+/// `ForgeQL` runtime files (`.forgeql-*` at any depth) and control files are
+/// excluded, matching [`export_patches`].
+///
+/// # Errors
+/// Returns an error when the worktree cannot be opened, `HEAD` cannot be peeled
+/// to a tree, or the diff cannot be computed.
+pub fn worktree_diff(worktree: &Path) -> Result<Vec<DiffFile>> {
+    let repo = Repository::open(worktree)
+        .with_context(|| format!("could not open worktree {}", worktree.display()))?;
+    let head_tree = repo.head()?.peel_to_tree()?;
+
+    let mut opts = git2::DiffOptions::new();
+    let _ = opts
+        .include_untracked(true)
+        .show_untracked_content(true)
+        .recurse_untracked_dirs(true)
+        .include_typechange(true);
+
+    let diff = repo.diff_tree_to_workdir_with_index(Some(&head_tree), Some(&mut opts))?;
+
+    // Accumulate per-file: libgit2 streams lines in delta order, so a plain
+    // ordered Vec keyed by the delta's new path is enough — no map needed.
+    let mut files: Vec<DiffFile> = Vec::new();
+
+    diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
+        let path = delta
+            .new_file()
+            .path()
+            .or_else(|| delta.old_file().path())
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+
+        if is_runtime_or_control(&path) {
+            return true;
+        }
+
+        if files.last().map(|f| &f.path) != Some(&path) {
+            files.push(DiffFile {
+                path,
+                status: delta_status_char(delta.status()),
+                added: 0,
+                removed: 0,
+                patch: String::new(),
+            });
+        }
+        let Some(entry) = files.last_mut() else {
+            return true;
+        };
+
+        match line.origin() {
+            '+' => entry.added += 1,
+            '-' => entry.removed += 1,
+            _ => {}
+        }
+        // `+`/`-`/` ` carry the origin char separately from the content; file
+        // and hunk headers already embed their own prefix.
+        if matches!(line.origin(), '+' | '-' | ' ') {
+            entry.patch.push(line.origin());
+        }
+        entry
+            .patch
+            .push_str(&String::from_utf8_lossy(line.content()));
+        true
+    })?;
+
+    Ok(files)
+}
+
+/// True when `path` is a `ForgeQL` runtime or control file and must never
+/// appear in a diff or a patch.
+fn is_runtime_or_control(path: &Path) -> bool {
+    is_clean_commit_excluded(path)
+        || path.components().any(|c| {
+            matches!(c, std::path::Component::Normal(n)
+                if n.to_str().is_some_and(|s| s.starts_with(".forgeql-")))
+        })
+}
+// -----------------------------------------------------------------------
 // EXPORT PATCH — format-patch export of session commits
 // -----------------------------------------------------------------------
 
@@ -794,6 +909,79 @@ mod tests {
             !paths.contains(&dir.join("new_file.cpp")),
             "untracked file must not appear in the dirty list"
         );
+    }
+
+    #[test]
+    fn worktree_diff_includes_untracked_files() {
+        // The whole point of SHOW DIFF: a reviewer must see NEW files. `git
+        // diff HEAD` alone omits them (see the test above — that behaviour is
+        // correct for dirty-detection but fatal for review), so worktree_diff
+        // opts into untracked content explicitly.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path();
+        let _repo = make_normal_repo(dir);
+
+        std::fs::write(dir.join("brand_new.rs"), b"fn added() {}\n").unwrap();
+
+        let files = worktree_diff(dir).unwrap();
+        let entry = files
+            .iter()
+            .find(|f| f.path == Path::new("brand_new.rs"))
+            .expect("untracked file must appear in the diff");
+
+        assert_eq!(entry.status, 'A', "an untracked file is an addition");
+        assert_eq!(entry.added, 1, "its single line counts as added");
+        assert_eq!(entry.removed, 0);
+        assert!(
+            entry.patch.contains("fn added() {}"),
+            "the new file's content must be present, not just its name: {}",
+            entry.patch
+        );
+    }
+
+    #[test]
+    fn worktree_diff_reports_modified_tracked_file() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path();
+        let _repo = make_normal_repo(dir);
+
+        std::fs::write(dir.join("file.cpp"), b"int main() { return 42; }\n").unwrap();
+
+        let files = worktree_diff(dir).unwrap();
+        let entry = files
+            .iter()
+            .find(|f| f.path == Path::new("file.cpp"))
+            .expect("modified tracked file must appear in the diff");
+        assert_eq!(entry.status, 'M');
+        assert!(entry.added >= 1 && entry.removed >= 1);
+    }
+
+    #[test]
+    fn worktree_diff_excludes_runtime_files() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path();
+        let _repo = make_normal_repo(dir);
+
+        std::fs::create_dir_all(dir.join(".forgeql-patches")).unwrap();
+        std::fs::write(dir.join(".forgeql-patches/0001.patch"), b"noise\n").unwrap();
+        std::fs::write(dir.join(".forgeql-showmore"), b"noise\n").unwrap();
+
+        let files = worktree_diff(dir).unwrap();
+        assert!(
+            files
+                .iter()
+                .all(|f| !f.path.to_string_lossy().contains(".forgeql-")),
+            "ForgeQL runtime files must never leak into a diff: {files:?}"
+        );
+    }
+
+    #[test]
+    fn worktree_diff_is_empty_for_a_clean_worktree() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path();
+        let _repo = make_normal_repo(dir);
+
+        assert!(worktree_diff(dir).unwrap().is_empty());
     }
 
     #[test]

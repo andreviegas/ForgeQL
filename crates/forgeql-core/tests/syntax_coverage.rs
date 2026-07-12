@@ -2152,6 +2152,43 @@ fn parse_export_patch_forms() {
 }
 
 #[test]
+fn parse_show_diff_forms() {
+    use forgeql_core::ir::ForgeQLIR;
+
+    let ops = parser::parse("SHOW DIFF").expect("parse SHOW DIFF");
+    let ForgeQLIR::ShowDiff { stat, ref clauses } = ops[0] else {
+        panic!("expected ShowDiff, got {:?}", ops[0]);
+    };
+    assert!(!stat);
+    assert!(clauses.where_predicates.is_empty());
+
+    let ops = parser::parse("SHOW DIFF STAT").expect("parse SHOW DIFF STAT");
+    let ForgeQLIR::ShowDiff { stat, .. } = ops[0] else {
+        panic!("expected ShowDiff, got {:?}", ops[0]);
+    };
+    assert!(stat, "STAT must set the stat flag");
+
+    // The reviewer's P2 triage query: is forgeql-core touched at all?
+    let ops = parser::parse("SHOW DIFF STAT IN 'crates/forgeql-core/**'")
+        .expect("parse SHOW DIFF STAT with IN");
+    let ForgeQLIR::ShowDiff { stat, ref clauses } = ops[0] else {
+        panic!("expected ShowDiff, got {:?}", ops[0]);
+    };
+    assert!(stat);
+    assert_eq!(clauses.in_glob.as_deref(), Some("crates/forgeql-core/**"));
+
+    // Line filtering runs before the cap, exactly as in SHOW body.
+    let ops = parser::parse("SHOW DIFF WHERE text MATCHES '^\\+.*unsafe' LIMIT 5")
+        .expect("parse SHOW DIFF with a text predicate");
+    let ForgeQLIR::ShowDiff { ref clauses, .. } = ops[0] else {
+        panic!("expected ShowDiff, got {:?}", ops[0]);
+    };
+    assert_eq!(clauses.where_predicates.len(), 1);
+    assert_eq!(clauses.where_predicates[0].field, "text");
+    assert_eq!(clauses.limit, Some(5));
+}
+
+#[test]
 fn parse_move_lines_append() {
     parser::parse("MOVE LINES 1-5 OF 'src/lib.rs' TO 'dst/lib.rs'")
         .expect("parse MOVE LINES (append)");

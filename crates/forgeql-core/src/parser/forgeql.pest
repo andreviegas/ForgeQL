@@ -91,6 +91,7 @@ statement = {
   | show_sources_stmt
   | show_branches_stmt
   | show_stats_stmt
+  | show_diff_stmt
   | change_stmt
   | copy_stmt
   | move_stmt
@@ -208,6 +209,16 @@ undo_last = @{ "LAST-" ~ ASCII_DIGIT+ }
 /// from every patch, so transaction checkpoint commits drop out.
 export_patch_stmt = { "EXPORT" ~ "PATCH" ~ export_last? }
 export_last = { "LAST" ~ number }
+
+/// `SHOW DIFF [STAT]` — the session worktree's UNCOMMITTED diff, inline.
+/// EXPORT PATCH covers committed work only, so this is the only way to see a
+/// pending change — in particular for a pre-commit reviewer agent that cannot
+/// read the worktree from the filesystem. Untracked files are included (as
+/// whole-file additions); ForgeQL runtime files are excluded. STAT emits the
+/// per-file map alone. Clauses apply to the file rows; WHERE text filters the
+/// diff's own lines, as in SHOW body.
+show_diff_stmt = { "SHOW" ~ "DIFF" ~ show_diff_stat? ~ clauses }
+show_diff_stat = { "STAT" }
 
 // -----------------------------------------------------------------------
 // Queries

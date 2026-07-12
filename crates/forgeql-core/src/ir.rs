@@ -529,6 +529,20 @@ pub enum ForgeQLIR {
     },
     /// `JOB LIST` — list all known background jobs.
     JobList,
+    /// `SHOW DIFF [STAT]` — the session worktree's **uncommitted** diff,
+    /// returned inline. `EXPORT PATCH` covers committed work only, so this is
+    /// the only way an agent (notably a pre-commit reviewer that cannot read
+    /// the worktree from disk) can see a pending change. `stat` returns the
+    /// file map alone, without hunk text.
+    ShowDiff {
+        /// `STAT` — emit only the per-file map, omitting the diff text.
+        #[serde(default)]
+        stat: bool,
+        /// Universal clauses; applied to the per-file rows, except `WHERE text`
+        /// which filters the diff's own lines (as in `SHOW body`).
+        #[serde(default)]
+        clauses: Clauses,
+    },
     /// `EXPORT PATCH [LAST n]` — write the session's commits as `git am`-ready
     /// mbox patch files under `.forgeql-patches/` in the worktree. `last`
     /// selects the last n commits; `None` exports everything the session
