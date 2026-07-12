@@ -6,6 +6,54 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.109.2] — 2026-07-12 — refactor(core): block-group key belongs to the language, not the engine
+
+### Fixed
+
+- **The last language-shaped fact in `forgeql-core` is gone.** `block_group_key`
+  (`ast/index/file_indexer.rs`) computed a run's grouping key by matching the
+  literal string `"comment_style"` — a language concept hardcoded in the
+  language-agnostic core. It is now a `LanguageSupport::block_group_key` trait
+  method with an empty default; core knows only the rule *"same key groups,
+  different key splits the run"* and asks the language what the key is.
+
+  Rust supplies the comment style (so `///` doc runs and `//` line runs still
+  form separate blocks); a future format supplies whatever it needs — CSV
+  splitting records by field count needs **no core change at all**.
+
+### Added
+
+- **`array_block`** — JSON now declares a `block_groups` rule collapsing a run of
+  8+ adjacent `array` siblings into one synthetic block node.
+
+  **This is what makes a keyless JSON document addressable.** An array of arrays
+  of strings (`crates/forgeql/tests/corpus.json` — 26 KB, 733 entries) has no
+  keys anywhere, so the naming ladder can name nothing in it: it indexed to
+  **zero rows** and was invisible to every `FIND`, `SHOW` and `CHANGE`. It is now
+  one `array_block` node, and its entries are reachable by node-relative offset
+  with verbs that already exist:
+
+  ```sql
+  SHOW NODE   '<block>' WHERE text MATCHES 'g07_'
+  CHANGE NODE '<block>(42)' WITH '  ["g01_new", "FIND …"],'
+  DELETE NODE '<block>(40-52)'
+  ```
+
+### Notes
+
+- **`collapse_members` was scoped for this release and deliberately dropped.**
+  The plan assumed block members would need suppressing to stop a huge run
+  exploding the index. They do not — after the key-set/breadcrumb naming of
+  0.109.1, the elements of a keyless array are *unnamed*, so they emit no rows to
+  begin with and the block row alone does the job. The first real consumer is CSV
+  (240 000 named records), so the flag lands with its consumer rather than as
+  speculative config.
+- **Footgun, guarded by a test:** a language that declares `split_on_attr` but
+  does not implement `block_group_key` silently gets an empty key, so its runs
+  never split. `comment_block_splits_on_style` caught exactly this during the
+  refactor (the in-core test fixture `RustLanguageInline` had not been updated);
+  it is kept in sync with the production impl on purpose.
+
 ## [0.109.1] — 2026-07-12 — fix(lang-text): every JSON/YAML structural node is addressable
 
 ### Fixed

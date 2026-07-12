@@ -455,8 +455,8 @@ fn collect_nodes(
                     && let Some(spec) =
                         config.block_group_for_member(lang.map_kind(node.kind()).unwrap_or(""))
                 {
-                    let key = block_group_key(node, source, config, spec);
-                    let (count, end_byte) = scan_block_run(node, source, config, lang, spec, &key);
+                    let key = block_group_key(node, source, lang, spec);
+                    let (count, end_byte) = scan_block_run(node, source, lang, spec, &key);
                     if count >= spec.min_run {
                         let first_text = node_text(source, node);
                         let snippet = crate::result::comment_snippet(&first_text);
@@ -953,19 +953,21 @@ struct BlockTag {
     /// 1-based offset (or `start-end` range) of the member within the block.
     off: String,
 }
+/// The grouping key for one block-group member.
+///
+/// Core knows only the rule "same key groups, different key splits the run"; it
+/// asks the *language* what the key is. Before this, the key was computed here
+/// by matching the literal string `"comment_style"` — a language-shaped fact
+/// living in the language-agnostic core. Now the whole decision belongs to
+/// `LanguageSupport::block_group_key`, so a new format (CSV grouping records by
+/// field count, JSON grouping array elements) needs no core change at all.
 fn block_group_key(
     node: tree_sitter::Node<'_>,
     source: &[u8],
-    config: &LanguageConfig,
+    lang: &dyn LanguageSupport,
     spec: &BlockGroupSpec,
 ) -> String {
-    match spec.split_on_attr.as_deref() {
-        Some("comment_style") => config
-            .detect_comment_style(&node_text(source, node))
-            .unwrap_or("")
-            .to_string(),
-        _ => String::new(),
-    }
+    lang.block_group_key(node, source, spec.split_on_attr.as_deref())
 }
 
 /// Walk forward over tree siblings, extending a run while each sibling is the
@@ -976,7 +978,6 @@ fn block_group_key(
 fn scan_block_run(
     first: tree_sitter::Node<'_>,
     source: &[u8],
-    config: &LanguageConfig,
     lang: &dyn LanguageSupport,
     spec: &BlockGroupSpec,
     key: &str,
@@ -988,7 +989,7 @@ fn scan_block_run(
         if lang.map_kind(sib.kind()).unwrap_or("") != spec.member_fql_kind {
             break;
         }
-        if block_group_key(sib, source, config, spec) != key {
+        if block_group_key(sib, source, lang, spec) != key {
             break;
         }
         count += 1;

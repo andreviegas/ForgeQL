@@ -321,6 +321,26 @@ impl LanguageSupport for RustLanguageInline {
     fn config(&self) -> &'static LanguageConfig {
         rust_config()
     }
+
+    /// Mirrors the production `RustLanguage::block_group_key`: split a comment
+    /// run by its style so `///` doc runs and `//` line runs form separate
+    /// blocks. Kept in sync deliberately — `comment_block_splits_on_style`
+    /// indexes through this fixture, so a divergence here silently weakens the
+    /// coverage of the real thing.
+    fn block_group_key(
+        &self,
+        node: tree_sitter::Node<'_>,
+        source: &[u8],
+        attr: Option<&str>,
+    ) -> String {
+        match attr {
+            Some("comment_style") => rust_config()
+                .detect_comment_style(&rust_node_text(source, node))
+                .unwrap_or("")
+                .to_string(),
+            _ => String::new(),
+        }
+    }
 }
 
 #[cfg(any(test, feature = "test-helpers"))]

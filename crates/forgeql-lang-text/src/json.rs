@@ -253,4 +253,24 @@ mod tests {
             "a name encodes a position: {names:?}"
         );
     }
+
+    #[test]
+    fn json_declares_an_array_block_group() {
+        // corpus.json is an array of arrays of strings — no keys anywhere, so
+        // the naming ladder can name nothing in it and it indexes to ZERO rows.
+        // Block grouping is what makes it addressable: a run of adjacent `array`
+        // members collapses into one synthetic `array_block` node spanning the
+        // run, whose members are then reachable as '<block_id>(n)' line offsets.
+        let groups = json_config().block_groups();
+        let spec = groups
+            .iter()
+            .find(|s| s.member_fql_kind == "array")
+            .unwrap();
+        assert_eq!(spec.block_fql_kind, "array_block");
+        assert!(
+            spec.min_run >= 2,
+            "a run of one is not a run: {}",
+            spec.min_run
+        );
+    }
 }

@@ -549,6 +549,28 @@ pub trait LanguageSupport: Send + Sync {
     /// Static language configuration used by enrichers.
     fn config(&self) -> &'static LanguageConfig;
 
+    /// Grouping key for a block-group member, when the spec sets `split_on_attr`.
+    ///
+    /// A run of adjacent same-kind members only groups together while this key
+    /// is unchanged, so the key is how a language declares that two neighbours
+    /// are *not* the same sort of thing: Rust returns the comment style, so a
+    /// `///` doc run and a `//` line run form separate blocks.
+    ///
+    /// This is the single hook that keeps `forgeql-core` free of language
+    /// knowledge here — core knows only "same key groups, different key splits".
+    /// The default returns an empty key, which groups every adjacent member.
+    ///
+    /// `attr` is the spec's `split_on_attr` value; `None` means the spec did not
+    /// ask for a split.
+    fn block_group_key(
+        &self,
+        _node: tree_sitter::Node<'_>,
+        _source: &[u8],
+        _attr: Option<&str>,
+    ) -> String {
+        String::new()
+    }
+
     /// Optional macro expander for two-pass expansion.
     ///
     /// Returns `None` by default — languages without macro-expansion support

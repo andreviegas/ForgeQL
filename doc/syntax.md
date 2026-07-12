@@ -30,6 +30,7 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
    - [Dynamic Fields](#dynamic-fields)
    - [Enrichment Fields](#enrichment-fields)
 6. [Structured-Text and Config Formats](#structured-text-and-config-formats)
+   - [Block Grouping — one handle over a run of siblings](#block-grouping--one-handle-over-a-run-of-siblings)
 7. [Advanced Patterns](#advanced-patterns)
 8. [Raw line and file operations (legacy, non-indexed files)](#raw-line-and-file-operations-legacy-non-indexed-files)
 
@@ -972,7 +973,7 @@ gets a stable `node_id` and the **same commands apply** — `FIND symbols`,
 | XML family | `.xml`, `.arxml` (AUTOSAR), `.xdm`/`.epc`/`.epd` (EB tresos), `.ecuc`, `.odx` | Every element is a nested node, named by the cascade below |
 | Vector CAN | `.dbc` | `BO_` messages as `object`; `SG_` signals nested as `field`; `VAL_TABLE_`/`VAL_` as `enum`; attributes as `pair`; `EV_` as `variable` |
 | TOML | `.toml` (`Cargo.toml`), `.lock` (`Cargo.lock`) | Each `pair` under its key; each `[table]`/`[[table-array]]` by its `name`/`id`/`key` member or header key |
-| JSON / YAML | `.json`, `.jsonc`, `.yaml`, `.yml` | `object`/`array`/`pair`. A `pair` is named by its key. A container is named by an identifier-like member (`name`/`id`/`key`/`title`/`alias`), else by its **key-set skeleton** — its sorted keys, comma-joined (`uses`, `name,run`) — so a mapping with no name is still addressable. An `array`/sequence is named after the key of its nearest ancestor pair (`steps`). Names never encode a position: a slot-based name would follow the slot rather than the node, and two siblings would trade `node_id`s when reordered. |
+| JSON / YAML | `.json`, `.jsonc`, `.yaml`, `.yml` | `object`/`array`/`pair`. A `pair` is named by its key. A container is named by an identifier-like member (`name`/`id`/`key`/`title`/`alias`), else by its **key-set skeleton** — its sorted keys, comma-joined (`uses`, `name,run`) — so a mapping with no name is still addressable. An `array`/sequence is named after the key of its nearest ancestor pair (`steps`). Names never encode a position: a slot-based name would follow the slot rather than the node, and two siblings would trade `node_id`s when reordered. A run of 8+ adjacent `array` siblings collapses into one `array_block` (below). |
 | INI | `.ini`, `.cfg`, `.editorconfig`, `.gitconfig` | `[section]` as `object`; `key = value` nested as `pair` |
 | justfile | `justfile` (any casing, with or without dot) | Recipes as `function`; `:=` assignments and `alias` as `variable`; `set` as `pair`; `mod` as `namespace` |
 | Make | `Makefile`/`makefile`/`GNUmakefile`, `*.mk` | Rules as `function` named by target list; assignments as `variable`; `define` as `macro`; `ifeq`/`ifdef` as `if` |
@@ -1004,6 +1005,40 @@ FIND symbols WHERE name = 'CanIfPublicTxBuffering' IN 'config/**'
 SHOW NODE '<node_id>'
 CHANGE NODE '<node_id>(2)' WITH '      <VALUE>true</VALUE>'
 ```
+
+### Block Grouping — one handle over a run of siblings
+
+A run of adjacent same-kind siblings collapses into a single synthetic,
+**childless block node** spanning the whole run. The block is the members'
+*sibling*, never their parent; it exists so a whole run can be read, copied,
+moved or deleted with one handle. Blank lines between members do not break a run
+(they are not tree nodes). Configured per language via `block_groups`.
+
+| Language | Members | Block kind | Min run | Split by |
+|---|---|---|---|---|
+| Rust | `comment` | `comment_block` | 2 | comment style — a `///` doc run and a `//` line run form **separate** blocks |
+| JSON | `array` | `array_block` | 8 | — |
+
+Members keep their own rows and node ids; the block is *added*, nothing is
+hidden. Its display label is the first member's snippet plus the run length
+(`g01_name_eq_stopped… (×733)`).
+
+**Why JSON needs it.** A JSON document with no keys anywhere — an array of arrays
+of strings, e.g. a test corpus — can be named by nothing, so it indexes to *zero*
+rows and is invisible to every `FIND`, `SHOW` and `CHANGE`. Block grouping makes
+it addressable: the run becomes one node, and its members are reachable by
+node-relative offset.
+
+```sql
+SHOW outline OF 'tests/corpus.json'
+-- array_block  g01_name_eq_stopped… (×733)   n7c1e….0000
+
+SHOW NODE   '<block>' WHERE text MATCHES 'g07_'   -- grep inside; filtering runs before the cap
+CHANGE NODE '<block>(42)' WITH '  ["g01_new", "FIND …"],'
+DELETE NODE '<block>(40-52)'                      -- drop a contiguous run of entries
+```
+
+No new verbs: `'<id>(n)'` and `'<id>(n-m)'` offsets already do the work.
 
 ---
 

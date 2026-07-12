@@ -123,6 +123,27 @@ impl LanguageSupport for RustLanguage {
         rust_config()
     }
 
+    /// Split a comment run by its style, so a `///` doc-comment run and a `//`
+    /// line-comment run form separate blocks instead of one mixed block.
+    ///
+    /// This is the language-specific half of block grouping. It lives here
+    /// rather than in `forgeql-core` — core knows only "same key groups,
+    /// different key splits".
+    fn block_group_key(
+        &self,
+        node: tree_sitter::Node<'_>,
+        source: &[u8],
+        attr: Option<&str>,
+    ) -> String {
+        match attr {
+            Some("comment_style") => rust_config()
+                .detect_comment_style(&node_text(source, node))
+                .unwrap_or("")
+                .to_string(),
+            _ => String::new(),
+        }
+    }
+
     fn macro_expander(&self) -> Option<&dyn MacroExpander> {
         static EXPANDER: macro_expand::RustMacroExpander = macro_expand::RustMacroExpander;
         Some(&EXPANDER)

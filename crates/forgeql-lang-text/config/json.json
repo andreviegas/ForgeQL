@@ -22,5 +22,13 @@
     "array":   "array",
     "pair":    "pair",
     "comment": "comment"
-  }
+  },
+
+  "block_groups": [
+    {
+      "member_fql_kind": "array",
+      "block_fql_kind": "array_block",
+      "min_run": 8
+    }
+  ]
 }

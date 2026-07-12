@@ -196,6 +196,13 @@ Source line filtering runs **before** the 40-line cap.
 | `for` | for loops (traditional and range-based) |
 | `switch` | switch statements |
 | `do` | do-while loops |
+| `comment_block` | A run of 2+ adjacent same-style comments, as one addressable node (`///` doc runs and `//` line runs form separate blocks) |
+| `array_block` | A run of 8+ adjacent JSON `array` siblings, as one addressable node — this is what makes a keyless JSON document (an array of arrays) addressable at all |
+
+A **block** node is the *sibling* of its members, never their parent. Members keep
+their own rows and node_ids; the block is added, nothing is hidden. Read or edit a
+member through the block's node-relative offset: `SHOW NODE '<block>(42)'`,
+`CHANGE NODE '<block>(42)' WITH '...'`, `DELETE NODE '<block>(40-52)'`.
 
 ## Enrichment Fields
 
