@@ -278,6 +278,55 @@ pub fn finalize(
     })
 }
 
+/// Buffering parameters for transports: which results get windowed into a
+/// `SHOW MORE` buffer, with what label, direction, and inline cap.
+///
+/// Read-oriented bulk output (SHOW, FIND, EXPORT PATCH) pages top-down under
+/// the session's inline cap. Command output (`VERIFY build`, `RUN`,
+/// `JOB STATUS`) uses the step's summary window — tail by default, so the
+/// decisive last lines arrive inline. `None` → the result is never buffered.
+#[must_use]
+pub fn buffering_params(
+    result: &crate::result::ForgeQLResult,
+    inline_cap: usize,
+) -> Option<(String, Direction, usize)> {
+    use crate::config::SummaryDirection;
+    use crate::result::ForgeQLResult;
+    const fn dir(d: SummaryDirection) -> Direction {
+        match d {
+            SummaryDirection::Tail => Direction::Tail,
+            SummaryDirection::Head => Direction::Head,
+        }
+    }
+    match result {
+        ForgeQLResult::VerifyBuild(v) => Some((
+            format!("verify_build '{}'", v.step),
+            dir(v.summary_direction),
+            v.summary_lines,
+        )),
+        ForgeQLResult::Run(v) => Some((
+            format!("run '{}'", v.step),
+            dir(v.summary_direction),
+            v.summary_lines,
+        )),
+        // Job output carries no per-step summary config at poll time — use the
+        // default tail window so a finished gate's log pages like VERIFY's.
+        ForgeQLResult::JobStatus(s) => Some((
+            format!("job '{}'", s.id),
+            Direction::Tail,
+            crate::config::SummaryConfig::default().lines,
+        )),
+        ForgeQLResult::Show(_) => Some(("show".to_string(), Direction::Head, inline_cap)),
+        ForgeQLResult::Query(_) => Some(("find".to_string(), Direction::Head, inline_cap)),
+        // Patch exports inline the whole mbox series; page from the top so
+        // the file list and first patch arrive first.
+        ForgeQLResult::ExportPatch(_) => {
+            Some(("export_patch".to_string(), Direction::Head, inline_cap))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

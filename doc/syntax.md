@@ -402,26 +402,26 @@ VERIFY build 'step' ['arg']…
 
 RUN 'template' ['arg']…
 
-JOB START 'step'
+JOB START 'step' ['arg']…
 JOB STATUS '<job-id>'
 JOB LIST
 ```
 
 | Command | Effect |
 |---|---|
-| `VERIFY build` | Run a named step from `.forgeql.yaml` `verify_steps`, synchronously. Returns `success` + `output`. Does **not** auto-rollback on failure. Steps may declare typed positional params (`params: [{ name: target, type: ident }]`); each `$name` in the step's command is substituted after arity and type validation, so a value can never inject shell syntax. |
-| `RUN` | Run a named allowlisted command template from `.forgeql.yaml` `run_steps`. `ident` args substitute into the command; `string` args bind to the subprocess stdin and are never spliced into the shell. |
-| `JOB START` | Run a verify step as a detached **background job** — returns a job id immediately instead of blocking the request. Use for long test gates. |
-| `JOB STATUS` / `JOB LIST` | Poll one job's state and output, or list all jobs. |
+| `VERIFY build` | Run a named step from `.forgeql.yaml` `verify_steps` and wait for it. The command executes on the background job pool — the engine is never blocked while it runs — but the response is synchronous: `success` + `output`, exactly as before. If the run outlives the step's `timeout_secs`, the response degrades to a `job_started` row with the id to poll. Does **not** auto-rollback on failure. Steps may declare typed positional params (`params: [{ name: target, type: ident }]`); each `$name` in the step's command is substituted after arity and type validation, so a value can never inject shell syntax. |
+| `RUN` | Run a named allowlisted command template from `.forgeql.yaml` `run_steps`, waiting the same way as `VERIFY build`. `ident` args substitute into the command; `string` args bind to the subprocess stdin and are never spliced into the shell. |
+| `JOB START` | Run a verify step as a detached **background job** — returns a job id immediately instead of blocking the request. Use for long test gates. Accepts the same typed positional args as `VERIFY build`. A `commit_gate: true` step run this way satisfies the commit gate when the job completes — unless an edit happened while it ran, in which case the gate stays blocked (the run tested stale sources). |
+| `JOB STATUS` / `JOB LIST` | Poll one job's state and output, or list all jobs. Polling also folds finished gate jobs into the commit gate. Responses carry a `hint` row with the next step (poll again, or the `SHOW MORE` grep recipe on failure). |
 
 Background jobs run through a **bounded worker pool**: at most
-`FORGEQL_MAX_CONCURRENT_JOBS` jobs execute at once (default `1`) and the rest
+`FORGEQL_MAX_CONCURRENT_JOBS` jobs execute at once (default `2`) and the rest
 wait `Queued` in a FIFO queue, starting automatically as slots free — a burst of
-`JOB START` builds runs serially instead of exhausting machine memory.
+`JOB START` builds is throttled instead of exhausting machine memory.
 
-VERIFY/RUN output that exceeds the inline cap is buffered; page or grep it with
-`SHOW MORE` — e.g. `SHOW MORE WHERE text MATCHES '^error|-->'` triages a
-compiler log without re-running the build.
+VERIFY/RUN/JOB STATUS output that exceeds the inline cap is buffered; page or
+grep it with `SHOW MORE` — e.g. `SHOW MORE WHERE text MATCHES '^error|-->'`
+triages a compiler log without re-running the build.
 
 **`.forgeql.yaml`** may be in the repo root **or** in the directory directly above it (sidecar, outside the tracked tree):
 

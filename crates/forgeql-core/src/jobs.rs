@@ -5,7 +5,7 @@
 //! build never holds the calling request open. `JOB STATUS <id>` and `JOB LIST`
 //! poll this in-memory registry.
 //!
-//! At most `max_concurrent` jobs (from `FORGEQL_MAX_CONCURRENT_JOBS`, default 1)
+//! At most `max_concurrent` jobs (from `FORGEQL_MAX_CONCURRENT_JOBS`, default 2)
 //! run at once; the rest wait `Queued` in a FIFO queue and start as slots free.
 //! This is the backpressure that stops a burst of parallel heavy builds from
 //! exhausting machine memory. Each job records its [`ResourceCost`] (resolved
@@ -17,8 +17,8 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -189,6 +189,8 @@ impl Inner {
 /// Process-wide registry of background jobs. Cheap to share via `Arc`.
 pub struct JobRegistry {
     inner: Mutex<Inner>,
+    /// Signalled on every job completion — lets `wait` block without polling.
+    done: Condvar,
 }
 
 impl JobRegistry {
@@ -205,21 +207,22 @@ impl JobRegistry {
                 max_concurrent: max_concurrent.max(1),
                 seq: 0,
             }),
+            done: Condvar::new(),
         }
     }
 
     /// Construct a registry whose concurrency cap comes from the
-    /// `FORGEQL_MAX_CONCURRENT_JOBS` environment variable. The default of 1
-    /// runs build jobs strictly one at a time — the safe setting that stops a
-    /// burst of heavy `JOB START` builds from exhausting machine memory.
-    /// Missing, unparseable, or zero values fall back to 1.
+    /// `FORGEQL_MAX_CONCURRENT_JOBS` environment variable. The default of 2
+    /// allows one long gate and one quick build to overlap while still
+    /// stopping a burst of heavy `JOB START` builds from exhausting memory.
+    /// Missing, unparseable, or zero values fall back to 2.
     #[must_use]
     pub fn from_env() -> Self {
         let cap = std::env::var("FORGEQL_MAX_CONCURRENT_JOBS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|&n| n >= 1)
-            .unwrap_or(1);
+            .unwrap_or(2);
         Self::new(cap)
     }
 
@@ -310,6 +313,34 @@ impl JobRegistry {
         inner.jobs.get(id).map(|job| job.snapshot(id))
     }
 
+    /// Block until job `id` reaches a terminal state or `timeout` elapses.
+    ///
+    /// Returns the job's snapshot at wake-up time: check `state` to tell a
+    /// finished job from one that is still running when the timeout fired.
+    /// `None` means the id is unknown (never submitted or already evicted).
+    pub fn wait(&self, id: &str, timeout: Duration) -> Option<JobSnapshot> {
+        let deadline = Instant::now() + timeout;
+        let mut inner = self.lock();
+        loop {
+            let snap = match inner.jobs.get(id) {
+                None => return None,
+                Some(job) => job.snapshot(id),
+            };
+            if matches!(snap.state, JobState::Succeeded | JobState::Failed) {
+                return Some(snap);
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Some(snap);
+            }
+            let (guard, _timed_out) = self
+                .done
+                .wait_timeout(inner, deadline - now)
+                .unwrap_or_else(PoisonError::into_inner);
+            inner = guard;
+        }
+    }
+
     /// `JOB LIST` — summaries in submission order (newest last).
     #[must_use]
     pub fn list(&self) -> Vec<JobSummary> {
@@ -336,7 +367,8 @@ impl JobRegistry {
             inner.running = inner.running.saturating_sub(1);
         }
         drop(inner);
-        // A slot just freed (or a spawn failed) — admit the next queued job.
+        // Wake any `wait` callers, then admit the next queued job.
+        self.done.notify_all();
         self.pump();
     }
 
@@ -467,5 +499,26 @@ mod tests {
         let _ = release_tx.send(());
         assert_eq!(wait_done(&reg, &first).state, JobState::Succeeded);
         assert_eq!(wait_done(&reg, &second).state, JobState::Succeeded);
+    }
+
+    #[test]
+    fn wait_returns_terminal_snapshot_or_times_out() {
+        let reg = Arc::new(JobRegistry::new(1));
+        let id = reg.start("slow".into(), medium(), || {
+            std::thread::sleep(Duration::from_millis(150));
+            JobOutcome {
+                success: true,
+                output: "done".into(),
+            }
+        });
+        // Deadline shorter than the job: returns a non-terminal snapshot.
+        let snap = reg.wait(&id, Duration::from_millis(1)).expect("known id");
+        assert!(matches!(snap.state, JobState::Queued | JobState::Running));
+        // Generous deadline: blocks until the terminal state arrives.
+        let snap = reg.wait(&id, Duration::from_secs(10)).expect("known id");
+        assert_eq!(snap.state, JobState::Succeeded);
+        assert_eq!(snap.output, "done");
+        // Unknown ids are distinguished from running ones.
+        assert!(reg.wait("j-nope", Duration::from_millis(1)).is_none());
     }
 }

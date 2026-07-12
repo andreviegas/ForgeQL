@@ -719,7 +719,17 @@ fn parse_undo_last_n() {
 #[test]
 fn parse_job_commands() {
     match &parse("JOB START 'test-all'").unwrap()[0] {
-        ForgeQLIR::JobStart { label } => assert_eq!(label, "test-all"),
+        ForgeQLIR::JobStart { label, args } => {
+            assert_eq!(label, "test-all");
+            assert!(args.is_empty());
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
+    match &parse("JOB START 'bless' 'zephyr' 'pytorch'").unwrap()[0] {
+        ForgeQLIR::JobStart { label, args } => {
+            assert_eq!(label, "bless");
+            assert_eq!(args, &["zephyr".to_string(), "pytorch".to_string()]);
+        }
         other => panic!("wrong variant: {other:?}"),
     }
     match &parse("JOB STATUS 'j-00001a'").unwrap()[0] {

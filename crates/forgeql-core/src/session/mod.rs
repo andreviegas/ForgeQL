@@ -253,6 +253,10 @@ pub struct Session {
     /// Mutations applied since the last successful gated `VERIFY build`,
     /// surfaced only to enrich the COMMIT-blocked message.
     pub edits_since_gate: usize,
+    /// Monotonic count of mutations over this session's lifetime — never reset
+    /// (unlike `edits_since_gate`). Snapshotted when a gated job starts so its
+    /// completion can prove no edit happened while the job was running.
+    pub mutation_seq: u64,
     /// `(rel_path, line)` for every row of the most recent FIND result that
     /// carried both a path and a line — the target set for
     /// `CHANGE NODES LAST MATCHING …` (the mechanical rename sweep).
@@ -329,6 +333,7 @@ impl Session {
             frozen_output_config: None,
             satisfied_gates: std::collections::HashSet::new(),
             edits_since_gate: 0,
+            mutation_seq: 0,
             last_find_sites: Vec::new(),
             budget: None,
             budget_data_dir: None,

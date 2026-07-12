@@ -70,7 +70,7 @@ fn try_exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> Result<ForgeQLR
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("op");
     let coords = SessionCoords::from_session_id(sid).expect("valid sid");
-    engine.execute(auth(AuthContext::Tester), Some(&coords), op)
+    engine.execute_blocking(auth(AuthContext::Tester), Some(&coords), op)
 }
 
 fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
@@ -126,6 +126,56 @@ fn an_edit_after_the_gate_re_blocks_commit() {
         exec(&mut engine, &sid, "COMMIT MESSAGE 'final'"),
         ForgeQLResult::Commit(_)
     ));
+}
+
+#[test]
+fn a_gated_job_satisfies_commit_after_completion() {
+    let (mut engine, sid, _dir) = gated_session();
+
+    // Start the gated step as a background job and wait for it to finish.
+    let started = exec(&mut engine, &sid, "JOB START 'gate'");
+    let ForgeQLResult::JobStarted(job) = started else {
+        panic!("expected JobStarted, got {started:?}");
+    };
+    let snap = engine
+        .jobs_handle()
+        .wait(&job.id, std::time::Duration::from_secs(30))
+        .expect("job id must be known");
+    assert!(
+        matches!(snap.state, forgeql_core::jobs::JobState::Succeeded),
+        "gate job must succeed: {snap:?}"
+    );
+
+    // COMMIT reconciles the finished gate job and proceeds.
+    assert!(matches!(
+        exec(&mut engine, &sid, "COMMIT MESSAGE 'gated via job'"),
+        ForgeQLResult::Commit(_)
+    ));
+}
+
+#[test]
+fn an_edit_before_the_gate_job_reconciles_keeps_commit_blocked() {
+    let (mut engine, sid, _dir) = gated_session();
+
+    // Start the gated step as a background job and let it finish.
+    let started = exec(&mut engine, &sid, "JOB START 'gate'");
+    let ForgeQLResult::JobStarted(job) = started else {
+        panic!("expected JobStarted, got {started:?}");
+    };
+    let _ = engine
+        .jobs_handle()
+        .wait(&job.id, std::time::Duration::from_secs(30))
+        .expect("job id must be known");
+
+    // Mutate before the job's result is reconciled: the run no longer
+    // describes the worktree, so it must not satisfy the gate.
+    exec(
+        &mut engine,
+        &sid,
+        "CHANGE FILE 'notes.txt' WITH <<TXT\nedited\nTXT",
+    );
+    try_exec(&mut engine, &sid, "COMMIT MESSAGE 'stale gate'")
+        .expect_err("a stale gate job must not unblock COMMIT");
 }
 
 #[test]

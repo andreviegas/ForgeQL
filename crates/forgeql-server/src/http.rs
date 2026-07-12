@@ -287,37 +287,85 @@ async fn execute_fql(
 
     let mut outputs = Vec::with_capacity(ops.len());
     let mut new_session: Option<String> = None;
-    let mut guard = state.engine.lock().await;
     for (text, op) in &ops {
         let started = std::time::Instant::now();
+        let mut guard = state.engine.lock().await;
         let result = guard
             .execute(user_id, coords.as_ref(), op)
             .map_err(|e| e.to_string())?;
+        // A pending VERIFY/RUN runs on the background job pool: release the
+        // engine lock while waiting so a long gate never blocks other tenants,
+        // then fold the outcome (and commit-gate bookkeeping) back in.
+        let result = match result {
+            ForgeQLResult::PendingExec(pending) => {
+                let registry = guard.jobs_handle();
+                drop(guard);
+                let job_id = pending.job_id.clone();
+                let wait = std::time::Duration::from_secs(pending.wait_secs);
+                let snapshot = tokio::task::spawn_blocking(move || registry.wait(&job_id, wait))
+                    .await
+                    .map_err(|e| format!("job wait failed: {e}"))?;
+                guard = state.engine.lock().await;
+                guard.finish_pending(&pending, snapshot)
+            }
+            other => other,
+        };
         if let ForgeQLResult::SourceOp(sop) = &result
             && let Some(sid) = sop.session_id.as_deref()
         {
             new_session = Some(sid.to_string());
         }
+        // The session the statement ran under: a USE earlier in the batch
+        // updates it for the following statements.
+        let sid = new_session.as_deref().or(session_id);
         let rendered = if format.eq_ignore_ascii_case("json") {
             result.to_json()
         } else {
-            compact::to_compact(&result)
+            let compacted = compact::to_compact(&result);
+            // Window over-cap output into the session's SHOW MORE buffer,
+            // mirroring the stdio transport.
+            finalize_windowed(&guard, sid, &result, compacted)
         };
         // One log row per executed statement, mirroring the stdio MCP handler.
-        // A USE earlier in the batch updates the session the row is keyed to.
         if let Some(logger) = state.query_logger.as_ref() {
-            let sid = new_session.as_deref().or(session_id).unwrap_or("");
+            let sid = sid.unwrap_or("");
             let source = guard
                 .source_name_for_session(sid)
                 .map_or_else(|| "unknown".to_string(), str::to_owned);
             let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             logger.log(text, &result, &rendered, elapsed, &source, sid, None);
         }
+        drop(guard);
         outputs.push(rendered);
     }
-    drop(guard);
 
     Ok((outputs.join("\n"), new_session))
+}
+
+/// Window over-cap CSV output into the session's `SHOW MORE` buffer (see
+/// `showmore::buffering_params`); pass-through when there is no session or the
+/// result type never buffers.
+fn finalize_windowed(
+    engine: &ForgeQLEngine,
+    sid: Option<&str>,
+    result: &ForgeQLResult,
+    rendered: String,
+) -> String {
+    let Some(sid) = sid else {
+        return rendered;
+    };
+    let Some(worktree) = engine.session_worktree(sid) else {
+        return rendered;
+    };
+    let inline_cap = engine.session_inline_cap(sid);
+    let Some((label, dir, cap)) = forgeql_core::showmore::buffering_params(result, inline_cap)
+    else {
+        return rendered;
+    };
+    match forgeql_core::showmore::finalize(&worktree, &rendered, &label, dir, cap) {
+        Ok(fin) => fin.text,
+        Err(_) => rendered,
+    }
 }
 
 #[cfg(test)]

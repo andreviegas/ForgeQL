@@ -16,9 +16,9 @@
 /// Result types that are already small (mutations, transactions, source ops)
 /// fall back to `to_json()`.
 use crate::result::{
-    CallDirection, ExportPatchResult, FileEntry, FindNodeResult, ForgeQLResult, MemberEntry,
-    MutationResult, OutlineEntry, QueryResult, SessionStats, ShowContent, ShowResult, SourceLine,
-    SymbolRow, VerifyBuildResult,
+    CallDirection, ExportPatchResult, FileEntry, FindNodeResult, ForgeQLResult, JobListResult,
+    JobStartedResult, MemberEntry, MutationResult, OutlineEntry, PendingExecResult, QueryResult,
+    RunResult, SessionStats, ShowContent, ShowResult, SourceLine, SymbolRow, VerifyBuildResult,
 };
 
 // -----------------------------------------------------------------------
@@ -37,6 +37,11 @@ pub fn to_compact(result: &ForgeQLResult) -> String {
         ForgeQLResult::FindNode(r) => compact_find_node(r),
         ForgeQLResult::Mutation(m) => compact_mutation(m),
         ForgeQLResult::VerifyBuild(v) => compact_verify(v),
+        ForgeQLResult::Run(r) => compact_run(r),
+        ForgeQLResult::JobStarted(j) => compact_job_started(j),
+        ForgeQLResult::JobStatus(s) => compact_job_status(s),
+        ForgeQLResult::JobList(l) => compact_job_list(l),
+        ForgeQLResult::PendingExec(p) => compact_pending_exec(p),
         ForgeQLResult::ExportPatch(e) => compact_export_patch(e),
         // These are already small — keep JSON.
         _ => result.to_json(),
@@ -492,9 +497,111 @@ fn compact_mutation(r: &MutationResult) -> String {
 /// window and grep the build log without re-running it.
 fn compact_verify(v: &VerifyBuildResult) -> String {
     let verdict = if v.success { "PASS" } else { "FAIL" };
-    let mut out = String::with_capacity(v.output.len() + 64);
+    let mut out = String::with_capacity(v.output.len() + 128);
     row(&mut out, &[&q("verify_build"), &q(&v.step), &q(verdict)]);
     out.push_str(v.output.trim_end_matches('\n'));
+    if !v.success {
+        out.push('\n');
+        row(&mut out, &[&q("hint"), &q(FAIL_GREP_HINT)]);
+        chomp(&mut out);
+    }
+    out
+}
+
+/// Failure-triage recipe appended to failed verify/run/job output. Appended
+/// last so a tail-windowed log still shows it; the transport buffers the full
+/// log for `SHOW MORE` when it exceeds the inline window.
+const FAIL_GREP_HINT: &str = "grep the full log with SHOW MORE WHERE text MATCHES \
+    'error\\[|error:|FAILED|warning:' or page it with SHOW MORE TAIL 60";
+
+/// `RUN '<step>'` output — same shape and failure hint as `VERIFY build`.
+fn compact_run(r: &RunResult) -> String {
+    let verdict = if r.success { "PASS" } else { "FAIL" };
+    let mut out = String::with_capacity(r.output.len() + 128);
+    row(&mut out, &[&q("run"), &q(&r.step), &q(verdict)]);
+    out.push_str(r.output.trim_end_matches('\n'));
+    if !r.success {
+        out.push('\n');
+        row(&mut out, &[&q("hint"), &q(FAIL_GREP_HINT)]);
+        chomp(&mut out);
+    }
+    out
+}
+
+/// `JOB START` acknowledgement with the poll recipe inline.
+fn compact_job_started(j: &JobStartedResult) -> String {
+    let mut out = String::with_capacity(160);
+    row(&mut out, &[&q("job_started"), &q(&j.id), &q(&j.label)]);
+    let hint = format!(
+        "runs in background — poll JOB STATUS '{}'; JOB LIST shows all jobs",
+        j.id
+    );
+    row(&mut out, &[&q("hint"), &q(&hint)]);
+    chomp(&mut out);
+    out
+}
+
+/// `JOB STATUS` — status row, then output (when finished), then a
+/// state-matched next-step hint as the last line.
+fn compact_job_status(s: &crate::jobs::JobSnapshot) -> String {
+    let mut out = String::with_capacity(s.output.len() + 192);
+    row(
+        &mut out,
+        &[
+            &q("job_status"),
+            &q(&s.id),
+            &q(&s.label),
+            &q(s.state.as_str()),
+            &s.elapsed_ms.to_string(),
+        ],
+    );
+    if !s.output.is_empty() {
+        out.push_str(s.output.trim_end_matches('\n'));
+        out.push('\n');
+    }
+    match s.state {
+        crate::jobs::JobState::Queued | crate::jobs::JobState::Running => {
+            let hint = format!(
+                "still {} — re-check with JOB STATUS '{}'",
+                s.state.as_str(),
+                s.id
+            );
+            row(&mut out, &[&q("hint"), &q(&hint)]);
+        }
+        crate::jobs::JobState::Failed => row(&mut out, &[&q("hint"), &q(FAIL_GREP_HINT)]),
+        crate::jobs::JobState::Succeeded => {}
+    }
+    chomp(&mut out);
+    out
+}
+
+/// `JOB LIST` — one row per job plus the poll recipe for the newest job.
+fn compact_job_list(l: &JobListResult) -> String {
+    let mut out = String::with_capacity(64 + l.jobs.len() * 64);
+    row(&mut out, &[&q("job_list"), &l.jobs.len().to_string()]);
+    row(&mut out, &[&q("id"), &q("[state,label,elapsed_ms]")]);
+    for job in &l.jobs {
+        let detail = bracket(&[job.state.as_str(), &job.label, &job.elapsed_ms.to_string()]);
+        row(&mut out, &[&q(&job.id), &detail]);
+    }
+    if let Some(newest) = l.jobs.last() {
+        let hint = format!("JOB STATUS '{}' returns a job's output", newest.id);
+        row(&mut out, &[&q("hint"), &q(&hint)]);
+    }
+    chomp(&mut out);
+    out
+}
+
+/// Defensive rendering for a pending job the transport did not wait out.
+fn compact_pending_exec(p: &PendingExecResult) -> String {
+    let mut out = String::with_capacity(160);
+    row(&mut out, &[&q("job_started"), &q(&p.job_id), &q(&p.step)]);
+    let hint = format!(
+        "runs in background — poll JOB STATUS '{}'; JOB LIST shows all jobs",
+        p.job_id
+    );
+    row(&mut out, &[&q("hint"), &q(&hint)]);
+    chomp(&mut out);
     out
 }
 

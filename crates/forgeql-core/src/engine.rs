@@ -126,6 +126,24 @@ pub struct ForgeQLEngine {
     /// Background build-job registry (`JOB START / STATUS / LIST`), shared with
     /// worker threads via `Arc`.
     jobs: Arc<crate::jobs::JobRegistry>,
+    /// Gated verify jobs whose completion has not yet been folded into their
+    /// session's `satisfied_gates` — see `reconcile_gate_jobs`.
+    pending_gate_jobs: Vec<PendingGateJob>,
+}
+
+/// A gated verify step running as a background job, awaiting reconciliation
+/// into its session's `satisfied_gates` once it completes.
+pub(crate) struct PendingGateJob {
+    /// Job id in the background registry.
+    pub(crate) job_id: String,
+    /// Internal session map key the gate belongs to.
+    pub(crate) sid: String,
+    /// The `commit_gate` verify-step name.
+    pub(crate) step: String,
+    /// The session's `mutation_seq` when the job was submitted. The gate is
+    /// only satisfied when the counter is unchanged at completion — an edit
+    /// made while the job ran means it tested stale sources.
+    pub(crate) mutation_seq_at_start: u64,
 }
 
 // -----------------------------------------------------------------------
@@ -183,6 +201,7 @@ impl ForgeQLEngine {
             commands_served: 0,
             lang_registry,
             jobs: Arc::new(crate::jobs::JobRegistry::from_env()),
+            pending_gate_jobs: Vec::new(),
         };
         Ok(engine)
     }
@@ -317,6 +336,118 @@ impl ForgeQLEngine {
         Ok(result)
     }
 
+    /// Execute an op and synchronously wait out any pending background
+    /// execution (`VERIFY build` / `RUN` now run on the job pool).
+    ///
+    /// Single-tenant callers (CLI, REPL, pipe mode) use this; multi-tenant
+    /// transports do the same wait manually so they can release their engine
+    /// lock while the job runs.
+    ///
+    /// # Errors
+    /// Same failure modes as [`Self::execute`].
+    pub fn execute_blocking(
+        &mut self,
+        user_id: &str,
+        coords: Option<&SessionCoords>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        match self.execute(user_id, coords, op)? {
+            ForgeQLResult::PendingExec(pending) => {
+                let snapshot = self.jobs.wait(
+                    &pending.job_id,
+                    std::time::Duration::from_secs(pending.wait_secs),
+                );
+                Ok(self.finish_pending(&pending, snapshot))
+            }
+            other => Ok(other),
+        }
+    }
+
+    /// Shared handle to the background job registry — lets a transport wait on
+    /// a job (`JobRegistry::wait`) without holding its engine lock.
+    #[must_use]
+    pub fn jobs_handle(&self) -> Arc<crate::jobs::JobRegistry> {
+        Arc::clone(&self.jobs)
+    }
+
+    /// Convert a finished (or still-running) pending job into its final result.
+    ///
+    /// Reconciles gate bookkeeping first, so a gated `VERIFY build` that just
+    /// completed can immediately satisfy `COMMIT`. A job still running at the
+    /// wait deadline (or an unknown id) is surfaced as `JobStarted` — the
+    /// caller keeps polling with `JOB STATUS`.
+    pub fn finish_pending(
+        &mut self,
+        pending: &crate::result::PendingExecResult,
+        snapshot: Option<crate::jobs::JobSnapshot>,
+    ) -> ForgeQLResult {
+        self.reconcile_gate_jobs();
+        let started = |job_id: &str, step: &str| {
+            ForgeQLResult::JobStarted(crate::result::JobStartedResult {
+                id: job_id.to_string(),
+                label: step.to_string(),
+            })
+        };
+        let Some(snap) = snapshot else {
+            return started(&pending.job_id, &pending.step);
+        };
+        if !matches!(
+            snap.state,
+            crate::jobs::JobState::Succeeded | crate::jobs::JobState::Failed
+        ) {
+            return started(&pending.job_id, &pending.step);
+        }
+        let success = matches!(snap.state, crate::jobs::JobState::Succeeded);
+        match pending.kind {
+            crate::result::PendingExecKind::Verify => {
+                ForgeQLResult::VerifyBuild(crate::result::VerifyBuildResult {
+                    step: pending.step.clone(),
+                    success,
+                    output: snap.output,
+                    summary_lines: pending.summary_lines,
+                    summary_direction: pending.summary_direction,
+                })
+            }
+            crate::result::PendingExecKind::Run => ForgeQLResult::Run(crate::result::RunResult {
+                step: pending.step.clone(),
+                success,
+                output: snap.output,
+                summary_lines: pending.summary_lines,
+                summary_direction: pending.summary_direction,
+            }),
+        }
+    }
+
+    /// Fold finished gated background jobs into their session's
+    /// `satisfied_gates`. A completed gate only counts when the session's
+    /// `mutation_seq` is unchanged since submission — otherwise the job tested
+    /// stale sources and the gate stays unsatisfied. Failed and stale entries
+    /// are dropped; running ones are kept for the next reconcile.
+    pub(crate) fn reconcile_gate_jobs(&mut self) {
+        let mut remaining = Vec::with_capacity(self.pending_gate_jobs.len());
+        let entries: Vec<PendingGateJob> = self.pending_gate_jobs.drain(..).collect();
+        for entry in entries {
+            let Some(snap) = self.jobs.status(&entry.job_id) else {
+                // Evicted from the registry ring — nothing left to reconcile.
+                continue;
+            };
+            match snap.state {
+                crate::jobs::JobState::Queued | crate::jobs::JobState::Running => {
+                    remaining.push(entry);
+                }
+                crate::jobs::JobState::Failed => {}
+                crate::jobs::JobState::Succeeded => {
+                    if let Some(session) = self.sessions.get_mut(&entry.sid)
+                        && session.mutation_seq == entry.mutation_seq_at_start
+                    {
+                        let _ = session.satisfied_gates.insert(entry.step);
+                    }
+                }
+            }
+        }
+        self.pending_gate_jobs = remaining;
+    }
+
     /// Guard for session-dependent operations: FIND / SHOW / mutations need a
     /// live worktree directory on disk. Source-management commands (CREATE, USE,
     /// DISCONNECT, SHOW SOURCES/BRANCHES) do not and are exempt. Errors if the
@@ -437,7 +568,7 @@ impl ForgeQLEngine {
             ForgeQLIR::VerifyBuild { step, args } => self.exec_verify_build(sid, step, args),
             ForgeQLIR::Run { step, args } => self.exec_run(sid, step, args),
             ForgeQLIR::Undo { last } => self.exec_undo(sid, *last),
-            ForgeQLIR::JobStart { label } => self.exec_job_start(sid, label),
+            ForgeQLIR::JobStart { label, args } => self.exec_job_start(sid, label, args),
             ForgeQLIR::JobStatus { id } => self.exec_job_status(id),
             ForgeQLIR::JobList => self.exec_job_list(),
             ForgeQLIR::ExportPatch { last } => self.exec_export_patch(sid, *last),

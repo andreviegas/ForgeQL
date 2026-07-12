@@ -233,11 +233,11 @@ The engine never auto-corrects the text it splices — no comma fixing, no brace
 
 ### Verify, Commit Gate, and Background Jobs
 
-`VERIFY build '<step>'` runs a vetted command from `.forgeql.yaml` (`verify_steps`), with optional typed positional params substituted only after arity/type validation. Steps are frozen at `USE` so an edit cannot tamper with a gate command.
+`VERIFY build '<step>'` runs a vetted command from `.forgeql.yaml` (`verify_steps`), with optional typed positional params substituted only after arity/type validation. Steps are frozen at `USE` so an edit cannot tamper with a gate command. Since 0.110 every `VERIFY build` / `RUN` executes on the background job pool: the caller still gets a synchronous `success` + `output` response (the transport waits on the job with the engine lock released), but a long gate can no longer freeze the engine for other sessions or tenants. A run that outlives the step's `timeout_secs` degrades to a `job_started` response for `JOB STATUS` polling.
 
 Steps marked `commit_gate: true` gate `COMMIT`: the step must have passed **since the most recent mutation**, and every successful mutation invalidates prior passes. Multiple gated steps AND together.
 
-`JOB START '<step>'` runs the same verify steps as detached background jobs (`jobs.rs`): the request returns a job id immediately; `JOB STATUS` / `JOB LIST` poll state and output. Jobs execute through a bounded worker pool with a FIFO queue — at most `FORGEQL_MAX_CONCURRENT_JOBS` (default 1) run at once, the rest wait `Queued` — so a burst of heavy builds is serialized instead of exhausting machine memory.
+`JOB START '<step>' ['<arg>'…]` runs the same verify steps (including typed params) as detached background jobs (`jobs.rs`): the request returns a job id immediately; `JOB STATUS` / `JOB LIST` poll state and output. Jobs execute through a bounded worker pool with a FIFO queue — at most `FORGEQL_MAX_CONCURRENT_JOBS` (default 2) run at once, the rest wait `Queued` — so a burst of heavy builds is throttled instead of exhausting machine memory. A `commit_gate: true` step run as a job satisfies the commit gate at completion, but only when no mutation happened while it ran (the session's mutation counter is snapshotted at submission and compared at reconcile time); reconciliation happens on `JOB STATUS`, `JOB LIST`, and `COMMIT`.
 
 ### Agent Distribution
 

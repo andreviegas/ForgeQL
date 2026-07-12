@@ -132,7 +132,7 @@ fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
     let op = ops.first().expect("at least one op");
     let coords = SessionCoords::from_session_id(sid).expect("valid sid");
     engine
-        .execute(auth(AuthContext::Tester), Some(&coords), op)
+        .execute_blocking(auth(AuthContext::Tester), Some(&coords), op)
         .unwrap_or_else(|e| panic!("execute failed for: {fql}: {e}"))
 }
 

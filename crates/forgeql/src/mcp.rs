@@ -312,6 +312,25 @@ async fn exec_engine(
     })?
     .map_err(engine_error)?;
 
+    // A pending VERIFY/RUN runs on the background job pool: release the engine
+    // lock while waiting so a long gate never freezes other engine users, then
+    // fold the outcome (and commit-gate bookkeeping) back in.
+    let (guard, result) = match result {
+        ForgeQLResult::PendingExec(pending) => {
+            let registry = guard.jobs_handle();
+            drop(guard);
+            let job_id = pending.job_id.clone();
+            let wait = std::time::Duration::from_secs(pending.wait_secs);
+            let snapshot = tokio::task::spawn_blocking(move || registry.wait(&job_id, wait))
+                .await
+                .map_err(|e| ErrorData::internal_error(format!("job wait failed: {e}"), None))?;
+            let mut reacquired = engine.lock().await;
+            let result = reacquired.finish_pending(&pending, snapshot);
+            (reacquired, result)
+        }
+        other => (guard, other),
+    };
+
     // Query budget status while the lock is still held.
     // Use budget_status_for_op so admin commands (ShowBranches, ShowSources,
     // CreateSource, RefreshSource) produce no snapshot — they should not
@@ -335,52 +354,10 @@ async fn exec_engine(
     Ok((result, budget_snap, worktree, inline_cap))
 }
 
-/// Decide whether a result's rendered CSV output should be buffered for
-/// `SHOW MORE`, returning `(label, direction, inline-cap)` when so.
-///
-/// Enabled for every bulk-output result type: `SHOW` and `FIND` (read output,
-/// capped at the session's inline limit) plus `VERIFY build` / `RUN` (command
-/// logs, capped at their summary window). `finalize` only writes a buffer when
-/// the rendered output exceeds the cap, so small results pass through inline.
-fn buffering_params(
-    result: &ForgeQLResult,
-    inline_cap: usize,
-) -> Option<(String, forgeql_core::showmore::Direction, usize)> {
-    use forgeql_core::config::SummaryDirection;
-    use forgeql_core::showmore::Direction;
-    match result {
-        ForgeQLResult::VerifyBuild(v) => {
-            let dir = match v.summary_direction {
-                SummaryDirection::Tail => Direction::Tail,
-                SummaryDirection::Head => Direction::Head,
-            };
-            Some((format!("verify_build '{}'", v.step), dir, v.summary_lines))
-        }
-        ForgeQLResult::Run(v) => {
-            let dir = match v.summary_direction {
-                SummaryDirection::Tail => Direction::Tail,
-                SummaryDirection::Head => Direction::Head,
-            };
-            Some((format!("run '{}'", v.step), dir, v.summary_lines))
-        }
-        // Read-oriented bulk output: SHOW (source lines) and FIND (rows). Both
-        // page top-down and share the session's inline cap. `finalize` only
-        // writes a buffer when the rendered output actually exceeds the cap, so
-        // small results pass through inline and unchanged.
-        ForgeQLResult::Show(_) => Some(("show".to_string(), Direction::Head, inline_cap)),
-        ForgeQLResult::Query(_) => Some(("find".to_string(), Direction::Head, inline_cap)),
-        // Patch exports inline the whole mbox series; page from the top so
-        // the file list and first patch arrive first.
-        ForgeQLResult::ExportPatch(_) => {
-            Some(("export_patch".to_string(), Direction::Head, inline_cap))
-        }
-        _ => None,
-    }
-}
-
 /// Apply the `SHOW MORE` buffering to a rendered CSV output when the result
-/// type opts in and exceeds its inline cap. Returns the (possibly windowed)
-/// text to display; the full output is written to the session buffer.
+/// type opts in (see `showmore::buffering_params`) and exceeds its inline cap.
+/// Returns the (possibly windowed) text to display; the full output is written
+/// to the session buffer.
 fn finalize_csv(
     rendered: String,
     result: &ForgeQLResult,
@@ -390,7 +367,8 @@ fn finalize_csv(
     let Some(root) = worktree else {
         return rendered;
     };
-    let Some((label, dir, cap)) = buffering_params(result, inline_cap) else {
+    let Some((label, dir, cap)) = forgeql_core::showmore::buffering_params(result, inline_cap)
+    else {
         return rendered;
     };
     match forgeql_core::showmore::finalize(root, &rendered, &label, dir, cap) {
@@ -606,6 +584,7 @@ mod tests {
     use std::sync::Arc;
 
     use forgeql_core::ast::lang::LanguageRegistry;
+    use forgeql_core::showmore::buffering_params;
     use forgeql_lang_c::CLanguage;
     use forgeql_lang_cpp::CppLanguage;
     use tempfile::tempdir;

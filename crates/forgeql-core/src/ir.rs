@@ -518,6 +518,9 @@ pub enum ForgeQLIR {
     JobStart {
         /// Verify-step label to run (same labels as `VERIFY build`).
         label: String,
+        /// Positional arguments for the step's typed params (empty when the
+        /// step takes none) — same substitution rules as `VERIFY build`.
+        args: Vec<String>,
     },
     /// `JOB STATUS '<id>'` — poll a background job's state and output.
     JobStatus {

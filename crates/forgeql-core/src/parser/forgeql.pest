@@ -276,7 +276,7 @@ run_stmt    = { "RUN" ~ any_value ~ string_literal* }
 
 /// `JOB START '<label>'` | `JOB STATUS '<id>'` | `JOB LIST`
 job_stmt   = { "JOB" ~ (job_start | job_status | job_list) }
-job_start  = { "START" ~ any_value }
+job_start  = { "START" ~ any_value ~ string_literal* }
 job_status = { "STATUS" ~ any_value }
 job_list   = { "LIST" }
 commit_stmt = { "COMMIT" ~ "MESSAGE" ~ content_value }

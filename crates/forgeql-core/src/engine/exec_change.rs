@@ -84,6 +84,7 @@ impl ForgeQLEngine {
         if let Some(session) = self.sessions.get_mut(sid) {
             session.satisfied_gates.clear();
             session.edits_since_gate = session.edits_since_gate.saturating_add(1);
+            session.mutation_seq = session.mutation_seq.saturating_add(1);
             // Line numbers may have shifted: any mutation invalidates the
             // remembered FIND sites so a sweep must re-aim with a fresh FIND.
             session.last_find_sites.clear();
@@ -227,6 +228,7 @@ impl ForgeQLEngine {
         if let Some(session) = self.sessions.get_mut(sid) {
             session.satisfied_gates.clear();
             session.edits_since_gate = session.edits_since_gate.saturating_add(1);
+            session.mutation_seq = session.mutation_seq.saturating_add(1);
             session.last_find_sites.clear();
         }
 
@@ -301,6 +303,7 @@ impl ForgeQLEngine {
         if let Some(session) = self.sessions.get_mut(sid) {
             session.satisfied_gates.clear();
             session.edits_since_gate = session.edits_since_gate.saturating_add(1);
+            session.mutation_seq = session.mutation_seq.saturating_add(1);
             // UNDO shifts lines back too — remembered FIND sites are stale.
             session.last_find_sites.clear();
         }

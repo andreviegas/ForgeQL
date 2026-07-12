@@ -77,6 +77,9 @@ impl fmt::Display for ForgeQLResult {
                 }
                 Ok(())
             }
+            Self::PendingExec(p) => {
+                write!(formatter, "job {} started — {}", p.job_id, p.step)
+            }
         }
     }
 }

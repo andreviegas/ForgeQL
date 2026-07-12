@@ -193,12 +193,13 @@ fn parse_job_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, Fo
         .ok_or_else(|| ForgeError::DslParse("job: expected START | STATUS | LIST".into()))?;
     match inner.as_rule() {
         Rule::job_start => {
+            let mut inner = inner.into_inner();
             let label = inner
-                .into_inner()
                 .next()
                 .map(|l| unquote(l.as_str()))
                 .ok_or_else(|| ForgeError::DslParse("job start: expected step label".into()))?;
-            Ok(ForgeQLIR::JobStart { label })
+            let args = inner.map(|l| unquote(l.as_str())).collect();
+            Ok(ForgeQLIR::JobStart { label, args })
         }
         Rule::job_status => {
             let id = inner

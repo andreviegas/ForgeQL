@@ -143,7 +143,7 @@ pub(crate) fn execute_and_print(
             .map(SessionCoords::from_session_id)
             .transpose()
             .unwrap_or(None); // malformed token: treat as no session
-        match engine.execute(user_id, coords.as_ref(), op) {
+        match engine.execute_blocking(user_id, coords.as_ref(), op) {
             Ok(result) => {
                 let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
                 update_session_from_result(session, op, &result, &mut log_source);

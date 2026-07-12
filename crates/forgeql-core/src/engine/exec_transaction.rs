@@ -4,8 +4,8 @@ use tracing::warn;
 use crate::{
     git::{self as git},
     result::{
-        BeginTransactionResult, CommitResult, ForgeQLResult, RollbackResult, RunResult,
-        VerifyBuildResult,
+        BeginTransactionResult, CommitResult, ForgeQLResult, PendingExecKind, PendingExecResult,
+        RollbackResult,
     },
     session::Checkpoint,
     verify,
@@ -13,6 +13,30 @@ use crate::{
 
 use super::ForgeQLEngine;
 use super::require_session_id;
+
+/// Session context exposed to verify/run subprocesses (and RUN templates).
+/// `FORGEQL_BUILD_DIR` is per-worktree so concurrent agents never share build
+/// artifacts; consume it as `cargo --target-dir $FORGEQL_BUILD_DIR`.
+fn step_env(
+    session: &crate::session::Session,
+    sid: &str,
+    workdir: &std::path::Path,
+) -> Vec<(&'static str, String)> {
+    vec![
+        ("FORGEQL_SESSION_ID", sid.to_string()),
+        ("FORGEQL_SOURCE", session.source_name.clone()),
+        ("FORGEQL_BRANCH", session.branch.clone()),
+        ("FORGEQL_ALIAS", session.id.clone()),
+        (
+            "FORGEQL_WORKTREE",
+            session.worktree_path.display().to_string(),
+        ),
+        (
+            "FORGEQL_BUILD_DIR",
+            workdir.join("target").display().to_string(),
+        ),
+    ]
+}
 
 impl ForgeQLEngine {
     pub(super) fn exec_begin_transaction(
@@ -101,6 +125,10 @@ impl ForgeQLEngine {
         message: &str,
     ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
+
+        // Gated verify steps may have completed as background jobs — fold
+        // their results into `satisfied_gates` before checking the gate.
+        self.reconcile_gate_jobs();
 
         // Commit gate: every verify step flagged `commit_gate: true` in
         // `.forgeql.yaml` must have passed since the last mutation. When no
@@ -335,82 +363,26 @@ impl ForgeQLEngine {
         args: &[String],
     ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
-        let session = self.require_session(sid)?;
-        // Use the verify steps frozen at USE time — prevents config tampering
-        // between session start and VERIFY execution.
-        let frozen_steps = session.frozen_verify_steps.as_deref().unwrap_or(&[]);
-        let workdir = session
-            .frozen_workdir
-            .clone()
-            .unwrap_or_else(|| session.worktree_path.clone());
-        let mut step = frozen_steps
-            .iter()
-            .find(|s| s.name == step_name)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "VERIFY step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
-                )
-            })?;
-        // Session context exposed to the command (and to RUN templates later).
-        // `FORGEQL_BUILD_DIR` is per-worktree so concurrent agents never share
-        // build artifacts; consume it as `cargo --target-dir $FORGEQL_BUILD_DIR`.
-        let env: [(&str, String); 6] = [
-            ("FORGEQL_SESSION_ID", sid.to_string()),
-            ("FORGEQL_SOURCE", session.source_name.clone()),
-            ("FORGEQL_BRANCH", session.branch.clone()),
-            ("FORGEQL_ALIAS", session.id.clone()),
-            (
-                "FORGEQL_WORKTREE",
-                session.worktree_path.display().to_string(),
-            ),
-            (
-                "FORGEQL_BUILD_DIR",
-                workdir.join("target").display().to_string(),
-            ),
-        ];
-        // Validate the supplied args against the step's declared params and
-        // substitute them into the command (injection-safe: ident-typed only).
-        step.command = crate::config::resolve_command(&step, args)
-            .map_err(|e| anyhow::anyhow!("VERIFY build '{step_name}': {e}"))?;
-        let summary = step.summary;
-        let result = verify::run_standalone(&step, &workdir, &env);
-        // Commit-gate bookkeeping: a gated step that passes marks itself
-        // satisfied for the current (unmutated) worktree state. The next
-        // mutation clears this set (see exec_mutation), so a stale gate can
-        // never satisfy COMMIT.
-        if result.success
-            && step.commit_gate
-            && let Some(session) = self.sessions.get_mut(sid)
-        {
-            let _ = session.satisfied_gates.insert(step.name);
-        }
-        Ok(ForgeQLResult::VerifyBuild(VerifyBuildResult {
-            step: result.step,
-            success: result.success,
-            output: result.output,
-            summary_lines: summary.lines,
-            summary_direction: summary.direction,
-        }))
+        let pending = self.submit_verify_job(sid, step_name, args, PendingExecKind::Verify)?;
+        Ok(ForgeQLResult::PendingExec(pending))
     }
 
-    /// `JOB START '<label>'` — run a verify step as a detached background job.
-    ///
-    /// Resolves the frozen verify step (same allowlist as `VERIFY build`), then
-    /// runs its command on a worker thread and returns the job id immediately —
-    /// the long build never blocks this request. The step's `weight` is recorded
-    /// on the job for the future scheduler.
-    ///
-    /// # Errors
-    /// Returns `Err` if the step name is not found, or the step declares params
-    /// (parameterized jobs are not supported yet — use `VERIFY build`).
-    pub(super) fn exec_job_start(
-        &self,
-        session_id: Option<&str>,
-        label: &str,
-    ) -> Result<ForgeQLResult> {
-        let sid = require_session_id(session_id)?;
+    /// Resolve a frozen verify step and submit its command to the background
+    /// job pool. Shared by `VERIFY build` (whose caller then waits on the job
+    /// with the engine lock released) and `JOB START` (which returns the job
+    /// id immediately). A `commit_gate` step is tracked with the session's
+    /// current `mutation_seq` so its completion can satisfy the commit gate —
+    /// see `reconcile_gate_jobs`.
+    fn submit_verify_job(
+        &mut self,
+        sid: &str,
+        step_name: &str,
+        args: &[String],
+        kind: PendingExecKind,
+    ) -> Result<PendingExecResult> {
         let session = self.require_session(sid)?;
+        // Use the verify steps frozen at USE time — prevents config tampering
+        // between session start and execution.
         let frozen_steps = session.frozen_verify_steps.as_deref().unwrap_or(&[]);
         let workdir = session
             .frozen_workdir
@@ -418,46 +390,69 @@ impl ForgeQLEngine {
             .unwrap_or_else(|| session.worktree_path.clone());
         let step = frozen_steps
             .iter()
-            .find(|s| s.name == label)
+            .find(|s| s.name == step_name)
             .cloned()
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "JOB START: verify step '{label}' not found in .forgeql.yaml — add it under verify_steps:"
+                    "verify step '{step_name}' not found in .forgeql.yaml — add it under verify_steps:"
                 )
             })?;
-        anyhow::ensure!(
-            step.params.is_empty(),
-            "JOB START '{label}': parameterized steps are not supported yet — use VERIFY build"
-        );
-        let env: Vec<(&'static str, String)> = vec![
-            ("FORGEQL_SESSION_ID", sid.to_string()),
-            ("FORGEQL_SOURCE", session.source_name.clone()),
-            ("FORGEQL_BRANCH", session.branch.clone()),
-            ("FORGEQL_ALIAS", session.id.clone()),
-            (
-                "FORGEQL_WORKTREE",
-                session.worktree_path.display().to_string(),
-            ),
-            (
-                "FORGEQL_BUILD_DIR",
-                workdir.join("target").display().to_string(),
-            ),
-        ];
-        let cost = step.weight.resolve();
-        let label_owned = step.name.clone();
-        let command = step.command.clone();
-        let step_name = step.name;
+        // Validate the supplied args against the step's declared params and
+        // substitute them into the command (injection-safe: ident-typed only).
+        let command = crate::config::resolve_command(&step, args)
+            .map_err(|e| anyhow::anyhow!("VERIFY build '{step_name}': {e}"))?;
+        let env = step_env(session, sid, &workdir);
+        let mutation_seq = session.mutation_seq;
+        let job_name = step.name.clone();
         let registry = std::sync::Arc::clone(&self.jobs);
-        let id = registry.start(label_owned.clone(), cost, move || {
-            let result = crate::verify::run_shell(&step_name, &command, &workdir, &env, None);
+        let job_id = registry.start(step.name.clone(), step.weight.resolve(), move || {
+            let result = verify::run_shell(&job_name, &command, &workdir, &env, None);
             crate::jobs::JobOutcome {
                 success: result.success,
                 output: result.output,
             }
         });
+        if step.commit_gate {
+            self.pending_gate_jobs.push(super::PendingGateJob {
+                job_id: job_id.clone(),
+                sid: sid.to_string(),
+                step: step.name.clone(),
+                mutation_seq_at_start: mutation_seq,
+            });
+        }
+        Ok(PendingExecResult {
+            job_id,
+            step: step.name,
+            kind,
+            wait_secs: step.timeout_secs,
+            summary_lines: step.summary.lines,
+            summary_direction: step.summary.direction,
+        })
+    }
+
+    /// `JOB START '<label>' ['<arg>'…]` — run a verify step as a detached
+    /// background job.
+    ///
+    /// Resolves the frozen verify step (same allowlist and typed-param
+    /// substitution as `VERIFY build`), then runs its command on a worker
+    /// thread and returns the job id immediately — the long build never blocks
+    /// this request. A `commit_gate` step satisfies the commit gate when the
+    /// job later completes, provided no mutation happened while it ran.
+    ///
+    /// # Errors
+    /// Returns `Err` if the step name is not found or the arguments do not
+    /// match the step's declared params.
+    pub(super) fn exec_job_start(
+        &mut self,
+        session_id: Option<&str>,
+        label: &str,
+        args: &[String],
+    ) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let pending = self.submit_verify_job(sid, label, args, PendingExecKind::Verify)?;
         Ok(ForgeQLResult::JobStarted(crate::result::JobStartedResult {
-            id,
-            label: label_owned,
+            id: pending.job_id,
+            label: pending.step,
         }))
     }
 
@@ -465,7 +460,10 @@ impl ForgeQLEngine {
     ///
     /// # Errors
     /// Returns `Err` if no job with that id is known.
-    pub(super) fn exec_job_status(&self, id: &str) -> Result<ForgeQLResult> {
+    pub(super) fn exec_job_status(&mut self, id: &str) -> Result<ForgeQLResult> {
+        // Fold finished gated jobs into `satisfied_gates` before reporting, so
+        // a poll that sees "succeeded" has also unblocked COMMIT.
+        self.reconcile_gate_jobs();
         self.jobs.status(id).map_or_else(
             || Err(anyhow::anyhow!("JOB STATUS: unknown job id '{id}'")),
             |snapshot| Ok(ForgeQLResult::JobStatus(snapshot)),
@@ -477,7 +475,8 @@ impl ForgeQLEngine {
     /// # Errors
     /// Never fails today; returns `Result` for dispatch uniformity.
     #[allow(clippy::unnecessary_wraps)]
-    pub(super) fn exec_job_list(&self) -> Result<ForgeQLResult> {
+    pub(super) fn exec_job_list(&mut self) -> Result<ForgeQLResult> {
+        self.reconcile_gate_jobs();
         Ok(ForgeQLResult::JobList(crate::result::JobListResult {
             jobs: self.jobs.list(),
         }))
@@ -497,6 +496,18 @@ impl ForgeQLEngine {
         args: &[String],
     ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
+        let pending = self.submit_run_job(sid, step_name, args)?;
+        Ok(ForgeQLResult::PendingExec(pending))
+    }
+
+    /// Resolve a frozen `RUN` template and submit it to the background job
+    /// pool; the caller waits on the job with the engine lock released.
+    fn submit_run_job(
+        &self,
+        sid: &str,
+        step_name: &str,
+        args: &[String],
+    ) -> Result<PendingExecResult> {
         let session = self.require_session(sid)?;
         // Use the run steps frozen at USE time — prevents config tampering
         // between session start and RUN execution.
@@ -514,36 +525,31 @@ impl ForgeQLEngine {
                     "RUN step '{step_name}' not found in .forgeql.yaml — add it under run_steps:"
                 )
             })?;
-        // Same session context as VERIFY; `FORGEQL_BUILD_DIR` is per-worktree so
-        // a RUN template (e.g. run_fql) can locate the freshly built binary.
-        let env: [(&str, String); 6] = [
-            ("FORGEQL_SESSION_ID", sid.to_string()),
-            ("FORGEQL_SOURCE", session.source_name.clone()),
-            ("FORGEQL_BRANCH", session.branch.clone()),
-            ("FORGEQL_ALIAS", session.id.clone()),
-            (
-                "FORGEQL_WORKTREE",
-                session.worktree_path.display().to_string(),
-            ),
-            (
-                "FORGEQL_BUILD_DIR",
-                workdir.join("target").display().to_string(),
-            ),
-        ];
         // Resolve the template: ident args → command tokens (injection-safe);
         // string args → subprocess stdin (never spliced into the shell).
         let (command, stdin) =
             crate::config::resolve_template(&step.name, &step.command, &step.params, args)
                 .map_err(|e| anyhow::anyhow!("RUN '{step_name}': {e}"))?;
-        let summary = step.summary;
-        let result = verify::run_shell(&step.name, &command, &workdir, &env, stdin.as_deref());
-        Ok(ForgeQLResult::Run(RunResult {
-            step: result.step,
-            success: result.success,
-            output: result.output,
-            summary_lines: summary.lines,
-            summary_direction: summary.direction,
-        }))
+        let env = step_env(session, sid, &workdir);
+        let job_name = step.name.clone();
+        let registry = std::sync::Arc::clone(&self.jobs);
+        // Run templates declare no `weight` — schedule them at the default cost.
+        let cost = crate::config::Weight::default().resolve();
+        let job_id = registry.start(step.name.clone(), cost, move || {
+            let result = verify::run_shell(&job_name, &command, &workdir, &env, stdin.as_deref());
+            crate::jobs::JobOutcome {
+                success: result.success,
+                output: result.output,
+            }
+        });
+        Ok(PendingExecResult {
+            job_id,
+            step: step.name,
+            kind: PendingExecKind::Run,
+            wait_secs: step.timeout_secs,
+            summary_lines: step.summary.lines,
+            summary_direction: step.summary.direction,
+        })
     }
 
     /// `EXPORT PATCH [LAST n]` — write the session's commits as

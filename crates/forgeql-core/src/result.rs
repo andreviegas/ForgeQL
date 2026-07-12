@@ -58,6 +58,10 @@ pub enum ForgeQLResult {
     JobStatus(crate::jobs::JobSnapshot),
     /// Background job list: `JOB LIST`
     JobList(JobListResult),
+    /// Intermediate: a `VERIFY build` / `RUN` command submitted to the job
+    /// pool. Never returned to end callers — transports wait on the job and
+    /// convert it into `VerifyBuild` / `Run` (or `JobStarted` on wait timeout).
+    PendingExec(PendingExecResult),
     /// Patch export: `EXPORT PATCH [LAST n]`
     ExportPatch(ExportPatchResult),
 }
@@ -740,6 +744,39 @@ pub struct RunResult {
     pub summary_direction: crate::config::SummaryDirection,
 }
 
+/// Which command submitted a [`PendingExecResult`] job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PendingExecKind {
+    /// `VERIFY build '<step>'`.
+    Verify,
+    /// `RUN '<step>'`.
+    Run,
+}
+
+/// Intermediate result of `VERIFY build` / `RUN` — the command now runs on
+/// the background job pool.
+///
+/// The engine lock is never held while the subprocess runs. Transports wait
+/// on `job_id` (up to `wait_secs`) and convert the finished job into a
+/// [`VerifyBuildResult`] / [`RunResult`]; a job still running at the deadline
+/// is surfaced as `JobStarted` for `JOB STATUS` polling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingExecResult {
+    /// Job id in the background registry.
+    pub job_id: String,
+    /// The verify/run step name being executed.
+    pub step: String,
+    /// Which command produced this pending job.
+    pub kind: PendingExecKind,
+    /// Longest time a synchronous caller should wait before falling back to
+    /// `JobStarted` — the step's `timeout_secs`.
+    pub wait_secs: u64,
+    /// Inline summary window carried through to the final result.
+    pub summary_lines: usize,
+    /// Which end of the output to show inline (tail by default).
+    pub summary_direction: crate::config::SummaryDirection,
+}
+
 // -----------------------------------------------------------------------
 // Plan results (DRY_RUN, EXPLAIN)
 // -----------------------------------------------------------------------
@@ -885,6 +922,7 @@ impl ForgeQLResult {
             | Self::JobStarted(_)
             | Self::JobStatus(_)
             | Self::JobList(_)
+            | Self::PendingExec(_)
             | Self::Commit(_)
             | Self::SourceOp(_)
             | Self::VerifyBuild(_)

@@ -6,6 +6,40 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.110.0] — 2026-07-13 — feat: VERIFY/RUN through the job pool; agent hints
+
+### Changed
+
+- **`VERIFY build` and `RUN` now execute on the background job pool.** The
+  response is unchanged — the caller still gets a synchronous `success` +
+  `output` — but the engine lock is released while the subprocess runs, so a
+  long test gate can no longer freeze the engine for other sessions or, on
+  `forgeql-server`, for other tenants. A run that outlives the step's
+  `timeout_secs` returns a `job_started` row instead; poll it with
+  `JOB STATUS '<id>'`.
+- **`FORGEQL_MAX_CONCURRENT_JOBS` default raised from 1 to 2**, letting one
+  long gate and one quick build overlap while still bounding memory use.
+- `JOB STATUS` output that exceeds the inline window is now buffered for
+  `SHOW MORE` on both transports, like `VERIFY build` output. The HTTP server
+  gained the same `SHOW MORE` windowing/buffering the stdio transport already
+  had.
+
+### Added
+
+- **`JOB START` accepts typed positional args** (`JOB START 'step' 'arg'…`),
+  with the same arity/type validation and injection-safe substitution as
+  `VERIFY build`.
+- **Background gate jobs satisfy the commit gate.** A `commit_gate: true` step
+  run via `JOB START` (or a timed-out `VERIFY build`) marks the gate satisfied
+  when the job completes — unless an edit happened while it ran, in which case
+  the gate stays blocked because the run tested stale sources. Reconciliation
+  happens on `JOB STATUS`, `JOB LIST`, and `COMMIT`.
+- **Inline next-step hints on job responses.** `JOB START` answers with the
+  exact poll command, a running `JOB STATUS` says how to re-check, and a failed
+  `VERIFY build` / `RUN` / job carries the `SHOW MORE WHERE text MATCHES …`
+  recipe for grepping the buffered log — the agent no longer needs the syntax
+  reference for the happy path.
+
 ## [0.109.3] — 2026-07-13 — fix(core): array_block never fired; map syntax damage as `error` rows
 
 ### Fixed
