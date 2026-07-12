@@ -6,6 +6,52 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.109.1] — 2026-07-12 — fix(lang-text): every JSON/YAML structural node is addressable
+
+### Fixed
+
+- **Structural nodes with no natural name emitted no row at all, so they had no
+  `node_id` and could not be moved, changed or deleted.** In
+  `.github/workflows/ci.yml` the step `- uses: actions/checkout@v4` (no `name:`
+  key) was invisible to the index — and, worse, its `uses` pair was reparented
+  onto the enclosing `steps` pair, so `SHOW outline` reported a child as a
+  *sibling*. `extract_name` named only pairs and containers carrying an
+  identifier-like member (`name`/`id`/`key`/`title`/`alias`); everything else
+  returned `None`, and `process_node_rows` only emits a row when a name exists.
+- **`fql_kind = 'array'` was documented but could never be produced.**
+  `json.json` and `yaml.json` both mapped the kind, but nothing named a
+  sequence, so `FIND symbols WHERE fql_kind = 'array'` returned 0 rows across
+  every JSON/YAML file in the repo.
+
+### Added
+
+- **`forgeql-lang-text::structure`** — one shared naming ladder for the
+  structured-text formats. JSON and YAML now delegate `extract_name` to
+  `structured_name`, supplying only a `StructureSpec` of their tree-sitter kind
+  names, so changing the naming rules is a one-file edit:
+  - `pair` → its (unquoted) key text;
+  - container with an identifier-like member → that member's value (unchanged);
+  - container **without** one → its **key-set skeleton**, the sorted keys
+    comma-joined (`uses`, `name,run`);
+  - `array`/sequence → the key of its nearest ancestor pair (`steps`);
+  - anything else → `None`.
+
+### Notes
+
+- **Names never encode a position.** `OrdinalRemapper::assign` re-attaches a node
+  to its previous ordinal by matching `(name, fql_kind, parent_ordinal)`. A
+  slot-based name (`steps[0]`) would follow the *position* rather than the node:
+  swap two sibling elements and each matches the other's hint, so the two nodes
+  trade ordinals and a handle held for one silently resolves to the other. The
+  key-set skeleton is derived from the node's own content — stable under sibling
+  reorder and under a value edit (`@v4` → `@v5` leaves the key set `{uses}`
+  untouched) — the same contract as the condition skeleton that names `if`
+  statements. `no_name_encodes_a_position` guards this in both plugins.
+- A JSON document containing no keys at all (`crates/forgeql/tests/corpus.json`,
+  an array of arrays of strings) still indexes to zero rows: it has no breadcrumb
+  to name anything. Making it addressable needs block-grouping of same-kind
+  sibling runs, which is a separate change.
+
 ## [0.109.0] — 2026-07-11 — feat(server): --log-queries CSV query log
 
 ### Added

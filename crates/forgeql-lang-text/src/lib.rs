@@ -37,6 +37,7 @@ pub mod just;
 pub mod make;
 pub mod markdown;
 pub mod rst;
+pub mod structure;
 pub mod toml;
 pub mod xml;
 pub mod yaml;

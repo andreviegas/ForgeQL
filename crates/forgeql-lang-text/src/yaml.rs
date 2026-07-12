@@ -22,7 +22,8 @@
 
 use std::sync::{Arc, OnceLock};
 
-use forgeql_core::ast::lang::{LanguageConfig, LanguageRegistry, LanguageSupport, node_text};
+use crate::structure::{self, StructureSpec};
+use forgeql_core::ast::lang::{LanguageConfig, LanguageRegistry, LanguageSupport};
 use forgeql_core::ast::lang_json::LanguageConfigJson;
 
 /// YAML language support for ForgeQL.
@@ -40,6 +41,9 @@ const PAIR_KINDS: &[&str] = &["block_mapping_pair", "flow_pair"];
 
 /// Mapping node kinds (block and flow style).
 const MAPPING_KINDS: &[&str] = &["block_mapping", "flow_mapping"];
+
+/// Sequence node kinds (block and flow style).
+const SEQUENCE_KINDS: &[&str] = &["block_sequence", "flow_sequence"];
 
 /// Returns the static YAML language configuration, loaded from
 /// `config/yaml.json` (embedded at compile time).
@@ -77,38 +81,17 @@ fn unquote(text: &str) -> &str {
     trimmed
 }
 
-/// The (unquoted) text of a mapping pair's key, if any.
-fn pair_key(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-    let key = node.child_by_field_name("key")?;
-    let name = unquote(&node_text(source, key)).to_string();
-    (!name.is_empty()).then_some(name)
-}
-
-/// Name a mapping by the value of its first identifier-like member, if any.
-fn mapping_identifier(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if !PAIR_KINDS.contains(&child.kind()) {
-            continue;
-        }
-        let Some(key) = child.child_by_field_name("key") else {
-            continue;
-        };
-        let key_text = node_text(source, key);
-        if !IDENTIFIER_KEYS.contains(&unquote(&key_text)) {
-            continue;
-        }
-        let Some(value) = child.child_by_field_name("value") else {
-            continue;
-        };
-        let value_name = unquote(&node_text(source, value)).to_string();
-        if !value_name.is_empty() {
-            return Some(value_name);
-        }
-    }
-    None
-}
-
+/// YAML's node-kind vocabulary for the shared naming ladder.
+///
+/// Everything about *how* a node is named lives in [`crate::structure`]; this
+/// const supplies only the tree-sitter-yaml kind names.
+const YAML_SPEC: StructureSpec = StructureSpec {
+    pair_kinds: PAIR_KINDS,
+    container_kinds: MAPPING_KINDS,
+    sequence_kinds: SEQUENCE_KINDS,
+    identifier_keys: IDENTIFIER_KEYS,
+    unquote,
+};
 impl LanguageSupport for YamlLanguage {
     fn name(&self) -> &'static str {
         "yaml"
@@ -123,17 +106,7 @@ impl LanguageSupport for YamlLanguage {
     }
 
     fn extract_name(&self, node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-        let kind = node.kind();
-        if PAIR_KINDS.contains(&kind) {
-            // Mapping members: index under the (unquoted) key text.
-            pair_key(node, source)
-        } else if MAPPING_KINDS.contains(&kind) {
-            // Mappings: name after an identifier-like member so whole entries
-            // are addressable by a stable node_id.
-            mapping_identifier(node, source)
-        } else {
-            None
-        }
+        structure::structured_name(node, source, &YAML_SPEC)
     }
 
     fn map_kind(&self, raw_kind: &str) -> Option<&'static str> {
@@ -229,5 +202,35 @@ mod tests {
         let tree = parse(source);
         let names = collect_names(&YamlLanguage, tree.root_node(), source);
         assert!(names.contains(&"G2_kernel_sched".to_string()));
+    }
+
+    #[test]
+    fn names_every_step_of_a_workflow_sequence() {
+        // The exact shape that broke .github/workflows/ci.yml: a step with no
+        // `name:` key emitted no row at all, so it had no node_id and could not
+        // be moved or deleted — and its `uses` pair was reparented onto `steps`,
+        // making the outline report a child as a sibling.
+        let source =
+            b"steps:\n  - uses: actions/checkout@v4\n  - name: Build\n    run: cargo build\n";
+        let tree = parse(source);
+        let names = collect_names(&YamlLanguage, tree.root_node(), source);
+
+        // the sequence itself, named after its key
+        assert!(names.contains(&"steps".to_string()), "{names:?}");
+        // the step WITHOUT a name: — addressable by its key-set skeleton
+        assert!(names.contains(&"uses".to_string()), "{names:?}");
+        // the step WITH a name: — still addressable by its identifier member
+        assert!(names.contains(&"Build".to_string()), "{names:?}");
+    }
+
+    #[test]
+    fn no_name_encodes_a_position() {
+        let source = b"steps:\n  - uses: a\n  - uses: b\n";
+        let tree = parse(source);
+        let names = collect_names(&YamlLanguage, tree.root_node(), source);
+        assert!(
+            names.iter().all(|n| !n.ends_with(']')),
+            "a name encodes a position: {names:?}"
+        );
     }
 }

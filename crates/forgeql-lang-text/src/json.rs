@@ -23,7 +23,8 @@
 
 use std::sync::{Arc, OnceLock};
 
-use forgeql_core::ast::lang::{LanguageConfig, LanguageRegistry, LanguageSupport, node_text};
+use crate::structure::{self, StructureSpec};
+use forgeql_core::ast::lang::{LanguageConfig, LanguageRegistry, LanguageSupport};
 use forgeql_core::ast::lang_json::LanguageConfigJson;
 
 /// JSON language support for ForgeQL.
@@ -69,32 +70,17 @@ fn unquote(text: &str) -> &str {
         .unwrap_or(trimmed)
 }
 
-/// Name an object by the value of its first identifier-like member, if any.
-fn object_identifier(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if child.kind() != "pair" {
-            continue;
-        }
-        let Some(key) = child.child_by_field_name("key") else {
-            continue;
-        };
-        let key_text = node_text(source, key);
-        let key_name = unquote(&key_text);
-        if !IDENTIFIER_KEYS.contains(&key_name) {
-            continue;
-        }
-        let Some(value) = child.child_by_field_name("value") else {
-            continue;
-        };
-        let value_text = node_text(source, value);
-        let value_name = unquote(&value_text).to_string();
-        if !value_name.is_empty() {
-            return Some(value_name);
-        }
-    }
-    None
-}
+/// JSON's node-kind vocabulary for the shared naming ladder.
+///
+/// Everything about *how* a node is named lives in [`crate::structure`]; this
+/// const supplies only the tree-sitter-json kind names.
+const JSON_SPEC: StructureSpec = StructureSpec {
+    pair_kinds: &["pair"],
+    container_kinds: &["object"],
+    sequence_kinds: &["array"],
+    identifier_keys: IDENTIFIER_KEYS,
+    unquote,
+};
 
 impl LanguageSupport for JsonLanguage {
     fn name(&self) -> &'static str {
@@ -110,20 +96,7 @@ impl LanguageSupport for JsonLanguage {
     }
 
     fn extract_name(&self, node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-        match node.kind() {
-            // Object members: index under the (unquoted) key text.
-            "pair" => {
-                let key = node.child_by_field_name("key")?;
-                let name = unquote(&node_text(source, key)).to_string();
-                (!name.is_empty()).then_some(name)
-            }
-
-            // Objects: name after an identifier-like member so whole entries
-            // (e.g. golden-test cases) are addressable by a stable node_id.
-            "object" => object_identifier(node, source),
-
-            _ => None,
-        }
+        structure::structured_name(node, source, &JSON_SPEC)
     }
 
     fn map_kind(&self, raw_kind: &str) -> Option<&'static str> {
@@ -230,5 +203,54 @@ mod tests {
         let names = collect_names(&JsonLanguage, tree.root_node(), source);
         assert!(names.contains(&"expect_rows".to_string()));
         assert!(names.contains(&"thread_runq".to_string()));
+    }
+
+    #[test]
+    fn names_array_after_its_key() {
+        // The `array` kind has always been in json.json's kind_map but could
+        // never be emitted, because nothing named an array. It is now named
+        // after the key of its nearest ancestor pair.
+        let source = br#"{"steps": [1, 2]}"#;
+        let tree = parse(source);
+        let names = collect_names(&JsonLanguage, tree.root_node(), source);
+        assert!(names.contains(&"steps".to_string()));
+    }
+
+    #[test]
+    fn names_identifier_less_object_by_its_key_set() {
+        // An object with no name/id/key/title/alias member used to emit no row
+        // at all, and its children were reparented onto the enclosing pair.
+        let source = br#"{"steps": [{"uses": "actions/checkout@v4"}]}"#;
+        let tree = parse(source);
+        let names = collect_names(&JsonLanguage, tree.root_node(), source);
+        assert!(names.contains(&"uses".to_string()));
+    }
+
+    #[test]
+    fn key_set_skeleton_survives_a_value_edit() {
+        // Bumping a value must not change any node's identity: OrdinalRemapper
+        // matches on (name, fql_kind, parent_ordinal), so a name that moved here
+        // would hand the node a fresh ordinal on every edit.
+        let before = br#"{"s": [{"uses": "actions/checkout@v4"}]}"#;
+        let after = br#"{"s": [{"uses": "actions/checkout@v5"}]}"#;
+        let (t1, t2) = (parse(before), parse(after));
+        assert_eq!(
+            collect_names(&JsonLanguage, t1.root_node(), before),
+            collect_names(&JsonLanguage, t2.root_node(), after),
+        );
+    }
+
+    #[test]
+    fn no_name_encodes_a_position() {
+        // A positional name (`steps[0]`) would follow the slot rather than the
+        // node: swap two siblings and each matches the other's ordinal hint, so
+        // the two nodes trade handles. Guard the ladder against regressing to it.
+        let source = br#"{"steps": [{"uses": "a"}, {"uses": "b"}]}"#;
+        let tree = parse(source);
+        let names = collect_names(&JsonLanguage, tree.root_node(), source);
+        assert!(
+            names.iter().all(|n| !n.ends_with(']')),
+            "a name encodes a position: {names:?}"
+        );
     }
 }

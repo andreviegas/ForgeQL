@@ -972,7 +972,7 @@ gets a stable `node_id` and the **same commands apply** — `FIND symbols`,
 | XML family | `.xml`, `.arxml` (AUTOSAR), `.xdm`/`.epc`/`.epd` (EB tresos), `.ecuc`, `.odx` | Every element is a nested node, named by the cascade below |
 | Vector CAN | `.dbc` | `BO_` messages as `object`; `SG_` signals nested as `field`; `VAL_TABLE_`/`VAL_` as `enum`; attributes as `pair`; `EV_` as `variable` |
 | TOML | `.toml` (`Cargo.toml`), `.lock` (`Cargo.lock`) | Each `pair` under its key; each `[table]`/`[[table-array]]` by its `name`/`id`/`key` member or header key |
-| JSON / YAML | `.json`, `.jsonc`, `.yaml`, `.yml` | `object`/`array`/`pair`; objects named by an identifier-like member |
+| JSON / YAML | `.json`, `.jsonc`, `.yaml`, `.yml` | `object`/`array`/`pair`. A `pair` is named by its key. A container is named by an identifier-like member (`name`/`id`/`key`/`title`/`alias`), else by its **key-set skeleton** — its sorted keys, comma-joined (`uses`, `name,run`) — so a mapping with no name is still addressable. An `array`/sequence is named after the key of its nearest ancestor pair (`steps`). Names never encode a position: a slot-based name would follow the slot rather than the node, and two siblings would trade `node_id`s when reordered. |
 | INI | `.ini`, `.cfg`, `.editorconfig`, `.gitconfig` | `[section]` as `object`; `key = value` nested as `pair` |
 | justfile | `justfile` (any casing, with or without dot) | Recipes as `function`; `:=` assignments and `alias` as `variable`; `set` as `pair`; `mod` as `namespace` |
 | Make | `Makefile`/`makefile`/`GNUmakefile`, `*.mk` | Rules as `function` named by target list; assignments as `variable`; `define` as `macro`; `ifeq`/`ifdef` as `if` |
