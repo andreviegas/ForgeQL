@@ -1,0 +1,98 @@
+{
+  "suite": "node_addressing",
+  "description": "Node handles on a real C source (zephyr kernel/sched.c). Migrated from the FCN/FSD/FE cases in the legacy tests/golden.json, which HARDCODED node_ids inside their fql strings ('n097e974b9c6e.0031' = thread_runq, '.0037' = curr_cpu_runq, '.0039' = runq_add). Those pins made the suite a liability: any change that gives a new fql_kind an ordinal shifts every later node_id in a file, and the pinned mutation cases then fire at the WRONG node — a DELETE that removed the wrong node and an INSERT that landed in the wrong place, duplicating thread_runq and producing failures that look like indexer bugs. GOLDEN_UPDATE=1 cannot fix that: it rewrites expect_* values, not the pins inside fql, so blessing would record the corruption as correct. Here every handle is CAPTURED from a FIND-by-name at run time, so the suite is immune to ordinal shifts by construction. Reads share one ro session; all mutations live in a single rw case so the big corpus needs only one throwaway worktree.",
+  "cases": [
+
+    { "name": "node_handles_resolve_and_read_back", "use": "zephyr-andre.main",
+      "steps": [
+        { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
+          "assert": { "row_count": 1, "pointer": { "/results/0/line": 51 } },
+          "capture": { "A": "results.0.node_id" } },
+
+        { "fql": "FIND NODE '${A}'",
+          "assert": { "field": { "type": "find_node" },
+                      "pointer": { "/line": 51, "/end_line": 69, "/name": "thread_runq", "/fql_kind": "function" } } },
+
+        { "fql": "SHOW NODE '${A}'",
+          "assert": { "pointer": { "/start_line": 51, "/end_line": 69,
+                                   "/content/lines/0/text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)" } } },
+
+        { "fql": "SHOW NODE '${A}' METADATA",
+          "assert": { "field": { "type": "find_node" },
+                      "pointer": { "/line": 51, "/end_line": 69, "/name": "thread_runq", "/fql_kind": "function" } } },
+
+        { "fql": "SHOW NODE '${A}' WHERE text LIKE '%ARG_UNUSED%'",
+          "assert": { "pointer": { "/content/lines/0/line": 66,
+                                   "/content/lines/0/text": "\tARG_UNUSED(thread);" } } },
+
+        { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'curr_cpu_runq' LIMIT 1",
+          "assert": { "row_count": 1 },
+          "capture": { "B": "results.0.node_id" } },
+
+        { "fql": "FIND NODE '${B}'",
+          "assert": { "pointer": { "/line": 71, "/end_line": 78 } } },
+
+        { "fql": "SHOW NODE '${B}' CONTENT",
+          "assert": { "pointer": { "/start_line": 71, "/end_line": 78,
+                                   "/content/lines/0/text": "static ALWAYS_INLINE void *curr_cpu_runq(void)" } } }
+      ] },
+
+    { "name": "node_mutations_round_trip_on_c_source", "use": "zephyr-andre.main", "mode": "rw",
+      "steps": [
+        { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
+          "assert": { "row_count": 1 },
+          "capture": { "A": "results.0.node_id" } },
+
+        { "fql": "BEGIN TRANSACTION 'v2-change'", "assert": { "field": { "name": "v2-change" } } },
+        { "fql": "CHANGE NODE '${A}' WITH <<C\nstatic void thread_runq_golden(void) {}\nC",
+          "assert": { "applied": true, "files_changed": ["kernel/sched.c"] },
+          "capture": { "CHANGED": "new_node_id" } },
+        { "fql": "FIND symbols WHERE name = 'thread_runq_golden' IN 'kernel/sched.c'",
+          "assert": { "row_count": 1 } },
+        { "fql": "SHOW NODE '${CHANGED}'",
+          "assert": { "pointer": { "/content/lines/0/text": "static void thread_runq_golden(void) {}" } } },
+        { "fql": "ROLLBACK TRANSACTION 'v2-change'", "assert": { "field": { "name": "v2-change" } } },
+        { "fql": "FIND symbols WHERE name = 'thread_runq' IN 'kernel/sched.c'",
+          "assert": { "row_count": 1 } },
+
+        { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'runq_add' LIMIT 1",
+          "assert": { "row_count": 1 },
+          "capture": { "R": "results.0.node_id" } },
+        { "fql": "BEGIN TRANSACTION 'v2-delete'", "assert": { "field": { "name": "v2-delete" } } },
+        { "fql": "DELETE NODE '${R}'",
+          "assert": { "applied": true, "files_changed": ["kernel/sched.c"] } },
+        { "fql": "FIND symbols WHERE name = 'runq_add' IN 'kernel/sched.c'",
+          "assert": { "row_count": 0 } },
+        { "fql": "ROLLBACK TRANSACTION 'v2-delete'", "assert": { "field": { "name": "v2-delete" } } },
+        { "fql": "FIND symbols WHERE name = 'runq_add' IN 'kernel/sched.c'",
+          "assert": { "row_count": 1 } },
+
+        { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'curr_cpu_runq' LIMIT 1",
+          "assert": { "row_count": 1, "pointer": { "/results/0/line": 71 } },
+          "capture": { "B": "results.0.node_id" } },
+
+        { "fql": "BEGIN TRANSACTION 'v2-insert-before'", "assert": { "field": { "name": "v2-insert-before" } } },
+        { "fql": "INSERT BEFORE NODE '${B}' WITH '/* v2 before curr_cpu_runq */'",
+          "assert": { "applied": true } },
+        { "fql": "SHOW LINES 71-71 OF 'kernel/sched.c'",
+          "assert": { "pointer": { "/content/lines/0/text": "/* v2 before curr_cpu_runq */" } } },
+        { "fql": "ROLLBACK TRANSACTION 'v2-insert-before'", "assert": { "field": { "name": "v2-insert-before" } } },
+        { "fql": "FIND symbols WHERE name = 'curr_cpu_runq' IN 'kernel/sched.c' WHERE line = 71",
+          "assert": { "row_count": 1 } },
+
+        { "fql": "BEGIN TRANSACTION 'v2-insert-after'", "assert": { "field": { "name": "v2-insert-after" } } },
+        { "fql": "INSERT AFTER NODE '${B}' WITH 'static void v2_inserted(void) {}'",
+          "assert": { "applied": true },
+          "capture": { "INSERTED": "new_node_id" } },
+        { "fql": "SHOW LINES 79-79 OF 'kernel/sched.c'",
+          "assert": { "pointer": { "/content/lines/0/text": "static void v2_inserted(void) {}" } } },
+        { "fql": "SHOW NODE '${INSERTED}'",
+          "assert": { "pointer": { "/content/lines/0/text": "static void v2_inserted(void) {}" } } },
+        { "fql": "FIND symbols WHERE name = 'v2_inserted' IN 'kernel/sched.c'",
+          "assert": { "row_count": 1 } },
+        { "fql": "ROLLBACK TRANSACTION 'v2-insert-after'", "assert": { "field": { "name": "v2-insert-after" } } },
+        { "fql": "FIND symbols WHERE name = 'v2_inserted' IN 'kernel/sched.c'",
+          "assert": { "row_count": 0 } }
+      ] }
+  ]
+}
