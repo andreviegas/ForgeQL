@@ -6,6 +6,40 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.111.1] — 2026-07-13 — feat(find): `FIND files WHERE has_error` — triage syntax damage
+
+### Added
+
+- **`FIND files WHERE has_error = 'true'`** and **`error_count`** — file-level triage for syntax
+  damage. `error` rows (0.109.3) find broken *regions*; these find the broken *files*, so an agent
+  can check what it is about to mutate before it mutates it. This half was specified with the
+  `error` kind but never built: `FIND files WHERE has_error = 'true'` silently returned zero rows
+  while `FIND symbols WHERE fql_kind = 'error'` returned plenty.
+
+  Both are **derived on demand**: they cost one indexed `fql_kind = 'error'` scan, so they are
+  computed only when a clause names them, and the `error_count` column appears in the output only
+  when you asked for it. A plain `FIND files` is unchanged and pays nothing. `error_count: None`
+  therefore means *not asked for*, never *no errors* — an unpopulated entry deliberately matches
+  neither `has_error = 'true'` nor `= 'false'`, so a query that never asked can never be read as a
+  clean bill of health.
+
+- **Guards for the node_id identity contract** (`tests/golden/structured_text.json`):
+  `reorder_preserves_node_ids` swaps two sibling YAML steps and asserts the handle held for one
+  still resolves to *its own* content, not to the sibling that took its slot; `no_positional_*`
+  asserts no emitted `object`/`array` name ever ends in `[N]`. A node_id follows **identity**,
+  never **position** — had any name encoded a slot (`steps[0]`), two swapped siblings would *trade*
+  node_ids and a `DELETE`/`CHANGE` would silently hit the wrong node. Nothing tested this before.
+
+### Known gap
+
+- **`error` rows are emitted but not addressable.** `error` is missing from
+  `is_addressable_fql_kind`, so every broken region comes back with an empty `node_id`: it can be
+  found and never repaired by handle, which is half of what the kind exists for. The fix is a
+  one-line addition, but it hands `error` rows ordinals and therefore shifts node_ids in every file
+  that contains one — so it needs an `ENRICH_VER` bump **and** a regeneration of the hardcoded
+  node_id pins in `tests/golden.json` (the FCN/FSD/FE cases). Held back to keep that migration on
+  its own commit; see the note on `ENRICH_VER`.
+
 ## [0.111.0] — 2026-07-13 — feat(dsl): SHOW DIFF — see an uncommitted change
 
 ### Added

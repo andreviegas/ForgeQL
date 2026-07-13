@@ -1049,7 +1049,7 @@ fn scan_block_run(
     // `next_named_sibling`, NOT `next_sibling`: a run's members are often
     // separated by anonymous punctuation. JSON array elements are separated by
     // `,` tokens, whose `map_kind` is empty — walking raw siblings breaks the
-    // run at the first comma, so a 733-element array scanned as a run of ONE and
+    // run at the first comma, so a 201-element array scanned as a run of ONE and
     // no block was ever emitted. Rust comment runs have no separator between
     // members, which is why this went unnoticed: for them the two walks agree.
     while let Some(sib) = cursor.next_named_sibling() {

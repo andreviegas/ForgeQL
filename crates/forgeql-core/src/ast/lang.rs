@@ -43,10 +43,11 @@ pub const FQL_SWITCH: &str = "switch";
 pub const FQL_DO: &str = "do";
 /// FQL kind for a region the parser could not parse.
 ///
-/// Covers a tree-sitter `ERROR` node (bytes it could not parse) and a `MISSING`
-/// node (a token it had to invent to recover). Both are universal to
-/// tree-sitter, so core can spot syntax damage in any language without knowing
-/// the language.
+/// Emitted for a tree-sitter `ERROR` node — the bytes it could not parse.
+/// `MISSING` nodes (tokens tree-sitter *invented* to recover) are deliberately
+/// NOT emitted: they occupy no source bytes, so they have no span to address
+/// and no text to change.  `ERROR` is universal to tree-sitter, so core maps
+/// syntax damage in any language without knowing the language.
 pub const FQL_ERROR: &str = "error";
 
 // -----------------------------------------------------------------------

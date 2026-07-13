@@ -1036,6 +1036,7 @@ fn make_file_entry(path: &str, size: u64) -> crate::result::FileEntry {
         extension,
         size,
         count: None,
+        error_count: None,
     }
 }
 
@@ -1058,6 +1059,29 @@ fn file_entry_where_name_matches_bare_file_name() {
     apply_clauses(&mut items, &clauses);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].path, PathBuf::from("kernel/Kconfig"));
+}
+
+#[test]
+fn file_entry_has_error_is_none_until_the_query_asks() {
+    // `error_count: None` means *not asked for*, never *no errors*.  An
+    // unpopulated entry must match NEITHER `= 'true'` NOR `= 'false'`, or a
+    // plain `FIND files` would silently report every file as clean.
+    let entry = make_file_entry("kernel/sched.c", 300);
+    assert_eq!(entry.field_str("has_error"), None);
+    assert_eq!(entry.field_num("error_count"), None);
+}
+
+#[test]
+fn file_entry_has_error_reflects_the_error_count() {
+    let mut clean = make_file_entry("kernel/sched.c", 300);
+    clean.error_count = Some(0);
+    assert_eq!(clean.field_str("has_error"), Some("false"));
+    assert_eq!(clean.field_num("error_count"), Some(0));
+
+    let mut damaged = make_file_entry("kernel/broken.c", 300);
+    damaged.error_count = Some(3);
+    assert_eq!(damaged.field_str("has_error"), Some("true"));
+    assert_eq!(damaged.field_num("error_count"), Some(3));
 }
 
 #[test]

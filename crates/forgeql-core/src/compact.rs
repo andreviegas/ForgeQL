@@ -308,19 +308,32 @@ fn compact_callgraph(
     out
 }
 
-/// FIND files → 2 flat columns: path, size.
+/// FIND files → 2 flat columns: path, size — plus `error_count` when the query
+/// asked about it.
 fn compact_filelist(files: &[FileEntry], total: usize) -> String {
     let mut out = String::with_capacity(files.len() * 40);
     // Header.
     let tot = total.to_string();
     row(&mut out, &[&q("find_files"), &tot]);
+    // `error_count` is populated only when the query asked about it, so the
+    // column shows up only then — a plain `FIND files` keeps its two columns.
+    let with_errors = files.iter().any(|e| e.error_count.is_some());
     // Schema hint.
-    row(&mut out, &[&q("path"), &q("size")]);
+    if with_errors {
+        row(&mut out, &[&q("path"), &q("size"), &q("error_count")]);
+    } else {
+        row(&mut out, &[&q("path"), &q("size")]);
+    }
     // Data rows.
     for entry in files {
         let path = q(&entry.path.to_string_lossy());
         let size = entry.size.to_string();
-        row(&mut out, &[&path, &size]);
+        if with_errors {
+            let errors = entry.error_count.unwrap_or(0).to_string();
+            row(&mut out, &[&path, &size, &errors]);
+        } else {
+            row(&mut out, &[&path, &size]);
+        }
     }
     chomp(&mut out);
     out

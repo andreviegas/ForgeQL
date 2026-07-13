@@ -673,11 +673,13 @@ impl ForgeQLEngine {
                         size,
                         depth,
                         count: None,
+                        error_count: None,
                     })
                 })
                 .collect()
         };
         let max_depth = clauses.depth.unwrap_or(usize::MAX);
+        stamp_error_counts(engine, workspace.root(), clauses, &mut entries)?;
         let results = format_file_results(&mut entries, clauses, max_depth);
         let count = results.len();
         Ok(serde_json::json!({
@@ -697,6 +699,61 @@ fn file_entry_json(fe: &FileEntry) -> serde_json::Value {
         "extension": fe.extension,
         "size":      fe.size,
     })
+}
+
+/// Populate [`FileEntry::error_count`] from the index — but only when the query
+/// actually asks about it.
+///
+/// Deriving the counts costs one indexed `fql_kind = 'error'` scan, so a plain
+/// `FIND files` must not pay for it.  Entries left at `None` mean *not asked
+/// for*, never *no errors*.
+fn stamp_error_counts(
+    engine: &dyn StorageEngine,
+    root: &std::path::Path,
+    clauses: &Clauses,
+    entries: &mut [FileEntry],
+) -> Result<()> {
+    if !references_error_field(clauses) {
+        return Ok(());
+    }
+
+    let probe = Clauses {
+        where_predicates: vec![crate::ir::Predicate {
+            field: "fql_kind".to_string(),
+            op: crate::ir::CompareOp::Eq,
+            value: crate::ir::PredicateValue::String(crate::ast::lang::FQL_ERROR.to_string()),
+        }],
+        group_by: Some(crate::ir::GroupBy::Field("file".to_string())),
+        ..Clauses::default()
+    };
+
+    let counts: std::collections::HashMap<PathBuf, u32> = engine
+        .find_symbols(&probe, root)?
+        .into_iter()
+        .filter_map(|m| Some((m.path?, u32::try_from(m.count?).unwrap_or(u32::MAX))))
+        .collect();
+
+    for entry in entries {
+        entry.error_count = Some(counts.get(&entry.path).copied().unwrap_or(0));
+    }
+    Ok(())
+}
+
+/// `true` when any clause names `has_error` or `error_count`.
+fn references_error_field(clauses: &Clauses) -> bool {
+    fn is_error_field(field: &str) -> bool {
+        field == "has_error" || field == "error_count"
+    }
+    clauses
+        .where_predicates
+        .iter()
+        .chain(clauses.having_predicates.iter())
+        .any(|p| is_error_field(&p.field))
+        || clauses
+            .order_by
+            .as_ref()
+            .is_some_and(|o| is_error_field(&o.field))
+        || matches!(&clauses.group_by, Some(crate::ir::GroupBy::Field(f)) if is_error_field(f))
 }
 
 /// Format file entries into result JSON, applying the clause-dependent shape:

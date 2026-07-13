@@ -86,6 +86,12 @@ impl ClauseTarget for crate::result::FileEntry {
             // The bare file name — `FIND files WHERE name = 'Kconfig'` is the
             // idiomatic first guess (mirrors `FIND symbols WHERE name`).
             "name" => self.path.file_name().and_then(|n| n.to_str()),
+            // `None` when the query never asked for error stats, so an
+            // unpopulated entry matches neither `= 'true'` nor `= 'false'`
+            // rather than silently claiming the file is clean.
+            "has_error" => self
+                .error_count
+                .map(|n| if n > 0 { "true" } else { "false" }),
             _ => None,
         }
     }
@@ -95,6 +101,7 @@ impl ClauseTarget for crate::result::FileEntry {
             "size" => Some(i64::try_from(self.size).unwrap_or(i64::MAX)),
             "depth" => self.depth.map(|d| i64::try_from(d).unwrap_or(i64::MAX)),
             "count" => self.count.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
+            "error_count" => self.error_count.map(i64::from),
             _ => None,
         }
     }

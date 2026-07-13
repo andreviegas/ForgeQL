@@ -284,6 +284,7 @@ fn filelist_two_columns() {
                     extension: "cpp".into(),
                     size: 12847,
                     count: None,
+                    error_count: None,
                 },
                 FileEntry {
                     path: PathBuf::from("include/motor_control.hpp"),
@@ -291,6 +292,7 @@ fn filelist_two_columns() {
                     extension: "hpp".into(),
                     size: 3421,
                     count: None,
+                    error_count: None,
                 },
             ],
             total: 142,

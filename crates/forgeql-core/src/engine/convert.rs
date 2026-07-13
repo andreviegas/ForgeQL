@@ -278,6 +278,10 @@ fn parse_file_entries(json: &serde_json::Value, clauses: &crate::ir::Clauses) ->
                         extension,
                         size,
                         count,
+                        error_count: entry
+                            .get("error_count")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| u32::try_from(n).unwrap_or(u32::MAX)),
                     })
                 })
                 .collect::<Vec<_>>()

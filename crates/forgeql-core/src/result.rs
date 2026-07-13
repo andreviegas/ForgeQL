@@ -472,6 +472,14 @@ pub struct FileEntry {
     /// Per-group file count populated after `GROUP BY` aggregation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<usize>,
+    /// Number of `fql_kind = 'error'` rows the index holds for this file.
+    ///
+    /// Populated **only** when the query filters, orders or groups on
+    /// `has_error` / `error_count`: deriving it costs an index scan, so a plain
+    /// `FIND files` never pays for it.  `None` therefore means *not asked for*,
+    /// never *no errors* — do not read it as a clean bill of health.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_count: Option<u32>,
 }
 
 impl FileEntry {

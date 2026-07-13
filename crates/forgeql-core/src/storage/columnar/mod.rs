@@ -155,6 +155,12 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///              file is no longer silently, partially indexed. Zero-width
 ///              `MISSING` tokens are deliberately NOT emitted: a row spanning
 ///              no bytes could be seen but not read or repaired.
+///        Note for the NEXT indexing change: `error` rows are emitted but are
+///        NOT in `is_addressable_fql_kind`, so they carry an empty `node_id`
+///        and cannot be repaired by handle. Fixing that hands them ordinals,
+///        which shifts node_ids in every file containing one — it needs a
+///        version bump AND a regeneration of the node_id pins in
+///        `tests/golden.json` (the FCN/FSD/FE cases hardcode them).
 pub const ENRICH_VER: u32 = 29;
 
 /// The filename used for the columnar delta file in the repository root.

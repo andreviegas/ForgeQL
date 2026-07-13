@@ -1,6 +1,6 @@
 {
   "suite": "structured_text",
-  "description": "Corpus-level guards for structured-text indexing. These assert EMITTED ROWS, not config. array_block shipped dead in 0.109.2 because its only test asserted that json.json DECLARED a block group — never that a block row appeared; scan_block_run walked raw siblings, so JSON's `,` separators broke every run at the first comma and a 201-element array scanned as a run of ONE. Exact-only asserts, so 'at least one' is written as LIMIT 1 + row_count 1.",
+  "description": "Corpus-level guards for structured-text indexing. These assert EMITTED ROWS, not config. array_block shipped dead in 0.109.2 because its only test asserted that json.json DECLARED a block group — never that a block row appeared; scan_block_run walked raw siblings, so JSON's `,` separators broke every run at the first comma and a 201-element array scanned as a run of ONE. The no_positional_* and reorder_preserves_node_ids cases guard the naming ladder's core contract: a node_id follows IDENTITY, never POSITION. If any name ever encoded a slot (steps[0]), two swapped siblings would TRADE node_ids and a handle held for one would silently resolve to the other — mis-targeting a DELETE or CHANGE. Exact-only asserts, so 'at least one' is written as LIMIT 1 + row_count 1.",
   "cases": [
     { "name": "keyless_json_document_is_addressable_at_all", "use": "forgeql-pub.frozen",
       "fql": "FIND symbols IN 'crates/forgeql/tests/corpus.json'",
@@ -20,6 +20,53 @@
 
     { "name": "syntax_damage_is_mapped_as_an_error_row", "use": "forgeql-pub.frozen",
       "fql": "FIND symbols WHERE fql_kind = 'error' LIMIT 1",
-      "assert": { "row_count": 1 } }
+      "assert": { "row_count": 1 } },
+
+    { "name": "has_error_surfaces_the_damaged_files", "use": "forgeql-pub.frozen",
+      "fql": "FIND files WHERE has_error = 'true' LIMIT 1",
+      "assert": { "row_count": 1 } },
+
+    { "name": "has_error_false_is_not_everything", "use": "forgeql-pub.frozen",
+      "fql": "FIND files WHERE has_error = 'false' LIMIT 1",
+      "assert": { "row_count": 1 } },
+
+    { "name": "error_count_is_orderable", "use": "forgeql-pub.frozen",
+      "fql": "FIND files WHERE error_count > 0 ORDER BY error_count DESC LIMIT 1",
+      "assert": { "row_count": 1 } },
+
+    { "name": "no_positional_object_names", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'object' WHERE name MATCHES '\\[[0-9]+\\]$'",
+      "assert": { "total": 0, "row_count": 0 } },
+
+    { "name": "no_positional_array_names", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'array' WHERE name MATCHES '\\[[0-9]+\\]$'",
+      "assert": { "total": 0, "row_count": 0 } },
+
+    { "name": "reorder_preserves_node_ids", "use": "forgeql-pub.frozen", "mode": "rw",
+      "steps": [
+        { "fql": "COPY LINES 1-1 OF '.github/workflows/ci.yml' TO 'probe_reorder.yml'",
+          "assert": { "applied": true } },
+        { "fql": "FIND symbols IN 'probe_reorder.yml' WHERE fql_kind = 'object' LIMIT 1",
+          "capture": { "seed": "results.0.node_id" } },
+        { "fql": "CHANGE NODE '${seed}' WITH <<Y\njobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n      - run: cargo test\nY",
+          "assert": { "applied": true } },
+
+        { "fql": "FIND symbols IN 'probe_reorder.yml' WHERE fql_kind = 'object' WHERE name = 'uses' LIMIT 1",
+          "assert": { "row_count": 1, "pointer": { "/results/0/line": 4 } },
+          "capture": { "uses_id": "results.0.node_id" } },
+        { "fql": "FIND symbols IN 'probe_reorder.yml' WHERE fql_kind = 'object' WHERE name = 'run' LIMIT 1",
+          "assert": { "row_count": 1, "pointer": { "/results/0/line": 5 } },
+          "capture": { "run_id": "results.0.node_id" } },
+        { "fql": "FIND symbols IN 'probe_reorder.yml' WHERE fql_kind = 'object' WHERE name = 'jobs' LIMIT 1",
+          "capture": { "root": "results.0.node_id" } },
+
+        { "fql": "CHANGE NODE '${root}' WITH <<Y\njobs:\n  build:\n    steps:\n      - run: cargo test\n      - uses: actions/checkout@v4\nY",
+          "assert": { "applied": true } },
+
+        { "fql": "SHOW NODE '${uses_id}'",
+          "assert": { "pointer": { "/content/lines/0/text": "      - uses: actions/checkout@v4", "/start_line": 5 } } },
+        { "fql": "SHOW NODE '${run_id}'",
+          "assert": { "pointer": { "/content/lines/0/text": "      - run: cargo test", "/start_line": 4 } } }
+      ] }
   ]
 }

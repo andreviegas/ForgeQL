@@ -811,6 +811,7 @@ fn display_show_result_filelist_variant() {
                 extension: "cpp".to_string(),
                 size: 1024,
                 count: None,
+                error_count: None,
             }],
             total: 1,
         },

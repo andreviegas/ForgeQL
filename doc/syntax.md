@@ -701,6 +701,24 @@ Applies to: `FIND files`
 | `extension` / `ext` | string | Extension without `.` (empty for extension-less files) |
 | `size` | integer | File size in bytes |
 | `depth` | integer | Directory depth from workspace root |
+| `has_error` | `"true"` / `"false"` | The file holds at least one `fql_kind = 'error'` row — a region the parser could not parse |
+| `error_count` | integer | Number of `error` rows in the file |
+
+`has_error` / `error_count` are **derived on demand**. They cost an index scan, so they are
+computed only when a clause names them — a plain `FIND files` never pays for it, and the
+`error_count` column appears in the output only when you asked about it.
+
+Triage a repository before mutating anything in it:
+
+```sql
+FIND files   WHERE has_error = 'true' ORDER BY error_count DESC   -- which files are damaged
+FIND symbols WHERE fql_kind = 'error' IN 'config/**'              -- path + line of every broken region
+```
+
+The engine maps the damage; it never repairs it (P1). **Known gap:** `error` rows are not yet in
+`is_addressable_fql_kind`, so they carry **no `node_id`** — you can locate a broken region by path
+and line, but you cannot yet `SHOW NODE` / `CHANGE NODE` it by handle. Repair it through the
+nearest enclosing addressable node, or with a raw-text edit.
 
 ### Diff Fields
 
@@ -1510,7 +1528,8 @@ column shows that field's value instead of `usages`:
 "src/timer.cpp","[updateTimer,405]"
 ```
 
-**FIND files** — 2 flat columns:
+**FIND files** — 2 flat columns (a third, `error_count`, appears only when the query names
+`has_error` or `error_count`):
 ```csv
 "find_files",142
 "path","size"

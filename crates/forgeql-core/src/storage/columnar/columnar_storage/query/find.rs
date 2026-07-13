@@ -199,6 +199,7 @@ impl ColumnarStorage {
                 size,
                 depth,
                 count: None,
+                error_count: None,
             });
         }
 
@@ -223,6 +224,7 @@ impl ColumnarStorage {
                 size: u64::from(*size),
                 depth,
                 count: None,
+                error_count: None,
             });
         }
 
@@ -248,6 +250,7 @@ impl ColumnarStorage {
                 size,
                 depth,
                 count: None,
+                error_count: None,
             });
         }
 
@@ -432,6 +435,7 @@ mod tests {
             size,
             depth: None,
             count: None,
+            error_count: None,
         }
     }
 
