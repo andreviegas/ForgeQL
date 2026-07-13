@@ -1,7 +1,7 @@
 [
   {
     "alias": "golden",
-    "expect_symbols_indexed": 2874572,
+    "expect_symbols_indexed": 2948962,
     "use": "zephyr-andre.zephyr-main"
   },
   {
@@ -147,11 +147,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"count": 838, "path": "kernel/mmu.c"},
-      {"count": 762, "path": "kernel/sched.c"},
-      {"count": 752, "path": "kernel/thread.c"},
-      {"count": 535, "path": "kernel/userspace.c"},
-      {"count": 515, "path": "kernel/work.c"}
+      {"count": 840, "path": "kernel/mmu.c"},
+      {"count": 778, "path": "kernel/sched.c"},
+      {"count": 755, "path": "kernel/thread.c"},
+      {"count": 542, "path": "kernel/userspace.c"},
+      {"count": 519, "path": "kernel/work.c"}
     ],
     "fql": "FIND symbols GROUP BY file IN 'kernel/**' ORDER BY count DESC LIMIT 5",
     "name": "G15_group_by_file_kernel_top5"
@@ -159,7 +159,7 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"count": 67587, "path": "samples/modules/tflite-micro/tflm_ethosu/src/models/keyword_spotting_cnn_small_int8/model.h"},
+      {"count": 67589, "path": "samples/modules/tflite-micro/tflm_ethosu/src/models/keyword_spotting_cnn_small_int8/model.h"},
       {"count": 18796, "path": "samples/boards/quicklogic/qomu/src/usb2serial_bit.c"},
       {"count": 17329, "path": "samples/modules/tflite-micro/magic_wand/src/magic_wand_model_data.cpp"},
       {"count": 16394, "path": "include/zephyr/sys/util_internal_is_eq.h"},
@@ -183,11 +183,11 @@
   {
     "expect_row_count": 5,
     "expect_rows": [
-      {"count": 838, "path": "kernel/mmu.c"},
-      {"count": 762, "path": "kernel/sched.c"},
-      {"count": 752, "path": "kernel/thread.c"},
-      {"count": 535, "path": "kernel/userspace.c"},
-      {"count": 515, "path": "kernel/work.c"}
+      {"count": 840, "path": "kernel/mmu.c"},
+      {"count": 778, "path": "kernel/sched.c"},
+      {"count": 755, "path": "kernel/thread.c"},
+      {"count": 542, "path": "kernel/userspace.c"},
+      {"count": 519, "path": "kernel/work.c"}
     ],
     "fql": "FIND symbols GROUP BY file IN 'kernel/**' HAVING count >= 500 ORDER BY count DESC",
     "name": "G18_group_by_file_kernel_having_500"
@@ -262,7 +262,7 @@
     "name": "G24_group_by_kind_drivers_top5"
   },
   {
-    "expect_row_count": 10,
+    "expect_row_count": 11,
     "expect_rows": [
       {"count": 2541, "kind": "variable"},
       {"count": 1591, "kind": "comment"},
@@ -2259,7 +2259,7 @@
   },
   {
     "alias": "golden-python",
-    "expect_symbols_indexed": 3116476,
+    "expect_symbols_indexed": 3138061,
     "use": "pytorch-andre.pytorch-frozen"
   },
   {
@@ -2695,7 +2695,7 @@
   },
   {
     "alias": "golden-rust",
-    "expect_symbols_indexed": 58307,
+    "expect_symbols_indexed": 59504,
     "use": "forgeql-pub.frozen"
   },
   {

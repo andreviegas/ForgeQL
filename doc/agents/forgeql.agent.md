@@ -400,6 +400,7 @@ FIND usages OF 'functionName' GROUP BY file ORDER BY count DESC
 | `do` | do-while loops |
 | `comment_block` | A run of 2+ adjacent same-style comments, as one addressable node (`///` doc runs and `//` line runs form separate blocks) |
 | `array_block` | A run of 8+ adjacent JSON `array` siblings, as one addressable node — this is what makes a keyless JSON document (an array of arrays) addressable at all |
+| `error` | A tree-sitter `ERROR` region — a span the parser could not parse, emitted as one addressable node (outermost only; nested ERRORs are not repeated). **Its presence means the file is already broken before you touch it.** Check with `FIND symbols WHERE fql_kind = 'error' GROUP BY file` before mutating, then read and repair by handle — the engine never fixes it for you. |
 
 A **block** node is the *sibling* of its members, never their parent. Members keep
 their own rows and node_ids; the block is added, nothing is hidden. Read or edit a

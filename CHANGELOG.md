@@ -6,6 +6,66 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.109.3] — 2026-07-13 — fix(core): array_block never fired; map syntax damage as `error` rows
+
+### Fixed
+
+- **`array_block` (0.109.2) shipped DEAD — it never emitted a single row.**
+  `scan_block_run` walked `next_sibling()`, but JSON array elements are separated
+  by `,` tokens: anonymous siblings whose `map_kind` is empty. The run therefore
+  broke at the first comma, so a 201-element array scanned as a run of **one** and
+  no block was ever emitted. `crates/forgeql/tests/corpus.json` still indexed to
+  **zero rows** — the exact problem 0.109.2 claimed to fix.
+
+  The run is now scanned over **named** siblings. Rust comment runs have no
+  separator between members, which is why every existing comment-block test kept
+  passing and nothing flagged it.
+
+  This also revives block groups in `rust.json`, `c.json` and `cpp.json`, which
+  were equally dead.
+
+  **Why the test suite missed it:** the unit test asserted that `json.json`
+  *declares* a block group — it never asserted a block row is *emitted*. It tested
+  the config file, not the behaviour, and passed on dead code. Found by driving
+  the built binary directly (`RUN 'run_fql'`), which is the only check that asks
+  the engine a question about a real file.
+
+### Added
+
+- **`error` rows.** A tree-sitter `ERROR` region — bytes the parser could not
+  parse — now emits an addressable row with `fql_kind = 'error'`. Until now these
+  were tracked only to suppress phantom enrichment and emitted nothing, so a
+  broken file was **silently, partially indexed** and an agent had no way to learn
+  that the file it was about to mutate was already damaged.
+
+  ```sql
+  FIND symbols WHERE fql_kind = 'error' GROUP BY file ORDER BY count DESC
+  SHOW NODE '<id>'   →   CHANGE NODE '<id>' WITH '…'
+  ```
+
+  Only the **outermost** damage is emitted; a nested `ERROR` would report one
+  wound as several. Zero-width `MISSING` tokens are deliberately **not** emitted:
+  a row spanning no bytes could be seen but not read or repaired, and a row you
+  cannot act on is the half-measure this change exists to avoid.
+
+  **P1:** the engine maps the damage and hands over a handle. It does not
+  validate, refuse, or repair — that is the agent's job.
+
+### Changed
+
+- `ENRICH_VER` 26 → 29 (27 and 28 consumed mid-development, never released).
+
+  **This was missed for three commits.** 0.109.1 (JSON/YAML naming) and 0.109.2
+  (`array_block`) both changed index output and neither bumped `ENRICH_VER`, so
+  every corpus golden suite read **pre-change v26 segments** and kept reporting
+  `symbols_indexed=2874572 ✓` for Zephyr — the same number as before the change.
+  Three commits of indexing work were never once exercised against the real
+  corpora, and every gate was green throughout.
+
+  The bump is required on **every iteration** of an indexing change, not once per
+  feature: a v(N) cache built from an earlier draft of your own change is exactly
+  as stale as a v(N-1) cache. This is now guardian principle **P5**.
+
 ## [0.109.2] — 2026-07-12 — refactor(core): block-group key belongs to the language, not the engine
 
 ### Fixed

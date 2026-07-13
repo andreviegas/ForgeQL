@@ -1,0 +1,25 @@
+{
+  "suite": "structured_text",
+  "description": "Corpus-level guards for structured-text indexing. These assert EMITTED ROWS, not config. array_block shipped dead in 0.109.2 because its only test asserted that json.json DECLARED a block group — never that a block row appeared; scan_block_run walked raw siblings, so JSON's `,` separators broke every run at the first comma and a 201-element array scanned as a run of ONE. Exact-only asserts, so 'at least one' is written as LIMIT 1 + row_count 1.",
+  "cases": [
+    { "name": "keyless_json_document_is_addressable_at_all", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols IN 'crates/forgeql/tests/corpus.json'",
+      "assert": { "total": 1, "row_count": 1, "rows": [ {"name": "array_block"} ] } },
+
+    { "name": "array_block_row_is_actually_emitted", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'array_block' IN 'crates/forgeql/tests/corpus.json' LIMIT 1",
+      "assert": { "row_count": 1 } },
+
+    { "name": "array_kind_is_emitted_not_merely_documented", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'array' IN '.github/workflows/ci.yml' LIMIT 1",
+      "assert": { "row_count": 1 } },
+
+    { "name": "workflow_step_without_a_name_key_is_addressable", "use": "forgeql-pub.frozen",
+      "fql": "SHOW outline OF '.github/workflows/ci.yml' ALL WHERE fql_kind = 'object' WHERE name = 'uses' LIMIT 1",
+      "assert": { "row_count": 1 } },
+
+    { "name": "syntax_damage_is_mapped_as_an_error_row", "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'error' LIMIT 1",
+      "assert": { "row_count": 1 } }
+  ]
+}

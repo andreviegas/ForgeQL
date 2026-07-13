@@ -842,6 +842,61 @@ mod tests {
     }
 
     #[test]
+    fn syntax_damage_is_mapped_as_an_error_row() {
+        // Until now a broken file was silently, partially indexed: tree-sitter
+        // recovered, ERROR subtrees existed, and nothing surfaced them — so an
+        // agent could not learn that the file it was about to mutate was already
+        // broken. The damage is now an addressable row.
+        let src = "fn ok() {}\nfn broken( { let x = ;\nfn also_ok() {}\n";
+        let table = index_rust_snippet(src);
+
+        let errors: Vec<_> = table
+            .rows
+            .iter()
+            .filter(|r| table.fql_kind_of(r) == "error")
+            .collect();
+
+        assert!(
+            !errors.is_empty(),
+            "a file tree-sitter could not parse must surface at least one error row"
+        );
+        // EVERY error row must be addressable: a row spanning no bytes could be
+        // seen but not read or repaired (`SHOW NODE` / `CHANGE NODE` need bytes).
+        // This is why zero-width MISSING nodes are deliberately not emitted.
+        assert!(
+            errors.iter().all(|r| !r.byte_range.is_empty()),
+            "an error row that spans no bytes cannot be acted on"
+        );
+    }
+
+    #[test]
+    fn a_clean_file_has_no_error_rows() {
+        let table = index_rust_snippet("fn f() -> u32 { 42 }\n");
+        assert!(
+            !table.rows.iter().any(|r| table.fql_kind_of(r) == "error"),
+            "a file that parses cleanly must produce no error rows"
+        );
+    }
+
+    #[test]
+    fn nested_damage_reports_one_region_not_many() {
+        // A broken region can contain further ERROR nodes. Emitting each would
+        // report one wound as several, so only the OUTERMOST is surfaced.
+        let src = "fn a() {}\nfn bad( ( ( { ] ) ;\nfn b() {}\n";
+        let table = index_rust_snippet(src);
+
+        let errors = table
+            .rows
+            .iter()
+            .filter(|r| table.fql_kind_of(r) == "error")
+            .count();
+        assert!(
+            errors <= 2,
+            "nested ERROR nodes must not each emit a row (got {errors})"
+        );
+    }
+
+    #[test]
     fn block_members_carry_block_alias_fields() {
         // Each member of a block is tagged with the block's 4-digit ordinal
         // (`block_ord`) and its 1-based offset within the block (`block_off`),

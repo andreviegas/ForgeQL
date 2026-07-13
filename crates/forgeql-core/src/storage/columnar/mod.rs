@@ -133,7 +133,29 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///          body) is. This lets `SHOW members` and type resolution reach the
 ///          definition instead of a bodyless reference; v25 segments carry
 ///          the spurious reference rows.
-pub const ENRICH_VER: u32 = 26;
+///  27, 28 — Consumed during development of 29 and never released. Dev caches
+///          at those versions hold drafts of the changes below and must not be
+///          trusted. (Bumping on EVERY iteration of an indexing change is not
+///          optional: a v(N) cache built from an earlier draft of your own
+///          change is exactly as stale as a v(N-1) cache, and reusing it makes
+///          the test suite pass against code that never ran.)
+///  29 — Four changes to index output, none of which v26 segments have:
+///          (a) JSON/YAML containers with no identifier member are now named by
+///              their key-set skeleton, and arrays by their nearest ancestor
+///              pair's key — v26 segments emit no row at all for those nodes,
+///              so their children are reparented onto the wrong ancestor;
+///          (b) a run of 8+ adjacent JSON `array` siblings now emits an
+///              `array_block` row — v26 segments lack it, leaving a keyless
+///              JSON document with zero addressable rows;
+///          (c) block runs are scanned over *named* siblings, so members
+///              separated by anonymous punctuation (JSON's `,`) group at all —
+///              before this, a 201-element array scanned as a run of ONE and no
+///              block was ever emitted;
+///          (d) tree-sitter `ERROR` regions now emit `error` rows, so a broken
+///              file is no longer silently, partially indexed. Zero-width
+///              `MISSING` tokens are deliberately NOT emitted: a row spanning
+///              no bytes could be seen but not read or repaired.
+pub const ENRICH_VER: u32 = 29;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

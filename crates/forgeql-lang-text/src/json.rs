@@ -256,11 +256,12 @@ mod tests {
 
     #[test]
     fn json_declares_an_array_block_group() {
-        // corpus.json is an array of arrays of strings — no keys anywhere, so
-        // the naming ladder can name nothing in it and it indexes to ZERO rows.
-        // Block grouping is what makes it addressable: a run of adjacent `array`
-        // members collapses into one synthetic `array_block` node spanning the
-        // run, whose members are then reachable as '<block_id>(n)' line offsets.
+        // NOTE: this asserts only that the RULE is declared. It is NOT sufficient
+        // on its own — `array_block` once shipped completely dead while this test
+        // passed, because the run scanner walked raw siblings and JSON's `,`
+        // separators broke every run at the first comma. Config is not behaviour.
+        // The row-is-actually-emitted guard lives in the `structured_text` golden
+        // suite, which asserts against a real corpus.
         let groups = json_config().block_groups();
         let spec = groups
             .iter()
@@ -272,5 +273,34 @@ mod tests {
             "a run of one is not a run: {}",
             spec.min_run
         );
+    }
+
+    #[test]
+    fn array_elements_are_adjacent_named_siblings_despite_commas() {
+        // The precise shape that made array_block dead: JSON separates array
+        // elements with `,` tokens. Those are ANONYMOUS siblings, so a run
+        // scanner walking `next_sibling()` stops at the first comma and never
+        // reaches min_run. `next_named_sibling()` skips them.
+        //
+        // This test pins the tree-sitter fact the block scanner depends on.
+        let source = br#"[["a","b"],["c","d"],["e","f"]]"#;
+        let tree = parse(source);
+        let root = tree.root_node().named_child(0).unwrap(); // the outer array
+
+        let first = root.named_child(0).unwrap();
+        assert_eq!(first.kind(), "array");
+
+        // Raw sibling walk hits the comma; named sibling walk reaches the element.
+        assert_eq!(first.next_sibling().unwrap().kind(), ",");
+        assert_eq!(first.next_named_sibling().unwrap().kind(), "array");
+
+        let mut run = 1;
+        let mut cursor = first;
+        while let Some(sib) = cursor.next_named_sibling() {
+            assert_eq!(sib.kind(), "array");
+            run += 1;
+            cursor = sib;
+        }
+        assert_eq!(run, 3, "all three elements must be walkable as one run");
     }
 }

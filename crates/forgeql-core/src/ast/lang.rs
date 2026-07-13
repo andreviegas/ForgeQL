@@ -41,6 +41,13 @@ pub const FQL_WHILE: &str = "while";
 pub const FQL_FOR: &str = "for";
 pub const FQL_SWITCH: &str = "switch";
 pub const FQL_DO: &str = "do";
+/// FQL kind for a region the parser could not parse.
+///
+/// Covers a tree-sitter `ERROR` node (bytes it could not parse) and a `MISSING`
+/// node (a token it had to invent to recover). Both are universal to
+/// tree-sitter, so core can spot syntax damage in any language without knowing
+/// the language.
+pub const FQL_ERROR: &str = "error";
 
 // -----------------------------------------------------------------------
 // LanguageConfig — static, data-only description of a language grammar

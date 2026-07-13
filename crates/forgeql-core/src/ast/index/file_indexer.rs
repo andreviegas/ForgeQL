@@ -11,7 +11,7 @@ use crate::ast::enrich::guard_utils::{
 };
 use crate::ast::enrich::macro_table::MacroTable;
 use crate::ast::enrich::{EnrichContext, NodeEnricher};
-use crate::ast::lang::{BlockGroupSpec, LanguageConfig, LanguageSupport};
+use crate::ast::lang::{BlockGroupSpec, FQL_ERROR, LanguageConfig, LanguageSupport};
 use crate::error::ForgeError;
 
 use super::{IndexRow, SegmentBuildCtx, SymbolTable, node_text};
@@ -613,11 +613,35 @@ fn update_guard_stack(
     }
 }
 
-/// Emit all symbol-table rows for a single (non-skipped) `node`: the named row
-/// (or a re-tagged `macro_call` row), every enricher `extra_rows`, and any
-/// usage site. Returns the named row's ordinal so the caller can propagate it
-/// to descendant nodes. Does **not** descend into children — the caller owns
-/// the cursor walk. Extracted from the `collect_nodes` walk loop.
+/// Maximum characters in a syntax-error row's name, so a long line of garbage
+/// cannot produce an unbounded name.
+const MAX_ERROR_SNIPPET: usize = 60;
+
+/// A one-line, length-capped label for a syntax-error region.
+///
+/// Content-derived, never positional — the same contract as every other name in
+/// the index. An error region's identity is inherently unstable (it changes when
+/// the broken text changes, and disappears when the text is fixed), which is
+/// exactly what we want: a stale handle to damage that no longer exists must not
+/// resolve.
+fn error_snippet(text: &str) -> String {
+    let first = text.lines().next().unwrap_or("").trim();
+    if first.is_empty() {
+        return FQL_ERROR.to_string();
+    }
+    if first.chars().count() > MAX_ERROR_SNIPPET {
+        let short: String = first.chars().take(MAX_ERROR_SNIPPET).collect();
+        format!("{short}…")
+    } else {
+        first.to_string()
+    }
+}
+/// Emit all symbol-table rows for a single (non-skipped) `node`: the syntax-error
+/// row, the named row (or a re-tagged `macro_call` row), every enricher
+/// `extra_rows`, and any usage site. Returns the named row's ordinal so the
+/// caller can propagate it to descendant nodes. Does **not** descend into
+/// children — the caller owns the cursor walk. Extracted from the
+/// `collect_nodes` walk loop.
 #[allow(clippy::too_many_arguments)]
 fn process_node_rows(
     ctx: &mut IndexContext<'_>,
@@ -651,8 +675,45 @@ fn process_node_rows(
         inside_error,
     };
 
+    // --- Syntax damage ---------------------------------------------------
+    // A tree-sitter `ERROR` node is a region the parser could not parse. It is
+    // universal to tree-sitter, so core needs no language knowledge to spot it.
+    //
+    // Until now these were tracked only to *suppress* phantom enrichment, and
+    // emitted no rows: an agent had no way to learn that the file it was about
+    // to mutate was already broken.
+    //
+    // Only the OUTERMOST damage is emitted (`!inside_error`) — a nested ERROR
+    // would report one wound as several.
+    //
+    // `MISSING` nodes are deliberately NOT emitted. A missing token is
+    // zero-width, so a row for it would span no bytes: an agent could see it but
+    // could not `SHOW NODE` or `CHANGE NODE` it. A row you cannot act on is the
+    // half-measure this whole change exists to avoid. In practice a missing
+    // token almost always sits inside an ERROR region, which IS emitted.
+    //
+    // P1: this MAPS the damage and hands over a handle. The engine does not
+    // validate, refuse, or repair; reading and fixing it is the agent's job.
+    if !inside_error && node.is_error() {
+        let name = error_snippet(&node_text(source, node));
+        let mut sink = RowSink {
+            table: ctx.table,
+            enrichers: ctx.enrichers,
+            remapper: ctx.ordinal_remapper.as_mut(),
+            row_ordinal_counter,
+        };
+        current_node_ordinal = emit_addressable_row(
+            &mut sink,
+            &enrich_ctx,
+            ts_language,
+            &name,
+            FQL_ERROR,
+            parent_ordinal,
+            block_tag,
+        );
+    }
     // Every named node becomes a row.
-    if let Some(name) = ctx.language.extract_name(node, source) {
+    else if let Some(name) = ctx.language.extract_name(node, source) {
         let fql_kind_val = ctx.language.map_kind(node.kind()).unwrap_or("");
         let mut sink = RowSink {
             table: ctx.table,
@@ -985,7 +1046,13 @@ fn scan_block_run(
     let mut count = 1usize;
     let mut end_byte = first.byte_range().end;
     let mut cursor = first;
-    while let Some(sib) = cursor.next_sibling() {
+    // `next_named_sibling`, NOT `next_sibling`: a run's members are often
+    // separated by anonymous punctuation. JSON array elements are separated by
+    // `,` tokens, whose `map_kind` is empty — walking raw siblings breaks the
+    // run at the first comma, so a 733-element array scanned as a run of ONE and
+    // no block was ever emitted. Rust comment runs have no separator between
+    // members, which is why this went unnoticed: for them the two walks agree.
+    while let Some(sib) = cursor.next_named_sibling() {
         if lang.map_kind(sib.kind()).unwrap_or("") != spec.member_fql_kind {
             break;
         }

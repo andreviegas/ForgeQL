@@ -31,6 +31,7 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
    - [Enrichment Fields](#enrichment-fields)
 6. [Structured-Text and Config Formats](#structured-text-and-config-formats)
    - [Block Grouping — one handle over a run of siblings](#block-grouping--one-handle-over-a-run-of-siblings)
+   - [Syntax Damage — the `error` kind](#syntax-damage--the-error-kind)
 7. [Advanced Patterns](#advanced-patterns)
 8. [Raw line and file operations (legacy, non-indexed files)](#raw-line-and-file-operations-legacy-non-indexed-files)
 
@@ -1021,7 +1022,11 @@ moved or deleted with one handle. Blank lines between members do not break a run
 
 Members keep their own rows and node ids; the block is *added*, nothing is
 hidden. Its display label is the first member's snippet plus the run length
-(`g01_name_eq_stopped… (×733)`).
+(`["g01_name_eq_stopped",  "FIND symbols W… (×201)`).
+
+A run is scanned over **named** siblings, so members separated by anonymous
+punctuation still group: JSON array elements are separated by `,` tokens, and
+walking raw siblings would break every run at the first comma.
 
 **Why JSON needs it.** A JSON document with no keys anywhere — an array of arrays
 of strings, e.g. a test corpus — can be named by nothing, so it indexes to *zero*
@@ -1030,8 +1035,10 @@ it addressable: the run becomes one node, and its members are reachable by
 node-relative offset.
 
 ```sql
-SHOW outline OF 'tests/corpus.json'
--- array_block  g01_name_eq_stopped… (×733)   n7c1e….0000
+-- A block is not a structural declaration, so the DEFAULT outline omits it.
+-- `ALL` (or an explicit `WHERE fql_kind`) surfaces it:
+SHOW outline OF 'crates/forgeql/tests/corpus.json' ALL
+--   2 | array_block | ["g01_name_eq_stopped",  "FIND symbols W… (×201)
 
 SHOW NODE   '<block>' WHERE text MATCHES 'g07_'   -- grep inside; filtering runs before the cap
 CHANGE NODE '<block>(42)' WITH '  ["g01_new", "FIND …"],'
@@ -1039,6 +1046,39 @@ DELETE NODE '<block>(40-52)'                      -- drop a contiguous run of en
 ```
 
 No new verbs: `'<id>(n)'` and `'<id>(n-m)'` offsets already do the work.
+
+---
+
+### Syntax Damage — the `error` kind
+
+Applies to **every** language, not just structured text.
+
+When tree-sitter cannot parse a span it recovers and produces an `ERROR` node.
+Those regions are now indexed as addressable rows with `fql_kind = 'error'`, so a
+broken file is no longer **silently, partially indexed**.
+
+```sql
+-- triage BEFORE mutating: is the file already broken?
+FIND symbols WHERE fql_kind = 'error' GROUP BY file ORDER BY count DESC
+FIND symbols WHERE fql_kind = 'error' IN 'config/**'
+
+-- then read and repair by handle
+SHOW NODE   '<id>'
+CHANGE NODE '<id>' WITH '…'
+```
+
+- Only the **outermost** damage is emitted — a nested `ERROR` would report one
+  wound as several.
+- Zero-width `MISSING` tokens are **not** emitted: a row spanning no bytes could
+  be seen but not read or repaired, and a row you cannot act on is worse than no
+  row.
+- The row's name is the first line of the unparseable text, capped at 60 chars.
+
+**The engine maps the damage; it never repairs it.** `SHOW DIFF`'s boundary diff,
+`lines_removed`, and this kind are the same move: make the agent *see*, then let
+the agent decide. Note that real-world corpora carry more damage than you would
+expect — tree-sitter-c cannot fully parse Zephyr's macro-heavy C, and `error` is
+a top-11 kind by count in its `kernel/` tree.
 
 ---
 
