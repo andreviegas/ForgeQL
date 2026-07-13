@@ -138,6 +138,40 @@ pub fn format_rev(rev: u64) -> String {
     format!("h{rev:016x}")
 }
 
+/// Format a rev that must always render, including zero.
+///
+/// [`format_rev`] renders a zero rev as the empty string ("no rev"), which is
+/// right for analysis-only rows. A directory rev is a membership XOR and is
+/// legitimately zero for an empty directory; an empty string there would read
+/// as "no rev" and defeat the mandatory `IF REV` gate on a recursive delete.
+#[must_use]
+pub fn format_rev_exact(rev: u64) -> String {
+    format!("h{rev:016x}")
+}
+
+/// Rev of a raw byte span: SHA-256, first 8 bytes little-endian.
+///
+/// Identical to the `row_rev` computation the file indexer applies to a node
+/// byte range, so a whole-file rev and a node rev are the same scheme.
+#[must_use]
+pub fn rev_of_bytes(bytes: &[u8]) -> u64 {
+    let digest = Sha256::digest(bytes);
+    u64::from_le_bytes(digest[..8].try_into().unwrap_or([0u8; 8]))
+}
+
+/// XOR-fold a path fingerprint into a directory membership rev.
+///
+/// The directory rev is one flat XOR of the first 8 bytes of
+/// `sha256_of_path` over every file underneath the directory, at any depth.
+/// It moves when the membership of the subtree changes (add / remove / rename
+/// / move) and deliberately does NOT move when file content changes — content
+/// staleness is what the per-file rev is for. No file is read to compute it.
+#[must_use]
+pub fn fold_path_rev(acc: u64, path: &str) -> u64 {
+    let hash = sha256_of_path(path);
+    acc ^ u64::from_le_bytes(hash[..8].try_into().unwrap_or([0u8; 8]))
+}
+
 /// `(base_id, Some((start, end)))` — the split form of a `node_id` that may
 /// carry a `(n)` / `(n-m)` line-offset suffix.
 type NodeOffsetSplit<'a> = (&'a str, Option<(u32, u32)>);
@@ -207,6 +241,11 @@ pub fn offset_lines(
     let Some((a, b)) = offset else {
         return Ok((node_line, node_end_line));
     };
+    // A directory node spans no lines (end_line < line); an offset into it is
+    // meaningless, and the span arithmetic below would underflow.
+    if node_end_line < node_line {
+        return Err("node has no addressable lines".to_owned());
+    }
     let span = node_end_line - node_line + 1;
     let off_start = usize::try_from(a).unwrap_or(usize::MAX);
     let off_end = usize::try_from(b).unwrap_or(usize::MAX);

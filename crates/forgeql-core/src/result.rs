@@ -503,6 +503,18 @@ pub struct FileEntry {
     /// Populated only when a clause names it — see [`FileEntry::error_count`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parse_coverage: Option<u8>,
+    /// Bare-hex handle (`n<hex>`) for this path — the whole-file (or
+    /// whole-directory) node id. Present on path rows, absent on the aggregate
+    /// rows a `GROUP BY` produces, which address nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    /// Version stamp for the path, so a listed row is immediately actionable —
+    /// `DELETE NODE '<node_id>' IF REV '<rev>'` in one round trip instead of a
+    /// re-read. A file rev is the SHA-256 of its bytes; a directory rev is a
+    /// membership XOR over the paths underneath it (it moves when the subtree
+    /// gains or loses a file, not when a file's content changes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
 }
 
 impl FileEntry {

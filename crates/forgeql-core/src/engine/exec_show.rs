@@ -653,7 +653,11 @@ impl ForgeQLEngine {
             )]
             indexed_opt.unwrap()
         } else {
-            let raw = query::find_files(workspace, glob, &clauses.exclude_globs);
+            // Files and directories in one list: a directory is an addressable
+            // node too, and an agent that has to run a second query to see them
+            // pays a round trip for nothing.
+            let mut raw = query::find_files(workspace, glob, &clauses.exclude_globs);
+            raw.extend(query::find_dirs(workspace, glob, &clauses.exclude_globs));
             raw.iter()
                 .filter_map(|v| {
                     let path = v.get("path").and_then(|p| p.as_str()).map(PathBuf::from)?;
@@ -675,13 +679,16 @@ impl ForgeQLEngine {
                         count: None,
                         error_count: None,
                         parse_coverage: None,
+                        node_id: None,
+                        rev: None,
                     })
                 })
                 .collect()
         };
         let max_depth = clauses.depth.unwrap_or(usize::MAX);
         stamp_error_counts(engine, workspace.root(), clauses, &mut entries)?;
-        let results = format_file_results(&mut entries, clauses, max_depth);
+        let mut results = format_file_results(&mut entries, clauses, max_depth);
+        stamp_path_handles(workspace, &mut results);
         let count = results.len();
         Ok(serde_json::json!({
             "op":      "find_files",
@@ -693,7 +700,65 @@ impl ForgeQLEngine {
     }
 }
 
+/// Give every listed path its handle and its rev, so a `FIND files` row is
+/// actionable as it stands — `DELETE NODE '<node_id>' IF REV '<rev>'` in one
+/// round trip instead of a re-read. (Handing out the handle but not the rev
+/// would be worse than handing out neither: the agent would try the delete,
+/// hit the mandatory-IF-REV error, and have to come back for the rev anyway.)
+///
+/// Runs after LIMIT: a file rev costs a read, so only the rows the agent
+/// actually sees are paid for. A directory rev is a membership XOR over the
+/// paths underneath it — no file is read, and it deliberately does not move
+/// when file content changes (per-file revs cover that).
+fn stamp_path_handles(workspace: &Workspace, results: &mut [serde_json::Value]) {
+    let root = workspace.root();
+    let mut worktree: Option<Vec<PathBuf>> = None;
+    for row in results.iter_mut() {
+        let Some(path) = row.get("path").and_then(|p| p.as_str()).map(str::to_owned) else {
+            continue;
+        };
+        let rel = path.trim_end_matches('/');
+        if rel.is_empty() {
+            continue;
+        }
+        let abs = root.join(rel);
+        let node_id = format!(
+            "n{}",
+            crate::node_id::hex_prefix(&crate::node_id::sha256_of_path(rel), 12)
+        );
+        let rev = if path.ends_with('/') || abs.is_dir() {
+            let files = worktree.get_or_insert_with(|| {
+                workspace
+                    .files()
+                    .filter(|p| !crate::result::FileEntry::is_runtime_artifact(p))
+                    .map(|abs| abs.strip_prefix(root).unwrap_or(&abs).to_path_buf())
+                    .collect()
+            });
+            let rel_path = PathBuf::from(rel);
+            let xor = files
+                .iter()
+                .filter(|f| f.starts_with(&rel_path))
+                .fold(0u64, |acc, f| {
+                    crate::node_id::fold_path_rev(acc, &f.to_string_lossy())
+                });
+            crate::node_id::format_rev_exact(xor)
+        } else {
+            std::fs::read(&abs)
+                .map(|bytes| crate::node_id::format_rev(crate::node_id::rev_of_bytes(&bytes)))
+                .unwrap_or_default()
+        };
+        if let Some(obj) = row.as_object_mut() {
+            let _ = obj.insert("node_id".to_owned(), serde_json::Value::String(node_id));
+            if !rev.is_empty() {
+                let _ = obj.insert("rev".to_owned(), serde_json::Value::String(rev));
+            }
+        }
+    }
+}
 /// Base JSON object for a file entry: `path`, `extension`, `size`.
+///
+/// `node_id` and `rev` are stamped later, by `stamp_path_handles`, on the rows
+/// that survive LIMIT.
 fn file_entry_json(fe: &FileEntry) -> serde_json::Value {
     serde_json::json!({
         "path":      fe.path.display().to_string(),

@@ -286,6 +286,8 @@ fn filelist_two_columns() {
                     count: None,
                     error_count: None,
                     parse_coverage: None,
+                    node_id: None,
+                    rev: None,
                 },
                 FileEntry {
                     path: PathBuf::from("include/motor_control.hpp"),
@@ -295,6 +297,8 @@ fn filelist_two_columns() {
                     count: None,
                     error_count: None,
                     parse_coverage: None,
+                    node_id: None,
+                    rev: None,
                 },
             ],
             total: 142,

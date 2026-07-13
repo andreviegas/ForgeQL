@@ -390,8 +390,21 @@ impl ForgeQLEngine {
             node_line,
             start,
             end,
+            has_offset,
+            kind,
             ..
         } = self.resolve_node_span(session_id, node_id, if_rev)?;
+        if is_path_kind(&kind) && !has_offset {
+            // Overwriting a whole file destroys everything in it; a directory
+            // has no content to overwrite at all.
+            if kind == "dir" {
+                bail!(
+                    "CHANGE NODE '{node_id}' addresses a directory — a directory \
+                     has no content. Address a file or a node inside it."
+                );
+            }
+            require_path_rev("CHANGE", node_id, &kind, if_rev)?;
+        }
         let ir = ForgeQLIR::ChangeContent {
             files: vec![rel_path.clone()],
             target: ChangeTarget::Lines {
@@ -584,6 +597,15 @@ impl ForgeQLEngine {
 
         let sid = require_session_id(session_id)?;
         let node = self.resolve_node(session_id, node_id, None)?;
+        // Inserting around a whole-file handle is the BOF/EOF form and needs no
+        // guard — it creates, it does not destroy. A directory has no lines to
+        // insert around.
+        if node.kind == "dir" {
+            bail!(
+                "INSERT ... NODE '{node_id}' addresses a directory — insert around a \
+                 file handle or a node inside one."
+            );
+        }
         // Line where the inserted content will land after reindex.
         let insert_line = if before { node.line } else { node.end_line + 1 };
 
@@ -643,11 +665,17 @@ impl ForgeQLEngine {
             start,
             end,
             has_offset,
+            kind,
             ..
         } = self.resolve_node_span(session_id, node_id, if_rev)?;
-        // A whole-node delete absorbs the node's trailing blank line(s) so it
-        // leaves no stray separator; an `id(n-m)` offset delete removes exactly
-        // the addressed line range.
+
+        // A bare-hex handle addresses a whole file or a whole directory. That is
+        // a different operation, not a line span: blanking the lines of a file
+        // leaves a 0-byte ghost behind instead of removing it.
+        if is_path_kind(&kind) && !has_offset {
+            require_path_rev("DELETE", node_id, &kind, if_rev)?;
+            return self.delete_path_node(session_id, &rel_path, &kind);
+        }
         let end = if has_offset {
             end
         } else {
@@ -702,6 +730,28 @@ impl ForgeQLEngine {
         let src = self.resolve_node_span(session_id, src_id, if_rev)?;
         let dst = self.resolve_node_span(session_id, dst_id, None)?;
 
+        // A bare-hex source moves the whole file: its content is spliced in at
+        // the anchor and the file is left empty. That is destructive, so it is
+        // gated like a delete. (The empty file is reported, never auto-removed
+        // — the engine does not decide that for the agent.) A directory cannot
+        // be spliced into a line at all; MOVE NODE ... TO is the verb for that.
+        if is_path_kind(&src.kind) && !src.has_offset {
+            if src.kind == "dir" {
+                bail!(
+                    "MOVE NODE '{src_id}' addresses a directory — a directory has no \
+                     content to splice. Move the files individually."
+                );
+            }
+            require_path_rev("MOVE", src_id, &src.kind, if_rev)?;
+        }
+        if dst.kind == "dir" {
+            bail!(
+                "MOVE NODE ... {} NODE '{dst_id}' addresses a directory — an anchor \
+                 must be a file or a node inside one.",
+                if before { "BEFORE" } else { "AFTER" }
+            );
+        }
+
         // Anchor line, in the file's PRE-move numbering.
         let at = if before { dst.start } else { dst.end + 1 };
 
@@ -743,7 +793,77 @@ impl ForgeQLEngine {
         Ok(result)
     }
 
-    /// Resolve `node_id` → (`rel_path`, `line`, `end_line`) and optionally check IF REV guard.
+    /// Whole-file / whole-directory delete: unlink, never blank.
+    ///
+    /// A node delete lowers to `ChangeTarget::Lines { content: "" }`. Applied to
+    /// a whole file that would empty it and leave a 0-byte ghost in the index —
+    /// the file form has to take the `ChangeTarget::Delete` path instead (the
+    /// one `WITH NOTHING` uses), which unlinks the file, keeps the original for
+    /// ROLLBACK, and stages the removal at COMMIT.
+    ///
+    /// A directory is the same operation over every file underneath it: one
+    /// plan, so the whole subtree lands or none of it does. The now-empty
+    /// directories are removed bottom-up afterwards — `remove_dir` refuses a
+    /// non-empty directory, so anything the walk could not see (an ignored file)
+    /// keeps its parent alive rather than being silently destroyed.
+    fn delete_path_node(
+        &mut self,
+        session_id: Option<&str>,
+        rel_path: &str,
+        kind: &str,
+    ) -> Result<ForgeQLResult> {
+        let is_dir = kind == "dir";
+        let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
+        let root = workspace.root().to_path_buf();
+        let abs = workspace.safe_path(rel_path)?;
+
+        let files: Vec<String> = if is_dir {
+            workspace
+                .files()
+                .filter(|p| !crate::result::FileEntry::is_runtime_artifact(p))
+                .filter(|p| p.starts_with(&abs))
+                .map(|p| {
+                    p.strip_prefix(&root)
+                        .unwrap_or(&p)
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect()
+        } else {
+            vec![rel_path.to_owned()]
+        };
+
+        let mut result = if files.is_empty() {
+            // An empty directory: nothing to unlink, only the directory itself.
+            ForgeQLResult::Mutation(crate::result::MutationResult {
+                op: "delete_node".to_string(),
+                applied: true,
+                files_changed: Vec::new(),
+                edit_count: 0,
+                lines_written: 0,
+                lines_removed: 0,
+                diff: None,
+                suggestions: Vec::new(),
+                new_node_id: None,
+            })
+        } else {
+            let ir = ForgeQLIR::ChangeContent {
+                files,
+                target: ChangeTarget::Delete,
+                clauses: crate::ir::Clauses::default(),
+            };
+            self.exec_mutation(session_id, &ir, false)?
+        };
+
+        if is_dir {
+            remove_empty_dirs(&abs);
+        }
+        if let ForgeQLResult::Mutation(ref mut m) = result {
+            m.op = "delete_node".to_string();
+        }
+        Ok(result)
+    }
+    /// Resolve `node_id` → (`rel_path`, `line`, `end_line`, `kind`) and optionally check IF REV guard.
     fn resolve_node(
         &self,
         session_id: Option<&str>,
@@ -788,6 +908,7 @@ impl ForgeQLEngine {
             rel_path,
             line: node.line,
             end_line: node.end_line,
+            kind: node.fql_kind,
         })
     }
 
@@ -812,6 +933,7 @@ impl ForgeQLEngine {
             end,
             has_offset: offset.is_some(),
             node_line: node.line,
+            kind: node.kind,
         })
     }
 }
@@ -821,6 +943,10 @@ struct ResolvedNode {
     rel_path: String,
     line: usize,
     end_line: usize,
+    /// `fql_kind` of the resolved node. `file` and `dir` mark the synthesized
+    /// whole-path nodes a bare-hex handle resolves to — the mutation verbs treat
+    /// those differently (unlink rather than blank; mandatory `IF REV`).
+    kind: String,
 }
 
 /// A node resolved to the line span an operation targets, honoring an optional
@@ -838,6 +964,48 @@ struct NodeSpan {
     /// 1-based start line of the base node, used to re-resolve the post-edit
     /// handle by position so the caller learns the new id even if it churned.
     node_line: usize,
+    /// `fql_kind` of the base node — see [`ResolvedNode::kind`].
+    kind: String,
+}
+
+/// Is this the synthesized node of a whole file or a whole directory (a bare-hex
+/// `n<hex>` handle)?
+fn is_path_kind(kind: &str) -> bool {
+    kind == "file" || kind == "dir"
+}
+
+/// Destructive whole-path mutations require `IF REV`.
+///
+/// A node edit can be reviewed and corrected afterwards; deleting a file or
+/// overwriting all of it leaves nothing to re-read. The rev is the agent
+/// proving it is acting on what it actually saw — for a directory that is its
+/// membership (the files it listed), for a file its bytes.
+fn require_path_rev(op: &str, node_id: &str, kind: &str, if_rev: Option<&str>) -> Result<()> {
+    if if_rev.is_none() && is_path_kind(kind) {
+        bail!(
+            "whole-{kind} {op} requires IF REV — read the current rev with \
+             FIND NODE '{node_id}' (or FIND files) and repeat the command with \
+             IF REV '<rev>'"
+        );
+    }
+    Ok(())
+}
+
+/// Remove `dir` and every directory under it that is empty, deepest first.
+///
+/// `remove_dir` refuses a non-empty directory, so anything the file walk could
+/// not see — an ignored build artifact, say — keeps its parent alive instead of
+/// being destroyed silently.
+fn remove_empty_dirs(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            remove_empty_dirs(&entry.path());
+        }
+    }
+    let _ = std::fs::remove_dir(dir);
 }
 
 /// Extract the inclusive 1-based line span `[line_start, line_end]` from `src`.

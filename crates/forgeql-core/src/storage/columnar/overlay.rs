@@ -500,6 +500,39 @@ impl Overlay {
             None
         }
     }
+
+    /// Every segment source path whose path-SHA-256 starts with `hex_prefix`.
+    ///
+    /// The single-hit [`Overlay::seg_idx_for_node_id_prefix`] stops at the first
+    /// match; a bare-hex (whole-file) handle must instead be able to see a
+    /// second match and refuse to guess, so this walks forward from the binary
+    /// search position while the prefix still matches.
+    #[must_use]
+    pub fn seg_paths_for_node_id_prefix(&self, hex_prefix: &str) -> Vec<PathBuf> {
+        let byte_len = hex_prefix.len() / 2;
+        if byte_len == 0 || byte_len > 32 || !hex_prefix.len().is_multiple_of(2) {
+            return Vec::new();
+        }
+        let mut prefix_bytes = [0u8; 32];
+        for (i, chunk) in hex_prefix.as_bytes().chunks(2).enumerate() {
+            let Ok(s) = std::str::from_utf8(chunk) else {
+                return Vec::new();
+            };
+            match u8::from_str_radix(s, 16) {
+                Ok(b) => prefix_bytes[i] = b,
+                Err(_) => return Vec::new(),
+            }
+        }
+        let pos = self
+            .seg_id_index
+            .partition_point(|(h, _)| h[..byte_len] < prefix_bytes[..byte_len]);
+        self.seg_id_index[pos..]
+            .iter()
+            .take_while(|(h, _)| h[..byte_len] == prefix_bytes[..byte_len])
+            .filter_map(|(_, idx)| self.segments.get(*idx as usize))
+            .map(|meta| meta.source_path.clone())
+            .collect()
+    }
     /// Decode and return the global-row-id bitmap for a given `fql_kind`.
     ///
     /// Binary-searches the sorted `kind_index` blob and deserialises the

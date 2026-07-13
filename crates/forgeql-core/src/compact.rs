@@ -320,8 +320,18 @@ fn compact_filelist(files: &[FileEntry], total: usize) -> String {
     // its two columns and pays nothing.
     let with_errors = files.iter().any(|e| e.error_count.is_some());
     let with_coverage = files.iter().any(|e| e.parse_coverage.is_some());
+    // `node_id` / `rev` are on every path row (an aggregate row addresses
+    // nothing, so a GROUP BY result drops both columns).
+    let with_handles = files.iter().any(|e| e.node_id.is_some());
+    let with_revs = files.iter().any(|e| e.rev.is_some());
     // Schema hint.
     let mut schema: Vec<String> = vec![q("path"), q("size")];
+    if with_handles {
+        schema.push(q("node_id"));
+    }
+    if with_revs {
+        schema.push(q("rev"));
+    }
     if with_errors {
         schema.push(q("error_count"));
     }
@@ -333,6 +343,12 @@ fn compact_filelist(files: &[FileEntry], total: usize) -> String {
     // Data rows.
     for entry in files {
         let mut cells: Vec<String> = vec![q(&entry.path.to_string_lossy()), entry.size.to_string()];
+        if with_handles {
+            cells.push(q(entry.node_id.as_deref().unwrap_or("")));
+        }
+        if with_revs {
+            cells.push(q(entry.rev.as_deref().unwrap_or("")));
+        }
         if with_errors {
             cells.push(entry.error_count.unwrap_or(0).to_string());
         }

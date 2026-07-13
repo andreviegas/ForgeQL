@@ -83,6 +83,37 @@ pub fn find_files(workspace: &Workspace, glob: &str, exclude: &[String]) -> Vec<
         .collect()
 }
 
+/// `FIND files` — the directory rows.
+///
+/// Directories are addressable nodes too, so they are listed alongside files
+/// and marked by a **trailing slash on `path`** (`src/`): no new column, and
+/// `WHERE path LIKE '%/'` selects them with operators that already exist.
+/// `size` is the number of direct children, which is the only size a directory
+/// has. The glob is matched against the slash-less path, so `IN 'src/**'`
+/// behaves the same for a directory as for a file under it.
+#[must_use]
+pub fn find_dirs(workspace: &Workspace, glob: &str, exclude: &[String]) -> Vec<serde_json::Value> {
+    workspace
+        .dirs()
+        .into_iter()
+        .filter(|p| relative_glob_matches(p, glob, workspace.root()))
+        .filter(|p| {
+            !exclude
+                .iter()
+                .any(|ex| relative_glob_matches(p, ex, workspace.root()))
+        })
+        .map(|p| {
+            let children = std::fs::read_dir(&p).map(Iterator::count).unwrap_or(0);
+            let path_str = workspace.relative(&p).display().to_string();
+            serde_json::json!({
+                "path":      format!("{path_str}/"),
+                "size":      children,
+                "extension": "",
+            })
+        })
+        .collect()
+}
+
 /// Group flat file results by directory depth, collapsing sub-directories
 /// deeper than `max_depth` into summary entries with file counts.
 #[must_use]

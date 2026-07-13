@@ -286,6 +286,11 @@ fn parse_file_entries(json: &serde_json::Value, clauses: &crate::ir::Clauses) ->
                             .get("parse_coverage")
                             .and_then(|v| v.as_u64())
                             .map(|n| u8::try_from(n).unwrap_or(100)),
+                        node_id: entry
+                            .get("node_id")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned),
+                        rev: entry.get("rev").and_then(|v| v.as_str()).map(str::to_owned),
                     })
                 })
                 .collect::<Vec<_>>()

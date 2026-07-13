@@ -59,8 +59,13 @@ You are a code exploration and transformation agent. All source code is accessed
 | File structure | `SHOW outline OF 'file' [WHERE fql_kind = '...']` |
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
-| File list | `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...'] ORDER BY size DESC` |
+| File list | `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...'] ORDER BY size DESC` — every row carries `node_id` + `rev` |
+| Directory list | `FIND files WHERE path LIKE '%/'` — directories are rows too, marked by a trailing slash |
 | Repo top-level dirs | `FIND files` (returns depth-1 entries) |
+| Read a whole file | `SHOW NODE '<file_hex>'` — the bare-hex (no-ordinal) handle from `FIND files`; `'<file_hex>(k-m)'` reads a line range |
+| Delete a file / directory | `DELETE NODE '<hex>' IF REV '<rev>'` — **IF REV is mandatory**; a dir handle deletes its subtree |
+| Overwrite a whole file | `CHANGE NODE '<file_hex>' IF REV '<rev>' WITH '...'` — **IF REV is mandatory** |
+| Write into a new/empty file | `INSERT AFTER NODE '<file_hex>' WITH '...'` — appends at EOF, ungated |
 | Context around symbol | `SHOW context OF 'name'` |
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
 | Delete a node | `DELETE NODE '<id>' [IF REV '<rev>']` — `'<id>(n-m)'` deletes lines within it |

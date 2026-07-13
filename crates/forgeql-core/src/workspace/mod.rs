@@ -80,6 +80,34 @@ impl Workspace {
             })
     }
 
+    /// Enumerate all directories in the workspace, respecting the same ignore
+    /// files as [`Workspace::files`].
+    ///
+    /// Returns absolute paths; the workspace root itself is not included.
+    /// Directories are addressable nodes (a bare-hex `n<hex>` handle), and an
+    /// empty directory is implied by no file path — so walking is the only way
+    /// to see one.
+    #[must_use]
+    pub fn dirs(&self) -> Vec<PathBuf> {
+        WalkBuilder::new(&self.root)
+            .add_custom_ignore_filename(".forgeql-ignore")
+            .hidden(false)
+            .git_ignore(true)
+            .build()
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                if entry.file_type().is_some_and(|t| t.is_dir())
+                    && entry.path() != self.root
+                    && !crate::result::FileEntry::is_runtime_artifact(entry.path())
+                {
+                    Some(entry.into_path())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Enumerate source files matching a given extension (e.g. `"cpp"`, `"h"`).
     pub fn files_with_extension<'a>(&'a self, ext: &'a str) -> impl Iterator<Item = PathBuf> + 'a {
         self.files().filter(move |p| {

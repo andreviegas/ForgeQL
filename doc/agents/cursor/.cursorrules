@@ -31,7 +31,8 @@ The right way to find and read code:
 - File structure: `SHOW outline OF 'file'`
 - Class members: `SHOW members OF 'type'`
 - Call graph: `SHOW callees OF 'name'`
-- File listing: `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...']`
+- File listing: `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...']` — every row carries `node_id` + `rev`; directories are rows too, marked by a trailing slash (`WHERE path LIKE '%/'`)
+- Whole file / directory as a node: `n<hex>` with no ordinal — `SHOW NODE '<hex>'` reads the file, `'<hex>(k-m)'` a line range, `INSERT AFTER NODE '<hex>'` appends at EOF
 - Review an uncommitted change: `SHOW DIFF STAT` for the file map, then `SHOW DIFF IN 'path/**'` for hunks (`EXPORT PATCH` covers committed work only)
 
 ## Mutations
@@ -39,6 +40,7 @@ The right way to find and read code:
 - Replace a node: `CHANGE NODE '<id>' [IF REV '<rev>'] WITH '...'` — `'<id>(n-m)'` splices lines within the node; heredoc `WITH <<TAG … TAG` when content has quotes
 - Insert around a node: `INSERT BEFORE/AFTER NODE '<id>' WITH '...'`
 - Delete a node: `DELETE NODE '<id>'` — `'<id>(n-m)'` deletes lines within it
+- Delete a whole file or directory: `DELETE NODE '<hex>' IF REV '<rev>'` — `IF REV` is **mandatory** on whole-path deletes (and on a whole-file `CHANGE NODE '<hex>'`); a directory handle deletes its subtree. Take the `rev` off the `FIND files` row.
 - Relocate a node: `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — byte-exact, atomic, cross-file; the engine never re-indents
 - Reverse a bad edit: `UNDO` (most recent) · `UNDO LAST-n`
 - Rename = mechanical sweep: `FIND usages OF 'old'` → one targeted `CHANGE NODE` per site

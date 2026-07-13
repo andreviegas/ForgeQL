@@ -62,7 +62,8 @@ alias.
 | File structure | `SHOW outline OF 'file'` |
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
-| File listing | `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...']` |
+| File listing | `FIND files [IN 'path/**'] [WHERE name = '...'] [WHERE extension = '...']` — every row carries `node_id` + `rev`; directories are rows too, marked by a trailing slash (`WHERE path LIKE '%/'`) |
+| Whole file / directory as a node | `n<hex>` with no ordinal (straight from `FIND files`): `SHOW NODE '<hex>'` reads it, `'<hex>(k-m)'` a line range, `INSERT AFTER NODE '<hex>'` appends at EOF |
 | Review an uncommitted change | `SHOW DIFF STAT` — the file map; then `SHOW DIFF IN 'path/**'` for hunks. `EXPORT PATCH` covers **committed** work only. |
 | Hotspots | `FIND symbols WHERE fql_kind = 'function' ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count |
 
@@ -106,6 +107,7 @@ Edit indexed code by stable `node_id` **only**: `CHANGE NODE` replaces a node, `
 | `CHANGE NODE '<id>(n-m)' WITH '...'` | Replace lines n–m within the node |
 | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` | Insert lines around the node |
 | `DELETE NODE '<id>'` / `DELETE NODE '<id>(n-m)'` | Delete the node, or lines n–m within it |
+| `DELETE NODE '<hex>' IF REV '<rev>'` | Delete a whole **file** — or a **directory** and its subtree. `IF REV` is **mandatory** here, as it is for a whole-file `CHANGE NODE '<hex>'`: a node edit can be corrected afterwards, a deleted file cannot be re-read. Take the `rev` straight off the `FIND files` row. |
 | `MOVE NODE '<src>' (BEFORE\|AFTER) NODE '<dst>'` | Relocate the node byte-for-byte — atomic, cross-file, no re-indent |
 | `<mutation> IF REV '<rev>'` | Guard a mutation on the node's content rev |
 | `UNDO` / `UNDO LAST-n` | Reverse recent mutations from the per-session undo ring |

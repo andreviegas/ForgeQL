@@ -32,6 +32,202 @@ pub mod mock_provider;
 pub mod source_provider;
 pub mod stub;
 
+/// Whole-path handles: `n<hex>` with no ordinal addresses a **file or
+/// directory**, not a node inside one.
+///
+/// This is deliberately backend-independent. A path handle is the fingerprint of
+/// a path plus what is on disk — there is no index in it, nothing is stored, and
+/// so no `ENRICH_VER` bump is possible or needed. Every backend answers these,
+/// and a backend with an index (the columnar one) only uses its catalogs to skip
+/// the worktree walk.
+pub mod path_node {
+    use anyhow::{Result, anyhow};
+    use std::path::{Path, PathBuf};
+
+    use crate::result::FindNodeResult;
+
+    /// Minimum hex chars after `n`. Matches `shortest_prefix_len`'s floor:
+    /// below it, an ordinary all-hex symbol name (`nadd`, `nbeef`) would parse
+    /// as a file handle wherever a name and a node_id are both accepted.
+    const MIN_HEX: usize = 12;
+
+    /// The `<hex>` of a bare handle — `None` when the id carries an ordinal and
+    /// so addresses a node inside a file.
+    #[must_use]
+    pub fn bare_hex(node_id: &str) -> Option<&str> {
+        let stripped = node_id.strip_prefix('n')?;
+        if stripped.contains('.') {
+            return None;
+        }
+        Some(stripped)
+    }
+
+    /// Normalize and check a bare hex, or say why it is not a handle.
+    pub fn validate_hex(node_id: &str, hex: &str) -> Result<String> {
+        let hex = hex.to_ascii_lowercase();
+        if hex.len() < MIN_HEX
+            || hex.len() > 64
+            || !hex.len().is_multiple_of(2)
+            || !hex.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(anyhow!("invalid node_id format: {node_id}"));
+        }
+        Ok(hex)
+    }
+
+    /// Does `rel` fingerprint to something starting with `hex`?
+    #[must_use]
+    pub fn path_matches_hex(rel: &Path, hex: &str) -> bool {
+        let full = crate::node_id::hex_prefix(
+            &crate::node_id::sha256_of_path(&rel.to_string_lossy()),
+            64,
+        );
+        full.starts_with(hex)
+    }
+
+    /// Every file in the worktree, workspace-relative — the same membership
+    /// `FIND files` reports, so a directory rev folds exactly the files an agent
+    /// can see listed.
+    #[must_use]
+    pub fn worktree_files(root: &Path) -> Vec<PathBuf> {
+        let Ok(workspace) = crate::workspace::Workspace::new(root) else {
+            return Vec::new();
+        };
+        workspace
+            .files()
+            .filter(|p| !crate::result::FileEntry::is_runtime_artifact(p))
+            .map(|abs| abs.strip_prefix(root).unwrap_or(&abs).to_path_buf())
+            .collect()
+    }
+
+    /// Resolve a bare handle against the worktree itself.
+    ///
+    /// This is the only place a directory can be found (no catalog lists them,
+    /// and an empty one is implied by no file path), and it is also where a file
+    /// created this session — before the overlay was rebuilt — turns up.
+    pub fn resolve_in_worktree(node_id: &str, hex: &str, root: &Path) -> Result<FindNodeResult> {
+        let files = worktree_files(root);
+        let mut hits: Vec<(PathBuf, bool)> = files
+            .iter()
+            .filter(|p| path_matches_hex(p, hex))
+            .map(|p| (p.clone(), false))
+            .collect();
+
+        if let Ok(workspace) = crate::workspace::Workspace::new(root) {
+            hits.extend(
+                workspace
+                    .dirs()
+                    .into_iter()
+                    .map(|abs| abs.strip_prefix(root).unwrap_or(&abs).to_path_buf())
+                    .filter(|p| path_matches_hex(p, hex))
+                    .map(|p| (p, true)),
+            );
+        }
+        hits.sort();
+        hits.dedup();
+
+        match hits.len() {
+            0 => Err(anyhow!("node_id not found: {node_id}")),
+            1 => {
+                let (rel, is_dir) = &hits[0];
+                if *is_dir {
+                    Ok(dir_node(node_id, rel, root, &files))
+                } else {
+                    file_node(node_id, rel, root)
+                }
+            }
+            // Never guess: the caller may be about to delete it.
+            n => Err(anyhow!(
+                "ambiguous node_id {node_id}: prefix matches {n} paths: {}",
+                hits.iter()
+                    .map(|(p, _)| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+
+    /// Lines in a byte buffer: a trailing newline does not open a new line.
+    fn count_lines(bytes: &[u8]) -> usize {
+        if bytes.is_empty() {
+            return 0;
+        }
+        let newlines = bytes.iter().filter(|&&b| b == b'\n').count();
+        if bytes.last() == Some(&b'\n') {
+            newlines
+        } else {
+            newlines + 1
+        }
+    }
+
+    /// Synthesize the node for a whole file.
+    pub fn file_node(node_id: &str, rel: &Path, root: &Path) -> Result<FindNodeResult> {
+        let abs = root.join(rel);
+        let bytes = std::fs::read(&abs).map_err(|e| {
+            anyhow!(
+                "node_id {node_id} resolves to {} which cannot be read: {e}",
+                rel.display()
+            )
+        })?;
+        Ok(FindNodeResult {
+            node_id: node_id.to_owned(),
+            fql_kind: "file".to_owned(),
+            name: rel
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: abs,
+            line: 1,
+            // An empty file still spans line 1: INSERT BEFORE/AFTER needs a line
+            // to land against, and that is the create-then-write bootstrap.
+            end_line: count_lines(&bytes).max(1),
+            rev: crate::node_id::format_rev(crate::node_id::rev_of_bytes(&bytes)),
+            parent_node_id: None,
+            first_child_node_id: None,
+            next_sibling_node_id: None,
+            prev_sibling_node_id: None,
+        })
+    }
+
+    /// Synthesize the node for a whole directory.
+    ///
+    /// A directory has no bytes, so its rev is a membership XOR over the paths
+    /// of every file underneath it: it moves when a file is added, removed,
+    /// renamed or moved anywhere in the subtree, and deliberately does not move
+    /// when file content changes. That is what a recursive delete has to be
+    /// gated on — that the agent saw the current membership, not that it read
+    /// every byte. (Content staleness is the per-file rev's job.)
+    #[must_use]
+    pub fn dir_node(node_id: &str, rel: &Path, root: &Path, files: &[PathBuf]) -> FindNodeResult {
+        let rev = files
+            .iter()
+            .filter(|f| f.starts_with(rel))
+            .fold(0u64, |acc, f| {
+                crate::node_id::fold_path_rev(acc, &f.to_string_lossy())
+            });
+        FindNodeResult {
+            node_id: node_id.to_owned(),
+            fql_kind: "dir".to_owned(),
+            name: format!(
+                "{}/",
+                rel.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            ),
+            path: root.join(rel),
+            line: 1,
+            // A directory spans no lines. `offset_lines` refuses an `(n-m)`
+            // suffix on it rather than underflowing.
+            end_line: 0,
+            rev: crate::node_id::format_rev_exact(rev),
+            parent_node_id: None,
+            first_child_node_id: None,
+            next_sibling_node_id: None,
+            prev_sibling_node_id: None,
+        }
+    }
+}
+
 pub use backend_set::BackendSet;
 pub use columnar::overlay::Overlay;
 pub use columnar::shadow_writer::ShadowWriteResult;
@@ -137,7 +333,15 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// Resolves a node_id to its current location, rev, and nav links.
     /// Returns `None` when the node cannot be matched (deleted or renamed).
     fn find_node(&self, node_id: &str, root: &Path) -> Result<Option<FindNodeResult>> {
-        let _ = (node_id, root);
+        // A bare `n<hex>` handle addresses a whole file or directory. That needs
+        // no index — only the path fingerprint and the worktree — so it is
+        // answered here, for every backend, rather than in one of them. A
+        // backend that does have catalogs (columnar) overrides this to skip the
+        // walk; the answer is the same either way.
+        if let Some(hex) = path_node::bare_hex(node_id) {
+            let hex = path_node::validate_hex(node_id, hex)?;
+            return path_node::resolve_in_worktree(node_id, &hex, root).map(Some);
+        }
         Ok(None)
     }
 

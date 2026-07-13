@@ -813,6 +813,8 @@ fn display_show_result_filelist_variant() {
                 count: None,
                 error_count: None,
                 parse_coverage: None,
+                node_id: None,
+                rev: None,
             }],
             total: 1,
         },

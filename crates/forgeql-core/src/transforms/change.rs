@@ -327,6 +327,14 @@ pub(crate) fn lines_to_byte_range(
         bail!("end line ({end_line}) < start line ({start_line})");
     }
 
+    // A 0-byte file has no lines to map, but line 1 of it is still a valid
+    // target: it is where INSERT BEFORE/AFTER writes the first content into a
+    // freshly created file. Without this the create-then-write bootstrap fails
+    // with "start line 1 out of range".
+    if source.is_empty() && start_line == 1 && end_line <= 1 {
+        return Ok((0, 0));
+    }
+
     let mut line = 1usize;
     let mut byte_start = None;
     let mut byte_end = None;

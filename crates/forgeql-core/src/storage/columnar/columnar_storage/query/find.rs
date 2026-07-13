@@ -201,6 +201,8 @@ impl ColumnarStorage {
                 count: None,
                 error_count: None,
                 parse_coverage: None,
+                node_id: None,
+                rev: None,
             });
         }
 
@@ -227,6 +229,8 @@ impl ColumnarStorage {
                 count: None,
                 error_count: None,
                 parse_coverage: None,
+                node_id: None,
+                rev: None,
             });
         }
 
@@ -254,6 +258,8 @@ impl ColumnarStorage {
                 count: None,
                 error_count: None,
                 parse_coverage: None,
+                node_id: None,
+                rev: None,
             });
         }
 
@@ -440,6 +446,8 @@ mod tests {
             count: None,
             error_count: None,
             parse_coverage: None,
+            node_id: None,
+            rev: None,
         }
     }
 

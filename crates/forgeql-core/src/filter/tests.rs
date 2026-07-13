@@ -1038,6 +1038,8 @@ fn make_file_entry(path: &str, size: u64) -> crate::result::FileEntry {
         count: None,
         error_count: None,
         parse_coverage: None,
+        node_id: None,
+        rev: None,
     }
 }
 

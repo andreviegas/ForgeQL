@@ -321,6 +321,41 @@ MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'   -- relocate, byte-exact
 `FIND symbols`, `SHOW outline`, and the CSV form of `SHOW body` all surface
 node_ids, so a handle is usually one read away.
 
+#### Whole-file and whole-directory handles — `n<hex>` with no ordinal
+
+The ordinal is what makes a handle point *inside* a file. Drop it and the handle
+addresses the **file itself** — or a **directory**, since a file and a directory
+can never share a path:
+
+```sql
+FIND files IN 'src/**'                      -- every row carries node_id + rev
+FIND NODE '<hex>'                           -- kind = file | dir, plus its rev
+SHOW NODE '<hex>'                           -- read the whole file (buffered)
+SHOW NODE '<hex>(12-40)'                    -- read lines 12–40 of it
+SHOW outline OF '<hex>'                     -- outline the file, or list a directory
+INSERT BEFORE NODE '<hex>' WITH '...'       -- prepend at BOF
+INSERT AFTER  NODE '<hex>' WITH '...'       -- append at EOF (works on a 0-byte file)
+CHANGE NODE '<hex>' IF REV '<rev>' WITH '...'  -- overwrite the whole file
+DELETE NODE '<hex>' IF REV '<rev>'          -- delete the file; a dir deletes its subtree
+```
+
+`<hex>` is the same path fingerprint the node form uses (≥ 12 hex chars), so
+`FIND files` hands you a handle you can act on without a second lookup.
+
+**`IF REV` is mandatory on the destructive whole-path forms** — whole-file
+`DELETE` and `CHANGE`, and a whole-file `MOVE` source. A node edit can be
+reviewed and corrected afterwards; deleting a file or overwriting all of it
+leaves nothing to re-read. The rev is you proving you are acting on what you
+actually saw. `SHOW` and `INSERT BEFORE/AFTER` create or read, so they are
+ungated.
+
+A **file rev** is the SHA-256 of its bytes. A **directory rev** is a membership
+XOR over the paths of every file underneath it, at any depth: it moves when the
+subtree gains, loses, or renames a file, and deliberately does *not* move when a
+file's content changes. That is what a recursive delete needs to be gated on —
+that you saw the current membership, not that you read every byte. Content
+staleness is the per-file rev's job.
+
 #### Node-relative line offsets
 
 A node_id may carry a 1-based line offset **inside the node's own span**, so you
@@ -730,11 +765,13 @@ Applies to: `FIND files`
 
 | Field | Type | Description |
 |---|---|---|
-| `path` / `file` | string | Relative file path |
+| `path` / `file` | string | Relative file path. A **directory** row ends in `/` (`src/`) — that trailing slash is the only marker, so `WHERE path LIKE '%/'` lists directories and `NOT LIKE` excludes them. |
 | `name` | string | Bare file name (e.g. `Kconfig`, `CMakeLists.txt`). Works with `=`, `LIKE`, `MATCHES`. |
-| `extension` / `ext` | string | Extension without `.` (empty for extension-less files) |
-| `size` | integer | File size in bytes |
+| `extension` / `ext` | string | Extension without `.` (empty for extension-less files and directories) |
+| `size` | integer | File size in bytes; for a directory, its number of direct children |
 | `depth` | integer | Directory depth from workspace root |
+| `node_id` | string | The path's bare-hex handle (`n<hex>`) — on every path row, so a listed file or directory is actionable without a second lookup |
+| `rev` | string | Version stamp for the path: a file's is the SHA-256 of its bytes, a directory's is a membership XOR over the paths underneath it. Pass it to `IF REV`. |
 | `has_error` | `"true"` / `"false"` | The file did **not parse as its declared language** — it holds at least one `error_scope = 'root'` region. This is the `.c` that is not really C, or the JSON with an unbalanced brace. |
 | `error_count` | integer | Number of `root` regions in the file |
 | `parse_coverage` | integer | Percent of the file's bytes tree-sitter parsed (0–100) |

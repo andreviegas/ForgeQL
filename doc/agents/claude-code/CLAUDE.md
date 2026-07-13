@@ -45,7 +45,11 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Subtree outline | `SHOW outline OF '<node_id>'` |
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
-| File list | `FIND files [IN 'path/**'] [WHERE extension = '...'] ORDER BY size DESC` |
+| File list | `FIND files [IN 'path/**'] [WHERE extension = '...'] ORDER BY size DESC` — every row carries `node_id` + `rev`; directories are rows too, marked by a trailing slash (`WHERE path LIKE '%/'`) |
+| Read a whole file | `SHOW NODE '<file_hex>'` — the bare-hex (no-ordinal) handle from `FIND files`; `'<file_hex>(k-m)'` reads a line range |
+| Delete a file / directory | `DELETE NODE '<hex>' IF REV '<rev>'` — **IF REV is mandatory** on whole-path deletes; a dir handle deletes its subtree |
+| Overwrite a whole file | `CHANGE NODE '<file_hex>' IF REV '<rev>' WITH '...'` — **IF REV is mandatory** |
+| Write into a new/empty file | `INSERT AFTER NODE '<file_hex>' WITH '...'` — appends at EOF, ungated |
 | Context around symbol | `SHOW context OF 'name'` |
 | Read + filter a node | `SHOW body OF 'name' DEPTH 99 WHERE text LIKE '%pattern%'` |
 | Page a truncated/buffered output | `SHOW MORE [HEAD n \| TAIL n \| n-m] [WHERE text MATCHES '...']` |

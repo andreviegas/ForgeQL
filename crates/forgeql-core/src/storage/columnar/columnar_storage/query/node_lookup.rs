@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::result::FindNodeResult;
 use crate::storage::StorageEngine;
@@ -120,9 +121,13 @@ impl ColumnarStorage {
         root: &Path,
     ) -> Result<Option<FindNodeResult>> {
         let stripped = node_id.strip_prefix('n').unwrap_or(node_id);
-        let (hex_prefix, ord_str) = stripped
-            .split_once('.')
-            .ok_or_else(|| anyhow::anyhow!("invalid node_id format: {node_id}"))?;
+        // A dotless `n<hex>` is a whole-file (or whole-directory) handle: the
+        // ordinal is what makes an id point *inside* a file, so its absence
+        // means the file itself. Resolution is a different problem — path
+        // fingerprint instead of ordinal — so it gets its own path.
+        let Some((hex_prefix, ord_str)) = stripped.split_once('.') else {
+            return self.find_path_node(node_id, stripped, root).map(Some);
+        };
         let ordinal: u32 = ord_str
             .parse()
             .map_err(|_| anyhow::anyhow!("invalid ordinal in node_id: {node_id}"))?;
@@ -163,6 +168,61 @@ impl ColumnarStorage {
         }
 
         Err(anyhow::anyhow!("node_id not found: {node_id}"))
+    }
+
+    /// Resolve a bare-hex handle — `n<hex>` — to the file or directory whose
+    /// path fingerprints to `<hex>`, and synthesize a node for it.
+    ///
+    /// The synthesized node is never stored. Everything in it is derived from
+    /// the path (which is what `<hex>` already encodes) and from the bytes on
+    /// disk, so it costs no index space, needs no `ENRICH_VER` bump, and cannot
+    /// be served stale from a cached segment.
+    pub(super) fn find_path_node(
+        &self,
+        node_id: &str,
+        hex: &str,
+        root: &Path,
+    ) -> Result<FindNodeResult> {
+        let hex = crate::storage::path_node::validate_hex(node_id, hex)?;
+        // Fast path: the file catalogs are in RAM — a binary search over the
+        // committed segment table, plus the (small) set of files reindexed this
+        // session. Directories are in none of them, and neither is a file
+        // created this session before the overlay was rebuilt; those fall
+        // through to the shared worktree resolver, which every backend uses.
+        let hits = self.indexed_paths_for_hex(&hex);
+        match hits.len() {
+            0 => crate::storage::path_node::resolve_in_worktree(node_id, &hex, root),
+            1 => crate::storage::path_node::file_node(node_id, &hits[0], root),
+            // Never guess: the caller may be about to delete it.
+            n => Err(anyhow::anyhow!(
+                "ambiguous node_id {node_id}: prefix matches {n} paths: {}",
+                hits.iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+
+    /// File paths matching `hex` across the three in-RAM file catalogs:
+    /// reindexed this session, committed segments, and non-indexed files the
+    /// overlay tracks. Directories are not in any of them.
+    fn indexed_paths_for_hex(&self, hex: &str) -> Vec<PathBuf> {
+        let mut hits: Vec<PathBuf> = Vec::new();
+        for ds in &self.dirty.added {
+            if crate::storage::path_node::path_matches_hex(&ds.source_path, hex) {
+                hits.push(ds.source_path.clone());
+            }
+        }
+        hits.extend(self.overlay.seg_paths_for_node_id_prefix(hex));
+        for (path, _) in self.overlay.file_entries() {
+            if crate::storage::path_node::path_matches_hex(path, hex) {
+                hits.push(path.clone());
+            }
+        }
+        hits.sort();
+        hits.dedup();
+        hits
     }
 
     /// Resolve a committed node (one that existed at index time) by its segment
@@ -427,6 +487,7 @@ impl ColumnarStorage {
         out
     }
 }
+
 /// 1-based source line of a node's last content byte, from the file's sorted
 /// newline byte offsets and the node's exclusive `byte_end`.
 ///

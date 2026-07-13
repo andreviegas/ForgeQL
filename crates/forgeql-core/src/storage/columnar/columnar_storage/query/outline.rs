@@ -17,6 +17,8 @@ impl ColumnarStorage {
         // descendants. File / glob form otherwise.
         let results = if let Some((hex, ordinal)) = parse_outline_node_target(file) {
             self.outline_subtree(workspace, root, file, &hex, ordinal, all)
+        } else if let Some(target) = self.outline_path_target(file, root) {
+            self.outline_glob(workspace, root, &target, all)
         } else {
             self.outline_glob(workspace, root, file, all)
         };
@@ -25,6 +27,27 @@ impl ColumnarStorage {
             "op":      "show_outline",
             "file":    file,
             "results": results,
+        })
+    }
+
+    /// A bare-hex handle (`n<hex>`) in outline position addresses a whole file
+    /// — or a whole directory, which outlines as everything underneath it.
+    fn outline_path_target(&self, target: &str, root: &std::path::Path) -> Option<String> {
+        let stripped = target.strip_prefix('n')?;
+        if target.contains('/') || stripped.contains('.') {
+            return None;
+        }
+        let node = self.find_path_node(target, stripped, root).ok()?;
+        let rel = node
+            .path
+            .strip_prefix(root)
+            .unwrap_or(&node.path)
+            .display()
+            .to_string();
+        Some(if node.fql_kind == "dir" {
+            format!("{rel}/**")
+        } else {
+            rel
         })
     }
 

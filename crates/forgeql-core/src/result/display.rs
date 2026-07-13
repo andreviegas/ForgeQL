@@ -194,7 +194,14 @@ impl fmt::Display for ShowResult {
             }
             ShowContent::FileList { files, total } => {
                 for entry in files {
-                    writeln!(formatter, "  {}", entry.path.display())?;
+                    write!(formatter, "  {}", entry.path.display())?;
+                    if let Some(ref node_id) = entry.node_id {
+                        write!(formatter, "  {node_id}")?;
+                    }
+                    if let Some(ref rev) = entry.rev {
+                        write!(formatter, "  {rev}")?;
+                    }
+                    writeln!(formatter)?;
                 }
                 writeln!(formatter, "({total} files)")?;
             }

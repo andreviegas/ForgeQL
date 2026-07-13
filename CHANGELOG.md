@@ -6,6 +6,44 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — files and directories are addressable nodes (`n<hex>`)
+
+```sql
+FIND files IN 'legacy/**'                       -- every row: path, node_id, rev
+SHOW NODE '<hex>'                               -- read a whole file
+SHOW NODE '<hex>(12-40)'                        -- read lines 12–40 of it
+INSERT AFTER NODE '<hex>' WITH '...'            -- append at EOF (works on a 0-byte file)
+CHANGE NODE '<hex>' IF REV '<rev>' WITH '...'   -- overwrite a whole file
+DELETE NODE '<hex>' IF REV '<rev>'              -- delete a file, or a directory's subtree
+```
+
+The `node_id` grammar always had a hole in it: `n<hex>.<ordinal>` addresses a node **inside** a
+file, and the dotless form — the file itself — was rejected. So files were the one thing an agent
+could see but not act on: `FIND files` handed back path strings, and the only whole-file delete
+(`CHANGE FILE … WITH NOTHING`) had no `IF REV` guard at all. This closes the hole. Every row of
+every FIND result is now a usable, version-stamped mutation handle.
+
+- **Bare-hex handles** resolve to a whole file, or to a **directory** (a file and a directory can
+  never share a path, so there is no new ambiguity). Nothing is stored: the node is synthesized
+  from the path fingerprint and the bytes on disk, so there is no index cost and no `ENRICH_VER`
+  trigger. Resolution lives in the storage trait, so every backend answers it.
+- **`FIND files` gains `node_id` and `rev` on every row**, and lists **directories**, marked by a
+  trailing slash on `path` (`src/`) — no new column, and `WHERE path LIKE '%/'` selects them.
+  Revs are computed after `LIMIT`, so only the rows you actually see cost a read.
+- **`IF REV` is mandatory** on whole-file `DELETE` and `CHANGE`, and on a whole-file `MOVE` source.
+  A node edit can be corrected afterwards; deleting a file leaves nothing to re-read.
+- **A file rev** is the SHA-256 of its bytes. **A directory rev** is a membership XOR over the
+  paths of every file underneath it: it moves when the subtree gains, loses or renames a file
+  anywhere, and deliberately not when a file's content changes — a recursive delete has to be
+  gated on the membership you saw, not on bytes you never read.
+- **`DELETE NODE '<file_hex>'` unlinks the file** rather than blanking its lines (which would have
+  left a 0-byte ghost behind); a directory handle deletes its files in one atomic plan and then
+  removes the emptied directories bottom-up.
+- **`SHOW NODE '<hex>(k-m)'`** reads a file's line range, and **`SHOW outline OF '<hex>'`** outlines
+  a file or lists a directory.
+- **`INSERT BEFORE/AFTER NODE '<hex>'`** is prepend-at-BOF / append-at-EOF, and now works on an
+  empty file — the create-then-write bootstrap.
+
 ## [0.112.0] — 2026-07-13 — feat(dsl): `MOVE NODE` — relocate a node by handle
 
 ```sql
