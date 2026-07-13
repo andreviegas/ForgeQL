@@ -98,7 +98,7 @@ ForgeQL indexes code quality metrics at parse time. Use them in WHERE clauses:
 
 ## Mutations
 
-Edit indexed code by stable `node_id` **only**: `CHANGE NODE` replaces a node, `INSERT BEFORE/AFTER NODE` adds around it, `DELETE NODE` removes it. `CHANGE FILE` on indexed files is disabled; raw-text file edits (`CHANGE FILE`, line-range copy and move) exist for non-indexed files and file scaffolding — see the syntax reference. This applies to config too: TOML, YAML, JSON, XML/arxml, DBC, Makefiles, CMake, INI, justfiles, and Markdown are all node-addressable.
+Edit indexed code by stable `node_id` **only**: `CHANGE NODE` replaces a node, `INSERT BEFORE/AFTER NODE` adds around it, `DELETE NODE` removes it, and `MOVE NODE` relocates it byte-for-byte in one atomic step. `CHANGE FILE` on indexed files is disabled; raw-text file edits (`CHANGE FILE`, line-range copy and move) exist for non-indexed files and file scaffolding — see the syntax reference. This applies to config too: TOML, YAML, JSON, XML/arxml, DBC, Makefiles, CMake, INI, justfiles, and Markdown are all node-addressable.
 
 | Command | Effect |
 |---|---|
@@ -106,6 +106,7 @@ Edit indexed code by stable `node_id` **only**: `CHANGE NODE` replaces a node, `
 | `CHANGE NODE '<id>(n-m)' WITH '...'` | Replace lines n–m within the node |
 | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` | Insert lines around the node |
 | `DELETE NODE '<id>'` / `DELETE NODE '<id>(n-m)'` | Delete the node, or lines n–m within it |
+| `MOVE NODE '<src>' (BEFORE\|AFTER) NODE '<dst>'` | Relocate the node byte-for-byte — atomic, cross-file, no re-indent |
 | `<mutation> IF REV '<rev>'` | Guard a mutation on the node's content rev |
 | `UNDO` / `UNDO LAST-n` | Reverse recent mutations from the per-session undo ring |
 | Raw-text `CHANGE FILE` / copy / move | Non-indexed files only — see the syntax reference |

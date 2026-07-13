@@ -6,6 +6,46 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.112.0] — 2026-07-13 — feat(dsl): `MOVE NODE` — relocate a node by handle
+
+```sql
+MOVE NODE '<src_id>' [IF REV '<rev>'] (BEFORE | AFTER) NODE '<dst_id>'
+```
+
+The last verb the node-addressing model was missing. Until now, relocating code meant reading the
+node, holding its text, `INSERT`ing it at the destination and `DELETE`ing the original — four steps,
+a read round-trip, and a window where the file contained the node twice or not at all.
+
+### Added
+
+- **`MOVE NODE`** — relocation, not re-authoring. The node's bytes are lifted **verbatim** and
+  spliced at the anchor. The delete and the insert land in **one atomic plan**, so the file is never
+  briefly missing the node and a failure leaves nothing half-moved. Source and destination may be in
+  different files. The response carries `new_node_id` (re-parenting changes `parent_ordinal`, so the
+  node earns a fresh handle).
+
+  It is a thin node-resolving wrapper over the existing `plan_move_lines`, which already handles
+  same-file moves in both directions and cross-file moves — so `MOVE NODE` adds **no new byte-
+  splicing logic**, and inherits its guard: an anchor inside the moved span is **refused** rather
+  than silently corrupting the file.
+
+  **The engine does not re-indent (P1).** On an indentation-sensitive format the seam is real: a node
+  lifted from inside a block keeps its original leading whitespace. Guessing the right indent is
+  exactly the kind of "smart" the engine refuses to be — the boundary diff shows the seam and the
+  agent closes it with `CHANGE NODE '<new_id>(1-n)'`.
+
+  `INTO` is deliberately **not** offered: "first child of a container" has no mechanical definition
+  that holds across languages, and the engine will not guess one.
+
+### Fixed
+
+- **A same-file relocation reported its file twice.** `apply_plan` collected `files_changed` *before*
+  `merge_by_file()`, and a same-file move arrives as two `FileEdit`s on one path — so `MOVE LINES`
+  has always reported `2 file(s)` for a one-file move. Now merged first. Cosmetic, but the mutation
+  result is the thing an agent reads back.
+
+No index output changes, so `ENRICH_VER` stays 32.
+
 ## [0.111.3] — 2026-07-13 — feat(index): `error` rows are addressable — you can finally repair the damage
 
 `error` has been emitted since 0.109.3 but was never in `is_addressable_fql_kind`, so every region

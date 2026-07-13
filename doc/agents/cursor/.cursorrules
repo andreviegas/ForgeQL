@@ -39,6 +39,7 @@ The right way to find and read code:
 - Replace a node: `CHANGE NODE '<id>' [IF REV '<rev>'] WITH '...'` — `'<id>(n-m)'` splices lines within the node; heredoc `WITH <<TAG … TAG` when content has quotes
 - Insert around a node: `INSERT BEFORE/AFTER NODE '<id>' WITH '...'`
 - Delete a node: `DELETE NODE '<id>'` — `'<id>(n-m)'` deletes lines within it
+- Relocate a node: `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — byte-exact, atomic, cross-file; the engine never re-indents
 - Reverse a bad edit: `UNDO` (most recent) · `UNDO LAST-n`
 - Rename = mechanical sweep: `FIND usages OF 'old'` → one targeted `CHANGE NODE` per site
 - Gate then commit: `BEGIN TRANSACTION` → edits → `VERIFY build 'step'` (or `JOB START 'step'` for long gates; poll `JOB STATUS <id>`) → `COMMIT MESSAGE 'msg'`. Steps marked `commit_gate: true` must pass after the last edit or COMMIT is refused.

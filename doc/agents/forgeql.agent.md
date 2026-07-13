@@ -64,6 +64,7 @@ You are a code exploration and transformation agent. All source code is accessed
 | Context around symbol | `SHOW context OF 'name'` |
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
 | Delete a node | `DELETE NODE '<id>' [IF REV '<rev>']` — `'<id>(n-m)'` deletes lines within it |
+| Relocate a node | `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — byte-exact, atomic, cross-file |
 | Reverse a bad edit | `UNDO` (most recent) · `UNDO LAST-n` |
 | Long test gate | `JOB START 'step'` → `JOB STATUS <id>` / `JOB LIST` (background, queued) |
 | Page/grep buffered output | `SHOW MORE [HEAD n \| TAIL n \| n-m] [WHERE text MATCHES '...']` |
@@ -155,6 +156,7 @@ SHOW DIFF [STAT] [clauses]    -- the worktree's UNCOMMITTED diff, inline
 CHANGE NODE '<node_id>' [IF REV '<rev>'] WITH 'text'   -- '<id>(n)' / '<id>(n-m)' splices node lines
 INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'text'
 DELETE NODE '<node_id>' [IF REV '<rev>']
+MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'  -- relocate byte-exact; atomic; cross-file OK
 
 -- Heredoc: no escaping needed (use for Rust lifetimes, char literals, C-style strings)
 CHANGE NODE '<node_id>' WITH <<TAG
@@ -173,7 +175,7 @@ UNDO                     -- reverse the most recent mutation
 UNDO LAST-n              -- restore the state from n mutations back
 
 BEGIN TRANSACTION 'name'
-  -- CHANGE / INSERT / DELETE NODE / VERIFY commands
+  -- CHANGE / INSERT / DELETE / MOVE NODE / VERIFY commands
 COMMIT MESSAGE 'msg'
 VERIFY build 'step'      -- synchronous; output greppable via SHOW MORE
 JOB START 'step'         -- background job for long gates; JOB STATUS <id> / JOB LIST

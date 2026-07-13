@@ -208,13 +208,16 @@ impl ForgeQLEngine {
         op_name: &str,
         line_range: Option<(usize, usize)>,
     ) -> Result<ForgeQLResult> {
+        // Merge FIRST: a same-file relocation (MOVE NODE / MOVE LINES) arrives as
+        // two FileEdits on one path, and collecting before the merge reported the
+        // file twice.
+        plan.merge_by_file()?;
+
         let files_changed: Vec<PathBuf> =
             plan.file_edits.iter().map(|fe| fe.path.clone()).collect();
         let edit_count = plan.edit_count();
         let range_len = line_range.map(|(start, end)| end.saturating_sub(start).saturating_add(1));
         let lines_written = range_len.unwrap_or_else(|| plan.lines_written());
-
-        plan.merge_by_file()?;
 
         // Snapshot the merged edits before apply() consumes the plan.
         let edits_snapshot = plan.file_edits.clone();
@@ -667,6 +670,75 @@ impl ForgeQLEngine {
         // DELETE NODE — report it under its own op name.
         if let ForgeQLResult::Mutation(ref mut m) = result {
             m.op = "delete_node".to_string();
+        }
+        Ok(result)
+    }
+
+    /// `MOVE NODE 'src' [IF REV 'rev'] BEFORE|AFTER NODE 'dst'`
+    ///
+    /// Relocation, not re-authoring: the node's bytes are lifted verbatim and
+    /// spliced at the anchor. Delete and insert land in ONE plan, so the file is
+    /// never briefly missing the node and a failure leaves nothing half-moved.
+    ///
+    /// The engine does NOT re-indent (P1). `plan_move_lines` already refuses an
+    /// insertion point inside the moved range, which is what makes "move a node
+    /// into itself" an error rather than a corruption.
+    pub(super) fn exec_move_node(
+        &mut self,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        let (src_id, before, dst_id, if_rev) = match op {
+            ForgeQLIR::MoveNode {
+                src_id,
+                before,
+                dst_id,
+                if_rev,
+            } => (src_id.as_str(), *before, dst_id.as_str(), if_rev.as_deref()),
+            _ => bail!("exec_move_node called with wrong IR variant"),
+        };
+
+        let sid = require_session_id(session_id)?;
+        let src = self.resolve_node_span(session_id, src_id, if_rev)?;
+        let dst = self.resolve_node_span(session_id, dst_id, None)?;
+
+        // Anchor line, in the file's PRE-move numbering.
+        let at = if before { dst.start } else { dst.end + 1 };
+
+        let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
+        let src_abs = workspace.safe_path(&src.rel_path)?;
+        let dst_abs = workspace.safe_path(&dst.rel_path)?;
+
+        let plan = crate::transforms::copy_move::plan_move_lines(
+            &src.rel_path,
+            &src_abs,
+            src.start,
+            src.end,
+            &dst_abs,
+            Some(at),
+        )?;
+        let mut result = self.apply_plan(sid, plan, "move_node", None)?;
+
+        // Where the payload came to rest, in the POST-move numbering. Moving a
+        // node DOWN inside one file first removes it from above the anchor, so
+        // the anchor slides up by the node's height.
+        let same_file = src.rel_path == dst.rel_path;
+        let moved = src.end.saturating_sub(src.start) + 1;
+        let landed = if same_file && src.start < at {
+            at.saturating_sub(moved)
+        } else {
+            at
+        };
+
+        // Re-parenting changes parent_ordinal, so the node earns a fresh handle.
+        let new_node_id = {
+            let session = self.require_session(sid)?;
+            session
+                .engine_for(&crate::ir::Backend::Default)?
+                .find_node_id_at_line(&dst.rel_path, landed)
+        };
+        if let ForgeQLResult::Mutation(ref mut m) = result {
+            m.new_node_id = new_node_id;
         }
         Ok(result)
     }

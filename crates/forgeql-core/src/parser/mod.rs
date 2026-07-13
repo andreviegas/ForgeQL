@@ -329,6 +329,7 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         | Rule::change_nodes_last_stmt
         | Rule::insert_node_stmt
         | Rule::delete_node_stmt
+        | Rule::move_node_stmt
         | Rule::show_node_stmt => parse_node_stmt(pair),
         Rule::show_more_stmt => parse_show_more_stmt(pair),
         Rule::undo_stmt => parse_undo_stmt(pair),
@@ -619,6 +620,38 @@ fn parse_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
             Ok(ForgeQLIR::DeleteNode { node_id, if_rev })
         }
 
+        Rule::move_node_stmt => {
+            let mut inner = pair.into_inner();
+            let src_id = next_str(&mut inner, "move_node: expected source node_id")?;
+            let mut if_rev = None;
+            let mut before = None;
+            let mut dst_id = None;
+            for child in inner {
+                match child.as_rule() {
+                    Rule::if_rev_clause => {
+                        if_rev = child
+                            .into_inner()
+                            .next()
+                            .map(unwrap_any_value)
+                            .transpose()?;
+                    }
+                    Rule::insert_position => before = Some(child.as_str() == "BEFORE"),
+                    _ => dst_id = Some(unwrap_any_value(child)?),
+                }
+            }
+            let before = before.ok_or_else(|| {
+                ForgeError::DslParse("move_node: expected BEFORE or AFTER".into())
+            })?;
+            let dst_id = dst_id.ok_or_else(|| {
+                ForgeError::DslParse("move_node: expected destination node_id".into())
+            })?;
+            Ok(ForgeQLIR::MoveNode {
+                src_id,
+                before,
+                dst_id,
+                if_rev,
+            })
+        }
         Rule::show_node_stmt => {
             let mut inner = pair.into_inner();
             let node_id = next_str(&mut inner, "show_node: expected node_id")?;

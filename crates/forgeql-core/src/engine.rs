@@ -559,6 +559,7 @@ impl ForgeQLEngine {
             ForgeQLIR::ChangeNodesLast { .. } => self.exec_change_nodes_last(sid, op),
             ForgeQLIR::InsertNode { .. } => self.exec_insert_node(sid, op),
             ForgeQLIR::DeleteNode { .. } => self.exec_delete_node(sid, op),
+            ForgeQLIR::MoveNode { .. } => self.exec_move_node(sid, op),
             ForgeQLIR::CopyLines { .. } => self.exec_copy_lines(sid, op),
             ForgeQLIR::MoveLines { .. } => self.exec_move_lines(sid, op),
             // --- Checkpoint-based transactions ---

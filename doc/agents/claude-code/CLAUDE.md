@@ -55,6 +55,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Find a file by name | `FIND files WHERE name = 'Kconfig'` (also `LIKE`/`MATCHES`) |
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
 | Delete a node | `DELETE NODE '<id>' [IF REV '<rev>']` — `'<id>(n-m)'` deletes lines within it |
+| Relocate a node | `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — byte-exact, atomic, cross-file |
 | Reverse a bad edit | `UNDO` (most recent) · `UNDO LAST-n` |
 | Long test gate | `JOB START 'step'` → `JOB STATUS <id>` / `JOB LIST` (background, FIFO-queued) |
 
@@ -135,6 +136,7 @@ SHOW DIFF [STAT] [clauses]               -- the worktree's UNCOMMITTED diff, inl
 CHANGE NODE '<node_id>' [IF REV '<rev>'] WITH 'text'   -- '<id>(n)' / '<id>(n-m)' splices node lines
 INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'text'
 DELETE NODE '<node_id>' [IF REV '<rev>']               -- '<id>(n-m)' deletes lines within the node
+MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'  -- relocate byte-exact; atomic; cross-file OK
 
 -- Heredoc form when content contains quotes: WITH <<TAG … TAG (tag uppercase, own line)
 
@@ -142,7 +144,7 @@ UNDO                     -- reverse the most recent mutation
 UNDO LAST-n              -- restore the state from n mutations back
 
 BEGIN TRANSACTION 'name'
-  -- CHANGE / INSERT / DELETE NODE / VERIFY commands
+  -- CHANGE / INSERT / DELETE / MOVE NODE / VERIFY commands
 COMMIT MESSAGE 'msg'
 VERIFY build 'step'      -- synchronous; grep the buffered log: SHOW MORE WHERE text MATCHES '^error|-->'
 JOB START 'step'         -- background job for long gates; JOB STATUS <id> / JOB LIST
@@ -543,16 +545,19 @@ COMMIT MESSAGE 'refactor: name CSD structure field bit shift constant'
 
 ### Extract or relocate code
 
-Indexed code is edited by node handle — `CHANGE NODE`, `INSERT BEFORE/AFTER NODE`, `DELETE NODE`. Relocating a raw line range across non-indexed files uses `COPY`/`MOVE` from the syntax reference.
+Indexed code is edited by node handle — `CHANGE NODE`, `INSERT BEFORE/AFTER NODE`, `DELETE NODE`, `MOVE NODE`. To **relocate** a node, use `MOVE NODE`: it lifts the bytes verbatim and splices them at the anchor in one atomic plan — no read round-trip, and no window where the file holds the node twice or not at all. Relocating a raw line range across non-indexed files uses `COPY`/`MOVE` from the syntax reference.
 
 ```sql
--- Move a function to another file by node handle, atomically
+-- Relocate a function to another file, atomically, by node handle
 BEGIN TRANSACTION 'extract-helper'
-  -- read the node (FIND symbols / SHOW outline gave the node_id)
-  SHOW NODE '<node_id>'
-  -- recreate it at the destination, then delete the original
-  INSERT AFTER NODE '<dst_anchor_id>' WITH 'static int helper(void) { ... }'
-  DELETE NODE '<node_id>'
+  -- FIND symbols / SHOW outline gave both node_ids; no need to read the source
+  MOVE NODE '<helper_id>' AFTER NODE '<dst_anchor_id>'
   VERIFY build 'test'
 COMMIT MESSAGE 'refactor: extract helper to shared header'
 ```
+
+`MOVE NODE` returns `new_node_id` — re-parenting changes `parent_ordinal`, so the moved node earns
+a fresh handle. The engine never re-indents (P1): a node lifted out of a block keeps its original
+leading whitespace, the boundary diff shows the seam, and you close it with
+`CHANGE NODE '<new_id>(1-n)'`. When you want to control the indent from the start, `INSERT` +
+`DELETE` in a transaction is still the better tool.

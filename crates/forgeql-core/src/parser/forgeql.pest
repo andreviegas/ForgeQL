@@ -94,6 +94,7 @@ statement = {
   | show_diff_stmt
   | change_stmt
   | copy_stmt
+  | move_node_stmt
   | move_stmt
   | find_stmt
   | find_node_stmt
@@ -261,6 +262,15 @@ copy_stmt = {
     "COPY" ~ "LINES" ~ number ~ "-" ~ number ~ "OF" ~ any_value
     ~ "TO" ~ any_value
     ~ ("AT" ~ "LINE" ~ number)?
+}
+
+/// `MOVE NODE 'src' [IF REV 'rev'] BEFORE|AFTER NODE 'dst'`
+/// Relocate a node byte-for-byte: the source span is deleted and re-inserted at
+/// the anchor in ONE atomic plan, so the file is never briefly missing it.
+/// The engine NEVER re-indents (P1) — on an indentation-sensitive format the
+/// seam is real, and the boundary diff shows it so the agent can close it.
+move_node_stmt = {
+    "MOVE" ~ "NODE" ~ any_value ~ if_rev_clause? ~ insert_position ~ "NODE" ~ any_value
 }
 
 /// `MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]`

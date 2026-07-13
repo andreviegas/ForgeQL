@@ -311,6 +311,25 @@ pub enum ForgeQLIR {
         if_rev: Option<String>,
     },
 
+    /// `MOVE NODE 'src' [IF REV 'rev'] BEFORE|AFTER NODE 'dst'`
+    ///
+    /// Relocate a node byte-for-byte. The source span is deleted and re-inserted
+    /// at the anchor in ONE atomic plan, so the file is never briefly missing it
+    /// and a failure leaves nothing half-moved.
+    ///
+    /// The engine does NOT re-indent (P1). On an indentation-sensitive format the
+    /// seam is real; the boundary diff shows it, and the agent closes it with
+    /// `CHANGE NODE '<new_id>(1-n)'`. Where the agent wants to control the indent,
+    /// `INSERT` + `DELETE` in a transaction remains the better tool.
+    MoveNode {
+        src_id: String,
+        /// `true` = BEFORE the anchor, `false` = AFTER it.
+        before: bool,
+        dst_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        if_rev: Option<String>,
+    },
+
     /// `SHOW NODE 'id' [CONTENT | METADATA]`
     ///
     /// * `CONTENT` (default) — return the source lines of the node.

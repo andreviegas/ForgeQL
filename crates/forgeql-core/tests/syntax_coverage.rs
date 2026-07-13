@@ -34,6 +34,7 @@ use std::sync::Arc;
 use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
 use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
+use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
 use forgeql_core::result::{ForgeQLResult, ShowContent};
@@ -2198,6 +2199,50 @@ fn parse_move_lines_append() {
 fn parse_move_lines_at() {
     parser::parse("MOVE LINES 1-5 OF 'src/lib.rs' TO 'dst/lib.rs' AT LINE 20")
         .expect("parse MOVE LINES AT LINE");
+}
+
+#[test]
+fn parse_move_node_before() {
+    let mut ir = parser::parse("MOVE NODE 'n0abc.0001' BEFORE NODE 'n0abc.0009'")
+        .expect("parse MOVE NODE BEFORE");
+    match ir.remove(0) {
+        ForgeQLIR::MoveNode {
+            src_id,
+            before,
+            dst_id,
+            if_rev,
+        } => {
+            assert_eq!(src_id, "n0abc.0001");
+            assert!(before);
+            assert_eq!(dst_id, "n0abc.0009");
+            assert_eq!(if_rev, None);
+        }
+        other => panic!("expected MoveNode, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_move_node_after_with_rev_guard() {
+    let mut ir = parser::parse("MOVE NODE 'n0abc.0001' IF REV 'h123' AFTER NODE 'n0abc.0009'")
+        .expect("parse MOVE NODE AFTER with IF REV");
+    match ir.remove(0) {
+        ForgeQLIR::MoveNode { before, if_rev, .. } => {
+            assert!(!before);
+            assert_eq!(if_rev.as_deref(), Some("h123"));
+        }
+        other => panic!("expected MoveNode, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_move_lines_still_parses_after_move_node_added() {
+    // `MOVE NODE` sits before `MOVE LINES` in the PEG statement list. If that
+    // ordering ever regressed, one of the two verbs would stop parsing — and PEG
+    // fails silently into the next alternative, so only a test catches it.
+    parser::parse("MOVE LINES 1-5 OF 'src/lib.rs' TO 'dst/lib.rs'")
+        .expect("MOVE LINES still parses");
+    parser::parse("MOVE NODE 'n0abc.0001' AFTER NODE 'n0abc.0009'")
+        .expect("MOVE NODE still parses");
 }
 
 #[test]

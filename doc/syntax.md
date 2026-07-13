@@ -222,6 +222,8 @@ INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'new_content'
 DELETE NODE '<node_id>' [IF REV '<rev>']
 
 DELETE NODE '<node_id>(n-m)'
+
+MOVE NODE '<src_id>' [IF REV '<rev>'] (BEFORE | AFTER) NODE '<dst_id>'
 ```
 `<node_id>` is a stable handle from `FIND symbols`, `SHOW outline`, `FIND NODE`, or the CSV form of `SHOW body` (see [Node Addressing](#node-addressing)). Editing by handle is drift-proof: a node_id stays valid across edits that shift line numbers, so you read once and mutate by handle.
 
@@ -233,6 +235,37 @@ DELETE NODE '<node_id>(n-m)'
 | `INSERT AFTER NODE … WITH …` | Insert new lines immediately after the node |
 | `DELETE NODE … [IF REV '<rev>']` | Delete the node's source span (optionally rev-guarded) |
 | `DELETE NODE '<id>(n-m)'` | Delete only lines n–m within the node (node-relative offset) |
+| `MOVE NODE '<src>' (BEFORE\|AFTER) NODE '<dst>'` | Relocate the node's bytes to the anchor — one atomic plan, no read round-trip |
+
+#### MOVE NODE
+
+Relocation, not re-authoring. `MOVE NODE` lifts the node's bytes **verbatim** and splices them at
+the anchor — the delete and the insert land in **one atomic plan**, so the file is never briefly
+missing the node and a failure leaves nothing half-moved. No read round-trip: you never have to
+`SHOW NODE` it, hold the text, and re-`INSERT` it yourself.
+
+```sql
+-- reorder two functions in the same file
+MOVE NODE '<runq_add>' BEFORE NODE '<thread_runq>'
+
+-- lift a helper into another file (the anchor decides where)
+MOVE NODE '<helper>' AFTER NODE '<last_include>'
+```
+
+Src and dst may be in **different files**. The response carries `new_node_id`: re-parenting changes
+`parent_ordinal`, so the moved node earns a fresh handle.
+
+**The engine does not re-indent (P1).** On an indentation-sensitive format the seam is real: a node
+lifted from inside a block keeps its original leading whitespace. That is deliberate — guessing the
+right indent is exactly the kind of "smart" the engine refuses to be. The boundary diff shows the
+seam; close it yourself with `CHANGE NODE '<new_id>(1-n)'`. Where you want to control the indent
+from the start, `INSERT` + `DELETE` inside a transaction remains the better tool.
+
+Moving a node **into itself** (an anchor inside the moved span) is refused rather than silently
+corrupting the file.
+
+`INTO` is deliberately **not** offered: "first child of a container" has no mechanical definition
+that holds across languages, and the engine will not guess one.
 
 #### Heredoc syntax
 
@@ -282,6 +315,7 @@ SHOW NODE '<node_id>' [CONTENT | METADATA] -- source (default) or the FIND NODE 
 CHANGE NODE '<node_id>' WITH '...'         -- replace the whole node
 INSERT (BEFORE | AFTER) NODE '<node_id>' WITH '...'
 DELETE NODE '<node_id>' [IF REV '<rev>']
+MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'   -- relocate, byte-exact
 ```
 
 `FIND symbols`, `SHOW outline`, and the CSV form of `SHOW body` all surface

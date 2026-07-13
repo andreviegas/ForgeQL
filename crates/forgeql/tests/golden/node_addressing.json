@@ -152,6 +152,41 @@
         { "fql": "ROLLBACK TRANSACTION 'v2-sequential'", "assert": { "field": { "name": "v2-sequential" } } },
         { "fql": "FIND symbols WHERE name = 'runq_add' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
           "assert": { "row_count": 1 } }
+      ] },
+
+    { "name": "move_node_relocates_a_function_byte_exact", "use": "zephyr-andre.main", "mode": "rw",
+      "steps": [
+        { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'runq_add' LIMIT 1",
+          "assert": { "row_count": 1, "pointer": { "/results/0/line": 80 } },
+          "capture": { "R": "results.0.node_id" } },
+        { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
+          "assert": { "row_count": 1, "pointer": { "/results/0/line": 51 } },
+          "capture": { "T": "results.0.node_id" } },
+
+        { "fql": "BEGIN TRANSACTION 'v2-move'", "assert": { "field": { "name": "v2-move" } } },
+
+        { "fql": "MOVE NODE '${R}' BEFORE NODE '${T}'",
+          "assert": { "applied": true, "files_changed": ["kernel/sched.c"],
+                      "field": { "op": "move_node" } },
+          "capture": { "MOVED": "new_node_id" } },
+
+        { "fql": "FIND symbols WHERE name = 'runq_add' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
+          "assert": { "row_count": 1, "pointer": { "/results/0/line": 51 } } },
+        { "fql": "SHOW NODE '${MOVED}'",
+          "assert": { "pointer": { "/start_line": 51,
+                                   "/content/lines/0/text": "static ALWAYS_INLINE void runq_add(struct k_thread *thread)" } } },
+
+        { "fql": "ROLLBACK TRANSACTION 'v2-move'", "assert": { "field": { "name": "v2-move" } } },
+        { "fql": "FIND symbols WHERE name = 'runq_add' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
+          "assert": { "row_count": 1, "pointer": { "/results/0/line": 80 } } }
+      ] },
+
+    { "name": "move_node_into_itself_is_refused", "use": "zephyr-andre.main", "mode": "rw",
+      "steps": [
+        { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
+          "capture": { "T": "results.0.node_id" } },
+        { "fql": "MOVE NODE '${T}' BEFORE NODE '${T}'",
+          "assert": { "error": true } }
       ] }
   ]
 }
