@@ -812,6 +812,7 @@ fn display_show_result_filelist_variant() {
                 size: 1024,
                 count: None,
                 error_count: None,
+                parse_coverage: None,
             }],
             total: 1,
         },

@@ -622,7 +622,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "forgeql"
-version = "0.111.1"
+version = "0.111.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-client"
-version = "0.111.1"
+version = "0.111.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-core"
-version = "0.111.1"
+version = "0.111.2"
 dependencies = [
  "anyhow",
  "bincode",
@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-c"
-version = "0.111.1"
+version = "0.111.2"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -701,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-cpp"
-version = "0.111.1"
+version = "0.111.2"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-python"
-version = "0.111.1"
+version = "0.111.2"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-rust"
-version = "0.111.1"
+version = "0.111.2"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -728,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-lang-text"
-version = "0.111.1"
+version = "0.111.2"
 dependencies = [
  "forgeql-core",
  "tree-sitter",
@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "forgeql-server"
-version = "0.111.1"
+version = "0.111.2"
 dependencies = [
  "anyhow",
  "axum",

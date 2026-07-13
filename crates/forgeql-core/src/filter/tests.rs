@@ -1037,6 +1037,7 @@ fn make_file_entry(path: &str, size: u64) -> crate::result::FileEntry {
         size,
         count: None,
         error_count: None,
+        parse_coverage: None,
     }
 }
 
@@ -1072,16 +1073,31 @@ fn file_entry_has_error_is_none_until_the_query_asks() {
 }
 
 #[test]
-fn file_entry_has_error_reflects_the_error_count() {
-    let mut clean = make_file_entry("kernel/sched.c", 300);
-    clean.error_count = Some(0);
-    assert_eq!(clean.field_str("has_error"), Some("false"));
-    assert_eq!(clean.field_num("error_count"), Some(0));
+fn file_entry_has_error_reflects_root_regions_only() {
+    // `error_count` counts ONLY `error_scope = 'root'` regions — files that did
+    // not parse as their declared language. A file full of `nested` regions
+    // (macro-heavy C: Zephyr has 16 480 of them) is healthy and must read false.
+    let mut healthy = make_file_entry("kernel/sched.c", 300);
+    healthy.error_count = Some(0);
+    assert_eq!(healthy.field_str("has_error"), Some("false"));
+    assert_eq!(healthy.field_num("error_count"), Some(0));
 
-    let mut damaged = make_file_entry("kernel/broken.c", 300);
-    damaged.error_count = Some(3);
-    assert_eq!(damaged.field_str("has_error"), Some("true"));
-    assert_eq!(damaged.field_num("error_count"), Some(3));
+    let mut unparsed = make_file_entry("data/actually_xml.c", 300);
+    unparsed.error_count = Some(3);
+    assert_eq!(unparsed.field_str("has_error"), Some("true"));
+    assert_eq!(unparsed.field_num("error_count"), Some(3));
+}
+
+#[test]
+fn file_entry_parse_coverage_is_a_percent() {
+    let mut entry = make_file_entry("kernel/sched.c", 300);
+    assert_eq!(entry.field_num("parse_coverage"), None);
+
+    entry.parse_coverage = Some(99);
+    assert_eq!(entry.field_num("parse_coverage"), Some(99));
+
+    entry.parse_coverage = Some(0);
+    assert_eq!(entry.field_num("parse_coverage"), Some(0));
 }
 
 #[test]

@@ -155,13 +155,22 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///              file is no longer silently, partially indexed. Zero-width
 ///              `MISSING` tokens are deliberately NOT emitted: a row spanning
 ///              no bytes could be seen but not read or repaired.
-///        Note for the NEXT indexing change: `error` rows are emitted but are
-///        NOT in `is_addressable_fql_kind`, so they carry an empty `node_id`
-///        and cannot be repaired by handle. Fixing that hands them ordinals,
-///        which shifts node_ids in every file containing one — it needs a
-///        version bump AND a regeneration of the node_id pins in
-///        `tests/golden.json` (the FCN/FSD/FE cases hardcode them).
-pub const ENRICH_VER: u32 = 29;
+///   30 — BURNED. Consumed mid-session by an abandoned draft that made `error`
+///        addressable (which shifts ordinals). That draft's run wrote v30
+///        segments; the code was then reverted, but the segments survive. Any
+///        later change reusing 30 silently reads those poisoned ordinals — it
+///        cost a full gate run to find. A version is spent the moment ANY build
+///        writes segments under it, released or not.
+///   31 — `error` rows carry `error_scope` (`root` / `file` / `nested`) and
+///        `error_bytes`. A raw tree-sitter ERROR is a terrible danger signal:
+///        tree-sitter parses C without running the preprocessor, so `static
+///        ALWAYS_INLINE void f(void)` errors on the return type while `f` still
+///        indexes correctly. Zephyr has ~74k such regions and essentially none
+///        is damage. Position + size let `parse_coverage` separate a healthy
+///        macro-heavy header (~1.0) from a file whose extension lies (~0).
+///        `error` remains absent from `is_addressable_fql_kind`, so this adds
+///        FIELDS only — no ordinals are consumed and no node_id moves.
+pub const ENRICH_VER: u32 = 31;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

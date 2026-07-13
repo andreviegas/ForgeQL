@@ -20,6 +20,7 @@ pub mod comments;
 pub mod control_flow;
 pub mod data_flow_utils;
 pub mod decl_distance;
+pub mod error_scope;
 pub mod escape;
 pub mod fallthrough;
 pub mod guard_utils;
@@ -227,5 +228,6 @@ pub fn default_enrichers() -> Vec<Box<dyn NodeEnricher>> {
         Box::new(recursion::RecursionEnricher),
         Box::new(todo::TodoEnricher),
         Box::new(macro_expand_enrich::MacroExpandEnricher),
+        Box::new(error_scope::ErrorScopeEnricher),
     ]
 }

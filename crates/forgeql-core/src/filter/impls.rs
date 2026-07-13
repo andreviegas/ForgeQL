@@ -102,6 +102,7 @@ impl ClauseTarget for crate::result::FileEntry {
             "depth" => self.depth.map(|d| i64::try_from(d).unwrap_or(i64::MAX)),
             "count" => self.count.map(|n| i64::try_from(n).unwrap_or(i64::MAX)),
             "error_count" => self.error_count.map(i64::from),
+            "parse_coverage" => self.parse_coverage.map(i64::from),
             _ => None,
         }
     }

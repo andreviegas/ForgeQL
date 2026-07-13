@@ -472,7 +472,20 @@ pub struct FileEntry {
     /// Per-group file count populated after `GROUP BY` aggregation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<usize>,
-    /// Number of `fql_kind = 'error'` rows the index holds for this file.
+    /// Number of `error_scope = 'root'` regions in this file — i.e. how badly
+    /// tree-sitter failed to parse the file **as its declared language**.
+    ///
+    /// Deliberately NOT a count of every `ERROR` node. tree-sitter parses C
+    /// without running the preprocessor, so `static ALWAYS_INLINE void f(void)`
+    /// produces an ERROR beside the return type while `f` still indexes
+    /// correctly. Zephyr has 21 681 such regions and 16 480 of them are `nested`
+    /// — inside a node that indexed fine. Counting those would make `has_error`
+    /// fire on idiomatic kernel C, and an alarm that goes off on healthy code is
+    /// not an alarm. Only 207 of Zephyr's regions are `root`; those are the
+    /// files that genuinely did not parse.
+    ///
+    /// For the raw picture use `FIND symbols WHERE fql_kind = 'error'` and
+    /// filter on `error_scope`; for magnitude use `parse_coverage`.
     ///
     /// Populated **only** when the query filters, orders or groups on
     /// `has_error` / `error_count`: deriving it costs an index scan, so a plain
@@ -480,6 +493,16 @@ pub struct FileEntry {
     /// never *no errors* — do not read it as a clean bill of health.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_count: Option<u32>,
+    /// Percent of the file's bytes tree-sitter parsed (0–100).
+    ///
+    /// `100 - (bytes inside ERROR regions / file size)`. Integer because the
+    /// clause engine compares numbers as `i64`, so `WHERE parse_coverage < 50`
+    /// works. This is the number that separates a macro-heavy but perfectly
+    /// healthy C header (~99) from a file whose extension lies (~0).
+    ///
+    /// Populated only when a clause names it — see [`FileEntry::error_count`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parse_coverage: Option<u8>,
 }
 
 impl FileEntry {

@@ -308,32 +308,39 @@ fn compact_callgraph(
     out
 }
 
-/// FIND files → 2 flat columns: path, size — plus `error_count` when the query
-/// asked about it.
+/// FIND files → 2 flat columns: path, size — plus `error_count` and/or
+/// `parse_coverage` when the query asked about them.
 fn compact_filelist(files: &[FileEntry], total: usize) -> String {
     let mut out = String::with_capacity(files.len() * 40);
     // Header.
     let tot = total.to_string();
     row(&mut out, &[&q("find_files"), &tot]);
-    // `error_count` is populated only when the query asked about it, so the
-    // column shows up only then — a plain `FIND files` keeps its two columns.
+    // `error_count` / `parse_coverage` are populated only when the query asked
+    // about them, so each column shows up only then — a plain `FIND files` keeps
+    // its two columns and pays nothing.
     let with_errors = files.iter().any(|e| e.error_count.is_some());
+    let with_coverage = files.iter().any(|e| e.parse_coverage.is_some());
     // Schema hint.
+    let mut schema: Vec<String> = vec![q("path"), q("size")];
     if with_errors {
-        row(&mut out, &[&q("path"), &q("size"), &q("error_count")]);
-    } else {
-        row(&mut out, &[&q("path"), &q("size")]);
+        schema.push(q("error_count"));
     }
+    if with_coverage {
+        schema.push(q("parse_coverage"));
+    }
+    let schema_refs: Vec<&str> = schema.iter().map(String::as_str).collect();
+    row(&mut out, &schema_refs);
     // Data rows.
     for entry in files {
-        let path = q(&entry.path.to_string_lossy());
-        let size = entry.size.to_string();
+        let mut cells: Vec<String> = vec![q(&entry.path.to_string_lossy()), entry.size.to_string()];
         if with_errors {
-            let errors = entry.error_count.unwrap_or(0).to_string();
-            row(&mut out, &[&path, &size, &errors]);
-        } else {
-            row(&mut out, &[&path, &size]);
+            cells.push(entry.error_count.unwrap_or(0).to_string());
         }
+        if with_coverage {
+            cells.push(entry.parse_coverage.unwrap_or(100).to_string());
+        }
+        let cell_refs: Vec<&str> = cells.iter().map(String::as_str).collect();
+        row(&mut out, &cell_refs);
     }
     chomp(&mut out);
     out

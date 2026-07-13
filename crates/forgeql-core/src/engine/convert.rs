@@ -282,6 +282,10 @@ fn parse_file_entries(json: &serde_json::Value, clauses: &crate::ir::Clauses) ->
                             .get("error_count")
                             .and_then(|v| v.as_u64())
                             .map(|n| u32::try_from(n).unwrap_or(u32::MAX)),
+                        parse_coverage: entry
+                            .get("parse_coverage")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| u8::try_from(n).unwrap_or(100)),
                     })
                 })
                 .collect::<Vec<_>>()

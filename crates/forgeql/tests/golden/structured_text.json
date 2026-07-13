@@ -22,16 +22,28 @@
       "fql": "FIND symbols WHERE fql_kind = 'error' LIMIT 1",
       "assert": { "row_count": 1 } },
 
-    { "name": "has_error_surfaces_the_damaged_files", "use": "forgeql-pub.frozen",
+    { "name": "has_error_means_the_file_did_not_parse", "use": "zephyr-andre.main",
       "fql": "FIND files WHERE has_error = 'true' LIMIT 1",
       "assert": { "row_count": 1 } },
 
-    { "name": "has_error_false_is_not_everything", "use": "forgeql-pub.frozen",
+    { "name": "has_error_false_is_not_everything", "use": "zephyr-andre.main",
       "fql": "FIND files WHERE has_error = 'false' LIMIT 1",
       "assert": { "row_count": 1 } },
 
-    { "name": "error_count_is_orderable", "use": "forgeql-pub.frozen",
-      "fql": "FIND files WHERE error_count > 0 ORDER BY error_count DESC LIMIT 1",
+    { "name": "root_errors_are_the_rare_signal", "use": "zephyr-andre.main",
+      "fql": "FIND symbols WHERE fql_kind = 'error' WHERE error_scope = 'root'",
+      "assert": { "total": 207 } },
+
+    { "name": "nested_errors_are_the_common_noise", "use": "zephyr-andre.main",
+      "fql": "FIND symbols WHERE fql_kind = 'error' WHERE error_scope = 'nested'",
+      "assert": { "total": 16480 } },
+
+    { "name": "macro_heavy_c_is_nested_noise_not_damage", "use": "zephyr-andre.main",
+      "fql": "FIND symbols WHERE fql_kind = 'error' WHERE error_scope = 'nested' IN 'kernel/sched.c'",
+      "assert": { "total": 14 } },
+
+    { "name": "parse_coverage_is_queryable", "use": "forgeql-pub.frozen",
+      "fql": "FIND files WHERE parse_coverage < 100 LIMIT 1",
       "assert": { "row_count": 1 } },
 
     { "name": "no_positional_object_names", "use": "forgeql-pub.frozen",

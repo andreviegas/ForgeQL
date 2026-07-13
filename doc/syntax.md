@@ -701,24 +701,39 @@ Applies to: `FIND files`
 | `extension` / `ext` | string | Extension without `.` (empty for extension-less files) |
 | `size` | integer | File size in bytes |
 | `depth` | integer | Directory depth from workspace root |
-| `has_error` | `"true"` / `"false"` | The file holds at least one `fql_kind = 'error'` row — a region the parser could not parse |
-| `error_count` | integer | Number of `error` rows in the file |
+| `has_error` | `"true"` / `"false"` | The file did **not parse as its declared language** — it holds at least one `error_scope = 'root'` region. This is the `.c` that is not really C, or the JSON with an unbalanced brace. |
+| `error_count` | integer | Number of `root` regions in the file |
+| `parse_coverage` | integer | Percent of the file's bytes tree-sitter parsed (0–100) |
 
-`has_error` / `error_count` are **derived on demand**. They cost an index scan, so they are
-computed only when a clause names them — a plain `FIND files` never pays for it, and the
-`error_count` column appears in the output only when you asked about it.
+All three are **derived on demand**. They cost an index scan, so they are computed only when a
+clause names them — a plain `FIND files` never pays for it, and each column appears in the output
+only when you asked about it. An unpopulated entry matches neither `has_error = 'true'` nor
+`= 'false'`, so a query that never asked can never be misread as a clean bill of health.
+
+**An `error` row is not damage.** tree-sitter parses C **without running the preprocessor**, so it
+cannot know that an unknown identifier in declaration-specifier position is a macro:
+`static ALWAYS_INLINE void f(void)` yields an `ERROR` beside the return type while `f` itself
+indexes perfectly as a `function` with correct boundaries. Zephyr holds **21 681** such regions —
+**16 480** of them `nested` inside a node that indexed fine — and essentially none of them is
+damage. That is why `has_error` counts **only `root`** regions (207 in Zephyr): a signal that fires
+on idiomatic kernel C is not a signal. Use `error_scope` for the raw picture and `parse_coverage`
+for magnitude.
 
 Triage a repository before mutating anything in it:
 
 ```sql
-FIND files   WHERE has_error = 'true' ORDER BY error_count DESC   -- which files are damaged
-FIND symbols WHERE fql_kind = 'error' IN 'config/**'              -- path + line of every broken region
+FIND files   WHERE has_error = 'true'                    -- files that did not parse at all
+FIND files   WHERE parse_coverage < 50 ORDER BY parse_coverage ASC   -- mostly-unparsed files
+FIND symbols WHERE fql_kind = 'error' WHERE error_scope = 'root'     -- the regions themselves
 ```
 
-The engine maps the damage; it never repairs it (P1). **Known gap:** `error` rows are not yet in
-`is_addressable_fql_kind`, so they carry **no `node_id`** — you can locate a broken region by path
-and line, but you cannot yet `SHOW NODE` / `CHANGE NODE` it by handle. Repair it through the
-nearest enclosing addressable node, or with a raw-text edit.
+The engine reports where the parse broke and passes no judgement; it never repairs anything (P1).
+**Known gap:** `error` rows are not yet in `is_addressable_fql_kind`, so they carry **no `node_id`**
+— you can locate a region by path and line, but you cannot yet `SHOW NODE` / `CHANGE NODE` it by
+handle. Repair it through the nearest enclosing addressable node, or with a raw-text edit.
+
+Ragged CSV rows and duplicate JSON keys are deliberately **not** errors — they parse fine. They
+surface through block-group splitting instead.
 
 ### Diff Fields
 
@@ -970,6 +985,26 @@ Detects TODO, FIXME, HACK, and XXX markers in comments inside function bodies. W
 | `has_todo` | `function` | `"true"` if any marker comment is found |
 | `todo_count` | `function` | Total number of marker occurrences |
 | `todo_tags` | `function` | Comma-separated, sorted unique tags found (e.g. `"FIXME,TODO"`) |
+
+#### ErrorScopeEnricher
+
+Locates a tree-sitter `ERROR` region and records how much of the file it consumed. Position and
+size only — the engine passes no judgement on whether the region is "bad" (P1).
+
+An `ERROR` on its own is a poor danger signal. tree-sitter parses C **without running the
+preprocessor**, so `static ALWAYS_INLINE void f(void)` produces an `ERROR` beside the return type
+while `f` still indexes correctly as a `function`. Zephyr holds 21 681 `error` regions; 16 480 are
+`nested`, and only 207 are `root`.
+
+| Field | Applies to | Description |
+|---|---|---|
+| `error_scope` | `error` | `"root"` — the ERROR *is* the file: nothing parsed (a `.c` that is not really C). `"file"` — loose at top level, nothing named owns it (usually a file-scope macro the parser could not model). `"nested"` — inside a node the language could name, so an indexed symbol still owns the span and its boundaries are intact. |
+| `error_bytes` | `error` | Byte length of the region. Only outermost `ERROR`s are emitted, so spans never overlap and per-file sums are exact — this is what `parse_coverage` is derived from. |
+
+```sql
+FIND symbols WHERE fql_kind = 'error' WHERE error_scope = 'root'    -- files that did not parse
+FIND symbols WHERE fql_kind = 'error' GROUP BY error_scope ORDER BY count DESC
+```
 
 #### GuardEnricher
 
@@ -1528,8 +1563,8 @@ column shows that field's value instead of `usages`:
 "src/timer.cpp","[updateTimer,405]"
 ```
 
-**FIND files** — 2 flat columns (a third, `error_count`, appears only when the query names
-`has_error` or `error_count`):
+**FIND files** — 2 flat columns. `error_count` and/or `parse_coverage` are appended **only** when
+the query names them; a plain `FIND files` stays at two columns and pays nothing:
 ```csv
 "find_files",142
 "path","size"

@@ -200,6 +200,7 @@ impl ColumnarStorage {
                 depth,
                 count: None,
                 error_count: None,
+                parse_coverage: None,
             });
         }
 
@@ -225,6 +226,7 @@ impl ColumnarStorage {
                 depth,
                 count: None,
                 error_count: None,
+                parse_coverage: None,
             });
         }
 
@@ -251,6 +253,7 @@ impl ColumnarStorage {
                 depth,
                 count: None,
                 error_count: None,
+                parse_coverage: None,
             });
         }
 
@@ -436,6 +439,7 @@ mod tests {
             depth: None,
             count: None,
             error_count: None,
+            parse_coverage: None,
         }
     }
 

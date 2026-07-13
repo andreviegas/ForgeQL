@@ -6,7 +6,60 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.111.1] — 2026-07-13 — feat(find): `FIND files WHERE has_error` — triage syntax damage
+## [0.111.2] — 2026-07-13 — feat(index): `error_scope` + `parse_coverage` — make `error` mean something
+
+`error` (0.109.3) was emitted for every tree-sitter `ERROR` node, and 0.111.1 built file-level
+triage on top of that. Both were **wrong about what an ERROR means**, and the docs said "damaged
+files" and "syntax damage" — which would send an agent hunting for corruption in perfectly healthy,
+idiomatic kernel C.
+
+tree-sitter parses C **without running the preprocessor**. It cannot know that an unknown identifier
+in declaration-specifier position is a macro, so `static ALWAYS_INLINE void f(void)` yields an
+`ERROR` beside the return type — while `f` itself indexes perfectly as a `function` with correct
+boundaries. This is not a tree-sitter bug and it is not damage; it is inherent to parsing C without
+a preprocessor. Measured across Zephyr:
+
+| `error_scope` | count | |
+|---|---:|---|
+| `nested` | 16 480 | inside a node that indexed fine — span intact, safe to edit by handle |
+| `file` | 4 994 | loose at top level (file-scope macros the parser could not model) |
+| `root` | **207** | **the file did not parse at all** |
+
+An alarm that fires on 21 681 regions of healthy code is not an alarm. The 207 are the real signal.
+
+### Added
+
+- **`error_scope`** (`root` / `file` / `nested`) and **`error_bytes`** on `error` rows. Position and
+  size only — the engine passes no judgement (P1). Derived from the tree via the language's own
+  `extract_name`, so core gains no language knowledge (P2).
+
+- **`parse_coverage`** on `FIND files` — percent of a file's bytes tree-sitter parsed (0–100).
+  Integer because the clause engine compares as `i64`, so `WHERE parse_coverage < 50` works. This is
+  the number that separates a macro-heavy but healthy header (~99) from a file whose extension lies
+  (~0). Only outermost `ERROR`s are emitted, so spans never overlap and the per-file sum is exact.
+
+### Changed
+
+- **`has_error` / `error_count` now count only `root` regions** — i.e. the file did not parse as its
+  declared language. Previously they counted every `ERROR`, which on Zephyr meant firing on
+  essentially every macro-heavy C file. `FIND files WHERE has_error = 'true'` now returns the files
+  that are genuinely not what they claim to be.
+
+- Docs no longer call this "damage". `error` marks an **unparsed span**; use `error_scope` for the
+  raw picture and `parse_coverage` for magnitude.
+
+- `ENRICH_VER` 29 → **31**. (30 is BURNED: an abandoned mid-session draft that made `error`
+  addressable wrote v30 segments before being reverted. Reusing 30 silently read those poisoned
+  ordinals. A version is spent the moment any build writes segments under it.) This change adds
+  FIELDS only — `error` stays out of `is_addressable_fql_kind`, no ordinals are consumed, and the
+  zephyr golden node_id pins are unaffected, which the gate confirms.
+
+### Unchanged by design
+
+- Ragged CSV rows and duplicate JSON keys are **not** errors — they parse fine. They surface through
+  block-group splitting.
+
+## [0.111.1] — 2026-07-13 — feat(find): `FIND files WHERE has_error` — file-level error triage
 
 ### Added
 

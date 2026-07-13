@@ -674,6 +674,7 @@ impl ForgeQLEngine {
                         depth,
                         count: None,
                         error_count: None,
+                        parse_coverage: None,
                     })
                 })
                 .collect()
@@ -713,7 +714,9 @@ fn stamp_error_counts(
     clauses: &Clauses,
     entries: &mut [FileEntry],
 ) -> Result<()> {
-    if !references_error_field(clauses) {
+    let want_errors = references_field(clauses, &["has_error", "error_count"]);
+    let want_coverage = references_field(clauses, &["parse_coverage"]);
+    if !want_errors && !want_coverage {
         return Ok(());
     }
 
@@ -723,37 +726,69 @@ fn stamp_error_counts(
             op: crate::ir::CompareOp::Eq,
             value: crate::ir::PredicateValue::String(crate::ast::lang::FQL_ERROR.to_string()),
         }],
-        group_by: Some(crate::ir::GroupBy::Field("file".to_string())),
         ..Clauses::default()
     };
+    let rows = engine.find_symbols(&probe, root)?;
 
-    let counts: std::collections::HashMap<PathBuf, u32> = engine
-        .find_symbols(&probe, root)?
-        .into_iter()
-        .filter_map(|m| Some((m.path?, u32::try_from(m.count?).unwrap_or(u32::MAX))))
-        .collect();
-
-    for entry in entries {
-        entry.error_count = Some(counts.get(&entry.path).copied().unwrap_or(0));
+    if want_errors {
+        // Only `root` regions count: the file did not parse as its declared
+        // language at all.  A `nested` region means an indexed symbol still owns
+        // the span — counting those would fire on every macro-heavy C file.
+        let mut roots: std::collections::HashMap<PathBuf, u32> = std::collections::HashMap::new();
+        for m in &rows {
+            if m.fields.get("error_scope").map(String::as_str) != Some("root") {
+                continue;
+            }
+            if let Some(path) = m.path.clone() {
+                *roots.entry(path).or_default() += 1;
+            }
+        }
+        for entry in &mut *entries {
+            entry.error_count = Some(roots.get(&entry.path).copied().unwrap_or(0));
+        }
     }
+
+    if want_coverage {
+        // Magnitude, not position: EVERY unparsed byte counts here, whatever its
+        // scope.  Outermost ERRORs only are emitted, so the spans never overlap
+        // and a plain sum is exact.
+        let mut unparsed: std::collections::HashMap<PathBuf, u64> =
+            std::collections::HashMap::new();
+        for m in &rows {
+            let bytes: u64 = m
+                .fields
+                .get("error_bytes")
+                .and_then(|b| b.parse().ok())
+                .unwrap_or(0);
+            if let Some(path) = m.path.clone() {
+                *unparsed.entry(path).or_default() += bytes;
+            }
+        }
+        for entry in entries {
+            let bad = unparsed.get(&entry.path).copied().unwrap_or(0);
+            let pct = if entry.size == 0 {
+                100
+            } else {
+                let covered = entry.size.saturating_sub(bad);
+                u8::try_from(covered.saturating_mul(100) / entry.size).unwrap_or(100)
+            };
+            entry.parse_coverage = Some(pct);
+        }
+    }
+
     Ok(())
 }
 
-/// `true` when any clause names `has_error` or `error_count`.
-fn references_error_field(clauses: &Clauses) -> bool {
-    fn is_error_field(field: &str) -> bool {
-        field == "has_error" || field == "error_count"
-    }
+/// `true` when any clause names one of `names`.
+fn references_field(clauses: &Clauses, names: &[&str]) -> bool {
+    let hit = |field: &str| names.contains(&field);
     clauses
         .where_predicates
         .iter()
         .chain(clauses.having_predicates.iter())
-        .any(|p| is_error_field(&p.field))
-        || clauses
-            .order_by
-            .as_ref()
-            .is_some_and(|o| is_error_field(&o.field))
-        || matches!(&clauses.group_by, Some(crate::ir::GroupBy::Field(f)) if is_error_field(f))
+        .any(|p| hit(&p.field))
+        || clauses.order_by.as_ref().is_some_and(|o| hit(&o.field))
+        || matches!(&clauses.group_by, Some(crate::ir::GroupBy::Field(f)) if hit(f))
 }
 
 /// Format file entries into result JSON, applying the clause-dependent shape:
