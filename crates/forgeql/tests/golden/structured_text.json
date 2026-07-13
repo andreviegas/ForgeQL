@@ -42,6 +42,16 @@
       "fql": "FIND symbols WHERE fql_kind = 'error' WHERE error_scope = 'nested' IN 'kernel/sched.c'",
       "assert": { "total": 14 } },
 
+    { "name": "error_row_hands_out_a_usable_handle", "use": "forgeql-pub.frozen",
+      "steps": [
+        { "fql": "FIND symbols WHERE fql_kind = 'error' LIMIT 1",
+          "assert": { "row_count": 1 },
+          "capture": { "eid": "results.0.node_id" } },
+        { "fql": "SHOW NODE '${eid}'" },
+        { "fql": "FIND NODE '${eid}'",
+          "assert": { "pointer": { "/fql_kind": "error" } } }
+      ] },
+
     { "name": "parse_coverage_is_queryable", "use": "forgeql-pub.frozen",
       "fql": "FIND files WHERE parse_coverage < 100 LIMIT 1",
       "assert": { "row_count": 1 } },

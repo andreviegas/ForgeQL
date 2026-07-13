@@ -6,6 +6,48 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.111.3] — 2026-07-13 — feat(index): `error` rows are addressable — you can finally repair the damage
+
+`error` has been emitted since 0.109.3 but was never in `is_addressable_fql_kind`, so every region
+came back with an **empty `node_id`**: findable, and never repairable by handle. The documented
+recipe — `SHOW NODE '<id>'` → `CHANGE NODE '<id>'` — could not run at all. That is half of what the
+kind exists for.
+
+The fix is one line. Landing it was not, because addressability **consumes ordinals**, which shifts
+node_ids in every file that holds an error — and the legacy suite hardcoded node_ids *inside its
+`fql` strings*. With stale pins the mutation cases fired at the wrong nodes: a `DELETE` removed the
+wrong node and an `INSERT` landed in the wrong place, duplicating `thread_runq` and producing
+failures that read like indexer bugs but were mis-targeting. `GOLDEN_UPDATE=1` could not repair it
+either — it rewrites `expect_*` values, not the pins inside `fql`, so blessing would have recorded
+the duplicate as the expected answer.
+
+So the pins had to go first.
+
+### Changed
+
+- **`error` is addressable.** `FIND symbols WHERE fql_kind = 'error'` now hands out a real
+  `node_id`; `SHOW NODE` reads the region and `CHANGE NODE` repairs it. The engine still never
+  repairs anything itself (P1).
+
+- **`ENRICH_VER` 31 → 32.** Ordinals are consumed, so node_ids move in any file with an error.
+
+### Tests
+
+- **`tests/golden.json` is now free of hardcoded node_ids.** The last pinned cases (`FN01`–`FN06`,
+  `FN08`, `FF01`–`FF07`, and the `node_id` values baked into `kernel/priority_queues.c`
+  expectations) are ported to the v2 suite, which captures every handle from a `FIND` at run time.
+  `tests/golden/node_addressing.json` now carries four cases covering handle resolution across
+  three files, the full mutation round-trip, and the v0.60.2 sequential-change duplication guard.
+  A new kind can never mis-target this suite again.
+
+- **`golden_test.rs::rows_of` now reads `/content/lines`.** It didn't, so `row_count` on any
+  `SHOW NODE` / `SHOW body` / `SHOW context` result was **always 0**: an assert of 1 could never
+  pass, and — far worse — an assert of 0 passed *vacuously*. A case that looked like a guard tested
+  nothing. Same family as the `array_block` false green.
+
+- `error_row_hands_out_a_usable_handle` captures an `error` row's `node_id` and resolves it. The
+  previous suite only asserted that `error` rows *existed*.
+
 ## [0.111.2] — 2026-07-13 — feat(index): `error_scope` + `parse_coverage` — make `error` mean something
 
 `error` (0.109.3) was emitted for every tree-sitter `ERROR` node, and 0.111.1 built file-level

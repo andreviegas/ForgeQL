@@ -170,7 +170,14 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        macro-heavy header (~1.0) from a file whose extension lies (~0).
 ///        `error` remains absent from `is_addressable_fql_kind`, so this adds
 ///        FIELDS only — no ordinals are consumed and no node_id moves.
-pub const ENRICH_VER: u32 = 31;
+///   32 — `error` rows are ADDRESSABLE. Emitted since 29, they were never in
+///        `is_addressable_fql_kind`, so every broken region came back with an
+///        empty `node_id`: findable, never repairable by handle — half of what
+///        the kind exists for. This CONSUMES ordinals, so node_ids shift in
+///        every file holding an error. Landing it required first porting every
+///        hardcoded node_id pin out of `tests/golden.json` into the v2 suite,
+///        which captures handles at run time (`tests/golden/node_addressing.json`).
+pub const ENRICH_VER: u32 = 32;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

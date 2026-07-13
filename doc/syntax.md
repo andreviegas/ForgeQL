@@ -727,10 +727,14 @@ FIND files   WHERE parse_coverage < 50 ORDER BY parse_coverage ASC   -- mostly-u
 FIND symbols WHERE fql_kind = 'error' WHERE error_scope = 'root'     -- the regions themselves
 ```
 
-The engine reports where the parse broke and passes no judgement; it never repairs anything (P1).
-**Known gap:** `error` rows are not yet in `is_addressable_fql_kind`, so they carry **no `node_id`**
-— you can locate a region by path and line, but you cannot yet `SHOW NODE` / `CHANGE NODE` it by
-handle. Repair it through the nearest enclosing addressable node, or with a raw-text edit.
+The engine reports where the parse broke and passes no judgement; it never repairs anything (P1) —
+it hands you a handle and you do the repair:
+
+```sql
+FIND symbols WHERE fql_kind = 'error' WHERE error_scope = 'root'   -- get the node_id
+SHOW NODE '<id>'                                                   -- read the region
+CHANGE NODE '<id>' WITH '…'                                        -- repair it yourself
+```
 
 Ragged CSV rows and duplicate JSON keys are deliberately **not** errors — they parse fine. They
 surface through block-group splitting instead.

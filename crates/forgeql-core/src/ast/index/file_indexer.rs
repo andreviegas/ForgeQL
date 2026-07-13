@@ -162,6 +162,15 @@ fn is_addressable_fql_kind(fql_kind: &str) -> bool {
             | "preprocessor_region"
             | "preprocessor_directive"
             | "macro_call"
+            // A region the parser could not parse.  Addressable ON PURPOSE:
+            // mapping the damage was only half the contract — an agent must be
+            // able to `SHOW NODE` it and `CHANGE NODE` it to repair it.  The
+            // engine still never repairs it itself (P1).
+            //
+            // This CONSUMES ordinals, so node_ids shift in every file that holds
+            // an error.  That is why no golden case may hardcode a node_id: they
+            // all capture handles from a FIND at run time now.
+            | "error"
     )
 }
 

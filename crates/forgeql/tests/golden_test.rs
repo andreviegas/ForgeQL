@@ -355,6 +355,11 @@ fn rows_of(result: &Value) -> Vec<Value> {
         .or_else(|| result.pointer("/content/files"))
         .or_else(|| result.pointer("/content/entries"))
         .or_else(|| result.pointer("/content/members"))
+        // SHOW NODE / SHOW body / SHOW context / SHOW LINES return their payload
+        // here. Without it `row_count` on any of them was ALWAYS 0: an assert of
+        // 1 could never pass, and — far worse — an assert of 0 passed vacuously,
+        // so a case that looked like a guard tested nothing at all.
+        .or_else(|| result.pointer("/content/lines"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default()

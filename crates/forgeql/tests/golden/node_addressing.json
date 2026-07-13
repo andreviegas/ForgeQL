@@ -37,6 +37,39 @@
                                    "/content/lines/0/text": "static ALWAYS_INLINE void *curr_cpu_runq(void)" } } }
       ] },
 
+    { "name": "find_node_resolves_captured_handles_across_files", "use": "zephyr-andre.main",
+      "steps": [
+        { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'runq_add' LIMIT 1",
+          "assert": { "row_count": 1 },
+          "capture": { "R": "results.0.node_id" } },
+        { "fql": "FIND NODE '${R}'",
+          "assert": { "field": { "type": "find_node" },
+                      "pointer": { "/line": 80, "/name": "runq_add", "/fql_kind": "function",
+                                   "/path": "kernel/sched.c" } } },
+
+        { "fql": "FIND symbols IN 'include/zephyr/kernel.h' WHERE name = 'k_mutex_lock' WHERE fql_kind = 'field' LIMIT 1",
+          "assert": { "row_count": 1 },
+          "capture": { "M": "results.0.node_id" } },
+        { "fql": "FIND NODE '${M}'",
+          "assert": { "pointer": { "/line": 3525, "/name": "k_mutex_lock", "/fql_kind": "field",
+                                   "/path": "include/zephyr/kernel.h" } } },
+
+        { "fql": "FIND symbols IN 'subsys/testsuite/ztest/src/ztest.c' WHERE name = 'z_impl___ztest_set_test_result' WHERE fql_kind = 'function' LIMIT 1",
+          "assert": { "row_count": 1 },
+          "capture": { "Z": "results.0.node_id" } },
+        { "fql": "FIND NODE '${Z}'",
+          "assert": { "pointer": { "/line": 1111, "/name": "z_impl___ztest_set_test_result",
+                                   "/fql_kind": "function",
+                                   "/path": "subsys/testsuite/ztest/src/ztest.c" } } },
+
+        { "fql": "SHOW outline OF 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq'",
+          "assert": { "pointer": { "/content/entries/0/name": "thread_runq" } },
+          "capture": { "O": "content.entries.0.node_id" } },
+        { "fql": "SHOW NODE '${O}'",
+          "assert": { "pointer": { "/start_line": 51,
+                                   "/content/lines/0/text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)" } } }
+      ] },
+
     { "name": "node_mutations_round_trip_on_c_source", "use": "zephyr-andre.main", "mode": "rw",
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
@@ -93,6 +126,32 @@
         { "fql": "ROLLBACK TRANSACTION 'v2-insert-after'", "assert": { "field": { "name": "v2-insert-after" } } },
         { "fql": "FIND symbols WHERE name = 'v2_inserted' IN 'kernel/sched.c'",
           "assert": { "row_count": 0 } }
+      ] },
+
+    { "name": "sequential_change_does_not_duplicate_symbols", "use": "zephyr-andre.main", "mode": "rw",
+      "steps": [
+        { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
+          "assert": { "row_count": 1 },
+          "capture": { "T": "results.0.node_id" } },
+        { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'runq_add' LIMIT 1",
+          "assert": { "row_count": 1 },
+          "capture": { "R": "results.0.node_id" } },
+
+        { "fql": "BEGIN TRANSACTION 'v2-sequential'", "assert": { "field": { "name": "v2-sequential" } } },
+
+        { "fql": "CHANGE NODE '${T}' WITH 'static ALWAYS_INLINE void *thread_runq(struct k_thread *thread) { ARG_UNUSED(thread); return &_kernel.ready_q.runq; }'",
+          "assert": { "applied": true } },
+        { "fql": "FIND symbols WHERE name = 'thread_runq' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
+          "assert": { "row_count": 1 } },
+
+        { "fql": "CHANGE NODE '${R}' WITH 'static ALWAYS_INLINE void runq_add(struct k_thread *thread) { _priq_run_add(thread_runq(thread), thread); }'",
+          "assert": { "applied": true } },
+        { "fql": "FIND symbols WHERE name = 'runq_add' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
+          "assert": { "row_count": 1 } },
+
+        { "fql": "ROLLBACK TRANSACTION 'v2-sequential'", "assert": { "field": { "name": "v2-sequential" } } },
+        { "fql": "FIND symbols WHERE name = 'runq_add' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
+          "assert": { "row_count": 1 } }
       ] }
   ]
 }

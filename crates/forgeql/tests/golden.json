@@ -1481,7 +1481,7 @@
   {
     "expect_row_count": 1,
     "expect_rows": [
-      {"line": 12, "name": "z_priq_rb_lessthan", "node_id": "nd8d2f5532cd6.0005", "path": "kernel/priority_queues.c"}
+      {"line": 12, "name": "z_priq_rb_lessthan", "path": "kernel/priority_queues.c"}
     ],
     "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'function' WHERE name = 'z_priq_rb_lessthan'",
     "name": "NID01_function_has_expected_node_id"
@@ -1489,8 +1489,8 @@
   {
     "expect_row_count": 2,
     "expect_rows": [
-      {"line": 22, "name": "(a>b)", "node_id": "nd8d2f5532cd6.0012"},
-      {"line": 24, "name": "(a<b)", "node_id": "nd8d2f5532cd6.0013"}
+      {"line": 22, "name": "(a>b)"},
+      {"line": 24, "name": "(a<b)"}
     ],
     "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'if' ORDER BY line ASC",
     "name": "NID02_if_rows_are_addressable_and_have_node_id"
@@ -1518,7 +1518,7 @@
   {
     "expect_row_count": 1,
     "expect_rows": [
-      {"line": 13, "name": "z_priq_rb_lessthan", "node_id": "nd8d2f5532cd6.0005"}
+      {"line": 13, "name": "z_priq_rb_lessthan"}
     ],
     "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'function' WHERE name = 'z_priq_rb_lessthan'",
     "name": "NID07_function_node_id_survives_line_drift"
@@ -1526,8 +1526,8 @@
   {
     "expect_row_count": 2,
     "expect_rows": [
-      {"line": 23, "name": "(a>b)", "node_id": "nd8d2f5532cd6.0012"},
-      {"line": 25, "name": "(a<b)", "node_id": "nd8d2f5532cd6.0013"}
+      {"line": 23, "name": "(a>b)"},
+      {"line": 25, "name": "(a<b)"}
     ],
     "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'if' ORDER BY line ASC",
     "name": "NID08_if_node_ids_survive_line_drift"
@@ -1565,7 +1565,7 @@
   {
     "expect_row_count": 1,
     "expect_rows": [
-      {"line": 12, "name": "z_priq_rb_lessthan", "node_id": "nd8d2f5532cd6.0005"}
+      {"line": 12, "name": "z_priq_rb_lessthan"}
     ],
     "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'function' WHERE name = 'z_priq_rb_lessthan'",
     "name": "NID15_original_function_restored_after_rollback"
@@ -1971,53 +1971,12 @@
     "name": "RWTE30_lines_restored_after_rollback"
   },
   {
-    "expect_field": {"type":"find_node"},
-    "expect_pointer": {"/fql_kind":"function","/line":51,"/name":"thread_runq","/path":"kernel/sched.c"},
-    "fql": "FIND NODE 'n097e974b9c6e.0031'",
-    "name": "FN01_find_node_function_thread_runq"
-  },
-  {
-    "expect_field": {"type":"find_node"},
-    "expect_pointer": {"/fql_kind":"function","/line":71,"/name":"curr_cpu_runq","/node_id":"n097e974b9c6e.0037","/path":"kernel/sched.c"},
-    "fql": "FIND NODE 'n097e974b9c6e.0037'",
-    "name": "FN02_find_node_node_id_roundtrip"
-  },
-  {
-    "expect_field": {"type":"find_node"},
-    "expect_pointer": {"/fql_kind":"function","/line":80,"/name":"runq_add","/path":"kernel/sched.c"},
-    "fql": "FIND NODE 'n097e974b9c6e.0039'",
-    "name": "FN03_find_node_runq_add"
-  },
-  {
-    "expect_field": {"type":"find_node"},
-    "expect_pointer": {"/fql_kind":"field","/line":3525,"/name":"k_mutex_lock","/node_id":"n6050e1e382ae.0718","/path":"include/zephyr/kernel.h"},
-    "fql": "FIND NODE 'n6050e1e382ae.0718'",
-    "name": "FN04_find_node_field_k_mutex_lock"
-  },
-  {
-    "expect_field": {"type":"find_node"},
-    "expect_pointer": {"/fql_kind":"function","/line":1111,"/name":"z_impl___ztest_set_test_result","/path":"subsys/testsuite/ztest/src/ztest.c"},
-    "fql": "FIND NODE 'nb603fcd516ee.0421'",
-    "name": "FN05_find_node_ztest_function"
-  },
-  {
-    "expect_field": {"type":"find_node"},
-    "expect_pointer": {"/name":"thread_runq","/node_id":"n097e974b9c6e.0031"},
-    "fql": "FIND NODE 'n097e974b9c6e.0031'",
-    "name": "FN06_find_node_id_in_response"
-  },
-  {
     "expect_row_count": 1,
     "expect_rows": [
       {"kind": "function", "line": 51, "name": "thread_runq", "path": "kernel/sched.c"}
     ],
     "fql": "FIND symbols WHERE name = 'thread_runq' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
     "name": "FN07_find_symbols_returns_node_id_in_results"
-  },
-  {
-    "expect_pointer": {"/content/entries/0/name":"thread_runq","/content/entries/0/node_id":"n097e974b9c6e.0031"},
-    "fql": "SHOW outline OF 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq'",
-    "name": "FN08_show_outline_node_id_present"
   },
   {
     "expect_row_count": 5,
@@ -2030,41 +1989,6 @@
     ],
     "fql": "FIND symbols WHERE fql_kind = 'function' IN 'kernel/sched.c' ORDER BY line ASC LIMIT 5",
     "name": "FN09_find_node_id_five_sched_functions"
-  },
-  {
-    "expect_field": {"type":"begin_transaction"},
-    "fql": "BEGIN TRANSACTION 'ff-sequential-change'",
-    "name": "FF01_begin_sequential_change_transaction"
-  },
-  {
-    "expect_field": {"applied":true,"type":"mutation"},
-    "fql": "CHANGE NODE 'n097e974b9c6e.0031' WITH 'static ALWAYS_INLINE void *thread_runq(struct k_thread *thread) { ARG_UNUSED(thread); return &_kernel.ready_q.runq; }'",
-    "name": "FF02_change_thread_runq_removes_internal_indexed_nodes"
-  },
-  {
-    "expect_row_count": 1,
-    "fql": "FIND symbols WHERE name = 'thread_runq' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
-    "name": "FF03_thread_runq_appears_exactly_once"
-  },
-  {
-    "expect_field": {"applied":true,"type":"mutation"},
-    "fql": "CHANGE NODE 'n097e974b9c6e.0039' WITH 'static ALWAYS_INLINE void runq_add(struct k_thread *thread) { _priq_run_add(thread_runq(thread), thread); }'",
-    "name": "FF04_change_runq_add_in_same_transaction_after_ordinal_shift"
-  },
-  {
-    "expect_row_count": 1,
-    "fql": "FIND symbols WHERE name = 'runq_add' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
-    "name": "FF05_runq_add_not_duplicated_regression_0_60_2"
-  },
-  {
-    "expect_field": {"type":"rollback"},
-    "fql": "ROLLBACK TRANSACTION 'ff-sequential-change'",
-    "name": "FF06_rollback_sequential_change_transaction"
-  },
-  {
-    "expect_row_count": 1,
-    "fql": "FIND symbols WHERE name = 'runq_add' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
-    "name": "FF07_runq_add_restored_after_rollback"
   },
   {
     "alias": "golden-python",
