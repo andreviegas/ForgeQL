@@ -246,6 +246,7 @@ impl TransformPlan {
         self.merge_by_file()?;
 
         let mut originals = HashMap::new();
+        let mut created = Vec::new();
 
         for file_edit in &mut self.file_edits {
             // Edits are already reverse-sorted by merge_by_file();
@@ -254,7 +255,8 @@ impl TransformPlan {
 
             // For new file creation (e.g. CHANGE FILE WITH content on a
             // non-existent file), treat the original as empty bytes.
-            let original = if file_edit.path.exists() {
+            let existed = file_edit.path.exists();
+            let original = if existed {
                 crate::workspace::file_io::read_bytes(&file_edit.path)?
             } else {
                 Vec::new()
@@ -264,6 +266,23 @@ impl TransformPlan {
                 // writing an emptied buffer. `original` is kept for rollback.
                 std::fs::remove_file(&file_edit.path)?;
             } else {
+                if !existed {
+                    // Ancestor directories the write is about to bring into
+                    // existence are as much this plan's creation as the file
+                    // itself — ROLLBACK must remove both, and only these
+                    // (a directory that already existed is not ours to delete).
+                    let mut missing = Vec::new();
+                    let mut dir = file_edit.path.parent();
+                    while let Some(d) = dir {
+                        if d.as_os_str().is_empty() || d.exists() {
+                            break;
+                        }
+                        missing.push(d.to_path_buf());
+                        dir = d.parent();
+                    }
+                    created.extend(missing.into_iter().rev());
+                    created.push(file_edit.path.clone());
+                }
                 let mut buf = original.clone();
                 apply_edits_to_buffer(&mut buf, &file_edit.edits);
                 crate::workspace::file_io::write_atomic(&file_edit.path, &buf)?;
@@ -275,6 +294,7 @@ impl TransformPlan {
         Ok(TransformResult {
             transaction_name: None,
             originals,
+            created,
         })
     }
 }
@@ -333,6 +353,15 @@ pub struct TransformResult {
     pub transaction_name: Option<String>,
     /// Original raw bytes of each modified file.
     pub originals: HashMap<PathBuf, Vec<u8>>,
+    /// Files this plan brought into existence.
+    ///
+    /// `git reset --hard` restores only tracked paths, and staging is deferred
+    /// to COMMIT — so a file created inside a transaction is untracked when
+    /// ROLLBACK runs and the reset walks straight past it. Surfacing the fact
+    /// here lets the transaction layer remove them itself. (A blanket
+    /// `git clean` would be wrong: it would also delete the user's unrelated
+    /// untracked files.)
+    pub created: Vec<PathBuf>,
 }
 
 impl TransformResult {

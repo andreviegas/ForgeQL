@@ -337,6 +337,145 @@ fn find_files_hands_out_a_handle_and_a_rev_per_row() {
 }
 
 // -----------------------------------------------------------------------
+// Creation, relocation, and ROLLBACK of created files
+// -----------------------------------------------------------------------
+
+#[test]
+fn insert_node_for_creates_an_empty_file_and_returns_its_handle() {
+    let (mut engine, sid, dir) = engine_with_session();
+
+    match execute_fql(&mut engine, &sid, "INSERT NODE FOR 'notes/readme.md'") {
+        ForgeQLResult::Mutation(m) => {
+            assert_eq!(
+                m.new_node_id.as_deref(),
+                Some(path_handle("notes/readme.md").as_str())
+            );
+        }
+        other => panic!("expected Mutation, got {other:?}"),
+    }
+    let path = dir.path().join("notes/readme.md");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "", "created empty");
+
+    // The bootstrap: create, then write into it by handle.
+    let handle = path_handle("notes/readme.md");
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("INSERT AFTER NODE '{handle}' WITH '# Title'"),
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), "# Title\n");
+
+    // It will not clobber an existing path.
+    let err = try_fql(&mut engine, &sid, "INSERT NODE FOR 'notes/readme.md'").unwrap_err();
+    assert!(err.to_string().contains("already exists"), "got: {err}");
+}
+
+#[test]
+fn insert_node_for_trailing_slash_creates_a_directory() {
+    let (mut engine, sid, dir) = engine_with_session();
+    let _ = execute_fql(&mut engine, &sid, "INSERT NODE FOR 'docs/'");
+    assert!(dir.path().join("docs").is_dir());
+}
+
+#[test]
+fn move_node_to_path_renames_the_file_and_keeps_its_rev() {
+    let (mut engine, sid, dir) = engine_with_session();
+    fs::write(dir.path().join("old.txt"), "body\n").unwrap();
+
+    let handle = path_handle("old.txt");
+    let rev = node_rev(&mut engine, &sid, &handle);
+    match execute_fql(
+        &mut engine,
+        &sid,
+        &format!("MOVE NODE '{handle}' IF REV '{rev}' TO 'new.txt'"),
+    ) {
+        ForgeQLResult::Mutation(m) => {
+            // The handle is path-derived, so a rename earns a new one.
+            assert_eq!(
+                m.new_node_id.as_deref(),
+                Some(path_handle("new.txt").as_str())
+            );
+        }
+        other => panic!("expected Mutation, got {other:?}"),
+    }
+    assert!(
+        !dir.path().join("old.txt").exists(),
+        "the source is unlinked, not emptied"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("new.txt")).unwrap(),
+        "body\n"
+    );
+    // Same bytes at the new path, so the same rev.
+    assert_eq!(node_rev(&mut engine, &sid, &path_handle("new.txt")), rev);
+}
+
+#[test]
+fn move_node_to_requires_if_rev_and_refuses_an_existing_destination() {
+    let (mut engine, sid, dir) = engine_with_session();
+    fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+    fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+
+    let handle = path_handle("a.txt");
+    let err = try_fql(
+        &mut engine,
+        &sid,
+        &format!("MOVE NODE '{handle}' TO 'c.txt'"),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("requires IF REV"), "got: {err}");
+
+    let rev = node_rev(&mut engine, &sid, &handle);
+    let err = try_fql(
+        &mut engine,
+        &sid,
+        &format!("MOVE NODE '{handle}' IF REV '{rev}' TO 'b.txt'"),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("already exists"), "got: {err}");
+    assert_eq!(fs::read_to_string(dir.path().join("b.txt")).unwrap(), "b\n");
+}
+
+#[test]
+fn copy_node_to_a_directory_handle_keeps_the_basename() {
+    let (mut engine, sid, dir) = engine_with_session();
+    fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+    fs::create_dir_all(dir.path().join("pkg")).unwrap();
+
+    let file = path_handle("a.txt");
+    let pkg = path_handle("pkg");
+    // Creation only, so no rev needed.
+    let _ = execute_fql(&mut engine, &sid, &format!("COPY NODE '{file}' TO '{pkg}'"));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("pkg/a.txt")).unwrap(),
+        "a\n"
+    );
+    assert!(
+        dir.path().join("a.txt").exists(),
+        "COPY leaves the source alone"
+    );
+}
+
+#[test]
+fn copy_node_to_a_trailing_slash_path_is_the_same_as_a_directory_handle() {
+    let (mut engine, sid, dir) = engine_with_session();
+    fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+
+    // `api/v2/` does not exist yet — a path is the only way to name it, which is
+    // exactly why the TO argument accepts one.
+    let file = path_handle("a.txt");
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("COPY NODE '{file}' TO 'api/v2/'"),
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("api/v2/a.txt")).unwrap(),
+        "a\n"
+    );
+}
+
+// -----------------------------------------------------------------------
 // Engine lifecycle
 // -----------------------------------------------------------------------
 

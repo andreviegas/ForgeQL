@@ -42,6 +42,8 @@ The right way to find and read code:
 - Delete a node: `DELETE NODE '<id>'` — `'<id>(n-m)'` deletes lines within it
 - Delete a whole file or directory: `DELETE NODE '<hex>' IF REV '<rev>'` — `IF REV` is **mandatory** on whole-path deletes (and on a whole-file `CHANGE NODE '<hex>'`); a directory handle deletes its subtree. Take the `rev` off the `FIND files` row.
 - Relocate a node: `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — byte-exact, atomic, cross-file; the engine never re-indents
+- Create a file/directory: `INSERT NODE FOR 'src/new.rs'` · `INSERT NODE FOR 'docs/'` — returns the new handle; write into it with `INSERT AFTER NODE '<hex>' WITH '...'`
+- Rename/move/copy a file: `MOVE NODE '<hex>' IF REV '<rev>' TO 'path/new.rs'` (or `TO '<dir_hex>'`) · `COPY NODE '<hex>' TO 'api/v2/'` — MOVE is gated, COPY is not; the destination is never clobbered
 - Reverse a bad edit: `UNDO` (most recent) · `UNDO LAST-n`
 - Rename = mechanical sweep: `FIND usages OF 'old'` → one targeted `CHANGE NODE` per site
 - Gate then commit: `BEGIN TRANSACTION` → edits → `VERIFY build 'step'` (or `JOB START 'step'` for long gates; poll `JOB STATUS <id>`) → `COMMIT MESSAGE 'msg'`. Steps marked `commit_gate: true` must pass after the last edit or COMMIT is refused.

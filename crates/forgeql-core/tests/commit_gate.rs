@@ -78,6 +78,78 @@ fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
 }
 
 #[test]
+fn rollback_removes_files_the_transaction_created() {
+    let (mut engine, sid, dir) = gated_session();
+
+    let _ = exec(&mut engine, &sid, "BEGIN TRANSACTION 'txn'");
+    let _ = exec(&mut engine, &sid, "INSERT NODE FOR 'scratch/new.txt'");
+    assert!(dir.path().join("scratch/new.txt").exists());
+
+    let _ = exec(&mut engine, &sid, "ROLLBACK");
+
+    // ROLLBACK is `git reset --hard`, which restores **tracked** paths. Staging
+    // is deferred to COMMIT, so a file created inside the transaction is still
+    // untracked and the reset walked straight past it — it survived, on disk and
+    // in the index (BUG-025). The created paths are now removed explicitly.
+    assert!(
+        !dir.path().join("scratch/new.txt").exists(),
+        "ROLLBACK must remove what the transaction created"
+    );
+    assert!(
+        !dir.path().join("scratch").exists(),
+        "and the directory it created for it"
+    );
+    // The pre-existing file is untouched — this is not a `git clean`.
+    assert_eq!(
+        fs::read_to_string(dir.path().join("notes.txt")).unwrap(),
+        "initial\n"
+    );
+}
+
+#[test]
+fn rollback_leaves_alone_a_directory_it_did_not_create() {
+    let (mut engine, sid, dir) = gated_session();
+    // An empty directory that was already there. Git does not track empty
+    // directories, so `reset --hard` will not restore it — if ROLLBACK deletes
+    // it, it is gone for good. Only what the transaction created may be removed.
+    fs::create_dir_all(dir.path().join("existing")).unwrap();
+
+    let _ = exec(&mut engine, &sid, "BEGIN TRANSACTION 'txn'");
+    let _ = exec(&mut engine, &sid, "INSERT NODE FOR 'existing/new.txt'");
+    let _ = exec(&mut engine, &sid, "INSERT NODE FOR 'made/up/deep.txt'");
+    let _ = exec(&mut engine, &sid, "ROLLBACK");
+
+    assert!(
+        !dir.path().join("existing/new.txt").exists(),
+        "the created file goes"
+    );
+    assert!(
+        dir.path().join("existing").is_dir(),
+        "the directory it was put in was not created by the transaction — it stays"
+    );
+    // Directories the transaction did create go, all the way up.
+    assert!(
+        !dir.path().join("made").exists(),
+        "created directories go too"
+    );
+}
+
+#[test]
+fn rollback_removes_a_directory_created_by_insert_node_for() {
+    let (mut engine, sid, dir) = gated_session();
+
+    let _ = exec(&mut engine, &sid, "BEGIN TRANSACTION 'txn'");
+    let _ = exec(&mut engine, &sid, "INSERT NODE FOR 'docs/'");
+    assert!(dir.path().join("docs").is_dir());
+
+    let _ = exec(&mut engine, &sid, "ROLLBACK");
+    assert!(
+        !dir.path().join("docs").exists(),
+        "a directory the transaction created is removed as a directory, not attempted as a file"
+    );
+}
+
+#[test]
 fn commit_is_gated_until_the_gated_step_passes() {
     let (mut engine, sid, _dir) = gated_session();
 

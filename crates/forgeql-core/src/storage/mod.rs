@@ -62,6 +62,22 @@ pub mod path_node {
         Some(stripped)
     }
 
+    /// Is this string a whole-path handle, as opposed to a path?
+    ///
+    /// Stricter than [`bare_hex`], which only asks "no ordinal?" of something
+    /// already known to be a node id. This one is asked of an argument that
+    /// could be *either* — a `TO` destination — so `notes/` must not read as a
+    /// handle merely because it starts with `n`.
+    #[must_use]
+    pub fn is_handle(value: &str) -> bool {
+        bare_hex(value).is_some_and(|hex| {
+            hex.len() >= MIN_HEX
+                && hex.len() <= 64
+                && hex.len().is_multiple_of(2)
+                && hex.bytes().all(|b| b.is_ascii_hexdigit())
+        })
+    }
+
     /// Normalize and check a bare hex, or say why it is not a handle.
     pub fn validate_hex(node_id: &str, hex: &str) -> Result<String> {
         let hex = hex.to_ascii_lowercase();
@@ -78,10 +94,8 @@ pub mod path_node {
     /// Does `rel` fingerprint to something starting with `hex`?
     #[must_use]
     pub fn path_matches_hex(rel: &Path, hex: &str) -> bool {
-        let full = crate::node_id::hex_prefix(
-            &crate::node_id::sha256_of_path(&rel.to_string_lossy()),
-            64,
-        );
+        let full =
+            crate::node_id::hex_prefix(&crate::node_id::sha256_of_path(&rel.to_string_lossy()), 64);
         full.starts_with(hex)
     }
 

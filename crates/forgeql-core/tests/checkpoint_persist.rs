@@ -119,11 +119,13 @@ fn checkpoint_survives_restart() {
             name: "txn-a".to_string(),
             oid: "bbbb".to_string(),
             pre_txn_oid: "aaaa".to_string(),
+            created: Vec::new(),
         },
         forgeql_core::session::Checkpoint {
             name: "txn-b".to_string(),
             oid: "cccc".to_string(),
             pre_txn_oid: "bbbb".to_string(),
+            created: Vec::new(),
         },
     ];
 
@@ -176,6 +178,7 @@ fn stale_checkpoint_file_is_discarded() {
         name: "txn-a".to_string(),
         oid: "old-oid".to_string(),
         pre_txn_oid: "base-oid".to_string(),
+        created: Vec::new(),
     }];
     forgeql_core::session::checkpoint_file::save(&session_a, dir.path()).expect("save");
 

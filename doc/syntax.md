@@ -224,6 +224,11 @@ DELETE NODE '<node_id>' [IF REV '<rev>']
 DELETE NODE '<node_id>(n-m)'
 
 MOVE NODE '<src_id>' [IF REV '<rev>'] (BEFORE | AFTER) NODE '<dst_id>'
+MOVE NODE '<src_id>' [IF REV '<rev>'] TO '<dir_hex> | <path>'
+COPY NODE '<src_id>' TO '<dir_hex> | <path>'
+
+INSERT NODE FOR '<path>'          -- create an empty file
+INSERT NODE FOR '<path>/'         -- create a directory
 ```
 `<node_id>` is a stable handle from `FIND symbols`, `SHOW outline`, `FIND NODE`, or the CSV form of `SHOW body` (see [Node Addressing](#node-addressing)). Editing by handle is drift-proof: a node_id stays valid across edits that shift line numbers, so you read once and mutate by handle.
 
@@ -236,6 +241,9 @@ MOVE NODE '<src_id>' [IF REV '<rev>'] (BEFORE | AFTER) NODE '<dst_id>'
 | `DELETE NODE … [IF REV '<rev>']` | Delete the node's source span (optionally rev-guarded) |
 | `DELETE NODE '<id>(n-m)'` | Delete only lines n–m within the node (node-relative offset) |
 | `MOVE NODE '<src>' (BEFORE\|AFTER) NODE '<dst>'` | Relocate the node's bytes to the anchor — one atomic plan, no read round-trip |
+| `MOVE NODE '<src>' IF REV … TO '<dst>'` | Move or rename: `<dst>` is a directory handle (keeps the basename) or a path. A whole-file source is **unlinked**, not emptied — `IF REV` mandatory |
+| `COPY NODE '<src>' TO '<dst>'` | Same addressing, source stays put. Creates only, so ungated |
+| `INSERT NODE FOR '<path>'` | Create an empty file (trailing slash: a directory) and return its handle — the one verb that takes a path, because the path does not exist yet |
 
 #### MOVE NODE
 
@@ -355,6 +363,41 @@ subtree gains, loses, or renames a file, and deliberately does *not* move when a
 file's content changes. That is what a recursive delete needs to be gated on —
 that you saw the current membership, not that you read every byte. Content
 staleness is the per-file rev's job.
+
+#### Creating and relocating paths
+
+A handle addresses something that exists. Creation and renaming are the two
+operations that cannot start from one — the destination has no fingerprint yet —
+so they take a path:
+
+```sql
+INSERT NODE FOR 'src/new_module.rs'          -- create an empty file, returns its n<hex>
+INSERT NODE FOR 'docs/'                      -- trailing slash: create a directory
+MOVE NODE '<hex>' IF REV '<rev>' TO 'src/renamed.rs'   -- rename (source is unlinked)
+MOVE NODE '<hex>' IF REV '<rev>' TO '<dir_hex>'        -- move into a directory
+COPY NODE '<hex>' TO 'api/v2/'               -- copy, keeping the basename
+COPY NODE '<hex>.<ord>' TO 'src/extracted.rs'          -- lift one node into a new file
+```
+
+The `TO` argument is a **directory handle** (the source keeps its basename) or a
+**path**: a trailing slash — or an existing directory — means "into here",
+anything else is the full destination. The destination is never clobbered; if it
+exists, the command is refused. `MOVE` with a whole-file source is destructive
+(the source file is removed) and takes the mandatory `IF REV`; `COPY` only
+creates, so it is ungated. Both return the destination's `node_id` — the handle
+is path-derived, so a move earns a new one, while the `rev` is unchanged (same
+bytes).
+
+`INSERT NODE FOR` replaces the old file-creation idiom (`COPY LINES 1-1`), and
+the pair `INSERT NODE FOR '<path>'` → `INSERT AFTER NODE '<hex>' WITH '…'` is
+the create-then-write bootstrap. Note that git does not track empty directories:
+one created with a trailing slash exists on disk and is listed by `FIND files`,
+but it will not survive a commit/clone round-trip until a file lands in it. The
+engine will not invent a `.gitkeep` for you.
+
+Files created inside a transaction are removed by `ROLLBACK`. (They are
+untracked until `COMMIT` stages them, so `git reset --hard` used to walk straight
+past them and leave them behind.)
 
 #### Node-relative line offsets
 

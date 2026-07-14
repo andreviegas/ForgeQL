@@ -3830,19 +3830,19 @@
   "name": "RWT30_boot_banner_v2_fully_gone"
  },
  {
-  "expect_row_count": 1,
+  "expect_row_count": 0,
   "fql": "FIND files WHERE path = 'kernel/rw_copy_test.c'",
-  "name": "RWT31_copy_file_not_cleaned_up_by_rollback"
+  "name": "RWT31_copy_file_cleaned_up_by_rollback"
  },
  {
-  "expect_row_count": 1,
+  "expect_row_count": 0,
   "fql": "FIND files WHERE path = 'kernel/rw_move_test.c'",
-  "name": "RWT32_move_file_not_cleaned_up_by_rollback"
+  "name": "RWT32_move_file_cleaned_up_by_rollback"
  },
  {
-  "expect_row_count": 1,
+  "expect_row_count": 0,
   "fql": "FIND files IN 'lib/rw_golden_test/**'",
-  "name": "RWT33_new_folder_not_cleaned_up_by_rollback"
+  "name": "RWT33_new_folder_cleaned_up_by_rollback"
  },
  {
   "expect_field": {

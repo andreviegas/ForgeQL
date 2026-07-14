@@ -19,7 +19,11 @@ use tracing::debug;
 
 use crate::session::{Checkpoint, Session};
 
-const FILE_VERSION: u32 = 1;
+// v2 adds `PersistedCheckpoint.created`. bincode is positional, so a v1 file
+// cannot be read as v2 — `load` bails on the version and `try_restore` degrades
+// to an empty stack with a warning, which is the same graceful path a corrupt
+// file takes. The only loss is an in-flight transaction across an upgrade.
+const FILE_VERSION: u32 = 2;
 const FILE_NAME: &str = ".forgeql-checkpoints";
 
 /// Root of the serialized checkpoint file.
@@ -36,6 +40,7 @@ struct PersistedCheckpoint {
     name: String,
     oid: String,
     pre_txn_oid: String,
+    created: Vec<std::path::PathBuf>,
 }
 
 // -----------------------------------------------------------------------
@@ -57,6 +62,7 @@ pub fn save(session: &Session, worktree_path: &Path) -> Result<()> {
                 name: cp.name.clone(),
                 oid: cp.oid.clone(),
                 pre_txn_oid: cp.pre_txn_oid.clone(),
+                created: cp.created.clone(),
             })
             .collect(),
     };
@@ -143,6 +149,7 @@ fn restore_into(cf: CheckpointFile, session: &mut Session) {
             name: p.name,
             oid: p.oid,
             pre_txn_oid: p.pre_txn_oid,
+            created: p.created,
         })
         .collect();
 }

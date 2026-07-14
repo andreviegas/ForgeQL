@@ -94,12 +94,15 @@ statement = {
   | show_diff_stmt
   | change_stmt
   | copy_stmt
+  | move_node_to_stmt
   | move_node_stmt
+  | copy_node_to_stmt
   | move_stmt
   | find_stmt
   | find_node_stmt
   | change_nodes_last_stmt
   | change_node_stmt
+  | insert_node_for_stmt
   | insert_node_stmt
   | delete_node_stmt
   | show_node_stmt
@@ -125,6 +128,11 @@ change_nodes_last_stmt = { "CHANGE" ~ "NODES" ~ "LAST" ~ change_matching }
 /// `INSERT BEFORE|AFTER NODE 'id' WITH content` — insert lines around a node.
 insert_node_stmt = { "INSERT" ~ insert_position ~ "NODE" ~ any_value ~ "WITH" ~ content_value }
 insert_position  = { "BEFORE" | "AFTER" }
+
+/// `INSERT NODE FOR 'path'` — create an empty file (or, with a trailing slash,
+/// a directory) and return its whole-path handle. Creation is the one thing a
+/// handle cannot address, because the path does not exist yet.
+insert_node_for_stmt = { "INSERT" ~ "NODE" ~ "FOR" ~ any_value }
 
 /// `DELETE NODE 'id' [IF REV 'rev']` — delete node source lines.
 delete_node_stmt = { "DELETE" ~ "NODE" ~ any_value ~ if_rev_clause? }
@@ -271,6 +279,19 @@ copy_stmt = {
 /// seam is real, and the boundary diff shows it so the agent can close it.
 move_node_stmt = {
     "MOVE" ~ "NODE" ~ any_value ~ if_rev_clause? ~ insert_position ~ "NODE" ~ any_value
+}
+
+/// `MOVE NODE 'src' [IF REV 'rev'] TO 'dst'` — move or rename by destination
+/// rather than by anchor. `dst` is a directory handle (keep the basename) or a
+/// path (a full rename). A path destination is the one thing that cannot be a
+/// handle: it does not exist yet.
+move_node_to_stmt = {
+    "MOVE" ~ "NODE" ~ any_value ~ if_rev_clause? ~ "TO" ~ any_value
+}
+
+/// `COPY NODE 'src' TO 'dst'` — same addressing, but the source stays put.
+copy_node_to_stmt = {
+    "COPY" ~ "NODE" ~ any_value ~ "TO" ~ any_value
 }
 
 /// `MOVE LINES n-m OF 'src' TO 'dst' [AT LINE k]`

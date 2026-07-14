@@ -328,6 +328,9 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         Rule::change_node_stmt
         | Rule::change_nodes_last_stmt
         | Rule::insert_node_stmt
+        | Rule::insert_node_for_stmt
+        | Rule::move_node_to_stmt
+        | Rule::copy_node_to_stmt
         | Rule::delete_node_stmt
         | Rule::move_node_stmt
         | Rule::show_node_stmt => parse_node_stmt(pair),
@@ -591,6 +594,45 @@ fn parse_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
                 word_boundary,
             })
         }
+        Rule::insert_node_for_stmt => {
+            let mut inner = pair.into_inner();
+            let path = next_str(&mut inner, "insert_node_for: expected path")?;
+            Ok(ForgeQLIR::InsertNodeFor { path })
+        }
+
+        Rule::move_node_to_stmt => {
+            let mut inner = pair.into_inner();
+            let src_id = next_str(&mut inner, "move_node_to: expected source node_id")?;
+            let mut if_rev = None;
+            let mut dst = None;
+            for child in inner {
+                if child.as_rule() == Rule::if_rev_clause {
+                    if_rev = child
+                        .into_inner()
+                        .next()
+                        .map(unwrap_any_value)
+                        .transpose()?;
+                } else {
+                    dst = Some(unwrap_any_value(child)?);
+                }
+            }
+            let dst = dst.ok_or_else(|| {
+                ForgeError::DslParse("move_node_to: expected destination after TO".into())
+            })?;
+            Ok(ForgeQLIR::MoveNodeTo {
+                src_id,
+                dst,
+                if_rev,
+            })
+        }
+
+        Rule::copy_node_to_stmt => {
+            let mut inner = pair.into_inner();
+            let src_id = next_str(&mut inner, "copy_node_to: expected source node_id")?;
+            let dst = next_str(&mut inner, "copy_node_to: expected destination after TO")?;
+            Ok(ForgeQLIR::CopyNodeTo { src_id, dst })
+        }
+
         Rule::insert_node_stmt => {
             let mut inner = pair.into_inner();
             let pos_pair = inner

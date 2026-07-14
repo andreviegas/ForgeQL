@@ -49,7 +49,10 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Read a whole file | `SHOW NODE '<file_hex>'` — the bare-hex (no-ordinal) handle from `FIND files`; `'<file_hex>(k-m)'` reads a line range |
 | Delete a file / directory | `DELETE NODE '<hex>' IF REV '<rev>'` — **IF REV is mandatory** on whole-path deletes; a dir handle deletes its subtree |
 | Overwrite a whole file | `CHANGE NODE '<file_hex>' IF REV '<rev>' WITH '...'` — **IF REV is mandatory** |
+| Create a file / directory | `INSERT NODE FOR 'src/new.rs'` · `INSERT NODE FOR 'docs/'` — returns the new handle |
 | Write into a new/empty file | `INSERT AFTER NODE '<file_hex>' WITH '...'` — appends at EOF, ungated |
+| Rename / move a file | `MOVE NODE '<file_hex>' IF REV '<rev>' TO 'path/new.rs'` (or `TO '<dir_hex>'` to move into a directory) |
+| Copy a file / a node into a file | `COPY NODE '<hex>' TO 'api/v2/'` · `COPY NODE '<hex>.<ord>' TO 'src/extracted.rs'` — ungated |
 | Context around symbol | `SHOW context OF 'name'` |
 | Read + filter a node | `SHOW body OF 'name' DEPTH 99 WHERE text LIKE '%pattern%'` |
 | Page a truncated/buffered output | `SHOW MORE [HEAD n \| TAIL n \| n-m] [WHERE text MATCHES '...']` |

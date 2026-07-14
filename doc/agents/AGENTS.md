@@ -109,6 +109,8 @@ Edit indexed code by stable `node_id` **only**: `CHANGE NODE` replaces a node, `
 | `DELETE NODE '<id>'` / `DELETE NODE '<id>(n-m)'` | Delete the node, or lines n–m within it |
 | `DELETE NODE '<hex>' IF REV '<rev>'` | Delete a whole **file** — or a **directory** and its subtree. `IF REV` is **mandatory** here, as it is for a whole-file `CHANGE NODE '<hex>'`: a node edit can be corrected afterwards, a deleted file cannot be re-read. Take the `rev` straight off the `FIND files` row. |
 | `MOVE NODE '<src>' (BEFORE\|AFTER) NODE '<dst>'` | Relocate the node byte-for-byte — atomic, cross-file, no re-indent |
+| `MOVE NODE '<hex>' IF REV '<rev>' TO '<path>'` | Rename or move a file: `TO` takes a directory handle (basename kept) or a path. The source is unlinked, not emptied. `COPY NODE … TO …` is the ungated twin. |
+| `INSERT NODE FOR '<path>'` | Create an empty file — or a directory, with a trailing slash — and get its handle back. Then write into it with `INSERT AFTER NODE '<hex>' WITH …`. |
 | `<mutation> IF REV '<rev>'` | Guard a mutation on the node's content rev |
 | `UNDO` / `UNDO LAST-n` | Reverse recent mutations from the per-session undo ring |
 | Raw-text `CHANGE FILE` / copy / move | Non-indexed files only — see the syntax reference |

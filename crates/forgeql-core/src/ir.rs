@@ -296,6 +296,12 @@ pub enum ForgeQLIR {
         word_boundary: bool,
     },
 
+    /// `INSERT NODE FOR 'path'` — create an empty file, or a directory when the
+    /// path ends in `/`. Every other verb addresses something that exists; this
+    /// is the one that brings a path into existence, so it takes a path and
+    /// hands back the handle.
+    InsertNodeFor { path: String },
+
     /// `INSERT BEFORE NODE 'id' WITH content` / `INSERT AFTER NODE 'id' WITH content`
     InsertNode {
         node_id: String,
@@ -330,6 +336,23 @@ pub enum ForgeQLIR {
         if_rev: Option<String>,
     },
 
+    /// `MOVE NODE 'src' [IF REV 'rev'] TO 'dst'` — move or rename by
+    /// destination instead of by anchor.
+    ///
+    /// `dst` is a directory handle (the basename is kept) or a path (a full
+    /// rename — the verb ForgeQL lacked, which until now took a COPY LINES +
+    /// DELETE dance). A path is the one destination that cannot be a handle:
+    /// it does not exist yet, so there is nothing to fingerprint.
+    MoveNodeTo {
+        src_id: String,
+        dst: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        if_rev: Option<String>,
+    },
+
+    /// `COPY NODE 'src' TO 'dst'` — same addressing as `MOVE NODE … TO`, but
+    /// the source stays where it is. Creation only, so no `IF REV`.
+    CopyNodeTo { src_id: String, dst: String },
     /// `SHOW NODE 'id' [CONTENT | METADATA]`
     ///
     /// * `CONTENT` (default) — return the source lines of the node.

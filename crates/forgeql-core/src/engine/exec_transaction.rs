@@ -92,6 +92,7 @@ impl ForgeQLEngine {
                 name: name.to_string(),
                 oid: oid.clone(),
                 pre_txn_oid,
+                created: Vec::new(),
             });
             // FT6: save AFTER push so the file reflects the full new stack.
             // The checkpoint commit tree captured the pre-push state (correct
@@ -236,7 +237,8 @@ impl ForgeQLEngine {
         let sid = require_session_id(session_id)?;
 
         // Pop the checkpoint (releases the mutable borrow before reindex).
-        let (label, oid, pre_txn_oid, worktree_path) = self.pop_rollback_checkpoint(sid, name)?;
+        let (label, oid, pre_txn_oid, worktree_path, created) =
+            self.pop_rollback_checkpoint(sid, name)?;
 
         // Git-as-source-of-truth ROLLBACK: `git reset --hard <checkpoint_oid>`
         // restores the worktree (and, for legacy sessions, the matching
@@ -245,6 +247,39 @@ impl ForgeQLEngine {
         // them instead (calling `resume_index` here would force a wasted rebuild).
         let repo = git::open(&worktree_path)?;
         git::reset_hard(&repo, &oid)?;
+
+        // `reset --hard` restores tracked paths only. A path created inside the
+        // transaction was never staged (staging is deferred to COMMIT), so the
+        // reset walks straight past it and it survives — on disk and, after the
+        // reindex below, in the index.
+        //
+        // Remove exactly what the transaction created, and nothing else. Not a
+        // `git clean`: that would also destroy the user's unrelated untracked
+        // files. Not "any empty parent", either — git does not track empty
+        // directories, so an empty directory that was already there is not
+        // restored by the reset, and deleting it would be unrecoverable. Only
+        // paths in `created` are touched, deepest first so a created directory
+        // is empty by the time it is reached.
+        let mut created = created;
+        created.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
+        for path in &created {
+            if !path.starts_with(&worktree_path) {
+                warn!(path = %path.display(), "rollback: recorded path is outside the worktree; skipped");
+                continue;
+            }
+            let result = if path.is_dir() {
+                // `remove_dir` refuses a non-empty directory: if the agent left
+                // something else in a directory we created, the directory stays.
+                std::fs::remove_dir(path)
+            } else {
+                std::fs::remove_file(path)
+            };
+            if let Err(err) = result
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                warn!(error = %err, path = %path.display(), "rollback: could not remove created path");
+            }
+        }
 
         self.restore_session_after_reset(sid, &worktree_path);
 
@@ -271,7 +306,13 @@ impl ForgeQLEngine {
         &mut self,
         sid: &str,
         name: Option<&str>,
-    ) -> Result<(String, String, String, std::path::PathBuf)> {
+    ) -> Result<(
+        String,
+        String,
+        String,
+        std::path::PathBuf,
+        Vec<std::path::PathBuf>,
+    )> {
         let session = self
             .sessions
             .get_mut(sid)
@@ -310,6 +351,7 @@ impl ForgeQLEngine {
             checkpoint.oid,
             checkpoint.pre_txn_oid,
             session.worktree_path.clone(),
+            checkpoint.created,
         ))
     }
 

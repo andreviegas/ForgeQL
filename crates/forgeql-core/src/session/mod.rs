@@ -160,6 +160,15 @@ pub struct Checkpoint {
     pub oid: String,
     /// HEAD immediately before the checkpoint commit was created.
     pub pre_txn_oid: String,
+    /// Files created since this checkpoint was pushed.
+    ///
+    /// ROLLBACK is `git reset --hard`, which restores tracked paths only.
+    /// Staging is deferred to COMMIT, so a file created inside the transaction
+    /// is still untracked and the reset leaves it behind — on disk and in the
+    /// index. These are removed explicitly instead. A nested BEGIN stages
+    /// everything created so far, which is why paths are recorded only in the
+    /// topmost frame: below it, `reset --hard` already handles them.
+    pub created: Vec<std::path::PathBuf>,
 }
 
 // -----------------------------------------------------------------------

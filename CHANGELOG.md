@@ -44,6 +44,40 @@ every FIND result is now a usable, version-stamped mutation handle.
 - **`INSERT BEFORE/AFTER NODE '<hex>'`** is prepend-at-BOF / append-at-EOF, and now works on an
   empty file — the create-then-write bootstrap.
 
+### Added — creating, renaming and relocating paths
+
+```sql
+INSERT NODE FOR 'src/new_module.rs'                    -- create an empty file, get its handle
+INSERT NODE FOR 'docs/'                                -- create a directory
+MOVE NODE '<hex>' IF REV '<rev>' TO 'src/renamed.rs'   -- rename (the source is unlinked)
+MOVE NODE '<hex>' IF REV '<rev>' TO '<dir_hex>'        -- move into a directory
+COPY NODE '<hex>' TO 'api/v2/'                         -- copy, keeping the basename
+COPY NODE '<hex>.<ord>' TO 'src/extracted.rs'          -- lift one node into a new file
+```
+
+Handles address what exists. Creation and renaming are the two operations that cannot start from
+one — the destination has no fingerprint yet — so they take a path, and hand a handle back.
+
+- **`INSERT NODE FOR '<path>'`** replaces the file-creation idiom nobody could discover
+  (`COPY LINES 1-1 OF … TO …`). Paired with `INSERT AFTER NODE '<hex>'`, it is the
+  create-then-write bootstrap. A trailing slash creates a directory instead — with the caveat,
+  documented rather than papered over, that git does not track empty directories and the engine
+  will not invent a `.gitkeep` for you.
+- **`MOVE NODE … TO`** is the rename ForgeQL never had (it took a COPY LINES + DELETE dance).
+  **`COPY NODE … TO`** is its ungated twin — a real task once copied 80 files one `COPY LINES` call
+  at a time. The `TO` argument is a directory handle (basename kept) or a path (full rename); an
+  existing destination is refused, never clobbered. A whole-file MOVE unlinks the source rather
+  than leaving a 0-byte husk, and is gated by the same mandatory `IF REV` as DELETE.
+
+### Fixed
+
+- **`ROLLBACK` now removes files created inside the transaction.** `git reset --hard`
+  restores *tracked* paths, and staging is deferred to COMMIT — so a created file was still
+  untracked when the reset ran, and survived it, on disk and in the index. Created paths are now
+  recorded per checkpoint and removed explicitly. (Not a blanket `git clean`: that would also
+  destroy the user's unrelated untracked files.) The checkpoint file version goes 1 → 2; an old
+  file is discarded with a warning, as a corrupt one already was.
+
 ## [0.112.0] — 2026-07-13 — feat(dsl): `MOVE NODE` — relocate a node by handle
 
 ```sql
