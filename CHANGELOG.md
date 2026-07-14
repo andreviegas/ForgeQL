@@ -6,6 +6,8 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.113.0] — 2026-07-14 — feat(dsl): files and directories as addressable nodes; ROLLBACK cleans what it created
+
 ### Added — files and directories are addressable nodes (`n<hex>`)
 
 ```sql

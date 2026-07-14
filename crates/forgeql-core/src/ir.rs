@@ -340,8 +340,8 @@ pub enum ForgeQLIR {
     /// destination instead of by anchor.
     ///
     /// `dst` is a directory handle (the basename is kept) or a path (a full
-    /// rename — the verb ForgeQL lacked, which until now took a COPY LINES +
-    /// DELETE dance). A path is the one destination that cannot be a handle:
+    /// rename — the verb `ForgeQL` lacked, which until now took a `COPY LINES` +
+    /// `DELETE` dance). A path is the one destination that cannot be a handle:
     /// it does not exist yet, so there is nothing to fingerprint.
     MoveNodeTo {
         src_id: String,

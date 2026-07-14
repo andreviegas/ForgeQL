@@ -172,7 +172,10 @@ fn rollback_after_a_server_restart_still_removes_created_files() {
         !dir.path().join("scratch/new.txt").exists(),
         "a created file must not survive a rollback just because the server restarted"
     );
-    assert!(!dir.path().join("scratch").exists(), "nor the directory made for it");
+    assert!(
+        !dir.path().join("scratch").exists(),
+        "nor the directory made for it"
+    );
     assert!(!dir.path().join("docs").exists(), "nor a created directory");
     assert_eq!(
         fs::read_to_string(dir.path().join("notes.txt")).unwrap(),

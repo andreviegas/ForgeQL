@@ -577,29 +577,16 @@ fn parse_change_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<Forge
             .ok_or_else(|| ForgeError::DslParse("change_node: missing content".into()))?,
     })
 }
-/// Parse the node-handle statements (CHANGE / INSERT / DELETE / SHOW NODE),
-/// each addressing an indexed node by its stable id.
-fn parse_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
+/// Parse the path-destination node statements (`INSERT NODE FOR`,
+/// `MOVE NODE … TO`, `COPY NODE … TO`) — the verbs whose destination is a
+/// path or directory handle rather than an existing node.
+fn parse_node_path_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
     match pair.as_rule() {
-        Rule::change_node_stmt => parse_change_node_stmt(pair),
-
-        Rule::change_nodes_last_stmt => {
-            let matching = pair.into_inner().next().ok_or_else(|| {
-                ForgeError::DslParse("change_nodes_last: expected MATCHING clause".into())
-            })?;
-            let (pattern, replacement, word_boundary) = parse_matching_parts(matching)?;
-            Ok(ForgeQLIR::ChangeNodesLast {
-                pattern,
-                replacement,
-                word_boundary,
-            })
-        }
         Rule::insert_node_for_stmt => {
             let mut inner = pair.into_inner();
             let path = next_str(&mut inner, "insert_node_for: expected path")?;
             Ok(ForgeQLIR::InsertNodeFor { path })
         }
-
         Rule::move_node_to_stmt => {
             let mut inner = pair.into_inner();
             let src_id = next_str(&mut inner, "move_node_to: expected source node_id")?;
@@ -625,12 +612,37 @@ fn parse_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
                 if_rev,
             })
         }
-
         Rule::copy_node_to_stmt => {
             let mut inner = pair.into_inner();
             let src_id = next_str(&mut inner, "copy_node_to: expected source node_id")?;
             let dst = next_str(&mut inner, "copy_node_to: expected destination after TO")?;
             Ok(ForgeQLIR::CopyNodeTo { src_id, dst })
+        }
+        other => Err(ForgeError::DslParse(format!(
+            "node path statement: unexpected rule {other:?}"
+        ))),
+    }
+}
+
+/// Parse the node-handle statements (CHANGE / INSERT / DELETE / SHOW NODE),
+/// each addressing an indexed node by its stable id.
+fn parse_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
+    match pair.as_rule() {
+        Rule::change_node_stmt => parse_change_node_stmt(pair),
+
+        Rule::change_nodes_last_stmt => {
+            let matching = pair.into_inner().next().ok_or_else(|| {
+                ForgeError::DslParse("change_nodes_last: expected MATCHING clause".into())
+            })?;
+            let (pattern, replacement, word_boundary) = parse_matching_parts(matching)?;
+            Ok(ForgeQLIR::ChangeNodesLast {
+                pattern,
+                replacement,
+                word_boundary,
+            })
+        }
+        Rule::insert_node_for_stmt | Rule::move_node_to_stmt | Rule::copy_node_to_stmt => {
+            parse_node_path_stmt(pair)
         }
 
         Rule::insert_node_stmt => {
@@ -694,33 +706,37 @@ fn parse_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
                 if_rev,
             })
         }
-        Rule::show_node_stmt => {
-            let mut inner = pair.into_inner();
-            let node_id = next_str(&mut inner, "show_node: expected node_id")?;
-            let mut metadata = false;
-            let mut clauses = crate::ir::Clauses::default();
-            for child in inner {
-                match child.as_rule() {
-                    Rule::show_node_mode => {
-                        metadata = child.as_str() == "METADATA";
-                    }
-                    Rule::clauses => {
-                        clauses = parse_clauses(child.into_inner());
-                    }
-                    _ => {}
-                }
-            }
-            Ok(ForgeQLIR::ShowNode {
-                node_id,
-                metadata,
-                clauses,
-            })
-        }
+        Rule::show_node_stmt => parse_show_node_stmt(pair),
 
         r => Err(ForgeError::DslParse(format!(
             "parse_node_stmt: unhandled rule: {r:?}"
         ))),
     }
+}
+
+/// Parse `SHOW NODE '<id>' [CONTENT|METADATA] [clauses]` — the read-side
+/// companion of the node-handle mutations.
+fn parse_show_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
+    let mut inner = pair.into_inner();
+    let node_id = next_str(&mut inner, "show_node: expected node_id")?;
+    let mut metadata = false;
+    let mut clauses = crate::ir::Clauses::default();
+    for child in inner {
+        match child.as_rule() {
+            Rule::show_node_mode => {
+                metadata = child.as_str() == "METADATA";
+            }
+            Rule::clauses => {
+                clauses = parse_clauses(child.into_inner());
+            }
+            _ => {}
+        }
+    }
+    Ok(ForgeQLIR::ShowNode {
+        node_id,
+        metadata,
+        clauses,
+    })
 }
 
 #[cfg(test)]

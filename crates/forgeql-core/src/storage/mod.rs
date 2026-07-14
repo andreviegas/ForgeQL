@@ -166,7 +166,8 @@ pub mod path_node {
         if bytes.is_empty() {
             return 0;
         }
-        let newlines = bytes.iter().filter(|&&b| b == b'\n').count();
+        // split() yields runs between newlines: run count - 1 == newline count.
+        let newlines = bytes.split(|&b| b == b'\n').count() - 1;
         if bytes.last() == Some(&b'\n') {
             newlines
         } else {

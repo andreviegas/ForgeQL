@@ -686,7 +686,7 @@ impl ForgeQLEngine {
                 std::fs::create_dir_all(parent)?;
             }
             crate::workspace::file_io::write_atomic(&abs, &[])?;
-            created.push(abs.clone());
+            created.push(abs);
         }
 
         // Record the creation so ROLLBACK removes it: the path is untracked
