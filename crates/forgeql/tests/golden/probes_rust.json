@@ -1,0 +1,108 @@
+{
+  "suite": "probes_rust",
+  "description": "Compound probes over forgeql-pub.frozen (Rust, ~59.5k symbols — ForgeQL indexing itself). Smaller corpus than zephyr/pytorch, so predicate stacks are shallower but still land on 1-6 rows. Pins the Rust condition-skeleton normalizer (&& / || / !) and the enclosing_type qualified-name path, neither of which the C or Python suites exercise.",
+  "cases": [
+    {
+      "name": "rust_complex_boolean_conditions_normalize_to_skeletons",
+      "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'if' WHERE condition_tests >= 4 IN 'crates/**' ORDER BY line ASC",
+      "assert": {
+        "total": 8,
+        "row_count": 8,
+        "rows": [
+          { "name": "(a&&b)||(c&&d)||(e&&f)", "enclosing_fn": "strip_outer_delimiters", "path": "crates/forgeql-lang-rust/src/macro_expand.rs", "line": 187, "metric_value": "6" },
+          { "name": "(a==b||a==c||a==d)&&e", "enclosing_fn": "resolve_type_symbol", "path": "crates/forgeql-core/src/storage/legacy/resolve.rs", "line": 213, "metric_value": "4" },
+          { "name": "a||b||c||d||e||f", "enclosing_fn": "skeleton_walk", "path": "crates/forgeql-core/src/ast/enrich/control_flow.rs", "line": 442, "metric_value": "6" },
+          { "name": "a&&b&&c==d&&e", "enclosing_fn": "topk_trim_for", "path": "crates/forgeql-core/src/storage/columnar/columnar_storage/fast_paths.rs", "line": 480, "metric_value": "4" },
+          { "name": "a&&b&&c&&!d", "enclosing_fn": "pick_field", "path": "crates/forgeql-core/tests/sms_integration.rs", "line": 502, "metric_value": "4" },
+          { "name": "a&&(b||c||d)", "enclosing_fn": "update_guard_stack", "path": "crates/forgeql-core/src/ast/index/file_indexer.rs", "line": 569, "metric_value": "4" },
+          { "name": "a||b||c||d", "enclosing_fn": "order_by_name_kind_fast_path", "path": "crates/forgeql-core/src/storage/columnar/columnar_storage/fast_paths.rs", "line": 660, "metric_value": "4" },
+          { "name": "a||b||c||d", "enclosing_fn": "order_by_name_kind_desc_fast_path", "path": "crates/forgeql-core/src/storage/columnar/columnar_storage/fast_paths.rs", "line": 689, "metric_value": "4" }
+        ]
+      }
+    },
+    {
+      "name": "rust_documented_fns_that_still_have_unused_params",
+      "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_unused_param = 'true' WHERE has_doc = 'true' WHERE param_count >= 4 IN 'crates/**' ORDER BY name ASC",
+      "assert": {
+        "total": 3,
+        "row_count": 3,
+        "rows": [
+          { "name": "assert_fields_match", "path": "crates/forgeql-core/tests/segment_parity.rs", "line": 153, "metric_value": "4" },
+          { "name": "extract_payload", "path": "crates/forgeql-core/src/transforms/copy_move.rs", "line": 165, "metric_value": "4" },
+          { "name": "try_resume_session", "path": "crates/forgeql-core/src/engine/exec_source.rs", "line": 352, "metric_value": "4" }
+        ]
+      }
+    },
+    {
+      "name": "rust_recursive_multi_return_fn_and_its_deepest_ifs",
+      "use": "forgeql-pub.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE is_recursive = 'true' WHERE lines >= 40 WHERE return_count >= 3 IN 'crates/**' ORDER BY name ASC",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "name": "check_expr_escape", "path": "crates/forgeql-core/src/ast/enrich/escape.rs", "line": 125, "metric_value": "71" }
+            ]
+          },
+          "capture": { "FN": "results.0.node_id" }
+        },
+        {
+          "fql": "SHOW outline OF '${FN}' WHERE fql_kind = 'if' WHERE depth >= 6",
+          "assert": {
+            "row_count": 2,
+            "all_same": "path",
+            "rows": [
+              { "name": "a&&!b", "line": 143, "depth": 6 },
+              { "name": "a==b||a>c", "line": 148, "depth": 7 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "rust_widest_structs_by_member_count",
+      "use": "forgeql-pub.frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'struct' WHERE member_count >= 20 IN 'crates/**' ORDER BY name ASC",
+      "assert": {
+        "total": 3,
+        "row_count": 3,
+        "rows": [
+          { "name": "LanguageConfig", "path": "crates/forgeql-core/src/ast/lang.rs", "line": 73, "metric_value": "98" },
+          { "name": "SegmentBuilder", "path": "crates/forgeql-core/src/storage/columnar/segment_builder.rs", "line": 225, "metric_value": "21" },
+          { "name": "Session", "path": "crates/forgeql-core/src/session/mod.rs", "line": 160, "metric_value": "24" }
+        ]
+      }
+    },
+    {
+      "name": "rust_enclosing_type_resolves_an_impl_method",
+      "use": "forgeql-pub.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE enclosing_type = 'SegmentBuilder' WHERE param_count >= 3 IN 'crates/**' ORDER BY name ASC",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "name": "set_field", "path": "crates/forgeql-core/src/storage/columnar/segment_builder.rs", "line": 417, "metric_value": "3" }
+            ]
+          },
+          "capture": { "FN": "results.0.node_id" }
+        },
+        {
+          "fql": "SHOW NODE '${FN}' WHERE text MATCHES 'fn set_field|extra_cols'",
+          "assert": {
+            "row_count": 2,
+            "rows": [
+              { "line": 417, "node_offset": 1 },
+              { "line": 421, "node_offset": 1 }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

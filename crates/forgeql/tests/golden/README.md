@@ -161,3 +161,28 @@ be reviewed and the pins updated on purpose, never absorbed silently.
 Probes are read-only and share the memoized per-corpus session, so they cost **no worktrees**.
 Never hard-code a `node_id` in a probe — `capture` it from step 1 and interpolate `${VAR}`, so
 the case survives ordinal churn.
+
+### Writing a probe: two traps
+
+**Do not pin `total` on a query that carries an explicit `LIMIT`.** An explicit `LIMIT`
+truncates the reported `total` (`LIMIT 3` on a 30-row match reports `total: 3`), so a `total`
+pin there asserts nothing and would mask the row set growing. Pin `total` only on unlimited
+queries — where it is the true match count and therefore a real tripwire. `probes_pytorch`'s
+`GROUP BY` case pins `row_count` and rows only, for exactly this reason.
+
+**Enrichers are not uniform across languages, so calibrate per corpus rather than porting a
+predicate stack.** Known asymmetries the suites depend on:
+
+| Field | Note |
+|---|---|
+| `naming` | Not emitted on Python function rows (it does fire on e.g. CMake rows) |
+| `has_escape` | C/C++ only — in pytorch it matches `torch/csrc/**`, never the `.py` tree |
+| `dup_logic` | No Python matches in the frozen pytorch corpus |
+
+That is why the Python cases carry `EXCLUDE 'torch/csrc/**'`: without it a "Python" probe
+silently drifts onto pytorch's C++ sources.
+
+Pairing a control-flow field with the wrong `fql_kind` is the other silent failure —
+`condition_tests`, `mixed_logic`, `paren_depth` and `dup_logic` live on `if`/`while`/`for`/`do`
+rows, **not** on `function`. `WHERE fql_kind = 'function' WHERE condition_tests >= 4` returns
+zero rows rather than erroring.

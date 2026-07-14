@@ -1,0 +1,115 @@
+{
+  "suite": "probes_pytorch",
+  "description": "Compound probes over the frozen pytorch corpus (Python). Each case stacks many clauses and enrichment fields into one query, narrowing to 1-3 rows, then chains SHOW steps against the captured node_id. Python-specific notes: the naming enricher does NOT fire on Python rows, and has_escape only fires on the C++ side of the tree, so Python cases EXCLUDE torch/csrc/**.",
+  "cases": [
+    {
+      "name": "python_dead_store_far_decl_shadow_fn_and_its_deepest_ifs",
+      "use": "pytorch-andre.pytorch-frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_unused_reassign = 'true' WHERE decl_far_count >= 50 WHERE has_shadow = 'true' IN 'torch/**' EXCLUDE 'torch/csrc/**'",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "name": "run_functionalized_fw_and_collect_metadata", "path": "torch/_functorch/_aot_autograd/collect_metadata_analysis.py", "line": 166, "metric_value": "59" }
+            ]
+          },
+          "capture": { "FN": "results.0.node_id" }
+        },
+        {
+          "fql": "SHOW outline OF '${FN}' WHERE fql_kind = 'if' WHERE depth >= 7",
+          "assert": {
+            "row_count": 3,
+            "all_same": "path",
+            "rows": [
+              { "name": "(a!=bandc<=b)", "line": 577, "depth": 7 },
+              { "name": "ab", "line": 590, "depth": 7 },
+              { "name": "ab", "line": 602, "depth": 8 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "python_todo_fn_with_unused_params_and_many_branches",
+      "use": "pytorch-andre.pytorch-frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_todo = 'true' WHERE has_unused_param = 'true' WHERE param_count >= 7 WHERE branch_count >= 20 IN 'torch/**' EXCLUDE 'torch/csrc/**' ORDER BY name ASC",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "name": "convert", "path": "torch/ao/quantization/fx/convert.py", "line": 1033, "metric_value": "9" }
+            ]
+          },
+          "capture": { "FN": "results.0.node_id" }
+        },
+        {
+          "fql": "SHOW outline OF '${FN}' WHERE fql_kind = 'if' WHERE depth = 2",
+          "assert": {
+            "row_count": 1,
+            "rows": [
+              { "name": "a", "path": "torch/ao/quantization/fx/convert.py", "line": 1142, "depth": 2 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "python_heavily_recursive_functions",
+      "use": "pytorch-andre.pytorch-frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE is_recursive = 'true' WHERE recursion_count >= 8 WHERE param_count >= 3 IN 'torch/**' EXCLUDE 'torch/csrc/**' ORDER BY name ASC",
+      "assert": {
+        "total": 3,
+        "row_count": 3,
+        "rows": [
+          { "name": "collate", "path": "torch/utils/data/_utils/collate.py", "line": 118, "metric_value": "8" },
+          { "name": "try_ann_to_type", "path": "torch/jit/annotations.py", "line": 404, "metric_value": "9" },
+          { "name": "walk", "path": "torch/fx/_graph_pickler.py", "line": 273, "metric_value": "10" }
+        ]
+      }
+    },
+    {
+      "name": "python_dunder_methods_with_huge_param_lists",
+      "use": "pytorch-andre.pytorch-frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES '^__.*__$' WHERE param_count >= 40 IN 'torch/**' EXCLUDE 'torch/csrc/**' ORDER BY param_count DESC",
+      "assert": {
+        "total": 2,
+        "row_count": 2,
+        "all_same": "name",
+        "rows": [
+          { "name": "__init__", "path": "torch/testing/_internal/common_optimizers.py", "line": 106, "metric_value": "45" },
+          { "name": "__init__", "path": "torch/autograd/profiler_util.py", "line": 729, "metric_value": "42" }
+        ]
+      }
+    },
+    {
+      "name": "python_magic_scientific_notation_literals_group_by_file",
+      "use": "pytorch-andre.pytorch-frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'number' WHERE num_format = 'scientific' WHERE is_magic = 'true' IN 'torch/**' GROUP BY file ORDER BY count DESC LIMIT 3",
+      "assert": {
+        "row_count": 3,
+        "rows": [
+          { "path": "torch/testing/_internal/common_methods_invocations.py", "count": 524 },
+          { "path": "torch/testing/_internal/common_modules.py", "count": 85 },
+          { "path": "torch/testing/_internal/opinfo/definitions/special.py", "count": 69 }
+        ]
+      }
+    },
+    {
+      "name": "python_most_complex_boolean_conditions",
+      "use": "pytorch-andre.pytorch-frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'if' WHERE condition_tests >= 12 IN 'torch/**' EXCLUDE 'torch/csrc/**' EXCLUDE 'torch/nativert/**' ORDER BY line ASC",
+      "assert": {
+        "total": 2,
+        "row_count": 2,
+        "rows": [
+          { "name": "((abandc!=dandeandf)or(agandc!=handeandi)or(a!=jandd!=kandfandl))", "enclosing_fn": "dtype_mismatch", "path": "torch/distributed/flight_recorder/components/types.py", "line": 506, "metric_value": "12" },
+          { "name": "(abcanddandeandfandg==handiandjandkandlandm)", "enclosing_fn": "compile_subgraph", "path": "torch/_dynamo/output_graph.py", "line": 2075, "metric_value": "12" }
+        ]
+      }
+    }
+  ]
+}
