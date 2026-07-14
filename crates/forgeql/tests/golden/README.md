@@ -123,3 +123,41 @@ the corpus (discarded on teardown — the frozen branch is never modified). Such
 **Nested transactions** are just more steps: each `BEGIN` pushes a checkpoint stack, a
 bare `ROLLBACK` pops the innermost, and `ROLLBACK 'name'` pops to that level. See the
 `node_mutations` suite for `DELETE`/`CHANGE NODE` + nested-rollback examples.
+
+## Compound probe suites (`probes_*.json`)
+
+The `enrich_*.json` suites pin **one field at a time** on small fixtures — they localise a
+regression to a single enricher. Probe suites do the opposite job: each case stacks many
+clauses and enrichment fields into **one query over a frozen real-world corpus**, narrowed
+to 1-4 rows, then chains `SHOW` steps that address the located node and pin its inner
+structure.
+
+```
+FIND symbols WHERE fql_kind = 'function'
+  WHERE lines >= 100 WHERE lines <= 150      -- metrics enricher
+  WHERE is_recursive = 'true'                -- recursion enricher
+  WHERE has_escape = 'true'                  -- escape enricher
+  WHERE naming = 'snake_case'                -- naming enricher
+  IN 'subsys/**'                             -- glob expansion
+                                             -- => exactly 1 row
+  -> capture node_id, then
+SHOW outline OF '${FN}' WHERE fql_kind = 'if' WHERE depth = 2   -- nested-if structure
+SHOW NODE '${FN}' WHERE text LIKE '%goto unlock%'               -- line filter + offsets
+```
+
+One case therefore crosses the parser, clause filtering, glob expansion, the columnar scan,
+four enrichers, node addressing, subtree outline and line-level filtering. A change to any of
+those paths moves a pinned value and the case fails.
+
+That breadth is the point, and it is also the trade-off: **a probe tells you something moved,
+not which enricher moved it.** Localisation is the `enrich_*` suites' job. Probes are the
+sensitivity layer — they are what catches an index-output change that a fresh-tempdir unit
+test and a stale segment cache would both report as green.
+
+Probes deliberately pin `total`/`row_count` as well as row contents, so an **additive** change
+(a new `fql_kind`, newly indexed rows) trips them too. That is a feature: such a change should
+be reviewed and the pins updated on purpose, never absorbed silently.
+
+Probes are read-only and share the memoized per-corpus session, so they cost **no worktrees**.
+Never hard-code a `node_id` in a probe — `capture` it from step 1 and interpolate `${VAR}`, so
+the case survives ordinal churn.

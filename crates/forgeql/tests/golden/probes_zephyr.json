@@ -1,0 +1,174 @@
+{
+  "suite": "probes_zephyr",
+  "description": "Compound probes. Each case stacks many clauses and enrichment fields so a single query crosses the parser, clause filtering, the columnar scan and several enrichers at once, landing on 1-4 rows of the frozen zephyr corpus. Chained steps then address the located node and pin its inner structure. Any change that perturbs one of those paths moves a pinned value, so these fail loudly on regressions AND on unreviewed additive changes to index output.",
+  "cases": [
+    {
+      "name": "escaping_recursive_midsize_fn_nested_ifs_and_gotos",
+      "use": "zephyr-andre.zephyr-main",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines >= 100 WHERE lines <= 150 WHERE is_recursive = 'true' WHERE has_escape = 'true' WHERE naming = 'snake_case' IN 'subsys/**'",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "name": "pm_device_runtime_get", "path": "subsys/pm/device_runtime.c", "line": 194, "metric_value": "116", "usages": 231 }
+            ]
+          },
+          "capture": { "FN": "results.0.node_id" }
+        },
+        {
+          "fql": "SHOW outline OF '${FN}' WHERE fql_kind = 'if' WHERE depth = 2",
+          "assert": {
+            "row_count": 6,
+            "all_same": "path",
+            "rows": [
+              { "name": "(a<b)", "line": 223, "depth": 2 },
+              { "name": "(a!=b)", "line": 241, "depth": 2 },
+              { "name": "(a)", "line": 245, "depth": 2 },
+              { "name": "((a==b)&&((c&d)==e))", "line": 262, "depth": 2 },
+              { "name": "(!a)", "line": 268, "depth": 2 },
+              { "name": "(a!=b)", "line": 291, "depth": 2 }
+            ]
+          }
+        },
+        {
+          "fql": "SHOW NODE '${FN}' WHERE text LIKE '%goto unlock%'",
+          "assert": {
+            "row_count": 6,
+            "rows": [
+              { "line": 230, "node_offset": 3 },
+              { "line": 242, "node_offset": 2 },
+              { "line": 248, "node_offset": 4 },
+              { "line": 265, "node_offset": 4 },
+              { "line": 285, "node_offset": 2 },
+              { "line": 295, "node_offset": 7 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "duplicate_logic_conditions_carry_normalized_skeletons",
+      "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols WHERE fql_kind = 'if' WHERE dup_logic = 'true' WHERE condition_tests >= 3 IN 'subsys/**' ORDER BY line ASC",
+      "assert": {
+        "total": 3,
+        "row_count": 3,
+        "rows": [
+          { "name": "(a||b||b)", "enclosing_fn": "mld_create_packet", "path": "subsys/net/ip/ipv6_mld.c", "line": 104, "metric_value": "3" },
+          { "name": "(a>b||((c-d)<a)||a>b)", "enclosing_fn": "pd_decode_command", "path": "subsys/mgmt/osdp/src/osdp_pd.c", "line": 417, "metric_value": "3" },
+          { "name": "((a&b||a&b)&&(c<d||c>e||!f||!g))", "enclosing_fn": "valid_conn_cte_tx_params", "path": "subsys/bluetooth/host/direction.c", "line": 481, "metric_value": "6" }
+        ]
+      }
+    },
+    {
+      "name": "fallthrough_switch_fn_with_shadowing",
+      "use": "zephyr-andre.zephyr-main",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_fallthrough = 'true' WHERE branch_count >= 10 WHERE lines >= 50 WHERE has_shadow = 'true' IN 'drivers/**'",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "name": "dai_ssp_set_config_tplg", "path": "drivers/dai/intel/ssp/ssp.c", "line": 1255 }
+            ]
+          },
+          "capture": { "FN": "results.0.node_id" }
+        },
+        {
+          "fql": "SHOW outline OF '${FN}' WHERE fql_kind = 'switch'",
+          "assert": {
+            "row_count": 5,
+            "all_same": "path",
+            "rows": [
+              { "name": "(a&b)", "line": 1352, "depth": 1 },
+              { "name": "(a&b)", "line": 1377, "depth": 1 },
+              { "name": "(a&b)", "line": 1510, "depth": 1 },
+              { "name": "(a)", "line": 1697, "depth": 1 },
+              { "name": "(a&b)", "line": 1753, "depth": 1 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "dead_store_far_decl_and_shadow_fn_with_nested_for",
+      "use": "zephyr-andre.zephyr-main",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_unused_reassign = 'true' WHERE decl_far_count >= 25 WHERE has_shadow = 'true' IN 'subsys/**'",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "name": "ll_cig_parameters_commit", "path": "subsys/bluetooth/controller/ll_sw/ull_central_iso.c", "line": 162, "metric_value": "30" }
+            ]
+          },
+          "capture": { "FN": "results.0.node_id" }
+        },
+        {
+          "fql": "SHOW outline OF '${FN}' WHERE fql_kind = 'for'",
+          "assert": {
+            "row_count": 7,
+            "all_same": "path",
+            "rows": [
+              { "name": "a<b", "line": 186, "depth": 1 },
+              { "name": "a<b", "line": 274, "depth": 1 },
+              { "name": "a<b", "line": 346, "depth": 1 },
+              { "name": "a<b", "line": 445, "depth": 2 },
+              { "name": "a<b", "line": 463, "depth": 1 },
+              { "name": "a<b", "line": 529, "depth": 1 },
+              { "name": "a<b", "line": 624, "depth": 1 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "repeated_condition_calls_with_many_null_checks_and_gotos",
+      "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_repeated_condition_calls = 'true' WHERE null_check_count >= 16 WHERE goto_count >= 2 IN 'subsys/**' ORDER BY name ASC",
+      "assert": {
+        "total": 4,
+        "row_count": 4,
+        "rows": [
+          { "name": "cmd_read", "path": "subsys/net/lib/lwm2m/lwm2m_shell.c", "line": 150, "metric_value": "26" },
+          { "name": "l2cap_br_conf_opt_ret_fc", "path": "subsys/bluetooth/host/classic/l2cap_br.c", "line": 3951, "metric_value": "16" },
+          { "name": "parser_execute", "path": "subsys/net/lib/http/http_parser.c", "line": 862, "metric_value": "48" },
+          { "name": "tcp_in", "path": "subsys/net/ip/tcp.c", "line": 2905, "metric_value": "16" }
+        ]
+      }
+    },
+    {
+      "name": "magic_hex_literals_with_digit_separators_group_by_file",
+      "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols WHERE fql_kind = 'number' WHERE is_magic = 'true' WHERE num_format = 'hex' WHERE has_separator = 'true' GROUP BY file ORDER BY count DESC",
+      "assert": {
+        "total": 2,
+        "row_count": 2,
+        "rows": [
+          { "path": "modules/hal_nordic/ironside/se/scripts/gen_periphconf_entries.py", "count": 55 },
+          { "path": "modules/hal_nordic/ironside/se/scripts/periphconf/builder.py", "count": 2 }
+        ]
+      }
+    },
+    {
+      "name": "unsafe_c_style_casts_to_mbox_struct_pointers",
+      "use": "zephyr-andre.zephyr-main",
+      "fql": "FIND symbols WHERE fql_kind = 'cast' WHERE cast_safety = 'unsafe' WHERE cast_target_type LIKE '%k_mbox%' IN 'kernel/**' ORDER BY line ASC",
+      "assert": {
+        "total": 4,
+        "row_count": 4,
+        "all_same": "path",
+        "rows": [
+          { "name": "c_style<struct k_mbox_msg *>", "path": "kernel/mailbox.c", "line": 169 },
+          { "name": "c_style<struct k_mbox_async *>", "path": "kernel/mailbox.c", "line": 182 },
+          { "name": "c_style<struct k_mbox_msg *>", "path": "kernel/mailbox.c", "line": 234 },
+          { "name": "c_style<struct k_mbox_msg *>", "path": "kernel/mailbox.c", "line": 402 }
+        ]
+      }
+    }
+  ]
+}
