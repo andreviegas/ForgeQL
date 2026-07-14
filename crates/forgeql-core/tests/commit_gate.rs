@@ -150,6 +150,38 @@ fn rollback_removes_a_directory_created_by_insert_node_for() {
 }
 
 #[test]
+fn rollback_after_a_server_restart_still_removes_created_files() {
+    let (mut engine, sid, dir) = gated_session();
+
+    let _ = exec(&mut engine, &sid, "BEGIN TRANSACTION 'txn'");
+    let _ = exec(&mut engine, &sid, "INSERT NODE FOR 'scratch/new.txt'");
+    let _ = exec(&mut engine, &sid, "INSERT NODE FOR 'docs/'");
+
+    // The server goes away mid-transaction — a session outlives the process, and
+    // an agent can reconnect hours later to finish. Everything ROLLBACK needs
+    // has to be on disk, not in this engine's RAM: drop it and rebuild.
+    drop(engine);
+    let mut engine = ForgeQLEngine::new(dir.path().join("data"), make_registry()).expect("engine");
+    let sid = engine
+        .register_local_session(dir.path())
+        .expect("register session");
+
+    let _ = exec(&mut engine, &sid, "ROLLBACK");
+
+    assert!(
+        !dir.path().join("scratch/new.txt").exists(),
+        "a created file must not survive a rollback just because the server restarted"
+    );
+    assert!(!dir.path().join("scratch").exists(), "nor the directory made for it");
+    assert!(!dir.path().join("docs").exists(), "nor a created directory");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("notes.txt")).unwrap(),
+        "initial\n",
+        "and nothing else is touched"
+    );
+}
+
+#[test]
 fn commit_is_gated_until_the_gated_step_passes() {
     let (mut engine, sid, _dir) = gated_session();
 

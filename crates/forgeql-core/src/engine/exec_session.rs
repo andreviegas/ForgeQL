@@ -395,6 +395,14 @@ impl ForgeQLEngine {
             session.frozen_run_steps = Some(config.run_steps);
         }
 
+        // Restore the checkpoint stack from disk, exactly as the real `USE`
+        // reconnect path does (`restore_session_on_reconnect`). A local session
+        // that skipped this could not see what a restarted server sees — and a
+        // test harness that is quietly more forgetful than production hides
+        // precisely the bugs a restart causes.
+        let current_head = Session::get_head_oid(workspace_root).unwrap_or_default();
+        crate::session::checkpoint_file::try_restore(&mut session, workspace_root, &current_head);
+
         session.build_index()?;
 
         session.touch();

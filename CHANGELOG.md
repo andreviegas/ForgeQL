@@ -74,9 +74,19 @@ one — the destination has no fingerprint yet — so they take a path, and hand
 - **`ROLLBACK` now removes files created inside the transaction.** `git reset --hard`
   restores *tracked* paths, and staging is deferred to COMMIT — so a created file was still
   untracked when the reset ran, and survived it, on disk and in the index. Created paths are now
-  recorded per checkpoint and removed explicitly. (Not a blanket `git clean`: that would also
-  destroy the user's unrelated untracked files.) The checkpoint file version goes 1 → 2; an old
-  file is discarded with a warning, as a corrupt one already was.
+  recorded per checkpoint and removed explicitly, deepest-first.
+
+  The list is **persisted on every append**, not just at BEGIN. A session outlives the server: an
+  agent can disconnect and reconnect hours later, and the ROLLBACK that consumes the list may run
+  in a process that has restarted since. A list held only in RAM would come back empty and the
+  created files would survive the rollback — the exact bug the list exists to prevent. Paths are
+  stored worktree-relative. The checkpoint file version goes 1 → 2; an old file is discarded with a
+  warning, as a corrupt one already was.
+
+  Only what the engine created is removed. Not a blanket `git clean` — that would destroy the
+  user's unrelated untracked files. And not "any empty parent directory", either: git does not
+  track empty directories, so one that was already there is never restored by the reset, and
+  deleting it would be unrecoverable.
 
 ## [0.112.0] — 2026-07-13 — feat(dsl): `MOVE NODE` — relocate a node by handle
 

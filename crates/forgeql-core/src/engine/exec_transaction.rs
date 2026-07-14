@@ -260,19 +260,23 @@ impl ForgeQLEngine {
         // restored by the reset, and deleting it would be unrecoverable. Only
         // paths in `created` are touched, deepest first so a created directory
         // is empty by the time it is reached.
+        // Recorded paths are worktree-relative and reach us from the checkpoint
+        // file, which is what survives a server restart — an agent can be gone
+        // for hours and still ROLLBACK correctly.
         let mut created = created;
         created.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
-        for path in &created {
+        for rel in &created {
+            let path = worktree_path.join(rel);
             if !path.starts_with(&worktree_path) {
-                warn!(path = %path.display(), "rollback: recorded path is outside the worktree; skipped");
+                warn!(path = %path.display(), "rollback: recorded path escapes the worktree; skipped");
                 continue;
             }
             let result = if path.is_dir() {
                 // `remove_dir` refuses a non-empty directory: if the agent left
                 // something else in a directory we created, the directory stays.
-                std::fs::remove_dir(path)
+                std::fs::remove_dir(&path)
             } else {
-                std::fs::remove_file(path)
+                std::fs::remove_file(&path)
             };
             if let Err(err) = result
                 && err.kind() != std::io::ErrorKind::NotFound

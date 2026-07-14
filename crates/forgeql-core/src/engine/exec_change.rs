@@ -196,6 +196,47 @@ impl ForgeQLEngine {
         self.apply_plan(sid, plan, "move_lines", Some((start, end)))
     }
 
+    /// Record paths this mutation brought into existence — and write the
+    /// checkpoint stack to disk immediately.
+    ///
+    /// The list only matters to a ROLLBACK, and the ROLLBACK may well happen in
+    /// a **different process**: sessions outlive the server, an agent can
+    /// reconnect hours later, and the checkpoint file is the only thing that
+    /// crosses a restart. Keeping created paths in RAM until BEGIN or ROLLBACK
+    /// next writes the file would mean a restart silently forgets them — and a
+    /// ROLLBACK that leaves created files behind is precisely the bug this list
+    /// exists to fix. So the save is not an optimization to defer; it is the
+    /// point.
+    ///
+    /// Paths are stored **worktree-relative**, so they survive the worktree
+    /// being reopened at a different absolute location.
+    ///
+    /// Outside a transaction there is nothing to roll back to, so nothing is
+    /// recorded.
+    fn record_created(&mut self, sid: &str, created: &[PathBuf]) {
+        if created.is_empty() {
+            return;
+        }
+        let Some(session) = self.sessions.get_mut(sid) else {
+            return;
+        };
+        let root = session.worktree_path.clone();
+        let Some(checkpoint) = session.checkpoints.last_mut() else {
+            return;
+        };
+        for abs in created {
+            checkpoint
+                .created
+                .push(abs.strip_prefix(&root).unwrap_or(abs).to_path_buf());
+        }
+        let session = &*session;
+        if let Err(err) = crate::session::checkpoint_file::save(session, &root) {
+            tracing::warn!(
+                error = %err,
+                "could not persist created paths; a ROLLBACK after a restart may leave them behind"
+            );
+        }
+    }
     /// Shared plan → diff → apply → reindex helper for plan-based mutations.
     ///
     /// `line_range` is the inclusive source line range the agent addressed
@@ -238,15 +279,14 @@ impl ForgeQLEngine {
             session.edits_since_gate = session.edits_since_gate.saturating_add(1);
             session.mutation_seq = session.mutation_seq.saturating_add(1);
             session.last_find_sites.clear();
-            // Files this plan brought into existence are untracked until COMMIT
-            // stages them, so ROLLBACK's `git reset --hard` would walk straight
-            // past them. Record them in the topmost frame so ROLLBACK can remove
-            // them itself; anything created below a nested BEGIN was staged by
-            // that BEGIN and the reset already covers it.
-            if let Some(checkpoint) = session.checkpoints.last_mut() {
-                checkpoint.created.extend(applied.created.iter().cloned());
-            }
         }
+        // Files this plan brought into existence are untracked until COMMIT
+        // stages them, so ROLLBACK's `git reset --hard` would walk straight past
+        // them. Record them in the topmost frame — and on disk, since the
+        // ROLLBACK may come from a process that has restarted since. Anything
+        // created below a nested BEGIN was staged by that BEGIN, so the reset
+        // already covers it.
+        self.record_created(sid, &applied.created);
 
         // Diff built after apply + reindex so it carries inline node addresses.
         let diff = self.build_post_edit_diff(sid, &edits_snapshot, &applied.originals);
@@ -651,11 +691,7 @@ impl ForgeQLEngine {
 
         // Record the creation so ROLLBACK removes it: the path is untracked
         // until COMMIT stages it, so `git reset --hard` would leave it behind.
-        if let Some(session) = self.sessions.get_mut(sid)
-            && let Some(checkpoint) = session.checkpoints.last_mut()
-        {
-            checkpoint.created.extend(created);
-        }
+        self.record_created(sid, &created);
         self.reindex_session(sid, std::slice::from_ref(&PathBuf::from(&rel)));
 
         let node_id = format!(
@@ -859,12 +895,7 @@ impl ForgeQLEngine {
         if let Some(parent) = dst_abs.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        if !created_dirs.is_empty()
-            && let Some(session) = self.sessions.get_mut(sid)
-            && let Some(checkpoint) = session.checkpoints.last_mut()
-        {
-            checkpoint.created.extend(created_dirs);
-        }
+        self.record_created(sid, &created_dirs);
 
         let mut plan = if is_move && !whole_file {
             crate::transforms::copy_move::plan_move_lines(

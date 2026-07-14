@@ -160,14 +160,24 @@ pub struct Checkpoint {
     pub oid: String,
     /// HEAD immediately before the checkpoint commit was created.
     pub pre_txn_oid: String,
-    /// Files created since this checkpoint was pushed.
+    /// Paths created since this checkpoint was pushed, **worktree-relative**.
     ///
     /// ROLLBACK is `git reset --hard`, which restores tracked paths only.
-    /// Staging is deferred to COMMIT, so a file created inside the transaction
+    /// Staging is deferred to COMMIT, so a path created inside the transaction
     /// is still untracked and the reset leaves it behind — on disk and in the
-    /// index. These are removed explicitly instead. A nested BEGIN stages
-    /// everything created so far, which is why paths are recorded only in the
-    /// topmost frame: below it, `reset --hard` already handles them.
+    /// index. These are removed explicitly.
+    ///
+    /// Persisted with the rest of the stack on every append, not just at BEGIN:
+    /// a session outlives the server, and the ROLLBACK that consumes this list
+    /// may run in a process that has restarted since the file was created. A
+    /// list held only in RAM would be silently empty after a restart, and the
+    /// created files would survive the rollback — the exact bug the list exists
+    /// to prevent.
+    ///
+    /// Only the topmost frame records: a nested BEGIN stages everything created
+    /// so far, so below it `reset --hard` already handles them. Only paths the
+    /// engine itself created are listed — an empty directory that was already
+    /// there is not ours to delete, and git would not restore it.
     pub created: Vec<std::path::PathBuf>,
 }
 
