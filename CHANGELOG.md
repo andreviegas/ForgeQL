@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.113.1] — 2026-07-14 — fix(git): user-facing commits no longer include undo-ring files
+
+### Fixed
+
+- The final `COMMIT` squash could include `.forgeql-undo-<n>` runtime files.
+  Checkpoint commits track those slot files on purpose (so `git reset --hard`
+  restores the undo ring), but the squash's staging filter only inspects paths
+  staged from the working tree — entries inherited from a checkpoint passed
+  through into the user-facing commit. The squash now sweeps the index and
+  drops every runtime-excluded entry, wherever it came from.
+
+### Added
+
+- Compound golden probe suites (`probes_zephyr`, `probes_pytorch`,
+  `probes_rust`) exercising multi-enricher predicate stacks and multi-step
+  capture cases against the frozen corpora.
+
 ## [0.113.0] — 2026-07-14 — feat(dsl): files and directories as addressable nodes; ROLLBACK cleans what it created
 
 ### Added — files and directories are addressable nodes (`n<hex>`)

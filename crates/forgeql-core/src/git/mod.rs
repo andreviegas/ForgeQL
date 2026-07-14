@@ -147,6 +147,25 @@ fn is_in_component_dir(path: &std::path::Path, dir: &str) -> bool {
         .any(|c| matches!(c, std::path::Component::Normal(n) if n.to_str() == Some(dir)))
 }
 
+/// Remove every index entry whose path is clean-commit excluded.
+///
+/// `add_all`'s exclusion callback only sees paths staged from the working
+/// tree.  Entries inherited from a checkpoint commit — the undo ring's
+/// `.forgeql-undo-<n>` slots are checkpoint-committed on purpose so `git
+/// reset --hard` restores them — are already in the index and pass through
+/// untouched, so they must be swept explicitly or they resurface in the
+/// user-facing commit.
+fn purge_excluded_index_entries(index: &mut git2::Index) {
+    let stale: Vec<String> = index
+        .iter()
+        .filter_map(|e| String::from_utf8(e.path).ok())
+        .filter(|p| is_clean_commit_excluded(std::path::Path::new(p)))
+        .collect();
+    for p in stale {
+        let _ = index.remove_path(std::path::Path::new(&p));
+    }
+}
+
 fn is_checkpoint_excluded(path: &std::path::Path) -> bool {
     // Check every path component, not just the leaf name, so that files
     // inside `.forgeql-staging/<hex>/` are excluded even though their
@@ -258,9 +277,7 @@ pub fn stage_and_commit_clean(repo: &Repository, message: &str) -> Result<()> {
         git2::IndexAddOption::DEFAULT,
         Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_clean_commit_excluded(path))),
     )?;
-    for f in CLEAN_COMMIT_EXCLUDED {
-        let _ = index.remove_path(std::path::Path::new(f));
-    }
+    purge_excluded_index_entries(&mut index);
     index.write()?;
 
     let tree_id = index.write_tree()?;
@@ -314,9 +331,7 @@ pub fn squash_commit_on_branch(
         git2::IndexAddOption::DEFAULT,
         Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_clean_commit_excluded(path))),
     )?;
-    for f in CLEAN_COMMIT_EXCLUDED {
-        let _ = index.remove_path(std::path::Path::new(f));
-    }
+    purge_excluded_index_entries(&mut index);
     index.write()?;
 
     let tree_id = index.write_tree()?;
@@ -1210,6 +1225,40 @@ mod tests {
             .unwrap()
             .count();
         assert_eq!(on_disk, 1, "stale patches from earlier exports removed");
+    }
+
+    #[test]
+    fn squash_commit_drops_checkpoint_inherited_undo_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_normal_repo(dir.path());
+
+        std::fs::write(dir.path().join("file.cpp"), b"int main(){return 1;}\n").unwrap();
+        raw_commit_all(dir.path(), "base");
+        let base = repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string();
+
+        // Checkpoint commits keep undo slots on purpose (restart durability),
+        // so by the final squash the slot file is already tracked at the
+        // branch tip — `add_all`'s callback never sees it.
+        std::fs::write(dir.path().join(".forgeql-undo-0"), b"FQLUNDO\tv1\n").unwrap();
+        std::fs::write(dir.path().join("file.cpp"), b"int main(){return 2;}\n").unwrap();
+        raw_commit_all(dir.path(), "forgeql: checkpoint 'txn'");
+
+        let sha = squash_commit_on_branch(&repo, &base, "user commit").unwrap();
+        let commit = repo
+            .find_commit(git2::Oid::from_str(&sha).unwrap())
+            .unwrap();
+        let tree = commit.tree().unwrap();
+        assert!(tree.get_name("file.cpp").is_some(), "source change kept");
+        assert!(
+            tree.get_name(".forgeql-undo-0").is_none(),
+            "undo slot inherited from a checkpoint must not reach the user-facing commit"
+        );
     }
 
     /// Range helpers and the uncommitted-changes probe used by EXPORT PATCH.
