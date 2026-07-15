@@ -227,6 +227,24 @@ impl LanguageSupport for XmlLanguage {
     fn config(&self) -> &'static LanguageConfig {
         xml_config()
     }
+
+    fn validate_source(
+        &self,
+        source: &[u8],
+        _path: &std::path::Path,
+    ) -> Option<Result<(), String>> {
+        // Well-formedness only: balanced tags and valid syntax, not schema/DTD
+        // validity. Applies uniformly to every XML dialect (arxml, odx, …).
+        let mut reader = quick_xml::Reader::from_reader(source);
+        let mut buf = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(quick_xml::events::Event::Eof) => return Some(Ok(())),
+                Ok(_) => buf.clear(),
+                Err(e) => return Some(Err(e.to_string())),
+            }
+        }
+    }
 }
 
 /// Convenience registry containing only XML support.

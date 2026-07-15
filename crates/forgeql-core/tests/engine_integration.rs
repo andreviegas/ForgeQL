@@ -29,10 +29,9 @@ use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
 fn make_registry() -> Arc<LanguageRegistry> {
-    Arc::new(LanguageRegistry::new(vec![
-        Arc::new(CppLanguageInline),
-        Arc::new(forgeql_lang_text::JsonLanguage),
-    ]))
+    let mut langs = forgeql_lang_text::text_languages();
+    langs.push(Arc::new(CppLanguageInline));
+    Arc::new(LanguageRegistry::new(langs))
 }
 
 // -----------------------------------------------------------------------
@@ -966,6 +965,59 @@ fn jsonc_dialect_is_not_strictly_validated() {
             mr.structural_errors
         ),
         other => panic!("expected Mutation, got: {other:?}"),
+    }
+}
+
+/// The strict validators cover YAML, TOML and XML too: an edit that leaves any
+/// of them unparseable is reported, while a well-formed edit is not. Each broken
+/// form is one a strict parser rejects but the error-tolerant tree-sitter grammar
+/// would recover from.
+#[test]
+fn mutation_reports_structural_errors_for_yaml_toml_and_xml() {
+    let cases = [
+        ("cfg.yaml", "{a: 1}", "{a: 1"),
+        ("cfg.toml", "a = 1", "a ="),
+        ("cfg.xml", "<r><a/></r>", "<r><a></r>"),
+    ];
+    for (name, valid, broken) in cases {
+        let (mut engine, sid, dir) = engine_with_session();
+        let path = dir.path().join(name);
+        fs::write(&path, valid).unwrap();
+        let handle = path_handle(name);
+
+        let rev = node_rev(&mut engine, &sid, &handle);
+        match execute_fql(
+            &mut engine,
+            &sid,
+            &format!("CHANGE NODE '{handle}' IF REV '{rev}' WITH '{valid}'"),
+        ) {
+            ForgeQLResult::Mutation(mr) => assert!(
+                mr.structural_errors.is_empty(),
+                "{name}: valid content must not be flagged: {:?}",
+                mr.structural_errors
+            ),
+            other => panic!("{name}: expected Mutation, got: {other:?}"),
+        }
+
+        let rev = node_rev(&mut engine, &sid, &handle);
+        match execute_fql(
+            &mut engine,
+            &sid,
+            &format!("CHANGE NODE '{handle}' IF REV '{rev}' WITH '{broken}'"),
+        ) {
+            ForgeQLResult::Mutation(mr) => {
+                let Some(se) = mr.structural_errors.first() else {
+                    panic!("{name}: broken content must be reported");
+                };
+                assert!(
+                    se.path.ends_with(name),
+                    "{name}: path {}",
+                    se.path.display()
+                );
+                assert!(!se.message.is_empty(), "{name}: carries a diagnostic");
+            }
+            other => panic!("{name}: expected Mutation, got: {other:?}"),
+        }
     }
 }
 

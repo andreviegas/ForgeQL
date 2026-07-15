@@ -605,6 +605,7 @@ pub trait LanguageSupport: Send + Sync {
     /// `path` lets a plugin that serves several dialects opt individual
     /// extensions in or out; the strict check itself reads only `source`.
     fn validate_source(&self, _source: &[u8], _path: &Path) -> Option<Result<(), String>> {
+        // No strict validator for this language/dialect.
         None
     }
 }

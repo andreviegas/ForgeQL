@@ -141,6 +141,22 @@ impl LanguageSupport for TomlLanguage {
     fn config(&self) -> &'static LanguageConfig {
         toml_config()
     }
+
+    fn validate_source(
+        &self,
+        source: &[u8],
+        _path: &std::path::Path,
+    ) -> Option<Result<(), String>> {
+        let text = match std::str::from_utf8(source) {
+            Ok(text) => text,
+            Err(e) => return Some(Err(format!("invalid UTF-8: {e}"))),
+        };
+        Some(
+            toml::from_str::<toml::Value>(text)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+        )
+    }
 }
 
 /// Convenience registry containing only TOML support.

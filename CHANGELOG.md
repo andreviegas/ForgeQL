@@ -35,6 +35,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   armed-set persistence file introduced with `FOUND` was missing from the
   clean-commit exclusion list, so it leaked into user-facing commits.
 
+## [0.116.0] — 2026-07-15 — feat(mutations): extend structural validation to YAML, TOML and XML
+
+### Added
+
+- **Strict validators for YAML, TOML and XML**, joining JSON behind the same
+  `validate_source` hook. A mutation that leaves any of these files unparseable
+  is reported in `structural_errors` with the parser's diagnostic, exactly as for
+  JSON. Each catches the corruptions tree-sitter recovers from and hides — a
+  reshaped YAML indent, a TOML key with no value, an XML tag that does not match
+  its opener.
+
+  - YAML (`yaml`, `yml`) — the `saphyr` YAML 1.2 parser.
+  - TOML (`toml`, and `Cargo.lock`) — the `toml` crate.
+  - XML (`xml`, `arxml`, `xdm`, `epc`, `epd`, `ecuc`, `odx`) — `quick-xml`
+    well-formedness (balanced tags and valid syntax; not schema/DTD validity),
+    applied uniformly to every dialect.
+
+  Formats with no strict grammar (Markdown, reStructuredText, INI, Make, CMake,
+  just, DBC) remain unvalidated and report nothing, as before.
 ## [0.115.0] — 2026-07-15 — feat(mutations): flag structured files a mutation leaves unparseable
 
 ### Added

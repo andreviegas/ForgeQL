@@ -536,7 +536,7 @@ successful mutation returns:
 | `lines_written` | Number of source lines the edit wrote |
 | `lines_removed` | Number of original source lines the edit overwrote — the **destructive-edit signal**: a large value on a small edit means you clobbered more than intended (e.g. a `CHANGE NODE` on a node whose span covers a whole folded body) |
 | boundary diff | A compact diff including the unchanged **context lines directly above and below** the change, so a seam the splice created (a missing separator, an unbalanced brace) is visible immediately |
-| `structural_errors` | Present only when the edit left a touched structured-text file unparseable under a **strict, format-native parser** (e.g. JSON via RFC-8259): the file path, the parser's diagnostic with line/column, and whether the file parsed cleanly *before* this edit. The engine flags the break; the repair is yours. A missing JSON comma is caught here even though it leaves no top-level `error` region for tree-sitter to report. |
+| `structural_errors` | Present only when the edit left a touched structured-text file unparseable under a **strict, format-native parser** (JSON, YAML, TOML and XML today): the file path, the parser's diagnostic with line/column, and whether the file parsed cleanly *before* this edit. The engine flags the break; the repair is yours. A missing JSON comma or a reshaped YAML indent is caught here even though it leaves no top-level `error` region for tree-sitter to report. |
 
 Every present line of the diff (added + context) carries an inline
 `node_id(offset)` handle, so a follow-up correction is a copy-paste
