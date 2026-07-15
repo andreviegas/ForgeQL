@@ -78,6 +78,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and dup-shape comparison still works. Comparison and boolean operators are
   unchanged, and arithmetic outside an assignment is still preserved.
 
+## [0.115.1] — 2026-07-15 — refactor(engine): one module per mutation verb family
+
+### Changed
+
+- The mutation-verb implementation, previously a single ~1,900-line source
+  file, is split into eight focused modules under `engine/exec_change/`:
+  `raw_text` (`CHANGE FILE` and `COPY`/`MOVE LINES`), `change`, `insert`,
+  `delete`, `relocate`, `found` (the FOUND set and its bulk verbs), `plan`
+  (the shared plan → apply → reindex → diff pipeline and UNDO), and `resolve`
+  (handle → span resolution and the `IF REV` guards). Internal reorganization
+  only: every verb, error message, and result shape is unchanged.
+
 ## [0.115.0] — 2026-07-15 — feat(dsl): SHOW VERSION
 
 ### Added
