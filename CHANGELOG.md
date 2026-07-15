@@ -5,6 +5,34 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.119.0] — 2026-07-15 — refactor(engine): one module per mutation verb family; MOVE NODE absorbs the trailing blank separator
+
+### Changed
+
+- The mutation-verb implementation, previously a single ~1,900-line source
+  file, is split into eight focused modules under `engine/exec_change/`:
+  `raw_text` (`CHANGE FILE` and `COPY`/`MOVE LINES`), `change`, `insert`,
+  `delete`, `relocate`, `found` (the FOUND set and its bulk verbs), `plan`
+  (the shared plan → apply → reindex → diff pipeline and UNDO), and `resolve`
+  (handle → span resolution and the `IF REV` guards). Internal reorganization
+  only: every verb, error message, and result shape is unchanged.
+
+### Fixed — MOVE NODE no longer accumulates blank lines in the source file
+
+- Moving a node out of a file left its trailing blank separator behind, so
+  repeated `MOVE NODE` operations piled up consecutive blank lines in the
+  source — enough to fail `cargo fmt --check` on a file the agent never
+  hand-edited. `DELETE NODE` already absorbed the trailing blank run; the
+  removal half of a move did not. The two removal paths now share one policy:
+  `absorb_trailing_blank_lines` lives in the transforms layer, and
+  `plan_move_lines` takes the removed range separately from the moved payload.
+  Whole-node moves (`MOVE NODE`, `MOVE NODE … TO`) absorb the trailing blank
+  run exactly like `DELETE NODE`; the payload spliced at the destination is
+  still the node's exact span, and the line-addressed `MOVE LINES` verb stays
+  byte-exact. Offset sub-range moves (`'<id>(n-m)'`) are line-addressed and
+  also stay exact.
+
 ## [0.118.0] — 2026-07-15 — fix(index): stale node handles die instead of re-pointing at a byte-identical sibling
 
 ### Fixed
@@ -77,35 +105,6 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `((a=b)>c)`: the smell is visible in the skeleton an agent reads to confirm it,
   and dup-shape comparison still works. Comparison and boolean operators are
   unchanged, and arithmetic outside an assignment is still preserved.
-
-## [0.115.2] — 2026-07-15 — fix(engine): MOVE NODE no longer accumulates blank lines in the source file
-
-### Fixed
-
-- Moving a node out of a file left its trailing blank separator behind, so
-  repeated `MOVE NODE` operations piled up consecutive blank lines in the
-  source — enough to fail `cargo fmt --check` on a file the agent never
-  hand-edited. `DELETE NODE` already absorbed the trailing blank run; the
-  removal half of a move did not. The two removal paths now share one policy:
-  `absorb_trailing_blank_lines` lives in the transforms layer, and
-  `plan_move_lines` takes the removed range separately from the moved payload.
-  Whole-node moves (`MOVE NODE`, `MOVE NODE … TO`) absorb the trailing blank
-  run exactly like `DELETE NODE`; the payload spliced at the destination is
-  still the node's exact span, and the line-addressed `MOVE LINES` verb stays
-  byte-exact. Offset sub-range moves (`'<id>(n-m)'`) are line-addressed and
-  also stay exact.
-
-## [0.115.1] — 2026-07-15 — refactor(engine): one module per mutation verb family
-
-### Changed
-
-- The mutation-verb implementation, previously a single ~1,900-line source
-  file, is split into eight focused modules under `engine/exec_change/`:
-  `raw_text` (`CHANGE FILE` and `COPY`/`MOVE LINES`), `change`, `insert`,
-  `delete`, `relocate`, `found` (the FOUND set and its bulk verbs), `plan`
-  (the shared plan → apply → reindex → diff pipeline and UNDO), and `resolve`
-  (handle → span resolution and the `IF REV` guards). Internal reorganization
-  only: every verb, error message, and result shape is unchanged.
 
 ## [0.115.0] — 2026-07-15 — feat(dsl): SHOW VERSION
 
