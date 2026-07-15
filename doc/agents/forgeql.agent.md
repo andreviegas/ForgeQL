@@ -73,7 +73,7 @@ You are a code exploration and transformation agent. All source code is accessed
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
 | Delete a node | `DELETE NODE '<id>' IF REV '<rev>'` — `'<id>(n-m)'` deletes lines within it |
 | Byte-identical twins | Two identical same-parent siblings share a rev. Deleting one kills the deleted handle (`node_not_found`) — it never re-points at the survivor. Identical revs under one parent = twins: re-`FIND` after deleting one |
-| Relocate a node | `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — byte-exact, atomic, cross-file |
+| Relocate a node | `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — verbatim payload, atomic, cross-file; source removal absorbs trailing blanks |
 | Sweep a whole FIND result | `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a usage row its one line |
 | Delete a whole FIND result | `DELETE NODES FOUND IF REV '<master>'` — `IF REV` mandatory |
 | Relocate a whole FIND result | `MOVE NODES FOUND IF REV '<master>' TO 'dir/'` · `COPY NODES FOUND TO 'dir/'` (ungated) — each member keeps its basename |
@@ -169,7 +169,7 @@ SHOW DIFF [STAT] [clauses]    -- the worktree's UNCOMMITTED diff, inline
 CHANGE NODE '<node_id>' IF REV '<rev>' WITH 'text'   -- '<id>(n)' / '<id>(n-m)' splices node lines
 INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'text'
 DELETE NODE '<node_id>' IF REV '<rev>'
-MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'  -- relocate byte-exact; atomic; cross-file OK
+MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'  -- relocate verbatim payload; source removal absorbs trailing blanks; cross-file OK
 
 -- FOUND — the set the previous FIND returned. FIND is the set-selection syntax;
 -- these act on every member in ONE atomic mutation (one diff, one UNDO step).

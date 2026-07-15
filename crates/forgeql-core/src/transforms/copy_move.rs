@@ -83,33 +83,45 @@ pub fn plan_copy_lines_at(
     Ok(insertion_plan(dst_abs, &dst_bytes, Some(at), payload))
 }
 
-/// Plan `MOVE LINES start-end OF src TO dst [AT LINE at]`.
+/// Plan `MOVE LINES start-end OF src TO dst [AT LINE at]` — and the
+/// node-addressed moves lowered onto it.
 ///
-/// Like COPY but also deletes the source lines (`start..=end` in `src`).
+/// Like COPY but also deletes the source range. The payload is always
+/// `start..=end`; the removed range is `start..=delete_end`. Whole-node moves
+/// widen `delete_end` over the node's trailing blank separator (via
+/// `absorb_trailing_blank_lines`) so the source file does not accumulate
+/// blank lines — the same policy as `DELETE NODE`. The line-addressed
+/// `MOVE LINES` verb passes `delete_end == end` and stays exact.
+///
 /// When `src == dst` (same-file move), both the insertion and deletion are
 /// expressed as separate [`ByteRangeEdit`]s on the same file.
 /// [`TransformPlan::apply`] applies them in reverse byte order, which
 /// ensures correct results regardless of whether the move is up or down.
 ///
 /// # Errors
-/// Returns `Err` if lines are out of range, the content is not valid UTF-8,
-/// or (for same-file moves) the destination line falls inside the moved range.
+/// Returns `Err` if lines are out of range, `delete_end < end`, the content
+/// is not valid UTF-8, or (for same-file moves) the destination line falls
+/// inside the removed range.
 pub fn plan_move_lines(
     src_rel: &str,
     src_abs: &Path,
     start: usize,
     end: usize,
+    delete_end: usize,
     dst_abs: &Path,
     at: Option<usize>,
 ) -> Result<TransformPlan> {
     if at == Some(0) {
         bail!("AT LINE is 1-based, got 0");
     }
+    if delete_end < end {
+        bail!("delete_end ({delete_end}) < end ({end}): the removed range must cover the payload");
+    }
 
     // ── read source ──────────────────────────────────────────────────────
     let src_bytes = read_bytes(src_abs)?;
     let payload = extract_payload(&src_bytes, src_rel, start, end)?;
-    let (del_start, del_end) = lines_to_byte_range(&src_bytes, start, end)?;
+    let (del_start, del_end) = lines_to_byte_range(&src_bytes, start, delete_end)?;
 
     let same_file = src_abs == dst_abs;
 
@@ -125,7 +137,7 @@ pub fn plan_move_lines(
         insertion_byte_offset(&[], at)
     };
     // Guard: for same-file moves the insertion point must not lie inside
-    // the deleted range (that would be logically contradictory).
+    // the removed range (that would be logically contradictory).
     if same_file && ins_byte > del_start && ins_byte < del_end {
         bail!(
             "AT LINE cannot point inside the moved range ({start}..={end}); \
@@ -296,7 +308,7 @@ mod tests {
         let dst = tmp.path().join("dst.txt");
         std::fs::write(&dst, make_file(3)).unwrap();
 
-        let mut plan = plan_move_lines("src.txt", &src, 2, 4, &dst, None).unwrap();
+        let mut plan = plan_move_lines("src.txt", &src, 2, 4, 4, &dst, None).unwrap();
         plan.merge_by_file().unwrap();
 
         // Apply each file's edits separately (apply() writes to disk; test manually)
@@ -332,7 +344,7 @@ mod tests {
         std::fs::write(&f, make_file(5)).unwrap();
 
         // Move lines 1-2 to AT LINE 5 (before original line5)
-        let mut plan = plan_move_lines("f.txt", &f, 1, 2, &f, Some(5)).unwrap();
+        let mut plan = plan_move_lines("f.txt", &f, 1, 2, 2, &f, Some(5)).unwrap();
         plan.merge_by_file().unwrap();
 
         let fe = plan.file_edits.into_iter().next().unwrap();
@@ -350,7 +362,7 @@ mod tests {
         std::fs::write(&f, make_file(5)).unwrap();
 
         // Move lines 4-5 to AT LINE 2 (before original line2)
-        let mut plan = plan_move_lines("f.txt", &f, 4, 5, &f, Some(2)).unwrap();
+        let mut plan = plan_move_lines("f.txt", &f, 4, 5, 5, &f, Some(2)).unwrap();
         plan.merge_by_file().unwrap();
 
         let fe = plan.file_edits.into_iter().next().unwrap();
@@ -368,8 +380,49 @@ mod tests {
         std::fs::write(&f, make_file(5)).unwrap();
 
         // Trying to move lines 2-4 AT LINE 3 (inside the range) must fail
-        let result = plan_move_lines("f.txt", &f, 2, 4, &f, Some(3));
+        let result = plan_move_lines("f.txt", &f, 2, 4, 4, &f, Some(3));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn move_wider_delete_end_absorbs_source_blanks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src.txt");
+        // A "node" on line 3 with a blank separator on line 4.
+        std::fs::write(&src, b"line1\n\nline3\n\nline5\n").unwrap();
+        let dst = tmp.path().join("dst.txt");
+        std::fs::write(&dst, b"").unwrap();
+
+        // Payload is line 3 only; the removed range 3..=4 absorbs the blank.
+        let mut plan = plan_move_lines("src.txt", &src, 3, 3, 4, &dst, None).unwrap();
+        plan.merge_by_file().unwrap();
+
+        let (src_edit, dst_edit): (Vec<_>, Vec<_>) = plan
+            .file_edits
+            .into_iter()
+            .partition(|fe| fe.path == src.as_path());
+
+        let mut dst_buf = std::fs::read(&dst).unwrap();
+        if let Some(fe) = dst_edit.into_iter().next() {
+            apply_edits_to_buffer(&mut dst_buf, &fe.edits);
+        }
+        let mut src_buf = std::fs::read(&src).unwrap();
+        if let Some(fe) = src_edit.into_iter().next() {
+            apply_edits_to_buffer(&mut src_buf, &fe.edits);
+        }
+
+        // Payload stays the node's exact span — the blank does not travel.
+        assert_eq!(dst_buf, b"line3\n");
+        // No blank-line accumulation: exactly one separator survives.
+        assert_eq!(src_buf, b"line1\n\nline5\n");
+    }
+
+    #[test]
+    fn move_delete_end_smaller_than_end_is_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("f.txt");
+        std::fs::write(&f, make_file(5)).unwrap();
+        assert!(plan_move_lines("f.txt", &f, 2, 4, 3, &f, None).is_err());
     }
 
     #[test]

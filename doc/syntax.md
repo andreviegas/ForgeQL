@@ -341,6 +341,11 @@ MOVE NODE '<helper>' AFTER NODE '<last_include>'
 Src and dst may be in **different files**. The response carries `new_node_id`: re-parenting changes
 `parent_ordinal`, so the moved node earns a fresh handle.
 
+The payload is spliced **verbatim**, and the **source-side removal absorbs the trailing blank
+separator**, exactly like `DELETE NODE` — repeated moves out of one file do not accumulate blank
+lines. A `lines_removed` slightly larger than the node's span is this absorption, not a clobber.
+Line-addressed `MOVE LINES` and offset sub-ranges (`'<id>(n-m)'`) stay byte-exact.
+
 **The engine does not re-indent (P1).** On an indentation-sensitive format the seam is real: a node
 lifted from inside a block keeps its original leading whitespace. That is deliberate — guessing the
 right indent is exactly the kind of "smart" the engine refuses to be. The boundary diff shows the
@@ -401,7 +406,7 @@ SHOW NODE '<node_id>' [CONTENT | METADATA] -- source (default) or the FIND NODE 
 CHANGE NODE '<node_id>' WITH '...'         -- replace the whole node
 INSERT (BEFORE | AFTER) NODE '<node_id>' WITH '...'
 DELETE NODE '<node_id>' IF REV '<rev>'
-MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'   -- relocate, byte-exact
+MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'   -- relocate; source removal absorbs trailing blanks
 ```
 
 `FIND symbols`, `FIND files`, `SHOW outline`, `SHOW members`, and the CSV form of

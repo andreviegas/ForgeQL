@@ -7,9 +7,9 @@ use crate::engine::{ForgeQLEngine, require_session_id};
 use crate::ir::{ChangeTarget, ForgeQLIR};
 use crate::result::ForgeQLResult;
 
-use super::resolve::{
-    NodeSpan, absorb_trailing_blank_lines, is_path_kind, require_path_rev, require_rev,
-};
+use crate::transforms::change::absorb_trailing_blank_lines;
+
+use super::resolve::{NodeSpan, is_path_kind, require_path_rev, require_rev};
 
 impl ForgeQLEngine {
     pub(in crate::engine) fn exec_delete_node(

@@ -185,7 +185,7 @@ impl ForgeQLEngine {
         Self::reject_numeric_dest(dst, "MOVE LINES")?;
         let dst_abs = workspace.safe_path(dst)?;
 
-        let plan = plan_move_lines(src, &src_abs, start, end, &dst_abs, at)?;
+        let plan = plan_move_lines(src, &src_abs, start, end, end, &dst_abs, at)?;
         self.apply_plan(sid, plan, "move_lines", Some((start, end)))
     }
 }

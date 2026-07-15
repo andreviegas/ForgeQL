@@ -62,7 +62,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Find a file by name | `FIND files WHERE name = 'Kconfig'` (also `LIKE`/`MATCHES`) |
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
 | Delete a node | `DELETE NODE '<id>' IF REV '<rev>'` — `'<id>(n-m)'` deletes lines within it |
-| Relocate a node | `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — byte-exact, atomic, cross-file |
+| Relocate a node | `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — verbatim payload, atomic, cross-file; source removal absorbs trailing blanks |
 | Reverse a bad edit | `UNDO` (most recent) · `UNDO LAST-n` |
 | Long test gate | `JOB START 'step'` → `JOB STATUS <id>` / `JOB LIST` (background, FIFO-queued) |
 
@@ -148,7 +148,7 @@ CHANGE NODE '<node_id>' IF REV '<rev>' WITH 'text'    -- '<id>(n)' / '<id>(n-m)'
 CHANGE NODE '<node_id>' IF REV '<rev>' MATCHING [WORD] 'a' WITH 'b'
 INSERT (BEFORE | AFTER) NODE '<node_id>' IF REV '<rev>' WITH 'text'
 DELETE NODE '<node_id>' IF REV '<rev>'                -- '<id>(n-m)' deletes lines within the node
-MOVE NODE '<src_id>' IF REV '<rev>' (BEFORE | AFTER) NODE '<dst_id>'  -- byte-exact; atomic; cross-file
+MOVE NODE '<src_id>' IF REV '<rev>' (BEFORE | AFTER) NODE '<dst_id>'  -- verbatim payload; source removal absorbs trailing blanks; atomic; cross-file
 MOVE NODE '<src_id>' IF REV '<rev>' TO 'path/new.rs'  -- rename / move a whole file
 
 -- Creation is ungated — nothing exists yet to fingerprint:

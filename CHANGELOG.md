@@ -78,6 +78,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and dup-shape comparison still works. Comparison and boolean operators are
   unchanged, and arithmetic outside an assignment is still preserved.
 
+## [0.115.2] — 2026-07-15 — fix(engine): MOVE NODE no longer accumulates blank lines in the source file
+
+### Fixed
+
+- Moving a node out of a file left its trailing blank separator behind, so
+  repeated `MOVE NODE` operations piled up consecutive blank lines in the
+  source — enough to fail `cargo fmt --check` on a file the agent never
+  hand-edited. `DELETE NODE` already absorbed the trailing blank run; the
+  removal half of a move did not. The two removal paths now share one policy:
+  `absorb_trailing_blank_lines` lives in the transforms layer, and
+  `plan_move_lines` takes the removed range separately from the moved payload.
+  Whole-node moves (`MOVE NODE`, `MOVE NODE … TO`) absorb the trailing blank
+  run exactly like `DELETE NODE`; the payload spliced at the destination is
+  still the node's exact span, and the line-addressed `MOVE LINES` verb stays
+  byte-exact. Offset sub-range moves (`'<id>(n-m)'`) are line-addressed and
+  also stay exact.
+
 ## [0.115.1] — 2026-07-15 — refactor(engine): one module per mutation verb family
 
 ### Changed

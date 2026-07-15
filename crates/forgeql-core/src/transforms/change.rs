@@ -365,6 +365,22 @@ pub(crate) fn lines_to_byte_range(
     Ok((bs, be))
 }
 
+/// Extend a 1-based inclusive `end_line` forward over the contiguous run of
+/// blank lines that immediately follow it in `content`, so deleting a node also
+/// removes its trailing blank separator (avoids blank-line accumulation).
+/// Whitespace is not part of a node's span/rev, so this only widens the DELETE
+/// extent. Returns `end_line` unchanged when the next line is non-blank or out
+/// of range.
+pub(crate) fn absorb_trailing_blank_lines(content: &str, end_line: usize) -> usize {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut end = end_line;
+    // The 1-based line `end + 1` sits at 0-based index `end`.
+    while end < lines.len() && lines[end].trim().is_empty() {
+        end += 1;
+    }
+    end
+}
+
 // -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------
@@ -410,6 +426,21 @@ mod tests {
     fn lines_to_byte_range_out_of_range_error() {
         let source = b"only one line\n";
         assert!(lines_to_byte_range(source, 5, 6).is_err());
+    }
+    #[test]
+    fn absorb_trailing_blank_lines_extends_over_blank_run() {
+        // No trailing blank → unchanged.
+        assert_eq!(super::absorb_trailing_blank_lines("a\nb\nc", 1), 1);
+        // One trailing blank after line 1 → absorbs it (end 1 → 2).
+        assert_eq!(super::absorb_trailing_blank_lines("a\n\nc", 1), 2);
+        // Multiple trailing blanks → absorbs the whole run.
+        assert_eq!(super::absorb_trailing_blank_lines("a\n\n\n\nc", 1), 4);
+        // Node is the last line → nothing to absorb.
+        assert_eq!(super::absorb_trailing_blank_lines("a", 1), 1);
+        // Trailing blank at EOF.
+        assert_eq!(super::absorb_trailing_blank_lines("a\n\n", 1), 2);
+        // Whitespace-only line counts as blank.
+        assert_eq!(super::absorb_trailing_blank_lines("a\n   \nc", 1), 2);
     }
 
     #[test]

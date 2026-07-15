@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 use crate::engine::{ForgeQLEngine, require_session_id};
 use crate::ir::ForgeQLIR;
 use crate::result::ForgeQLResult;
+use crate::transforms::change::absorb_trailing_blank_lines;
 
 use super::plan::missing_ancestors;
 use super::resolve::{is_path_kind, require_path_rev, require_rev};
@@ -83,12 +84,23 @@ impl ForgeQLEngine {
         }
         self.record_created(sid, &created_dirs);
 
+        // Whole-node moves absorb the trailing blank separator on the source
+        // side, exactly like DELETE NODE — the payload stays the node's exact
+        // span. Offset sub-ranges are line-addressed and stay exact.
+        let delete_end = if !is_move || whole_file || src.has_offset {
+            src.end
+        } else {
+            std::fs::read_to_string(&src_abs)
+                .map(|content| absorb_trailing_blank_lines(&content, src.end))
+                .unwrap_or(src.end)
+        };
         let mut plan = if is_move && !whole_file {
             crate::transforms::copy_move::plan_move_lines(
                 &src.rel_path,
                 &src_abs,
                 src.start,
                 src.end,
+                delete_end,
                 &dst_abs,
                 None,
             )?
@@ -225,11 +237,22 @@ impl ForgeQLEngine {
         let src_abs = workspace.safe_path(&src.rel_path)?;
         let dst_abs = workspace.safe_path(&dst.rel_path)?;
 
+        // Whole-node moves absorb the trailing blank separator on the source
+        // side, exactly like DELETE NODE — the payload stays the node's exact
+        // span. Offset sub-ranges are line-addressed and stay exact.
+        let delete_end = if src.has_offset {
+            src.end
+        } else {
+            std::fs::read_to_string(&src_abs)
+                .map(|content| absorb_trailing_blank_lines(&content, src.end))
+                .unwrap_or(src.end)
+        };
         let plan = crate::transforms::copy_move::plan_move_lines(
             &src.rel_path,
             &src_abs,
             src.start,
             src.end,
+            delete_end,
             &dst_abs,
             Some(at),
         )?;
@@ -262,11 +285,12 @@ impl ForgeQLEngine {
 
         // Where the payload came to rest, in the POST-move numbering. Moving a
         // node DOWN inside one file first removes it from above the anchor, so
-        // the anchor slides up by the node's height.
+        // the anchor slides up by the removed span's height (node + absorbed
+        // trailing blanks).
         let same_file = src.rel_path == dst.rel_path;
-        let moved = src.end.saturating_sub(src.start) + 1;
+        let removed = delete_end.saturating_sub(src.start) + 1;
         let landed = if same_file && src.start < at {
-            at.saturating_sub(moved)
+            at.saturating_sub(removed)
         } else {
             at
         };
