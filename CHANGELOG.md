@@ -5,7 +5,7 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-## [0.117.0] — 2026-07-15 — fix(index): stale node handles survive deleting a byte-identical sibling
+## [0.118.0] — 2026-07-15 — fix(index): stale node handles die instead of re-pointing at a byte-identical sibling
 
 ### Fixed
 

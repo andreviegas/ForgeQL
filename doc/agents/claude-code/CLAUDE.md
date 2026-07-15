@@ -199,6 +199,13 @@ and source — enough to re-target on the spot.
 
 Creation is ungated: `INSERT NODE FOR`, `COPY NODE … TO`, and appending to a
 whole-file handle. There is nothing there to fingerprint, and they cannot clobber.
+
+One limit the rev cannot express: two **byte-identical same-parent siblings**
+share a rev (a rev hashes the span, and the spans are equal). The engine closes
+the hole on its side — deleting one of the twins kills the deleted handle
+(`node_not_found`) rather than letting the survivor adopt it — so a stale twin
+handle fails loudly. Read identical revs under one parent as "twins": after
+deleting one, re-`FIND` before touching the other.
 ### FOUND — acting on a whole FIND result
 
 `FIND` **is** the set-selection syntax. The rows it returns are saved as `FOUND`,

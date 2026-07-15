@@ -314,7 +314,7 @@ pub struct Session {
     /// stashed on the legacy storage type.
     pub(crate) prebuilt_segment_map: Option<std::collections::HashMap<std::path::PathBuf, Vec<u8>>>,
     /// Removed **root** ordinals per worktree-relative path, staged by a
-    /// node-removal verb (`DELETE NODE` / `DELETE NODES FOUND`) and consumed by
+    /// node-removal verb (`DELETE NODE` whole-node, `MOVE NODE` away) and consumed by
     /// the very next `reindex_files`, which tombstones them in the ordinal
     /// remapper so a byte-identical surviving sibling cannot adopt a deleted
     /// node's handle. Transient: `reindex_files` takes it, so it is

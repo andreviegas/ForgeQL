@@ -72,6 +72,7 @@ You are a code exploration and transformation agent. All source code is accessed
 | Context around symbol | `SHOW context OF 'name'` |
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
 | Delete a node | `DELETE NODE '<id>' IF REV '<rev>'` — `'<id>(n-m)'` deletes lines within it |
+| Byte-identical twins | Two identical same-parent siblings share a rev. Deleting one kills the deleted handle (`node_not_found`) — it never re-points at the survivor. Identical revs under one parent = twins: re-`FIND` after deleting one |
 | Relocate a node | `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — byte-exact, atomic, cross-file |
 | Sweep a whole FIND result | `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a usage row its one line |
 | Delete a whole FIND result | `DELETE NODES FOUND IF REV '<master>'` — `IF REV` mandatory |
