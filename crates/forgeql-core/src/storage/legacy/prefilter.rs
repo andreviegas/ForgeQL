@@ -495,6 +495,7 @@ pub(super) fn find_symbols_prefilter(
             fields: index.strings.resolve_fields(&def.fields),
             count: None,
             node_id: None,
+            rev: None,
         });
     }
 
@@ -603,6 +604,7 @@ mod tests {
             fields: HashMap::new(),
             count: None,
             node_id: None,
+            rev: None,
         }
     }
 

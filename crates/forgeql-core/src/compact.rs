@@ -363,10 +363,10 @@ fn compact_filelist(files: &[FileEntry], total: usize, s: &ShowResult) -> String
     if let Some(rev) = s
         .metadata
         .as_ref()
-        .and_then(|m| m.get("last_rev"))
+        .and_then(|m| m.get("found_rev"))
         .and_then(serde_json::Value::as_str)
     {
-        row(&mut out, &[&q("last_rev"), &q(rev)]);
+        row(&mut out, &[&q("found_rev"), &q(rev)]);
     }
     chomp(&mut out);
     out
@@ -526,7 +526,11 @@ fn compact_mutation(r: &MutationResult) -> String {
         &[&q("lines_removed"), &r.lines_removed.to_string()],
     );
     if let Some(ref id) = r.new_node_id {
-        row(&mut out, &[&q("new_node_id"), &q(id)]);
+        // The handle and its rev together — a chained edit needs no re-read.
+        match r.new_rev {
+            Some(ref rev) => row(&mut out, &[&q("new_node_id"), &q(id), &q(rev)]),
+            None => row(&mut out, &[&q("new_node_id"), &q(id)]),
+        }
     }
     if let Some(ref d) = r.diff {
         row(&mut out, &[&q("diff"), &q(d)]);
@@ -728,8 +732,8 @@ fn compact_query(query: &QueryResult) -> String {
     // The master rev of the set this FIND just armed — what a bulk
     // `… NODE[S] LAST` mutation quotes in IF REV. One row, and only when a rev
     // was issued: a truncated result deliberately has none.
-    if let Some(rev) = &query.last_rev {
-        row(&mut out, &[&q("last_rev"), &q(rev)]);
+    if let Some(rev) = &query.found_rev {
+        row(&mut out, &[&q("found_rev"), &q(rev)]);
     }
     out
 }
@@ -806,10 +810,11 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
             row(&mut out, &[&q(key), &count.to_string()]);
         }
     } else {
+        // The rev rides with the handle — same column group, never apart from it.
         let schema = match (has_enclosing_fn, has_node_id) {
-            (true, true) => format!("[name,path,line,enclosing_fn,node_id,{metric_label}]"),
+            (true, true) => format!("[name,path,line,enclosing_fn,node_id,rev,{metric_label}]"),
             (true, false) => format!("[name,path,line,enclosing_fn,{metric_label}]"),
-            (false, true) => format!("[name,path,line,node_id,{metric_label}]"),
+            (false, true) => format!("[name,path,line,node_id,rev,{metric_label}]"),
             (false, false) => format!("[name,path,line,{metric_label}]"),
         };
         row(&mut out, &[&q("fql_kind"), &q(&schema)]);
@@ -825,6 +830,7 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
                         &sr.line.to_string(),
                         sr.enclosing_fn.as_deref().unwrap_or(""),
                         sr.node_id.as_deref().unwrap_or(""),
+                        sr.rev.as_deref().unwrap_or(""),
                         &sr.metric_str(),
                     ]),
                     (true, false) => bracket(&[
@@ -839,6 +845,7 @@ fn compact_find_grouped_by_kind(query: &QueryResult) -> String {
                         &sr.path,
                         &sr.line.to_string(),
                         sr.node_id.as_deref().unwrap_or(""),
+                        sr.rev.as_deref().unwrap_or(""),
                         &sr.metric_str(),
                     ]),
                     (false, false) => {

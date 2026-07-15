@@ -833,7 +833,7 @@ mod tests {
             metric_hint: None,
             group_by_field: None,
             hint: None,
-            last_rev: None,
+            found_rev: None,
         });
         assert!(
             buffering_params(&query, 40).is_some(),

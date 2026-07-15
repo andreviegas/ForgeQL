@@ -324,5 +324,9 @@ fn build_symbol_match(reader: &SegmentReader, local_row: u32, source_path: &Path
         node_id: reader
             .ordinal_of(local_row)
             .map(|ord| crate::node_id::make_node_id(&source_path.to_string_lossy(), ord)),
+        rev: reader
+            .ordinal_of(local_row)
+            .map(|_| crate::node_id::format_rev(reader.rev_of(local_row)))
+            .filter(|r| !r.is_empty()),
     }
 }

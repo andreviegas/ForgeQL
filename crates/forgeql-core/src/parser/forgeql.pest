@@ -94,19 +94,19 @@ statement = {
   | show_diff_stmt
   | change_stmt
   | copy_stmt
-  | move_nodes_last_to_stmt
+  | move_nodes_found_to_stmt
   | move_node_to_stmt
   | move_node_stmt
-  | copy_nodes_last_to_stmt
+  | copy_nodes_found_to_stmt
   | copy_node_to_stmt
   | move_stmt
   | find_stmt
   | find_node_stmt
-  | change_nodes_last_stmt
+  | change_nodes_found_stmt
   | change_node_stmt
   | insert_node_for_stmt
   | insert_node_stmt
-  | delete_nodes_last_stmt
+  | delete_nodes_found_stmt
   | delete_node_stmt
   | show_node_stmt
   | show_more_stmt
@@ -119,31 +119,33 @@ statement = {
 /// FIND NODE id -- resolve a node_id to its current location, rev, and nav links.
 find_node_stmt = { "FIND" ~ "NODE" ~ any_value }
 
-/// `CHANGE NODE 'id' [IF REV 'rev'] WITH content` — replace node source lines.
-/// `CHANGE NODE 'id' [IF REV 'rev'] MATCHING [WORD] 'a' WITH 'b'` — replace
+/// `CHANGE NODE 'id' IF REV 'rev' WITH content` — replace node source lines.
+/// `CHANGE NODE 'id' IF REV 'rev' MATCHING [WORD] 'a' WITH 'b'` — replace
 /// pattern occurrences inside the node only (node-scoped mechanical rename).
 change_node_stmt = { "CHANGE" ~ "NODE" ~ any_value ~ if_rev_clause? ~ (change_matching | ("WITH" ~ content_value)) }
 
-/// `CHANGE NODES LAST [IF REV 'master'] MATCHING [WORD] 'a' WITH 'b'` — apply
+/// `CHANGE NODES FOUND IF REV 'master' MATCHING [WORD] 'a' WITH 'b'` — apply
 /// the replacement across every member of the previous FIND result (the
 /// mechanical rename sweep). `IF REV` proves the set has not moved since.
-change_nodes_last_stmt = { "CHANGE" ~ "NODES" ~ "LAST" ~ if_rev_clause? ~ change_matching }
+change_nodes_found_stmt = { "CHANGE" ~ "NODES" ~ "FOUND" ~ if_rev_clause? ~ change_matching }
 
-/// `DELETE NODE LAST IF REV 'master'` — delete every member of the set the
+/// `DELETE NODES FOUND IF REV 'master'` — delete every member of the set the
 /// previous FIND armed. `IF REV` is mandatory: a bulk delete is the one
 /// mutation that cannot be reviewed after the fact.
-delete_nodes_last_stmt = { "DELETE" ~ "NODE" ~ "LAST" ~ if_rev_clause? }
+delete_nodes_found_stmt = { "DELETE" ~ "NODES" ~ "FOUND" ~ if_rev_clause? }
 
-/// `MOVE NODE LAST IF REV 'master' TO 'dir/'` — move every member into a
+/// `MOVE NODES FOUND IF REV 'master' TO 'dir/'` — move every member into a
 /// directory, each keeping its basename.
-move_nodes_last_to_stmt = { "MOVE" ~ "NODE" ~ "LAST" ~ if_rev_clause? ~ "TO" ~ any_value }
+move_nodes_found_to_stmt = { "MOVE" ~ "NODES" ~ "FOUND" ~ if_rev_clause? ~ "TO" ~ any_value }
 
-/// `COPY NODE LAST TO 'dir/'` — same, but the sources stay. Creation only, so
+/// `COPY NODES FOUND TO 'dir/'` — same, but the sources stay. Creation only, so
 /// no `IF REV`.
-copy_nodes_last_to_stmt = { "COPY" ~ "NODE" ~ "LAST" ~ "TO" ~ any_value }
+copy_nodes_found_to_stmt = { "COPY" ~ "NODES" ~ "FOUND" ~ "TO" ~ any_value }
 
-/// `INSERT BEFORE|AFTER NODE 'id' WITH content` — insert lines around a node.
-insert_node_stmt = { "INSERT" ~ insert_position ~ "NODE" ~ any_value ~ "WITH" ~ content_value }
+/// `INSERT BEFORE|AFTER NODE 'id' IF REV 'rev' WITH content` — insert lines
+/// around a node. `IF REV` is required: the anchor is an existing node, and an
+/// anchor that has moved since you read it puts the content in the wrong place.
+insert_node_stmt = { "INSERT" ~ insert_position ~ "NODE" ~ any_value ~ if_rev_clause? ~ "WITH" ~ content_value }
 insert_position  = { "BEFORE" | "AFTER" }
 
 /// `INSERT NODE FOR 'path'` — create an empty file (or, with a trailing slash,
@@ -151,7 +153,7 @@ insert_position  = { "BEFORE" | "AFTER" }
 /// handle cannot address, because the path does not exist yet.
 insert_node_for_stmt = { "INSERT" ~ "NODE" ~ "FOR" ~ any_value }
 
-/// `DELETE NODE 'id' [IF REV 'rev']` — delete node source lines.
+/// `DELETE NODE 'id' IF REV 'rev'` — delete node source lines.
 delete_node_stmt = { "DELETE" ~ "NODE" ~ any_value ~ if_rev_clause? }
 
 /// `IF REV 'rev'` — optimistic concurrency guard (reject if stored rev differs).
@@ -289,7 +291,7 @@ copy_stmt = {
     ~ ("AT" ~ "LINE" ~ number)?
 }
 
-/// `MOVE NODE 'src' [IF REV 'rev'] BEFORE|AFTER NODE 'dst'`
+/// `MOVE NODE 'src' IF REV 'rev' BEFORE|AFTER NODE 'dst'`
 /// Relocate a node byte-for-byte: the source span is deleted and re-inserted at
 /// the anchor in ONE atomic plan, so the file is never briefly missing it.
 /// The engine NEVER re-indents (P1) — on an indentation-sensitive format the
@@ -298,7 +300,7 @@ move_node_stmt = {
     "MOVE" ~ "NODE" ~ any_value ~ if_rev_clause? ~ insert_position ~ "NODE" ~ any_value
 }
 
-/// `MOVE NODE 'src' [IF REV 'rev'] TO 'dst'` — move or rename by destination
+/// `MOVE NODE 'src' IF REV 'rev' TO 'dst'` — move or rename by destination
 /// rather than by anchor. `dst` is a directory handle (keep the basename) or a
 /// path (a full rename). A path destination is the one thing that cannot be a
 /// handle: it does not exist yet.

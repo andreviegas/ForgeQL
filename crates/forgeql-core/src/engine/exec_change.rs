@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 use crate::{
     ir::{ChangeTarget, ForgeQLIR},
     result::{ForgeQLResult, MutationResult},
-    session::last_set::{self, LastMember, LastSet},
+    session::found_set::{self, FoundMember, FoundSet},
     transforms::change::lines_to_byte_range,
     transforms::copy_move::{plan_copy_lines, plan_copy_lines_at, plan_move_lines},
     transforms::diff::{CompactDiffConfig, compact_diff_addressed},
@@ -87,7 +87,7 @@ impl ForgeQLEngine {
 
         // A successful mutation invalidates every commit gate: the agent must
         // re-run the gated VERIFY build(s) before COMMIT will accept the change.
-        self.invalidate_last_set(sid);
+        self.invalidate_found_set(sid);
         if let Some(session) = self.sessions.get_mut(sid) {
             session.satisfied_gates.clear();
             session.edits_since_gate = session.edits_since_gate.saturating_add(1);
@@ -117,6 +117,7 @@ impl ForgeQLEngine {
             diff,
             suggestions,
             new_node_id: None,
+            new_rev: None,
         }))
     }
 
@@ -273,7 +274,7 @@ impl ForgeQLEngine {
         // remembered FIND sites (line numbers may have shifted). This is the
         // shared bookkeeping for every plan-based mutation (insert/delete
         // node, node-scoped matching, the rename sweep).
-        self.invalidate_last_set(sid);
+        self.invalidate_found_set(sid);
         if let Some(session) = self.sessions.get_mut(sid) {
             session.satisfied_gates.clear();
             session.edits_since_gate = session.edits_since_gate.saturating_add(1);
@@ -312,7 +313,30 @@ impl ForgeQLEngine {
             diff,
             suggestions: Vec::new(),
             new_node_id: None,
+            new_rev: None,
         }))
+    }
+
+    /// Stamp the post-edit handle **and its rev** onto a mutation result.
+    ///
+    /// The two always travel together. With `IF REV` mandatory, handing back a
+    /// handle without its new rev would make every chained edit on the same node
+    /// pay for a `FIND NODE` round trip first.
+    fn stamp_new_handle(&self, sid: &str, result: &mut ForgeQLResult, node_id: Option<String>) {
+        let rev = node_id.as_deref().and_then(|id| {
+            let session = self.require_session(sid).ok()?;
+            let root = session.worktree_path.clone();
+            session
+                .engine_for(&crate::ir::Backend::Default)
+                .ok()?
+                .find_node(id, &root)
+                .ok()?
+                .map(|n| n.rev)
+        });
+        if let ForgeQLResult::Mutation(ref mut m) = *result {
+            m.new_node_id = node_id;
+            m.new_rev = rev;
+        }
     }
 
     // ===================================================================
@@ -355,7 +379,7 @@ impl ForgeQLEngine {
         // The working tree changed: reindex the restored files and invalidate
         // every commit gate, exactly as a mutation does.
         self.reindex_session(sid, &files_changed);
-        self.invalidate_last_set(sid);
+        self.invalidate_found_set(sid);
         if let Some(session) = self.sessions.get_mut(sid) {
             session.satisfied_gates.clear();
             session.edits_since_gate = session.edits_since_gate.saturating_add(1);
@@ -382,6 +406,7 @@ impl ForgeQLEngine {
             diff: Some(summary),
             suggestions: Vec::new(),
             new_node_id: None,
+            new_rev: None,
         }))
     }
 
@@ -436,6 +461,7 @@ impl ForgeQLEngine {
             } => (node_id.as_str(), if_rev.as_deref(), content.as_str()),
             _ => bail!("exec_change_node called with wrong IR variant"),
         };
+        let if_rev = Some(require_rev(if_rev, "CHANGE NODE", node_id)?);
         let NodeSpan {
             rel_path,
             node_line,
@@ -475,14 +501,16 @@ impl ForgeQLEngine {
             session
                 .engine_for(&crate::ir::Backend::Default)?
                 .find_node_id_at_line(&rel_path, node_line)
+                // A whole-path handle is derived from the path, so an edit cannot
+                // change it — and there is no symbol at the line to re-derive it
+                // from. Fall back to the handle the agent addressed.
+                .or_else(|| Some(node_id.to_string()))
         };
-        if let ForgeQLResult::Mutation(ref mut m) = result {
-            m.new_node_id = new_node_id;
-        }
+        self.stamp_new_handle(sid, &mut result, new_node_id);
         Ok(result)
     }
 
-    /// `CHANGE NODE 'id' [IF REV] MATCHING [WORD] 'a' WITH 'b'` — replace
+    /// `CHANGE NODE 'id' IF REV MATCHING [WORD] 'a' WITH 'b'` — replace
     /// pattern occurrences inside the node's current line span only.
     pub(super) fn exec_change_node_matching(
         &mut self,
@@ -505,6 +533,7 @@ impl ForgeQLEngine {
             ),
             _ => bail!("exec_change_node_matching called with wrong IR variant"),
         };
+        let if_rev = Some(require_rev(if_rev, "CHANGE NODE … MATCHING", node_id)?);
         let NodeSpan {
             rel_path,
             node_line,
@@ -548,10 +577,12 @@ impl ForgeQLEngine {
             session
                 .engine_for(&crate::ir::Backend::Default)?
                 .find_node_id_at_line(&rel_path, node_line)
+                // A whole-path handle is derived from the path, so an edit cannot
+                // change it — and there is no symbol at the line to re-derive it
+                // from. Fall back to the handle the agent addressed.
+                .or_else(|| Some(node_id.to_string()))
         };
-        if let ForgeQLResult::Mutation(ref mut m) = result {
-            m.new_node_id = new_node_id;
-        }
+        self.stamp_new_handle(sid, &mut result, new_node_id);
         Ok(result)
     }
 
@@ -560,7 +591,7 @@ impl ForgeQLEngine {
     /// A mutation shifts line numbers, so the set no longer points at what the
     /// agent saw. Clearing only the in-memory copy would leave the file behind
     /// for the next process to restore — a stale set that looks live.
-    fn invalidate_last_set(&mut self, sid: &str) {
+    fn invalidate_found_set(&mut self, sid: &str) {
         let Some(session) = self.sessions.get_mut(sid) else {
             return;
         };
@@ -569,19 +600,8 @@ impl ForgeQLEngine {
         // leave the file behind, and the next reconnect would resurrect a set
         // whose members this very mutation has already moved — stale handles,
         // offered to verbs that do not all demand a rev.
-        drop(session.last_set.take());
-        last_set::clear(&session.worktree_path);
-    }
-
-    /// The set the previous FIND armed, checked against the caller's `IF REV`.
-    ///
-    /// Every LAST verb comes through here, so its three refusals read the same
-    /// whatever the verb: there is no set, the set was never shown in full, or
-    /// the set has moved since it was shown.
-    fn gated_last_set(&self, session_id: Option<&str>, if_rev: Option<&str>) -> Result<LastSet> {
-        let set = self.armed_last_set(session_id)?;
-        self.verify_last_rev(session_id, &set, if_rev)?;
-        Ok(set)
+        drop(session.found_set.take());
+        found_set::clear(&session.worktree_path);
     }
 
     /// The armed set, before any rev check: the two refusals that do not depend
@@ -590,23 +610,23 @@ impl ForgeQLEngine {
     /// Split from the rev check so a verb can reject a set it could never act on
     /// (usage sites are not nodes) before demanding a matching rev — the agent
     /// should not have to fix its rev to be told the set was the wrong shape.
-    fn armed_last_set(&self, session_id: Option<&str>) -> Result<LastSet> {
+    fn armed_found_set(&self, session_id: Option<&str>) -> Result<FoundSet> {
         let sid = require_session_id(session_id)?;
         let set = self
             .require_session(sid)?
-            .last_set
+            .found_set
             .clone()
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "no FIND result is armed in this session — run FIND symbols/usages/files \
-                     first, then re-issue the LAST command"
+                     first, then re-issue the FOUND command"
                 )
             })?;
 
         if !set.complete {
             bail!(
-                "the previous {} was truncated, so no master rev was issued for it — a LAST \
+                "the previous {} was truncated, so no master rev was issued for it — a FOUND \
                  mutation would act on rows you were never shown. Re-run the FIND with a LIMIT \
                  that covers the whole result (or narrower filters), then repeat this command.",
                 set.origin
@@ -616,10 +636,10 @@ impl ForgeQLEngine {
     }
 
     /// Re-derive the master rev from the live members and compare.
-    fn verify_last_rev(
+    fn verify_found_rev(
         &self,
         session_id: Option<&str>,
-        set: &LastSet,
+        set: &FoundSet,
         if_rev: Option<&str>,
     ) -> Result<()> {
         let Some(expected) = if_rev else {
@@ -650,7 +670,7 @@ impl ForgeQLEngine {
     ///
     /// A member that has since been deleted reads as `gone`, which flips the
     /// hash exactly as an edit would: it is a change to the set either way.
-    fn last_set_revs(&self, sid: &str, members: &[LastMember]) -> Result<Vec<(String, String)>> {
+    fn found_set_revs(&self, sid: &str, members: &[FoundMember]) -> Result<Vec<(String, String)>> {
         let session = self.require_session(sid)?;
         let root = session.worktree_path.clone();
         let engine = session.engine_for(&crate::ir::Backend::Default)?;
@@ -678,8 +698,8 @@ impl ForgeQLEngine {
     ///
     /// The single place a master rev is derived, so the rev FIND issues and the
     /// rev the gate compares against can never be computed two different ways.
-    pub(super) fn master_rev_of(&self, sid: &str, members: &[LastMember]) -> Result<String> {
-        Ok(LastSet::master_rev(&self.last_set_revs(sid, members)?))
+    pub(super) fn master_rev_of(&self, sid: &str, members: &[FoundMember]) -> Result<String> {
+        Ok(FoundSet::master_rev(&self.found_set_revs(sid, members)?))
     }
 
     /// The 1-based inclusive line span each member contributes to a sweep.
@@ -688,10 +708,10 @@ impl ForgeQLEngine {
     /// file); a usage site contributes its single line. Spans are merged per
     /// file so two overlapping members cannot produce two edits over the same
     /// bytes.
-    fn last_set_spans(
+    fn found_set_spans(
         &self,
         session_id: Option<&str>,
-        set: &LastSet,
+        set: &FoundSet,
     ) -> Result<std::collections::BTreeMap<String, Vec<(usize, usize)>>> {
         let mut by_file: std::collections::BTreeMap<String, Vec<(usize, usize)>> =
             std::collections::BTreeMap::new();
@@ -702,7 +722,7 @@ impl ForgeQLEngine {
             } else {
                 let line = member.line.ok_or_else(|| {
                     anyhow::anyhow!(
-                        "a LAST member has neither a node handle nor a line: {}",
+                        "a FOUND member has neither a node handle nor a line: {}",
                         member.path
                     )
                 })?;
@@ -728,10 +748,10 @@ impl ForgeQLEngine {
     /// files. A usage site addresses a line, not a file: it is not a thing that
     /// can be deleted or moved, and saying so beats silently deleting the file
     /// that happened to contain it.
-    fn last_set_paths(set: &LastSet, verb: &str) -> Result<Vec<String>> {
+    fn found_set_paths(set: &FoundSet, verb: &str) -> Result<Vec<String>> {
         if let Some(site) = set.members.iter().find(|m| m.node_id.is_none()) {
             bail!(
-                "{verb} NODE LAST needs addressable nodes, but the set came from {} — its rows \
+                "{verb} NODES FOUND needs addressable nodes, but the set came from {} — its rows \
                  are call sites (a line in {}), not nodes. Re-run as FIND files (or FIND symbols) \
                  to arm a set of handles.",
                 set.origin,
@@ -741,13 +761,13 @@ impl ForgeQLEngine {
         Ok(set.members.iter().map(|m| m.path.clone()).collect())
     }
 
-    pub(super) fn exec_change_nodes_last(
+    pub(super) fn exec_change_nodes_found(
         &mut self,
         session_id: Option<&str>,
         op: &ForgeQLIR,
     ) -> Result<ForgeQLResult> {
         let (pattern, replacement, word_boundary, if_rev) = match op {
-            ForgeQLIR::ChangeNodesLast {
+            ForgeQLIR::ChangeNodesFound {
                 pattern,
                 replacement,
                 word_boundary,
@@ -758,12 +778,16 @@ impl ForgeQLEngine {
                 *word_boundary,
                 if_rev.as_deref(),
             ),
-            _ => bail!("exec_change_nodes_last called with wrong IR variant"),
+            _ => bail!("exec_change_nodes_found called with wrong IR variant"),
         };
         let sid = require_session_id(session_id)?;
-        let set = self.gated_last_set(session_id, if_rev)?;
+        // Set first, then the gate: "you have nothing armed" is a more useful
+        // thing to be told than "you forgot a rev" when there is no set at all.
+        let set = self.armed_found_set(session_id)?;
+        let if_rev = require_found_rev(if_rev, "CHANGE")?;
+        self.verify_found_rev(session_id, &set, Some(if_rev))?;
         let member_count = set.members.len();
-        let spans = self.last_set_spans(session_id, &set)?;
+        let spans = self.found_set_spans(session_id, &set)?;
 
         let plan = {
             let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
@@ -804,26 +828,26 @@ impl ForgeQLEngine {
             }
         };
 
-        self.apply_plan(sid, plan, "change_nodes_last", None)
+        self.apply_plan(sid, plan, "change_nodes_found", None)
     }
 
-    /// `DELETE NODE LAST IF REV 'master'` — unlink every member of the set.
+    /// `DELETE NODES FOUND IF REV 'master'` — unlink every member of the set.
     ///
     /// Lowered to the same whole-path delete as `DELETE NODE`, but as one plan:
     /// a half-applied bulk delete is not something an agent can reason about.
-    pub(super) fn exec_delete_nodes_last(
+    pub(super) fn exec_delete_nodes_found(
         &mut self,
         session_id: Option<&str>,
         op: &ForgeQLIR,
     ) -> Result<ForgeQLResult> {
         let if_rev = match op {
-            ForgeQLIR::DeleteNodesLast { if_rev } => if_rev.as_deref(),
-            _ => bail!("exec_delete_nodes_last called with wrong IR variant"),
+            ForgeQLIR::DeleteNodesFound { if_rev } => if_rev.as_deref(),
+            _ => bail!("exec_delete_nodes_found called with wrong IR variant"),
         };
-        let if_rev = require_last_rev(if_rev, "DELETE")?;
-        let set = self.armed_last_set(session_id)?;
-        let paths = Self::last_set_paths(&set, "DELETE")?;
-        self.verify_last_rev(session_id, &set, Some(if_rev))?;
+        let if_rev = require_found_rev(if_rev, "DELETE")?;
+        let set = self.armed_found_set(session_id)?;
+        let paths = Self::found_set_paths(&set, "DELETE")?;
+        self.verify_found_rev(session_id, &set, Some(if_rev))?;
 
         // A directory member expands to the files under it, exactly as the
         // single-node recursive delete does.
@@ -856,7 +880,7 @@ impl ForgeQLEngine {
 
         let mut result = if files.is_empty() {
             ForgeQLResult::Mutation(MutationResult {
-                op: "delete_nodes_last".to_string(),
+                op: "delete_nodes_found".to_string(),
                 applied: true,
                 files_changed: Vec::new(),
                 edit_count: 0,
@@ -865,6 +889,7 @@ impl ForgeQLEngine {
                 diff: None,
                 suggestions: Vec::new(),
                 new_node_id: None,
+                new_rev: None,
             })
         } else {
             let ir = ForgeQLIR::ChangeContent {
@@ -878,39 +903,39 @@ impl ForgeQLEngine {
             remove_empty_dirs(abs);
         }
         if let ForgeQLResult::Mutation(ref mut m) = result {
-            m.op = "delete_nodes_last".to_string();
+            m.op = "delete_nodes_found".to_string();
         }
         Ok(result)
     }
 
-    /// `MOVE|COPY NODE LAST … TO 'dir/'` — relocate every member into one
+    /// `MOVE|COPY NODES FOUND … TO 'dir/'` — relocate every member into one
     /// directory, each keeping its basename.
     ///
     /// Unlike the single-node form the destination cannot be a rename: N sources
     /// cannot share one new name.
-    pub(super) fn exec_move_nodes_last_to(
+    pub(super) fn exec_move_nodes_found_to(
         &mut self,
         session_id: Option<&str>,
         op: &ForgeQLIR,
         is_move: bool,
     ) -> Result<ForgeQLResult> {
         let (dst, if_rev) = match op {
-            ForgeQLIR::MoveNodesLastTo { dst, if_rev } => (dst.as_str(), if_rev.as_deref()),
-            ForgeQLIR::CopyNodesLastTo { dst } => (dst.as_str(), None),
-            _ => bail!("exec_move_nodes_last_to called with wrong IR variant"),
+            ForgeQLIR::MoveNodesFoundTo { dst, if_rev } => (dst.as_str(), if_rev.as_deref()),
+            ForgeQLIR::CopyNodesFoundTo { dst } => (dst.as_str(), None),
+            _ => bail!("exec_move_nodes_found_to called with wrong IR variant"),
         };
         let verb = if is_move { "MOVE" } else { "COPY" };
         // A COPY creates; it cannot destroy what it did not read, so it needs no
         // gate. A MOVE unlinks the sources, so it does.
         let if_rev = if is_move {
-            Some(require_last_rev(if_rev, verb)?)
+            Some(require_found_rev(if_rev, verb)?)
         } else {
             None
         };
         let sid = require_session_id(session_id)?;
-        let set = self.armed_last_set(session_id)?;
-        let paths = Self::last_set_paths(&set, verb)?;
-        self.verify_last_rev(session_id, &set, if_rev)?;
+        let set = self.armed_found_set(session_id)?;
+        let paths = Self::found_set_paths(&set, verb)?;
+        self.verify_found_rev(session_id, &set, if_rev)?;
 
         let dst_dir = self.resolve_last_destination(session_id, dst, verb)?;
 
@@ -926,21 +951,21 @@ impl ForgeQLEngine {
                 let src_abs = workspace.safe_path(rel)?;
                 if src_abs.is_dir() {
                     bail!(
-                        "{verb} NODE LAST: '{rel}' is a directory — move the files individually, \
+                        "{verb} NODES FOUND: '{rel}' is a directory — move the files individually, \
                          or arm a set of files"
                     );
                 }
                 let basename = Path::new(rel)
                     .file_name()
-                    .ok_or_else(|| anyhow::anyhow!("{verb} NODE LAST: '{rel}' has no basename"))?;
+                    .ok_or_else(|| anyhow::anyhow!("{verb} NODES FOUND: '{rel}' has no basename"))?;
                 let dst_rel = Path::new(&dst_dir).join(basename);
                 let dst_abs = workspace.safe_path(&dst_rel.to_string_lossy())?;
                 if dst_abs == src_abs {
-                    bail!("{verb} NODE LAST: destination is the source ({rel})");
+                    bail!("{verb} NODES FOUND: destination is the source ({rel})");
                 }
                 if dst_abs.exists() {
                     bail!(
-                        "{verb} NODE LAST: destination '{}' already exists — the engine will not \
+                        "{verb} NODES FOUND: destination '{}' already exists — the engine will not \
                          clobber it. DELETE NODE it first, or choose another directory.",
                         dst_rel.display()
                     );
@@ -971,9 +996,9 @@ impl ForgeQLEngine {
         self.record_created(sid, &created_dirs);
 
         let op_name = if is_move {
-            "move_nodes_last_to"
+            "move_nodes_found_to"
         } else {
-            "copy_nodes_last_to"
+            "copy_nodes_found_to"
         };
         self.apply_plan(sid, plan, op_name, None)
     }
@@ -990,7 +1015,7 @@ impl ForgeQLEngine {
         if let Ok(node) = self.resolve_node(session_id, dst, None) {
             if node.kind != "dir" {
                 bail!(
-                    "{verb} NODE LAST: destination '{dst}' is a {} — a set moves into a \
+                    "{verb} NODES FOUND: destination '{dst}' is a {} — a set moves into a \
                      directory, so every member can keep its basename",
                     node.kind
                 );
@@ -1001,11 +1026,11 @@ impl ForgeQLEngine {
         // thing a handle cannot express), but it must name a directory.
         let rel = dst.trim_end_matches('/');
         if rel.is_empty() {
-            bail!("{verb} NODE LAST: destination is empty");
+            bail!("{verb} NODES FOUND: destination is empty");
         }
         if Path::new(rel).extension().is_some() {
             bail!(
-                "{verb} NODE LAST: destination '{dst}' looks like a file — a set moves into a \
+                "{verb} NODES FOUND: destination '{dst}' looks like a file — a set moves into a \
                  directory. Add a trailing '/' if you meant a new directory."
             );
         }
@@ -1076,7 +1101,7 @@ impl ForgeQLEngine {
             "n{}",
             crate::node_id::hex_prefix(&crate::node_id::sha256_of_path(&rel), 12)
         );
-        Ok(ForgeQLResult::Mutation(crate::result::MutationResult {
+        let mut result = ForgeQLResult::Mutation(crate::result::MutationResult {
             op: "insert_node_for".to_string(),
             applied: true,
             files_changed: vec![PathBuf::from(&rel)],
@@ -1085,25 +1110,46 @@ impl ForgeQLEngine {
             lines_removed: 0,
             diff: None,
             suggestions: Vec::new(),
-            new_node_id: Some(node_id),
-        }))
+            new_node_id: None,
+            new_rev: None,
+        });
+        // Hand back the new path's handle AND its rev: the next command is almost
+        // always a write into it, and that write should not need a re-read first.
+        self.stamp_new_handle(sid, &mut result, Some(node_id));
+        Ok(result)
     }
     pub(super) fn exec_insert_node(
         &mut self,
         session_id: Option<&str>,
         op: &ForgeQLIR,
     ) -> Result<ForgeQLResult> {
-        let (node_id, before, content) = match op {
+        let (node_id, before, if_rev, content) = match op {
             ForgeQLIR::InsertNode {
                 node_id,
                 before,
+                if_rev,
                 content,
-            } => (node_id.as_str(), *before, content.as_str()),
+            } => (
+                node_id.as_str(),
+                *before,
+                if_rev.as_deref(),
+                content.as_str(),
+            ),
             _ => bail!("exec_insert_node called with wrong IR variant"),
         };
 
         let sid = require_session_id(session_id)?;
-        let node = self.resolve_node(session_id, node_id, None)?;
+        // A whole-file handle is the BOF/EOF append form: it adds lines, it cannot
+        // clobber what is already there, so it needs no gate — same reasoning as
+        // the creation verbs. A node anchor is different: if it moved since the
+        // agent read it, the content lands in the wrong place.
+        let anchor_kind = self.node_kind_of(session_id, node_id)?;
+        let if_rev = if is_path_kind(&anchor_kind) {
+            None
+        } else {
+            Some(require_rev(if_rev, "INSERT … NODE", node_id)?)
+        };
+        let node = self.resolve_node(session_id, node_id, if_rev)?;
         // Inserting around a whole-file handle is the BOF/EOF form and needs no
         // guard — it creates, it does not destroy. A directory has no lines to
         // insert around.
@@ -1151,9 +1197,7 @@ impl ForgeQLEngine {
                 .engine_for(&crate::ir::Backend::Default)?
                 .find_node_id_at_line(&node.rel_path, insert_line)
         };
-        if let ForgeQLResult::Mutation(ref mut m) = result {
-            m.new_node_id = new_node_id;
-        }
+        self.stamp_new_handle(sid, &mut result, new_node_id);
         Ok(result)
     }
 
@@ -1166,6 +1210,7 @@ impl ForgeQLEngine {
             ForgeQLIR::DeleteNode { node_id, if_rev } => (node_id.as_str(), if_rev.as_deref()),
             _ => bail!("exec_delete_node called with wrong IR variant"),
         };
+        let if_rev = Some(require_rev(if_rev, "DELETE NODE", node_id)?);
         let NodeSpan {
             rel_path,
             node_end_line,
@@ -1209,7 +1254,7 @@ impl ForgeQLEngine {
         Ok(result)
     }
 
-    /// `MOVE NODE '<src>' [IF REV] TO '<dst>'` and `COPY NODE '<src>' TO '<dst>'`.
+    /// `MOVE NODE '<src>' IF REV TO '<dst>'` and `COPY NODE '<src>' TO '<dst>'`.
     ///
     /// The anchor form (`… BEFORE|AFTER NODE`) places a node *relative to
     /// another node*. This form places it *at a path* — which is what moving a
@@ -1237,6 +1282,12 @@ impl ForgeQLEngine {
             } => (src_id.as_str(), dst.as_str(), if_rev.as_deref()),
             ForgeQLIR::CopyNodeTo { src_id, dst } => (src_id.as_str(), dst.as_str(), None),
             _ => bail!("exec_move_node_to called with wrong IR variant"),
+        };
+        // MOVE unlinks the source, so it is gated. COPY only creates.
+        let if_rev = if is_move {
+            Some(require_rev(if_rev, "MOVE NODE … TO", src_id)?)
+        } else {
+            None
         };
         let sid = require_session_id(session_id)?;
         let src = self.resolve_node_span(session_id, src_id, if_rev)?;
@@ -1312,12 +1363,11 @@ impl ForgeQLEngine {
         };
         let mut result = self.apply_plan(sid, plan, op_name, None)?;
         // The handle is path-derived, so the moved/copied file has a new one.
-        if let ForgeQLResult::Mutation(ref mut m) = result {
-            m.new_node_id = Some(format!(
-                "n{}",
-                crate::node_id::hex_prefix(&crate::node_id::sha256_of_path(&dst_rel), 12)
-            ));
-        }
+        let moved_id = format!(
+            "n{}",
+            crate::node_id::hex_prefix(&crate::node_id::sha256_of_path(&dst_rel), 12)
+        );
+        self.stamp_new_handle(sid, &mut result, Some(moved_id));
         Ok(result)
     }
 
@@ -1361,7 +1411,7 @@ impl ForgeQLEngine {
             Ok(trimmed.to_owned())
         }
     }
-    /// `MOVE NODE 'src' [IF REV 'rev'] BEFORE|AFTER NODE 'dst'`
+    /// `MOVE NODE 'src' IF REV 'rev' BEFORE|AFTER NODE 'dst'`
     ///
     /// Relocation, not re-authoring: the node's bytes are lifted verbatim and
     /// spliced at the anchor. Delete and insert land in ONE plan, so the file is
@@ -1384,6 +1434,7 @@ impl ForgeQLEngine {
             } => (src_id.as_str(), *before, dst_id.as_str(), if_rev.as_deref()),
             _ => bail!("exec_move_node called with wrong IR variant"),
         };
+        let if_rev = Some(require_rev(if_rev, "MOVE NODE", src_id)?);
 
         let sid = require_session_id(session_id)?;
         let src = self.resolve_node_span(session_id, src_id, if_rev)?;
@@ -1446,9 +1497,7 @@ impl ForgeQLEngine {
                 .engine_for(&crate::ir::Backend::Default)?
                 .find_node_id_at_line(&dst.rel_path, landed)
         };
-        if let ForgeQLResult::Mutation(ref mut m) = result {
-            m.new_node_id = new_node_id;
-        }
+        self.stamp_new_handle(sid, &mut result, new_node_id);
         Ok(result)
     }
 
@@ -1504,6 +1553,7 @@ impl ForgeQLEngine {
                 diff: None,
                 suggestions: Vec::new(),
                 new_node_id: None,
+                new_rev: None,
             })
         } else {
             let ir = ForgeQLIR::ChangeContent {
@@ -1522,6 +1572,21 @@ impl ForgeQLEngine {
         }
         Ok(result)
     }
+
+    /// The `fql_kind` of a handle, without resolving its span or checking a rev.
+    ///
+    /// Used to decide whether a verb needs the gate at all: a whole-file or
+    /// directory handle behaves differently from a node inside one.
+    fn node_kind_of(&self, session_id: Option<&str>, node_id: &str) -> Result<String> {
+        let session = self.require_session(require_session_id(session_id)?)?;
+        let root = session.worktree_path.clone();
+        Ok(session
+            .engine_for(&crate::ir::Backend::Default)?
+            .find_node(node_id, &root)?
+            .map(|n| n.fql_kind)
+            .unwrap_or_default())
+    }
+
     /// Resolve `node_id` → (`rel_path`, `line`, `end_line`, `kind`) and optionally check IF REV guard.
     fn resolve_node(
         &self,
@@ -1650,15 +1715,36 @@ fn require_path_rev(op: &str, node_id: &str, kind: &str, if_rev: Option<&str>) -
     Ok(())
 }
 
-/// The bulk LAST verbs that destroy require `IF REV`.
+/// Every verb that names an **existing** node takes `IF REV`.
+///
+/// Not safety theatre: an agent may carry a handle across dozens of commands and
+/// then come back to it. The handle still resolves — handles are stable — but the
+/// code under it may have moved, including under an edit to one of its *children*,
+/// which changes the enclosing node's rev too (a rev is the hash of the node's
+/// whole span). Nothing else can tell the agent that the thing it remembers is no
+/// longer the thing that is there.
+///
+/// Creation verbs (`INSERT NODE FOR`, `COPY NODE … TO`) are exempt: a path that
+/// does not exist yet has nothing to fingerprint.
+fn require_rev<'a>(if_rev: Option<&'a str>, verb: &str, node_id: &str) -> Result<&'a str> {
+    if_rev.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{verb} requires IF REV '<rev>'. The rev travels with the handle: it is on the \
+             FIND / SHOW row that handed you '{node_id}', and on the result of the mutation \
+             that last touched it. If you no longer have it, FIND NODE '{node_id}' returns it."
+        )
+    })
+}
+
+/// The bulk FOUND verbs that destroy require `IF REV`.
 ///
 /// The grammar accepts the clause as optional so that a missing one lands here
 /// rather than falling through to the single-node verb, which would report an
-/// `invalid node_id: LAST` — an error about the wrong thing entirely.
-fn require_last_rev<'a>(if_rev: Option<&'a str>, verb: &str) -> Result<&'a str> {
+/// `invalid node_id: FOUND` — an error about the wrong thing entirely.
+fn require_found_rev<'a>(if_rev: Option<&'a str>, verb: &str) -> Result<&'a str> {
     if_rev.ok_or_else(|| {
         anyhow::anyhow!(
-            "{verb} NODE LAST requires IF REV '<master rev>' — it acts on every member of the \
+            "{verb} NODES FOUND requires IF REV '<master rev>' — it acts on every member of the \
              set at once. Re-run the FIND: its response carries the master rev to quote here."
         )
     })

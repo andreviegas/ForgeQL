@@ -143,6 +143,8 @@ impl ColumnarStorage {
             fields: HashMap::new(),
             count: None,
             node_id: None,
+            // A usage site is a line, not a node: no handle, so no rev.
+            rev: None,
         };
 
         let mut results: Vec<SymbolMatch> = Vec::new();

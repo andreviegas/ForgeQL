@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::{
     ir::{Backend, Clauses, GroupBy},
     result::{ForgeQLResult, QueryResult, ShowContent, ShowResult},
-    session::last_set::{self, LastMember, LastSet},
+    session::found_set::{self, FoundMember, FoundSet},
 };
 
 use super::ForgeQLEngine;
@@ -38,7 +38,7 @@ impl ForgeQLEngine {
             _ => None,
         };
         let hint = Self::unknown_where_field_hint(clauses, &results);
-        let last_rev = self.record_last_set(sid, "find_symbols", &results, total, clauses);
+        let found_rev = self.record_found_set(sid, "find_symbols", &results, total, clauses);
 
         Ok(ForgeQLResult::Query(QueryResult {
             op: "find_symbols".to_string(),
@@ -47,7 +47,7 @@ impl ForgeQLEngine {
             metric_hint,
             group_by_field,
             hint,
-            last_rev,
+            found_rev,
         }))
     }
 
@@ -100,7 +100,7 @@ impl ForgeQLEngine {
         if clauses.limit.is_none() {
             results.truncate(session.output_config().find_limit);
         }
-        let last_rev = self.record_last_set(sid, "find_usages", &results, total, clauses);
+        let found_rev = self.record_found_set(sid, "find_usages", &results, total, clauses);
 
         Ok(ForgeQLResult::Query(QueryResult {
             op: "find_usages".to_string(),
@@ -109,21 +109,21 @@ impl ForgeQLEngine {
             metric_hint: None,
             group_by_field: None,
             hint: None,
-            last_rev,
+            found_rev,
         }))
     }
 
-    /// Arm `LAST` from a symbol/usage FIND result.
+    /// Arm `FOUND` from a symbol/usage FIND result.
     ///
     /// Every FIND replaces the set — and a FIND whose rows carry no location
     /// (a `GROUP BY` aggregate) clears it rather than leaving the previous one
     /// armed. A set that survives the query the agent believes replaced it is
-    /// how `CHANGE NODES LAST` ends up sweeping code nobody looked at.
+    /// how `CHANGE NODES FOUND` ends up sweeping code nobody looked at.
     ///
     /// `complete` is false when the FIND was truncated: the members are exactly
     /// the rows returned, so a capped result can still be inspected, but no
-    /// master rev will be issued for it and every LAST verb refuses.
-    fn record_last_set(
+    /// master rev will be issued for it and every FOUND verb refuses.
+    fn record_found_set(
         &mut self,
         sid: &str,
         origin: &str,
@@ -142,7 +142,7 @@ impl ForgeQLEngine {
         let addressable = |r: &crate::result::SymbolMatch| {
             r.path.is_some() && (r.node_id.is_some() || r.line.is_some_and(|l| l >= 1))
         };
-        let members: Vec<LastMember> =
+        let members: Vec<FoundMember> =
             if clauses.group_by.is_none() && results.iter().all(addressable) {
                 results
                     .iter()
@@ -151,7 +151,7 @@ impl ForgeQLEngine {
                         // Backends may return worktree-absolute paths; store
                         // worktree-relative so the sweep can resolve them safely.
                         let rel = path.strip_prefix(&root).unwrap_or(path);
-                        Some(LastMember {
+                        Some(FoundMember {
                             node_id: r.node_id.clone(),
                             path: rel.to_string_lossy().into_owned(),
                             line: r.line.filter(|l| *l >= 1),
@@ -161,33 +161,33 @@ impl ForgeQLEngine {
             } else {
                 Vec::new()
             };
-        self.arm_last_set(sid, origin, members, total, results.len())
+        self.arm_found_set(sid, origin, members, total, results.len())
     }
 
     /// Store the set, or clear it when there is nothing addressable to store.
     ///
-    /// The one place `Session::last_set` is written, so the on-disk copy cannot
+    /// The one place `Session::found_set` is written, so the on-disk copy cannot
     /// drift from the in-memory one: a session outlives the server process, and
-    /// a LAST that survives only in RAM is a LAST the next process silently
+    /// a FOUND set that survives only in RAM is one the next process silently
     /// loses.
-    fn arm_last_set(
+    fn arm_found_set(
         &mut self,
         sid: &str,
         origin: &str,
-        members: Vec<LastMember>,
+        members: Vec<FoundMember>,
         total: usize,
         returned: usize,
     ) -> Option<String> {
         let root = self.sessions.get(sid)?.worktree_path.clone();
         if members.is_empty() {
             if let Some(session) = self.sessions.get_mut(sid) {
-                session.last_set = None;
+                session.found_set = None;
             }
-            last_set::clear(&root);
+            found_set::clear(&root);
             return None;
         }
 
-        // A truncated result gets no master rev: without one every LAST verb
+        // A truncated result gets no master rev: without one every FOUND verb
         // refuses, which is the whole point — the rows beyond the cap were
         // never shown, and a set the agent did not see is not a set it chose.
         let complete = total == returned;
@@ -197,30 +197,30 @@ impl ForgeQLEngine {
             None
         };
 
-        let set = LastSet {
+        let set = FoundSet {
             origin: origin.to_string(),
             complete,
             master_rev: master_rev.clone(),
             members,
         };
-        if let Err(err) = last_set::save(&set, &root) {
+        if let Err(err) = found_set::save(&set, &root) {
             tracing::warn!(
                 error = %err,
-                "could not persist the LAST set; a server restart will lose it"
+                "could not persist the FOUND set; a server restart will lose it"
             );
         }
         if let Some(session) = self.sessions.get_mut(sid) {
-            session.last_set = Some(set);
+            session.found_set = Some(set);
         }
         master_rev
     }
 
     /// `FIND files` — executed by the SHOW family (it renders a file listing),
-    /// but it is a FIND, so it arms LAST like the other two.
+    /// but it is a FIND, so it arms FOUND like the other two.
     ///
     /// Only handle-carrying rows arm it. A `GROUP BY` aggregate row is a count,
     /// not a node: there is nothing for a bulk verb to address and nothing for
-    /// the master rev to fingerprint, so such a result clears LAST instead of
+    /// the master rev to fingerprint, so such a result clears FOUND instead of
     /// leaving the previous one in place.
     pub(super) fn exec_find_files(
         &mut self,
@@ -241,7 +241,7 @@ impl ForgeQLEngine {
             }) if !aggregate && files.iter().all(|f| f.node_id.is_some()) => (
                 files
                     .iter()
-                    .map(|f| LastMember {
+                    .map(|f| FoundMember {
                         node_id: f.node_id.clone(),
                         path: f.path.to_string_lossy().into_owned(),
                         line: None,
@@ -252,16 +252,16 @@ impl ForgeQLEngine {
             ),
             _ => (Vec::new(), 0, 0),
         };
-        let last_rev = self.arm_last_set(sid, "find_files", members, total, returned);
+        let found_rev = self.arm_found_set(sid, "find_files", members, total, returned);
 
         // FIND files renders through the SHOW family, whose result has no
-        // `last_rev` column of its own — the master rev rides in the metadata
+        // `found_rev` column of its own — the master rev rides in the metadata
         // map so the CSV row reads the same as it does on FIND symbols/usages.
-        if let (Some(rev), ForgeQLResult::Show(show)) = (last_rev, &mut result) {
+        if let (Some(rev), ForgeQLResult::Show(show)) = (found_rev, &mut result) {
             drop(
                 show.metadata
                     .get_or_insert_with(serde_json::Map::new)
-                    .insert("last_rev".to_string(), serde_json::Value::String(rev)),
+                    .insert("found_rev".to_string(), serde_json::Value::String(rev)),
             );
         }
         Ok(result)

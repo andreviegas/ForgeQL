@@ -14,7 +14,7 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
    - [FIND Commands](#find-commands)
    - [SHOW Commands](#show-commands)
    - [Editing Commands (node handles)](#editing-commands-node-handles)
-   - [LAST — mutating a whole FIND result](#last--mutating-a-whole-find-result)
+   - [FOUND — mutating a whole FIND result](#found--mutating-a-whole-find-result)
    - [Node Addressing](#node-addressing)
    - [Mutation Responses — the diff is the contract](#mutation-responses--the-diff-is-the-contract)
    - [UNDO](#undo)
@@ -141,9 +141,9 @@ FIND files [clauses]
 
 > **Use `fql_kind` for all filtering.** It is language-agnostic and portable across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific and **deprecated**.
 
-Every `FIND` also **arms `LAST`** — the set its rows describe — and a complete result carries a
-`last_rev` row: the master rev that gates a bulk mutation over that set. See
-[LAST — mutating a whole FIND result](#last--mutating-a-whole-find-result).
+Every `FIND` also **arms `FOUND`** — the set its rows describe — and a complete result carries a
+`found_rev` row: the master rev that gates a bulk mutation over that set. See
+[FOUND — mutating a whole FIND result](#found--mutating-a-whole-find-result).
 
 ---
 
@@ -218,66 +218,88 @@ the surviving raw-text forms are collected in
 [Raw line and file operations](#raw-line-and-file-operations-legacy-non-indexed-files).
 
 ```sql
-CHANGE NODE '<node_id>' [IF REV '<rev>'] WITH 'new_content'
+-- Every verb that names an EXISTING node takes IF REV. It is not optional.
+CHANGE NODE '<node_id>' IF REV '<rev>' WITH 'new_content'
+CHANGE NODE '<node_id>(n-m)' IF REV '<rev>' WITH 'new_content'
+CHANGE NODE '<node_id>' IF REV '<rev>' MATCHING [WORD] 'old' WITH 'new'
 
-CHANGE NODE '<node_id>(n-m)' WITH 'new_content'
+INSERT (BEFORE | AFTER) NODE '<node_id>' IF REV '<rev>' WITH 'new_content'
 
-INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'new_content'
+DELETE NODE '<node_id>' IF REV '<rev>'
+DELETE NODE '<node_id>(n-m)' IF REV '<rev>'
 
-DELETE NODE '<node_id>' [IF REV '<rev>']
+MOVE NODE '<src_id>' IF REV '<rev>' (BEFORE | AFTER) NODE '<dst_id>'
+MOVE NODE '<src_id>' IF REV '<rev>' TO '<dir_hex> | <path>'
 
-DELETE NODE '<node_id>(n-m)'
-
-MOVE NODE '<src_id>' [IF REV '<rev>'] (BEFORE | AFTER) NODE '<dst_id>'
-MOVE NODE '<src_id>' [IF REV '<rev>'] TO '<dir_hex> | <path>'
+-- Creation verbs are ungated: a path that does not exist yet has nothing to
+-- fingerprint, and appending to a whole-file handle cannot clobber anything.
 COPY NODE '<src_id>' TO '<dir_hex> | <path>'
-
 INSERT NODE FOR '<path>'          -- create an empty file
 INSERT NODE FOR '<path>/'         -- create a directory
+INSERT AFTER NODE '<file_hex>' WITH '...'   -- append at EOF; no rev needed
 
--- LAST — every member of the previous FIND result, in one mutation
-CHANGE NODES LAST [IF REV '<master>'] MATCHING [WORD] 'old' WITH 'new'
-DELETE NODE LAST IF REV '<master>'
-MOVE NODE LAST IF REV '<master>' TO '<dir_hex> | <dir>/'
-COPY NODE LAST TO '<dir_hex> | <dir>/'
+-- FOUND — every member of the previous FIND result, in one mutation
+CHANGE NODES FOUND IF REV '<master>' MATCHING [WORD] 'old' WITH 'new'
+DELETE NODES FOUND IF REV '<master>'
+MOVE NODES FOUND IF REV '<master>' TO '<dir_hex> | <dir>/'
+COPY NODES FOUND TO '<dir_hex> | <dir>/'
 ```
 
-| Variant | Effect |
-|---|---|
-| `CHANGE NODE … WITH …` | Replace the node's entire source span |
-| `CHANGE NODE '<id>(n-m)' WITH …` | Replace only lines n–m within the node (node-relative offset) |
-| `INSERT BEFORE NODE … WITH …` | Insert new lines immediately before the node |
-| `INSERT AFTER NODE … WITH …` | Insert new lines immediately after the node |
-| `DELETE NODE … [IF REV '<rev>']` | Delete the node's source span (optionally rev-guarded) |
-| `DELETE NODE '<id>(n-m)'` | Delete only lines n–m within the node (node-relative offset) |
-| `MOVE NODE '<src>' (BEFORE\|AFTER) NODE '<dst>'` | Relocate the node's bytes to the anchor — one atomic plan, no read round-trip |
-| `MOVE NODE '<src>' IF REV … TO '<dst>'` | Move or rename: `<dst>` is a directory handle (keeps the basename) or a path. A whole-file source is **unlinked**, not emptied — `IF REV` mandatory |
-| `COPY NODE '<src>' TO '<dst>'` | Same addressing, source stays put. Creates only, so ungated |
-| `INSERT NODE FOR '<path>'` | Create an empty file (trailing slash: a directory) and return its handle — the one verb that takes a path, because the path does not exist yet |
-| `CHANGE NODES LAST [IF REV …] MATCHING …` | Sweep the replacement across **every member of the previous FIND**, in one plan |
-| `DELETE NODE LAST IF REV '<master>'` | Delete every member. `IF REV` **mandatory** |
-| `MOVE NODE LAST IF REV '<master>' TO '<dir>'` | Move every member into a directory, each keeping its basename |
-| `COPY NODE LAST TO '<dir>'` | Same, sources stay put. Creates only, so ungated |
+#### IF REV is mandatory — and free
 
-#### LAST — mutating a whole FIND result
+**The handle and its rev always travel together.** Every row that hands you a
+`node_id` hands you its `rev` in the same row — `FIND symbols`, `FIND files`,
+`SHOW outline`, `SHOW NODE`, `FIND NODE` — and every mutation hands back the new
+handle *and* its new rev, so a follow-up edit on the same node needs no re-read.
+You never have to fetch a rev; you already have it.
+
+**Why it is required.** A handle is stable: it survives edits, insertions, even
+re-parenting, and it never silently comes to mean a different node. That is
+exactly what makes the gate necessary. An agent can carry a handle across dozens
+of commands and come back to it, and the handle will still resolve — but the code
+underneath may have moved. A rev is the SHA-256 of the node's **whole span**, so
+an edit to any *child* changes the enclosing node's rev too. Nothing else can tell
+you that the node you remember is not the node that is there.
+
+A stale rev is refused with `rev_mismatch`, which hands back the node's current
+rev, line range, and source — enough to re-target without another read.
+
+| Variant | Effect | Gate |
+|---|---|---|
+| `CHANGE NODE … WITH …` | Replace the node's entire source span | `IF REV` |
+| `CHANGE NODE '<id>(n-m)' WITH …` | Replace only lines n–m within the node (node-relative offset) | `IF REV` |
+| `CHANGE NODE … MATCHING …` | Replace pattern occurrences inside the node's span only | `IF REV` |
+| `INSERT BEFORE\|AFTER NODE … WITH …` | Insert new lines around the node | `IF REV` |
+| `DELETE NODE …` | Delete the node's source span (or lines n–m within it) | `IF REV` |
+| `MOVE NODE '<src>' (BEFORE\|AFTER) NODE '<dst>'` | Relocate the node's bytes to the anchor — one atomic plan, no read round-trip | `IF REV` |
+| `MOVE NODE '<src>' … TO '<dst>'` | Move or rename: `<dst>` is a directory handle (keeps the basename) or a path. A whole-file source is **unlinked**, not emptied | `IF REV` |
+| `COPY NODE '<src>' TO '<dst>'` | Same addressing, source stays put | none — it creates |
+| `INSERT NODE FOR '<path>'` | Create an empty file (trailing slash: a directory) and return its handle **and rev** — the one verb that takes a path, because the path does not exist yet | none — it creates |
+| `INSERT … NODE '<file_hex>' WITH …` | Prepend at BOF / append at EOF of a whole file | none — it cannot clobber |
+| `CHANGE NODES FOUND MATCHING …` | Sweep the replacement across **every member of the previous FIND**, in one plan | `IF REV` (master) |
+| `DELETE NODES FOUND` | Delete every member | `IF REV` (master) |
+| `MOVE NODES FOUND … TO '<dir>'` | Move every member into a directory, each keeping its basename | `IF REV` (master) |
+| `COPY NODES FOUND TO '<dir>'` | Same, sources stay put | none — it creates |
+
+#### FOUND — mutating a whole FIND result
 
 `FIND` **is** the set-selection syntax. A query with precise filters already names the set, so the
-bulk verbs address it as `LAST` rather than carrying a second glob grammar. The rows a FIND
+bulk verbs address it as `FOUND` rather than carrying a second glob grammar. The rows a FIND
 returned are saved in the session, and a complete result carries a **master rev** — a hash over
 every member's `(handle, rev)`:
 
 ```sql
-FIND usages OF 'oldName'                                    -- rows + last_rev: h9c…
-CHANGE NODES LAST IF REV 'h9c…' MATCHING 'oldName' WITH 'newName'
+FIND usages OF 'oldName'                                    -- rows + found_rev: h9c…
+CHANGE NODES FOUND IF REV 'h9c…' MATCHING 'oldName' WITH 'newName'
 
-FIND files IN 'legacy/**' WHERE extension = 'c'             -- rows + last_rev: h4b…
-MOVE NODE LAST IF REV 'h4b…' TO 'archive/'
+FIND files IN 'legacy/**' WHERE extension = 'c'             -- rows + found_rev: h4b…
+MOVE NODES FOUND IF REV 'h4b…' TO 'archive/'
 ```
 
 Quote the master rev in `IF REV` and the mutation runs only if not one member has moved since you
 looked — the set-level extension of the per-node `IF REV` contract. It is re-derived from the live
 members at mutation time, so a rev cached at FIND time proves nothing about now. Unlike a
-directory's membership rev, it covers **content** as well, because `CHANGE NODES LAST` edits
+directory's membership rev, it covers **content** as well, because `CHANGE NODES FOUND` edits
 content.
 
 Every member is mutated in **one plan**: one boundary diff, one `UNDO` step, never half-applied.
@@ -285,16 +307,16 @@ Every member is mutated in **one plan**: one boundary diff, one `UNDO` step, nev
 | Rule | Why |
 |---|---|
 | A **handle contributes its whole span**; a `FIND usages` row contributes its one line | A symbol row means the function; a usage row means the call site |
-| A **truncated FIND issues no master rev**, and every LAST verb then refuses | `FIND usages` capped at 20 of 500, swept, would rename 20 and report success. Widen the `LIMIT` and look again |
-| **Any FIND replaces `LAST`; any mutation clears it** | A mutation shifts line numbers, so the set no longer points at what you saw |
+| A **truncated FIND issues no master rev**, and every FOUND verb then refuses | `FIND usages` capped at 20 of 500, swept, would rename 20 and report success. Widen the `LIMIT` and look again |
+| **Any FIND replaces `FOUND`; any mutation clears it** | A mutation shifts line numbers, so the set no longer points at what you saw |
 | A **`GROUP BY` result clears it** | An aggregate row is a count with a filename on it — it addresses nothing |
 | A **rev mismatch hands back no new rev** | The set moved; the only safe recovery is to re-run the FIND and see what it looks like now |
-| `DELETE`/`MOVE`/`COPY NODE LAST` need **handles** | Usage sites are lines, not nodes — arm them with `FIND files` or `FIND symbols` |
-| `IF REV` is **mandatory** for `DELETE`/`MOVE NODE LAST`, optional for `CHANGE NODES LAST`, absent from `COPY NODE LAST` | Destroying N things you cannot see is the one mistake the diff cannot catch afterwards; a copy creates and destroys nothing |
+| `DELETE`/`MOVE`/`COPY NODES FOUND` need **handles** | Usage sites are lines, not nodes — arm them with `FIND files` or `FIND symbols` |
+| `IF REV` is **mandatory** for `CHANGE`/`DELETE`/`MOVE NODES FOUND`, absent from `COPY NODES FOUND` | Destroying N things you cannot see is the one mistake the diff cannot catch afterwards; a copy creates and destroys nothing |
 
-The set is written to `.forgeql-lastset` in the worktree, so it survives a server restart: an agent
-may FIND, hand the session to another agent, and only then sweep. It is re-gated against live revs
-on use, so restoring it can only re-offer a target — never authorise a stale one.
+The set is written to `.forgeql-foundset` in the worktree, so it survives a server restart between
+the FIND and the mutation. It is re-gated against live revs on use, so restoring it can only
+re-offer a target — never authorise a stale one.
 #### MOVE NODE
 
 Relocation, not re-authoring. `MOVE NODE` lifts the node's bytes **verbatim** and splices them at
@@ -372,7 +394,7 @@ FIND NODE '<node_id>'                      -- metadata: name, kind, line, end_li
 SHOW NODE '<node_id>' [CONTENT | METADATA] -- source (default) or the FIND NODE record
 CHANGE NODE '<node_id>' WITH '...'         -- replace the whole node
 INSERT (BEFORE | AFTER) NODE '<node_id>' WITH '...'
-DELETE NODE '<node_id>' [IF REV '<rev>']
+DELETE NODE '<node_id>' IF REV '<rev>'
 MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'   -- relocate, byte-exact
 ```
 

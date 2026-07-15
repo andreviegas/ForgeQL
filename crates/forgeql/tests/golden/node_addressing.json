@@ -7,7 +7,7 @@
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
           "assert": { "row_count": 1, "pointer": { "/results/0/line": 51 } },
-          "capture": { "A": "results.0.node_id" } },
+          "capture": { "A": "results.0.node_id", "RA": "results.0.rev" } },
 
         { "fql": "FIND NODE '${A}'",
           "assert": { "field": { "type": "find_node" },
@@ -27,7 +27,7 @@
 
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'curr_cpu_runq' LIMIT 1",
           "assert": { "row_count": 1 },
-          "capture": { "B": "results.0.node_id" } },
+          "capture": { "B": "results.0.node_id", "RB": "results.0.rev" } },
 
         { "fql": "FIND NODE '${B}'",
           "assert": { "pointer": { "/line": 71, "/end_line": 78 } } },
@@ -41,7 +41,7 @@
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'runq_add' LIMIT 1",
           "assert": { "row_count": 1 },
-          "capture": { "R": "results.0.node_id" } },
+          "capture": { "R": "results.0.node_id", "RR": "results.0.rev" } },
         { "fql": "FIND NODE '${R}'",
           "assert": { "field": { "type": "find_node" },
                       "pointer": { "/line": 80, "/name": "runq_add", "/fql_kind": "function",
@@ -74,10 +74,10 @@
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
           "assert": { "row_count": 1 },
-          "capture": { "A": "results.0.node_id" } },
+          "capture": { "A": "results.0.node_id", "RA": "results.0.rev" } },
 
         { "fql": "BEGIN TRANSACTION 'v2-change'", "assert": { "field": { "name": "v2-change" } } },
-        { "fql": "CHANGE NODE '${A}' WITH <<C\nstatic void thread_runq_golden(void) {}\nC",
+        { "fql": "CHANGE NODE '${A}' IF REV '${RA}' WITH <<C\nstatic void thread_runq_golden(void) {}\nC",
           "assert": { "applied": true, "files_changed": ["kernel/sched.c"] },
           "capture": { "CHANGED": "new_node_id" } },
         { "fql": "FIND symbols WHERE name = 'thread_runq_golden' IN 'kernel/sched.c'",
@@ -90,9 +90,9 @@
 
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'runq_add' LIMIT 1",
           "assert": { "row_count": 1 },
-          "capture": { "R": "results.0.node_id" } },
+          "capture": { "R": "results.0.node_id", "RR": "results.0.rev" } },
         { "fql": "BEGIN TRANSACTION 'v2-delete'", "assert": { "field": { "name": "v2-delete" } } },
-        { "fql": "DELETE NODE '${R}'",
+        { "fql": "DELETE NODE '${R}' IF REV '${RR}'",
           "assert": { "applied": true, "files_changed": ["kernel/sched.c"] } },
         { "fql": "FIND symbols WHERE name = 'runq_add' IN 'kernel/sched.c'",
           "assert": { "row_count": 0 } },
@@ -102,10 +102,10 @@
 
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'curr_cpu_runq' LIMIT 1",
           "assert": { "row_count": 1, "pointer": { "/results/0/line": 71 } },
-          "capture": { "B": "results.0.node_id" } },
+          "capture": { "B": "results.0.node_id", "RB": "results.0.rev" } },
 
         { "fql": "BEGIN TRANSACTION 'v2-insert-before'", "assert": { "field": { "name": "v2-insert-before" } } },
-        { "fql": "INSERT BEFORE NODE '${B}' WITH '/* v2 before curr_cpu_runq */'",
+        { "fql": "INSERT BEFORE NODE '${B}' IF REV '${RB}' WITH '/* v2 before curr_cpu_runq */'",
           "assert": { "applied": true } },
         { "fql": "SHOW LINES 71-71 OF 'kernel/sched.c'",
           "assert": { "pointer": { "/content/lines/0/text": "/* v2 before curr_cpu_runq */" } } },
@@ -114,7 +114,7 @@
           "assert": { "row_count": 1 } },
 
         { "fql": "BEGIN TRANSACTION 'v2-insert-after'", "assert": { "field": { "name": "v2-insert-after" } } },
-        { "fql": "INSERT AFTER NODE '${B}' WITH 'static void v2_inserted(void) {}'",
+        { "fql": "INSERT AFTER NODE '${B}' IF REV '${RB}' WITH 'static void v2_inserted(void) {}'",
           "assert": { "applied": true },
           "capture": { "INSERTED": "new_node_id" } },
         { "fql": "SHOW LINES 79-79 OF 'kernel/sched.c'",
@@ -132,19 +132,19 @@
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
           "assert": { "row_count": 1 },
-          "capture": { "T": "results.0.node_id" } },
+          "capture": { "T": "results.0.node_id", "RT": "results.0.rev" } },
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'runq_add' LIMIT 1",
           "assert": { "row_count": 1 },
-          "capture": { "R": "results.0.node_id" } },
+          "capture": { "R": "results.0.node_id", "RR": "results.0.rev" } },
 
         { "fql": "BEGIN TRANSACTION 'v2-sequential'", "assert": { "field": { "name": "v2-sequential" } } },
 
-        { "fql": "CHANGE NODE '${T}' WITH 'static ALWAYS_INLINE void *thread_runq(struct k_thread *thread) { ARG_UNUSED(thread); return &_kernel.ready_q.runq; }'",
+        { "fql": "CHANGE NODE '${T}' IF REV '${RT}' WITH 'static ALWAYS_INLINE void *thread_runq(struct k_thread *thread) { ARG_UNUSED(thread); return &_kernel.ready_q.runq; }'",
           "assert": { "applied": true } },
         { "fql": "FIND symbols WHERE name = 'thread_runq' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
           "assert": { "row_count": 1 } },
 
-        { "fql": "CHANGE NODE '${R}' WITH 'static ALWAYS_INLINE void runq_add(struct k_thread *thread) { _priq_run_add(thread_runq(thread), thread); }'",
+        { "fql": "CHANGE NODE '${R}' IF REV '${RR}' WITH 'static ALWAYS_INLINE void runq_add(struct k_thread *thread) { _priq_run_add(thread_runq(thread), thread); }'",
           "assert": { "applied": true } },
         { "fql": "FIND symbols WHERE name = 'runq_add' WHERE fql_kind = 'function' IN 'kernel/sched.c'",
           "assert": { "row_count": 1 } },
@@ -158,14 +158,14 @@
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'runq_add' LIMIT 1",
           "assert": { "row_count": 1, "pointer": { "/results/0/line": 80 } },
-          "capture": { "R": "results.0.node_id" } },
+          "capture": { "R": "results.0.node_id", "RR": "results.0.rev" } },
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
           "assert": { "row_count": 1, "pointer": { "/results/0/line": 51 } },
-          "capture": { "T": "results.0.node_id" } },
+          "capture": { "T": "results.0.node_id", "RT": "results.0.rev" } },
 
         { "fql": "BEGIN TRANSACTION 'v2-move'", "assert": { "field": { "name": "v2-move" } } },
 
-        { "fql": "MOVE NODE '${R}' BEFORE NODE '${T}'",
+        { "fql": "MOVE NODE '${R}' IF REV '${RR}' BEFORE NODE '${T}'",
           "assert": { "applied": true, "files_changed": ["kernel/sched.c"],
                       "field": { "op": "move_node" } },
           "capture": { "MOVED": "new_node_id" } },
@@ -184,8 +184,8 @@
     { "name": "move_node_into_itself_is_refused", "use": "zephyr-andre.main", "mode": "rw",
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
-          "capture": { "T": "results.0.node_id" } },
-        { "fql": "MOVE NODE '${T}' BEFORE NODE '${T}'",
+          "capture": { "T": "results.0.node_id", "RT": "results.0.rev" } },
+        { "fql": "MOVE NODE '${T}' IF REV '${RT}' BEFORE NODE '${T}'",
           "assert": { "error": true } }
       ] }
   ]

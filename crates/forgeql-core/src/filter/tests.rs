@@ -16,6 +16,7 @@ fn make_symbol(name: &str, kind: &str, usages: usize) -> SymbolMatch {
         fields: HashMap::new(),
         count: None,
         node_id: None,
+        rev: None,
     }
 }
 
@@ -173,6 +174,7 @@ fn apply_clauses_exclude_glob() {
             fields: HashMap::new(),
             count: None,
             node_id: None,
+            rev: None,
         },
         SymbolMatch {
             name: "b".into(),
@@ -185,6 +187,7 @@ fn apply_clauses_exclude_glob() {
             fields: HashMap::new(),
             count: None,
             node_id: None,
+            rev: None,
         },
     ];
     let clauses = Clauses {
@@ -239,6 +242,7 @@ fn apply_clauses_path_in_glob() {
             fields: HashMap::new(),
             count: None,
             node_id: None,
+            rev: None,
         },
         SymbolMatch {
             name: "b".into(),
@@ -251,6 +255,7 @@ fn apply_clauses_path_in_glob() {
             fields: HashMap::new(),
             count: None,
             node_id: None,
+            rev: None,
         },
     ];
     let clauses = Clauses {
@@ -776,6 +781,7 @@ fn eval_pred_numeric_absent_field_is_false() {
         fields: HashMap::new(),
         count: None,
         node_id: None,
+        rev: None,
     };
     let pred = make_pred("usages", CompareOp::Gt, PredicateValue::Number(0));
     assert!(

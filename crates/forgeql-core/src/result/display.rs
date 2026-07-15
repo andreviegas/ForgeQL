@@ -118,6 +118,13 @@ impl fmt::Display for QueryResult {
             if let Some(ref fn_name) = sr.enclosing_fn {
                 write!(formatter, " | via {fn_name}")?;
             }
+            // The handle and its rev, together — everything a mutation needs.
+            if let Some(ref id) = sr.node_id {
+                write!(formatter, " | {id}")?;
+                if let Some(ref rev) = sr.rev {
+                    write!(formatter, " {rev}")?;
+                }
+            }
             if let Some(usages) = sr.usages {
                 write!(formatter, " | usages: {usages}")?;
             }
@@ -136,8 +143,8 @@ impl fmt::Display for QueryResult {
         }
         // The master rev of the set this FIND armed — quoted back in IF REV by
         // a bulk LAST mutation. Absent on a truncated result, by design.
-        if let Some(ref rev) = self.last_rev {
-            writeln!(formatter, "last_rev: {rev}")?;
+        if let Some(ref rev) = self.found_rev {
+            writeln!(formatter, "found_rev: {rev}")?;
         }
         Ok(())
     }
@@ -214,10 +221,10 @@ impl fmt::Display for ShowResult {
                 if let Some(rev) = self
                     .metadata
                     .as_ref()
-                    .and_then(|m| m.get("last_rev"))
+                    .and_then(|m| m.get("found_rev"))
                     .and_then(serde_json::Value::as_str)
                 {
-                    writeln!(formatter, "last_rev: {rev}")?;
+                    writeln!(formatter, "found_rev: {rev}")?;
                 }
             }
             ShowContent::Stats { sessions } =>

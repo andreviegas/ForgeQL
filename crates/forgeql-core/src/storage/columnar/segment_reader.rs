@@ -848,6 +848,10 @@ impl SegmentReader {
                         self.ordinal_of(row)
                             .map(|ord| crate::node_id::make_node_id(&p.to_string_lossy(), ord))
                     }),
+                    rev: self
+                        .ordinal_of(row)
+                        .map(|_| crate::node_id::format_rev(self.rev_of(row)))
+                        .filter(|r| !r.is_empty()),
                 }
             })
             .collect()
@@ -911,6 +915,12 @@ impl SegmentReader {
             node_id: self
                 .ordinal_of(row)
                 .map(|ord| crate::node_id::make_node_id(&source_path.to_string_lossy(), ord)),
+            // The handle and its rev travel together: a row you can address is a
+            // row you can safely mutate, without a second read to fetch the rev.
+            rev: self
+                .ordinal_of(row)
+                .map(|_| crate::node_id::format_rev(self.rev_of(row)))
+                .filter(|r| !r.is_empty()),
         })
     }
 }

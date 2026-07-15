@@ -76,13 +76,13 @@ pub(crate) const fn mutation_op_name(op: &ForgeQLIR) -> &'static str {
         ForgeQLIR::ChangeContent { .. } => "change_content",
         ForgeQLIR::ChangeNode { .. } => "change_node",
         ForgeQLIR::ChangeNodeMatching { .. } => "change_node_matching",
-        ForgeQLIR::ChangeNodesLast { .. } => "change_nodes_last",
+        ForgeQLIR::ChangeNodesFound { .. } => "change_nodes_found",
         ForgeQLIR::InsertNode { .. } => "insert_node",
         ForgeQLIR::InsertNodeFor { .. } => "insert_node_for",
         ForgeQLIR::DeleteNode { .. } => "delete_node",
-        ForgeQLIR::DeleteNodesLast { .. } => "delete_nodes_last",
-        ForgeQLIR::MoveNodesLastTo { .. } => "move_nodes_last_to",
-        ForgeQLIR::CopyNodesLastTo { .. } => "copy_nodes_last_to",
+        ForgeQLIR::DeleteNodesFound { .. } => "delete_nodes_found",
+        ForgeQLIR::MoveNodesFoundTo { .. } => "move_nodes_found_to",
+        ForgeQLIR::CopyNodesFoundTo { .. } => "copy_nodes_found_to",
         _ => "unknown_mutation",
     }
 }

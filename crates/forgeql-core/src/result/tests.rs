@@ -18,11 +18,12 @@ fn query_result_json_contains_projected_fields() {
             )]),
             count: None,
             node_id: None,
+            rev: None,
         }],
         total: 1,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
     });
 
@@ -58,11 +59,12 @@ fn json_find_result_includes_usages() {
             fields: HashMap::new(),
             count: None,
             node_id: None,
+            rev: None,
         }],
         total: 1,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
     });
     let json = result.to_json();
@@ -97,11 +99,12 @@ fn json_find_result_excludes_raw_fields() {
             fields,
             count: None,
             node_id: None,
+            rev: None,
         }],
         total: 1,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
     });
     let json = result.to_json();
@@ -139,11 +142,12 @@ fn json_count_group_by_includes_count() {
             fields: HashMap::new(),
             count: Some(4),
             node_id: None,
+            rev: None,
         }],
         total: 1,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
     });
     let json = result.to_json();
@@ -163,6 +167,7 @@ fn json_non_query_result_uses_serde() {
         diff: None,
         suggestions: vec![],
         new_node_id: None,
+        new_rev: None,
     });
     let output = result.to_json();
     // Must fall back to full serde JSON, not crash or return empty.
@@ -241,6 +246,7 @@ fn mutation_result_round_trips_through_json() {
             reason: "deprecated_attribute".to_string(),
         }],
         new_node_id: None,
+        new_rev: None,
     });
 
     let json_string = result.to_json();
@@ -352,7 +358,7 @@ fn display_query_result_empty() {
         total: 0,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
     };
     let output = format!("{result}");
@@ -374,11 +380,12 @@ fn display_query_result_with_items() {
             fields: HashMap::new(),
             count: None,
             node_id: None,
+            rev: None,
         }],
         total: 1,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
     };
     let output = format!("{result}");
@@ -405,11 +412,12 @@ fn display_query_result_shows_enclosing_fn() {
             fields,
             count: None,
             node_id: None,
+            rev: None,
         }],
         total: 1,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
     };
     let output = format!("{result}");
@@ -432,11 +440,12 @@ fn display_query_result_shows_truncation_notice() {
             fields: HashMap::new(),
             count: None,
             node_id: None,
+            rev: None,
         }],
         total: 100,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
     };
     let output = format!("{result}");
@@ -455,6 +464,7 @@ fn display_mutation_result_applied() {
         diff: None,
         suggestions: vec![],
         new_node_id: None,
+        new_rev: None,
     };
     let output = format!("{result}");
     assert!(output.contains("Applied"));
@@ -538,7 +548,7 @@ fn source_lines_count_zero_for_query_result() {
         total: 0,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
     });
     assert_eq!(r.source_lines_count(), 0);

@@ -71,11 +71,11 @@ You are a code exploration and transformation agent. All source code is accessed
 | Copy a file / a node into a file | `COPY NODE '<hex>' TO 'api/v2/'` · `COPY NODE '<hex>.<ord>' TO 'src/extracted.rs'` — ungated |
 | Context around symbol | `SHOW context OF 'name'` |
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
-| Delete a node | `DELETE NODE '<id>' [IF REV '<rev>']` — `'<id>(n-m)'` deletes lines within it |
+| Delete a node | `DELETE NODE '<id>' IF REV '<rev>'` — `'<id>(n-m)'` deletes lines within it |
 | Relocate a node | `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — byte-exact, atomic, cross-file |
-| Sweep a whole FIND result | `CHANGE NODES LAST [IF REV '<master>'] MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a usage row its one line |
-| Delete a whole FIND result | `DELETE NODE LAST IF REV '<master>'` — `IF REV` mandatory |
-| Relocate a whole FIND result | `MOVE NODE LAST IF REV '<master>' TO 'dir/'` · `COPY NODE LAST TO 'dir/'` (ungated) — each member keeps its basename |
+| Sweep a whole FIND result | `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a usage row its one line |
+| Delete a whole FIND result | `DELETE NODES FOUND IF REV '<master>'` — `IF REV` mandatory |
+| Relocate a whole FIND result | `MOVE NODES FOUND IF REV '<master>' TO 'dir/'` · `COPY NODES FOUND TO 'dir/'` (ungated) — each member keeps its basename |
 | Reverse a bad edit | `UNDO` (most recent) · `UNDO LAST-n` |
 | Long test gate | `JOB START 'step'` → `JOB STATUS <id>` / `JOB LIST` (background, queued) |
 | Page/grep buffered output | `SHOW MORE [HEAD n \| TAIL n \| n-m] [WHERE text MATCHES '...']` |
@@ -164,19 +164,19 @@ SHOW DIFF [STAT] [clauses]    -- the worktree's UNCOMMITTED diff, inline
 
 ### Mutations & Transactions
 ```sql
-CHANGE NODE '<node_id>' [IF REV '<rev>'] WITH 'text'   -- '<id>(n)' / '<id>(n-m)' splices node lines
+CHANGE NODE '<node_id>' IF REV '<rev>' WITH 'text'   -- '<id>(n)' / '<id>(n-m)' splices node lines
 INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'text'
-DELETE NODE '<node_id>' [IF REV '<rev>']
+DELETE NODE '<node_id>' IF REV '<rev>'
 MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'  -- relocate byte-exact; atomic; cross-file OK
 
--- LAST — the set the previous FIND returned. FIND is the set-selection syntax;
+-- FOUND — the set the previous FIND returned. FIND is the set-selection syntax;
 -- these act on every member in ONE atomic mutation (one diff, one UNDO step).
--- A complete FIND response carries the master rev to quote here as `last_rev`;
--- a truncated one carries none, and every LAST verb then refuses.
-CHANGE NODES LAST [IF REV '<master>'] MATCHING [WORD] 'a' WITH 'b'  -- sweep each member's span
-DELETE NODE LAST IF REV '<master>'                    -- IF REV mandatory: it destroys
-MOVE NODE LAST IF REV '<master>' TO 'dir/'            -- each member keeps its basename
-COPY NODE LAST TO 'dir/'                              -- creation only, so ungated
+-- A complete FIND response carries the master rev to quote here as `found_rev`;
+-- a truncated one carries none, and every FOUND verb then refuses.
+CHANGE NODES FOUND IF REV '<master>' MATCHING [WORD] 'a' WITH 'b'  -- sweep each member's span
+DELETE NODES FOUND IF REV '<master>'                    -- IF REV mandatory: it destroys
+MOVE NODES FOUND IF REV '<master>' TO 'dir/'            -- each member keeps its basename
+COPY NODES FOUND TO 'dir/'                              -- creation only, so ungated
 -- Heredoc: no escaping needed (use for Rust lifetimes, char literals, C-style strings)
 CHANGE NODE '<node_id>' WITH <<TAG
 replacement text

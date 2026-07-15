@@ -26,7 +26,7 @@ use crate::workspace::Workspace;
 
 pub mod checkpoint_file;
 pub mod coords;
-pub mod last_set;
+pub mod found_set;
 
 pub use coords::SessionCoords;
 
@@ -281,7 +281,7 @@ pub struct Session {
     /// verb. `None` until the first FIND, and again after any mutation: a
     /// mutation shifts line numbers, so a set that outlived it points at the
     /// wrong code.
-    pub last_set: Option<last_set::LastSet>,
+    pub found_set: Option<found_set::FoundSet>,
     /// Optional line-budget tracker.  `None` when the `.forgeql.yaml` does
     /// not contain a `line_budget` section.
     budget: Option<BudgetState>,
@@ -355,7 +355,7 @@ impl Session {
             satisfied_gates: std::collections::HashSet::new(),
             edits_since_gate: 0,
             mutation_seq: 0,
-            last_set: None,
+            found_set: None,
             budget: None,
             budget_data_dir: None,
             budget_branch: None,

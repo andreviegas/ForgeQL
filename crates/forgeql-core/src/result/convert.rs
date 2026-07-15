@@ -60,6 +60,11 @@ impl super::QueryResult {
                 if let Some(ref nid) = sr.node_id {
                     obj["node_id"] = serde_json::json!(nid);
                 }
+                // The rev rides with the handle in JSON too — an agent parsing
+                // this row can gate a mutation on it without a second query.
+                if let Some(ref rev) = sr.rev {
+                    obj["rev"] = serde_json::json!(rev);
+                }
                 obj
             })
             .collect();

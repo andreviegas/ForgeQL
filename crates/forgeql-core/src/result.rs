@@ -125,7 +125,7 @@ pub struct QueryResult {
     /// full is never gated, so no LAST verb will act on it) or when the rows
     /// carry nothing addressable (a `GROUP BY` aggregate).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_rev: Option<String>,
+    pub found_rev: Option<String>,
 }
 
 impl QueryResult {
@@ -188,6 +188,13 @@ pub struct SymbolMatch {
     /// Stable node handle; `None` for analysis-only rows (numbers, operators, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
+    /// Content rev of the node the handle addresses — what `IF REV` takes.
+    ///
+    /// Always handed out **with** the handle, never separately. A handle without
+    /// its rev is an address an agent cannot safely act on, and making it fetch
+    /// the rev costs a round trip per edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
 }
 // -----------------------------------------------------------------------
 // Query context — carries query-level metadata for row projection
@@ -250,6 +257,9 @@ pub(crate) struct SymbolRow {
     /// Format: `n{12-hex segment_id}.{ordinal:04}`.
     /// `None` for rows from legacy segments that have not been reindexed.
     pub node_id: Option<String>,
+    /// Content rev of that node — rendered next to the handle, never apart from
+    /// it, because a handle you cannot gate is a handle you cannot safely use.
+    pub rev: Option<String>,
 }
 
 /// Stage 2 block alias: when a row is a block member (it carries `block_ord` /
@@ -297,6 +307,7 @@ impl SymbolRow {
                 _ => row.fields.get(field).cloned(),
             }),
             node_id: surface_block_alias(row),
+            rev: row.rev.clone(),
         }
     }
 
@@ -621,6 +632,13 @@ pub struct MutationResult {
     /// * `DELETE NODE`: always `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_node_id: Option<String>,
+    /// Content rev of `new_node_id` after the edit.
+    ///
+    /// Returned so a follow-up mutation on the same node needs no re-read: with
+    /// `IF REV` mandatory, a mutation that handed back a handle but not its new
+    /// rev would force a `FIND NODE` round trip before every chained edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_rev: Option<String>,
 }
 
 /// An advisory note about a potential issue found during planning.

@@ -69,8 +69,8 @@
         { "fql": "COPY LINES 1-1 OF '.github/workflows/ci.yml' TO 'probe_reorder.yml'",
           "assert": { "applied": true } },
         { "fql": "FIND symbols IN 'probe_reorder.yml' WHERE fql_kind = 'object' LIMIT 1",
-          "capture": { "seed": "results.0.node_id" } },
-        { "fql": "CHANGE NODE '${seed}' WITH <<Y\njobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n      - run: cargo test\nY",
+          "capture": { "seed": "results.0.node_id", "seedrev": "results.0.rev" } },
+        { "fql": "CHANGE NODE '${seed}' IF REV '${seedrev}' WITH <<Y\njobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n      - run: cargo test\nY",
           "assert": { "applied": true } },
 
         { "fql": "FIND symbols IN 'probe_reorder.yml' WHERE fql_kind = 'object' WHERE name = 'uses' LIMIT 1",
@@ -80,9 +80,9 @@
           "assert": { "row_count": 1, "pointer": { "/results/0/line": 5 } },
           "capture": { "run_id": "results.0.node_id" } },
         { "fql": "FIND symbols IN 'probe_reorder.yml' WHERE fql_kind = 'object' WHERE name = 'jobs' LIMIT 1",
-          "capture": { "root": "results.0.node_id" } },
+          "capture": { "root": "results.0.node_id", "rootrev": "results.0.rev" } },
 
-        { "fql": "CHANGE NODE '${root}' WITH <<Y\njobs:\n  build:\n    steps:\n      - run: cargo test\n      - uses: actions/checkout@v4\nY",
+        { "fql": "CHANGE NODE '${root}' IF REV '${rootrev}' WITH <<Y\njobs:\n  build:\n    steps:\n      - run: cargo test\n      - uses: actions/checkout@v4\nY",
           "assert": { "applied": true } },
 
         { "fql": "SHOW NODE '${uses_id}'",

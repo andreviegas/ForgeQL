@@ -321,7 +321,7 @@ fn find_symbols_groups_by_kind() {
         total: 3,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
         results: vec![
             SymbolMatch {
@@ -335,6 +335,7 @@ fn find_symbols_groups_by_kind() {
                 fields: HashMap::new(),
                 count: None,
                 node_id: None,
+                rev: None,
             },
             SymbolMatch {
                 name: "apagarMotor".into(),
@@ -347,6 +348,7 @@ fn find_symbols_groups_by_kind() {
                 fields: HashMap::new(),
                 count: None,
                 node_id: None,
+                rev: None,
             },
             SymbolMatch {
                 name: "MotorControl".into(),
@@ -359,6 +361,7 @@ fn find_symbols_groups_by_kind() {
                 fields: HashMap::new(),
                 count: None,
                 node_id: None,
+                rev: None,
             },
         ],
     });
@@ -386,7 +389,7 @@ fn find_symbols_cf_rows_include_enclosing_fn() {
         total: 1,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
         results: vec![SymbolMatch {
             name: "(a&&(b||c))".into(),
@@ -399,6 +402,7 @@ fn find_symbols_cf_rows_include_enclosing_fn() {
             fields,
             count: None,
             node_id: None,
+            rev: None,
         }],
     });
     let csv = to_compact(&result);
@@ -422,7 +426,7 @@ fn find_usages_groups_by_file() {
         total: 3,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
         results: vec![
             SymbolMatch {
@@ -436,6 +440,7 @@ fn find_usages_groups_by_file() {
                 fields: HashMap::new(),
                 count: None,
                 node_id: None,
+                rev: None,
             },
             SymbolMatch {
                 name: "encenderMotor".into(),
@@ -448,6 +453,7 @@ fn find_usages_groups_by_file() {
                 fields: HashMap::new(),
                 count: None,
                 node_id: None,
+                rev: None,
             },
             SymbolMatch {
                 name: "encenderMotor".into(),
@@ -460,6 +466,7 @@ fn find_usages_groups_by_file() {
                 fields: HashMap::new(),
                 count: None,
                 node_id: None,
+                rev: None,
             },
         ],
     });
@@ -480,7 +487,7 @@ fn count_usages_flat_rows() {
         total: 2,
         metric_hint: None,
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
         results: vec![
             SymbolMatch {
@@ -494,6 +501,7 @@ fn count_usages_flat_rows() {
                 fields: HashMap::new(),
                 count: Some(4),
                 node_id: None,
+                rev: None,
             },
             SymbolMatch {
                 name: "src/main.cpp".into(),
@@ -506,6 +514,7 @@ fn count_usages_flat_rows() {
                 fields: HashMap::new(),
                 count: Some(1),
                 node_id: None,
+                rev: None,
             },
         ],
     });
@@ -528,7 +537,7 @@ fn find_symbols_with_metric_hint_shows_field_value() {
         total: 2,
         metric_hint: Some("member_count".into()),
         group_by_field: None,
-        last_rev: None,
+        found_rev: None,
         hint: None,
         results: vec![
             SymbolMatch {
@@ -542,6 +551,7 @@ fn find_symbols_with_metric_hint_shows_field_value() {
                 fields: HashMap::from([("member_count".into(), "17".into())]),
                 count: None,
                 node_id: None,
+                rev: None,
             },
             SymbolMatch {
                 name: "MpptState".into(),
@@ -554,6 +564,7 @@ fn find_symbols_with_metric_hint_shows_field_value() {
                 fields: HashMap::from([("member_count".into(), "12".into())]),
                 count: None,
                 node_id: None,
+                rev: None,
             },
         ],
     });
@@ -586,6 +597,7 @@ fn mutation_falls_back_to_json() {
         diff: None,
         suggestions: vec![],
         new_node_id: None,
+        new_rev: None,
     });
     let output = to_compact(&result);
     assert!(output.contains("rename_symbol"));
@@ -607,6 +619,7 @@ fn compact_mutation_surfaces_lines_removed() {
         diff: None,
         suggestions: vec![],
         new_node_id: None,
+        new_rev: None,
     });
     let output = to_compact(&result);
     assert!(output.contains("lines_removed"), "missing label: {output}");

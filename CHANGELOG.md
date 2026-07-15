@@ -6,33 +6,75 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added — `LAST`: mutating a whole FIND result under one rev
+### Changed — **BREAKING**: `IF REV` is mandatory on every verb that names an existing node
+
+`CHANGE NODE`, `CHANGE NODE … MATCHING`, `INSERT BEFORE|AFTER NODE`, `DELETE NODE`, `MOVE NODE`
+(both forms) and `CHANGE NODES FOUND` now **require** `IF REV`. Ungated, they are refused with a
+message naming the handle and where its rev came from.
+
+It costs nothing, because **the handle and its rev now travel together**:
+
+- `FIND symbols` rows carry `rev` beside `node_id` (they already did on `FIND files`).
+- Every mutation returns `new_rev` beside `new_node_id`, so a second edit on the same node — or a
+  write into a file `INSERT NODE FOR` just created — needs no re-read.
+
+**Why.** A handle is *stable*: it survives edits, insertions and even re-parenting, and it never
+silently comes to mean a different node (a deleted node's handle errors; it does not get reused).
+That is exactly what makes the gate necessary. An agent can carry a handle across dozens of
+commands, come back, and the handle will still resolve — while the code under it has moved. A rev
+is the SHA-256 of the node's **whole span**, so an edit to any *child* changes the enclosing node's
+rev too: touch a comment inside a function and the function's rev moves. Nothing but the rev can
+tell the agent that the node it remembers is not the node that is there. A stale rev is refused
+with `rev_mismatch`, which hands back the current rev, span and source — enough to re-target on the
+spot.
+
+Creation stays ungated — there is nothing yet to fingerprint, and it cannot clobber:
+`INSERT NODE FOR`, `COPY NODE … TO`, `COPY NODES FOUND TO`, and `INSERT … NODE '<file_hex>'` (the
+BOF/EOF append form).
+
+### Changed — **BREAKING**: `LAST` is now `FOUND`, and the noun is always plural
+
+`LAST` collided with the *history* axis it shares the grammar with (`SHOW MORE LAST-1`,
+`UNDO LAST-2`, `EXPORT PATCH LAST 3`), which counts backwards through time. The FIND-result set is
+a different idea, so it gets a different word — the past participle of the verb that produced it:
 
 ```sql
-FIND usages OF 'oldName'                                    -- rows + last_rev: h9c…
-CHANGE NODES LAST IF REV 'h9c…' MATCHING 'oldName' WITH 'newName'
+CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'
+DELETE NODES FOUND IF REV '<master>'
+MOVE NODES FOUND IF REV '<master>' TO 'archive/'
+COPY NODES FOUND TO 'api/v2/'
+```
 
-FIND files IN 'legacy/**' WHERE extension = 'c'             -- rows + last_rev: h4b…
-DELETE NODE LAST IF REV 'h4b…'                              -- unlink every member
-MOVE NODE LAST IF REV 'h4b…' TO 'archive/'                  -- each keeps its basename
-COPY NODE LAST TO 'api/v2/'                                 -- creation only, so ungated
+The response field is `found_rev` (was `last_rev`); the session file is `.forgeql-foundset`.
+`DELETE NODES FOUND` (singular) is gone: the set is always plural.
+
+### Added — `FOUND`: mutating a whole FIND result under one rev
+
+```sql
+FIND usages OF 'oldName'                                    -- rows + found_rev: h9c…
+CHANGE NODES FOUND IF REV 'h9c…' MATCHING 'oldName' WITH 'newName'
+
+FIND files IN 'legacy/**' WHERE extension = 'c'             -- rows + found_rev: h4b…
+DELETE NODES FOUND IF REV 'h4b…'                            -- unlink every member
+MOVE NODES FOUND IF REV 'h4b…' TO 'archive/'                -- each keeps its basename
+COPY NODES FOUND TO 'api/v2/'                               -- creation only, so ungated
 ```
 
 `FIND` **is** the set-selection syntax — a query with precise filters already names the set, so
-the bulk verbs address it as `LAST` instead of carrying a second glob grammar. The rows a FIND
+the bulk verbs address it as `FOUND` instead of carrying a second glob grammar. The rows a FIND
 returns are saved in the session, and the response carries a **master rev**: a hash over every
 member's `(handle, rev)`. Quote it back in `IF REV` and the mutation runs only if not one member
 has moved since you looked — the set-level extension of the per-node `IF REV` contract. Unlike a
-directory's membership rev, it covers **content** too, because `CHANGE NODES LAST` edits content.
+directory's membership rev, it covers **content** too, because `CHANGE NODES FOUND` edits content.
 
 Every member is mutated in **one plan**: one boundary diff, one `UNDO` step, never half-applied.
-An 80-file relocation is now two calls (`FIND files …` → `MOVE NODE LAST … TO 'api/v2/'`).
+An 80-file relocation is now two calls (`FIND files …` → `MOVE NODES FOUND … TO 'api/v2/'`).
 
 Three refusals, in the order an agent hits them:
 
 - **No set** — nothing armed, or the previous mutation cleared it.
 - **A set you were never shown in full** — a FIND truncated by the default limit issues **no**
-  master rev, and every LAST verb then refuses. `FIND usages` capped at 20 of 500, swept, would
+  master rev, and every FOUND verb then refuses. `FIND usages` capped at 20 of 500, swept, would
   otherwise rename 20 and report success; that failure mode is now impossible.
 - **A set that moved** — the rev is re-derived from the live members at mutation time, so a
   cached rev proves nothing. The mismatch hands back **no** replacement rev on purpose: the only
@@ -40,14 +82,13 @@ Three refusals, in the order an agent hits them:
 
 ### Changed
 
-- **`CHANGE NODES LAST` sweeps a node's whole span, not its declaration line.** Armed from
+- **`CHANGE NODES FOUND` sweeps a node's whole span, not its declaration line.** Armed from
   `FIND symbols`, it now rewrites the entire function body; armed from `FIND usages` (whose rows
   are call sites, not nodes) it still rewrites exactly those lines. Overlapping member spans are
   merged, so no byte is edited twice.
-- **`FIND files` arms `LAST`** — it is a FIND, and its rows have carried handles and revs since
+- **`FIND files` arms `FOUND`** — it is a FIND, and its rows have carried handles and revs since
   0.113.0. `FIND symbols`/`FIND usages` arm it as before.
-- **`CHANGE NODES LAST` accepts an optional `IF REV`.** The destructive bulk verbs
-  (`DELETE`/`MOVE NODE LAST`) require one; `COPY NODE LAST` creates and so needs none.
+- **Every `FOUND` verb requires `IF REV`** except `COPY NODES FOUND`, which only creates.
 - **`FIND files` responses carry `total`** — the pre-`LIMIT` row count, so a capped result is
   distinguishable from a complete one. `FIND symbols`/`usages` already reported it.
 
@@ -55,12 +96,12 @@ Three refusals, in the order an agent hits them:
 
 - **A `GROUP BY` result no longer leaves the previous set armed.** `record_find_sites` returned
   early when a result carried no `(path, line)` rows, so `FIND usages OF 'x'` → `FIND symbols
-  GROUP BY file` → `CHANGE NODES LAST` swept the **first** query's set — code the agent believed
+  GROUP BY file` → `CHANGE NODES FOUND` swept the **first** query's set — code the agent believed
   it had replaced. An aggregate row is a count with a filename on it: it addresses nothing, so it
-  now clears `LAST` rather than arming a set no verb can act on.
-- **`LAST` survives a server restart.** The set is written to `.forgeql-lastset` in the
-  worktree when it changes and restored on reconnect, so an agent can FIND, hand the session to
-  another agent, and sweep from a restarted process. It is re-gated against live revs on use, so
+  now clears `FOUND` rather than arming a set no verb can act on.
+- **`FOUND` survives a server restart.** The set is written to `.forgeql-foundset` in the
+  worktree when it changes and restored on reconnect, so the set survives a server restart between
+  the FIND and the mutation. It is re-gated against live revs on use, so
   restoring it can only re-offer a target — never authorise a stale one.
 
 ## [0.113.1] — 2026-07-14 — fix(git): user-facing commits no longer include undo-ring files
@@ -861,7 +902,7 @@ Release marker for the three changes shipped as 0.99.0–0.99.2, so a single
 tag carries the complete set. No functional changes beyond 0.99.2.
 
 - The mechanical rename sweep (`CHANGE NODE … MATCHING`,
-  `CHANGE NODES LAST MATCHING`) — see 0.99.0.
+  `CHANGE NODES FOUND MATCHING`) — see 0.99.0.
 - Peak indexing memory bounded by a size-aware admission queue — see 0.99.1.
 - Cold `USE` reuses existing per-file segments instead of re-parsing — see
   0.99.2.
@@ -907,7 +948,7 @@ tag carries the complete set. No functional changes beyond 0.99.2.
   replace pattern occurrences inside one node's span only. Same matching
   semantics as the file-level form (plain substring, or `WORD` for
   whole-word boundaries), scoped to the node's current lines.
-- `CHANGE NODES LAST MATCHING [WORD] 'old' WITH 'new'` — apply the
+- `CHANGE NODES FOUND MATCHING [WORD] 'old' WITH 'new'` — apply the
   replacement on every line of the previous FIND result in the session.
   This completes the two-step rename workflow: `FIND usages OF 'old'`
   aims at the exact occurrence sites (string literals and comments are

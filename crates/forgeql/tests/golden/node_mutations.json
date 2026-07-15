@@ -7,9 +7,9 @@
       "use": "forgeql-pub.frozen",
       "mode": "rw",
       "steps": [
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id" } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id", "R": "results.0.rev" } },
         { "fql": "BEGIN TRANSACTION 'txn'", "assert": { "field": { "name": "txn" } } },
-        { "fql": "DELETE NODE '${A}'", "assert": { "applied": true, "files_changed": ["crates/forgeql-core/src/node_id.rs"], "field": { "op": "delete_node" } } },
+        { "fql": "DELETE NODE '${A}' IF REV '${R}'", "assert": { "applied": true, "files_changed": ["crates/forgeql-core/src/node_id.rs"], "field": { "op": "delete_node" } } },
         { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 0 } },
         { "fql": "ROLLBACK", "assert": { "field": { "name": "txn" } } },
         { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 } }
@@ -20,9 +20,9 @@
       "use": "forgeql-pub.frozen",
       "mode": "rw",
       "steps": [
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id" } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id", "R": "results.0.rev" } },
         { "fql": "BEGIN TRANSACTION 'txn'", "assert": { "field": { "name": "txn" } } },
-        { "fql": "CHANGE NODE '${A}' WITH 'fn parse_offset_renamed() {}'", "assert": { "applied": true, "diff_contains": "parse_offset_renamed" } },
+        { "fql": "CHANGE NODE '${A}' IF REV '${R}' WITH 'fn parse_offset_renamed() {}'", "assert": { "applied": true, "diff_contains": "parse_offset_renamed" } },
         { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 0 } },
         { "fql": "ROLLBACK", "assert": { "field": { "name": "txn" } } },
         { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 } }
@@ -33,13 +33,13 @@
       "use": "forgeql-pub.frozen",
       "mode": "rw",
       "steps": [
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id" } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id", "R": "results.0.rev" } },
         { "fql": "BEGIN TRANSACTION 'outer'", "assert": { "field": { "name": "outer" } } },
-        { "fql": "DELETE NODE '${A}'", "assert": { "applied": true } },
+        { "fql": "DELETE NODE '${A}' IF REV '${R}'", "assert": { "applied": true } },
         { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 0 } },
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "B": "results.0.node_id" } },
+        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "B": "results.0.node_id", "S": "results.0.rev" } },
         { "fql": "BEGIN TRANSACTION 'inner'", "assert": { "field": { "name": "inner" } } },
-        { "fql": "DELETE NODE '${B}'", "assert": { "applied": true } },
+        { "fql": "DELETE NODE '${B}' IF REV '${S}'", "assert": { "applied": true } },
         { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1", "assert": { "row_count": 0 } },
         { "fql": "ROLLBACK", "assert": { "field": { "name": "inner" } } },
         { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1", "assert": { "row_count": 1 } },

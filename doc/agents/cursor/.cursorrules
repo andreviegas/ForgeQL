@@ -37,20 +37,21 @@ The right way to find and read code:
 
 ## Mutations
 
-- Replace a node: `CHANGE NODE '<id>' [IF REV '<rev>'] WITH '...'` — `'<id>(n-m)'` splices lines within the node; heredoc `WITH <<TAG … TAG` when content has quotes
-- Insert around a node: `INSERT BEFORE/AFTER NODE '<id>' WITH '...'`
-- Delete a node: `DELETE NODE '<id>'` — `'<id>(n-m)'` deletes lines within it
+- **`IF REV` is mandatory** on every verb that names an existing node (CHANGE / INSERT BEFORE|AFTER / DELETE / MOVE). It is free: the rev is handed to you *beside the handle* on every FIND/SHOW row, and every mutation returns the new handle **and** its new rev. Required because a handle is stable — it will still resolve a dozen commands later — so only the rev can tell you the code beneath it moved. A rev is the hash of the node's whole span, so an edit to any *child* changes the enclosing node's rev too. Creation (`INSERT NODE FOR`, `COPY NODE … TO`, appending to a file handle) is ungated.
+- Replace a node: `CHANGE NODE '<id>' IF REV '<rev>' WITH '...'` — `'<id>(n-m)'` splices lines within the node; heredoc `WITH <<TAG … TAG` when content has quotes
+- Insert around a node: `INSERT BEFORE/AFTER NODE '<id>' IF REV '<rev>' WITH '...'`
+- Delete a node: `DELETE NODE '<id>' IF REV '<rev>'` — `'<id>(n-m)'` deletes lines within it
 - Delete a whole file or directory: `DELETE NODE '<hex>' IF REV '<rev>'` — `IF REV` is **mandatory** on whole-path deletes (and on a whole-file `CHANGE NODE '<hex>'`); a directory handle deletes its subtree. Take the `rev` off the `FIND files` row.
 - Relocate a node: `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — byte-exact, atomic, cross-file; the engine never re-indents
 - Create a file/directory: `INSERT NODE FOR 'src/new.rs'` · `INSERT NODE FOR 'docs/'` — returns the new handle; write into it with `INSERT AFTER NODE '<hex>' WITH '...'`
 - Rename/move/copy a file: `MOVE NODE '<hex>' IF REV '<rev>' TO 'path/new.rs'` (or `TO '<dir_hex>'`) · `COPY NODE '<hex>' TO 'api/v2/'` — MOVE is gated, COPY is not; the destination is never clobbered
 - Reverse a bad edit: `UNDO` (most recent) · `UNDO LAST-n`
-- Act on a whole FIND result — `LAST` is the set the previous FIND returned, and its response carries a **master rev** (`last_rev`) that gates the mutation. Every member is edited in ONE atomic plan:
-  - Sweep: `CHANGE NODES LAST [IF REV '<master>'] MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a `FIND usages` row its one line
-  - Delete: `DELETE NODE LAST IF REV '<master>'` — `IF REV` mandatory
-  - Relocate: `MOVE NODE LAST IF REV '<master>' TO 'dir/'` · `COPY NODE LAST TO 'dir/'` (ungated)
-  - A truncated FIND issues no master rev and every LAST verb refuses — widen the `LIMIT` and look again. Any FIND replaces LAST; any mutation clears it.
-- Rename = aim, then sweep: `FIND usages OF 'old'` → `CHANGE NODES LAST IF REV '<master>' MATCHING 'old' WITH 'new'`
+- Act on a whole FIND result — `FOUND` is the set the previous FIND returned, and its response carries a **master rev** (`found_rev`) that gates the mutation. Every member is edited in ONE atomic plan:
+  - Sweep: `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a `FIND usages` row its one line
+  - Delete: `DELETE NODES FOUND IF REV '<master>'` — `IF REV` mandatory
+  - Relocate: `MOVE NODES FOUND IF REV '<master>' TO 'dir/'` · `COPY NODES FOUND TO 'dir/'` (ungated)
+  - A truncated FIND issues no master rev and every FOUND verb refuses — widen the `LIMIT` and look again. Any FIND replaces FOUND; any mutation clears it.
+- Rename = aim, then sweep: `FIND usages OF 'old'` → `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'`
 - Gate then commit: `BEGIN TRANSACTION` → edits → `VERIFY build 'step'` (or `JOB START 'step'` for long gates; poll `JOB STATUS <id>`) → `COMMIT MESSAGE 'msg'`. Steps marked `commit_gate: true` must pass after the last edit or COMMIT is refused.
 - Raw-text `CHANGE FILE` / line-range copy/move: non-indexed files only (see the syntax reference).
 

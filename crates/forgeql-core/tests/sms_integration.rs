@@ -1609,6 +1609,7 @@ mod invariant_tests {
             fields: HashMap::new(),
             count: None,
             node_id: None,
+            rev: None,
         }
     }
 
@@ -1651,7 +1652,7 @@ mod invariant_tests {
             metric_hint: None,
             group_by_field: None,
             hint: None,
-            last_rev: None,
+            found_rev: None,
         })
     }
 

@@ -4124,7 +4124,7 @@
    "applied": true,
    "type": "mutation"
   },
-  "fql": "CHANGE NODE 'n67ea16fed12f.0000(2)' WITH '    let a = 100;'",
+  "fql": "CHANGE NODE 'n67ea16fed12f.0000(2)' IF REV '${REV:n67ea16fed12f}' WITH '    let a = 100;'",
   "name": "GS3d_change_node_single_offset_pytorch"
  },
  {
@@ -4150,7 +4150,7 @@
    "applied": true,
    "type": "mutation"
   },
-  "fql": "CHANGE NODE 'n67ea16fed12f.0000(3-4)' WITH <<RUST\n    let b = 20;\n    let c = 30;\nRUST",
+  "fql": "CHANGE NODE 'n67ea16fed12f.0000(3-4)' IF REV '${REV:n67ea16fed12f}' WITH <<RUST\n    let b = 20;\n    let c = 30;\nRUST",
   "name": "GS3f_change_node_range_offset_pytorch"
  },
  {
@@ -4345,7 +4345,7 @@
    "new_node_id": "ne857f72d306c.0012",
    "type": "mutation"
   },
-  "fql": "INSERT BEFORE NODE 'ne857f72d306c.0006' WITH <<MD\n## Delta Section\n\nDelta paragraph one.\n\nMD",
+  "fql": "INSERT BEFORE NODE 'ne857f72d306c.0006' IF REV '${REV:ne857f72d306c.0006}' WITH <<MD\n## Delta Section\n\nDelta paragraph one.\n\nMD",
   "name": "MDID4_insert_before_beta_section"
  },
  {

@@ -423,6 +423,37 @@ fn is_mutation(fql: &str) -> bool {
 
 // ── test ─────────────────────────────────────────────────────────────────────
 
+/// Resolve `${REV:<node_id>}` placeholders in a golden entry's FQL.
+///
+/// `IF REV` is mandatory on every verb that names an existing node, and a golden
+/// entry cannot know a rev ahead of time — the fixtures it mutates are created by
+/// earlier entries in the same chain. So the harness does exactly what an agent
+/// does: read the rev off `FIND NODE`, then quote it. Pinning a literal rev here
+/// would be as brittle as the hardcoded `node_id` pins already are, and it would
+/// test the pin rather than the gate.
+fn resolve_rev_placeholders(client: &mut McpClient, session_id: Option<&str>, fql: &str) -> String {
+    let mut out = String::with_capacity(fql.len());
+    let mut rest = fql;
+    while let Some(start) = rest.find("${REV:") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 6..];
+        let Some(end) = after.find('}') else {
+            break;
+        };
+        let node_id = &after[..end];
+        let rev = client
+            .run_fql(session_id, &format!("FIND NODE '{node_id}'"))
+            .unwrap_or_else(|e| panic!("[golden] ${{REV:{node_id}}} lookup failed: {e}"))
+            .get("rev")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("[golden] FIND NODE '{node_id}' returned no rev"))
+            .to_string();
+        out.push_str(&rev);
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
 #[test]
 fn golden_values() {
     // ── Skip guard ────────────────────────────────────────────────────────────
@@ -547,8 +578,9 @@ fn golden_values() {
 
             // ── Query step ────────────────────────────────────────────────────
             GoldenEntry::Query(q) => {
+                let fql = resolve_rev_placeholders(&mut client, session_id.as_deref(), &q.fql);
                 let result = client
-                    .run_fql(session_id.as_deref(), &q.fql)
+                    .run_fql(session_id.as_deref(), &fql)
                     .unwrap_or_else(|e| panic!("[golden] '{}' run_fql failed: {e}", q.name));
 
                 let mut entry_failures: Vec<String> = Vec::new();

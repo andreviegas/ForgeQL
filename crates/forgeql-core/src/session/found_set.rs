@@ -1,16 +1,15 @@
-//! The `LAST` set — the rows the previous FIND returned, and the master rev
+//! The `FOUND` set — the rows the previous FIND returned, and the master rev
 //! that gates a bulk mutation over them.
 //!
 //! `FIND` *is* the set-selection syntax: a query with precise filters already
-//! names the set, so the bulk verbs address it as `LAST` rather than carrying a
-//! second glob grammar. What FIND returned is what LAST holds — never more.
+//! names the set, so the bulk verbs address it as `FOUND` rather than carrying a
+//! second glob grammar. What FIND returned is what FOUND holds — never more.
 //!
 //! ## Invariant
 //!
 //! `file on disk == in-memory set` after every command that touches it: a FIND
 //! replaces it, a mutation clears it. The set outlives the process because the
-//! session does — an agent may FIND, hand off, and sweep from a restarted
-//! server.
+//! session does — the server may restart between the FIND and the mutation.
 
 use std::path::Path;
 
@@ -19,11 +18,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const FILE_VERSION: u32 = 1;
-const FILE_NAME: &str = ".forgeql-lastset";
+const FILE_NAME: &str = ".forgeql-foundset";
 
 /// One row of the FIND result the set was armed from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LastMember {
+pub struct FoundMember {
     /// Stable handle, when the row carried one (`FIND symbols`, `FIND files`).
     ///
     /// `FIND usages` rows are call sites, not nodes: they have no handle, so
@@ -37,7 +36,7 @@ pub struct LastMember {
     pub line: Option<usize>,
 }
 
-impl LastMember {
+impl FoundMember {
     /// The identity the master rev is computed over: the handle when there is
     /// one, else the site coordinates.
     #[must_use]
@@ -51,29 +50,29 @@ impl LastMember {
 
 /// The previous FIND's result set.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LastSet {
+pub struct FoundSet {
     /// Which FIND armed it — so an error can name the query to re-run.
     pub origin: String,
     /// Exactly the rows the agent was shown, in the order it saw them.
-    pub members: Vec<LastMember>,
+    pub members: Vec<FoundMember>,
     /// `false` when the FIND was truncated (`total > results.len()`).
     ///
     /// An incomplete set is still armed, but no master rev is issued for it and
-    /// every LAST mutation refuses. Acting on rows the agent never saw is the
+    /// every FOUND mutation refuses. Acting on rows the agent never saw is the
     /// one mistake reading the diff afterwards cannot catch — for
-    /// `DELETE NODE LAST` it is a blind mass delete.
+    /// `DELETE NODES FOUND` it is a blind mass delete.
     pub complete: bool,
     /// The master rev issued for this set at FIND time, when one was issued.
     ///
     /// `None` for a truncated set — the gate has nothing to quote and every
-    /// LAST verb refuses. It is stored so the FIND response can hand it back,
+    /// FOUND verb refuses. It is stored so the FIND response can hand it back,
     /// never trusted at mutation time: the gate re-derives the rev from the
     /// live members, so a set that has moved since cannot pass by quoting the
     /// rev it was armed with.
     pub master_rev: Option<String>,
 }
 
-impl LastSet {
+impl FoundSet {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.members.is_empty()
@@ -85,7 +84,7 @@ impl LastSet {
     /// mutation to re-derive it — so any change to a member's content, or to
     /// the membership itself, flips the hash. This is the set-level extension
     /// of the per-node `IF REV` contract, and unlike a directory's membership
-    /// XOR it covers content too, because `CHANGE NODES LAST` edits content.
+    /// XOR it covers content too, because `CHANGE NODES FOUND` edits content.
     #[must_use]
     pub fn master_rev(pairs: &[(String, String)]) -> String {
         let mut hasher = Sha256::new();
@@ -104,12 +103,12 @@ impl LastSet {
 
 /// Root of the serialized set file.
 #[derive(Serialize, Deserialize)]
-struct LastSetFile {
+struct FoundSetFile {
     version: u32,
-    set: LastSet,
+    set: FoundSet,
 }
 
-/// Persist the set to `<worktree>/.forgeql-lastset`.
+/// Persist the set to `<worktree>/.forgeql-foundset`.
 ///
 /// Called wherever the set is mutated — arming it and clearing it — rather than
 /// at transaction boundaries: a session outlives the server, so state a later
@@ -117,8 +116,8 @@ struct LastSetFile {
 ///
 /// # Errors
 /// Returns `Err` if serialization or the atomic write fails.
-pub fn save(set: &LastSet, worktree_path: &Path) -> Result<()> {
-    let bytes = bincode::serialize(&LastSetFile {
+pub fn save(set: &FoundSet, worktree_path: &Path) -> Result<()> {
+    let bytes = bincode::serialize(&FoundSetFile {
         version: FILE_VERSION,
         set: set.clone(),
     })?;
@@ -126,42 +125,42 @@ pub fn save(set: &LastSet, worktree_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Drop the persisted set. A mutation invalidates LAST, and a file that outlived
+/// Drop the persisted set. A mutation invalidates FOUND, and a file that outlived
 /// it would re-arm a set whose line numbers have already shifted.
 pub fn clear(worktree_path: &Path) {
     let path = worktree_path.join(FILE_NAME);
     if path.exists()
         && let Err(err) = std::fs::remove_file(&path)
     {
-        tracing::warn!(error = %err, "could not remove the persisted LAST set");
+        tracing::warn!(error = %err, "could not remove the persisted FOUND set");
     }
 }
 
 /// Restore the set written by a previous process, if any.
 ///
 /// A missing, corrupt, or version-mismatched file degrades to "no previous
-/// FIND" — the state a fresh session is in, which every LAST verb already
+/// FIND" — the state a fresh session is in, which every FOUND verb already
 /// handles by telling the agent to run the FIND again.
 #[must_use]
-pub fn try_restore(worktree_path: &Path) -> Option<LastSet> {
+pub fn try_restore(worktree_path: &Path) -> Option<FoundSet> {
     let path = worktree_path.join(FILE_NAME);
     if !path.exists() {
         return None;
     }
     match crate::workspace::file_io::read_bytes(&path)
-        .and_then(|bytes| Ok(bincode::deserialize::<LastSetFile>(&bytes)?))
+        .and_then(|bytes| Ok(bincode::deserialize::<FoundSetFile>(&bytes)?))
     {
         Ok(file) if file.version == FILE_VERSION => Some(file.set),
         Ok(file) => {
             tracing::warn!(
                 version = file.version,
                 expected = FILE_VERSION,
-                "LAST set file version mismatch — discarding"
+                "FOUND set file version mismatch — discarding"
             );
             None
         }
         Err(err) => {
-            tracing::warn!(error = %err, "LAST set file load failed (non-fatal)");
+            tracing::warn!(error = %err, "FOUND set file load failed (non-fatal)");
             None
         }
     }
@@ -173,21 +172,22 @@ mod tests {
 
     #[test]
     fn master_rev_changes_when_a_member_rev_changes() {
-        let before = LastSet::master_rev(&[("na".into(), "h1".into()), ("nb".into(), "h2".into())]);
-        let after = LastSet::master_rev(&[("na".into(), "h1".into()), ("nb".into(), "h9".into())]);
+        let before =
+            FoundSet::master_rev(&[("na".into(), "h1".into()), ("nb".into(), "h2".into())]);
+        let after = FoundSet::master_rev(&[("na".into(), "h1".into()), ("nb".into(), "h9".into())]);
         assert_ne!(before, after);
     }
 
     #[test]
     fn master_rev_changes_when_a_member_leaves() {
-        let both = LastSet::master_rev(&[("na".into(), "h1".into()), ("nb".into(), "h2".into())]);
-        let one = LastSet::master_rev(&[("na".into(), "h1".into())]);
+        let both = FoundSet::master_rev(&[("na".into(), "h1".into()), ("nb".into(), "h2".into())]);
+        let one = FoundSet::master_rev(&[("na".into(), "h1".into())]);
         assert_ne!(both, one);
     }
 
     #[test]
     fn site_rows_key_on_path_and_line() {
-        let site = LastMember {
+        let site = FoundMember {
             node_id: None,
             path: "src/a.rs".into(),
             line: Some(42),
@@ -198,9 +198,9 @@ mod tests {
     #[test]
     fn roundtrips_through_disk() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let set = LastSet {
+        let set = FoundSet {
             origin: "find_symbols".into(),
-            members: vec![LastMember {
+            members: vec![FoundMember {
                 node_id: Some("nabc.0001".into()),
                 path: "src/a.rs".into(),
                 line: Some(10),

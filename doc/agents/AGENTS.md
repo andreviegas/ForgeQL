@@ -101,6 +101,8 @@ ForgeQL indexes code quality metrics at parse time. Use them in WHERE clauses:
 
 Edit indexed code by stable `node_id` **only**: `CHANGE NODE` replaces a node, `INSERT BEFORE/AFTER NODE` adds around it, `DELETE NODE` removes it, and `MOVE NODE` relocates it byte-for-byte in one atomic step. `CHANGE FILE` on indexed files is disabled; raw-text file edits (`CHANGE FILE`, line-range copy and move) exist for non-indexed files and file scaffolding — see the syntax reference. This applies to config too: TOML, YAML, JSON, XML/arxml, DBC, Makefiles, CMake, INI, justfiles, and Markdown are all node-addressable.
 
+**`IF REV` is mandatory on every verb that names an existing node** — `CHANGE`, `INSERT BEFORE/AFTER`, `DELETE`, `MOVE`. It costs nothing: the rev is handed to you *beside the handle* on every `FIND`/`SHOW` row, and every mutation returns the new handle **and** its new rev, so a follow-up edit needs no re-read. It is required because a handle is *stable* — it survives edits and re-parenting and will still resolve a dozen commands later — so the handle alone cannot tell you the code beneath it has moved. The rev can: it is the hash of the node's **whole span**, so an edit to any *child* changes the enclosing node's rev too. A stale rev is refused with `rev_mismatch`, which hands back the node's current rev, span, and source. Creation verbs (`INSERT NODE FOR`, `COPY NODE … TO`, appending to a whole-file handle) are ungated — there is nothing yet to fingerprint.
+
 | Command | Effect |
 |---|---|
 | `CHANGE NODE '<id>' WITH '...'` | Replace the node's source span (heredoc `WITH <<TAG … TAG` when content has quotes) |
@@ -113,14 +115,14 @@ Edit indexed code by stable `node_id` **only**: `CHANGE NODE` replaces a node, `
 | `INSERT NODE FOR '<path>'` | Create an empty file — or a directory, with a trailing slash — and get its handle back. Then write into it with `INSERT AFTER NODE '<hex>' WITH …`. |
 | `<mutation> IF REV '<rev>'` | Guard a mutation on the node's content rev |
 | `UNDO` / `UNDO LAST-n` | Reverse recent mutations from the per-session undo ring |
-| `CHANGE NODES LAST [IF REV '<master>'] MATCHING 'a' WITH 'b'` | Sweep the replacement across **every member of the previous FIND** — a handle contributes its whole span, a usage row its one line |
-| `DELETE NODE LAST IF REV '<master>'` | Delete every member. `IF REV` **mandatory** |
-| `MOVE NODE LAST IF REV '<master>' TO 'dir/'` · `COPY NODE LAST TO 'dir/'` | Relocate every member into a directory, each keeping its basename. MOVE is gated, COPY is not |
+| `CHANGE NODES FOUND IF REV '<master>' MATCHING 'a' WITH 'b'` | Sweep the replacement across **every member of the previous FIND** — a handle contributes its whole span, a usage row its one line |
+| `DELETE NODES FOUND IF REV '<master>'` | Delete every member. `IF REV` **mandatory** |
+| `MOVE NODES FOUND IF REV '<master>' TO 'dir/'` · `COPY NODES FOUND TO 'dir/'` | Relocate every member into a directory, each keeping its basename. MOVE is gated, COPY is not |
 | Raw-text `CHANGE FILE` / copy / move | Non-indexed files only — see the syntax reference |
 
 **The diff is the contract.** Mutations are mechanical — the engine never fixes commas, wraps braces, or re-indents. Every mutation returns `new_node_id`, `lines_written`, `lines_removed`, and a boundary diff whose context lines carry inline `node_id(offset)` handles. Read the diff after every mutation: if it shows a seam you created, issue the follow-up `CHANGE NODE '<id>(off)'` yourself. A large `lines_removed` on a small edit means you clobbered more than intended — `UNDO` reverses it.
 
-**Renames** are a composition: `FIND usages OF 'old'` aims at the exact occurrence sites (a string literal or a comment is not a usage site, so it survives untouched), then `CHANGE NODES LAST IF REV '<master>' MATCHING 'old' WITH 'new'` sweeps every one of them in a single mutation. The `last_rev` on the FIND response is the master rev to quote: it fails the sweep if any site moved since you looked, and a FIND truncated by the default limit issues none at all — so a partial result can never be renamed as if it were the whole one.
+**Renames** are a composition: `FIND usages OF 'old'` aims at the exact occurrence sites (a string literal or a comment is not a usage site, so it survives untouched), then `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'` sweeps every one of them in a single mutation. The `found_rev` on the FIND response is the master rev to quote: it fails the sweep if any site moved since you looked, and a FIND truncated by the default limit issues none at all — so a partial result can never be renamed as if it were the whole one.
 
 Wrap mutations in a transaction and gate the commit:
 

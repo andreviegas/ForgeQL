@@ -61,7 +61,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Repo top-level dirs | `FIND files` (returns depth-1 entries) |
 | Find a file by name | `FIND files WHERE name = 'Kconfig'` (also `LIKE`/`MATCHES`) |
 | Insert around a node | `INSERT BEFORE/AFTER NODE '<id>' WITH '...'` |
-| Delete a node | `DELETE NODE '<id>' [IF REV '<rev>']` — `'<id>(n-m)'` deletes lines within it |
+| Delete a node | `DELETE NODE '<id>' IF REV '<rev>'` — `'<id>(n-m)'` deletes lines within it |
 | Relocate a node | `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — byte-exact, atomic, cross-file |
 | Reverse a bad edit | `UNDO` (most recent) · `UNDO LAST-n` |
 | Long test gate | `JOB START 'step'` → `JOB STATUS <id>` / `JOB LIST` (background, FIFO-queued) |
@@ -140,17 +140,27 @@ SHOW DIFF [STAT] [clauses]               -- the worktree's UNCOMMITTED diff, inl
 -- Indexed code is edited by node handle (below); CHANGE FILE on indexed files
 -- is disabled. Raw-text CHANGE FILE / copy / move: non-indexed files only.
 
-CHANGE NODE '<node_id>' [IF REV '<rev>'] WITH 'text'   -- '<id>(n)' / '<id>(n-m)' splices node lines
-INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'text'
-DELETE NODE '<node_id>' [IF REV '<rev>']               -- '<id>(n-m)' deletes lines within the node
-MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'  -- relocate byte-exact; atomic; cross-file OK
+-- IF REV is MANDATORY on every verb that names an existing node. It is free:
+-- the rev comes back beside the handle on every FIND/SHOW row, and every
+-- mutation hands back the new handle + new rev for the next edit.
+CHANGE NODE '<node_id>' IF REV '<rev>' WITH 'text'    -- '<id>(n)' / '<id>(n-m)' splices node lines
+CHANGE NODE '<node_id>' IF REV '<rev>' MATCHING [WORD] 'a' WITH 'b'
+INSERT (BEFORE | AFTER) NODE '<node_id>' IF REV '<rev>' WITH 'text'
+DELETE NODE '<node_id>' IF REV '<rev>'                -- '<id>(n-m)' deletes lines within the node
+MOVE NODE '<src_id>' IF REV '<rev>' (BEFORE | AFTER) NODE '<dst_id>'  -- byte-exact; atomic; cross-file
+MOVE NODE '<src_id>' IF REV '<rev>' TO 'path/new.rs'  -- rename / move a whole file
 
--- LAST — the set the previous FIND returned. FIND is the set-selection syntax;
+-- Creation is ungated — nothing exists yet to fingerprint:
+INSERT NODE FOR 'src/new.rs'                          -- returns the new handle + rev
+INSERT AFTER NODE '<file_hex>' WITH 'text'            -- append at EOF of a file
+COPY NODE '<src_id>' TO 'api/v2/'
+
+-- FOUND — the set the previous FIND returned. FIND is the set-selection syntax;
 -- these act on every member in ONE atomic mutation (one diff, one UNDO step).
-CHANGE NODES LAST [IF REV '<master>'] MATCHING [WORD] 'a' WITH 'b'  -- sweep each member's span
-DELETE NODE LAST IF REV '<master>'                    -- IF REV mandatory: it destroys
-MOVE NODE LAST IF REV '<master>' TO 'dir/'            -- each member keeps its basename
-COPY NODE LAST TO 'dir/'                              -- creation only, so ungated
+CHANGE NODES FOUND IF REV '<master>' MATCHING [WORD] 'a' WITH 'b'  -- sweep each member's span
+DELETE NODES FOUND IF REV '<master>'                    -- IF REV mandatory: it destroys
+MOVE NODES FOUND IF REV '<master>' TO 'dir/'            -- each member keeps its basename
+COPY NODES FOUND TO 'dir/'                              -- creation only, so ungated
 
 -- Heredoc form when content contains quotes: WITH <<TAG … TAG (tag uppercase, own line)
 
@@ -165,16 +175,38 @@ JOB START 'step'         -- background job for long gates; JOB STATUS <id> / JOB
 ROLLBACK [TRANSACTION 'name']
 ```
 
-### LAST — acting on a whole FIND result
+### IF REV — mandatory, and free
 
-`FIND` **is** the set-selection syntax. The rows it returns are saved as `LAST`,
+Every verb that names an **existing** node takes `IF REV`. You never have to go
+and fetch the rev: it is handed to you **next to the handle**, in the same row,
+by `FIND symbols`, `FIND files`, `SHOW outline`, `SHOW NODE` and `FIND NODE` —
+and every mutation returns the new handle *and* its new rev, so the next edit on
+that node needs no re-read.
+
+It is required because a handle is *stable*. It survives edits, insertions, even
+re-parenting; it will still resolve a dozen commands later, and it will never
+quietly come to mean a different node. So the handle alone cannot tell you that
+the code under it has changed. The rev can: it is the SHA-256 of the node's whole
+span, so **an edit to any child changes the enclosing node's rev too**. Edit a
+comment inside a function, and the function's rev moves.
+
+That is the failure this prevents: you read a node, do a dozen other things, come
+back, and overwrite it from a mental model that is now stale. A wrong rev is
+refused with `rev_mismatch`, which hands back the node's current rev, line range,
+and source — enough to re-target on the spot.
+
+Creation is ungated: `INSERT NODE FOR`, `COPY NODE … TO`, and appending to a
+whole-file handle. There is nothing there to fingerprint, and they cannot clobber.
+### FOUND — acting on a whole FIND result
+
+`FIND` **is** the set-selection syntax. The rows it returns are saved as `FOUND`,
 and the response carries a **master rev** — a fingerprint of every member's
 `(handle, rev)`. Quote it back in `IF REV` and the mutation runs only if not one
 member has moved since you looked:
 
 ```sql
-FIND usages OF 'oldName'                                  -- rows + last_rev: h9c…
-CHANGE NODES LAST IF REV 'h9c…' MATCHING 'oldName' WITH 'newName'
+FIND usages OF 'oldName'                                  -- rows + found_rev: h9c…
+CHANGE NODES FOUND IF REV 'h9c…' MATCHING 'oldName' WITH 'newName'
 ```
 
 - **One mutation.** Every member is edited in a single plan: one diff, one `UNDO`
@@ -183,14 +215,14 @@ CHANGE NODES LAST IF REV 'h9c…' MATCHING 'oldName' WITH 'newName'
   function body, not just its declaration line. A `FIND usages` row is a call
   site: it contributes that one line.
 - **You can only act on what you saw.** A FIND truncated by the default limit
-  issues **no** master rev, and every LAST verb then refuses — widen the `LIMIT`
+  issues **no** master rev, and every FOUND verb then refuses — widen the `LIMIT`
   (or the filters) and look again.
-- **Any FIND replaces LAST; any mutation clears it.** A `GROUP BY` result is a
-  count, not a set of nodes: it clears LAST rather than arming something no verb
+- **Any FIND replaces FOUND; any mutation clears it.** A `GROUP BY` result is a
+  count, not a set of nodes: it clears FOUND rather than arming something no verb
   can address.
 - **On a rev mismatch, re-run the FIND.** The error hands back no new rev on
   purpose — the set moved, so look at it again before acting on it.
-- Sites are not nodes: `DELETE`/`MOVE`/`COPY NODE LAST` need handles, so arm them
+- Sites are not nodes: `DELETE`/`MOVE`/`COPY NODES FOUND` need handles, so arm them
   with `FIND files` or `FIND symbols`, not `FIND usages`.
 
 Every mutation answers with `new_node_id`, `lines_written`, `lines_removed`, and a

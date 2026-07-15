@@ -266,7 +266,7 @@ pub enum ForgeQLIR {
     /// `FIND NODE id` — resolve a `node_id` to its current location, rev, and nav links.
     FindNode { node_id: String },
 
-    /// `CHANGE NODE 'id' [IF REV 'rev'] WITH content` — replace node source lines.
+    /// `CHANGE NODE 'id' IF REV 'rev' WITH content` — replace node source lines.
     ChangeNode {
         node_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -274,7 +274,7 @@ pub enum ForgeQLIR {
         content: String,
     },
 
-    /// `CHANGE NODE 'id' [IF REV 'rev'] MATCHING [WORD] 'a' WITH 'b'` —
+    /// `CHANGE NODE 'id' IF REV 'rev' MATCHING [WORD] 'a' WITH 'b'` —
     /// replace pattern occurrences inside the node's span only.
     ChangeNodeMatching {
         node_id: String,
@@ -286,14 +286,14 @@ pub enum ForgeQLIR {
         word_boundary: bool,
     },
 
-    /// `CHANGE NODES LAST [IF REV 'master'] MATCHING [WORD] 'a' WITH 'b'` —
+    /// `CHANGE NODES FOUND IF REV 'master' MATCHING [WORD] 'a' WITH 'b'` —
     /// apply the replacement across every member of the set the previous FIND
     /// armed (the mechanical rename sweep).
     ///
-    /// `IF REV` is optional here — a content edit can be reviewed in the
-    /// boundary diff and corrected — but it is the only way to prove the set
-    /// has not moved under the agent since the FIND.
-    ChangeNodesLast {
+    /// `IF REV` is mandatory here, as on every verb naming an existing node —
+    /// it is the only way to prove the set has not moved under the agent
+    /// since the FIND.
+    ChangeNodesFound {
         pattern: String,
         replacement: String,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -308,22 +308,25 @@ pub enum ForgeQLIR {
     /// hands back the handle.
     InsertNodeFor { path: String },
 
-    /// `INSERT BEFORE NODE 'id' WITH content` / `INSERT AFTER NODE 'id' WITH content`
+    /// `INSERT BEFORE|AFTER NODE 'id' IF REV 'rev' WITH content` — insert lines
+    /// around an existing node. The anchor exists, so it is gated.
     InsertNode {
         node_id: String,
         /// `true` = INSERT BEFORE, `false` = INSERT AFTER.
         before: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        if_rev: Option<String>,
         content: String,
     },
 
-    /// `DELETE NODE 'id' [IF REV 'rev']` — delete node source lines.
+    /// `DELETE NODE 'id' IF REV 'rev'` — delete node source lines.
     DeleteNode {
         node_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         if_rev: Option<String>,
     },
 
-    /// `MOVE NODE 'src' [IF REV 'rev'] BEFORE|AFTER NODE 'dst'`
+    /// `MOVE NODE 'src' IF REV 'rev' BEFORE|AFTER NODE 'dst'`
     ///
     /// Relocate a node byte-for-byte. The source span is deleted and re-inserted
     /// at the anchor in ONE atomic plan, so the file is never briefly missing it
@@ -342,7 +345,7 @@ pub enum ForgeQLIR {
         if_rev: Option<String>,
     },
 
-    /// `MOVE NODE 'src' [IF REV 'rev'] TO 'dst'` — move or rename by
+    /// `MOVE NODE 'src' IF REV 'rev' TO 'dst'` — move or rename by
     /// destination instead of by anchor.
     ///
     /// `dst` is a directory handle (the basename is kept) or a path (a full
@@ -360,22 +363,22 @@ pub enum ForgeQLIR {
     /// the source stays where it is. Creation only, so no `IF REV`.
     CopyNodeTo { src_id: String, dst: String },
 
-    /// `DELETE NODE LAST IF REV 'master'` — delete every member of the set the
+    /// `DELETE NODES FOUND IF REV 'master'` — delete every member of the set the
     /// previous FIND armed, in one plan.
     ///
     /// `IF REV` is mandatory, and the master rev is only issued for a complete
     /// result: a bulk delete of rows the agent never saw is the one mistake
     /// that cannot be reviewed afterwards.
-    DeleteNodesLast { if_rev: Option<String> },
+    DeleteNodesFound { if_rev: Option<String> },
 
-    /// `MOVE NODE LAST IF REV 'master' TO 'dir/'` — move every member of the
+    /// `MOVE NODES FOUND IF REV 'master' TO 'dir/'` — move every member of the
     /// set into a directory. Each source keeps its basename, so unlike the
     /// single-node form the destination cannot be a full rename.
-    MoveNodesLastTo { dst: String, if_rev: Option<String> },
+    MoveNodesFoundTo { dst: String, if_rev: Option<String> },
 
-    /// `COPY NODE LAST TO 'dir/'` — as `MOVE NODE LAST … TO`, but the sources
+    /// `COPY NODES FOUND TO 'dir/'` — as `MOVE NODES FOUND … TO`, but the sources
     /// stay put. Creation only, so no `IF REV`.
-    CopyNodesLastTo { dst: String },
+    CopyNodesFoundTo { dst: String },
     /// `SHOW NODE 'id' [CONTENT | METADATA]`
     ///
     /// * `CONTENT` (default) — return the source lines of the node.

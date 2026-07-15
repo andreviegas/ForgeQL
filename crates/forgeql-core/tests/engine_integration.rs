@@ -2256,7 +2256,7 @@ fn unknown_where_field_gets_hint() {
 /// string literals and comments are NOT usage sites, so they survive — the
 /// fixture's classic sed-trap lines prove the precision.
 #[test]
-fn rename_sweep_via_find_then_change_nodes_last() {
+fn rename_sweep_via_find_then_change_nodes_found() {
     let (mut engine, sid, dir) = engine_with_session();
 
     let r = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
@@ -2264,11 +2264,14 @@ fn rename_sweep_via_find_then_change_nodes_last() {
         panic!("expected Query result");
     };
     assert!(!qr.results.is_empty(), "usage sites expected");
+    let rev = qr.found_rev.expect("a complete FIND issues a master rev");
 
     let r = execute_fql(
         &mut engine,
         &sid,
-        "CHANGE NODES LAST MATCHING WORD 'encenderMotor' WITH 'startMotor'",
+        &format!(
+            "CHANGE NODES FOUND IF REV '{rev}' MATCHING WORD 'encenderMotor' WITH 'startMotor'"
+        ),
     );
     let ForgeQLResult::Mutation(mr) = r else {
         panic!("expected Mutation result");
@@ -2288,11 +2291,11 @@ fn rename_sweep_via_find_then_change_nodes_last() {
     );
 }
 
-/// `CHANGE NODES LAST` without a previous FIND fails with guidance.
+/// `CHANGE NODES FOUND` without a previous FIND fails with guidance.
 #[test]
-fn change_nodes_last_without_find_errors() {
+fn change_nodes_found_without_find_errors() {
     let (mut engine, sid, _dir) = engine_with_session();
-    let ops = parser::parse("CHANGE NODES LAST MATCHING 'a' WITH 'b'").expect("parse");
+    let ops = parser::parse("CHANGE NODES FOUND MATCHING 'a' WITH 'b'").expect("parse");
     let coords = SessionCoords::from_session_id(&sid).expect("valid session_id");
     let err = engine
         .execute(auth(AuthContext::Tester), Some(&coords), &ops[0])
@@ -2305,7 +2308,7 @@ fn change_nodes_last_without_find_errors() {
 
 /// A complete FIND issues a master rev; quoting it back runs the sweep.
 #[test]
-fn last_rev_gates_the_sweep() {
+fn found_rev_gates_the_sweep() {
     let (mut engine, sid, dir) = engine_with_session();
 
     let r = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
@@ -2313,14 +2316,14 @@ fn last_rev_gates_the_sweep() {
         panic!("expected Query result");
     };
     let rev = qr
-        .last_rev
+        .found_rev
         .expect("a complete FIND must issue a master rev");
 
     let r = execute_fql(
         &mut engine,
         &sid,
         &format!(
-            "CHANGE NODES LAST IF REV '{rev}' MATCHING WORD 'encenderMotor' WITH 'startMotor'"
+            "CHANGE NODES FOUND IF REV '{rev}' MATCHING WORD 'encenderMotor' WITH 'startMotor'"
         ),
     );
     let ForgeQLResult::Mutation(mr) = r else {
@@ -2335,14 +2338,14 @@ fn last_rev_gates_the_sweep() {
 /// A master rev that no longer matches the live members refuses the mutation —
 /// and hands back no replacement rev, so the only way on is to look again.
 #[test]
-fn stale_last_rev_is_refused() {
+fn stale_found_rev_is_refused() {
     let (mut engine, sid, _dir) = engine_with_session();
 
     let _ = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
     let err = fql_err(
         &mut engine,
         &sid,
-        "CHANGE NODES LAST IF REV 'hdeadbeefdeadbeef' MATCHING 'encenderMotor' WITH 'x'",
+        "CHANGE NODES FOUND IF REV 'hdeadbeefdeadbeef' MATCHING 'encenderMotor' WITH 'x'",
     );
     assert!(err.contains("rev_mismatch"), "gate must fire: {err}");
     assert!(
@@ -2354,7 +2357,7 @@ fn stale_last_rev_is_refused() {
 /// A GROUP BY row is a count with a filename on it. It must clear LAST rather
 /// than arm a set that no verb can act on.
 #[test]
-fn group_by_result_clears_last() {
+fn group_by_result_clears_found_set() {
     let (mut engine, sid, _dir) = engine_with_session();
 
     let _ = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
@@ -2363,14 +2366,14 @@ fn group_by_result_clears_last() {
         panic!("expected Query result");
     };
     assert!(
-        qr.last_rev.is_none(),
+        qr.found_rev.is_none(),
         "an aggregate addresses nothing — no master rev"
     );
 
     let err = fql_err(
         &mut engine,
         &sid,
-        "CHANGE NODES LAST MATCHING 'encenderMotor' WITH 'x'",
+        "CHANGE NODES FOUND MATCHING 'encenderMotor' WITH 'x'",
     );
     assert!(
         err.contains("no FIND result is armed"),
@@ -2384,7 +2387,7 @@ fn delete_node_last_requires_if_rev() {
     let (mut engine, sid, _dir) = engine_with_session();
 
     let _ = execute_fql(&mut engine, &sid, "FIND files");
-    let err = fql_err(&mut engine, &sid, "DELETE NODE LAST");
+    let err = fql_err(&mut engine, &sid, "DELETE NODES FOUND");
     assert!(
         err.contains("requires IF REV"),
         "a bulk delete must demand the gate: {err}"
@@ -2400,12 +2403,12 @@ fn bulk_delete_refuses_a_set_of_usage_sites() {
     let ForgeQLResult::Query(qr) = r else {
         panic!("expected Query result");
     };
-    let rev = qr.last_rev.expect("master rev");
+    let rev = qr.found_rev.expect("master rev");
 
     let err = fql_err(
         &mut engine,
         &sid,
-        &format!("DELETE NODE LAST IF REV '{rev}'"),
+        &format!("DELETE NODES FOUND IF REV '{rev}'"),
     );
     assert!(
         err.contains("addressable nodes"),
@@ -2416,14 +2419,14 @@ fn bulk_delete_refuses_a_set_of_usage_sites() {
 /// A session outlives the process. An agent may FIND, hand the session on (or
 /// wait out a restart), and only then sweep — so the set has to come back.
 #[test]
-fn last_set_survives_a_restart() {
+fn found_set_survives_a_restart() {
     let (mut engine, sid, dir) = engine_with_session();
 
     let r = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
     let ForgeQLResult::Query(qr) = r else {
         panic!("expected Query result");
     };
-    let rev = qr.last_rev.expect("master rev");
+    let rev = qr.found_rev.expect("master rev");
     drop(engine); // the server goes away between the FIND and the sweep
 
     let mut restarted =
@@ -2436,7 +2439,7 @@ fn last_set_survives_a_restart() {
         &mut restarted,
         &sid2,
         &format!(
-            "CHANGE NODES LAST IF REV '{rev}' MATCHING WORD 'encenderMotor' WITH 'startMotor'"
+            "CHANGE NODES FOUND IF REV '{rev}' MATCHING WORD 'encenderMotor' WITH 'startMotor'"
         ),
     );
     let ForgeQLResult::Mutation(mr) = r else {
@@ -2453,16 +2456,22 @@ fn last_set_survives_a_restart() {
 
 /// ...but a mutation clears the persisted copy too. Resurrecting a set whose
 /// members the mutation just moved would hand stale spans to the next sweep —
-/// and `CHANGE NODES LAST` does not require a rev to run.
+/// and a rev quoted from before the mutation must no longer authorise a sweep.
 #[test]
 fn a_mutation_clears_the_set_on_disk_too() {
     let (mut engine, sid, dir) = engine_with_session();
 
-    let _ = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
+    let r = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    let rev = qr.found_rev.expect("master rev");
     let _ = execute_fql(
         &mut engine,
         &sid,
-        "CHANGE NODES LAST MATCHING WORD 'encenderMotor' WITH 'startMotor'",
+        &format!(
+            "CHANGE NODES FOUND IF REV '{rev}' MATCHING WORD 'encenderMotor' WITH 'startMotor'"
+        ),
     );
     drop(engine);
 
@@ -2475,12 +2484,97 @@ fn a_mutation_clears_the_set_on_disk_too() {
     let err = fql_err(
         &mut restarted,
         &sid2,
-        "CHANGE NODES LAST MATCHING 'startMotor' WITH 'x'",
+        "CHANGE NODES FOUND MATCHING 'startMotor' WITH 'x'",
     );
     assert!(
         err.contains("no FIND result is armed"),
         "the mutation must have cleared the on-disk set, not left it to be restored: {err}"
     );
+}
+
+/// Every verb that names an existing node demands the gate.
+#[test]
+fn existing_node_verbs_require_if_rev() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let (id, rev) = file_handle(&mut engine, &sid, "motor_control.cpp");
+    assert!(
+        rev.starts_with('h'),
+        "the rev travels with the handle: {rev}"
+    );
+
+    for fql in [
+        format!("CHANGE NODE '{id}' WITH 'void x() {{}}'"),
+        format!("DELETE NODE '{id}'"),
+        format!("MOVE NODE '{id}' TO 'moved.cpp'"),
+    ] {
+        let err = fql_err(&mut engine, &sid, &fql);
+        assert!(
+            err.contains("requires IF REV"),
+            "an ungated mutation on an existing node must be refused: {fql} → {err}"
+        );
+    }
+}
+
+/// The scenario the gate exists for: an agent carries a handle across other
+/// commands, the code under it moves, and it comes back with the rev it read
+/// first. The handle still resolves — handles are stable — so nothing but the
+/// rev can tell it that the thing it remembers is not the thing that is there.
+#[test]
+fn a_stale_rev_cannot_overwrite() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let (id, rev) = file_handle(&mut engine, &sid, "motor_control.cpp");
+
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("CHANGE NODE '{id}' IF REV '{rev}' MATCHING 'encenderMotor' WITH 'startMotor'"),
+    );
+    let ForgeQLResult::Mutation(mr) = r else {
+        panic!("expected Mutation result");
+    };
+    assert!(mr.applied);
+    let new_rev = mr.new_rev.expect("a mutation hands back the new rev");
+    assert_ne!(new_rev, rev, "the edit moved the node's rev");
+
+    // The agent still remembers the rev it read before that edit.
+    let err = fql_err(
+        &mut engine,
+        &sid,
+        &format!("CHANGE NODE '{id}' IF REV '{rev}' WITH '// clobber'"),
+    );
+    assert!(
+        err.contains("rev_mismatch"),
+        "a stale rev must not be allowed to overwrite: {err}"
+    );
+
+    // The rev the mutation handed back works, with no re-read in between.
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("CHANGE NODE '{id}' IF REV '{new_rev}' MATCHING 'startMotor' WITH 'runMotor'"),
+    );
+    let ForgeQLResult::Mutation(mr) = r else {
+        panic!("expected Mutation result");
+    };
+    assert!(mr.applied, "the post-edit rev must be usable straight away");
+}
+
+/// The handle and rev of a file, as `FIND files` hands them out together.
+fn file_handle(engine: &mut ForgeQLEngine, sid: &str, name: &str) -> (String, String) {
+    let r = execute_fql(engine, sid, &format!("FIND files WHERE name = '{name}'"));
+    let ForgeQLResult::Show(show) = r else {
+        panic!("expected Show result");
+    };
+    let ShowContent::FileList { files, .. } = show.content else {
+        panic!("expected FileList");
+    };
+    let f = files.first().expect("a file row");
+    (
+        f.node_id.clone().expect("handle"),
+        f.rev.clone().expect("rev"),
+    )
 }
 
 /// COPY LINES reports the addressed range length, not the payload's text-line

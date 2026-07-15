@@ -474,12 +474,12 @@ impl ForgeQLEngine {
                 | ForgeQLIR::ShowMore { .. }
                 | ForgeQLIR::ChangeNode { .. }
                 | ForgeQLIR::ChangeNodeMatching { .. }
-                | ForgeQLIR::ChangeNodesLast { .. }
+                | ForgeQLIR::ChangeNodesFound { .. }
                 | ForgeQLIR::InsertNode { .. }
                 | ForgeQLIR::DeleteNode { .. }
-                | ForgeQLIR::DeleteNodesLast { .. }
-                | ForgeQLIR::MoveNodesLastTo { .. }
-                | ForgeQLIR::CopyNodesLastTo { .. }
+                | ForgeQLIR::DeleteNodesFound { .. }
+                | ForgeQLIR::MoveNodesFoundTo { .. }
+                | ForgeQLIR::CopyNodesFoundTo { .. }
                 | ForgeQLIR::BeginTransaction { .. }
                 | ForgeQLIR::Commit { .. }
                 | ForgeQLIR::Rollback { .. }
@@ -562,16 +562,16 @@ impl ForgeQLEngine {
             ForgeQLIR::ChangeContent { .. } => self.exec_mutation(sid, op, true),
             ForgeQLIR::ChangeNode { .. } => self.exec_change_node(sid, op),
             ForgeQLIR::ChangeNodeMatching { .. } => self.exec_change_node_matching(sid, op),
-            ForgeQLIR::ChangeNodesLast { .. } => self.exec_change_nodes_last(sid, op),
+            ForgeQLIR::ChangeNodesFound { .. } => self.exec_change_nodes_found(sid, op),
             ForgeQLIR::InsertNode { .. } => self.exec_insert_node(sid, op),
             ForgeQLIR::InsertNodeFor { .. } => self.exec_insert_node_for(sid, op),
             ForgeQLIR::DeleteNode { .. } => self.exec_delete_node(sid, op),
-            ForgeQLIR::DeleteNodesLast { .. } => self.exec_delete_nodes_last(sid, op),
+            ForgeQLIR::DeleteNodesFound { .. } => self.exec_delete_nodes_found(sid, op),
             ForgeQLIR::MoveNode { .. } => self.exec_move_node(sid, op),
             ForgeQLIR::MoveNodeTo { .. } => self.exec_move_node_to(sid, op, true),
             ForgeQLIR::CopyNodeTo { .. } => self.exec_move_node_to(sid, op, false),
-            ForgeQLIR::MoveNodesLastTo { .. } => self.exec_move_nodes_last_to(sid, op, true),
-            ForgeQLIR::CopyNodesLastTo { .. } => self.exec_move_nodes_last_to(sid, op, false),
+            ForgeQLIR::MoveNodesFoundTo { .. } => self.exec_move_nodes_found_to(sid, op, true),
+            ForgeQLIR::CopyNodesFoundTo { .. } => self.exec_move_nodes_found_to(sid, op, false),
             ForgeQLIR::CopyLines { .. } => self.exec_copy_lines(sid, op),
             ForgeQLIR::MoveLines { .. } => self.exec_move_lines(sid, op),
             // --- Checkpoint-based transactions ---
