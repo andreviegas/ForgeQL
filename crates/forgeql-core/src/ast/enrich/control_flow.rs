@@ -509,6 +509,26 @@ fn skeleton_walk(
         return;
     }
 
+    // Assignment inside a condition (e.g. `if ((x = a + b) > 0)`): the assignment
+    // operator is itself a smell (`=` where `==` was meant), so it is kept — the
+    // skeleton must agree with `has_assignment_in_condition`. The assigned value
+    // is a computed noun, not decision structure, so its whole RHS folds to a
+    // single operand. Skip the C++ `>=` template-close misparse that fabricates a
+    // spurious assignment_expression.
+    if config.is_assignment_kind(kind) && !contains_template_misparse(node, config) {
+        let lhs = node.child_by_field_name("left");
+        let rhs = node.child_by_field_name("right");
+        if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
+            skeleton_walk(lhs, source, mapping, next_letter, result, config);
+            let op = node
+                .child_by_field_name("operator")
+                .map_or_else(|| "=".to_string(), |o| node_text(source, o));
+            result.push_str(&op);
+            push_label(mapping, next_letter, result, node_text(source, rhs));
+            return;
+        }
+    }
+
     // Binary/logical expressions: recurse into children.
     if config.is_binary_expression_kind(kind) || config.is_logical_expression_kind(kind) {
         recurse_children(node, source, mapping, next_letter, result, config);

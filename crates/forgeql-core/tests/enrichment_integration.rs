@@ -981,9 +981,9 @@ fn control_flow_no_false_positive_zephyr_like() {
             .get("condition_text")
             .map(String::as_str)
             .unwrap_or("");
-        // The known true positive at line 76 has skeleton ((a)>b) from `(x = a + b) > 0`.
+        // The known true positive at line 76 has skeleton ((a=b)>c) from `(x = a + b) > 0`.
         // Skip it — it IS a real assignment.
-        if cond == "((a)>b)" {
+        if cond == "((a=b)>c)" {
             continue;
         }
         fps.push(format!("line {:?}: '{cond}'", row.line));
@@ -1093,6 +1093,33 @@ fn control_flow_condition_text_has_skeleton() {
             || skeleton.contains('<');
         assert!(has_ops, "skeleton should contain operators: {skeleton}");
     }
+}
+
+#[test]
+fn skeleton_keeps_assignment_operator() {
+    // Regression: an assignment inside a condition (`=` where `==` was meant) is
+    // the single most defect-shaped token a condition can hold, so it must
+    // survive skeletonization — the skeleton has to agree with the
+    // `has_assignment_in_condition` flag reported beside it. `if ((x = a + b) > 0)`
+    // normalizes to `((a=b)>c)`: the `=` is kept, and the assigned value `a + b`
+    // folds to a single operand (arithmetic only computes a value).
+    let (mut e, sid, _d) = engine_enrichment_only();
+    let r = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE fql_kind = 'if' WHERE has_assignment_in_condition = 'true'",
+    );
+    let qr = as_query(&r);
+    assert_eq!(
+        qr.results.len(),
+        1,
+        "fixture has one assignment-in-condition"
+    );
+    let skeleton = field(&qr.results[0], "condition_text");
+    assert_eq!(
+        skeleton, "((a=b)>c)",
+        "assignment `=` must survive in the skeleton"
+    );
 }
 
 // -----------------------------------------------------------------------

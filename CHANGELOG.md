@@ -5,6 +5,20 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.116.0] — 2026-07-15 — fix(enrich): condition skeletons keep the assignment operator
+
+### Fixed
+
+- The normalized condition skeleton (`condition_text`) no longer dissolves an
+  assignment inside a condition into a bare operand. An assignment written where
+  a comparison was meant — `if ((x = a + b) > 0)` — is the single most
+  defect-shaped token a condition can hold, yet the skeleton reported `((a)>b)`,
+  showing no assignment at all and silently contradicting the
+  `has_assignment_in_condition` flag reported beside it. The walker now keeps the
+  `=` and folds the assigned value to one operand, so the condition normalizes to
+  `((a=b)>c)`: the smell is visible in the skeleton an agent reads to confirm it,
+  and dup-shape comparison still works. Comparison and boolean operators are
+  unchanged, and arithmetic outside an assignment is still preserved.
 
 ## [0.115.0] — 2026-07-15 — feat(dsl): SHOW VERSION
 

@@ -1033,7 +1033,7 @@ Computed at index time. Queryable with `WHERE` like any other field.
 |---|---|---|
 | `condition_tests` | `if`, `while`, `for`, `do` | Number of boolean sub-expressions |
 | `paren_depth` | `if`, `while`, `for`, `do` | Max parentheses nesting |
-| `condition_text` | `if`, `while`, `for`, `do` | Normalized condition *skeleton* — operands alpha-renamed to `a`, `b`, … for shape comparison (e.g. `a||b&&c`); NOT raw source text. Grammars without a `condition` field (CMake, Make, C++ range-`for`) name rows by the construct's raw first line instead. |
+| `condition_text` | `if`, `while`, `for`, `do` | Normalized condition *skeleton* — **operands** (the nouns) are alpha-renamed to `a`, `b`, … for shape comparison, while **operators are kept verbatim** because the operator *is* the signal: `&&`, `\|\|`, `!`, the comparisons, the bitwise ops, and the assignment `=` (the `=`-for-`==` smell) all survive, so `x==5\|\|x==6` → `a==b\|\|a==c` and `if ((x = a + b) > 0)` → `((a=b)>c)`. The one exception is value-only arithmetic (`+ - * / %`) on the right of an assignment, which folds into a single operand (`x = a + b` → `a=b`). NOT raw source text. Grammars without a `condition` field (CMake, Make, C++ range-`for`) name rows by the construct's raw first line instead. |
 | `has_catch_all` | `switch` | `"true"` if switch has a catch-all case |
 | `catch_all_kind` | `switch` | Kind of catch-all (e.g. `"default"`) when present |
 | `for_style` | `for` | `"traditional"` or `"range"` |

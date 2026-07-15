@@ -177,7 +177,11 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        every file holding an error. Landing it required first porting every
 ///        hardcoded node_id pin out of `tests/golden.json` into the v2 suite,
 ///        which captures handles at run time (`tests/golden/node_addressing.json`).
-pub const ENRICH_VER: u32 = 32;
+///   33 — `condition_text` KEEPS an assignment `=` inside a condition and folds
+///        the assigned value to one operand, so `if ((x = a + b) > 0)` reads
+///        `((a=b)>c)`, not the old `((a)>b)`. v32 segments hold the pre-fix
+///        skeleton that drops the `=` and contradicts `has_assignment_in_condition`.
+pub const ENRICH_VER: u32 = 33;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";
