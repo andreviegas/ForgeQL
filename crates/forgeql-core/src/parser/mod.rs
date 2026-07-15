@@ -331,6 +331,9 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         | Rule::insert_node_for_stmt
         | Rule::move_node_to_stmt
         | Rule::copy_node_to_stmt
+        | Rule::move_nodes_last_to_stmt
+        | Rule::copy_nodes_last_to_stmt
+        | Rule::delete_nodes_last_stmt
         | Rule::delete_node_stmt
         | Rule::move_node_stmt
         | Rule::show_node_stmt => parse_node_stmt(pair),
@@ -519,6 +522,28 @@ fn parse_symbol_backend_clauses(
     Ok((symbol, backend, clauses))
 }
 
+/// Pull the value out of an `IF REV '<rev>'` clause when the next pair is one.
+///
+/// The bulk LAST verbs accept the clause optionally *in the grammar* and demand
+/// it in the engine. Making it mandatory here instead would drop
+/// `DELETE NODE LAST` through to `DELETE NODE`, which then reports
+/// `invalid node_id: LAST` — a parse error about the wrong thing, when what the
+/// agent actually needs to be told is that the gate is not optional.
+fn optional_if_rev(
+    inner: &mut pest::iterators::Pairs<'_, Rule>,
+) -> Result<Option<String>, ForgeError> {
+    if inner
+        .peek()
+        .is_some_and(|p| p.as_rule() == Rule::if_rev_clause)
+    {
+        let clause = inner
+            .next()
+            .ok_or_else(|| ForgeError::DslParse("if_rev: expected clause".into()))?;
+        return clause.into_inner().next().map(unwrap_any_value).transpose();
+    }
+    Ok(None)
+}
+
 /// Extract `(pattern, replacement, word_boundary)` from a `change_matching`
 /// pair: `MATCHING [WORD] 'pattern' WITH 'replacement'`.
 fn parse_matching_parts(
@@ -618,6 +643,22 @@ fn parse_node_path_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQL
             let dst = next_str(&mut inner, "copy_node_to: expected destination after TO")?;
             Ok(ForgeQLIR::CopyNodeTo { src_id, dst })
         }
+        Rule::move_nodes_last_to_stmt => {
+            let mut inner = pair.into_inner();
+            let if_rev = optional_if_rev(&mut inner)?;
+            let dst = next_str(
+                &mut inner,
+                "move_nodes_last_to: expected destination after TO",
+            )?;
+            Ok(ForgeQLIR::MoveNodesLastTo { dst, if_rev })
+        }
+        Rule::copy_nodes_last_to_stmt => {
+            let dst = next_str(
+                &mut pair.into_inner(),
+                "copy_nodes_last_to: expected destination after TO",
+            )?;
+            Ok(ForgeQLIR::CopyNodesLastTo { dst })
+        }
         other => Err(ForgeError::DslParse(format!(
             "node path statement: unexpected rule {other:?}"
         ))),
@@ -631,7 +672,20 @@ fn parse_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         Rule::change_node_stmt => parse_change_node_stmt(pair),
 
         Rule::change_nodes_last_stmt => {
-            let matching = pair.into_inner().next().ok_or_else(|| {
+            let mut if_rev = None;
+            let mut matching = None;
+            for child in pair.into_inner() {
+                if child.as_rule() == Rule::if_rev_clause {
+                    if_rev = child
+                        .into_inner()
+                        .next()
+                        .map(unwrap_any_value)
+                        .transpose()?;
+                } else {
+                    matching = Some(child);
+                }
+            }
+            let matching = matching.ok_or_else(|| {
                 ForgeError::DslParse("change_nodes_last: expected MATCHING clause".into())
             })?;
             let (pattern, replacement, word_boundary) = parse_matching_parts(matching)?;
@@ -639,11 +693,17 @@ fn parse_node_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
                 pattern,
                 replacement,
                 word_boundary,
+                if_rev,
             })
         }
-        Rule::insert_node_for_stmt | Rule::move_node_to_stmt | Rule::copy_node_to_stmt => {
-            parse_node_path_stmt(pair)
-        }
+        Rule::delete_nodes_last_stmt => Ok(ForgeQLIR::DeleteNodesLast {
+            if_rev: optional_if_rev(&mut pair.into_inner())?,
+        }),
+        Rule::insert_node_for_stmt
+        | Rule::move_node_to_stmt
+        | Rule::copy_node_to_stmt
+        | Rule::move_nodes_last_to_stmt
+        | Rule::copy_nodes_last_to_stmt => parse_node_path_stmt(pair),
 
         Rule::insert_node_stmt => {
             let mut inner = pair.into_inner();

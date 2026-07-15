@@ -118,6 +118,14 @@ pub struct QueryResult {
     /// input; never populated on ordinary results.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Master rev of the `LAST` set this FIND armed — the handle a bulk
+    /// `… NODE[S] LAST` mutation must quote in `IF REV`.
+    ///
+    /// Absent when the result was truncated (a set the agent has not seen in
+    /// full is never gated, so no LAST verb will act on it) or when the rows
+    /// carry nothing addressable (a `GROUP BY` aggregate).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_rev: Option<String>,
 }
 
 impl QueryResult {

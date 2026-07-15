@@ -94,8 +94,10 @@ statement = {
   | show_diff_stmt
   | change_stmt
   | copy_stmt
+  | move_nodes_last_to_stmt
   | move_node_to_stmt
   | move_node_stmt
+  | copy_nodes_last_to_stmt
   | copy_node_to_stmt
   | move_stmt
   | find_stmt
@@ -104,6 +106,7 @@ statement = {
   | change_node_stmt
   | insert_node_for_stmt
   | insert_node_stmt
+  | delete_nodes_last_stmt
   | delete_node_stmt
   | show_node_stmt
   | show_more_stmt
@@ -121,9 +124,23 @@ find_node_stmt = { "FIND" ~ "NODE" ~ any_value }
 /// pattern occurrences inside the node only (node-scoped mechanical rename).
 change_node_stmt = { "CHANGE" ~ "NODE" ~ any_value ~ if_rev_clause? ~ (change_matching | ("WITH" ~ content_value)) }
 
-/// `CHANGE NODES LAST MATCHING [WORD] 'a' WITH 'b'` — apply the replacement
-/// on every line of the previous FIND result (the mechanical rename sweep).
-change_nodes_last_stmt = { "CHANGE" ~ "NODES" ~ "LAST" ~ change_matching }
+/// `CHANGE NODES LAST [IF REV 'master'] MATCHING [WORD] 'a' WITH 'b'` — apply
+/// the replacement across every member of the previous FIND result (the
+/// mechanical rename sweep). `IF REV` proves the set has not moved since.
+change_nodes_last_stmt = { "CHANGE" ~ "NODES" ~ "LAST" ~ if_rev_clause? ~ change_matching }
+
+/// `DELETE NODE LAST IF REV 'master'` — delete every member of the set the
+/// previous FIND armed. `IF REV` is mandatory: a bulk delete is the one
+/// mutation that cannot be reviewed after the fact.
+delete_nodes_last_stmt = { "DELETE" ~ "NODE" ~ "LAST" ~ if_rev_clause? }
+
+/// `MOVE NODE LAST IF REV 'master' TO 'dir/'` — move every member into a
+/// directory, each keeping its basename.
+move_nodes_last_to_stmt = { "MOVE" ~ "NODE" ~ "LAST" ~ if_rev_clause? ~ "TO" ~ any_value }
+
+/// `COPY NODE LAST TO 'dir/'` — same, but the sources stay. Creation only, so
+/// no `IF REV`.
+copy_nodes_last_to_stmt = { "COPY" ~ "NODE" ~ "LAST" ~ "TO" ~ any_value }
 
 /// `INSERT BEFORE|AFTER NODE 'id' WITH content` — insert lines around a node.
 insert_node_stmt = { "INSERT" ~ insert_position ~ "NODE" ~ any_value ~ "WITH" ~ content_value }

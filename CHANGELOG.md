@@ -6,6 +6,63 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — `LAST`: mutating a whole FIND result under one rev
+
+```sql
+FIND usages OF 'oldName'                                    -- rows + last_rev: h9c…
+CHANGE NODES LAST IF REV 'h9c…' MATCHING 'oldName' WITH 'newName'
+
+FIND files IN 'legacy/**' WHERE extension = 'c'             -- rows + last_rev: h4b…
+DELETE NODE LAST IF REV 'h4b…'                              -- unlink every member
+MOVE NODE LAST IF REV 'h4b…' TO 'archive/'                  -- each keeps its basename
+COPY NODE LAST TO 'api/v2/'                                 -- creation only, so ungated
+```
+
+`FIND` **is** the set-selection syntax — a query with precise filters already names the set, so
+the bulk verbs address it as `LAST` instead of carrying a second glob grammar. The rows a FIND
+returns are saved in the session, and the response carries a **master rev**: a hash over every
+member's `(handle, rev)`. Quote it back in `IF REV` and the mutation runs only if not one member
+has moved since you looked — the set-level extension of the per-node `IF REV` contract. Unlike a
+directory's membership rev, it covers **content** too, because `CHANGE NODES LAST` edits content.
+
+Every member is mutated in **one plan**: one boundary diff, one `UNDO` step, never half-applied.
+An 80-file relocation is now two calls (`FIND files …` → `MOVE NODE LAST … TO 'api/v2/'`).
+
+Three refusals, in the order an agent hits them:
+
+- **No set** — nothing armed, or the previous mutation cleared it.
+- **A set you were never shown in full** — a FIND truncated by the default limit issues **no**
+  master rev, and every LAST verb then refuses. `FIND usages` capped at 20 of 500, swept, would
+  otherwise rename 20 and report success; that failure mode is now impossible.
+- **A set that moved** — the rev is re-derived from the live members at mutation time, so a
+  cached rev proves nothing. The mismatch hands back **no** replacement rev on purpose: the only
+  safe recovery is to re-run the FIND and look at the rows again.
+
+### Changed
+
+- **`CHANGE NODES LAST` sweeps a node's whole span, not its declaration line.** Armed from
+  `FIND symbols`, it now rewrites the entire function body; armed from `FIND usages` (whose rows
+  are call sites, not nodes) it still rewrites exactly those lines. Overlapping member spans are
+  merged, so no byte is edited twice.
+- **`FIND files` arms `LAST`** — it is a FIND, and its rows have carried handles and revs since
+  0.113.0. `FIND symbols`/`FIND usages` arm it as before.
+- **`CHANGE NODES LAST` accepts an optional `IF REV`.** The destructive bulk verbs
+  (`DELETE`/`MOVE NODE LAST`) require one; `COPY NODE LAST` creates and so needs none.
+- **`FIND files` responses carry `total`** — the pre-`LIMIT` row count, so a capped result is
+  distinguishable from a complete one. `FIND symbols`/`usages` already reported it.
+
+### Fixed
+
+- **A `GROUP BY` result no longer leaves the previous set armed.** `record_find_sites` returned
+  early when a result carried no `(path, line)` rows, so `FIND usages OF 'x'` → `FIND symbols
+  GROUP BY file` → `CHANGE NODES LAST` swept the **first** query's set — code the agent believed
+  it had replaced. An aggregate row is a count with a filename on it: it addresses nothing, so it
+  now clears `LAST` rather than arming a set no verb can act on.
+- **`LAST` survives a server restart.** The set is written to `.forgeql-lastset` in the
+  worktree when it changes and restored on reconnect, so an agent can FIND, hand the session to
+  another agent, and sweep from a restarted process. It is re-gated against live revs on use, so
+  restoring it can only re-offer a target — never authorise a stale one.
+
 ## [0.113.1] — 2026-07-14 — fix(git): user-facing commits no longer include undo-ring files
 
 ### Fixed

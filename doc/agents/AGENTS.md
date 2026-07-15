@@ -113,11 +113,14 @@ Edit indexed code by stable `node_id` **only**: `CHANGE NODE` replaces a node, `
 | `INSERT NODE FOR '<path>'` | Create an empty file — or a directory, with a trailing slash — and get its handle back. Then write into it with `INSERT AFTER NODE '<hex>' WITH …`. |
 | `<mutation> IF REV '<rev>'` | Guard a mutation on the node's content rev |
 | `UNDO` / `UNDO LAST-n` | Reverse recent mutations from the per-session undo ring |
+| `CHANGE NODES LAST [IF REV '<master>'] MATCHING 'a' WITH 'b'` | Sweep the replacement across **every member of the previous FIND** — a handle contributes its whole span, a usage row its one line |
+| `DELETE NODE LAST IF REV '<master>'` | Delete every member. `IF REV` **mandatory** |
+| `MOVE NODE LAST IF REV '<master>' TO 'dir/'` · `COPY NODE LAST TO 'dir/'` | Relocate every member into a directory, each keeping its basename. MOVE is gated, COPY is not |
 | Raw-text `CHANGE FILE` / copy / move | Non-indexed files only — see the syntax reference |
 
 **The diff is the contract.** Mutations are mechanical — the engine never fixes commas, wraps braces, or re-indents. Every mutation returns `new_node_id`, `lines_written`, `lines_removed`, and a boundary diff whose context lines carry inline `node_id(offset)` handles. Read the diff after every mutation: if it shows a seam you created, issue the follow-up `CHANGE NODE '<id>(off)'` yourself. A large `lines_removed` on a small edit means you clobbered more than intended — `UNDO` reverses it.
 
-**Renames** are a composition: `FIND usages OF 'old'` → inspect sites → one targeted `CHANGE NODE` per site.
+**Renames** are a composition: `FIND usages OF 'old'` aims at the exact occurrence sites (a string literal or a comment is not a usage site, so it survives untouched), then `CHANGE NODES LAST IF REV '<master>' MATCHING 'old' WITH 'new'` sweeps every one of them in a single mutation. The `last_rev` on the FIND response is the master rev to quote: it fails the sweep if any site moved since you looked, and a FIND truncated by the default limit issues none at all — so a partial result can never be renamed as if it were the whole one.
 
 Wrap mutations in a transaction and gate the commit:
 

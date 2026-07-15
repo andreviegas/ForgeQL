@@ -145,6 +145,13 @@ INSERT (BEFORE | AFTER) NODE '<node_id>' WITH 'text'
 DELETE NODE '<node_id>' [IF REV '<rev>']               -- '<id>(n-m)' deletes lines within the node
 MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'  -- relocate byte-exact; atomic; cross-file OK
 
+-- LAST — the set the previous FIND returned. FIND is the set-selection syntax;
+-- these act on every member in ONE atomic mutation (one diff, one UNDO step).
+CHANGE NODES LAST [IF REV '<master>'] MATCHING [WORD] 'a' WITH 'b'  -- sweep each member's span
+DELETE NODE LAST IF REV '<master>'                    -- IF REV mandatory: it destroys
+MOVE NODE LAST IF REV '<master>' TO 'dir/'            -- each member keeps its basename
+COPY NODE LAST TO 'dir/'                              -- creation only, so ungated
+
 -- Heredoc form when content contains quotes: WITH <<TAG … TAG (tag uppercase, own line)
 
 UNDO                     -- reverse the most recent mutation
@@ -157,6 +164,34 @@ VERIFY build 'step'      -- synchronous; grep the buffered log: SHOW MORE WHERE 
 JOB START 'step'         -- background job for long gates; JOB STATUS <id> / JOB LIST
 ROLLBACK [TRANSACTION 'name']
 ```
+
+### LAST — acting on a whole FIND result
+
+`FIND` **is** the set-selection syntax. The rows it returns are saved as `LAST`,
+and the response carries a **master rev** — a fingerprint of every member's
+`(handle, rev)`. Quote it back in `IF REV` and the mutation runs only if not one
+member has moved since you looked:
+
+```sql
+FIND usages OF 'oldName'                                  -- rows + last_rev: h9c…
+CHANGE NODES LAST IF REV 'h9c…' MATCHING 'oldName' WITH 'newName'
+```
+
+- **One mutation.** Every member is edited in a single plan: one diff, one `UNDO`
+  step, never half-applied.
+- **A handle contributes its whole span**, so a symbol row sweeps the entire
+  function body, not just its declaration line. A `FIND usages` row is a call
+  site: it contributes that one line.
+- **You can only act on what you saw.** A FIND truncated by the default limit
+  issues **no** master rev, and every LAST verb then refuses — widen the `LIMIT`
+  (or the filters) and look again.
+- **Any FIND replaces LAST; any mutation clears it.** A `GROUP BY` result is a
+  count, not a set of nodes: it clears LAST rather than arming something no verb
+  can address.
+- **On a rev mismatch, re-run the FIND.** The error hands back no new rev on
+  purpose — the set moved, so look at it again before acting on it.
+- Sites are not nodes: `DELETE`/`MOVE`/`COPY NODE LAST` need handles, so arm them
+  with `FIND files` or `FIND symbols`, not `FIND usages`.
 
 Every mutation answers with `new_node_id`, `lines_written`, `lines_removed`, and a
 boundary diff (context lines carry `node_id(offset)` handles) — read it, then fix

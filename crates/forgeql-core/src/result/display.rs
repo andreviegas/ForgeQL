@@ -134,6 +134,11 @@ impl fmt::Display for QueryResult {
                 self.total,
             )?;
         }
+        // The master rev of the set this FIND armed — quoted back in IF REV by
+        // a bulk LAST mutation. Absent on a truncated result, by design.
+        if let Some(ref rev) = self.last_rev {
+            writeln!(formatter, "last_rev: {rev}")?;
+        }
         Ok(())
     }
 }
@@ -204,6 +209,16 @@ impl fmt::Display for ShowResult {
                     writeln!(formatter)?;
                 }
                 writeln!(formatter, "({total} files)")?;
+                // Same master-rev line as FIND symbols/usages — FIND files
+                // arms LAST too, and the gate has to be quotable from here.
+                if let Some(rev) = self
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("last_rev"))
+                    .and_then(serde_json::Value::as_str)
+                {
+                    writeln!(formatter, "last_rev: {rev}")?;
+                }
             }
             ShowContent::Stats { sessions } =>
             {

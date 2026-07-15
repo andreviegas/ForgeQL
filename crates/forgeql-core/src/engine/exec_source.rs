@@ -340,6 +340,7 @@ impl ForgeQLEngine {
             metric_hint: Some("size_bytes".to_string()),
             group_by_field: None,
             hint,
+            last_rev: None,
         }))
     }
 
@@ -479,6 +480,12 @@ impl ForgeQLEngine {
             let worktree = session.worktree_path.clone();
             let current_head = crate::session::Session::get_head_oid(&worktree).unwrap_or_default();
             crate::session::checkpoint_file::try_restore(session, &worktree, &current_head);
+            // The LAST set outlives the process too: an agent may FIND, hand the
+            // session to another agent (or wait out a restart), and only then
+            // sweep. The set is re-gated against live revs at mutation time, so
+            // restoring it can only re-offer a target — never authorise a stale
+            // one.
+            session.last_set = crate::session::last_set::try_restore(&worktree);
         }
         // FT7: on reconnect, reindex any tracked files that were modified on
         // disk but not captured in a checkpoint commit.  Non-fatal — if the git
@@ -727,6 +734,7 @@ impl ForgeQLEngine {
             metric_hint: None,
             group_by_field: None,
             hint: None,
+            last_rev: None,
         }))
     }
 

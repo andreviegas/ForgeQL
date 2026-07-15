@@ -286,14 +286,20 @@ pub enum ForgeQLIR {
         word_boundary: bool,
     },
 
-    /// `CHANGE NODES LAST MATCHING [WORD] 'a' WITH 'b'` — apply the
-    /// replacement on every line of the previous FIND result in this
-    /// session (the mechanical rename sweep).
+    /// `CHANGE NODES LAST [IF REV 'master'] MATCHING [WORD] 'a' WITH 'b'` —
+    /// apply the replacement across every member of the set the previous FIND
+    /// armed (the mechanical rename sweep).
+    ///
+    /// `IF REV` is optional here — a content edit can be reviewed in the
+    /// boundary diff and corrected — but it is the only way to prove the set
+    /// has not moved under the agent since the FIND.
     ChangeNodesLast {
         pattern: String,
         replacement: String,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         word_boundary: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        if_rev: Option<String>,
     },
 
     /// `INSERT NODE FOR 'path'` — create an empty file, or a directory when the
@@ -353,6 +359,23 @@ pub enum ForgeQLIR {
     /// `COPY NODE 'src' TO 'dst'` — same addressing as `MOVE NODE … TO`, but
     /// the source stays where it is. Creation only, so no `IF REV`.
     CopyNodeTo { src_id: String, dst: String },
+
+    /// `DELETE NODE LAST IF REV 'master'` — delete every member of the set the
+    /// previous FIND armed, in one plan.
+    ///
+    /// `IF REV` is mandatory, and the master rev is only issued for a complete
+    /// result: a bulk delete of rows the agent never saw is the one mistake
+    /// that cannot be reviewed afterwards.
+    DeleteNodesLast { if_rev: Option<String> },
+
+    /// `MOVE NODE LAST IF REV 'master' TO 'dir/'` — move every member of the
+    /// set into a directory. Each source keeps its basename, so unlike the
+    /// single-node form the destination cannot be a full rename.
+    MoveNodesLastTo { dst: String, if_rev: Option<String> },
+
+    /// `COPY NODE LAST TO 'dir/'` — as `MOVE NODE LAST … TO`, but the sources
+    /// stay put. Creation only, so no `IF REV`.
+    CopyNodesLastTo { dst: String },
     /// `SHOW NODE 'id' [CONTENT | METADATA]`
     ///
     /// * `CONTENT` (default) — return the source lines of the node.

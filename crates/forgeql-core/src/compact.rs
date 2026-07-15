@@ -86,7 +86,7 @@ fn compact_show(s: &ShowResult) -> String {
         ShowContent::CallGraph {
             direction, entries, ..
         } => compact_callgraph(s, direction, entries),
-        ShowContent::FileList { files, total } => compact_filelist(files, *total),
+        ShowContent::FileList { files, total } => compact_filelist(files, *total, s),
         ShowContent::Stats { sessions } => compact_stats(sessions),
     }
 }
@@ -310,7 +310,7 @@ fn compact_callgraph(
 
 /// FIND files → 2 flat columns: path, size — plus `error_count` and/or
 /// `parse_coverage` when the query asked about them.
-fn compact_filelist(files: &[FileEntry], total: usize) -> String {
+fn compact_filelist(files: &[FileEntry], total: usize, s: &ShowResult) -> String {
     let mut out = String::with_capacity(files.len() * 40);
     // Header.
     let tot = total.to_string();
@@ -357,6 +357,16 @@ fn compact_filelist(files: &[FileEntry], total: usize) -> String {
         }
         let cell_refs: Vec<&str> = cells.iter().map(String::as_str).collect();
         row(&mut out, &cell_refs);
+    }
+    // The master rev of the set this FIND armed — same row, same meaning as on
+    // FIND symbols/usages, so an agent learns the gate once.
+    if let Some(rev) = s
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("last_rev"))
+        .and_then(serde_json::Value::as_str)
+    {
+        row(&mut out, &[&q("last_rev"), &q(rev)]);
     }
     chomp(&mut out);
     out
@@ -714,6 +724,12 @@ fn compact_query(query: &QueryResult) -> String {
     // one CSV row so the caller sees it next to the (usually empty) results.
     if let Some(hint) = &query.hint {
         row(&mut out, &[&q("hint"), &q(hint)]);
+    }
+    // The master rev of the set this FIND just armed — what a bulk
+    // `… NODE[S] LAST` mutation quotes in IF REV. One row, and only when a rev
+    // was issued: a truncated result deliberately has none.
+    if let Some(rev) = &query.last_rev {
+        row(&mut out, &[&q("last_rev"), &q(rev)]);
     }
     out
 }

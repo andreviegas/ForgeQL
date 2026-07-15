@@ -151,8 +151,11 @@ fn convert_show_content(op: &ForgeQLIR, json: &serde_json::Value) -> Result<Show
 
         ForgeQLIR::FindFiles { clauses, .. } => {
             let files = parse_file_entries(json, clauses);
+            // `total` is the pre-LIMIT row count; `count` is what came back.
+            // Older payloads carry only `count`, so fall back to it.
             let total = json
-                .get("count")
+                .get("total")
+                .or_else(|| json.get("count"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(files.len() as u64) as usize;
             Ok(ShowContent::FileList { files, total })

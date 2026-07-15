@@ -402,7 +402,7 @@ impl ForgeQLEngine {
         // precisely the bugs a restart causes.
         let current_head = Session::get_head_oid(workspace_root).unwrap_or_default();
         crate::session::checkpoint_file::try_restore(&mut session, workspace_root, &current_head);
-
+        session.last_set = crate::session::last_set::try_restore(workspace_root);
         session.build_index()?;
 
         session.touch();

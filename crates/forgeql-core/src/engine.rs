@@ -477,6 +477,9 @@ impl ForgeQLEngine {
                 | ForgeQLIR::ChangeNodesLast { .. }
                 | ForgeQLIR::InsertNode { .. }
                 | ForgeQLIR::DeleteNode { .. }
+                | ForgeQLIR::DeleteNodesLast { .. }
+                | ForgeQLIR::MoveNodesLastTo { .. }
+                | ForgeQLIR::CopyNodesLastTo { .. }
                 | ForgeQLIR::BeginTransaction { .. }
                 | ForgeQLIR::Commit { .. }
                 | ForgeQLIR::Rollback { .. }
@@ -550,8 +553,11 @@ impl ForgeQLEngine {
             | ForgeQLIR::ShowMembers { .. }
             | ForgeQLIR::ShowBody { .. }
             | ForgeQLIR::ShowCallees { .. }
-            | ForgeQLIR::ShowLines { .. }
-            | ForgeQLIR::FindFiles { .. } => self.exec_show(sid, op),
+            | ForgeQLIR::ShowLines { .. } => self.exec_show(sid, op),
+            // FIND files is a SHOW op internally, but it is still a FIND: it
+            // arms LAST like the other two.
+            ForgeQLIR::FindFiles { .. } => self.exec_find_files(sid, op),
+
             // --- Mutations ---
             ForgeQLIR::ChangeContent { .. } => self.exec_mutation(sid, op, true),
             ForgeQLIR::ChangeNode { .. } => self.exec_change_node(sid, op),
@@ -560,9 +566,12 @@ impl ForgeQLEngine {
             ForgeQLIR::InsertNode { .. } => self.exec_insert_node(sid, op),
             ForgeQLIR::InsertNodeFor { .. } => self.exec_insert_node_for(sid, op),
             ForgeQLIR::DeleteNode { .. } => self.exec_delete_node(sid, op),
+            ForgeQLIR::DeleteNodesLast { .. } => self.exec_delete_nodes_last(sid, op),
             ForgeQLIR::MoveNode { .. } => self.exec_move_node(sid, op),
             ForgeQLIR::MoveNodeTo { .. } => self.exec_move_node_to(sid, op, true),
             ForgeQLIR::CopyNodeTo { .. } => self.exec_move_node_to(sid, op, false),
+            ForgeQLIR::MoveNodesLastTo { .. } => self.exec_move_nodes_last_to(sid, op, true),
+            ForgeQLIR::CopyNodesLastTo { .. } => self.exec_move_nodes_last_to(sid, op, false),
             ForgeQLIR::CopyLines { .. } => self.exec_copy_lines(sid, op),
             ForgeQLIR::MoveLines { .. } => self.exec_move_lines(sid, op),
             // --- Checkpoint-based transactions ---

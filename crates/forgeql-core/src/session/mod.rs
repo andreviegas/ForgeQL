@@ -26,6 +26,7 @@ use crate::workspace::Workspace;
 
 pub mod checkpoint_file;
 pub mod coords;
+pub mod last_set;
 
 pub use coords::SessionCoords;
 
@@ -276,10 +277,11 @@ pub struct Session {
     /// (unlike `edits_since_gate`). Snapshotted when a gated job starts so its
     /// completion can prove no edit happened while the job was running.
     pub mutation_seq: u64,
-    /// `(rel_path, line)` for every row of the most recent FIND result that
-    /// carried both a path and a line — the target set for
-    /// `CHANGE NODES LAST MATCHING …` (the mechanical rename sweep).
-    pub last_find_sites: Vec<(String, usize)>,
+    /// The set the most recent FIND armed — the target of every `… NODE[S] LAST`
+    /// verb. `None` until the first FIND, and again after any mutation: a
+    /// mutation shifts line numbers, so a set that outlived it points at the
+    /// wrong code.
+    pub last_set: Option<last_set::LastSet>,
     /// Optional line-budget tracker.  `None` when the `.forgeql.yaml` does
     /// not contain a `line_budget` section.
     budget: Option<BudgetState>,
@@ -353,7 +355,7 @@ impl Session {
             satisfied_gates: std::collections::HashSet::new(),
             edits_since_gate: 0,
             mutation_seq: 0,
-            last_find_sites: Vec::new(),
+            last_set: None,
             budget: None,
             budget_data_dir: None,
             budget_branch: None,

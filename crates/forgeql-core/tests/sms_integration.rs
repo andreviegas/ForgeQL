@@ -1651,6 +1651,7 @@ mod invariant_tests {
             metric_hint: None,
             group_by_field: None,
             hint: None,
+            last_rev: None,
         })
     }
 

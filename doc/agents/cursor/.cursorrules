@@ -45,7 +45,12 @@ The right way to find and read code:
 - Create a file/directory: `INSERT NODE FOR 'src/new.rs'` · `INSERT NODE FOR 'docs/'` — returns the new handle; write into it with `INSERT AFTER NODE '<hex>' WITH '...'`
 - Rename/move/copy a file: `MOVE NODE '<hex>' IF REV '<rev>' TO 'path/new.rs'` (or `TO '<dir_hex>'`) · `COPY NODE '<hex>' TO 'api/v2/'` — MOVE is gated, COPY is not; the destination is never clobbered
 - Reverse a bad edit: `UNDO` (most recent) · `UNDO LAST-n`
-- Rename = mechanical sweep: `FIND usages OF 'old'` → one targeted `CHANGE NODE` per site
+- Act on a whole FIND result — `LAST` is the set the previous FIND returned, and its response carries a **master rev** (`last_rev`) that gates the mutation. Every member is edited in ONE atomic plan:
+  - Sweep: `CHANGE NODES LAST [IF REV '<master>'] MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a `FIND usages` row its one line
+  - Delete: `DELETE NODE LAST IF REV '<master>'` — `IF REV` mandatory
+  - Relocate: `MOVE NODE LAST IF REV '<master>' TO 'dir/'` · `COPY NODE LAST TO 'dir/'` (ungated)
+  - A truncated FIND issues no master rev and every LAST verb refuses — widen the `LIMIT` and look again. Any FIND replaces LAST; any mutation clears it.
+- Rename = aim, then sweep: `FIND usages OF 'old'` → `CHANGE NODES LAST IF REV '<master>' MATCHING 'old' WITH 'new'`
 - Gate then commit: `BEGIN TRANSACTION` → edits → `VERIFY build 'step'` (or `JOB START 'step'` for long gates; poll `JOB STATUS <id>`) → `COMMIT MESSAGE 'msg'`. Steps marked `commit_gate: true` must pass after the last edit or COMMIT is refused.
 - Raw-text `CHANGE FILE` / line-range copy/move: non-indexed files only (see the syntax reference).
 

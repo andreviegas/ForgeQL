@@ -321,6 +321,7 @@ fn find_symbols_groups_by_kind() {
         total: 3,
         metric_hint: None,
         group_by_field: None,
+        last_rev: None,
         hint: None,
         results: vec![
             SymbolMatch {
@@ -385,6 +386,7 @@ fn find_symbols_cf_rows_include_enclosing_fn() {
         total: 1,
         metric_hint: None,
         group_by_field: None,
+        last_rev: None,
         hint: None,
         results: vec![SymbolMatch {
             name: "(a&&(b||c))".into(),
@@ -420,6 +422,7 @@ fn find_usages_groups_by_file() {
         total: 3,
         metric_hint: None,
         group_by_field: None,
+        last_rev: None,
         hint: None,
         results: vec![
             SymbolMatch {
@@ -477,6 +480,7 @@ fn count_usages_flat_rows() {
         total: 2,
         metric_hint: None,
         group_by_field: None,
+        last_rev: None,
         hint: None,
         results: vec![
             SymbolMatch {
@@ -524,6 +528,7 @@ fn find_symbols_with_metric_hint_shows_field_value() {
         total: 2,
         metric_hint: Some("member_count".into()),
         group_by_field: None,
+        last_rev: None,
         hint: None,
         results: vec![
             SymbolMatch {

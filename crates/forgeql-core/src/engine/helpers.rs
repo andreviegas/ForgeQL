@@ -80,6 +80,9 @@ pub(crate) const fn mutation_op_name(op: &ForgeQLIR) -> &'static str {
         ForgeQLIR::InsertNode { .. } => "insert_node",
         ForgeQLIR::InsertNodeFor { .. } => "insert_node_for",
         ForgeQLIR::DeleteNode { .. } => "delete_node",
+        ForgeQLIR::DeleteNodesLast { .. } => "delete_nodes_last",
+        ForgeQLIR::MoveNodesLastTo { .. } => "move_nodes_last_to",
+        ForgeQLIR::CopyNodesLastTo { .. } => "copy_nodes_last_to",
         _ => "unknown_mutation",
     }
 }

@@ -106,6 +106,14 @@ fn try_fql(
     engine.execute(auth(AuthContext::Tester), Some(&coords), op)
 }
 
+/// Run a statement that must be refused, and hand back the message it was
+/// refused with — the message is the contract for every LAST gate.
+fn fql_err(engine: &mut ForgeQLEngine, session_id: &str, fql: &str) -> String {
+    try_fql(engine, session_id, fql)
+        .expect_err("must be refused")
+        .to_string()
+}
+
 // -----------------------------------------------------------------------
 // Files and directories as addressable nodes (bare-hex `n<hex>` handles)
 // -----------------------------------------------------------------------
@@ -2290,8 +2298,188 @@ fn change_nodes_last_without_find_errors() {
         .execute(auth(AuthContext::Tester), Some(&coords), &ops[0])
         .expect_err("must fail without a previous FIND");
     assert!(
-        err.to_string().contains("no previous FIND result"),
+        err.to_string().contains("no FIND result is armed"),
         "guidance expected: {err}"
+    );
+}
+
+/// A complete FIND issues a master rev; quoting it back runs the sweep.
+#[test]
+fn last_rev_gates_the_sweep() {
+    let (mut engine, sid, dir) = engine_with_session();
+
+    let r = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    let rev = qr
+        .last_rev
+        .expect("a complete FIND must issue a master rev");
+
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        &format!(
+            "CHANGE NODES LAST IF REV '{rev}' MATCHING WORD 'encenderMotor' WITH 'startMotor'"
+        ),
+    );
+    let ForgeQLResult::Mutation(mr) = r else {
+        panic!("expected Mutation result");
+    };
+    assert!(mr.applied);
+
+    let cpp = fs::read_to_string(dir.path().join("motor_control.cpp")).expect("read cpp");
+    assert!(cpp.contains("startMotor"), "rename applied under the gate");
+}
+
+/// A master rev that no longer matches the live members refuses the mutation —
+/// and hands back no replacement rev, so the only way on is to look again.
+#[test]
+fn stale_last_rev_is_refused() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let _ = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
+    let err = fql_err(
+        &mut engine,
+        &sid,
+        "CHANGE NODES LAST IF REV 'hdeadbeefdeadbeef' MATCHING 'encenderMotor' WITH 'x'",
+    );
+    assert!(err.contains("rev_mismatch"), "gate must fire: {err}");
+    assert!(
+        !err.contains("\"current\""),
+        "a set-level mismatch must not hand back a fresh rev to blindly retry: {err}"
+    );
+}
+
+/// A GROUP BY row is a count with a filename on it. It must clear LAST rather
+/// than arm a set that no verb can act on.
+#[test]
+fn group_by_result_clears_last() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let _ = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
+    let r = execute_fql(&mut engine, &sid, "FIND symbols GROUP BY file");
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    assert!(
+        qr.last_rev.is_none(),
+        "an aggregate addresses nothing — no master rev"
+    );
+
+    let err = fql_err(
+        &mut engine,
+        &sid,
+        "CHANGE NODES LAST MATCHING 'encenderMotor' WITH 'x'",
+    );
+    assert!(
+        err.contains("no FIND result is armed"),
+        "the aggregate must clear LAST, not leave the previous set armed: {err}"
+    );
+}
+
+/// The destructive bulk verbs will not run ungated.
+#[test]
+fn delete_node_last_requires_if_rev() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let _ = execute_fql(&mut engine, &sid, "FIND files");
+    let err = fql_err(&mut engine, &sid, "DELETE NODE LAST");
+    assert!(
+        err.contains("requires IF REV"),
+        "a bulk delete must demand the gate: {err}"
+    );
+}
+
+/// `FIND usages` rows are call sites, not nodes: they cannot be deleted or moved.
+#[test]
+fn bulk_delete_refuses_a_set_of_usage_sites() {
+    let (mut engine, sid, _dir) = engine_with_session();
+
+    let r = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    let rev = qr.last_rev.expect("master rev");
+
+    let err = fql_err(
+        &mut engine,
+        &sid,
+        &format!("DELETE NODE LAST IF REV '{rev}'"),
+    );
+    assert!(
+        err.contains("addressable nodes"),
+        "a site is not a node — say so: {err}"
+    );
+}
+
+/// A session outlives the process. An agent may FIND, hand the session on (or
+/// wait out a restart), and only then sweep — so the set has to come back.
+#[test]
+fn last_set_survives_a_restart() {
+    let (mut engine, sid, dir) = engine_with_session();
+
+    let r = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    let rev = qr.last_rev.expect("master rev");
+    drop(engine); // the server goes away between the FIND and the sweep
+
+    let mut restarted =
+        ForgeQLEngine::new(dir.path().join("data"), make_registry()).expect("engine");
+    let sid2 = restarted
+        .register_local_session(dir.path())
+        .expect("register session");
+
+    let r = execute_fql(
+        &mut restarted,
+        &sid2,
+        &format!(
+            "CHANGE NODES LAST IF REV '{rev}' MATCHING WORD 'encenderMotor' WITH 'startMotor'"
+        ),
+    );
+    let ForgeQLResult::Mutation(mr) = r else {
+        panic!("expected Mutation result");
+    };
+    assert!(
+        mr.applied,
+        "a set armed before the restart is still the set"
+    );
+
+    let cpp = fs::read_to_string(dir.path().join("motor_control.cpp")).expect("read cpp");
+    assert!(cpp.contains("startMotor"));
+}
+
+/// ...but a mutation clears the persisted copy too. Resurrecting a set whose
+/// members the mutation just moved would hand stale spans to the next sweep —
+/// and `CHANGE NODES LAST` does not require a rev to run.
+#[test]
+fn a_mutation_clears_the_set_on_disk_too() {
+    let (mut engine, sid, dir) = engine_with_session();
+
+    let _ = execute_fql(&mut engine, &sid, "FIND usages OF 'encenderMotor'");
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        "CHANGE NODES LAST MATCHING WORD 'encenderMotor' WITH 'startMotor'",
+    );
+    drop(engine);
+
+    let mut restarted =
+        ForgeQLEngine::new(dir.path().join("data"), make_registry()).expect("engine");
+    let sid2 = restarted
+        .register_local_session(dir.path())
+        .expect("register session");
+
+    let err = fql_err(
+        &mut restarted,
+        &sid2,
+        "CHANGE NODES LAST MATCHING 'startMotor' WITH 'x'",
+    );
+    assert!(
+        err.contains("no FIND result is armed"),
+        "the mutation must have cleared the on-disk set, not left it to be restored: {err}"
     );
 }
 

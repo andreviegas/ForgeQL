@@ -14,6 +14,7 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
    - [FIND Commands](#find-commands)
    - [SHOW Commands](#show-commands)
    - [Editing Commands (node handles)](#editing-commands-node-handles)
+   - [LAST — mutating a whole FIND result](#last--mutating-a-whole-find-result)
    - [Node Addressing](#node-addressing)
    - [Mutation Responses — the diff is the contract](#mutation-responses--the-diff-is-the-contract)
    - [UNDO](#undo)
@@ -140,6 +141,10 @@ FIND files [clauses]
 
 > **Use `fql_kind` for all filtering.** It is language-agnostic and portable across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific and **deprecated**.
 
+Every `FIND` also **arms `LAST`** — the set its rows describe — and a complete result carries a
+`last_rev` row: the master rev that gates a bulk mutation over that set. See
+[LAST — mutating a whole FIND result](#last--mutating-a-whole-find-result).
+
 ---
 
 ### SHOW Commands
@@ -229,8 +234,13 @@ COPY NODE '<src_id>' TO '<dir_hex> | <path>'
 
 INSERT NODE FOR '<path>'          -- create an empty file
 INSERT NODE FOR '<path>/'         -- create a directory
+
+-- LAST — every member of the previous FIND result, in one mutation
+CHANGE NODES LAST [IF REV '<master>'] MATCHING [WORD] 'old' WITH 'new'
+DELETE NODE LAST IF REV '<master>'
+MOVE NODE LAST IF REV '<master>' TO '<dir_hex> | <dir>/'
+COPY NODE LAST TO '<dir_hex> | <dir>/'
 ```
-`<node_id>` is a stable handle from `FIND symbols`, `SHOW outline`, `FIND NODE`, or the CSV form of `SHOW body` (see [Node Addressing](#node-addressing)). Editing by handle is drift-proof: a node_id stays valid across edits that shift line numbers, so you read once and mutate by handle.
 
 | Variant | Effect |
 |---|---|
@@ -244,7 +254,47 @@ INSERT NODE FOR '<path>/'         -- create a directory
 | `MOVE NODE '<src>' IF REV … TO '<dst>'` | Move or rename: `<dst>` is a directory handle (keeps the basename) or a path. A whole-file source is **unlinked**, not emptied — `IF REV` mandatory |
 | `COPY NODE '<src>' TO '<dst>'` | Same addressing, source stays put. Creates only, so ungated |
 | `INSERT NODE FOR '<path>'` | Create an empty file (trailing slash: a directory) and return its handle — the one verb that takes a path, because the path does not exist yet |
+| `CHANGE NODES LAST [IF REV …] MATCHING …` | Sweep the replacement across **every member of the previous FIND**, in one plan |
+| `DELETE NODE LAST IF REV '<master>'` | Delete every member. `IF REV` **mandatory** |
+| `MOVE NODE LAST IF REV '<master>' TO '<dir>'` | Move every member into a directory, each keeping its basename |
+| `COPY NODE LAST TO '<dir>'` | Same, sources stay put. Creates only, so ungated |
 
+#### LAST — mutating a whole FIND result
+
+`FIND` **is** the set-selection syntax. A query with precise filters already names the set, so the
+bulk verbs address it as `LAST` rather than carrying a second glob grammar. The rows a FIND
+returned are saved in the session, and a complete result carries a **master rev** — a hash over
+every member's `(handle, rev)`:
+
+```sql
+FIND usages OF 'oldName'                                    -- rows + last_rev: h9c…
+CHANGE NODES LAST IF REV 'h9c…' MATCHING 'oldName' WITH 'newName'
+
+FIND files IN 'legacy/**' WHERE extension = 'c'             -- rows + last_rev: h4b…
+MOVE NODE LAST IF REV 'h4b…' TO 'archive/'
+```
+
+Quote the master rev in `IF REV` and the mutation runs only if not one member has moved since you
+looked — the set-level extension of the per-node `IF REV` contract. It is re-derived from the live
+members at mutation time, so a rev cached at FIND time proves nothing about now. Unlike a
+directory's membership rev, it covers **content** as well, because `CHANGE NODES LAST` edits
+content.
+
+Every member is mutated in **one plan**: one boundary diff, one `UNDO` step, never half-applied.
+
+| Rule | Why |
+|---|---|
+| A **handle contributes its whole span**; a `FIND usages` row contributes its one line | A symbol row means the function; a usage row means the call site |
+| A **truncated FIND issues no master rev**, and every LAST verb then refuses | `FIND usages` capped at 20 of 500, swept, would rename 20 and report success. Widen the `LIMIT` and look again |
+| **Any FIND replaces `LAST`; any mutation clears it** | A mutation shifts line numbers, so the set no longer points at what you saw |
+| A **`GROUP BY` result clears it** | An aggregate row is a count with a filename on it — it addresses nothing |
+| A **rev mismatch hands back no new rev** | The set moved; the only safe recovery is to re-run the FIND and see what it looks like now |
+| `DELETE`/`MOVE`/`COPY NODE LAST` need **handles** | Usage sites are lines, not nodes — arm them with `FIND files` or `FIND symbols` |
+| `IF REV` is **mandatory** for `DELETE`/`MOVE NODE LAST`, optional for `CHANGE NODES LAST`, absent from `COPY NODE LAST` | Destroying N things you cannot see is the one mistake the diff cannot catch afterwards; a copy creates and destroys nothing |
+
+The set is written to `.forgeql-lastset` in the worktree, so it survives a server restart: an agent
+may FIND, hand the session to another agent, and only then sweep. It is re-gated against live revs
+on use, so restoring it can only re-offer a target — never authorise a stale one.
 #### MOVE NODE
 
 Relocation, not re-authoring. `MOVE NODE` lifts the node's bytes **verbatim** and splices them at

@@ -687,6 +687,19 @@ impl ForgeQLEngine {
         };
         let max_depth = clauses.depth.unwrap_or(usize::MAX);
         stamp_error_counts(engine, workspace.root(), clauses, &mut entries)?;
+
+        // Rows that survive the filters but not the LIMIT. `count` alone cannot
+        // tell a complete result from a capped one, and `LAST` has to know:
+        // a set armed from rows the agent never saw is not a set it chose.
+        let total = {
+            let mut unbounded = clauses.clone();
+            unbounded.limit = None;
+            unbounded.offset = None;
+            let mut probe = entries.clone();
+            crate::filter::apply_clauses(&mut probe, &unbounded);
+            probe.len()
+        };
+
         let mut results = format_file_results(&mut entries, clauses, max_depth);
         stamp_path_handles(workspace, &mut results);
         let count = results.len();
@@ -696,6 +709,7 @@ impl ForgeQLEngine {
             "depth":   max_depth,
             "results": results,
             "count":   count,
+            "total":   total,
         }))
     }
 }

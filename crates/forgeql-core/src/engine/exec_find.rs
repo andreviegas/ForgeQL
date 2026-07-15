@@ -3,6 +3,7 @@ use anyhow::Result;
 use crate::{
     ir::{Backend, Clauses, GroupBy},
     result::{ForgeQLResult, QueryResult, ShowContent, ShowResult},
+    session::last_set::{self, LastMember, LastSet},
 };
 
 use super::ForgeQLEngine;
@@ -37,7 +38,7 @@ impl ForgeQLEngine {
             _ => None,
         };
         let hint = Self::unknown_where_field_hint(clauses, &results);
-        self.record_find_sites(sid, &results);
+        let last_rev = self.record_last_set(sid, "find_symbols", &results, total, clauses);
 
         Ok(ForgeQLResult::Query(QueryResult {
             op: "find_symbols".to_string(),
@@ -46,6 +47,7 @@ impl ForgeQLEngine {
             metric_hint,
             group_by_field,
             hint,
+            last_rev,
         }))
     }
 
@@ -98,7 +100,7 @@ impl ForgeQLEngine {
         if clauses.limit.is_none() {
             results.truncate(session.output_config().find_limit);
         }
-        self.record_find_sites(sid, &results);
+        let last_rev = self.record_last_set(sid, "find_usages", &results, total, clauses);
 
         Ok(ForgeQLResult::Query(QueryResult {
             op: "find_usages".to_string(),
@@ -107,33 +109,162 @@ impl ForgeQLEngine {
             metric_hint: None,
             group_by_field: None,
             hint: None,
+            last_rev,
         }))
     }
 
-    /// Remember `(rel_path, line)` for every result row carrying both — the
-    /// target set consumed by `CHANGE NODES LAST MATCHING …`. Rows without a
-    /// path or line (GROUP BY aggregates, source listings) record nothing,
-    /// leaving the previous target set intact.
-    fn record_find_sites(&mut self, sid: &str, results: &[crate::result::SymbolMatch]) {
-        let Some(session) = self.sessions.get_mut(sid) else {
-            return;
+    /// Arm `LAST` from a symbol/usage FIND result.
+    ///
+    /// Every FIND replaces the set — and a FIND whose rows carry no location
+    /// (a `GROUP BY` aggregate) clears it rather than leaving the previous one
+    /// armed. A set that survives the query the agent believes replaced it is
+    /// how `CHANGE NODES LAST` ends up sweeping code nobody looked at.
+    ///
+    /// `complete` is false when the FIND was truncated: the members are exactly
+    /// the rows returned, so a capped result can still be inspected, but no
+    /// master rev will be issued for it and every LAST verb refuses.
+    fn record_last_set(
+        &mut self,
+        sid: &str,
+        origin: &str,
+        results: &[crate::result::SymbolMatch],
+        total: usize,
+        clauses: &Clauses,
+    ) -> Option<String> {
+        let root = self.sessions.get(sid)?.worktree_path.clone();
+
+        // An aggregate is not a set of nodes. `GROUP BY` rows are counts — they
+        // may even carry a stray handle from the group's first member — and a
+        // set armed from them addresses nothing anyone asked for. Read it off
+        // the query, not the row shape: the query is what the agent wrote.
+        //
+        // The row check then keeps out anything that carries no location at all.
+        let addressable = |r: &crate::result::SymbolMatch| {
+            r.path.is_some() && (r.node_id.is_some() || r.line.is_some_and(|l| l >= 1))
         };
-        let root = session.worktree_path.clone();
-        let sites: Vec<(String, usize)> = results
-            .iter()
-            .filter_map(|r| {
-                let path = r.path.as_ref()?;
-                let line = r.line?;
-                // Backends may return worktree-absolute paths; store
-                // worktree-relative so the sweep can resolve them safely.
-                let rel = path.strip_prefix(&root).unwrap_or(path);
-                Some((rel.to_string_lossy().into_owned(), line))
-            })
-            .collect();
-        if sites.is_empty() {
-            return;
+        let members: Vec<LastMember> =
+            if clauses.group_by.is_none() && results.iter().all(addressable) {
+                results
+                    .iter()
+                    .filter_map(|r| {
+                        let path = r.path.as_ref()?;
+                        // Backends may return worktree-absolute paths; store
+                        // worktree-relative so the sweep can resolve them safely.
+                        let rel = path.strip_prefix(&root).unwrap_or(path);
+                        Some(LastMember {
+                            node_id: r.node_id.clone(),
+                            path: rel.to_string_lossy().into_owned(),
+                            line: r.line.filter(|l| *l >= 1),
+                        })
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        self.arm_last_set(sid, origin, members, total, results.len())
+    }
+
+    /// Store the set, or clear it when there is nothing addressable to store.
+    ///
+    /// The one place `Session::last_set` is written, so the on-disk copy cannot
+    /// drift from the in-memory one: a session outlives the server process, and
+    /// a LAST that survives only in RAM is a LAST the next process silently
+    /// loses.
+    fn arm_last_set(
+        &mut self,
+        sid: &str,
+        origin: &str,
+        members: Vec<LastMember>,
+        total: usize,
+        returned: usize,
+    ) -> Option<String> {
+        let root = self.sessions.get(sid)?.worktree_path.clone();
+        if members.is_empty() {
+            if let Some(session) = self.sessions.get_mut(sid) {
+                session.last_set = None;
+            }
+            last_set::clear(&root);
+            return None;
         }
-        session.last_find_sites = sites;
+
+        // A truncated result gets no master rev: without one every LAST verb
+        // refuses, which is the whole point — the rows beyond the cap were
+        // never shown, and a set the agent did not see is not a set it chose.
+        let complete = total == returned;
+        let master_rev = if complete {
+            self.master_rev_of(sid, &members).ok()
+        } else {
+            None
+        };
+
+        let set = LastSet {
+            origin: origin.to_string(),
+            complete,
+            master_rev: master_rev.clone(),
+            members,
+        };
+        if let Err(err) = last_set::save(&set, &root) {
+            tracing::warn!(
+                error = %err,
+                "could not persist the LAST set; a server restart will lose it"
+            );
+        }
+        if let Some(session) = self.sessions.get_mut(sid) {
+            session.last_set = Some(set);
+        }
+        master_rev
+    }
+
+    /// `FIND files` — executed by the SHOW family (it renders a file listing),
+    /// but it is a FIND, so it arms LAST like the other two.
+    ///
+    /// Only handle-carrying rows arm it. A `GROUP BY` aggregate row is a count,
+    /// not a node: there is nothing for a bulk verb to address and nothing for
+    /// the master rev to fingerprint, so such a result clears LAST instead of
+    /// leaving the previous one in place.
+    pub(super) fn exec_find_files(
+        &mut self,
+        session_id: Option<&str>,
+        op: &crate::ir::ForgeQLIR,
+    ) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let mut result = self.exec_show(session_id, op)?;
+
+        // As on FIND symbols: an aggregate is a count, not a set of nodes.
+        let aggregate = matches!(op, crate::ir::ForgeQLIR::FindFiles { clauses, .. }
+            if clauses.group_by.is_some());
+
+        let (members, total, returned) = match &result {
+            ForgeQLResult::Show(ShowResult {
+                content: ShowContent::FileList { files, total },
+                ..
+            }) if !aggregate && files.iter().all(|f| f.node_id.is_some()) => (
+                files
+                    .iter()
+                    .map(|f| LastMember {
+                        node_id: f.node_id.clone(),
+                        path: f.path.to_string_lossy().into_owned(),
+                        line: None,
+                    })
+                    .collect(),
+                *total,
+                files.len(),
+            ),
+            _ => (Vec::new(), 0, 0),
+        };
+        let last_rev = self.arm_last_set(sid, "find_files", members, total, returned);
+
+        // FIND files renders through the SHOW family, whose result has no
+        // `last_rev` column of its own — the master rev rides in the metadata
+        // map so the CSV row reads the same as it does on FIND symbols/usages.
+        if let (Some(rev), ForgeQLResult::Show(show)) = (last_rev, &mut result) {
+            drop(
+                show.metadata
+                    .get_or_insert_with(serde_json::Map::new)
+                    .insert("last_rev".to_string(), serde_json::Value::String(rev)),
+            );
+        }
+        Ok(result)
     }
 
     /// FIND NODE id — resolve a `node_id` to its location, rev, and nav links.
