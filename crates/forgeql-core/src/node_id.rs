@@ -101,6 +101,18 @@ pub fn make_node_id(path: &str, ordinal: u32) -> String {
     format_node_id(&hash, DEFAULT_SEGMENT_PREFIX_HEX, ordinal)
 }
 
+/// Extract the ordinal from a base node handle (`n<hex>.<ordinal>`).
+///
+/// This is the form [`split_node_offset`] returns. Returns `None` for a
+/// bare-hex whole-file or directory handle (no `.<ordinal>` suffix), which
+/// addresses a path rather than an indexed node.
+#[must_use]
+pub fn ordinal_of(base_id: &str) -> Option<u32> {
+    base_id
+        .rsplit_once('.')
+        .and_then(|(_, ord)| ord.parse().ok())
+}
+
 /// Surface a node's handle for display.
 ///
 /// When `block_ord`/`block_off` are present

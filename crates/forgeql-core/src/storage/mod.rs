@@ -258,7 +258,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::ast::index::{IndexRow, IndexStats, SymbolTable};
+use crate::ast::index::{IndexRow, IndexStats, OrdinalTombstones, SymbolTable};
 use crate::ir::Clauses;
 use crate::result::{FileEntry, FindNodeResult, SymbolMatch};
 use crate::workspace::Workspace;
@@ -475,6 +475,18 @@ pub trait StorageEngine: Send + Sync + 'static {
     ///
     /// Deleted files are purged; modified files are re-parsed.
     fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()>;
+
+    /// Like [`reindex_files`](Self::reindex_files), but tombstones the given
+    /// per-path removed **root** ordinals so a byte-identical surviving sibling
+    /// cannot adopt a just-deleted node's ordinal. Backends that do
+    /// not remap ordinals inherit this default, which ignores the tombstones.
+    fn reindex_files_tombstoned(
+        &mut self,
+        paths: &[PathBuf],
+        _tombstones: &OrdinalTombstones,
+    ) -> Result<()> {
+        self.reindex_files(paths)
+    }
 
     /// Remove all rows originating from a single source file.
     fn purge_file(&mut self, path: &Path) -> Result<()>;

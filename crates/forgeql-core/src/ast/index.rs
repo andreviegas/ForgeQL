@@ -344,7 +344,7 @@ fn reassign_intern_ids(src: &ColumnarTable, dst: &mut ColumnarTable, row: &mut I
 mod build;
 mod file_indexer;
 
-pub use file_indexer::{IndexContext, OrdinalHint, OrdinalRemapper, index_file};
+pub use file_indexer::{IndexContext, OrdinalHint, OrdinalRemapper, OrdinalTombstones, index_file};
 
 // -----------------------------------------------------------------------
 // Shared utilities

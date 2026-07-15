@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use tracing::{debug, info, warn};
 
-use crate::ast::index::SymbolTable;
+use crate::ast::index::{OrdinalTombstones, SymbolTable};
 use crate::ast::lang::LanguageRegistry;
 use crate::ast::parse_cache::ParseCache;
 use crate::budget::{BudgetSnapshot, BudgetState};
@@ -313,6 +313,13 @@ pub struct Session {
     /// Lives here rather than on the legacy backend so columnar build output is not
     /// stashed on the legacy storage type.
     pub(crate) prebuilt_segment_map: Option<std::collections::HashMap<std::path::PathBuf, Vec<u8>>>,
+    /// Removed **root** ordinals per worktree-relative path, staged by a
+    /// node-removal verb (`DELETE NODE` / `DELETE NODES FOUND`) and consumed by
+    /// the very next `reindex_files`, which tombstones them in the ordinal
+    /// remapper so a byte-identical surviving sibling cannot adopt a deleted
+    /// node's handle. Transient: `reindex_files` takes it, so it is
+    /// empty for every non-removal mutation and never persisted.
+    pub(crate) pending_tombstones: OrdinalTombstones,
 }
 
 impl Session {
@@ -363,6 +370,7 @@ impl Session {
             columnar_build: None,
             parse_cache: Mutex::new(ParseCache::with_capacity(32)),
             prebuilt_segment_map: None,
+            pending_tombstones: OrdinalTombstones::new(),
         }
     }
 
@@ -617,15 +625,20 @@ impl Session {
     /// Returns `Err` if the index has not been built yet, or if tree-sitter
     /// parsing fails.
     pub fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
+        // A node-removal verb may have staged tombstones for this reindex; take
+        // them (so they never leak into a later mutation) and hand them to both
+        // backends. The tombstoned root ordinals stop a byte-identical
+        // surviving sibling from adopting a just-deleted node's handle.
+        let tombstones = std::mem::take(&mut self.pending_tombstones);
         // PhaseFT5: target both backends explicitly.
         // Legacy may have no table after `drop_legacy_index()` — treat as non-fatal.
         if let Some(legacy) = self.backends.legacy_storage_mut()
-            && let Err(e) = legacy.reindex_files(paths)
+            && let Err(e) = legacy.reindex_files_tombstoned(paths, &tombstones)
         {
             tracing::warn!("legacy reindex_files (non-fatal): {e}");
         }
         if let Some(columnar) = self.backends.columnar_engine_mut()
-            && let Err(e) = columnar.reindex_files(paths)
+            && let Err(e) = columnar.reindex_files_tombstoned(paths, &tombstones)
         {
             tracing::warn!("columnar reindex_files failed (non-fatal): {e}");
         }

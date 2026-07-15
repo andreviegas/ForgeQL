@@ -1310,6 +1310,23 @@ impl ForgeQLEngine {
                 .map(|content| absorb_trailing_blank_lines(&content, node_end_line))
                 .unwrap_or(node_end_line)
         };
+        // Stage a tombstone for the removed root ordinal so the reindex
+        // this delete triggers keeps a byte-identical surviving sibling on its
+        // own ordinal instead of letting it silently adopt the deleted handle.
+        // Only a whole-node delete frees an ordinal — a line-range delete
+        // (`has_offset`) keeps the node, so it must not tombstone.
+        if !has_offset
+            && let Ok((base_id, _)) = crate::node_id::split_node_offset(node_id)
+            && let Some(ordinal) = crate::node_id::ordinal_of(base_id)
+            && let Ok(sid) = require_session_id(session_id)
+            && let Some(session) = self.sessions.get_mut(sid)
+        {
+            session
+                .pending_tombstones
+                .entry(rel_path.clone().into())
+                .or_default()
+                .push(ordinal);
+        }
         let ir = ForgeQLIR::ChangeContent {
             files: vec![rel_path],
             target: ChangeTarget::Lines {
@@ -1319,7 +1336,17 @@ impl ForgeQLEngine {
             },
             clauses: crate::ir::Clauses::default(),
         };
-        let mut result = self.exec_mutation(session_id, &ir, false)?;
+        let result = self.exec_mutation(session_id, &ir, false);
+        // If the mutation failed, no reindex ran and the staged tombstone was
+        // never consumed — drop it, or it would wrongly re-key a still-present
+        // node on a later, unrelated edit to the same file.
+        if result.is_err()
+            && let Ok(sid) = require_session_id(session_id)
+            && let Some(session) = self.sessions.get_mut(sid)
+        {
+            session.pending_tombstones.clear();
+        }
+        let mut result = result?;
         // The line-delete plumbing reuses ChangeContent, but the agent issued
         // DELETE NODE — report it under its own op name.
         if let ForgeQLResult::Mutation(ref mut m) = result {
@@ -1551,7 +1578,32 @@ impl ForgeQLEngine {
             &dst_abs,
             Some(at),
         )?;
-        let mut result = self.apply_plan(sid, plan, "move_node", None)?;
+        // Moving a whole node out of its source file frees that node's
+        // ordinal there. Tombstone it so a byte-identical surviving sibling in
+        // the source file keeps its own ordinal instead of adopting the moved
+        // node's handle. A bare-hex whole-file source or a line-range move frees
+        // no per-node ordinal, so it does not tombstone.
+        if !src.has_offset
+            && !is_path_kind(&src.kind)
+            && let Ok((base_id, _)) = crate::node_id::split_node_offset(src_id)
+            && let Some(ordinal) = crate::node_id::ordinal_of(base_id)
+            && let Some(session) = self.sessions.get_mut(sid)
+        {
+            session
+                .pending_tombstones
+                .entry(src.rel_path.clone().into())
+                .or_default()
+                .push(ordinal);
+        }
+        let result = self.apply_plan(sid, plan, "move_node", None);
+        // A failed apply ran no reindex, so the staged tombstone was not
+        // consumed — drop it before it can mis-key a later edit.
+        if result.is_err()
+            && let Some(session) = self.sessions.get_mut(sid)
+        {
+            session.pending_tombstones.clear();
+        }
+        let mut result = result?;
 
         // Where the payload came to rest, in the POST-move numbering. Moving a
         // node DOWN inside one file first removes it from above the anchor, so

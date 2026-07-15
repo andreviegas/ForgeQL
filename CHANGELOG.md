@@ -5,6 +5,21 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.117.0] — 2026-07-15 — fix(index): stale node handles survive deleting a byte-identical sibling
+
+### Fixed
+
+- Deleting one of two byte-identical sibling nodes no longer silently transfers
+  the deleted node's handle to the survivor. The ordinal remapper reused the
+  lower ordinal on its min-ordinal tiebreak, so after deleting the first of two
+  identical siblings the second adopted the deleted node's `node_id` — and
+  because the two spans are byte-identical they also share a `rev`, so an
+  `IF REV` guard aimed at the deleted node passed and silently mutated the
+  survivor instead. A node-removal verb (`DELETE NODE`, `MOVE NODE` away) now
+  tombstones the removed root ordinal for the reindex it triggers: the surviving
+  sibling keeps its own ordinal, and the deleted handle resolves to
+  `node_not_found` instead of re-pointing at a live node. Bumps `ENRICH_VER`
+  (33 → 34) because a reindex after such a removal now stores different ordinals.
 
 ## [0.117.0] — 2026-07-15 — feat(mutations): a mutation that breaks a structured file is flagged
 

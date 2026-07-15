@@ -181,7 +181,12 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        the assigned value to one operand, so `if ((x = a + b) > 0)` reads
 ///        `((a=b)>c)`, not the old `((a)>b)`. v32 segments hold the pre-fix
 ///        skeleton that drops the `=` and contradicts `has_assignment_in_condition`.
-pub const ENRICH_VER: u32 = 33;
+///   34 — a node-removal verb (`DELETE NODE` / `MOVE NODE` away) now tombstones
+///        the removed root ordinal in the reindex remapper, so a byte-identical
+///        surviving sibling keeps its own ordinal instead of adopting the
+///        deleted node's. A v33 segment built during such a reindex holds the
+///        pre-fix (re-keyed) ordinals for that post-removal content.
+pub const ENRICH_VER: u32 = 34;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

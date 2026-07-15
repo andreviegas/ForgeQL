@@ -7,7 +7,9 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use crate::ast::enrich::default_enrichers;
-use crate::ast::index::{IndexContext, OrdinalHint, OrdinalRemapper, SymbolTable, index_file};
+use crate::ast::index::{
+    IndexContext, OrdinalHint, OrdinalRemapper, OrdinalTombstones, SymbolTable, index_file,
+};
 use crate::storage::columnar::bytes_to_hex;
 use crate::storage::columnar::columnar_storage::ColumnarStorage;
 use crate::storage::columnar::segment_builder::{
@@ -17,16 +19,24 @@ use crate::storage::columnar::segment_reader::SegmentReader;
 use crate::storage::git_sha1_provider::git_blob_sha1;
 
 impl ColumnarStorage {
-    pub(super) fn reindex_files_impl(&mut self, paths: &[PathBuf]) -> Result<()> {
+    pub(super) fn reindex_files_impl(
+        &mut self,
+        paths: &[PathBuf],
+        tombstones: &OrdinalTombstones,
+    ) -> Result<()> {
         // Run the per-file parse+enrich on the big-stack indexing pool: `index_file`
         // walks the AST recursively and a single deeply-nested edited file would
         // otherwise overflow rayon's default ~2 MiB stack. The full build already
         // does this (see `SymbolTable::indexing_pool`); reindex needs it too.
-        SymbolTable::indexing_pool().install(|| self.reindex_files_on_pool(paths))
+        SymbolTable::indexing_pool().install(|| self.reindex_files_on_pool(paths, tombstones))
     }
 
     #[allow(clippy::too_many_lines)]
-    fn reindex_files_on_pool(&mut self, paths: &[PathBuf]) -> Result<()> {
+    fn reindex_files_on_pool(
+        &mut self,
+        paths: &[PathBuf],
+        tombstones: &OrdinalTombstones,
+    ) -> Result<()> {
         std::fs::create_dir_all(&self.staging_dir)?;
         let mut parser = tree_sitter::Parser::new();
         let enrichers = default_enrichers();
@@ -56,7 +66,13 @@ impl ColumnarStorage {
                     base
                 );
             }
-            let remapper = OrdinalRemapper::from_previous(hints);
+            let mut remapper = OrdinalRemapper::from_previous(hints);
+            // A node-removal verb tombstones the removed root ordinal(s)
+            // for this file, so a byte-identical surviving sibling cannot adopt
+            // the deleted node's handle on the min-ordinal tiebreak.
+            if let Some(removed) = tombstones.get(&rel_path) {
+                remapper.tombstone(removed);
+            }
 
             // Shadow the persistent segment and evict any stale dirty entry
             // AFTER capturing hints so the remapper references valid data.

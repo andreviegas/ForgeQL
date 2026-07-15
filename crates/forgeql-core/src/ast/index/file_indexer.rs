@@ -99,6 +99,14 @@ pub struct OrdinalHint {
     pub ordinal: u32,
 }
 
+/// Per-file removed **root** ordinals staged for the next reindex.
+///
+/// Marking these hints consumed before `assign()` runs stops a byte-identical
+/// surviving sibling from adopting a just-deleted node's ordinal — the survivor
+/// keeps its own ordinal, and the deleted handle then resolves to nothing
+/// instead of silently re-pointing at the survivor. Keyed by worktree-relative
+/// path; empty for every non-removal mutation.
+pub type OrdinalTombstones = std::collections::BTreeMap<std::path::PathBuf, Vec<u32>>;
 pub struct OrdinalRemapper {
     previous: Vec<OrdinalHint>,
     used: Vec<bool>,
@@ -187,6 +195,22 @@ impl OrdinalRemapper {
             previous,
             used,
             next_ordinal,
+        }
+    }
+
+    /// Mark the hints for `ordinals` as already consumed, before any `assign()`.
+    ///
+    /// A removal verb passes the removed node's root ordinal(s). The matching
+    /// hint is then invisible to `assign`, so a byte-identical surviving sibling
+    /// can no longer win it on the min-ordinal tiebreak — it keeps its own
+    /// ordinal, and the removed node's handle resolves to nothing. `next_ordinal`
+    /// is unaffected (the hint stays in `previous`, still bounding the max), so
+    /// the retired ordinal is never reissued.
+    pub fn tombstone(&mut self, ordinals: &[u32]) {
+        for (idx, hint) in self.previous.iter().enumerate() {
+            if ordinals.contains(&hint.ordinal) {
+                self.used[idx] = true;
+            }
         }
     }
 
@@ -1288,4 +1312,72 @@ fn extract_fields(
     }
 
     fields
+}
+
+#[cfg(test)]
+mod identical_sibling_tombstone_tests {
+    use super::*;
+
+    // Two byte-identical same-parent siblings share every discriminator the
+    // remapper keys on — name, kind, parent, guard, fingerprint, content_hash —
+    // and differ only in ordinal. This is the one case `content_hash` cannot
+    // resolve, so `assign` falls through to the min-ordinal tiebreak.
+    fn twin_hint(ordinal: u32) -> OrdinalHint {
+        OrdinalHint {
+            name: "sep".to_string(),
+            fql_kind: "comment".to_string(),
+            parent_ordinal: 0,
+            guard_group_id: None,
+            guard_branch: None,
+            first_body_statement_fingerprint: None,
+            content_hash: Some("deadbeef".to_string()),
+            ordinal,
+        }
+    }
+
+    fn twin_key() -> OrdinalMatchKey<'static> {
+        OrdinalMatchKey {
+            name: "sep",
+            fql_kind: "comment",
+            parent_ordinal: 0,
+            guard_group_id: None,
+            guard_branch: None,
+            first_body_statement_fingerprint: None,
+            content_hash: Some("deadbeef"),
+        }
+    }
+
+    #[test]
+    fn without_tombstone_survivor_adopts_the_deleted_twins_ordinal() {
+        // Reproduces the pre-fix behaviour: with both twins' hints live, the lone survivor
+        // matches the *lower* ordinal — the deleted node's — and silently
+        // re-keys to the stale handle.
+        let mut remapper = OrdinalRemapper::from_previous(vec![twin_hint(1), twin_hint(5)]);
+        assert_eq!(remapper.assign(&twin_key()), 1);
+    }
+
+    #[test]
+    fn tombstone_keeps_the_surviving_twin_on_its_own_ordinal() {
+        // The fix: tombstoning the deleted twin's ordinal hides that hint, so
+        // the survivor matches only its own (5) and keeps its handle. The stale
+        // handle to ordinal 1 then resolves to nothing (node_not_found).
+        let mut remapper = OrdinalRemapper::from_previous(vec![twin_hint(1), twin_hint(5)]);
+        remapper.tombstone(&[1]);
+        assert_eq!(remapper.assign(&twin_key()), 5);
+    }
+
+    #[test]
+    fn tombstone_does_not_reissue_the_retired_ordinal() {
+        // The retired ordinal must never be handed to a different node:
+        // `next_ordinal` stays max+1 because the tombstoned hint remains in
+        // `previous`, still bounding the max.
+        let mut remapper = OrdinalRemapper::from_previous(vec![twin_hint(1), twin_hint(5)]);
+        remapper.tombstone(&[1]);
+        assert_eq!(remapper.assign(&twin_key()), 5);
+        let fresh = OrdinalMatchKey {
+            name: "other",
+            ..twin_key()
+        };
+        assert_eq!(remapper.assign(&fresh), 6);
+    }
 }

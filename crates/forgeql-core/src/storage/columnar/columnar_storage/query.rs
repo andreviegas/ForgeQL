@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::ast::index::IndexStats;
+use crate::ast::index::{IndexStats, OrdinalTombstones};
 use crate::ir::Clauses;
 use crate::result::{FindNodeResult, SymbolMatch};
 use crate::workspace::Workspace;
@@ -164,7 +164,15 @@ impl StorageEngine for ColumnarStorage {
     }
 
     fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
-        self.reindex_files_impl(paths)
+        self.reindex_files_impl(paths, &OrdinalTombstones::new())
+    }
+
+    fn reindex_files_tombstoned(
+        &mut self,
+        paths: &[PathBuf],
+        tombstones: &OrdinalTombstones,
+    ) -> Result<()> {
+        self.reindex_files_impl(paths, tombstones)
     }
 
     fn is_path_fresh(&self, rel_path: &Path, _root: &Path) -> bool {
