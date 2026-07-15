@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.115.0] — 2026-07-15 — feat(dsl): SHOW VERSION
+
+### Added
+
+- **`SHOW VERSION`** reports the crate version compiled into the running
+  binary. Session-independent and exempt from budget logging. A long-lived
+  server (or a stdio MCP process that outlived a binary reinstall) can now be
+  interrogated in one statement instead of inferred from behaviour.
+
+### Fixed
+
+- Commits made after a `FIND` no longer include `.forgeql-foundset`. The
+  armed-set persistence file introduced with `FOUND` was missing from the
+  clean-commit exclusion list, so it leaked into user-facing commits.
+
 ## [0.114.0] — 2026-07-15 — feat(dsl)!: FOUND bulk mutations under one master rev; IF REV mandatory on existing-node verbs
 
 ### Added — `SHOW outline` and `SHOW members` rows carry their rev (and members, their handle)
