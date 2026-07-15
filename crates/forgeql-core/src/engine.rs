@@ -526,6 +526,7 @@ impl ForgeQLEngine {
             } => self.use_source(user_id, source, branch, as_branch),
             ForgeQLIR::ShowSources => self.show_sources(),
             ForgeQLIR::ShowBranches => self.show_branches(sid),
+            ForgeQLIR::ShowVersion => Ok(Self::show_version()),
             ForgeQLIR::ShowStats {
                 session_id: for_session,
             } => {
@@ -601,6 +602,7 @@ impl ForgeQLEngine {
                 | ForgeQLIR::Vacuum { .. }
                 | ForgeQLIR::ShowSources
                 | ForgeQLIR::ShowBranches
+                | ForgeQLIR::ShowVersion
                 | ForgeQLIR::ShowStats { .. }
         );
         if is_admin_op {
@@ -691,7 +693,7 @@ impl ForgeQLEngine {
 
     /// Return the current budget snapshot for a session.
     /// Returns `None` if no budget is active OR if the last operation was an
-    /// admin-exempt command (`CreateSource`, `RefreshSource`, `ShowSources`, `ShowBranches`)
+    /// admin-exempt command (`CreateSource`, `RefreshSource`, `ShowSources`, `ShowBranches`, `ShowVersion`)
     /// — those commands should not appear in the budget log.
     #[must_use]
     pub fn budget_status(&self, session_id: &str) -> Option<crate::budget::BudgetSnapshot> {
@@ -733,6 +735,7 @@ impl ForgeQLEngine {
                 | ForgeQLIR::RefreshSource { .. }
                 | ForgeQLIR::ShowSources
                 | ForgeQLIR::ShowBranches
+                | ForgeQLIR::ShowVersion
         );
         if is_admin {
             None

@@ -763,6 +763,21 @@ impl ForgeQLEngine {
         }))
     }
 
+    /// `SHOW VERSION` — report the crate version compiled into the running
+    /// binary. Session-independent: reads no AST data, so it needs no active
+    /// session.
+    pub(super) fn show_version() -> ForgeQLResult {
+        ForgeQLResult::SourceOp(SourceOpResult {
+            op: "show_version".to_string(),
+            source_name: None,
+            session_id: None,
+            branches: Vec::new(),
+            symbols_indexed: None,
+            resumed: false,
+            message: Some(env!("CARGO_PKG_VERSION").to_string()),
+        })
+    }
+
     /// `SHOW STATS [FOR 'session_id']` — emit internal diagnostics for one or
     /// all active sessions.
     ///

@@ -304,6 +304,7 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
 
         Rule::show_sources_stmt
         | Rule::show_branches_stmt
+        | Rule::show_version_stmt
         | Rule::show_stats_stmt
         | Rule::show_context_stmt
         | Rule::show_signature_stmt
@@ -401,6 +402,8 @@ fn parse_show_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQL
         Rule::show_sources_stmt => Ok(ForgeQLIR::ShowSources),
 
         Rule::show_branches_stmt => Ok(ForgeQLIR::ShowBranches),
+
+        Rule::show_version_stmt => Ok(ForgeQLIR::ShowVersion),
 
         Rule::show_stats_stmt => {
             let session_id = pair.into_inner().next().map(|p| unquote(p.as_str()));

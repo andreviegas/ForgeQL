@@ -95,6 +95,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 USE source.branch AS 'alias'
 SHOW SOURCES
 SHOW BRANCHES
+SHOW VERSION
 ```
 
 Sessions persist across server restarts. To reconnect or hand off to another agent, use

@@ -244,6 +244,13 @@ fn parse_show_branches() {
 }
 
 #[test]
+fn parse_show_version() {
+    let ops = parse("SHOW VERSION").unwrap();
+    assert_eq!(ops.len(), 1);
+    assert!(matches!(ops[0], ForgeQLIR::ShowVersion));
+}
+
+#[test]
 fn parse_show_stats_no_session() {
     let ops = parse("SHOW STATS").unwrap();
     assert!(matches!(ops[0], ForgeQLIR::ShowStats { session_id: None }));

@@ -67,6 +67,8 @@ USE source_name.branch AS 'alias'
 SHOW SOURCES
 
 SHOW BRANCHES
+
+SHOW VERSION
 ```
 
 `source_name` is an unquoted identifier that may contain hyphens (e.g. `pisco-code`).
@@ -85,6 +87,10 @@ agents can reconnect to the same worktree at any time with the same `USE` comman
 Worktree identity uses a composite key: filesystem directory =
 `{user}/{source}.{branch}.{alias}`, git branch = `fql/{user}/{source}/{branch}/{alias}`
 (under the `fql/` namespace).
+
+`SHOW VERSION` reports the crate version compiled into the running binary (e.g.
+`0.114.0`). It reads no source and needs no active session, so it is the quickest
+way for an agent to confirm which build of the engine is answering its queries.
 
 ---
 

@@ -122,6 +122,7 @@ FIND symbols
 USE source.branch AS 'alias'
 SHOW SOURCES
 SHOW BRANCHES
+SHOW VERSION
 ```
 
 Sessions persist across server restarts — the worktree and any uncommitted changes are

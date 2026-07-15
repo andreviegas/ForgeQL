@@ -223,6 +223,9 @@ pub enum ForgeQLIR {
     /// `SHOW BRANCHES` — list branches of the current session source.
     ShowBranches,
 
+    /// `SHOW VERSION` — report the crate version of the running binary.
+    ShowVersion,
+
     /// `SHOW STATS [FOR 'session_id']` — report internal stats for one or all sessions.
     /// When `session_id` is `None`, reports aggregate stats across all loaded sessions.
     ShowStats {
