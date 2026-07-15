@@ -317,6 +317,14 @@ impl fmt::Display for MutationResult {
                 suggestion.byte_offset,
             )?;
         }
+        for se in &self.structural_errors {
+            writeln!(
+                formatter,
+                "  structural error ({}): {}",
+                se.path.display(),
+                se.message,
+            )?;
+        }
         Ok(())
     }
 }

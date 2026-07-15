@@ -168,6 +168,7 @@ fn json_non_query_result_uses_serde() {
         suggestions: vec![],
         new_node_id: None,
         new_rev: None,
+        structural_errors: Vec::new(),
     });
     let output = result.to_json();
     // Must fall back to full serde JSON, not crash or return empty.
@@ -247,6 +248,7 @@ fn mutation_result_round_trips_through_json() {
         }],
         new_node_id: None,
         new_rev: None,
+        structural_errors: Vec::new(),
     });
 
     let json_string = result.to_json();
@@ -465,6 +467,7 @@ fn display_mutation_result_applied() {
         suggestions: vec![],
         new_node_id: None,
         new_rev: None,
+        structural_errors: Vec::new(),
     };
     let output = format!("{result}");
     assert!(output.contains("Applied"));

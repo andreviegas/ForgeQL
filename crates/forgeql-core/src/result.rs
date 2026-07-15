@@ -656,6 +656,34 @@ pub struct MutationResult {
     /// rev would force a `FIND NODE` round trip before every chained edit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_rev: Option<String>,
+    /// Structured-text files this mutation left unparseable under a strict format
+    /// grammar, each with the parser's diagnostic. Empty when every touched file
+    /// still parses (or has no strict validator). See [`StructuralError`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub structural_errors: Vec<StructuralError>,
+}
+
+/// A structured-text file left unparseable by a mutation.
+///
+/// When an edit leaves a touched file invalid under its own strict grammar (a
+/// broken `.json`, say), the engine reports the breakage and the parser's
+/// message; it never repairs it (mechanical tool). One entry per touched file
+/// that is invalid *after* the edit; a mutation whose touched files all still
+/// parse (or have no strict validator) carries none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StructuralError {
+    /// The touched file that no longer parses (workspace-relative path).
+    pub path: PathBuf,
+    /// Whether the file parsed cleanly *before* this edit. `Some(true)` — this
+    /// edit introduced the error. `Some(false)` — it was already broken and the
+    /// edit did not cause it (the defect being chased may be the breakage
+    /// itself). `None` — the pre-edit state was unknown (e.g. a file this
+    /// mutation created).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_before: Option<bool>,
+    /// The strict parser's diagnostic, ideally with a line and column
+    /// (e.g. `"expected ',' or '}' at line 1 column 10"`).
+    pub message: String,
 }
 
 /// An advisory note about a potential issue found during planning.

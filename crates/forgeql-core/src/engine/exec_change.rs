@@ -75,6 +75,7 @@ impl ForgeQLEngine {
         // Snapshot the merged edits before apply() consumes the plan, then apply.
         // apply() returns the pre-edit bytes of every modified file.
         let edits_snapshot = plan.file_edits.clone();
+        let structural_before = self.structural_validity(sid, &files_changed);
         let applied = plan.apply()?;
 
         // Paths this plan brought into existence (files and their engine-made
@@ -84,6 +85,7 @@ impl ForgeQLEngine {
 
         // Reindex touched files.
         self.reindex_session(sid, &files_changed);
+        let structural_errors = self.structural_errors(sid, &files_changed, &structural_before);
 
         // A successful mutation invalidates every commit gate: the agent must
         // re-run the gated VERIFY build(s) before COMMIT will accept the change.
@@ -118,6 +120,7 @@ impl ForgeQLEngine {
             suggestions,
             new_node_id: None,
             new_rev: None,
+            structural_errors,
         }))
     }
 
@@ -267,8 +270,10 @@ impl ForgeQLEngine {
 
         // Snapshot the merged edits before apply() consumes the plan.
         let edits_snapshot = plan.file_edits.clone();
+        let structural_before = self.structural_validity(sid, &files_changed);
         let applied = plan.apply()?;
         self.reindex_session(sid, &files_changed);
+        let structural_errors = self.structural_errors(sid, &files_changed, &structural_before);
 
         // A successful mutation invalidates every commit gate and the
         // remembered FIND sites (line numbers may have shifted). This is the
@@ -314,7 +319,73 @@ impl ForgeQLEngine {
             suggestions: Vec::new(),
             new_node_id: None,
             new_rev: None,
+            structural_errors,
         }))
+    }
+
+    /// Read `path` from the worktree and run its language's strict validator, if
+    /// it has one. `None` — no validator for this file (or dialect), or the file
+    /// could not be read; `Some(result)` — the strict well-formedness verdict.
+    fn validate_file(
+        &self,
+        root: &std::path::Path,
+        path: &std::path::Path,
+    ) -> Option<Result<(), String>> {
+        let lang = self.lang_registry.language_for_path(path)?;
+        let abs = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
+        let bytes = std::fs::read(&abs).ok()?;
+        lang.validate_source(&bytes, path)
+    }
+
+    /// Strict validity of each touched file that has a format validator, read
+    /// from disk as it stands now. Snapshots the pre-edit state so a later
+    /// [`Self::structural_errors`] can report whether the edit caused a break.
+    fn structural_validity(
+        &self,
+        sid: &str,
+        paths: &[PathBuf],
+    ) -> std::collections::HashMap<PathBuf, bool> {
+        let mut out = std::collections::HashMap::new();
+        let Ok((workspace, _engine)) = self.require_workspace_and_engine(Some(sid)) else {
+            return out;
+        };
+        for path in paths {
+            if let Some(result) = self.validate_file(workspace.root(), path) {
+                let _ = out.insert(path.clone(), result.is_ok());
+            }
+        }
+        out
+    }
+
+    /// After an edit, one [`crate::result::StructuralError`] per touched file a
+    /// strict format validator now rejects. `before` is the pre-edit snapshot
+    /// from [`Self::structural_validity`], used to report whether this edit
+    /// introduced the break. Files without a validator, or that still parse, add
+    /// nothing.
+    fn structural_errors(
+        &self,
+        sid: &str,
+        paths: &[PathBuf],
+        before: &std::collections::HashMap<PathBuf, bool>,
+    ) -> Vec<crate::result::StructuralError> {
+        let mut out = Vec::new();
+        let Ok((workspace, _engine)) = self.require_workspace_and_engine(Some(sid)) else {
+            return out;
+        };
+        for path in paths {
+            if let Some(Err(message)) = self.validate_file(workspace.root(), path) {
+                out.push(crate::result::StructuralError {
+                    path: path.clone(),
+                    valid_before: before.get(path).copied(),
+                    message,
+                });
+            }
+        }
+        out
     }
 
     /// Stamp the post-edit handle **and its rev** onto a mutation result.
@@ -399,6 +470,7 @@ impl ForgeQLEngine {
         Ok(ForgeQLResult::Mutation(MutationResult {
             op: "undo".to_string(),
             applied: true,
+            structural_errors: Vec::new(),
             edit_count: snapshot.files.len(),
             files_changed,
             lines_written: 0,
@@ -882,6 +954,7 @@ impl ForgeQLEngine {
             ForgeQLResult::Mutation(MutationResult {
                 op: "delete_nodes_found".to_string(),
                 applied: true,
+                structural_errors: Vec::new(),
                 files_changed: Vec::new(),
                 edit_count: 0,
                 lines_written: 0,
@@ -1104,6 +1177,7 @@ impl ForgeQLEngine {
         let mut result = ForgeQLResult::Mutation(crate::result::MutationResult {
             op: "insert_node_for".to_string(),
             applied: true,
+            structural_errors: Vec::new(),
             files_changed: vec![PathBuf::from(&rel)],
             edit_count: 1,
             lines_written: 0,
@@ -1546,6 +1620,7 @@ impl ForgeQLEngine {
             ForgeQLResult::Mutation(crate::result::MutationResult {
                 op: "delete_node".to_string(),
                 applied: true,
+                structural_errors: Vec::new(),
                 files_changed: Vec::new(),
                 edit_count: 0,
                 lines_written: 0,

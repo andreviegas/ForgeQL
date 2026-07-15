@@ -106,6 +106,19 @@ impl LanguageSupport for JsonLanguage {
     fn config(&self) -> &'static LanguageConfig {
         json_config()
     }
+
+    fn validate_source(&self, source: &[u8], path: &std::path::Path) -> Option<Result<(), String>> {
+        // JSONC permits comments and trailing commas, which a strict RFC-8259
+        // parser rejects — so only the plain `.json` dialect is checked.
+        if path.extension().and_then(|e| e.to_str()) == Some("jsonc") {
+            return None;
+        }
+        Some(
+            serde_json::from_slice::<serde_json::Value>(source)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+        )
+    }
 }
 
 // -----------------------------------------------------------------------

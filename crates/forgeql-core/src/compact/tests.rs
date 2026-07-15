@@ -609,6 +609,7 @@ fn mutation_falls_back_to_json() {
         suggestions: vec![],
         new_node_id: None,
         new_rev: None,
+        structural_errors: Vec::new(),
     });
     let output = to_compact(&result);
     assert!(output.contains("rename_symbol"));
@@ -631,6 +632,7 @@ fn compact_mutation_surfaces_lines_removed() {
         suggestions: vec![],
         new_node_id: None,
         new_rev: None,
+        structural_errors: Vec::new(),
     });
     let output = to_compact(&result);
     assert!(output.contains("lines_removed"), "missing label: {output}");

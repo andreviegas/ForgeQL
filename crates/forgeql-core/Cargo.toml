@@ -64,6 +64,7 @@ tracing     = { workspace = true }
 insta        = { workspace = true }
 criterion    = { workspace = true }
 forgeql-core = { path = ".", features = ["test-helpers"] }
+forgeql-lang-text = { workspace = true }
 
 [[bench]]
 name              = "columnar_filter"

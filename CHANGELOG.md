@@ -35,6 +35,29 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   armed-set persistence file introduced with `FOUND` was missing from the
   clean-commit exclusion list, so it leaked into user-facing commits.
 
+## [0.115.0] — 2026-07-15 — feat(mutations): flag structured files a mutation leaves unparseable
+
+### Added
+
+- **`structural_errors` on every mutation result.** When an edit leaves a
+  touched structured-text file unparseable under a strict, format-native parser,
+  the mutation result now names the file and carries the parser's diagnostic
+  (with line and column), so an agent learns *at edit time* — not later in the
+  pipeline — that it broke the file. Each entry records whether the file parsed
+  cleanly before the edit, distinguishing a break this edit introduced from one
+  that was already there. A mutation whose touched files all still parse (or have
+  no strict validator) reports nothing.
+
+  JSON is checked with a strict RFC-8259 parser. This is deliberately not built
+  on tree-sitter's `error` regions: tree-sitter is error-tolerant and recovers a
+  tree from broken input, so a common defect such as a missing comma leaves no
+  top-level error at all and slips through. A real parser catches every such case
+  with a precise location. The `.jsonc` dialect (comments, trailing commas) is
+  exempt, since a strict JSON parser would wrongly reject it.
+
+- **A `validate_source` hook on the language-support interface** lets any
+  language plugin supply a strict well-formedness check. Languages without one
+  simply never report a structural break, so the core stays language-agnostic.
 ## [0.114.0] — 2026-07-15 — feat(dsl)!: FOUND bulk mutations under one master rev; IF REV mandatory on existing-node verbs
 
 ### Added — `SHOW outline` and `SHOW members` rows carry their rev (and members, their handle)

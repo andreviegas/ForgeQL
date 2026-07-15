@@ -586,6 +586,27 @@ pub trait LanguageSupport: Send + Sync {
     fn macro_expander(&self) -> Option<&dyn MacroExpander> {
         None
     }
+
+    /// Strict, format-native well-formedness check for this file.
+    ///
+    /// tree-sitter is error-tolerant — it recovers a usable tree from broken
+    /// input, so its `ERROR` nodes are a leaky signal for "does this still
+    /// parse?" (a missing JSON comma recovers into a valid-looking object).
+    /// Languages backed by a strict parser override this to answer definitively;
+    /// the mutation path calls it before and after an edit so the agent learns
+    /// immediately when it has left a structured file unparseable.
+    ///
+    /// * `None` — this language/dialect has no strict validator (the default, and
+    ///   e.g. JSONC, whose comments a JSON parser would wrongly reject). Nothing
+    ///   is ever reported.
+    /// * `Some(Ok(()))` — well-formed.
+    /// * `Some(Err(msg))` — a short reason, ideally with a line/column.
+    ///
+    /// `path` lets a plugin that serves several dialects opt individual
+    /// extensions in or out; the strict check itself reads only `source`.
+    fn validate_source(&self, _source: &[u8], _path: &Path) -> Option<Result<(), String>> {
+        None
+    }
 }
 
 // -----------------------------------------------------------------------

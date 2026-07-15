@@ -29,7 +29,10 @@ use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
 fn make_registry() -> Arc<LanguageRegistry> {
-    Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
+    Arc::new(LanguageRegistry::new(vec![
+        Arc::new(CppLanguageInline),
+        Arc::new(forgeql_lang_text::JsonLanguage),
+    ]))
 }
 
 // -----------------------------------------------------------------------
@@ -875,6 +878,93 @@ fn change_mutation_includes_diff() {
                 "compact preview should show the new text: {diff}"
             );
         }
+        other => panic!("expected Mutation, got: {other:?}"),
+    }
+}
+
+/// A mutation that leaves a structured file unparseable reports it immediately:
+/// the file was valid JSON before the edit and is not after, so the result
+/// carries a `StructuralError` naming the file and the parser's diagnostic. A
+/// well-formed edit reports nothing; editing an already-broken file flags the
+/// breakage as pre-existing rather than caused by this edit.
+#[test]
+fn mutation_reports_structural_error_when_it_breaks_json() {
+    let (mut engine, sid, dir) = engine_with_session();
+    let path = dir.path().join("cfg.json");
+    fs::write(&path, "{ \"a\": 1 }\n").unwrap();
+    let handle = path_handle("cfg.json");
+
+    // valid -> valid: nothing to report.
+    let rev = node_rev(&mut engine, &sid, &handle);
+    match execute_fql(
+        &mut engine,
+        &sid,
+        &format!("CHANGE NODE '{handle}' IF REV '{rev}' WITH '{{ \"a\": 2 }}'"),
+    ) {
+        ForgeQLResult::Mutation(mr) => assert!(
+            mr.structural_errors.is_empty(),
+            "a valid JSON edit must not report a structural error: {:?}",
+            mr.structural_errors
+        ),
+        other => panic!("expected Mutation, got: {other:?}"),
+    }
+
+    // valid -> broken: reported, and attributed to this edit.
+    let rev = node_rev(&mut engine, &sid, &handle);
+    match execute_fql(
+        &mut engine,
+        &sid,
+        &format!("CHANGE NODE '{handle}' IF REV '{rev}' WITH '{{ \"a\": 2 '"),
+    ) {
+        ForgeQLResult::Mutation(mr) => {
+            let se = mr
+                .structural_errors
+                .first()
+                .expect("breaking JSON must report a structural error");
+            assert!(se.path.ends_with("cfg.json"), "path: {}", se.path.display());
+            assert_eq!(se.valid_before, Some(true), "this edit caused the break");
+            assert!(!se.message.is_empty(), "carries the parser diagnostic");
+        }
+        other => panic!("expected Mutation, got: {other:?}"),
+    }
+
+    // broken -> broken: still reported, now flagged as pre-existing.
+    let rev = node_rev(&mut engine, &sid, &handle);
+    match execute_fql(
+        &mut engine,
+        &sid,
+        &format!("CHANGE NODE '{handle}' IF REV '{rev}' WITH '{{ \"a\": 3 '"),
+    ) {
+        ForgeQLResult::Mutation(mr) => {
+            let se = mr.structural_errors.first().expect("still broken");
+            assert_eq!(se.valid_before, Some(false), "breakage predates this edit");
+        }
+        other => panic!("expected Mutation, got: {other:?}"),
+    }
+}
+
+/// The JSON plugin serves `.jsonc`, whose comments and trailing commas a strict
+/// RFC-8259 parser rejects. Those must never be reported as structural errors —
+/// the strict validator opts the dialect out.
+#[test]
+fn jsonc_dialect_is_not_strictly_validated() {
+    let (mut engine, sid, dir) = engine_with_session();
+    let path = dir.path().join("cfg.jsonc");
+    fs::write(&path, "{ \"a\": 1 }\n").unwrap();
+    let handle = path_handle("cfg.jsonc");
+
+    // A trailing comma is legal JSONC but not strict JSON; it must not be flagged.
+    let rev = node_rev(&mut engine, &sid, &handle);
+    match execute_fql(
+        &mut engine,
+        &sid,
+        &format!("CHANGE NODE '{handle}' IF REV '{rev}' WITH '{{ \"a\": 2, }}'"),
+    ) {
+        ForgeQLResult::Mutation(mr) => assert!(
+            mr.structural_errors.is_empty(),
+            "JSONC dialect must not be strictly validated: {:?}",
+            mr.structural_errors
+        ),
         other => panic!("expected Mutation, got: {other:?}"),
     }
 }

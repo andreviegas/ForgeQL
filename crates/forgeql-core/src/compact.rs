@@ -555,6 +555,21 @@ fn compact_mutation(r: &MutationResult) -> String {
     if let Some(ref d) = r.diff {
         row(&mut out, &[&q("diff"), &q(d)]);
     }
+    for se in &r.structural_errors {
+        let cause = match se.valid_before {
+            Some(true) => "broke",
+            Some(false) => "still invalid",
+            None => "invalid",
+        };
+        row(
+            &mut out,
+            &[
+                &q("structural_error"),
+                &q(&se.path.display().to_string()),
+                &q(&format!("{cause}: {}", se.message)),
+            ],
+        );
+    }
     chomp(&mut out);
     out
 }
