@@ -10,7 +10,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 3. Never brute-force read code. Use FIND to locate symbols, then SHOW NODE to read them by stable handle.
 4. SHOW body and SHOW context without LIMIT are capped at 40 lines. If capped, use FIND to get the symbol's node_id, then `SHOW NODE '<id>'` — it returns the node's full span. Page buffered output with `SHOW MORE`.
 5. Edit by node handle only. `CHANGE FILE` on indexed files is disabled. Config files (TOML, YAML, JSON, XML/arxml, DBC, Makefile, CMake, INI, justfile, Markdown) are indexed and edited by node handle like code.
-6. The diff is the contract. Mutations are mechanical — the engine never fixes commas, wraps braces, or re-indents. Every mutation returns `new_node_id`, `lines_written`, `lines_removed`, and a boundary diff with inline `node_id(offset)` handles: read it and self-correct any seam with `CHANGE NODE '<id>(off)'`. A large `lines_removed` on a small edit means you clobbered more than intended — `UNDO` reverses it.
+6. The diff is the contract. Mutations are mechanical — the engine never fixes commas, wraps braces, or re-indents. Every mutation returns `new_node_id`, `lines_written`, `lines_removed`, `structural_errors` (a structured file the edit left unparseable — fix it before moving on), and a boundary diff with inline `node_id(offset)` handles: read it and self-correct any seam with `CHANGE NODE '<id>(off)'`. A large `lines_removed` on a small edit means you clobbered more than intended — `UNDO` reverses it.
 
 ## Query Workflow
 

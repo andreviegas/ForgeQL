@@ -5,6 +5,49 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.117.0] — 2026-07-15 — feat(mutations): a mutation that breaks a structured file is flagged
+
+### Added
+
+- **`structural_errors` on every mutation result.** When an edit leaves a
+  touched structured-text file unparseable under a strict, format-native parser,
+  the mutation result now names the file and carries the parser's diagnostic
+  (with line and column), so an agent learns *at edit time* — not later in the
+  pipeline — that it broke the file. Each entry records whether the file parsed
+  cleanly before the edit, distinguishing a break this edit introduced from one
+  that was already there. A mutation whose touched files all still parse (or have
+  no strict validator) reports nothing.
+
+  JSON is checked with a strict RFC-8259 parser. This is deliberately not built
+  on tree-sitter's `error` regions: tree-sitter is error-tolerant and recovers a
+  tree from broken input, so a common defect such as a missing comma leaves no
+  top-level error at all and slips through. A real parser catches every such case
+  with a precise location. The `.jsonc` dialect (comments, trailing commas) is
+  exempt, since a strict JSON parser would wrongly reject it.
+
+- **A `validate_source` hook on the language-support interface** lets any
+  language plugin supply a strict well-formedness check. Languages without one
+  simply never report a structural break, so the core stays language-agnostic.
+
+### Added — extended to YAML, TOML and XML
+
+- **Strict validators for YAML, TOML and XML**, joining JSON behind the same
+  `validate_source` hook. A mutation that leaves any of these files unparseable
+  is reported in `structural_errors` with the parser's diagnostic, exactly as for
+  JSON. Each catches the corruptions tree-sitter recovers from and hides — a
+  reshaped YAML indent, a TOML key with no value, an XML tag that does not match
+  its opener.
+
+  - YAML (`yaml`, `yml`) — the `saphyr` YAML 1.2 parser.
+  - TOML (`toml`, and `Cargo.lock`) — the `toml` crate.
+  - XML (`xml`, `arxml`, `xdm`, `epc`, `epd`, `ecuc`, `odx`) — `quick-xml`
+    well-formedness (balanced tags and valid syntax; not schema/DTD validity),
+    applied uniformly to every dialect.
+
+  Formats with no strict grammar (Markdown, reStructuredText, INI, Make, CMake,
+  just, DBC) remain unvalidated and report nothing, as before.
+
 ## [0.116.0] — 2026-07-15 — fix(enrich): condition skeletons keep the assignment operator
 
 ### Fixed
@@ -35,48 +78,6 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   armed-set persistence file introduced with `FOUND` was missing from the
   clean-commit exclusion list, so it leaked into user-facing commits.
 
-## [0.116.0] — 2026-07-15 — feat(mutations): extend structural validation to YAML, TOML and XML
-
-### Added
-
-- **Strict validators for YAML, TOML and XML**, joining JSON behind the same
-  `validate_source` hook. A mutation that leaves any of these files unparseable
-  is reported in `structural_errors` with the parser's diagnostic, exactly as for
-  JSON. Each catches the corruptions tree-sitter recovers from and hides — a
-  reshaped YAML indent, a TOML key with no value, an XML tag that does not match
-  its opener.
-
-  - YAML (`yaml`, `yml`) — the `saphyr` YAML 1.2 parser.
-  - TOML (`toml`, and `Cargo.lock`) — the `toml` crate.
-  - XML (`xml`, `arxml`, `xdm`, `epc`, `epd`, `ecuc`, `odx`) — `quick-xml`
-    well-formedness (balanced tags and valid syntax; not schema/DTD validity),
-    applied uniformly to every dialect.
-
-  Formats with no strict grammar (Markdown, reStructuredText, INI, Make, CMake,
-  just, DBC) remain unvalidated and report nothing, as before.
-## [0.115.0] — 2026-07-15 — feat(mutations): flag structured files a mutation leaves unparseable
-
-### Added
-
-- **`structural_errors` on every mutation result.** When an edit leaves a
-  touched structured-text file unparseable under a strict, format-native parser,
-  the mutation result now names the file and carries the parser's diagnostic
-  (with line and column), so an agent learns *at edit time* — not later in the
-  pipeline — that it broke the file. Each entry records whether the file parsed
-  cleanly before the edit, distinguishing a break this edit introduced from one
-  that was already there. A mutation whose touched files all still parse (or have
-  no strict validator) reports nothing.
-
-  JSON is checked with a strict RFC-8259 parser. This is deliberately not built
-  on tree-sitter's `error` regions: tree-sitter is error-tolerant and recovers a
-  tree from broken input, so a common defect such as a missing comma leaves no
-  top-level error at all and slips through. A real parser catches every such case
-  with a precise location. The `.jsonc` dialect (comments, trailing commas) is
-  exempt, since a strict JSON parser would wrongly reject it.
-
-- **A `validate_source` hook on the language-support interface** lets any
-  language plugin supply a strict well-formedness check. Languages without one
-  simply never report a structural break, so the core stays language-agnostic.
 ## [0.114.0] — 2026-07-15 — feat(dsl)!: FOUND bulk mutations under one master rev; IF REV mandatory on existing-node verbs
 
 ### Added — `SHOW outline` and `SHOW members` rows carry their rev (and members, their handle)
