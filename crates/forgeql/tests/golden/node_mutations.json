@@ -55,6 +55,39 @@
       "steps": [
         { "fql": "ROLLBACK", "assert": { "error": true } }
       ]
+    },
+
+    {
+      "name": "member_and_outline_rows_carry_a_usable_handle_and_rev",
+      "description": "A SHOW members / SHOW outline row is a row you can mutate FROM: it prints node_id and rev together, and that pair is exactly what the mandatory IF REV gate accepts. The member handle is attached by BYTE CONTAINMENT, not by line equality: SHOW members reports SymbolMatch::count at line 157, but the indexed field node starts at 156 — its #[serde(...)] attribute is part of the node — so a line lookup finds nothing. This case is the only thing that can catch that regression; the in-process engine_integration harness runs the legacy AST path, which has no revs and no byte lookup, so it cannot observe either field.",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "steps": [
+        { "fql": "SHOW members OF 'SymbolMatch'",
+          "assert": { "row_count": 10, "pointer": { "/content/members/0/line": 157 } },
+          "capture": { "M": "content.members.0.node_id", "RM": "content.members.0.rev" } },
+
+        { "fql": "SHOW NODE '${M}' METADATA",
+          "assert": { "field": { "type": "find_node" },
+                      "pointer": { "/name": "count", "/fql_kind": "field", "/line": 156, "/end_line": 157 } } },
+
+        { "fql": "CHANGE NODE '${M}' IF REV 'hdeadbeefdeadbeef' WITH '    pub count: Option<usize>,'",
+          "assert": { "error": true } },
+
+        { "fql": "BEGIN TRANSACTION 'member-handle'", "assert": { "field": { "name": "member-handle" } } },
+        { "fql": "CHANGE NODE '${M}' IF REV '${RM}' WITH '    pub member_handle_worked: Option<usize>,'",
+          "assert": { "applied": true, "diff_contains": "member_handle_worked" } },
+        { "fql": "ROLLBACK", "assert": { "field": { "name": "member-handle" } } },
+
+        { "fql": "SHOW outline OF 'crates/forgeql-core/src/node_id.rs' WHERE name = 'format_rev'",
+          "assert": { "row_count": 1, "pointer": { "/content/entries/0/line": 125 } },
+          "capture": { "O": "content.entries.0.node_id", "RO": "content.entries.0.rev" } },
+
+        { "fql": "BEGIN TRANSACTION 'outline-handle'", "assert": { "field": { "name": "outline-handle" } } },
+        { "fql": "CHANGE NODE '${O}' IF REV '${RO}' WITH 'fn outline_handle_worked() {}'",
+          "assert": { "applied": true, "diff_contains": "outline_handle_worked" } },
+        { "fql": "ROLLBACK", "assert": { "field": { "name": "outline-handle" } } }
+      ]
     }
   ]
 }

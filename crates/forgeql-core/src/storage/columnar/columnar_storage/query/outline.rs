@@ -290,6 +290,11 @@ fn push_outline_tree(
                         reader.extra_field_str("block_off", r),
                     )
                 }),
+                // The handle and its rev travel together: an outline row is a
+                // row you can mutate from, without a FIND NODE to fetch the rev.
+                "rev": ords[r as usize]
+                    .map(|_| crate::node_id::format_rev(reader.rev_of(r)))
+                    .filter(|rv| !rv.is_empty()),
                 "depth": depth,
             }));
             depth + 1
@@ -365,6 +370,10 @@ fn push_outline_all_source_order(
                     reader.extra_field_str("block_off", r),
                 )
             }),
+            "rev": reader
+                .ordinal_of(r)
+                .map(|_| crate::node_id::format_rev(reader.rev_of(r)))
+                .filter(|rv| !rv.is_empty()),
             "depth": stack.len(),
         }));
         stack.push(end);

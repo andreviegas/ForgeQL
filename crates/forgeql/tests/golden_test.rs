@@ -225,6 +225,17 @@ impl McpClient {
         if let Some(err) = resp.get("error") {
             return Err(std::io::Error::other(format!("tools/call error: {err}")));
         }
+        // A structured self-healing rejection (rev_mismatch, node_not_found) comes
+        // back as an error-FLAGGED tool result whose text is valid JSON, not as a
+        // JSON-RPC protocol error. Parsing it would look exactly like success, so
+        // `assert: {error: true}` on any such step would pass vacuously.
+        if resp.pointer("/result/isError").and_then(Value::as_bool) == Some(true) {
+            let text = resp
+                .pointer("/result/content/0/text")
+                .and_then(Value::as_str)
+                .unwrap_or("<no text>");
+            return Err(std::io::Error::other(format!("tool error: {text}")));
+        }
         let content = resp
             .pointer("/result/content")
             .and_then(Value::as_array)

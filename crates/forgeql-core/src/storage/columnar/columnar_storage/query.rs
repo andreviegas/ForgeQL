@@ -39,6 +39,10 @@ impl StorageEngine for ColumnarStorage {
         self.find_node_id_at_line_impl(rel_path, line)
     }
 
+    fn find_node_id_at_byte(&self, rel_path: &str, byte: usize) -> Option<String> {
+        self.find_node_id_at_byte_impl(rel_path, byte)
+    }
+
     fn innermost_nodes_for_lines(
         &self,
         rel_path: &str,

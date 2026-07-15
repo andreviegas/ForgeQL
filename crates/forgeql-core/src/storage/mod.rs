@@ -370,6 +370,21 @@ pub trait StorageEngine: Send + Sync + 'static {
         None
     }
 
+    /// The innermost indexed node whose byte span contains `byte`.
+    ///
+    /// `SHOW members` reads its rows from the AST, not the index, and the two do
+    /// not agree on a node's *line*: the indexed `field` node starts at the
+    /// attribute or doc line above the declaration. Containment is the relation
+    /// that actually holds between them — the member's first byte lies inside the
+    /// indexed node — so handles are attached by span, not by a fuzzy line match.
+    ///
+    /// Backends without byte spans return `None`; the row then simply carries no
+    /// handle, exactly as before.
+    fn find_node_id_at_byte(&self, rel_path: &str, byte: usize) -> Option<String> {
+        let _ = (rel_path, byte);
+        None
+    }
+
     /// For each 1-based source line in `start..=end`, the innermost indexed node
     /// that *contains* it, as `(node_id, node_start_line)` (`None` for a line
     /// covered by no indexed node). An empty `Vec` means this backend keeps no

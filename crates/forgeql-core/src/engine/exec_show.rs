@@ -437,7 +437,9 @@ impl ForgeQLEngine {
                     lang_registry: &self.lang_registry,
                     ordinal: None,
                 };
-                show::show_members(&req)
+                let mut json = show::show_members(&req)?;
+                stamp_member_handles(engine, workspace, &loc.path, &mut json);
+                Ok(json)
             })
             .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
     }
@@ -711,6 +713,50 @@ impl ForgeQLEngine {
             "count":   count,
             "total":   total,
         }))
+    }
+}
+
+/// Give every `SHOW members` row its handle and its rev.
+///
+/// Members are read straight off the tree-sitter AST, which knows nothing about
+/// ordinals — so a member row used to be **read-only**: an agent that wanted to
+/// edit a field had to go back and FIND it by name first. Mapping each member's
+/// line to the indexed node restores the rule every other row obeys: if you can
+/// see it, you can address it, and the rev you need is right there.
+fn stamp_member_handles(
+    engine: &dyn StorageEngine,
+    workspace: &Workspace,
+    path: &std::path::Path,
+    json: &mut serde_json::Value,
+) {
+    let rel = workspace.relative(path).display().to_string();
+    let root = workspace.root().to_path_buf();
+    let Some(members) = json.get_mut("members").and_then(|m| m.as_array_mut()) else {
+        return;
+    };
+    for member in members.iter_mut() {
+        // Match by byte containment, not by line: the indexed field node starts
+        // at the attribute/doc line above the declaration, so their lines differ.
+        let Some(byte) = member.get("byte_start").and_then(serde_json::Value::as_u64) else {
+            continue;
+        };
+        let Ok(byte) = usize::try_from(byte) else {
+            continue;
+        };
+        let Some(node_id) = engine.find_node_id_at_byte(&rel, byte) else {
+            continue;
+        };
+        let rev = engine
+            .find_node(&node_id, &root)
+            .ok()
+            .flatten()
+            .map(|n| n.rev);
+        if let Some(obj) = member.as_object_mut() {
+            let _ = obj.insert("node_id".to_string(), serde_json::json!(node_id));
+            if let Some(rev) = rev {
+                let _ = obj.insert("rev".to_string(), serde_json::json!(rev));
+            }
+        }
     }
 }
 

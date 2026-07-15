@@ -432,6 +432,13 @@ pub struct OutlineEntry {
     /// Stable node handle — `None` for entries from legacy segments without reindex.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
+    /// Content rev of that node — what `IF REV` takes.
+    ///
+    /// Handed out with the handle, never apart from it: an outline row is a row
+    /// you mutate from, and making it fetch the rev separately would cost a
+    /// round trip per edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
     /// Nesting depth in the structural tree (0 = top-level declaration). Lets
     /// the renderer indent children under their enclosing declaration.
     #[serde(default)]
@@ -447,6 +454,16 @@ pub struct MemberEntry {
     pub text: String,
     /// 1-based line number.
     pub line: usize,
+    /// Stable node handle of the member declaration.
+    ///
+    /// Without it a member row was read-only: an agent that wanted to edit a
+    /// field had to go back and FIND it by name. `None` for rows from legacy
+    /// segments, which carry no ordinals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    /// Content rev of that node — what `IF REV` takes. Always beside the handle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
 }
 
 /// Direction of a call graph query.

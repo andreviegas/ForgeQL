@@ -6,6 +6,35 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — `SHOW outline` and `SHOW members` rows carry their rev (and members, their handle)
+
+The "handle and rev travel together" rule now holds on every read surface:
+
+- **`SHOW outline`** rows already had a `node_id`; they now carry its `rev` beside it. Schema:
+  `[fql_kind,name,line,node_id,rev]`.
+- **`SHOW members`** rows had **neither** — a member row was effectively read-only, and an agent
+  that wanted to edit a field had to go back and `FIND` it by name first. They now carry both.
+  Schema: `[declaration,line,node_id,rev]`.
+
+Members are read from the AST, not the index, and the two disagree about a member's *line*: the
+indexed `field` node starts at the attribute or doc-comment line **above** the declaration, so an
+exact-line match finds nothing. Handles are therefore attached by **byte containment** — the
+member's first byte lies inside exactly one innermost indexed node — via a new
+`StorageEngine::find_node_id_at_byte`. That is a relation that actually holds between the two
+views, not a fuzzy line-offset guess. Backends without byte
+spans return `None` and the row simply carries no handle, as before.
+
+Covered by the `member_and_outline_rows_carry_a_usable_handle_and_rev` golden case
+(`tests/golden/node_mutations.json`), which reads a handle+rev off a member row and mutates through
+it. The in-process `engine_integration` harness cannot cover this: it runs the legacy AST path,
+which has neither revs nor byte spans, so an assertion there would only ever be false.
+
+Writing that case exposed a hole in the v2 golden client: a structured self-healing rejection
+(`rev_mismatch`, `node_not_found`) comes back as an error-**flagged** tool result whose text is
+valid JSON — not as a JSON-RPC protocol error — so the client parsed it and reported success. Every
+`assert: {"error": true}` on such a step would have passed vacuously. The client now honours
+`result.isError`.
+
 ### Changed — **BREAKING**: `IF REV` is mandatory on every verb that names an existing node
 
 `CHANGE NODE`, `CHANGE NODE … MATCHING`, `INSERT BEFORE|AFTER NODE`, `DELETE NODE`, `MOVE NODE`

@@ -185,6 +185,7 @@ fn parse_outline_entries(json: &serde_json::Value) -> Vec<OutlineEntry> {
                             .get("node_id")
                             .and_then(|v| v.as_str())
                             .map(String::from),
+                        rev: entry.get("rev").and_then(|v| v.as_str()).map(String::from),
                         depth: entry
                             .get("depth")
                             .and_then(serde_json::Value::as_u64)
@@ -211,6 +212,8 @@ fn parse_member_entries(json: &serde_json::Value) -> Vec<MemberEntry> {
                         fql_kind: m.get("fql_kind")?.as_str()?.to_string(),
                         text: m.get("text")?.as_str()?.to_string(),
                         line: m.get("line")?.as_u64()? as usize,
+                        node_id: m.get("node_id").and_then(|v| v.as_str()).map(String::from),
+                        rev: m.get("rev").and_then(|v| v.as_str()).map(String::from),
                     })
                 })
                 .collect()

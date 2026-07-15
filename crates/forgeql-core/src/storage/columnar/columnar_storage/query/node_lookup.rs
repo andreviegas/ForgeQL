@@ -346,6 +346,53 @@ impl ColumnarStorage {
         Some(seg_meta.node_id(seg.ordinal_of(local_row).unwrap_or(0)))
     }
 
+    /// The innermost row of `rel_path` whose byte span contains `byte`.
+    ///
+    /// Innermost = smallest span, so a field inside a struct wins over the struct
+    /// that encloses it. Pure byte arithmetic — no file is read.
+    pub(super) fn find_node_id_at_byte_impl(&self, rel_path: &str, byte: usize) -> Option<String> {
+        let pick =
+            |reader: &crate::storage::columnar::segment_reader::SegmentReader| -> Option<u32> {
+                let mut best: Option<(u32, usize)> = None;
+                for r in 0..reader.row_count {
+                    if reader.ordinal_of(r).is_none() {
+                        continue;
+                    }
+                    let start = reader.byte_start_of(r) as usize;
+                    let end = reader.byte_end_of(r) as usize;
+                    if end == 0 || byte < start || byte >= end {
+                        continue;
+                    }
+                    let span = end - start;
+                    if best.is_none_or(|(_, best_span)| span < best_span) {
+                        best = Some((r, span));
+                    }
+                }
+                best.map(|(r, _)| r)
+            };
+
+        // Dirty overlay (post-mutation segments) takes priority over committed,
+        // exactly as the line lookup does — reads and writes must agree.
+        if !self.dirty.is_empty() {
+            for ds in &self.dirty.added {
+                if ds.source_path.to_str() == Some(rel_path) {
+                    let row = pick(&ds.reader)?;
+                    let ord = ds.reader.ordinal_of(row)?;
+                    return Some(crate::node_id::make_node_id(rel_path, ord));
+                }
+            }
+        }
+        let seg_idx = self
+            .overlay
+            .segments()
+            .iter()
+            .position(|s| s.source_path.to_str() == Some(rel_path))?;
+        let seg = self.segments.get(seg_idx)?;
+        let seg_meta = self.overlay.segments().get(seg_idx)?;
+        let row = pick(seg)?;
+        Some(seg_meta.node_id(seg.ordinal_of(row)?))
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "Single linear resolver: build the newline index, fold the chosen segment's rows, pick the innermost-containing node per line — splitting scatters tightly-coupled state"

@@ -223,7 +223,7 @@ fn compact_outline(s: &ShowResult, entries: &[OutlineEntry]) -> String {
     // Schema hint. One row per node in pre-order; the first column is the
     // nesting depth, so the structural tree is visible without re-grouping.
     let schema = if has_node_id {
-        "[fql_kind,name,line,node_id]"
+        "[fql_kind,name,line,node_id,rev]"
     } else {
         "[fql_kind,name,line]"
     };
@@ -241,6 +241,7 @@ fn compact_outline(s: &ShowResult, entries: &[OutlineEntry]) -> String {
                 &display_name,
                 &line,
                 e.node_id.as_deref().unwrap_or(""),
+                e.rev.as_deref().unwrap_or(""),
             ])
         } else {
             bracket(&[&e.fql_kind, &display_name, &line])
@@ -262,14 +263,33 @@ fn compact_members(s: &ShowResult, members: &[MemberEntry]) -> String {
         .as_ref()
         .map_or_else(String::new, |p| q(&p.to_string_lossy()));
     row(&mut out, &[&op, &sym, &file]);
+    // A member row is addressable, so it ships its handle and rev — otherwise an
+    // agent that wanted to edit a field had to go back and FIND it by name.
+    let with_handles = members.iter().any(|m| m.node_id.is_some());
     // Schema hint.
-    row(&mut out, &[&q("type"), &q("[declaration,line]")]);
+    let schema = if with_handles {
+        "[declaration,line,node_id,rev]"
+    } else {
+        "[declaration,line]"
+    };
+    row(&mut out, &[&q("type"), &q(schema)]);
     // Group by kind.
     let groups = group_members(members);
     for (kind, items) in &groups {
         let brackets: Vec<String> = items
             .iter()
-            .map(|(text, line)| bracket(&[text, &line.to_string()]))
+            .map(|m| {
+                if with_handles {
+                    bracket(&[
+                        &m.text,
+                        &m.line.to_string(),
+                        m.node_id.as_deref().unwrap_or(""),
+                        m.rev.as_deref().unwrap_or(""),
+                    ])
+                } else {
+                    bracket(&[&m.text, &m.line.to_string()])
+                }
+            })
             .collect();
         let val = q(&brackets.join(","));
         row(&mut out, &[&q(kind), &val]);
@@ -898,14 +918,15 @@ fn group_rows_by_kind<'a>(rows: &'a [SymbolRow]) -> Vec<(String, Vec<&'a SymbolR
     groups
 }
 
-/// Group member entries by kind → Vec<(kind, Vec<(text, line)>)>.
-fn group_members(members: &[MemberEntry]) -> Vec<(String, Vec<(&str, usize)>)> {
-    let mut groups: Vec<(String, Vec<(&str, usize)>)> = Vec::new();
+/// Group member entries by kind, keeping the whole entry — the handle and rev
+/// have to reach the renderer, not just the text and line.
+fn group_members(members: &[MemberEntry]) -> Vec<(String, Vec<&MemberEntry>)> {
+    let mut groups: Vec<(String, Vec<&MemberEntry>)> = Vec::new();
     for m in members {
         if let Some(g) = groups.iter_mut().find(|(k, _)| k == &m.fql_kind) {
-            g.1.push((&m.text, m.line));
+            g.1.push(m);
         } else {
-            groups.push((m.fql_kind.clone(), vec![(&m.text, m.line)]));
+            groups.push((m.fql_kind.clone(), vec![m]));
         }
     }
     groups

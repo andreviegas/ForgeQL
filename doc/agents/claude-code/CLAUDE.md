@@ -179,7 +179,8 @@ ROLLBACK [TRANSACTION 'name']
 
 Every verb that names an **existing** node takes `IF REV`. You never have to go
 and fetch the rev: it is handed to you **next to the handle**, in the same row,
-by `FIND symbols`, `FIND files`, `SHOW outline`, `SHOW NODE` and `FIND NODE` —
+by `FIND symbols`, `FIND files`, `SHOW outline`, `SHOW members`, `SHOW NODE` and
+`FIND NODE` —
 and every mutation returns the new handle *and* its new rev, so the next edit on
 that node needs no re-read.
 

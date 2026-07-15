@@ -1,9 +1,60 @@
 //! `fmt::Display` implementations for all `ForgeQL` result types.
 use super::{
-    BeginTransactionResult, CommitResult, ForgeQLResult, MutationResult, PlanResult, QueryResult,
-    RollbackResult, RunResult, ShowContent, ShowResult, SourceOpResult, VerifyBuildResult,
+    BeginTransactionResult, CommitResult, FileEntry, ForgeQLResult, MutationResult, PlanResult,
+    QueryResult, RollbackResult, RunResult, ShowContent, ShowResult, SourceOpResult,
+    VerifyBuildResult,
 };
 use std::fmt;
+
+/// One `SHOW outline` / `SHOW members` row: `line | kind | text | <id> <rev>`.
+///
+/// The handle and its rev are printed together or not at all — a handle without
+/// its rev is an address the agent cannot act on, since `IF REV` is mandatory.
+fn write_tree_row(
+    formatter: &mut fmt::Formatter<'_>,
+    line: usize,
+    kind: &str,
+    text: &str,
+    node_id: Option<&str>,
+    rev: Option<&str>,
+) -> fmt::Result {
+    let suffix = match (node_id, rev) {
+        (Some(id), Some(rev)) => format!(" | {id} {rev}"),
+        (Some(id), None) => format!(" | {id}"),
+        _ => String::new(),
+    };
+    writeln!(formatter, "{line:>4} | {kind:12} | {text}{suffix}")
+}
+
+/// Render a `FIND files` listing: one row per entry, then the total and the
+/// master rev that arms a FOUND mutation.
+fn write_file_list(
+    formatter: &mut fmt::Formatter<'_>,
+    files: &[FileEntry],
+    total: usize,
+    metadata: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> fmt::Result {
+    for entry in files {
+        write!(formatter, "  {}", entry.path.display())?;
+        if let Some(ref node_id) = entry.node_id {
+            write!(formatter, "  {node_id}")?;
+        }
+        if let Some(ref rev) = entry.rev {
+            write!(formatter, "  {rev}")?;
+        }
+        writeln!(formatter)?;
+    }
+    writeln!(formatter, "({total} files)")?;
+    // Same master-rev line as FIND symbols/usages — FIND files arms FOUND too,
+    // and the gate has to be quotable from here.
+    if let Some(rev) = metadata
+        .and_then(|m| m.get("found_rev"))
+        .and_then(serde_json::Value::as_str)
+    {
+        writeln!(formatter, "found_rev: {rev}")?;
+    }
+    Ok(())
+}
 
 // -----------------------------------------------------------------------
 // Display formatting (human-readable output)
@@ -176,19 +227,25 @@ impl fmt::Display for ShowResult {
             }
             ShowContent::Outline { entries } => {
                 for entry in entries {
-                    writeln!(
+                    write_tree_row(
                         formatter,
-                        "{:>4} | {:12} | {}",
-                        entry.line, entry.fql_kind, entry.name,
+                        entry.line,
+                        &entry.fql_kind,
+                        &entry.name,
+                        entry.node_id.as_deref(),
+                        entry.rev.as_deref(),
                     )?;
                 }
             }
             ShowContent::Members { members, .. } => {
                 for member in members {
-                    writeln!(
+                    write_tree_row(
                         formatter,
-                        "{:>4} | {:12} | {}",
-                        member.line, member.fql_kind, member.text,
+                        member.line,
+                        &member.fql_kind,
+                        &member.text,
+                        member.node_id.as_deref(),
+                        member.rev.as_deref(),
                     )?;
                 }
             }
@@ -205,27 +262,7 @@ impl fmt::Display for ShowResult {
                 }
             }
             ShowContent::FileList { files, total } => {
-                for entry in files {
-                    write!(formatter, "  {}", entry.path.display())?;
-                    if let Some(ref node_id) = entry.node_id {
-                        write!(formatter, "  {node_id}")?;
-                    }
-                    if let Some(ref rev) = entry.rev {
-                        write!(formatter, "  {rev}")?;
-                    }
-                    writeln!(formatter)?;
-                }
-                writeln!(formatter, "({total} files)")?;
-                // Same master-rev line as FIND symbols/usages — FIND files
-                // arms LAST too, and the gate has to be quotable from here.
-                if let Some(rev) = self
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get("found_rev"))
-                    .and_then(serde_json::Value::as_str)
-                {
-                    writeln!(formatter, "found_rev: {rev}")?;
-                }
+                write_file_list(formatter, files, *total, self.metadata.as_ref())?;
             }
             ShowContent::Stats { sessions } =>
             {

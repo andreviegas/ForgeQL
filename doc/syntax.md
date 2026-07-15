@@ -172,7 +172,7 @@ SHOW MORE [LAST-k] [HEAD n | TAIL n | n-m] [clauses]
 | `SHOW body OF` | Source text of a symbol. **Default `DEPTH 0`**: signature only, body replaced by `{ ... }`. `DEPTH 1`+: progressively reveals nested structure. `DEPTH 99`: full source. In CSV output the first column is a **node-relative 1-based `off`set** (not an absolute line) and the node's id is in the header — so you can `CHANGE NODE '<id>'` straight from the read. Absolute line numbers are available in `format=JSON`. |
 | `SHOW signature OF` | Declaration line only (return type, name, parameters). |
 | `SHOW outline OF` | Structural tree of a file. By default lists only **structural declarations** (functions, classes, structs, enums, traits, unions, namespaces, modules, type aliases, macros); each entry carries a **`depth`** so the compact output reads as an indented tree in source order. `ALL` includes every node; a `WHERE fql_kind = '...'` predicate implies `ALL`. Passing a `<node_id>` instead of a file path scopes the outline to that node's subtree. Supports `ORDER BY`, `LIMIT`, `OFFSET`. |
-| `SHOW members OF` | Member declarations of a class/struct/enum: fields, methods, enumerators. Supports `WHERE fql_kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
+| `SHOW members OF` | Member declarations of a class/struct/enum: fields, methods, enumerators. Every row carries its `node_id` **and `rev`**, so a member is mutable where you read it. Supports `WHERE fql_kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
 | `SHOW context OF` | Surrounding lines of a symbol definition. `DEPTH N` controls how many context lines (default 5). |
 | `SHOW callees OF` | All symbols called from inside the named function body. |
 | `SHOW NODE '<id>'` | `CONTENT` (default) prints the node's source; `METADATA` returns its `FIND NODE` record. A node-relative line offset — `'<id>(n)'` or `'<id>(n-m)'` — narrows `CONTENT` to a single line or inclusive range within the node's own span (1-based). |
@@ -249,9 +249,9 @@ COPY NODES FOUND TO '<dir_hex> | <dir>/'
 
 **The handle and its rev always travel together.** Every row that hands you a
 `node_id` hands you its `rev` in the same row — `FIND symbols`, `FIND files`,
-`SHOW outline`, `SHOW NODE`, `FIND NODE` — and every mutation hands back the new
-handle *and* its new rev, so a follow-up edit on the same node needs no re-read.
-You never have to fetch a rev; you already have it.
+`SHOW outline`, `SHOW members`, `SHOW NODE`, `FIND NODE` — and every mutation
+hands back the new handle *and* its new rev, so a follow-up edit on the same node
+needs no re-read. You never have to fetch a rev; you already have it.
 
 **Why it is required.** A handle is stable: it survives edits, insertions, even
 re-parenting, and it never silently comes to mean a different node. That is
@@ -398,8 +398,9 @@ DELETE NODE '<node_id>' IF REV '<rev>'
 MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'   -- relocate, byte-exact
 ```
 
-`FIND symbols`, `SHOW outline`, and the CSV form of `SHOW body` all surface
-node_ids, so a handle is usually one read away.
+`FIND symbols`, `FIND files`, `SHOW outline`, `SHOW members`, and the CSV form of
+`SHOW body` all surface node_ids — each with its `rev` — so a handle you can
+actually mutate is one read away.
 
 #### Whole-file and whole-directory handles — `n<hex>` with no ordinal
 

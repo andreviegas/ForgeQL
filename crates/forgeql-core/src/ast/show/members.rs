@@ -59,7 +59,9 @@ fn classify_member(
             if sig.is_empty() {
                 return None;
             }
-            Some(serde_json::json!({ "fql_kind": "method", "text": sig, "line": ln }))
+            Some(
+                serde_json::json!({ "fql_kind": "method", "text": sig, "line": ln, "byte_start": child.start_byte() }),
+            )
         } else {
             let text = std::str::from_utf8(&source[child.byte_range()])
                 .unwrap_or("")
@@ -68,7 +70,9 @@ fn classify_member(
             if text.is_empty() {
                 return None;
             }
-            Some(serde_json::json!({ "fql_kind": "field", "text": text, "line": ln }))
+            Some(
+                serde_json::json!({ "fql_kind": "field", "text": text, "line": ln, "byte_start": child.start_byte() }),
+            )
         }
     } else if config.is_function_kind(ck) {
         let body_start = child
@@ -80,7 +84,9 @@ fn classify_member(
         if sig.is_empty() {
             return None;
         }
-        Some(serde_json::json!({ "fql_kind": "method", "text": sig, "line": ln }))
+        Some(
+            serde_json::json!({ "fql_kind": "method", "text": sig, "line": ln, "byte_start": child.start_byte() }),
+        )
     } else if config.is_declaration_kind(ck) {
         let text = std::str::from_utf8(&source[child.byte_range()])
             .unwrap_or("")
@@ -89,14 +95,18 @@ fn classify_member(
         if text.is_empty() {
             return None;
         }
-        Some(serde_json::json!({ "fql_kind": "method", "text": text, "line": ln }))
+        Some(
+            serde_json::json!({ "fql_kind": "method", "text": text, "line": ln, "byte_start": child.start_byte() }),
+        )
     } else if config.is_enumerator_kind(ck) {
         let name_node = child.child_by_field_name("name")?;
         let name = std::str::from_utf8(&source[name_node.byte_range()]).unwrap_or("");
         if name.is_empty() {
             return None;
         }
-        Some(serde_json::json!({ "fql_kind": "enumerator", "text": name, "line": ln }))
+        Some(
+            serde_json::json!({ "fql_kind": "enumerator", "text": name, "line": ln, "byte_start": child.start_byte() }),
+        )
     } else {
         None
     }
