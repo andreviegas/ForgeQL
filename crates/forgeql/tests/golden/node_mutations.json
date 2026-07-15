@@ -1,93 +1,397 @@
 {
-  "suite": "node_mutations",
-  "description": "Mutation + transaction behaviour (DELETE/CHANGE NODE, nested BEGIN/ROLLBACK) on a throwaway rw worktree off forgeql-pub.frozen. node_ids are captured at runtime, never hard-coded.",
-  "cases": [
+ "suite": "node_mutations",
+ "description": "Mutation + transaction behaviour (DELETE/CHANGE NODE, nested BEGIN/ROLLBACK) on a throwaway rw worktree off forgeql-pub.frozen. node_ids are captured at runtime, never hard-coded.",
+ "cases": [
+  {
+   "name": "delete_and_rollback",
+   "use": "forgeql-pub.frozen",
+   "mode": "rw",
+   "steps": [
     {
-      "name": "delete_and_rollback",
-      "use": "forgeql-pub.frozen",
-      "mode": "rw",
-      "steps": [
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id", "R": "results.0.rev" } },
-        { "fql": "BEGIN TRANSACTION 'txn'", "assert": { "field": { "name": "txn" } } },
-        { "fql": "DELETE NODE '${A}' IF REV '${R}'", "assert": { "applied": true, "files_changed": ["crates/forgeql-core/src/node_id.rs"], "field": { "op": "delete_node" } } },
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 0 } },
-        { "fql": "ROLLBACK", "assert": { "field": { "name": "txn" } } },
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 } }
-      ]
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1",
+     "assert": {
+      "row_count": 1
+     },
+     "capture": {
+      "A": "results.0.node_id",
+      "R": "results.0.rev"
+     }
     },
     {
-      "name": "change_node_and_rollback",
-      "use": "forgeql-pub.frozen",
-      "mode": "rw",
-      "steps": [
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id", "R": "results.0.rev" } },
-        { "fql": "BEGIN TRANSACTION 'txn'", "assert": { "field": { "name": "txn" } } },
-        { "fql": "CHANGE NODE '${A}' IF REV '${R}' WITH 'fn parse_offset_renamed() {}'", "assert": { "applied": true, "diff_contains": "parse_offset_renamed" } },
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 0 } },
-        { "fql": "ROLLBACK", "assert": { "field": { "name": "txn" } } },
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 } }
-      ]
+     "fql": "BEGIN TRANSACTION 'txn'",
+     "assert": {
+      "field": {
+       "name": "txn"
+      }
+     }
     },
     {
-      "name": "nested_rollback_pops_inner_only",
-      "use": "forgeql-pub.frozen",
-      "mode": "rw",
-      "steps": [
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id", "R": "results.0.rev" } },
-        { "fql": "BEGIN TRANSACTION 'outer'", "assert": { "field": { "name": "outer" } } },
-        { "fql": "DELETE NODE '${A}' IF REV '${R}'", "assert": { "applied": true } },
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 0 } },
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1", "assert": { "row_count": 1 }, "capture": { "B": "results.0.node_id", "S": "results.0.rev" } },
-        { "fql": "BEGIN TRANSACTION 'inner'", "assert": { "field": { "name": "inner" } } },
-        { "fql": "DELETE NODE '${B}' IF REV '${S}'", "assert": { "applied": true } },
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1", "assert": { "row_count": 0 } },
-        { "fql": "ROLLBACK", "assert": { "field": { "name": "inner" } } },
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1", "assert": { "row_count": 1 } },
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 0 } },
-        { "fql": "ROLLBACK", "assert": { "field": { "name": "outer" } } },
-        { "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1", "assert": { "row_count": 1 } }
-      ]
+     "fql": "DELETE NODE '${A}' IF REV '${R}'",
+     "assert": {
+      "applied": true,
+      "files_changed": [
+       "crates/forgeql-core/src/node_id.rs"
+      ],
+      "field": {
+       "op": "delete_node"
+      }
+     }
     },
     {
-      "name": "rollback_without_transaction_errors",
-      "use": "forgeql-pub.frozen",
-      "mode": "rw",
-      "steps": [
-        { "fql": "ROLLBACK", "assert": { "error": true } }
-      ]
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1",
+     "assert": {
+      "row_count": 0
+     }
     },
-
     {
-      "name": "member_and_outline_rows_carry_a_usable_handle_and_rev",
-      "description": "A SHOW members / SHOW outline row is a row you can mutate FROM: it prints node_id and rev together, and that pair is exactly what the mandatory IF REV gate accepts. The member handle is attached by BYTE CONTAINMENT, not by line equality: SHOW members reports SymbolMatch::count at line 157, but the indexed field node starts at 156 — its #[serde(...)] attribute is part of the node — so a line lookup finds nothing. This case is the only thing that can catch that regression; the in-process engine_integration harness runs the legacy AST path, which has no revs and no byte lookup, so it cannot observe either field.",
-      "use": "forgeql-pub.frozen",
-      "mode": "rw",
-      "steps": [
-        { "fql": "SHOW members OF 'SymbolMatch'",
-          "assert": { "row_count": 10, "pointer": { "/content/members/0/line": 157 } },
-          "capture": { "M": "content.members.0.node_id", "RM": "content.members.0.rev" } },
-
-        { "fql": "SHOW NODE '${M}' METADATA",
-          "assert": { "field": { "type": "find_node" },
-                      "pointer": { "/name": "count", "/fql_kind": "field", "/line": 156, "/end_line": 157 } } },
-
-        { "fql": "CHANGE NODE '${M}' IF REV 'hdeadbeefdeadbeef' WITH '    pub count: Option<usize>,'",
-          "assert": { "error": true } },
-
-        { "fql": "BEGIN TRANSACTION 'member-handle'", "assert": { "field": { "name": "member-handle" } } },
-        { "fql": "CHANGE NODE '${M}' IF REV '${RM}' WITH '    pub member_handle_worked: Option<usize>,'",
-          "assert": { "applied": true, "diff_contains": "member_handle_worked" } },
-        { "fql": "ROLLBACK", "assert": { "field": { "name": "member-handle" } } },
-
-        { "fql": "SHOW outline OF 'crates/forgeql-core/src/node_id.rs' WHERE name = 'format_rev'",
-          "assert": { "row_count": 1, "pointer": { "/content/entries/0/line": 125 } },
-          "capture": { "O": "content.entries.0.node_id", "RO": "content.entries.0.rev" } },
-
-        { "fql": "BEGIN TRANSACTION 'outline-handle'", "assert": { "field": { "name": "outline-handle" } } },
-        { "fql": "CHANGE NODE '${O}' IF REV '${RO}' WITH 'fn outline_handle_worked() {}'",
-          "assert": { "applied": true, "diff_contains": "outline_handle_worked" } },
-        { "fql": "ROLLBACK", "assert": { "field": { "name": "outline-handle" } } }
-      ]
+     "fql": "ROLLBACK",
+     "assert": {
+      "field": {
+       "name": "txn"
+      }
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1",
+     "assert": {
+      "row_count": 1
+     }
     }
-  ]
+   ]
+  },
+  {
+   "name": "change_node_and_rollback",
+   "use": "forgeql-pub.frozen",
+   "mode": "rw",
+   "steps": [
+    {
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1",
+     "assert": {
+      "row_count": 1
+     },
+     "capture": {
+      "A": "results.0.node_id",
+      "R": "results.0.rev"
+     }
+    },
+    {
+     "fql": "BEGIN TRANSACTION 'txn'",
+     "assert": {
+      "field": {
+       "name": "txn"
+      }
+     }
+    },
+    {
+     "fql": "CHANGE NODE '${A}' IF REV '${R}' WITH 'fn parse_offset_renamed() {}'",
+     "assert": {
+      "applied": true,
+      "diff_contains": "parse_offset_renamed"
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1",
+     "assert": {
+      "row_count": 0
+     }
+    },
+    {
+     "fql": "ROLLBACK",
+     "assert": {
+      "field": {
+       "name": "txn"
+      }
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1",
+     "assert": {
+      "row_count": 1
+     }
+    }
+   ]
+  },
+  {
+   "name": "nested_rollback_pops_inner_only",
+   "use": "forgeql-pub.frozen",
+   "mode": "rw",
+   "steps": [
+    {
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1",
+     "assert": {
+      "row_count": 1
+     },
+     "capture": {
+      "A": "results.0.node_id",
+      "R": "results.0.rev"
+     }
+    },
+    {
+     "fql": "BEGIN TRANSACTION 'outer'",
+     "assert": {
+      "field": {
+       "name": "outer"
+      }
+     }
+    },
+    {
+     "fql": "DELETE NODE '${A}' IF REV '${R}'",
+     "assert": {
+      "applied": true
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1",
+     "assert": {
+      "row_count": 0
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1",
+     "assert": {
+      "row_count": 1
+     },
+     "capture": {
+      "B": "results.0.node_id",
+      "S": "results.0.rev"
+     }
+    },
+    {
+     "fql": "BEGIN TRANSACTION 'inner'",
+     "assert": {
+      "field": {
+       "name": "inner"
+      }
+     }
+    },
+    {
+     "fql": "DELETE NODE '${B}' IF REV '${S}'",
+     "assert": {
+      "applied": true
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1",
+     "assert": {
+      "row_count": 0
+     }
+    },
+    {
+     "fql": "ROLLBACK",
+     "assert": {
+      "field": {
+       "name": "inner"
+      }
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='offset_lines' LIMIT 1",
+     "assert": {
+      "row_count": 1
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1",
+     "assert": {
+      "row_count": 0
+     }
+    },
+    {
+     "fql": "ROLLBACK",
+     "assert": {
+      "field": {
+       "name": "outer"
+      }
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1",
+     "assert": {
+      "row_count": 1
+     }
+    }
+   ]
+  },
+  {
+   "name": "rollback_without_transaction_errors",
+   "use": "forgeql-pub.frozen",
+   "mode": "rw",
+   "steps": [
+    {
+     "fql": "ROLLBACK",
+     "assert": {
+      "error": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "member_and_outline_rows_carry_a_usable_handle_and_rev",
+   "description": "A SHOW members / SHOW outline row is a row you can mutate FROM: it prints node_id and rev together, and that pair is exactly what the mandatory IF REV gate accepts. The member handle is attached by BYTE CONTAINMENT, not by line equality: SHOW members reports SymbolMatch::count at line 157, but the indexed field node starts at 156 — its #[serde(...)] attribute is part of the node — so a line lookup finds nothing. This case is the only thing that can catch that regression; the in-process engine_integration harness runs the legacy AST path, which has no revs and no byte lookup, so it cannot observe either field.",
+   "use": "forgeql-pub.frozen",
+   "mode": "rw",
+   "steps": [
+    {
+     "fql": "SHOW members OF 'SymbolMatch'",
+     "assert": {
+      "row_count": 10,
+      "pointer": {
+       "/content/members/0/line": 157
+      }
+     },
+     "capture": {
+      "M": "content.members.0.node_id",
+      "RM": "content.members.0.rev"
+     }
+    },
+    {
+     "fql": "SHOW NODE '${M}' METADATA",
+     "assert": {
+      "field": {
+       "type": "find_node"
+      },
+      "pointer": {
+       "/name": "count",
+       "/fql_kind": "field",
+       "/line": 156,
+       "/end_line": 157
+      }
+     }
+    },
+    {
+     "fql": "CHANGE NODE '${M}' IF REV 'hdeadbeefdeadbeef' WITH '    pub count: Option<usize>,'",
+     "assert": {
+      "error": true
+     }
+    },
+    {
+     "fql": "BEGIN TRANSACTION 'member-handle'",
+     "assert": {
+      "field": {
+       "name": "member-handle"
+      }
+     }
+    },
+    {
+     "fql": "CHANGE NODE '${M}' IF REV '${RM}' WITH '    pub member_handle_worked: Option<usize>,'",
+     "assert": {
+      "applied": true,
+      "diff_contains": "member_handle_worked"
+     }
+    },
+    {
+     "fql": "ROLLBACK",
+     "assert": {
+      "field": {
+       "name": "member-handle"
+      }
+     }
+    },
+    {
+     "fql": "SHOW outline OF 'crates/forgeql-core/src/node_id.rs' WHERE name = 'format_rev'",
+     "assert": {
+      "row_count": 1,
+      "pointer": {
+       "/content/entries/0/line": 125
+      }
+     },
+     "capture": {
+      "O": "content.entries.0.node_id",
+      "RO": "content.entries.0.rev"
+     }
+    },
+    {
+     "fql": "BEGIN TRANSACTION 'outline-handle'",
+     "assert": {
+      "field": {
+       "name": "outline-handle"
+      }
+     }
+    },
+    {
+     "fql": "CHANGE NODE '${O}' IF REV '${RO}' WITH 'fn outline_handle_worked() {}'",
+     "assert": {
+      "applied": true,
+      "diff_contains": "outline_handle_worked"
+     }
+    },
+    {
+     "fql": "ROLLBACK",
+     "assert": {
+      "field": {
+       "name": "outline-handle"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "name": "deleted_twin_handle_dies_instead_of_repointing",
+   "description": "Two byte-identical same-parent comments share every remapper discriminator AND the same rev. Pre-fix, deleting the first re-keyed the survivor onto the deleted ordinal, so the stale handle+rev pair kept resolving — the one IF REV blind spot. The tombstone keeps the survivor on its own ordinal: the stale handle must now fail.",
+   "use": "forgeql-pub.frozen",
+   "mode": "rw",
+   "steps": [
+    {
+     "fql": "BEGIN TRANSACTION 'twintomb'",
+     "assert": {
+      "field": {
+       "name": "twintomb"
+      }
+     }
+    },
+    {
+     "fql": "INSERT NODE FOR 'zz_twin_probe.rs'",
+     "assert": {
+      "applied": true
+     },
+     "capture": {
+      "F": "new_node_id"
+     }
+    },
+    {
+     "fql": "INSERT AFTER NODE '${F}' WITH <<TWIN\n// twin separator\nfn alpha() {}\n// twin separator\nfn omega() {}\nTWIN",
+     "assert": {
+      "applied": true
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'zz_twin_probe.rs' WHERE fql_kind = 'comment' ORDER BY line ASC LIMIT 5",
+     "assert": {
+      "row_count": 2,
+      "all_same": "rev"
+     },
+     "capture": {
+      "T1": "results.0.node_id",
+      "R1": "results.0.rev"
+     }
+    },
+    {
+     "fql": "DELETE NODE '${T1}' IF REV '${R1}'",
+     "assert": {
+      "applied": true
+     }
+    },
+    {
+     "fql": "CHANGE NODE '${T1}' IF REV '${R1}' WITH '// hijacked'",
+     "assert": {
+      "error": true
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'zz_twin_probe.rs' WHERE fql_kind = 'comment' ORDER BY line ASC LIMIT 5",
+     "assert": {
+      "row_count": 1
+     }
+    },
+    {
+     "fql": "ROLLBACK",
+     "assert": {
+      "field": {
+       "name": "twintomb"
+      }
+     }
+    }
+   ]
+  }
+ ]
 }
