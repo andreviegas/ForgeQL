@@ -100,6 +100,10 @@ const CLEAN_COMMIT_EXCLUDED: &[&str] = &[
     ".forgeql-session",
     crate::storage::columnar::DELTA_FILE_NAME,
     ".forgeql-checkpoints", // FT6: never in user-facing history
+    // The armed FIND set: session runtime state, meaningless outside its
+    // worktree. Written by every FIND, so without this entry every
+    // post-FIND commit would ship the binary set file.
+    crate::session::found_set::FILE_NAME,
 ];
 
 /// Files excluded from **internal checkpoint** commits (`BEGIN TRANSACTION`).
@@ -1110,6 +1114,9 @@ mod tests {
         )));
         assert!(is_clean_commit_excluded(Path::new(".forgeql-showmore-3")));
         assert!(is_clean_commit_excluded(Path::new(".forgeql-index")));
+        assert!(is_clean_commit_excluded(Path::new(
+            crate::session::found_set::FILE_NAME
+        )));
         assert!(!is_clean_commit_excluded(Path::new("src/main.rs")));
     }
 

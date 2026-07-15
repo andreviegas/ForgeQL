@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const FILE_VERSION: u32 = 1;
-const FILE_NAME: &str = ".forgeql-foundset";
+/// Worktree-relative name of the persisted set — referenced by the git layer
+/// so user-facing commits never include it.
+pub(crate) const FILE_NAME: &str = ".forgeql-foundset";
 
 /// One row of the FIND result the set was armed from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
