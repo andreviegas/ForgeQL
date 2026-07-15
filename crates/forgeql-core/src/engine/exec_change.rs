@@ -955,9 +955,9 @@ impl ForgeQLEngine {
                          or arm a set of files"
                     );
                 }
-                let basename = Path::new(rel)
-                    .file_name()
-                    .ok_or_else(|| anyhow::anyhow!("{verb} NODES FOUND: '{rel}' has no basename"))?;
+                let basename = Path::new(rel).file_name().ok_or_else(|| {
+                    anyhow::anyhow!("{verb} NODES FOUND: '{rel}' has no basename")
+                })?;
                 let dst_rel = Path::new(&dst_dir).join(basename);
                 let dst_abs = workspace.safe_path(&dst_rel.to_string_lossy())?;
                 if dst_abs == src_abs {

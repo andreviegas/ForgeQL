@@ -6,6 +6,8 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.114.0] — 2026-07-15 — feat(dsl)!: FOUND bulk mutations under one master rev; IF REV mandatory on existing-node verbs
+
 ### Added — `SHOW outline` and `SHOW members` rows carry their rev (and members, their handle)
 
 The "handle and rev travel together" rule now holds on every read surface:
