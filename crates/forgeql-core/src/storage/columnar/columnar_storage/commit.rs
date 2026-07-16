@@ -289,11 +289,11 @@ impl ColumnarStorage {
 
     /// Called by `ROLLBACK` after `git reset --hard` restores the worktree.
     ///
-    /// Reads the valid hex IDs from the restored delta file, GCs any orphaned
-    /// staging directories, then reloads the dirty overlay from the delta.
+    /// Reads the valid staged segment names from the restored delta file, GCs
+    /// any orphaned staging files, then reloads the dirty overlay from the delta.
     pub fn reload_delta_after_rollback(&mut self) -> Result<()> {
-        let valid_hexes = DeltaFile::read_valid_hexes(&self.delta_path);
-        DeltaFile::gc_orphaned_staging(&valid_hexes, &self.staging_dir);
+        let valid_names = DeltaFile::read_valid_segment_names(&self.delta_path);
+        DeltaFile::gc_orphaned_staging(&valid_names, &self.staging_dir);
         self.dirty = DirtyOverlay::new();
         self.load_delta()
     }
@@ -322,7 +322,11 @@ impl ColumnarStorage {
         //    Idempotent: skips any hex that is already there.
         for ds in &self.dirty.added {
             let hex = ds.reader.content_id_hex();
-            let src = self.staging_dir.join(format!("{hex}.fqsf"));
+            let src = crate::storage::columnar::delta_file::staged_segment_path(
+                &self.staging_dir,
+                &ds.source_path,
+                &hex,
+            );
             let dst = ctx.segment_path_for(&hex);
             promote_segment(&src, &dst)?;
         }

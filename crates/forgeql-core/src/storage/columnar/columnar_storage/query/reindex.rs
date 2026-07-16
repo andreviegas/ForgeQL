@@ -94,9 +94,22 @@ impl ColumnarStorage {
             let content_id_bytes = git_blob_sha1(&bytes);
             let hex_content_id = bytes_to_hex(&content_id_bytes);
 
-            let seg_path = self.staging_dir.join(format!("{hex_content_id}.fqsf"));
+            // Keyed by (path, content), NOT content alone — see
+            // `staged_segment_file_name`. Same-path same-bytes reuse is kept:
+            // it is what lets UNDO restore a file's original node ids.
+            let seg_path = self.staging_dir.join(
+                crate::storage::columnar::delta_file::staged_segment_file_name(
+                    &rel_path,
+                    &hex_content_id,
+                ),
+            );
 
-            if !is_valid_segment(&seg_path) {
+            // A staged tombstone means this path's node identities changed even
+            // when the new bytes match a previously staged state — a removal
+            // must never be served from cache, or the tombstoned remap is
+            // silently skipped and a byte-identical sibling adopts the dead id.
+            let has_tombstones = tombstones.get(&rel_path).is_some_and(|t| !t.is_empty());
+            if has_tombstones || !is_valid_segment(&seg_path) {
                 parser
                     .set_language(&lang.tree_sitter_language())
                     .map_err(|e| anyhow::anyhow!("tree-sitter language error: {e}"))?;

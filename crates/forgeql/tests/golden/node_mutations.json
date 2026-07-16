@@ -393,5 +393,89 @@
     }
    ]
   }
+,
+  {
+   "name": "segment_cache_does_not_serve_another_files_ordinals",
+   "description": "The staged reindex segment was keyed by content alone, so a file whose post-delete bytes matched ANOTHER already-indexed file was served that file's cached ordinals verbatim — skipping the tombstoned remap entirely. Here seed.cpp arms the cache with a lone fn at ordinal 0; deleting the first of two byte-identical twins in tw.cpp leaves bytes identical to seed.cpp. Pre-fix the survivor adopted .0000 and the stale handle+rev kept resolving; the (path,content) cache key + tombstone bypass keep the survivor on its own ordinal, so the stale handle must fail.",
+   "use": "forgeql-pub.frozen",
+   "mode": "rw",
+   "steps": [
+    {
+     "fql": "BEGIN TRANSACTION 'segcache'",
+     "assert": {
+      "field": {
+       "name": "segcache"
+      }
+     }
+    },
+    {
+     "fql": "INSERT NODE FOR 'zz_seg_seed.cpp'",
+     "assert": {
+      "applied": true
+     },
+     "capture": {
+      "F1": "new_node_id"
+     }
+    },
+    {
+     "fql": "INSERT AFTER NODE '${F1}' WITH <<SEED\nvoid seg_probe() {\n    int q = 3;\n}\nSEED",
+     "assert": {
+      "applied": true
+     }
+    },
+    {
+     "fql": "INSERT NODE FOR 'zz_seg_tw.cpp'",
+     "assert": {
+      "applied": true
+     },
+     "capture": {
+      "F2": "new_node_id"
+     }
+    },
+    {
+     "fql": "INSERT AFTER NODE '${F2}' WITH <<TWINS\nvoid seg_probe() {\n    int q = 3;\n}\n\nvoid seg_probe() {\n    int q = 3;\n}\nTWINS",
+     "assert": {
+      "applied": true
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'zz_seg_tw.cpp' WHERE fql_kind = 'function' ORDER BY line ASC LIMIT 5",
+     "assert": {
+      "row_count": 2,
+      "all_same": "rev"
+     },
+     "capture": {
+      "T1": "results.0.node_id",
+      "R1": "results.0.rev"
+     }
+    },
+    {
+     "fql": "DELETE NODE '${T1}' IF REV '${R1}'",
+     "assert": {
+      "applied": true
+     }
+    },
+    {
+     "fql": "CHANGE NODE '${T1}' IF REV '${R1}' WITH '// hijacked'",
+     "assert": {
+      "error": true
+     }
+    },
+    {
+     "fql": "FIND symbols IN 'zz_seg_tw.cpp' WHERE fql_kind = 'function' ORDER BY line ASC LIMIT 5",
+     "assert": {
+      "row_count": 1
+     }
+    },
+    {
+     "fql": "ROLLBACK",
+     "assert": {
+      "field": {
+       "name": "segcache"
+      }
+     }
+    }
+   ]
+  }
  ]
 }

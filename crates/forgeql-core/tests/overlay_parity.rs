@@ -3208,11 +3208,11 @@ fn delta_file_roundtrip() {
     DeltaFile::save(&dirty, &delta_path).expect("save delta");
     assert!(delta_path.exists(), "delta file must exist after save");
 
-    // read_valid_hexes returns staged hex IDs (none here — only removals).
-    let hexes = DeltaFile::read_valid_hexes(&delta_path);
+    // read_valid_segment_names returns staged names (none here — only removals).
+    let names = DeltaFile::read_valid_segment_names(&delta_path);
     assert!(
-        hexes.is_empty(),
-        "no staged entries → read_valid_hexes must be empty"
+        names.is_empty(),
+        "no staged entries → read_valid_segment_names must be empty"
     );
 
     // Full roundtrip: load back and compare removed_hex_ids.
@@ -3299,12 +3299,17 @@ fn reindex_writes_delta_file() {
 
     assert!(delta_path.exists(), "delta must exist after reindex");
 
-    // read_valid_hexes gives us the staged hex IDs.
-    let hexes = DeltaFile::read_valid_hexes(&delta_path);
-    assert_eq!(hexes.len(), 1, "expected 1 staged hex; got {}", hexes.len());
+    // read_valid_segment_names gives us the staged segment file names.
+    let names = DeltaFile::read_valid_segment_names(&delta_path);
+    assert_eq!(
+        names.len(),
+        1,
+        "expected 1 staged name; got {}",
+        names.len()
+    );
     assert!(
-        !hexes[0].is_empty(),
-        "staged hex_content_id must be non-empty"
+        !names[0].is_empty(),
+        "staged segment file name must be non-empty"
     );
 
     // Full load: verify source_path and removed_hex_ids.
@@ -3535,18 +3540,18 @@ fn rollback_gcs_orphaned_staging_segments() {
     let delta_path = worktree.join(".forgeql-columnar-delta");
     let checkpoint_delta = std::fs::read(&delta_path).expect("read checkpoint delta");
 
-    let hex_a_vec = DeltaFile::read_valid_hexes(&delta_path);
+    let name_a_vec = DeltaFile::read_valid_segment_names(&delta_path);
     assert_eq!(
-        hex_a_vec.len(),
+        name_a_vec.len(),
         1,
-        "checkpoint must have exactly 1 staged hex"
+        "checkpoint must have exactly 1 staged segment"
     );
-    let hex_a = hex_a_vec[0].clone();
+    let name_a = name_a_vec[0].clone();
 
     let staging_dir = worktree.join(".forgeql-staging");
     assert!(
-        staging_dir.join(format!("{hex_a}.fqsf")).exists(),
-        "staging dir for hex_a must exist"
+        staging_dir.join(&name_a).exists(),
+        "staged segment for file1 must exist"
     );
 
     // ── Post-checkpoint: reindex file2 → staging hex B, delta updated ──
@@ -3555,20 +3560,20 @@ fn rollback_gcs_orphaned_staging_segments() {
         .reindex_files(std::slice::from_ref(&file2))
         .expect("reindex file2");
 
-    let hexes_after = DeltaFile::read_valid_hexes(&delta_path);
+    let names_after = DeltaFile::read_valid_segment_names(&delta_path);
     assert_eq!(
-        hexes_after.len(),
+        names_after.len(),
         2,
-        "after second reindex must have 2 staged hexes"
+        "after second reindex must have 2 staged segments"
     );
-    let hex_b = hexes_after
+    let name_b = names_after
         .iter()
-        .find(|h| *h != &hex_a)
+        .find(|n| *n != &name_a)
         .cloned()
-        .expect("hex_b");
+        .expect("name_b");
     assert!(
-        staging_dir.join(format!("{hex_b}.fqsf")).exists(),
-        "staging dir for hex_b must exist before rollback"
+        staging_dir.join(&name_b).exists(),
+        "staged segment for file2 must exist before rollback"
     );
 
     // ── Simulate git reset --hard: restore delta to checkpoint state ──
@@ -3579,15 +3584,15 @@ fn rollback_gcs_orphaned_staging_segments() {
         .reload_dirty_from_delta()
         .expect("reload_dirty_from_delta after rollback");
 
-    // hex_b staging dir must be GC'd (it's no longer in the restored delta).
+    // file2's staged segment must be GC'd (no longer in the restored delta).
     assert!(
-        !staging_dir.join(format!("{hex_b}.fqsf")).exists(),
-        "staging dir for hex_b must be removed after rollback GC"
+        !staging_dir.join(&name_b).exists(),
+        "staged segment for file2 must be removed after rollback GC"
     );
-    // hex_a staging dir must remain (still in the restored delta).
+    // file1's staged segment must remain (still in the restored delta).
     assert!(
-        staging_dir.join(format!("{hex_a}.fqsf")).exists(),
-        "staging dir for hex_a must survive rollback GC"
+        staging_dir.join(&name_a).exists(),
+        "staged segment for file1 must survive rollback GC"
     );
 
     // Query results must reflect checkpoint state: file1 updated, file2 not.
@@ -3687,16 +3692,24 @@ fn nested_rollback_restores_correct_delta() {
         .reindex_files(std::slice::from_ref(&file1))
         .expect("reindex ckpt1");
     let ckpt1_delta = std::fs::read(&delta_path).expect("read ckpt1 delta");
-    let ckpt1_hexes = DeltaFile::read_valid_hexes(&delta_path);
-    assert_eq!(ckpt1_hexes.len(), 1, "checkpoint1 must have 1 staged hex");
+    let ckpt1_names = DeltaFile::read_valid_segment_names(&delta_path);
+    assert_eq!(
+        ckpt1_names.len(),
+        1,
+        "checkpoint1 must have 1 staged segment"
+    );
 
     // ── Checkpoint 2: also reindex file2 ──
     std::fs::write(&file2, "void Phase2File2() {}\n").expect("ckpt2 file2");
     storage
         .reindex_files(std::slice::from_ref(&file2))
         .expect("reindex ckpt2");
-    let ckpt2_hexes = DeltaFile::read_valid_hexes(&delta_path);
-    assert_eq!(ckpt2_hexes.len(), 2, "checkpoint2 must have 2 staged hexes");
+    let ckpt2_names = DeltaFile::read_valid_segment_names(&delta_path);
+    assert_eq!(
+        ckpt2_names.len(),
+        2,
+        "checkpoint2 must have 2 staged segments"
+    );
 
     // ── Rollback to checkpoint 1 (simulate git reset --hard to ckpt1) ──
     std::fs::write(&delta_path, &ckpt1_delta).expect("restore ckpt1 delta");
@@ -3704,20 +3717,20 @@ fn nested_rollback_restores_correct_delta() {
         .reload_dirty_from_delta()
         .expect("reload after rollback to ckpt1");
 
-    // Only ckpt1 hex should remain in staging.
+    // Only ckpt1's staged segment should remain in staging.
     let staging_dir = worktree.join(".forgeql-staging");
-    for hex in &ckpt2_hexes {
-        if !ckpt1_hexes.contains(hex) {
+    for name in &ckpt2_names {
+        if !ckpt1_names.contains(name) {
             assert!(
-                !staging_dir.join(format!("{hex}.fqsf")).exists(),
-                "ckpt2-only hex {hex} must be GC'd after rollback to ckpt1"
+                !staging_dir.join(name).exists(),
+                "ckpt2-only segment {name} must be GC'd after rollback to ckpt1"
             );
         }
     }
-    for hex in &ckpt1_hexes {
+    for name in &ckpt1_names {
         assert!(
-            staging_dir.join(format!("{hex}.fqsf")).exists(),
-            "ckpt1 hex {hex} must survive rollback to ckpt1"
+            staging_dir.join(name).exists(),
+            "ckpt1 segment {name} must survive rollback to ckpt1"
         );
     }
 
@@ -3850,8 +3863,12 @@ fn commit_promotes_segments_and_builds_new_overlay() {
     assert_eq!(storage.dirty().added.len(), 1, "must have 1 staged segment");
     let staged_hex = storage.dirty().added[0].reader.content_id_hex();
     let staging_dir = worktree.join(".forgeql-staging");
+    let staged_name = format!(
+        "{}-{staged_hex}.fqsf",
+        forgeql_core::node_id::hex_prefix(&forgeql_core::node_id::sha256_of_path("file1.cpp"), 12)
+    );
     assert!(
-        staging_dir.join(format!("{staged_hex}.fqsf")).exists(),
+        staging_dir.join(&staged_name).exists(),
         "staged segment must be in staging dir before commit"
     );
 

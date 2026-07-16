@@ -1380,4 +1380,57 @@ mod identical_sibling_tombstone_tests {
         };
         assert_eq!(remapper.assign(&fresh), 6);
     }
+
+    fn fn_hint(ordinal: u32) -> OrdinalHint {
+        OrdinalHint {
+            name: "dup".to_string(),
+            fql_kind: "function".to_string(),
+            parent_ordinal: 0,
+            guard_group_id: None,
+            guard_branch: None,
+            first_body_statement_fingerprint: Some("fp".to_string()),
+            content_hash: Some("H".to_string()),
+            ordinal,
+        }
+    }
+
+    fn child_hint(ordinal: u32, parent_ordinal: u32) -> OrdinalHint {
+        OrdinalHint {
+            name: "x".to_string(),
+            fql_kind: "variable".to_string(),
+            parent_ordinal,
+            guard_group_id: None,
+            guard_branch: None,
+            first_body_statement_fingerprint: None,
+            content_hash: Some("C".to_string()),
+            ordinal,
+        }
+    }
+
+    fn fn_key() -> OrdinalMatchKey<'static> {
+        OrdinalMatchKey {
+            name: "dup",
+            fql_kind: "function",
+            parent_ordinal: 0,
+            guard_group_id: None,
+            guard_branch: None,
+            first_body_statement_fingerprint: Some("fp"),
+            content_hash: Some("H"),
+        }
+    }
+
+    #[test]
+    fn tombstoning_only_the_root_still_keeps_the_survivor_with_children() {
+        // Twins WITH a child subtree: fn@0{child@1}, fn@2{child@3}. Deleting the
+        // first stages ONLY the root ordinal 0 (current engine behaviour). If the
+        // remapper handles this correctly the survivor keeps ordinal 2.
+        let mut remapper = OrdinalRemapper::from_previous(vec![
+            fn_hint(0),
+            child_hint(1, 0),
+            fn_hint(2),
+            child_hint(3, 2),
+        ]);
+        remapper.tombstone(&[0]);
+        assert_eq!(remapper.assign(&fn_key()), 2);
+    }
 }

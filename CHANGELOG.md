@@ -6,6 +6,36 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.120.0] — 2026-07-16 — fix(index): a reindexed file no longer adopts node identities cached for identical bytes
+
+### Fixed — stale node handles could silently re-point at a byte-identical surviving sibling
+
+- The per-session reindex cache stored each reindexed file's segment under a key
+  derived from the file's **content alone**. Two files with identical bytes —
+  or one file whose bytes, after a deletion, came to match a state already
+  indexed for *any* file earlier in the session — were therefore served the
+  cached segment verbatim, **skipping ordinal remapping and the removal
+  tombstones entirely**. Node ordinals are file-history-dependent identity, not
+  content-derived data: after deleting one of two byte-identical sibling nodes,
+  the survivor could adopt the deleted node's node_id, and because byte-identical
+  twins share a rev, the stale handle + rev pair kept resolving — the one case
+  the `IF REV` guard exists to prevent. The longer a session ran, the more
+  cached contents accumulated and the more likely the collision.
+- Staged segments are now keyed by **(path, content)**, so one file can never be
+  served another file's node identities, and a reindex carrying removal
+  tombstones always re-runs the ordinal remap instead of reusing a cached
+  segment — a removal is an identity change even when the resulting bytes match
+  a previously indexed state of the same file. Same-path/same-bytes reuse is
+  preserved where it is sound: `UNDO` still restores a file's original node ids.
+- Golden `segment_cache_does_not_serve_another_files_ordinals` pins the exact
+  scenario (seed file arms the cache; twin delete in a second file must kill the
+  stale handle). A remapper unit test additionally locks root-only tombstoning
+  of a node that carries a child subtree.
+- Migration: a session whose staged segments predate this release is still
+  readable — reconnect and commit fall back to the legacy content-only file
+  name when the new one is not on disk, so uncommitted staged state survives
+  the upgrade.
+
 ## [0.119.0] — 2026-07-15 — refactor(engine): one module per mutation verb family; MOVE NODE absorbs the trailing blank separator
 
 ### Changed
