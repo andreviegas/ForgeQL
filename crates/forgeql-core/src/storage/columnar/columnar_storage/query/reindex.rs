@@ -42,9 +42,7 @@ impl ColumnarStorage {
         let enrichers = default_enrichers();
 
         for path in paths {
-            let rel_path = path
-                .strip_prefix(&self.worktree_root)
-                .unwrap_or(path)
+            let rel_path = crate::storage::columnar::segment_source_rel(path, &self.worktree_root)
                 .to_path_buf();
 
             // Build ordinal hints from the most-recent version of this segment:
@@ -78,7 +76,7 @@ impl ColumnarStorage {
             // AFTER capturing hints so the remapper references valid data.
             let old_hex = self.path_to_hex_content_id(&rel_path).unwrap_or_default();
             if !old_hex.is_empty() {
-                self.dirty.remove_hex(old_hex.clone());
+                self.dirty.remove_path(rel_path.clone());
             }
             drop(self.dirty.remove_stale_for_path(&rel_path));
 

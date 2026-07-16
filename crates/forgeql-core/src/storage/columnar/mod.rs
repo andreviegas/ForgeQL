@@ -186,13 +186,80 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        surviving sibling keeps its own ordinal instead of adopting the
 ///        deleted node's. A v33 segment built during such a reindex holds the
 ///        pre-fix (re-keyed) ordinals for that post-removal content.
-pub const ENRICH_VER: u32 = 34;
+///   35 — a segment is keyed by **(path, content)**, not by content alone: the
+///        filename gained a source-path component. The indexing result depends on
+///        the file bytes *and* on which parser the path selects, so two
+///        byte-identical files with different extensions must not share a segment.
+///        v34 segment/overlay trees are laid out under the old content-only names
+///        and cannot be resolved by the new key.
+pub const ENRICH_VER: u32 = 35;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";
 
 /// The folder name used for columnar staging segments.
 pub const STAGING_DIR_NAME: &str = ".forgeql-staging";
+
+/// Stable key for a source path, used to name a segment.
+///
+/// Derived from the path **relative to the worktree root**: the segment store is
+/// shared by every worktree of a bare repo, so an absolute path would key the
+/// same file differently per worktree and defeat reuse.
+pub(crate) fn path_key(source_path: &std::path::Path) -> String {
+    crate::node_id::hex_prefix(
+        &crate::node_id::sha256_of_path(&source_path.to_string_lossy()),
+        12,
+    )
+}
+
+/// Reduce a source path to the worktree-relative form that keys a segment.
+///
+/// The segment store is shared by every worktree of a bare repo, so a key must
+/// never embed an absolute path: the same file would key differently per
+/// worktree and every worktree would re-index the whole tree.
+///
+/// Callers pass either an absolute path inside the worktree or a path already
+/// reduced to the relative form — the latter is returned unchanged, since it is
+/// already the key. Only an **absolute** path outside the worktree has no sound
+/// key, and that is a wiring mistake, so it is reported rather than hidden.
+pub(crate) fn segment_source_rel<'a>(
+    source_path: &'a std::path::Path,
+    worktree_root: &std::path::Path,
+) -> &'a std::path::Path {
+    if let Ok(rel) = source_path.strip_prefix(worktree_root) {
+        return rel;
+    }
+    if source_path.is_relative() {
+        return source_path;
+    }
+    tracing::warn!(
+        path = %source_path.display(),
+        root = %worktree_root.display(),
+        "segment key: absolute source path is not under the worktree root; \
+         keying by it defeats reuse across worktrees"
+    );
+    debug_assert!(false, "absolute source path is not under the worktree root");
+    source_path
+}
+/// Location of a segment within a versioned provider directory, keyed by
+/// **(path, content)** rather than by content alone.
+///
+/// A segment caches an indexing result, and that result is a function of the
+/// file's bytes *and* of the parser its path selects. Content alone cannot name
+/// it: two byte-identical files with different extensions parse to different
+/// trees, and two identical-bytes files can carry different node ordinals.
+/// Sharing one segment between them serves one file the other file's data.
+///
+/// Keeps the git-style 2-char fan-out on the content hash to avoid flat
+/// directories, and disambiguates within a shard by `path_key`.
+#[must_use]
+pub fn segment_rel_path(source_path: &std::path::Path, hex_content_id: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(&hex_content_id[..2]).join(format!(
+        "{}-{}.fqsf",
+        &hex_content_id[2..],
+        path_key(source_path)
+    ))
+}
 /// Encode a byte slice as a lowercase hex string.
 pub(crate) fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;

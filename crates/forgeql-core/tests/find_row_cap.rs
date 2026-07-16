@@ -35,12 +35,19 @@ fn fixtures_dir() -> PathBuf {
 fn vp() -> String {
     format!("test-v{}", forgeql_core::storage::columnar::ENRICH_VER)
 }
-
-fn seg_path(segments_base: &std::path::Path, hex: &str) -> std::path::PathBuf {
+/// Keyed by (path, content) via the engine's own helper — `source_path` is the
+/// worktree-relative path the overlay stores.
+fn seg_path(
+    segments_base: &std::path::Path,
+    source_path: &std::path::Path,
+    hex: &str,
+) -> std::path::PathBuf {
     segments_base
         .join(vp())
-        .join(&hex[..2])
-        .join(format!("{}.fqsf", &hex[2..]))
+        .join(forgeql_core::storage::columnar::segment_rel_path(
+            source_path,
+            hex,
+        ))
 }
 
 /// Index `canonical.cpp` and build a single-segment `ColumnarStorage`
@@ -99,7 +106,11 @@ fn single_segment_cpp_storage() -> (TempDir, ColumnarStorage) {
         }
     }
     builder
-        .flush(&seg_path(&segments_dir, &hex))
+        .flush(&seg_path(
+            &segments_dir,
+            std::path::Path::new("canonical.cpp"),
+            &hex,
+        ))
         .expect("segment flush");
 
     let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
@@ -115,7 +126,7 @@ fn single_segment_cpp_storage() -> (TempDir, ColumnarStorage) {
         .iter()
         .map(|m| {
             Arc::new(
-                SegmentReader::open(&seg_path(&segments_dir, &m.hex_content_id))
+                SegmentReader::open(&seg_path(&segments_dir, &m.source_path, &m.hex_content_id))
                     .expect("open segment"),
             )
         })

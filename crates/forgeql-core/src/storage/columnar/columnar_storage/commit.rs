@@ -158,6 +158,7 @@ impl ColumnarStorage {
                 &ctx.provider_id,
                 ctx.hash_fn.as_ref(),
                 HashMap::new(),
+                worktree_path,
             );
             let t_sw = std::time::Instant::now();
             match writer.run() {
@@ -221,7 +222,7 @@ impl ColumnarStorage {
             .segments()
             .iter()
             .filter_map(|meta| {
-                let dir = ctx.segment_path_for(&meta.hex_content_id);
+                let dir = ctx.segment_path_for(&meta.source_path, &meta.hex_content_id);
                 SegmentReader::open(&dir).ok().map(Arc::new)
             })
             .collect()
@@ -319,7 +320,7 @@ impl ColumnarStorage {
         ctx: &ColumnarBuildContext,
     ) -> Result<()> {
         // 1. Promote staging segments → bare-repo segment store.
-        //    Idempotent: skips any hex that is already there.
+        //    Idempotent: skips any (path, content) key already present.
         for ds in &self.dirty.added {
             let hex = ds.reader.content_id_hex();
             let src = crate::storage::columnar::delta_file::staged_segment_path(
@@ -327,7 +328,7 @@ impl ColumnarStorage {
                 &ds.source_path,
                 &hex,
             );
-            let dst = ctx.segment_path_for(&hex);
+            let dst = ctx.segment_path_for(&ds.source_path, &hex);
             promote_segment(&src, &dst)?;
         }
 

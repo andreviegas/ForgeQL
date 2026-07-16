@@ -191,11 +191,11 @@ impl OverlayBuilder {
     /// this method assembles the complete `segment_map` needed by
     /// `build_and_persist`:
     ///
-    /// - All persistent `SegmentMeta` entries whose `hex_content_id` is **not**
-    ///   shadowed by `dirty` (i.e. not in `dirty.removed_hex_ids`).
+    /// - All persistent `SegmentMeta` entries whose `source_path` is **not**
+    ///   shadowed by `dirty` (i.e. not in `dirty.removed_paths`).
     /// - All newly promoted dirty segments from `dirty.added`.
     ///
-    /// Both sets are re-opened fresh from `ctx.segment_path_for(hex)` (the
+    /// Both sets are re-opened fresh from `ctx.segment_path_for(path, hex)` (the
     /// canonical bare-repo location after promotion).  The `source_path` on
     /// each `SegmentMeta` / `DirtySegment` is already workspace-relative, so
     /// we reconstruct the `abs_path` key as `worktree_root.join(rel_path)`,
@@ -213,7 +213,7 @@ impl OverlayBuilder {
 
         // Base segments that are not shadowed by the dirty overlay.
         for meta in base_overlay.segments() {
-            if dirty.shadows(&meta.hex_content_id) {
+            if dirty.shadows(&meta.source_path) {
                 continue;
             }
             let abs_path = worktree_root.join(&meta.source_path);
@@ -252,20 +252,14 @@ impl OverlayBuilder {
             .par_iter()
             .filter_map(|(abs_path, content_id)| {
                 let hex = bytes_to_hex(content_id);
-                let seg_path = provider_ver_dir
-                    .join(&hex[..2])
-                    .join(format!("{}.fqsf", &hex[2..]));
+                let rel_path =
+                    super::segment_source_rel(abs_path, &self.worktree_root).to_path_buf();
+                let seg_path = provider_ver_dir.join(super::segment_rel_path(&rel_path, &hex));
                 if !seg_path.exists() {
                     return None;
                 }
                 match SegmentReader::open(&seg_path) {
-                    Ok(reader) => {
-                        let rel_path = abs_path
-                            .strip_prefix(&self.worktree_root)
-                            .unwrap_or(abs_path)
-                            .to_path_buf();
-                        Some((rel_path, hex, reader))
-                    }
+                    Ok(reader) => Some((rel_path, hex, reader)),
                     Err(e) => {
                         warn!(
                             path = %seg_path.display(),

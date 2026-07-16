@@ -101,12 +101,24 @@ fn vp() -> String {
     format!("test-v{}", forgeql_core::storage::columnar::ENRICH_VER)
 }
 
-/// Path to a specific segment file: `<segments_base>/<vp()>/<hex[..2]>/<hex[2..]>.fqsf`.
-fn seg_path(segments_base: &std::path::Path, hex: &str) -> std::path::PathBuf {
+/// Path to a specific segment file, keyed by (path, content) exactly as the
+/// engine keys it — via the engine's own helper, so this can never drift from
+/// the rule it asserts.
+///
+/// `source_path` must be the path the overlay stores: worktree-relative. Every
+/// fixture here writes its file directly into the worktree root, so the file
+/// name *is* the relative path.
+fn seg_path(
+    segments_base: &std::path::Path,
+    source_path: &std::path::Path,
+    hex: &str,
+) -> std::path::PathBuf {
     segments_base
         .join(vp())
-        .join(&hex[..2])
-        .join(format!("{}.fqsf", &hex[2..]))
+        .join(forgeql_core::storage::columnar::segment_rel_path(
+            source_path,
+            hex,
+        ))
 }
 
 /// Build a segment for `table`, store it under `segments_dir/<provider>/<hex>/`,
@@ -130,7 +142,14 @@ fn build_segment(
         acc
     });
 
-    let seg_path = seg_path(segments_dir, &hex);
+    // The overlay stores paths worktree-relative, and every fixture writes its
+    // file into the worktree root, so the file name is that relative path.
+    let rel_source_path = std::path::Path::new(
+        abs_source_path
+            .file_name()
+            .expect("source path has a file name"),
+    );
+    let seg_path = seg_path(segments_dir, rel_source_path, &hex);
 
     let mut builder = SegmentBuilder::new("test", &content_id);
     for row in &table.rows {
@@ -235,7 +254,7 @@ fn overlay_find_symbols_matches_legacy_merged() {
         .segments()
         .iter()
         .map(|meta| {
-            let seg_dir = seg_path(&segments_dir, &meta.hex_content_id);
+            let seg_dir = seg_path(&segments_dir, &meta.source_path, &meta.hex_content_id);
             Arc::new(SegmentReader::open(&seg_dir).expect("SegmentReader::open"))
         })
         .collect();
@@ -337,7 +356,8 @@ fn overlay_kind_prefilter_matches_legacy() {
         .iter()
         .map(|m| {
             Arc::new(
-                SegmentReader::open(&seg_path(&segments_dir, &m.hex_content_id)).expect("open"),
+                SegmentReader::open(&seg_path(&segments_dir, &m.source_path, &m.hex_content_id))
+                    .expect("open"),
             )
         })
         .collect();
@@ -417,7 +437,7 @@ fn single_segment_cpp_overlay() -> (
         .iter()
         .map(|m| {
             Arc::new(
-                SegmentReader::open(&seg_path(&segments_dir, &m.hex_content_id))
+                SegmentReader::open(&seg_path(&segments_dir, &m.source_path, &m.hex_content_id))
                     .expect("open segment"),
             )
         })
@@ -646,7 +666,8 @@ fn overlay_lookup_name_spans_segments() {
         .iter()
         .map(|m| {
             Arc::new(
-                SegmentReader::open(&seg_path(&segments_dir, &m.hex_content_id)).expect("open"),
+                SegmentReader::open(&seg_path(&segments_dir, &m.source_path, &m.hex_content_id))
+                    .expect("open"),
             )
         })
         .collect();
@@ -847,8 +868,12 @@ fn columnar_show_outline_matches_legacy() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(&seg_path(&segments_dir, &meta.hex_content_id))
-                    .expect("SegmentReader::open"),
+                SegmentReader::open(&seg_path(
+                    &segments_dir,
+                    &meta.source_path,
+                    &meta.hex_content_id,
+                ))
+                .expect("SegmentReader::open"),
             )
         })
         .collect();
@@ -1608,8 +1633,12 @@ fn combined_path_glob_and_enrichment_parity() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(&seg_path(&segments_dir, &meta.hex_content_id))
-                    .expect("SegmentReader::open"),
+                SegmentReader::open(&seg_path(
+                    &segments_dir,
+                    &meta.source_path,
+                    &meta.hex_content_id,
+                ))
+                .expect("SegmentReader::open"),
             )
         })
         .collect();
@@ -2026,9 +2055,10 @@ fn dirty_overlay_shadows_and_unions() {
         });
         builder
             .flush(
-                &seg_dir
-                    .join(&file1_hex[..2])
-                    .join(format!("{}.fqsf", &file1_hex[2..])),
+                &seg_dir.join(forgeql_core::storage::columnar::segment_rel_path(
+                    std::path::Path::new("file1.cpp"),
+                    &file1_hex,
+                )),
             )
             .expect("file1 flush");
     }
@@ -2053,9 +2083,10 @@ fn dirty_overlay_shadows_and_unions() {
         });
         builder
             .flush(
-                &seg_dir
-                    .join(&file2_hex[..2])
-                    .join(format!("{}.fqsf", &file2_hex[2..])),
+                &seg_dir.join(forgeql_core::storage::columnar::segment_rel_path(
+                    std::path::Path::new("file2.rs"),
+                    &file2_hex,
+                )),
             )
             .expect("file2 flush");
     }
@@ -2088,11 +2119,12 @@ fn dirty_overlay_shadows_and_unions() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(
-                    &seg_dir
-                        .join(&meta.hex_content_id[..2])
-                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
-                )
+                SegmentReader::open(&seg_dir.join(
+                    forgeql_core::storage::columnar::segment_rel_path(
+                        &meta.source_path,
+                        &meta.hex_content_id,
+                    ),
+                ))
                 .expect("open persistent segment"),
             )
         })
@@ -2200,9 +2232,10 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
         builder.add_usage("SymbolA", 3);
         builder
             .flush(
-                &seg_dir
-                    .join(&file1_hex[..2])
-                    .join(format!("{}.fqsf", &file1_hex[2..])),
+                &seg_dir.join(forgeql_core::storage::columnar::segment_rel_path(
+                    std::path::Path::new("file1.cpp"),
+                    &file1_hex,
+                )),
             )
             .expect("flush");
     }
@@ -2226,11 +2259,12 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(
-                    &seg_dir
-                        .join(&meta.hex_content_id[..2])
-                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
-                )
+                SegmentReader::open(&seg_dir.join(
+                    forgeql_core::storage::columnar::segment_rel_path(
+                        &meta.source_path,
+                        &meta.hex_content_id,
+                    ),
+                ))
                 .expect("open"),
             )
         })
@@ -2278,6 +2312,7 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
 /// Gate: resolve_symbol returns the dirty row (not the shadowed persistent one)
 /// and returns None for a name that no longer exists in the dirty overlay.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn dirty_overlay_resolve_symbol_shadows_and_unions() {
     use forgeql_core::ir::Clauses;
     use forgeql_core::storage::StorageEngine;
@@ -2321,9 +2356,10 @@ fn dirty_overlay_resolve_symbol_shadows_and_unions() {
         });
         builder
             .flush(
-                &seg_dir
-                    .join(&file1_hex[..2])
-                    .join(format!("{}.fqsf", &file1_hex[2..])),
+                &seg_dir.join(forgeql_core::storage::columnar::segment_rel_path(
+                    std::path::Path::new("file1.cpp"),
+                    &file1_hex,
+                )),
             )
             .expect("file1 flush");
     }
@@ -2347,11 +2383,12 @@ fn dirty_overlay_resolve_symbol_shadows_and_unions() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(
-                    &seg_dir
-                        .join(&meta.hex_content_id[..2])
-                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
-                )
+                SegmentReader::open(&seg_dir.join(
+                    forgeql_core::storage::columnar::segment_rel_path(
+                        &meta.source_path,
+                        &meta.hex_content_id,
+                    ),
+                ))
                 .expect("open"),
             )
         })
@@ -2433,9 +2470,10 @@ fn dirty_overlay_resolve_respects_in_glob_filter() {
         });
         builder
             .flush(
-                &seg_dir
-                    .join(&bg_hex[..2])
-                    .join(format!("{}.fqsf", &bg_hex[2..])),
+                &seg_dir.join(forgeql_core::storage::columnar::segment_rel_path(
+                    std::path::Path::new("other.rs"),
+                    &bg_hex,
+                )),
             )
             .expect("bg flush");
     }
@@ -2456,11 +2494,12 @@ fn dirty_overlay_resolve_respects_in_glob_filter() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(
-                    &seg_dir
-                        .join(&meta.hex_content_id[..2])
-                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
-                )
+                SegmentReader::open(&seg_dir.join(
+                    forgeql_core::storage::columnar::segment_rel_path(
+                        &meta.source_path,
+                        &meta.hex_content_id,
+                    ),
+                ))
                 .expect("open bg seg"),
             )
         })
@@ -2571,9 +2610,10 @@ fn dirty_overlay_resolve_uses_alphabetical_not_insertion_order() {
         });
         builder
             .flush(
-                &seg_dir
-                    .join(&bg_hex[..2])
-                    .join(format!("{}.fqsf", &bg_hex[2..])),
+                &seg_dir.join(forgeql_core::storage::columnar::segment_rel_path(
+                    std::path::Path::new("other2.rs"),
+                    &bg_hex,
+                )),
             )
             .expect("bg flush");
     }
@@ -2594,11 +2634,12 @@ fn dirty_overlay_resolve_uses_alphabetical_not_insertion_order() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(
-                    &seg_dir
-                        .join(&meta.hex_content_id[..2])
-                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
-                )
+                SegmentReader::open(&seg_dir.join(
+                    forgeql_core::storage::columnar::segment_rel_path(
+                        &meta.source_path,
+                        &meta.hex_content_id,
+                    ),
+                ))
                 .expect("open bg seg"),
             )
         })
@@ -2707,11 +2748,12 @@ fn reindex_updates_dirty_overlay() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(
-                    &seg_dir
-                        .join(&meta.hex_content_id[..2])
-                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
-                )
+                SegmentReader::open(&seg_dir.join(
+                    forgeql_core::storage::columnar::segment_rel_path(
+                        &meta.source_path,
+                        &meta.hex_content_id,
+                    ),
+                ))
                 .expect("open seg"),
             )
         })
@@ -2806,8 +2848,12 @@ fn find_symbols_matches_regex_alternation() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(&seg_path(seg_dir.parent().unwrap(), &meta.hex_content_id))
-                    .expect("open seg"),
+                SegmentReader::open(&seg_path(
+                    seg_dir.parent().unwrap(),
+                    &meta.source_path,
+                    &meta.hex_content_id,
+                ))
+                .expect("open seg"),
             )
         })
         .collect();
@@ -2875,8 +2921,12 @@ fn find_node_resolves_newly_created_dirty_node() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(&seg_path(seg_dir.parent().unwrap(), &meta.hex_content_id))
-                    .expect("open seg"),
+                SegmentReader::open(&seg_path(
+                    seg_dir.parent().unwrap(),
+                    &meta.source_path,
+                    &meta.hex_content_id,
+                ))
+                .expect("open seg"),
             )
         })
         .collect();
@@ -2957,8 +3007,12 @@ fn find_node_round_trips_after_ordinal_reassignment() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(&seg_path(seg_dir.parent().unwrap(), &meta.hex_content_id))
-                    .expect("open seg"),
+                SegmentReader::open(&seg_path(
+                    seg_dir.parent().unwrap(),
+                    &meta.source_path,
+                    &meta.hex_content_id,
+                ))
+                .expect("open seg"),
             )
         })
         .collect();
@@ -3047,7 +3101,11 @@ fn is_path_fresh_detects_external_edit() {
             }
         }
         builder
-            .flush(&seg_path(seg_dir.parent().unwrap(), &hex))
+            .flush(&seg_path(
+                seg_dir.parent().unwrap(),
+                std::path::Path::new("fresh.cpp"),
+                &hex,
+            ))
             .expect("segment flush");
     }
 
@@ -3069,8 +3127,12 @@ fn is_path_fresh_detects_external_edit() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(&seg_path(seg_dir.parent().unwrap(), &meta.hex_content_id))
-                    .expect("open seg"),
+                SegmentReader::open(&seg_path(
+                    seg_dir.parent().unwrap(),
+                    &meta.source_path,
+                    &meta.hex_content_id,
+                ))
+                .expect("open seg"),
             )
         })
         .collect();
@@ -3156,11 +3218,12 @@ fn purge_removes_file_symbols() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(
-                    &seg_dir
-                        .join(&meta.hex_content_id[..2])
-                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
-                )
+                SegmentReader::open(&seg_dir.join(
+                    forgeql_core::storage::columnar::segment_rel_path(
+                        &meta.source_path,
+                        &meta.hex_content_id,
+                    ),
+                ))
                 .expect("open seg"),
             )
         })
@@ -3202,8 +3265,10 @@ fn delta_file_roundtrip() {
 
     // Build a dirty overlay with only removals (no staging segments needed).
     let mut dirty = DirtyOverlay::new();
-    let _ = dirty.removed_hex_ids.insert("aabbccdd".to_owned());
-    let _ = dirty.removed_hex_ids.insert("11223344".to_owned());
+    let _ = dirty.removed_paths.insert(PathBuf::from("src/gone.cpp"));
+    let _ = dirty
+        .removed_paths
+        .insert(PathBuf::from("src/also_gone.rs"));
 
     DeltaFile::save(&dirty, &delta_path).expect("save delta");
     assert!(delta_path.exists(), "delta file must exist after save");
@@ -3215,16 +3280,16 @@ fn delta_file_roundtrip() {
         "no staged entries → read_valid_segment_names must be empty"
     );
 
-    // Full roundtrip: load back and compare removed_hex_ids.
+    // Full roundtrip: load back and compare removed_paths.
     let loaded = DeltaFile::load(&delta_path, &staging_dir).expect("load delta");
     assert_eq!(loaded.added.len(), 0, "no staged entries expected");
-    let mut orig_removed: Vec<_> = dirty.removed_hex_ids.iter().cloned().collect();
-    let mut loaded_removed: Vec<_> = loaded.removed_hex_ids.iter().cloned().collect();
+    let mut orig_removed: Vec<_> = dirty.removed_paths.iter().cloned().collect();
+    let mut loaded_removed: Vec<_> = loaded.removed_paths.iter().cloned().collect();
     orig_removed.sort_unstable();
     loaded_removed.sort_unstable();
     assert_eq!(
         orig_removed, loaded_removed,
-        "removed_hex_ids roundtrip mismatch"
+        "removed_paths roundtrip mismatch"
     );
 }
 
@@ -3276,11 +3341,12 @@ fn reindex_writes_delta_file() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(
-                    &seg_dir
-                        .join(&meta.hex_content_id[..2])
-                        .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
-                )
+                SegmentReader::open(&seg_dir.join(
+                    forgeql_core::storage::columnar::segment_rel_path(
+                        &meta.source_path,
+                        &meta.hex_content_id,
+                    ),
+                ))
                 .expect("open seg"),
             )
         })
@@ -3312,7 +3378,7 @@ fn reindex_writes_delta_file() {
         "staged segment file name must be non-empty"
     );
 
-    // Full load: verify source_path and removed_hex_ids.
+    // Full load: verify source_path and removed_paths.
     let staging_dir = worktree.join(".forgeql-staging");
     let loaded_dirty = DeltaFile::load(&delta_path, &staging_dir).expect("load delta");
     assert_eq!(
@@ -3326,8 +3392,8 @@ fn reindex_writes_delta_file() {
         "staged source_path must be worktree-relative"
     );
     assert!(
-        !loaded_dirty.removed_hex_ids.is_empty(),
-        "removed_hex_ids must be non-empty after shadowing file1"
+        !loaded_dirty.removed_paths.is_empty(),
+        "removed_paths must be non-empty after shadowing file1"
     );
 }
 
@@ -3384,11 +3450,12 @@ fn delta_survives_simulated_restart() {
             .iter()
             .map(|meta| {
                 Arc::new(
-                    SegmentReader::open(
-                        &seg_dir
-                            .join(&meta.hex_content_id[..2])
-                            .join(format!("{}.fqsf", &meta.hex_content_id[2..])),
-                    )
+                    SegmentReader::open(&seg_dir.join(
+                        forgeql_core::storage::columnar::segment_rel_path(
+                            &meta.source_path,
+                            &meta.hex_content_id,
+                        ),
+                    ))
                     .expect("open seg"),
                 )
             })
@@ -3512,11 +3579,12 @@ fn rollback_gcs_orphaned_staging_segments() {
             .iter()
             .map(|m| {
                 Arc::new(
-                    SegmentReader::open(
-                        &seg_dir
-                            .join(&m.hex_content_id[..2])
-                            .join(format!("{}.fqsf", &m.hex_content_id[2..])),
-                    )
+                    SegmentReader::open(&seg_dir.join(
+                        forgeql_core::storage::columnar::segment_rel_path(
+                            &m.source_path,
+                            &m.hex_content_id,
+                        ),
+                    ))
                     .expect("seg"),
                 )
             })
@@ -3666,11 +3734,12 @@ fn nested_rollback_restores_correct_delta() {
             .iter()
             .map(|m| {
                 Arc::new(
-                    SegmentReader::open(
-                        &seg_dir
-                            .join(&m.hex_content_id[..2])
-                            .join(format!("{}.fqsf", &m.hex_content_id[2..])),
-                    )
+                    SegmentReader::open(&seg_dir.join(
+                        forgeql_core::storage::columnar::segment_rel_path(
+                            &m.source_path,
+                            &m.hex_content_id,
+                        ),
+                    ))
                     .expect("seg"),
                 )
             })
@@ -3819,12 +3888,20 @@ fn commit_promotes_segments_and_builds_new_overlay() {
         .expect("base overlay");
 
     // Copy initial .fqsf segments from staging area into bare-repo segment store.
-    let bare_hex1_dir = seg_path(&segments_dir, &hex1);
-    let bare_hex2_dir = seg_path(&segments_dir, &hex2);
+    let bare_hex1_dir = seg_path(&segments_dir, std::path::Path::new("file1.cpp"), &hex1);
+    let bare_hex2_dir = seg_path(&segments_dir, std::path::Path::new("file2.cpp"), &hex2);
     std::fs::create_dir_all(bare_hex1_dir.parent().unwrap()).expect("bare hex1 parent");
     std::fs::create_dir_all(bare_hex2_dir.parent().unwrap()).expect("bare hex2 parent");
-    let _ = std::fs::copy(seg_path(&wt_seg_dir, &hex1), &bare_hex1_dir).expect("copy hex1");
-    let _ = std::fs::copy(seg_path(&wt_seg_dir, &hex2), &bare_hex2_dir).expect("copy hex2");
+    let _ = std::fs::copy(
+        seg_path(&wt_seg_dir, std::path::Path::new("file1.cpp"), &hex1),
+        &bare_hex1_dir,
+    )
+    .expect("copy hex1");
+    let _ = std::fs::copy(
+        seg_path(&wt_seg_dir, std::path::Path::new("file2.cpp"), &hex2),
+        &bare_hex2_dir,
+    )
+    .expect("copy hex2");
 
     // Build ColumnarBuildContext pointing at bare-repo stores.
     let ctx = ColumnarBuildContext::new(
@@ -3843,11 +3920,12 @@ fn commit_promotes_segments_and_builds_new_overlay() {
         .iter()
         .map(|m| {
             Arc::new(
-                SegmentReader::open(
-                    &seg_root
-                        .join(&m.hex_content_id[..2])
-                        .join(format!("{}.fqsf", &m.hex_content_id[2..])),
-                )
+                SegmentReader::open(&seg_root.join(
+                    forgeql_core::storage::columnar::segment_rel_path(
+                        &m.source_path,
+                        &m.hex_content_id,
+                    ),
+                ))
                 .expect("open seg"),
             )
         })
@@ -3891,7 +3969,11 @@ fn commit_promotes_segments_and_builds_new_overlay() {
     );
 
     // ── Assert 2: bare-repo segment store has the promoted segment ──
-    let promoted_dir = seg_path(&segments_dir, &staged_hex);
+    let promoted_dir = seg_path(
+        &segments_dir,
+        std::path::Path::new("file1.cpp"),
+        &staged_hex,
+    );
     assert!(
         promoted_dir.exists(),
         "promoted segment must exist in bare-repo store at {}",
@@ -3998,9 +4080,13 @@ fn new_session_hits_promoted_overlay_cache() {
         .build_and_persist(&base_overlay_path)
         .expect("base overlay");
 
-    let bare_hex1_dir = seg_path(&segments_dir, &hex1);
+    let bare_hex1_dir = seg_path(&segments_dir, std::path::Path::new("file1.cpp"), &hex1);
     std::fs::create_dir_all(bare_hex1_dir.parent().unwrap()).expect("bare hex1 parent");
-    let _ = std::fs::copy(seg_path(&wt_seg_dir, &hex1), &bare_hex1_dir).expect("copy hex1");
+    let _ = std::fs::copy(
+        seg_path(&wt_seg_dir, std::path::Path::new("file1.cpp"), &hex1),
+        &bare_hex1_dir,
+    )
+    .expect("copy hex1");
 
     let ctx = ColumnarBuildContext::new(
         segments_dir.clone(),
@@ -4018,11 +4104,12 @@ fn new_session_hits_promoted_overlay_cache() {
         .iter()
         .map(|m| {
             Arc::new(
-                SegmentReader::open(
-                    &seg_root
-                        .join(&m.hex_content_id[..2])
-                        .join(format!("{}.fqsf", &m.hex_content_id[2..])),
-                )
+                SegmentReader::open(&seg_root.join(
+                    forgeql_core::storage::columnar::segment_rel_path(
+                        &m.source_path,
+                        &m.hex_content_id,
+                    ),
+                ))
                 .expect("open seg"),
             )
         })
@@ -4060,11 +4147,12 @@ fn new_session_hits_promoted_overlay_cache() {
         .iter()
         .map(|m| {
             Arc::new(
-                SegmentReader::open(
-                    &seg_root
-                        .join(&m.hex_content_id[..2])
-                        .join(format!("{}.fqsf", &m.hex_content_id[2..])),
-                )
+                SegmentReader::open(&seg_root.join(
+                    forgeql_core::storage::columnar::segment_rel_path(
+                        &m.source_path,
+                        &m.hex_content_id,
+                    ),
+                ))
                 .expect("session B: open seg"),
             )
         })
@@ -4137,7 +4225,7 @@ fn ft5_columnar_index_stats_rows_match_overlay() {
         .segments()
         .iter()
         .map(|meta| {
-            let seg_dir = seg_path(&segments_dir, &meta.hex_content_id);
+            let seg_dir = seg_path(&segments_dir, &meta.source_path, &meta.hex_content_id);
             Arc::new(
                 forgeql_core::storage::columnar::SegmentReader::open(&seg_dir)
                     .expect("SegmentReader::open"),
@@ -4199,7 +4287,7 @@ fn ft5_session_has_columnar_after_install() {
         .segments()
         .iter()
         .map(|meta| {
-            let seg_dir = seg_path(&segments_dir, &meta.hex_content_id);
+            let seg_dir = seg_path(&segments_dir, &meta.source_path, &meta.hex_content_id);
             Arc::new(
                 forgeql_core::storage::columnar::SegmentReader::open(&seg_dir)
                     .expect("SegmentReader::open"),
@@ -4516,8 +4604,12 @@ fn find_node_reports_not_found_for_committed_node_deleted_in_dirty() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(&seg_path(seg_dir.parent().unwrap(), &meta.hex_content_id))
-                    .expect("open seg"),
+                SegmentReader::open(&seg_path(
+                    seg_dir.parent().unwrap(),
+                    &meta.source_path,
+                    &meta.hex_content_id,
+                ))
+                .expect("open seg"),
             )
         })
         .collect();
@@ -4596,8 +4688,12 @@ fn show_outline_reflects_dirty_deletions() {
         .iter()
         .map(|meta| {
             Arc::new(
-                SegmentReader::open(&seg_path(seg_dir.parent().unwrap(), &meta.hex_content_id))
-                    .expect("open seg"),
+                SegmentReader::open(&seg_path(
+                    seg_dir.parent().unwrap(),
+                    &meta.source_path,
+                    &meta.hex_content_id,
+                ))
+                .expect("open seg"),
             )
         })
         .collect();

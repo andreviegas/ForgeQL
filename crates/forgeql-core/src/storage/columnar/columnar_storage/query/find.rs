@@ -151,7 +151,7 @@ impl ColumnarStorage {
         // Persistent overlay segments, skipping any shadowed by the dirty
         // overlay (their replacement is scanned below).
         for (idx, meta) in self.overlay.segments().iter().enumerate() {
-            if self.dirty.shadows(&meta.hex_content_id) {
+            if self.dirty.shadows(&meta.source_path) {
                 continue;
             }
             let Some(seg) = self.segments.get(idx) else {
@@ -184,7 +184,7 @@ impl ColumnarStorage {
         // Base: persistent overlay segments with mmap-cached sizes.
         // Skip any segment shadowed (replaced or deleted) by the dirty overlay.
         for (idx, seg) in segs.iter().enumerate() {
-            if self.dirty.shadows(&seg.hex_content_id) {
+            if self.dirty.shadows(&seg.source_path) {
                 continue;
             }
             let ext = seg
@@ -360,7 +360,7 @@ impl ColumnarStorage {
                 self.overlay
                     .segments()
                     .get(seg_idx as usize)
-                    .is_none_or(|meta| !self.dirty.shadows(&meta.hex_content_id))
+                    .is_none_or(|meta| !self.dirty.shadows(&meta.source_path))
             });
         }
         for pred in &clauses.where_predicates {

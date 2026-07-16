@@ -201,12 +201,10 @@ impl StorageEngine for ColumnarStorage {
     }
 
     fn purge_file(&mut self, path: &Path) -> Result<()> {
-        let rel_path = path
-            .strip_prefix(&self.worktree_root)
-            .unwrap_or(path)
-            .to_path_buf();
-        if let Some(old_hex) = self.path_to_hex_content_id(&rel_path) {
-            self.dirty.remove_hex(old_hex);
+        let rel_path =
+            crate::storage::columnar::segment_source_rel(path, &self.worktree_root).to_path_buf();
+        if self.path_to_hex_content_id(&rel_path).is_some() {
+            self.dirty.remove_path(rel_path.clone());
         }
         drop(self.dirty.remove_stale_for_path(&rel_path));
         self.save_delta()?;

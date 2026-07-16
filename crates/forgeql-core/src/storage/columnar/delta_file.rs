@@ -60,42 +60,54 @@ pub(crate) fn staged_segment_file_name(source_path: &Path, hex_content_id: &str)
     format!("{path_hex}-{hex_content_id}.fqsf")
 }
 
-/// On-disk path of a staged segment, tolerating segments staged before the
-/// (path, content) naming: fall back to the legacy `{content_hex}.fqsf` name
-/// when the current name is not on disk, so a session that spans the upgrade
-/// keeps its uncommitted staged state across a reconnect or commit.
+/// On-disk path of a staged segment.
+///
+/// Named by (path, content) only. A segment staged before that naming carried a
+/// content-only name, and resolving one here would hand a file the segment of a
+/// byte-identical file with a different path or language — the defect this
+/// naming exists to prevent — so pre-0.121 staged segments are deliberately not
+/// found. They are orphaned and garbage-collected; the file is reindexed from
+/// the worktree, which still holds its uncommitted bytes.
 pub(crate) fn staged_segment_path(
     staging_dir: &Path,
     source_path: &Path,
     hex_content_id: &str,
 ) -> PathBuf {
-    let named = staging_dir.join(staged_segment_file_name(source_path, hex_content_id));
-    if named.exists() {
-        return named;
-    }
-    let legacy = staging_dir.join(format!("{hex_content_id}.fqsf"));
-    if legacy.exists() { legacy } else { named }
+    staging_dir.join(staged_segment_file_name(source_path, hex_content_id))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DeltaFile  (on-disk struct)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Current [`DeltaFile`] format version.
+///
+/// Bumped when the meaning or layout of the persisted fields changes. Version 2
+/// replaced the content-hash removal set with source paths.
+const DELTA_FORMAT_VERSION: u32 = 2;
+
 /// `bincode`-serialized snapshot of a [`DirtyOverlay`].
 ///
 /// `DirtyOverlay` is not serialized directly — its in-memory indexes are
 /// rebuilt from the staging segment files on load.  Only the content-ID list
-/// and the removed-blob set need to persist.
+/// and the removed-path set need to persist.
 ///
 /// [`DirtyOverlay`]: super::dirty_overlay::DirtyOverlay
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DeltaFile {
+    /// Format version of this file — must lead the struct so a delta written by
+    /// an older engine is rejected rather than silently reinterpreted.
+    ///
+    /// `removed_paths` once held content hashes as `Vec<String>`, and bincode
+    /// encodes `PathBuf` exactly like `String`, so an unversioned older file
+    /// decodes cleanly with hashes misread as paths.
+    pub version: u32,
     /// One entry per dirty segment held in `DirtyOverlay::added`.
     /// Also the authoritative list of valid staging directories.
     pub staged: Vec<StagedEntry>,
-    /// Hex content IDs of persistent overlay segments hidden from queries.
-    /// Corresponds to `DirtyOverlay::removed_hex_ids`.
-    pub removed_hex_ids: Vec<String>,
+    /// Source paths of persistent overlay segments hidden from queries.
+    /// Corresponds to `DirtyOverlay::removed_paths`.
+    pub removed_paths: Vec<PathBuf>,
 }
 
 impl DeltaFile {
@@ -107,6 +119,7 @@ impl DeltaFile {
     /// Returns `Err` on bincode encoding failure or file I/O error.
     pub fn save(dirty: &DirtyOverlay, path: &Path) -> Result<()> {
         let file = Self {
+            version: DELTA_FORMAT_VERSION,
             staged: dirty
                 .added
                 .iter()
@@ -116,7 +129,7 @@ impl DeltaFile {
                     replaces_hex: ds.replaces_hex.clone(),
                 })
                 .collect(),
-            removed_hex_ids: dirty.removed_hex_ids.iter().cloned().collect(),
+            removed_paths: dirty.removed_paths.iter().cloned().collect(),
         };
         let bytes = bincode::serialize(&file)?;
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
@@ -140,9 +153,25 @@ impl DeltaFile {
 
         let bytes = std::fs::read(path)?;
         let file: Self = bincode::deserialize(&bytes)?;
+        // A delta written before the removal set became path-keyed decodes
+        // cleanly — bincode encodes `PathBuf` exactly like `String` — with
+        // content hashes misread as paths, which shadows nothing and silently
+        // resurrects a deleted file's symbols. Refuse it instead.
+        if file.version != DELTA_FORMAT_VERSION {
+            anyhow::bail!(
+                "columnar delta at {} has format version {} (expected {})",
+                path.display(),
+                file.version,
+                DELTA_FORMAT_VERSION
+            );
+        }
 
         let mut dirty = DirtyOverlay::new();
-        dirty.removed_hex_ids = file.removed_hex_ids.into_iter().collect();
+        // Shadowed paths come from two places. The recorded set is authoritative
+        // for deleted files, which have no staged replacement to infer from; the
+        // staged entries re-derive the changed-file half, since a staged segment
+        // that replaces a base segment always shadows its own path.
+        dirty.removed_paths = file.removed_paths.into_iter().collect();
 
         for entry in &file.staged {
             let seg_path =
@@ -154,6 +183,9 @@ impl DeltaFile {
                         source_path: entry.source_path.clone(),
                         replaces_hex: entry.replaces_hex.clone(),
                     });
+                    if !entry.replaces_hex.is_empty() {
+                        let _ = dirty.removed_paths.insert(entry.source_path.clone());
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -179,6 +211,8 @@ impl DeltaFile {
             return Vec::new();
         };
         bincode::deserialize::<Self>(&bytes)
+            .ok()
+            .filter(|f| f.version == DELTA_FORMAT_VERSION)
             .map(|f| {
                 f.staged
                     .into_iter()
@@ -202,14 +236,7 @@ impl DeltaFile {
             if valid_names.contains(&name) {
                 continue;
             }
-            // A pre-upgrade staged segment carries the legacy content-only
-            // name. It is still live when a valid entry references the same
-            // content hex — rollback GC must not delete the very state the
-            // legacy-name fallback in `staged_segment_path` exists to keep.
-            let is_referenced_legacy = valid_names.iter().any(|v| v.ends_with(&format!("-{name}")));
-            if !is_referenced_legacy {
-                let _ = std::fs::remove_file(entry.path());
-            }
+            let _ = std::fs::remove_file(entry.path());
         }
     }
 }

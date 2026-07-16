@@ -8,8 +8,8 @@
 //! ## Query semantics
 //!
 //! Results are the **union** of persistent overlay rows and dirty rows, with
-//! dirty rows taking precedence: any persistent segment whose
-//! `hex_content_id` appears in `removed_hex_ids` is silently omitted.
+//! dirty rows taking precedence: any persistent segment whose `source_path`
+//! appears in `removed_paths` is silently omitted.
 //!
 //! [`ColumnarStorage`]: super::columnar_storage::ColumnarStorage
 use std::collections::HashSet;
@@ -47,7 +47,7 @@ pub struct DirtySegment {
 /// Per-session in-RAM mutations on top of the persistent columnar overlay.
 ///
 /// Queries union `ColumnarStorage`'s persistent segments + `DirtyOverlay`
-/// segments, filtering out rows whose hex content ID is in `removed_hex_ids`.
+/// segments, filtering out rows whose `source_path` is in `removed_paths`.
 ///
 /// All methods are O(n) in the number of dirty segments, which is small
 /// (proportional to files changed in one session).
@@ -59,12 +59,16 @@ pub struct DirtyOverlay {
     /// Vec is always empty — the struct exists to wire up the plumbing.
     pub added: Vec<DirtySegment>,
 
-    /// Hex content IDs of persistent segments that are hidden from queries.
+    /// Source paths whose persistent segment is hidden from queries.
     ///
-    /// Populated when a file is changed (`replaces_hex` of the old segment)
-    /// or deleted (`purge_file`).  Querying code skips any persistent segment
-    /// whose `hex_content_id` is in this set.
-    pub removed_hex_ids: HashSet<String>,
+    /// Populated when a file is changed (its base segment is stale) or deleted
+    /// (`purge_file`).  Querying code skips any persistent segment whose
+    /// `source_path` is in this set.
+    ///
+    /// Keyed by **path**, never by content hash: two different files can hold
+    /// identical bytes and therefore share a content hash, and shadowing the one
+    /// that changed must not blank out the one that did not.
+    pub removed_paths: HashSet<PathBuf>,
 }
 
 impl DirtyOverlay {
@@ -80,22 +84,22 @@ impl DirtyOverlay {
     /// maximum query performance — identical to pre-PhaseFT1 behaviour.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.added.is_empty() && self.removed_hex_ids.is_empty()
+        self.added.is_empty() && self.removed_paths.is_empty()
     }
 
-    /// Whether the persistent segment with this hex content ID is shadowed.
+    /// Whether the persistent segment for this source path is shadowed.
     ///
     /// Called by `find_symbols` / `find_usages` to filter out persistent
     /// segments for files that have been changed or deleted.
     #[must_use]
-    pub fn shadows(&self, hex_content_id: &str) -> bool {
-        self.removed_hex_ids.contains(hex_content_id)
+    pub fn shadows(&self, source_path: &Path) -> bool {
+        self.removed_paths.contains(source_path)
     }
 
     /// Add a new dirty segment for a changed file.
     ///
-    /// If `replaces_hex` is non-empty it is added to `removed_hex_ids` so
-    /// that the old persistent segment is hidden from queries.
+    /// If `replaces_hex` is non-empty the file's `source_path` is added to
+    /// `removed_paths` so the old persistent segment is hidden from queries.
     ///
     /// Called by PhaseFT2's `reindex_files`.
     pub fn add_segment(
@@ -105,7 +109,7 @@ impl DirtyOverlay {
         replaces_hex: String,
     ) {
         if !replaces_hex.is_empty() {
-            let _ = self.removed_hex_ids.insert(replaces_hex.clone());
+            let _ = self.removed_paths.insert(source_path.clone());
         }
         self.added.push(DirtySegment {
             reader,
@@ -114,21 +118,20 @@ impl DirtyOverlay {
         });
     }
 
-    /// Mark a persistent segment hex as removed without adding a replacement.
+    /// Shadow a path's persistent segment without adding a replacement.
     ///
     /// Used for deleted files (`purge_file`) where the file no longer exists
     /// and therefore no new segment is built.
-    pub fn remove_hex(&mut self, hex: String) {
-        let _ = self.removed_hex_ids.insert(hex);
+    pub fn remove_path(&mut self, source_path: PathBuf) {
+        let _ = self.removed_paths.insert(source_path);
     }
 
     /// Remove any previously staged dirty segment for `source_path`.
     ///
     /// Called when the same file is changed a second time within a session.
-    /// Returns the `replaces_hex` of the removed entry (so the caller can
-    /// re-add the original hex to `removed_hex_ids` if needed).
+    /// Returns the `replaces_hex` of the removed entry.
     ///
-    /// Note: the entry in `removed_hex_ids` from the *first* change is left
+    /// Note: the path's entry in `removed_paths` from the *first* change is left
     /// intact — the persistent segment is still shadowed.
     pub fn remove_stale_for_path(&mut self, source_path: &Path) -> Option<String> {
         let pos = self
@@ -211,18 +214,32 @@ mod tests {
     fn empty_overlay_is_empty() {
         let d = DirtyOverlay::new();
         assert!(d.is_empty());
-        assert!(!d.shadows("abc123"));
+        assert!(!d.shadows(Path::new("src/a.cpp")));
         assert!(d.materialize_all(&crate::ir::Clauses::default()).is_empty());
     }
 
     #[test]
-    fn remove_hex_shadows_correctly() {
+    fn remove_path_shadows_only_that_path() {
         let mut d = DirtyOverlay::new();
-        assert!(!d.shadows("deadbeef"));
-        d.remove_hex("deadbeef".to_owned());
-        assert!(d.shadows("deadbeef"));
-        assert!(!d.shadows("cafebabe"));
+        assert!(!d.shadows(Path::new("src/a.cpp")));
+        d.remove_path(PathBuf::from("src/a.cpp"));
+        assert!(d.shadows(Path::new("src/a.cpp")));
+        assert!(!d.shadows(Path::new("src/b.cpp")));
         assert!(!d.is_empty());
+    }
+
+    /// Shadowing is keyed by path, never by content.
+    ///
+    /// Two files can hold byte-identical content and therefore share a content
+    /// hash. Shadowing the one that changed must leave the other's persistent
+    /// segment visible — keying this by content silently emptied every untouched
+    /// file that happened to share the edited file's bytes.
+    #[test]
+    fn shadowing_one_file_never_shadows_its_byte_identical_twin() {
+        let mut d = DirtyOverlay::new();
+        d.remove_path(PathBuf::from("src/a.cpp"));
+        assert!(d.shadows(Path::new("src/a.cpp")));
+        assert!(!d.shadows(Path::new("src/twin_of_a.cpp")));
     }
 
     #[test]

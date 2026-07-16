@@ -63,6 +63,11 @@ pub struct ShadowWriter<'a> {
     /// When a path is found here the source file is not re-read, avoiding
     /// the double-read overhead (Issue 3).
     pre_computed: HashMap<PathBuf, Vec<u8>>,
+    /// Worktree root, used to reduce the table's absolute paths to the
+    /// workspace-relative form that keys a segment. The segment store is shared
+    /// by every worktree of a bare repo, so the key must not embed an absolute
+    /// path.
+    worktree_root: &'a Path,
 }
 
 impl<'a> ShadowWriter<'a> {
@@ -76,6 +81,8 @@ impl<'a> ShadowWriter<'a> {
     ///   content-ID bytes.
     /// - `pre_computed`: content IDs collected inline during the build
     ///   (may be empty).
+    /// - `worktree_root`: root the table's absolute paths are reduced against
+    ///   to form the workspace-relative segment key.
     #[must_use]
     pub fn new(
         table: &'a SymbolTable,
@@ -83,6 +90,7 @@ impl<'a> ShadowWriter<'a> {
         provider_id: &'a str,
         hash_content: &'a (dyn Fn(&[u8]) -> Vec<u8> + Send + Sync),
         pre_computed: HashMap<PathBuf, Vec<u8>>,
+        worktree_root: &'a Path,
     ) -> Self {
         Self {
             table,
@@ -90,6 +98,7 @@ impl<'a> ShadowWriter<'a> {
             provider_id,
             hash_content,
             pre_computed,
+            worktree_root,
         }
     }
 
@@ -142,6 +151,10 @@ impl<'a> ShadowWriter<'a> {
         let provider_id = self.provider_id;
         let hash_content = self.hash_content;
         let pre_computed = &self.pre_computed;
+        let dest = SegmentDest {
+            provider_dir: &provider_dir,
+            worktree_root: self.worktree_root,
+        };
 
         // Usage postings (BUG-006): group the merged table's usage sites by
         // path_id ONCE up front — scanning the whole usages map per file
@@ -169,7 +182,7 @@ impl<'a> ShadowWriter<'a> {
                     hash_content,
                     pre_computed,
                     usages_by_path,
-                    &provider_dir,
+                    &dest,
                 )
             })
             .collect();
@@ -219,6 +232,15 @@ impl<'a> ShadowWriter<'a> {
 /// set of enrichment columns written (`Some` only when a new segment was built).
 type WorkResult = (PathBuf, Vec<u8>, Option<BTreeSet<String>>);
 
+/// Where a file's segment is written, and the root its path is keyed against.
+///
+/// A segment is keyed by (path, content), so writing one needs both the provider
+/// directory and the root that reduces the table's absolute paths to the
+/// workspace-relative form the key uses.
+struct SegmentDest<'a> {
+    provider_dir: &'a Path,
+    worktree_root: &'a Path,
+}
 /// Build (and flush) one shadow segment for all rows of a single source file.
 /// Runs on a Rayon worker — fully independent per file. Returns `None` when the
 /// file is unreadable; `Some((path, content_id, None))` when an up-to-date
@@ -231,7 +253,7 @@ fn build_file_segment(
     hash_content: &(dyn Fn(&[u8]) -> Vec<u8> + Send + Sync),
     pre_computed: &HashMap<PathBuf, Vec<u8>>,
     usages_by_path: &HashMap<u32, Vec<(&str, u32)>>,
-    provider_dir: &Path,
+    dest: &SegmentDest<'_>,
 ) -> Option<WorkResult> {
     // row_indices is non-empty by construction.
     let first_row = &table.rows[row_indices[0]];
@@ -254,10 +276,12 @@ fn build_file_segment(
     };
 
     let hex = bytes_to_hex(&content_id);
-    // 2-char git-style prefix sharding to avoid flat directories.
-    let target_path = provider_dir
-        .join(&hex[..2])
-        .join(format!("{}.fqsf", &hex[2..]));
+    // Keyed by (path, content): 2-char git-style prefix sharding on the content
+    // hash to avoid flat directories, disambiguated within the shard by path.
+    let rel_path = super::segment_source_rel(&abs_path, dest.worktree_root);
+    let target_path = dest
+        .provider_dir
+        .join(super::segment_rel_path(rel_path, &hex));
 
     // Idempotent: skip already-valid segments.
     if is_valid_segment(&target_path) {
@@ -441,6 +465,7 @@ mod tests {
             "test",
             &identity_hash,
             HashMap::new(),
+            tmp.path(),
         );
         let result = writer.run().expect("run");
         assert_eq!(result.count, 0, "no segments for empty table");
@@ -472,6 +497,7 @@ mod tests {
             "test",
             &identity_hash,
             HashMap::new(),
+            tmp.path(),
         );
         let result = writer.run().expect("run");
         assert_eq!(result.count, 1, "one segment written");
@@ -522,6 +548,7 @@ mod tests {
             "test",
             &identity_hash,
             HashMap::new(),
+            tmp.path(),
         );
         writer.run().expect("run");
 
@@ -588,8 +615,14 @@ mod tests {
         pre_computed.insert(file_path.clone(), identity_hash(content));
 
         let segments_base = tmp.path().join("segments");
-        let writer =
-            ShadowWriter::new(&table, &segments_base, "test", &identity_hash, pre_computed);
+        let writer = ShadowWriter::new(
+            &table,
+            &segments_base,
+            "test",
+            &identity_hash,
+            pre_computed,
+            tmp.path(),
+        );
         let result = writer.run().expect("run without re-reading file");
         assert_eq!(
             result.count, 1,
@@ -621,6 +654,7 @@ mod tests {
             "test",
             &identity_hash,
             HashMap::new(),
+            tmp.path(),
         );
         writer.run().expect("run");
 

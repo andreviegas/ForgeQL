@@ -6,6 +6,56 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.121.0] — 2026-07-16 — fix(index): a file no longer inherits a byte-identical file's parse or node identities
+
+### Fixed — one file could be served another file's index data
+
+A segment caches the result of indexing one file, and that result depends on the
+file's bytes **and** on which parser its path selects. Segments were stored under
+a key derived from the **content alone**, so any two byte-identical files shared
+one segment — whichever was written first won, and the other file's segment was
+silently discarded. Three separate failures came out of that single omission:
+
+- **A file could report another language's parse.** `void twin() { int q = 3; }`
+  is a valid C++ function and is not valid Rust. Byte-identical `a.cpp` and
+  `b.rs` shared a segment, so after the `.cpp` file was indexed first the `.rs`
+  file reported `language = cpp` and `fql_kind = function` instead of its own
+  `error` rows. `FIND symbols … WHERE language = 'rust'` missed the file
+  entirely, and `FIND symbols WHERE fql_kind = 'error'` — the documented way to
+  learn a file is already unparseable **before** editing it — answered that a
+  broken file was clean.
+- **Editing one file emptied another.** The set of persistent segments hidden
+  behind pending edits was keyed by content hash. Editing `a.cpp` hid *every*
+  segment whose bytes matched `a.cpp`'s previous state, so an untouched
+  `b.cpp` holding identical bytes lost all of its symbols: `FIND files` still
+  listed it and `SHOW NODE` still read it, while every symbol query treated it
+  as empty.
+- **Node identities merged at COMMIT.** Two identical-bytes files can carry
+  different node ordinals — one file's node may sit at ordinal 2 because it
+  survived a sibling's deletion, while a freshly written file has the same node
+  at ordinal 0. Promotion kept whichever segment arrived first, so after COMMIT
+  one file's node ids silently became the other's, with no edit to that file.
+
+Segments are now keyed by **(path, content)** everywhere they are written, read,
+promoted, or hidden — the rule the per-session staging layer already followed
+since 0.120.0, now applied to the committed store and to the fresh-build path as
+well. Reuse across commits and across worktrees is unaffected: the same path with
+the same bytes still resolves to the same segment. Only sharing between
+*different paths* that happen to hold identical bytes is given up, which is what
+made one file's data reachable through another's.
+
+- **`ENRICH_VER` 34 → 35.** Segment and overlay trees are namespaced by this
+  version, and v34 trees are laid out under the old content-only names, so they
+  cannot be resolved by the new key. The first `USE` after upgrading re-indexes.
+- **Upgrading discards a session's pending edits from the index, not from disk.**
+  Uncommitted work is written to the worktree, and re-indexing reads the worktree,
+  so nothing is lost — but the artifacts describing that pending state are not
+  carried across. The staging area no longer resolves segments staged under the
+  previous content-only name, and the per-session delta file carries a format
+  version and is refused if it was written by an older engine (its removal set
+  recorded content hashes, which the new one would have read as paths — a silent
+  misread that would have resurrected a deleted file's symbols).
+
 ## [0.120.0] — 2026-07-16 — fix(index): a reindexed file no longer adopts node identities cached for identical bytes
 
 ### Fixed — stale node handles could silently re-point at a byte-identical surviving sibling

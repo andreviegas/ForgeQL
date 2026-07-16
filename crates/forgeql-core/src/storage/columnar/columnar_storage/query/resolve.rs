@@ -68,7 +68,7 @@ impl ColumnarStorage {
                 self.overlay
                     .segments()
                     .get(seg_idx as usize)
-                    .is_none_or(|meta| !self.dirty.shadows(&meta.hex_content_id))
+                    .is_none_or(|meta| !self.dirty.shadows(&meta.source_path))
             });
         }
 

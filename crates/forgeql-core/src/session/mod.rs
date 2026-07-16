@@ -445,10 +445,11 @@ impl Session {
         // Columnar inline fast-path: build a SegmentBuildCtx so SymbolTable::build
         // writes segments inline per-file (with per-file post_pass), skipping the
         // 2-minute sequential merge. Passed to build_with_seg_ctx (not stored on legacy).
+        let worktree_root = self.worktree_path.clone();
         let (seg_ctx, inline_state) = self.columnar_build.as_ref().map_or_else(
             || (None, None),
             |ctx| {
-                let (sc, state) = ctx.make_inline_ctx();
+                let (sc, state) = ctx.make_inline_ctx(&worktree_root);
                 (Some(sc), Some(state))
             },
         );

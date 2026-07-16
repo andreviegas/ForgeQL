@@ -1,5 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use tracing::warn;
@@ -67,16 +67,18 @@ impl ColumnarBuildContext {
         format!("{}-v{}", self.provider_id, super::ENRICH_VER)
     }
 
-    /// Path to the segment directory for a given hex content ID.
+    /// Path to the segment file for a source path and its hex content ID.
     ///
-    /// Returns `<segments_dir>/<provider_id>-v<N>/<hex[0..2]>/<hex[2..]>.fqsf`
+    /// Returns `<segments_dir>/<provider_id>-v<N>/<hex[0..2]>/<hex[2..]>-<path_key>.fqsf`
     /// (git-style 2-char fan-out to avoid flat directories on large repos).
+    ///
+    /// `source_path` is **relative to the worktree root** and is part of the key:
+    /// see [`segment_rel_path`](super::segment_rel_path).
     #[must_use]
-    pub fn segment_path_for(&self, hex_content_id: &str) -> PathBuf {
+    pub fn segment_path_for(&self, source_path: &Path, hex_content_id: &str) -> PathBuf {
         self.segments_dir
             .join(self.versioned_provider())
-            .join(&hex_content_id[..2])
-            .join(format!("{}.fqsf", &hex_content_id[2..]))
+            .join(super::segment_rel_path(source_path, hex_content_id))
     }
 
     /// Path to the overlay file for a given snapshot hex (e.g. commit SHA).
@@ -123,7 +125,10 @@ impl ColumnarBuildContext {
         clippy::too_many_lines,
         reason = "mirrors reindex_files / ShadowWriter::run"
     )]
-    pub fn make_inline_ctx(&self) -> (crate::ast::index::SegmentBuildCtx, Arc<InlineCtxState>) {
+    pub fn make_inline_ctx(
+        &self,
+        worktree_root: &Path,
+    ) -> (crate::ast::index::SegmentBuildCtx, Arc<InlineCtxState>) {
         use crate::ast::index::{SegEmitFn, SegReuseFn, SegmentBuildCtx};
 
         let state = Arc::new(InlineCtxState {
@@ -133,6 +138,7 @@ impl ColumnarBuildContext {
 
         let segments_dir = self.segments_dir.clone();
         let provider_id = self.provider_id.clone();
+        let emit_root = worktree_root.to_path_buf();
         let state_ref = Arc::clone(&state);
 
         let emit_fn: SegEmitFn = Arc::new(
@@ -143,6 +149,7 @@ impl ColumnarBuildContext {
                     rows_start,
                     &segments_dir,
                     &provider_id,
+                    &emit_root,
                     &state_ref,
                 );
             },
@@ -150,6 +157,7 @@ impl ColumnarBuildContext {
 
         let reuse_segments_dir = self.segments_dir.clone();
         let reuse_provider = self.provider_id.clone();
+        let reuse_root = worktree_root.to_path_buf();
         let reuse_state = Arc::clone(&state);
         let reuse_fn: SegReuseFn =
             Arc::new(move |abs_path: &std::path::Path, content_id: &[u8]| {
@@ -158,6 +166,7 @@ impl ColumnarBuildContext {
                     content_id,
                     &reuse_segments_dir,
                     &reuse_provider,
+                    &reuse_root,
                     &reuse_state,
                 )
             });
@@ -183,16 +192,17 @@ impl ColumnarBuildContext {
         content_id: &[u8],
         segments_dir: &std::path::Path,
         provider_id: &str,
+        worktree_root: &std::path::Path,
         state: &InlineCtxState,
     ) -> bool {
         use super::bytes_to_hex;
         use super::segment_builder::is_valid_segment;
 
         let hex = bytes_to_hex(content_id);
+        let rel_path = super::segment_source_rel(abs_path, worktree_root);
         let target_path = segments_dir
             .join(format!("{provider_id}-v{}", super::ENRICH_VER))
-            .join(&hex[..2])
-            .join(format!("{}.fqsf", &hex[2..]));
+            .join(super::segment_rel_path(rel_path, &hex));
         if !is_valid_segment(&target_path) {
             return false;
         }
@@ -212,6 +222,7 @@ impl ColumnarBuildContext {
         rows_start: usize,
         segments_dir: &std::path::Path,
         provider_id: &str,
+        worktree_root: &std::path::Path,
         state: &InlineCtxState,
     ) {
         use super::bytes_to_hex;
@@ -224,9 +235,8 @@ impl ColumnarBuildContext {
 
         let hex = bytes_to_hex(content_id);
         let provider_ver_dir = segments_dir.join(format!("{provider_id}-v{}", super::ENRICH_VER));
-        let target_path = provider_ver_dir
-            .join(&hex[..2])
-            .join(format!("{}.fqsf", &hex[2..]));
+        let rel_path = super::segment_source_rel(&abs_path, worktree_root);
+        let target_path = provider_ver_dir.join(super::segment_rel_path(rel_path, &hex));
 
         // Always register in segment_map, even for already-written segments.
         {
@@ -447,7 +457,7 @@ mod tests {
         let overlays_dir = tmp.path().join("overlays");
         let hash_fn: HashFn = Arc::new(|b: &[u8]| identity_hash(b));
         let cbc = ColumnarBuildContext::new(segments_dir.clone(), overlays_dir, "test", hash_fn);
-        let (ctx, _state) = cbc.make_inline_ctx();
+        let (ctx, _state) = cbc.make_inline_ctx(tmp.path());
 
         let content_id = identity_hash(b"# Title\n\n## Section\n");
         (ctx.emit_fn)(&content_id, &table, 0);
@@ -519,13 +529,13 @@ mod tests {
         let content_id = identity_hash(b"# Title\n");
 
         // Before any emit: nothing to reuse.
-        let (ctx, state) = cbc.make_inline_ctx();
+        let (ctx, state) = cbc.make_inline_ctx(tmp.path());
         assert!(!(ctx.reuse_fn)(&file_path, &content_id));
         assert!(state.segment_map.lock().unwrap().is_empty());
 
         // Write the segment, then a fresh context must reuse it.
         (ctx.emit_fn)(&content_id, &table, 0);
-        let (ctx2, state2) = cbc.make_inline_ctx();
+        let (ctx2, state2) = cbc.make_inline_ctx(tmp.path());
         assert!((ctx2.reuse_fn)(&file_path, &content_id));
         assert_eq!(
             state2.segment_map.lock().unwrap().get(&file_path),
