@@ -2769,3 +2769,399 @@ fn move_lines_reports_symmetric_range_counts() {
         "a clean move reports written == removed"
     );
 }
+
+// -----------------------------------------------------------------------
+// Removal-range tombstones (plan-decouple-mutations.md, slices 0-6)
+//
+// Invariant under construction: removing a construct's whole span — by ANY
+// verb and ANY addressing form — must retire that construct's handle, so a
+// byte-identical sibling can never be reached through the dead handle.
+//
+// Fixture `twins.cpp`: three byte-identical `void dup() {}` functions, each
+// tagged by a trailing comment (// FIRST/SECOND/THIRD) so the physical
+// functions stay distinguishable. Because the three are byte-identical they
+// share one rev — the teeth: IF REV cannot tell them apart, so a leaked handle
+// silently mutates the wrong function. Handles are resolved by query, never
+// hardcoded, so the suite is independent of the parser's ordinal scheme.
+//
+// Every row carries `#[ignore]` for now. The RED rows wait on the fix; the
+// whole-node control waits on a harness capability: this engine (ForgeQLEngine
+// built with CppLanguageInline in a tempdir) does not resolve *symbol* node
+// handles — SHOW outline emits a handle, but FIND NODE (and any mutation) on it
+// returns node_not_found, though the identical flow resolves against the live
+// server. Every existing mutation test here addresses *file* handles only.
+// Before these can run, either the harness gains symbol-handle resolution, or
+// the suite moves to a golden rw case that runs against a live session.
+// -----------------------------------------------------------------------
+
+/// Load the twins fixture in a fresh session. Returns the engine, session,
+/// tempdir (kept alive by the caller), the file's bare-hex handle, and the path.
+fn twins_session() -> (ForgeQLEngine, String, tempfile::TempDir, String, PathBuf) {
+    let (engine, sid, dir) = engine_with_session_with_extra_files(&["twins.cpp"]);
+    let file = path_handle("twins.cpp");
+    let path = dir.path().join("twins.cpp");
+    (engine, sid, dir, file, path)
+}
+
+/// The `dup` twin functions, ordered by source line (FIRST, SECOND, THIRD),
+/// each as (line, node_id, rev). All that survive in the file are returned, so
+/// a caller may re-resolve after a deletion. The three are byte-identical, so
+/// their revs are equal.
+fn dup_twins(engine: &mut ForgeQLEngine, sid: &str) -> Vec<(usize, String, String)> {
+    // SHOW outline carries node handles after reindex (FIND symbols reads a
+    // backend that does not populate them). The outline row omits the rev, so
+    // fetch each handle's rev with FIND NODE.
+    let r = execute_fql(engine, sid, "SHOW outline OF 'twins.cpp'");
+    let ForgeQLResult::Show(sr) = r else {
+        panic!("expected Show result from SHOW outline");
+    };
+    let ShowContent::Outline { entries } = sr.content else {
+        panic!("expected outline content");
+    };
+    let mut located: Vec<(usize, String)> = entries
+        .iter()
+        .filter(|e| e.fql_kind == "function" && e.name == "dup")
+        .map(|e| (e.line, e.node_id.clone().expect("a twin has a handle")))
+        .collect();
+    located.sort_by_key(|&(line, _)| line);
+    located
+        .into_iter()
+        .map(|(line, id)| {
+            let rev = node_rev(engine, sid, &id);
+            (line, id, rev)
+        })
+        .collect()
+}
+
+/// The property every removal must uphold: once a twin is gone, its freed
+/// handle is dead. A stale write through `dead_handle` (carrying the rev the
+/// twins shared) must NOT land, and the survivor tagged `survivor_marker` must
+/// be untouched. Today the leaking verbs let that write clobber the survivor.
+fn assert_dead_handle_rejects_stale_write(
+    engine: &mut ForgeQLEngine,
+    sid: &str,
+    dead_handle: &str,
+    shared_rev: &str,
+    path: &std::path::Path,
+    survivor_marker: &str,
+) {
+    let stale = format!(
+        "CHANGE NODE '{dead_handle}' IF REV '{shared_rev}' WITH 'void CLOBBERED_BY_STALE_HANDLE() {{}}'"
+    );
+    let _ = try_fql(engine, sid, &stale);
+    let after = fs::read_to_string(path).expect("read twins.cpp");
+    assert!(
+        !after.contains("CLOBBERED_BY_STALE_HANDLE"),
+        "a stale handle silently clobbered a byte-identical survivor:\n{after}"
+    );
+    assert!(
+        after.contains(survivor_marker),
+        "the surviving twin ({survivor_marker}) must be intact:\n{after}"
+    );
+}
+
+#[test]
+#[ignore = "pending removal-range tombstones"]
+fn twin_survives_file_offset_delete() {
+    let (mut engine, sid, _dir, file, path) = twins_session();
+    let twins = dup_twins(&mut engine, &sid);
+    let (second_line, second_id, shared) = twins[1].clone();
+    let (_fid, frev) = file_handle(&mut engine, &sid, "twins.cpp");
+
+    // Remove the SECOND twin by FILE-relative line offset.
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("DELETE NODE '{file}({second_line})' IF REV '{frev}'"),
+    );
+
+    assert_dead_handle_rejects_stale_write(
+        &mut engine,
+        &sid,
+        &second_id,
+        &shared,
+        &path,
+        "// THIRD",
+    );
+}
+
+#[test]
+#[ignore = "pending removal-range tombstones"]
+fn twin_survives_node_offset_delete() {
+    let (mut engine, sid, _dir, _file, path) = twins_session();
+    let twins = dup_twins(&mut engine, &sid);
+    let (_second_line, second_id, shared) = twins[1].clone();
+
+    // Remove the SECOND twin by NODE-relative line offset (its whole 1-line span).
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("DELETE NODE '{second_id}(1)' IF REV '{shared}'"),
+    );
+
+    assert_dead_handle_rejects_stale_write(
+        &mut engine,
+        &sid,
+        &second_id,
+        &shared,
+        &path,
+        "// THIRD",
+    );
+}
+
+#[test]
+#[ignore = "pending removal-range tombstones"]
+fn change_with_empty_equals_delete() {
+    let (mut engine, sid, _dir, _file, path) = twins_session();
+    let twins = dup_twins(&mut engine, &sid);
+    let (_l, second_id, shared) = twins[1].clone();
+
+    // `CHANGE ... WITH ''` removes the SECOND twin's whole span; it must retire
+    // the handle exactly as a whole-node DELETE does (decision D1).
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("CHANGE NODE '{second_id}' IF REV '{shared}' WITH ''"),
+    );
+
+    assert_dead_handle_rejects_stale_write(
+        &mut engine,
+        &sid,
+        &second_id,
+        &shared,
+        &path,
+        "// THIRD",
+    );
+}
+
+#[test]
+#[ignore = "pending removal-range tombstones"]
+fn rename_retires_freed_ordinal() {
+    let (mut engine, sid, _dir, _file, path) = twins_session();
+    let twins = dup_twins(&mut engine, &sid);
+    let (_l, first_id, shared) = twins[0].clone();
+
+    // Rename the FIRST twin: its old span is gone under the same name, so the
+    // freed handle must retire loudly — a twin must not adopt it (F3).
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("CHANGE NODE '{first_id}' IF REV '{shared}' WITH 'void renamed_dup() {{}}'"),
+    );
+
+    let after = fs::read_to_string(&path).expect("read twins.cpp");
+    assert!(
+        after.contains("renamed_dup"),
+        "the rename must apply:\n{after}"
+    );
+
+    assert_dead_handle_rejects_stale_write(
+        &mut engine,
+        &sid,
+        &first_id,
+        &shared,
+        &path,
+        "// SECOND",
+    );
+}
+
+#[test]
+#[ignore = "pending removal-range tombstones"]
+fn found_delete_stages_tombstones() {
+    let (mut engine, sid, _dir, _file, path) = twins_session();
+    let twins = dup_twins(&mut engine, &sid);
+    let (_l1, second_id, shared) = twins[1].clone();
+    let third_line = twins[2].0;
+
+    // Delete every twin above THIRD as a set; THIRD must survive with its own
+    // identity, and the freed handles must be dead (F5).
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        &format!(
+            "FIND symbols WHERE name = 'dup' WHERE fql_kind = 'function' WHERE line < {third_line}"
+        ),
+    );
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    let master = qr.found_rev.expect("master rev over the found set");
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("DELETE NODES FOUND IF REV '{master}'"),
+    );
+
+    assert_dead_handle_rejects_stale_write(
+        &mut engine,
+        &sid,
+        &second_id,
+        &shared,
+        &path,
+        "// THIRD",
+    );
+}
+
+#[test]
+#[ignore = "pending removal-range tombstones"]
+fn found_delete_equals_sequential() {
+    // A FOUND bulk delete must leave the same handles alive/dead as the same
+    // deletions issued one at a time (decision D3).
+    //
+    // Path 1: bulk-delete every twin above THIRD via NODES FOUND.
+    let (mut engine_bulk, sid_bulk, _dir_bulk, _file_bulk, path_bulk) = twins_session();
+    let twins_bulk = dup_twins(&mut engine_bulk, &sid_bulk);
+    let second_bulk = twins_bulk[1].1.clone();
+    let third_line_bulk = twins_bulk[2].0;
+    let r = execute_fql(
+        &mut engine_bulk,
+        &sid_bulk,
+        &format!(
+            "FIND symbols WHERE name = 'dup' WHERE fql_kind = 'function' WHERE line < {third_line_bulk}"
+        ),
+    );
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    let master = qr.found_rev.expect("master rev");
+    let _ = execute_fql(
+        &mut engine_bulk,
+        &sid_bulk,
+        &format!("DELETE NODES FOUND IF REV '{master}'"),
+    );
+    let bytes_bulk = fs::read_to_string(&path_bulk).expect("read bulk");
+    let dead_bulk = try_fql(
+        &mut engine_bulk,
+        &sid_bulk,
+        &format!("FIND NODE '{second_bulk}'"),
+    )
+    .is_err();
+
+    // Path 2: delete FIRST, then SECOND, one whole-node DELETE at a time.
+    let (mut engine_seq, sid_seq, _dir_seq, _file_seq, path_seq) = twins_session();
+    let twins_seq = dup_twins(&mut engine_seq, &sid_seq);
+    let second_seq = twins_seq[1].1.clone();
+    let (_lf, first_seq, first_rev) = twins_seq[0].clone();
+    let _ = execute_fql(
+        &mut engine_seq,
+        &sid_seq,
+        &format!("DELETE NODE '{first_seq}' IF REV '{first_rev}'"),
+    );
+    let remaining = dup_twins(&mut engine_seq, &sid_seq);
+    let (_lr, second_now, second_now_rev) = remaining[0].clone();
+    let _ = execute_fql(
+        &mut engine_seq,
+        &sid_seq,
+        &format!("DELETE NODE '{second_now}' IF REV '{second_now_rev}'"),
+    );
+    let bytes_seq = fs::read_to_string(&path_seq).expect("read seq");
+    let dead_seq = try_fql(
+        &mut engine_seq,
+        &sid_seq,
+        &format!("FIND NODE '{second_seq}'"),
+    )
+    .is_err();
+
+    assert_eq!(
+        bytes_bulk, bytes_seq,
+        "the same deletions must leave the same bytes"
+    );
+    assert_eq!(
+        dead_bulk, dead_seq,
+        "a FOUND bulk delete must retire the same handles as sequential deletes"
+    );
+}
+
+#[test]
+#[ignore = "engine test harness cannot resolve symbol node handles yet — see suite header"]
+fn whole_node_delete_control() {
+    // The one removal path that already stages a tombstone. This stays green and
+    // guards against a regression in the behavior that is correct today.
+    let (mut engine, sid, _dir, _file, path) = twins_session();
+    let twins = dup_twins(&mut engine, &sid);
+    assert_eq!(
+        twins.len(),
+        3,
+        "twins.cpp must index as three dup functions"
+    );
+    let (_l, second_id, shared) = twins[1].clone();
+
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("DELETE NODE '{second_id}' IF REV '{shared}'"),
+    );
+
+    assert_dead_handle_rejects_stale_write(
+        &mut engine,
+        &sid,
+        &second_id,
+        &shared,
+        &path,
+        "// THIRD",
+    );
+}
+
+#[test]
+#[ignore = "pending removal-range tombstones"]
+fn poisoned_cache_sequence() {
+    // A buggy verb must not poison the (path, content) segment cache so that a
+    // later correct whole-node DELETE on identical bytes regresses (F4).
+    let (mut engine, sid, _dir, file, path) = twins_session();
+    let twins = dup_twins(&mut engine, &sid);
+    let (second_line, second_id, shared) = twins[1].clone();
+
+    // Poison: remove-via-CHANGE, then restore the bytes.
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("CHANGE NODE '{second_id}' IF REV '{shared}' WITH ''"),
+    );
+    let _ = execute_fql(&mut engine, &sid, "UNDO");
+
+    // The correct verb must still retire the handle on the restored bytes.
+    let (_fid, frev) = file_handle(&mut engine, &sid, "twins.cpp");
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("DELETE NODE '{file}({second_line})' IF REV '{frev}'"),
+    );
+
+    assert_dead_handle_rejects_stale_write(
+        &mut engine,
+        &sid,
+        &second_id,
+        &shared,
+        &path,
+        "// THIRD",
+    );
+}
+
+#[test]
+#[ignore = "pending removal-range tombstones"]
+fn undo_preserves_twin_identities() {
+    // Deleting a twin then UNDOing must restore both the bytes and every
+    // original handle — UNDO reindexes with no tombstones today (F6).
+    let (mut engine, sid, _dir, _file, path) = twins_session();
+    let original = fs::read_to_string(&path).expect("read original");
+    let twins = dup_twins(&mut engine, &sid);
+    let (_l, second_id, second_rev) = twins[1].clone();
+    let handles: Vec<String> = twins.iter().map(|(_, id, _)| id.clone()).collect();
+
+    let _ = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("DELETE NODE '{second_id}' IF REV '{second_rev}'"),
+    );
+    let _ = execute_fql(&mut engine, &sid, "UNDO");
+
+    let restored = fs::read_to_string(&path).expect("read restored");
+    assert_eq!(restored, original, "UNDO must restore the exact bytes");
+
+    for handle in &handles {
+        assert!(
+            try_fql(&mut engine, &sid, &format!("FIND NODE '{handle}'")).is_ok(),
+            "every original twin handle must resolve again after UNDO: {handle}"
+        );
+    }
+}
