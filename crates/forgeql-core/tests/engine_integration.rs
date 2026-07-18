@@ -121,6 +121,7 @@ fn execute_fql(engine: &mut ForgeQLEngine, session_id: &str, fql: &str) -> Forge
     let coords = SessionCoords::from_session_id(session_id).expect("valid session_id");
     engine
         .execute(auth(AuthContext::Tester), Some(&coords), op)
+        .result
         .expect("execute")
 }
 
@@ -133,7 +134,9 @@ fn try_fql(
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("at least one op");
     let coords = SessionCoords::from_session_id(session_id).expect("valid session_id");
-    engine.execute(auth(AuthContext::Tester), Some(&coords), op)
+    engine
+        .execute(auth(AuthContext::Tester), Some(&coords), op)
+        .result
 }
 
 /// Run a statement that must be refused, and hand back the message it was
@@ -532,6 +535,7 @@ fn show_sources_on_empty_engine() {
     let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
     let result = engine
         .execute(auth(AuthContext::Tester), None, &ForgeQLIR::ShowSources)
+        .result
         .unwrap();
     match result {
         ForgeQLResult::Query(qr) => {
@@ -1064,6 +1068,7 @@ fn find_symbols_without_session_fails() {
     assert!(
         engine
             .execute(auth(AuthContext::Tester), None, &op)
+            .result
             .is_err()
     );
 }
@@ -2295,6 +2300,7 @@ fn move_lines_to_numeric_dest_rejected() {
     let coords = SessionCoords::from_session_id(&session_id).expect("valid session_id");
     let err = engine
         .execute(auth(AuthContext::Tester), Some(&coords), &ops[0])
+        .result
         .expect_err("numeric TO destination must be rejected");
     let msg = err.to_string();
     assert!(
@@ -2468,6 +2474,7 @@ fn change_nodes_found_without_find_errors() {
     let coords = SessionCoords::from_session_id(&sid).expect("valid session_id");
     let err = engine
         .execute(auth(AuthContext::Tester), Some(&coords), &ops[0])
+        .result
         .expect_err("must fail without a previous FIND")
         .to_string();
     assert!(

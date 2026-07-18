@@ -22,7 +22,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use forgeql_core::compact;
-use forgeql_core::engine::ForgeQLEngine;
+use forgeql_core::engine::{ExecOutcome, ForgeQLEngine};
 use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
@@ -265,6 +265,22 @@ fn error_reply(id: &Value, msg: &str) -> Value {
     }
 }
 
+/// Attach a coach hint to a rendered response: a top-level `"coach"` sibling
+/// when the body is a JSON object, else a trailing `coach:` line. A `None` hint
+/// leaves the body byte-identical.
+fn with_coach(body: String, coach: Option<String>) -> String {
+    let Some(hint) = coach else {
+        return body;
+    };
+    match serde_json::from_str::<Value>(body.trim()) {
+        Ok(Value::Object(mut map)) => {
+            let _ = map.insert("coach".to_owned(), Value::String(hint));
+            serde_json::to_string(&Value::Object(map)).unwrap_or(body)
+        }
+        _ => format!("{body}\ncoach: {hint}"),
+    }
+}
+
 /// Parse and execute one or more FQL statements.
 ///
 /// Returns the concatenated output and, if any statement opened a session, the
@@ -313,10 +329,14 @@ async fn execute_fql(
     for (text, op) in &ops {
         let started = std::time::Instant::now();
         let mut guard = state.engine.lock().await;
-        let result = guard
-            .execute(user_id, coords.as_ref(), op)
-            .map_err(|e| e.to_string())?;
-        let coach_hint = guard.take_coach();
+        let ExecOutcome {
+            result,
+            coach: coach_hint,
+        } = guard.execute(user_id, coords.as_ref(), op);
+        let result = match result {
+            Ok(r) => r,
+            Err(e) => return Err(with_coach(e.to_string(), coach_hint)),
+        };
         // A pending VERIFY/RUN runs on the background job pool: release the
         // engine lock while waiting so a long gate never blocks other tenants,
         // then fold the outcome (and commit-gate bookkeeping) back in.
@@ -360,10 +380,7 @@ async fn execute_fql(
             logger.log(text, &result, &rendered, elapsed, &source, sid, None);
         }
         drop(guard);
-        let rendered = match coach_hint {
-            Some(c) => format!("{rendered}\ncoach: {c}"),
-            None => rendered,
-        };
+        let rendered = with_coach(rendered, coach_hint);
         outputs.push(rendered);
     }
 

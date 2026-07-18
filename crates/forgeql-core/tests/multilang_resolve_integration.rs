@@ -66,6 +66,7 @@ fn exec(engine: &mut ForgeQLEngine, session: &str, fql: &str) -> ForgeQLResult {
     let coords = SessionCoords::from_session_id(session).expect("valid session");
     engine
         .execute(auth(AuthContext::Tester), Some(&coords), op)
+        .result
         .expect("execute")
 }
 
@@ -76,6 +77,7 @@ fn exec_err(engine: &mut ForgeQLEngine, session: &str, fql: &str) -> String {
     let coords = SessionCoords::from_session_id(session).expect("valid session");
     engine
         .execute(auth(AuthContext::Tester), Some(&coords), op)
+        .result
         .expect_err("expected error")
         .to_string()
 }

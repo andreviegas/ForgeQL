@@ -78,6 +78,37 @@ pub enum ForgeError {
     // ---------------------------------------------------------------
     #[error("{0}")]
     InvalidInput(String),
+
+    // ---------------------------------------------------------------
+    // Self-healing rejections
+    // ---------------------------------------------------------------
+    /// A rejection the caller can recover from by looking again. `Display`
+    /// prints the `payload` alone — a JSON object for the structured kinds, a
+    /// plain message for `NoSession` — so the rendered error is byte-identical
+    /// to the old string; `kind` lets the engine classify it without parsing.
+    #[error("{payload}")]
+    Rejection {
+        kind: RejectionKind,
+        payload: String,
+    },
+}
+
+/// The taxonomy of self-healing rejections.
+///
+/// Carried on [`ForgeError::Rejection`]. Deliberately coarse — the payload
+/// holds the details; this only names the recovery family so the engine can
+/// classify a rejection without parsing its message text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RejectionKind {
+    /// A rev guard (single-node or FOUND-set) did not match the live state.
+    RevMismatch,
+    /// A handle resolved to no node.
+    NodeNotFound,
+    /// A session-dependent command ran with no session.
+    NoSession,
+    /// A bulk `FOUND` verb could not proceed — no armed set, a truncated
+    /// arming FIND (so no master rev), or a missing `IF REV`.
+    FoundRefusedNoLimit,
 }
 
 /// Convenience constructor: wrap a `std::io::Error` with the offending path.

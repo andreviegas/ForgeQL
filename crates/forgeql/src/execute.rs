@@ -7,7 +7,7 @@
 
 use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::compact;
-use forgeql_core::engine::ForgeQLEngine;
+use forgeql_core::engine::{ExecOutcome, ForgeQLEngine};
 use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
@@ -89,6 +89,22 @@ pub(crate) fn format_result(result: &ForgeQLResult, format: CliFormat) -> String
     }
 }
 
+/// Attach a coach hint to a rendered response: a top-level `"coach"` sibling
+/// when the body is a JSON object, else a trailing `coach:` line. A `None` hint
+/// leaves the body byte-identical.
+pub(crate) fn with_coach(body: String, coach: Option<String>) -> String {
+    let Some(hint) = coach else {
+        return body;
+    };
+    match serde_json::from_str::<serde_json::Value>(body.trim()) {
+        Ok(serde_json::Value::Object(mut map)) => {
+            let _ = map.insert("coach".to_owned(), serde_json::Value::String(hint));
+            serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or(body)
+        }
+        _ => format!("{body}\ncoach: {hint}"),
+    }
+}
+
 // -----------------------------------------------------------------------
 // Main entry point used by all runners
 // -----------------------------------------------------------------------
@@ -143,16 +159,12 @@ pub(crate) fn execute_and_print(
             .map(SessionCoords::from_session_id)
             .transpose()
             .unwrap_or(None); // malformed token: treat as no session
-        match engine.execute_blocking(user_id, coords.as_ref(), op) {
+        let ExecOutcome { result, coach } = engine.execute_blocking(user_id, coords.as_ref(), op);
+        match result {
             Ok(result) => {
                 let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
                 update_session_from_result(session, op, &result, &mut log_source);
-                let mut output = format_result(&result, format);
-                if let Some(coach) = engine.take_coach() {
-                    output.push('\n');
-                    output.push_str("coach: ");
-                    output.push_str(&coach);
-                }
+                let output = with_coach(format_result(&result, format), coach);
                 if let Some(ref mut l) = log {
                     l.log(
                         source_text,
@@ -167,7 +179,7 @@ pub(crate) fn execute_and_print(
                 println!("{output}");
             }
             Err(err) => {
-                eprintln!("error: {err:#}");
+                eprintln!("{}", with_coach(format!("error: {err:#}"), coach));
             }
         }
     }

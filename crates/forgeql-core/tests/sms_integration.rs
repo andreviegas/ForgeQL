@@ -889,7 +889,9 @@ fn tier2_no_crash(cmd: &GeneratedCommand, engine: &mut ForgeQLEngine, session: &
     // rather than letting the whole suite abort.
     let coords = SessionCoords::from_session_id(session).expect("valid session");
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        engine.execute(auth(AuthContext::Tester), Some(&coords), op)
+        engine
+            .execute(auth(AuthContext::Tester), Some(&coords), op)
+            .result
     }));
     let elapsed = start.elapsed().as_micros();
 
@@ -919,6 +921,7 @@ fn tier3_invariants(
     let coords = SessionCoords::from_session_id(session).expect("valid session");
     let result = engine
         .execute(auth(AuthContext::Tester), Some(&coords), op)
+        .result
         .ok()?;
     let elapsed = start.elapsed().as_micros();
     let rc = result_count(&result);

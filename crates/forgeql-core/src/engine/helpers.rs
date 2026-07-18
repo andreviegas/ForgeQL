@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 use tracing::info;
 
 use crate::config::ForgeConfig;
+use crate::error::{ForgeError, RejectionKind};
 use crate::ir::{Clauses, ForgeQLIR, PredicateValue};
 
 // -----------------------------------------------------------------------
@@ -62,7 +63,11 @@ pub(crate) fn generate_session_id() -> String {
 pub(crate) fn require_session_id(session_id: Option<&str>) -> Result<&str> {
     match session_id {
         Some(sid) if !sid.is_empty() => Ok(sid),
-        _ => bail!("session_id required — run USE <source>.<branch> first"),
+        _ => Err(ForgeError::Rejection {
+            kind: RejectionKind::NoSession,
+            payload: "session_id required — run USE <source>.<branch> first".to_owned(),
+        }
+        .into()),
     }
 }
 

@@ -47,6 +47,7 @@ fn exec(engine: &mut ForgeQLEngine, session_id: Option<&str>, fql: &str) -> Forg
     let coords = session_id.map(|s| SessionCoords::from_session_id(s).expect("valid session_id"));
     engine
         .execute(auth(AuthContext::Tester), coords.as_ref(), op)
+        .result
         .expect("execute")
 }
 

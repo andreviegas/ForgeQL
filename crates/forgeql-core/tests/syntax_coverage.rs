@@ -138,6 +138,7 @@ fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
     let coords = SessionCoords::from_session_id(sid).expect("valid sid");
     engine
         .execute_blocking(auth(AuthContext::Tester), Some(&coords), op)
+        .result
         .unwrap_or_else(|e| panic!("execute failed for: {fql}: {e}"))
 }
 
@@ -148,6 +149,7 @@ fn exec_err(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> String {
     let coords = SessionCoords::from_session_id(sid).expect("valid sid");
     engine
         .execute(auth(AuthContext::Tester), Some(&coords), op)
+        .result
         .expect_err(&format!("expected error for: {fql}"))
         .to_string()
 }
@@ -1869,7 +1871,12 @@ fn error_find_without_session() {
     let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
     let ops = parser::parse("FIND symbols").unwrap();
     let op = ops.first().unwrap();
-    assert!(engine.execute(auth(AuthContext::Tester), None, op).is_err());
+    assert!(
+        engine
+            .execute(auth(AuthContext::Tester), None, op)
+            .result
+            .is_err()
+    );
 }
 
 #[test]

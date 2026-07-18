@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use crate::error::{ForgeError, RejectionKind};
 use crate::{
     ir::{Backend, Clauses, GroupBy},
     result::{ForgeQLResult, QueryResult, ShowContent, ShowResult},
@@ -287,9 +288,13 @@ impl ForgeQLEngine {
                 }
                 Ok(ForgeQLResult::FindNode(r))
             }
-            None => anyhow::bail!(
-                r#"{{"error":"node_not_found","node_id":"{node_id}","suggested_next":"SHOW outline OF file"}}"#
-            ),
+            None => Err(ForgeError::Rejection {
+                kind: RejectionKind::NodeNotFound,
+                payload: format!(
+                    r#"{{"error":"node_not_found","node_id":"{node_id}","suggested_next":"SHOW outline OF file"}}"#
+                ),
+            }
+            .into()),
         }
     }
 

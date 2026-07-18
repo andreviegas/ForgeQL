@@ -5,6 +5,7 @@
 use anyhow::{Result, bail};
 
 use crate::engine::{ForgeQLEngine, require_session_id};
+use crate::error::{ForgeError, RejectionKind};
 
 impl ForgeQLEngine {
     /// The `fql_kind` of a handle, without resolving its span or checking a rev.
@@ -32,8 +33,9 @@ impl ForgeQLEngine {
         let node = session
             .engine_for(&crate::ir::Backend::Default)?
             .find_node(node_id, &root)?
-            .ok_or_else(|| {
-                anyhow::anyhow!(r#"{{"error":"node_not_found","node_id":"{node_id}"}}"#)
+            .ok_or_else(|| ForgeError::Rejection {
+                kind: RejectionKind::NodeNotFound,
+                payload: format!(r#"{{"error":"node_not_found","node_id":"{node_id}"}}"#),
             })?;
         if let Some(expected) = if_rev
             && node.rev != expected
@@ -53,7 +55,11 @@ impl ForgeQLEngine {
                 node.end_line,
                 &current_content,
             );
-            bail!("{payload}");
+            return Err(ForgeError::Rejection {
+                kind: RejectionKind::RevMismatch,
+                payload: payload.to_string(),
+            }
+            .into());
         }
         let rel_path = node
             .path

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 
 use crate::engine::{ForgeQLEngine, require_session_id};
+use crate::error::{ForgeError, RejectionKind};
 use crate::ir::{ChangeTarget, ForgeQLIR};
 use crate::result::{ForgeQLResult, MutationResult};
 use crate::session::found_set::{self, FoundMember, FoundSet};
@@ -47,17 +48,20 @@ impl ForgeQLEngine {
             .found_set
             .clone()
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    r#"{{"error":"no_found_set","suggested_next":"no FIND result is armed in this session — run FIND symbols/usages/files first, then re-issue the FOUND command"}}"#
-                )
+            .ok_or_else(|| ForgeError::Rejection {
+                kind: RejectionKind::FoundRefusedNoLimit,
+                payload: r#"{"error":"no_found_set","suggested_next":"no FIND result is armed in this session — run FIND symbols/usages/files first, then re-issue the FOUND command"}"#.to_owned(),
             })?;
 
         if !set.complete {
-            bail!(
-                r#"{{"error":"found_truncated","origin":"{origin}","suggested_next":"the previous {origin} was truncated, so no master rev was issued for it — a FOUND mutation would act on rows you were never shown. Re-run the FIND with a LIMIT that covers the whole result (or narrower filters), then repeat this command."}}"#,
-                origin = set.origin
-            );
+            return Err(ForgeError::Rejection {
+                kind: RejectionKind::FoundRefusedNoLimit,
+                payload: format!(
+                    r#"{{"error":"found_truncated","origin":"{origin}","suggested_next":"the previous {origin} was truncated, so no master rev was issued for it — a FOUND mutation would act on rows you were never shown. Re-run the FIND with a LIMIT that covers the whole result (or narrower filters), then repeat this command."}}"#,
+                    origin = set.origin
+                ),
+            }
+            .into());
         }
 
         Ok(set)
@@ -80,11 +84,15 @@ impl ForgeQLEngine {
             // span. A set is N nodes it cannot see, so the only safe recovery is
             // to look again — re-running the FIND both re-shows the rows and
             // issues the rev that matches them.
-            bail!(
-                r#"{{"error":"rev_mismatch","scope":"last","expected":"{expected}","members":{},"origin":"{}","suggested_next":"the set moved since the FIND armed it — re-run the FIND to see the current rows and get a fresh master rev"}}"#,
-                set.members.len(),
-                set.origin
-            );
+            return Err(ForgeError::Rejection {
+                kind: RejectionKind::RevMismatch,
+                payload: format!(
+                    r#"{{"error":"rev_mismatch","scope":"last","expected":"{expected}","members":{},"origin":"{}","suggested_next":"the set moved since the FIND armed it — re-run the FIND to see the current rows and get a fresh master rev"}}"#,
+                    set.members.len(),
+                    set.origin
+                ),
+            }
+            .into());
         }
         Ok(())
     }
@@ -483,9 +491,13 @@ impl ForgeQLEngine {
 /// `invalid node_id: FOUND` — an error about the wrong thing entirely.
 fn require_found_rev<'a>(if_rev: Option<&'a str>, verb: &str) -> Result<&'a str> {
     if_rev.ok_or_else(|| {
-        anyhow::anyhow!(
-            r#"{{"error":"found_refused","verb":"{verb}","suggested_next":"{verb} NODES FOUND requires IF REV '<master rev>' — it acts on every member of the set at once. Re-run the FIND: its response carries the master rev to quote here."}}"#
-        )
+        ForgeError::Rejection {
+            kind: RejectionKind::FoundRefusedNoLimit,
+            payload: format!(
+                r#"{{"error":"found_refused","verb":"{verb}","suggested_next":"{verb} NODES FOUND requires IF REV '<master rev>' — it acts on every member of the set at once. Re-run the FIND: its response carries the master rev to quote here."}}"#
+            ),
+        }
+        .into()
     })
 }
 

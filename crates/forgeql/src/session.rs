@@ -144,7 +144,7 @@ pub(crate) fn session_try_resume(engine: &mut ForgeQLEngine, session: &mut Sessi
     // user_id is the single birth point for identity in session-restore mode.
     // When auth is implemented, replace this with a real credential lookup.
     let user_id = auth(AuthContext::Session);
-    match engine.execute(user_id, None, &use_op) {
+    match engine.execute(user_id, None, &use_op).result {
         Ok(ForgeQLResult::SourceOp(SourceOpResult {
             session_id: Some(ref new_sid),
             ..

@@ -70,7 +70,9 @@ fn try_exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> Result<ForgeQLR
     let ops = parser::parse(fql).expect("parse");
     let op = ops.first().expect("op");
     let coords = SessionCoords::from_session_id(sid).expect("valid sid");
-    engine.execute_blocking(auth(AuthContext::Tester), Some(&coords), op)
+    engine
+        .execute_blocking(auth(AuthContext::Tester), Some(&coords), op)
+        .result
 }
 
 fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {

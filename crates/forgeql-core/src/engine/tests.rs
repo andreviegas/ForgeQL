@@ -79,6 +79,7 @@ fn engine_show_sources_empty() {
     let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
     let result = engine
         .execute(auth(AuthContext::Tester), None, &ForgeQLIR::ShowSources)
+        .result
         .unwrap();
     match result {
         ForgeQLResult::Query(qr) => {
@@ -93,7 +94,9 @@ fn engine_show_sources_empty() {
 fn engine_show_branches_requires_session() {
     let tmp = tempfile::tempdir().unwrap();
     let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
-    let result = engine.execute(auth(AuthContext::Tester), None, &ForgeQLIR::ShowBranches);
+    let result = engine
+        .execute(auth(AuthContext::Tester), None, &ForgeQLIR::ShowBranches)
+        .result;
     assert!(result.is_err());
 }
 
@@ -109,7 +112,7 @@ fn engine_find_symbols_without_session_fails() {
         backend: Backend::default(),
         clauses: Clauses::default(),
     };
-    let result = engine.execute(auth(AuthContext::Tester), None, &op);
+    let result = engine.execute(auth(AuthContext::Tester), None, &op).result;
     assert!(result.is_err());
 }
 
@@ -159,6 +162,7 @@ fn find_globals_returns_declaration_nodes() {
             Some(&SessionCoords::from_session_id(&session_id).unwrap()),
             &op[0],
         )
+        .result
         .unwrap();
     let results = match result {
         ForgeQLResult::Query(qr) => qr.results,
@@ -259,6 +263,7 @@ fn find_globals_with_conflicting_node_kind_returns_empty() {
             Some(&SessionCoords::from_session_id(&session_id).unwrap()),
             &op[0],
         )
+        .result
         .unwrap();
     let results = match result {
         ForgeQLResult::Query(qr) => qr.results,

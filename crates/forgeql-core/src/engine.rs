@@ -40,6 +40,7 @@ use tracing::{info, warn};
 use crate::{
     ast::lang::LanguageRegistry,
     coach_api::{Clause, Coach, CommandEvent, ErrKind, Outcome, Verb},
+    error::{ForgeError, RejectionKind},
     git::source::SourceRegistry,
     ir::{Clauses, ForgeQLIR},
     result::ForgeQLResult,
@@ -150,9 +151,20 @@ pub struct ForgeQLEngine {
     /// hint. `None` unless a product entry point injects one via `set_coach`;
     /// the engine's own constructor never builds one.
     coach: Option<Box<dyn Coach>>,
-    /// Hint the coach produced for the current command, taken by the transport
-    /// via `take_coach` and delivered on the outbound response.
-    pending_coach: Option<String>,
+}
+
+/// The result of an `execute` call.
+///
+/// Pairs the command's outcome with any coaching hint produced for it. The
+/// pairing is structural: a hint always travels with the command that produced
+/// it, so it cannot be delivered late, lost on an early error return, or
+/// stapled to another session's command. The hint is a plain `String` at this
+/// boundary — front-ends deliver it without needing the coach's vocabulary.
+pub struct ExecOutcome {
+    /// The command's result, success or error.
+    pub result: Result<ForgeQLResult>,
+    /// A coaching hint to deliver alongside the response, if any.
+    pub coach: Option<String>,
 }
 
 /// A gated verify step running as a background job, awaiting reconciliation
@@ -227,7 +239,6 @@ impl ForgeQLEngine {
             jobs: Arc::new(crate::jobs::JobRegistry::from_env()),
             pending_gate_jobs: Vec::new(),
             coach: None,
-            pending_coach: None,
         };
         Ok(engine)
     }
@@ -301,7 +312,7 @@ impl ForgeQLEngine {
         user_id: &str,
         coords: Option<&SessionCoords>,
         op: &ForgeQLIR,
-    ) -> Result<ForgeQLResult> {
+    ) -> ExecOutcome {
         self.commands_served += 1;
 
         // Derive the internal HashMap key directly from the SessionCoords.
@@ -322,12 +333,15 @@ impl ForgeQLEngine {
             .and_then(|mk| self.sessions.get(mk))
             .map(|s| s.worktree_path.clone());
 
-        // Guard: for any session-dependent operation, verify the worktree
-        // directory still exists on disk.  FIND/SHOW/mutations all need a
-        // live worktree; source-management commands (CREATE, USE, DISCONNECT,
-        // SHOW SOURCES, SHOW BRANCHES) do not.
-        // Guard: session-dependent ops need a live worktree on disk.
-        self.check_worktree_alive(sid, op)?;
+        // Guard: session-dependent ops need a live worktree on disk. This is an
+        // infrastructure precondition, not a coachable command outcome, so it
+        // returns without observing.
+        if let Err(e) = self.check_worktree_alive(sid, op) {
+            return ExecOutcome {
+                result: Err(e),
+                coach: None,
+            };
+        }
 
         // Content-addressed freshness gate (BUG-001/BUG-002): addressable-node
         // operations resolve a node_id to an exact line range. Reindex the
@@ -348,13 +362,27 @@ impl ForgeQLEngine {
                 self.ensure_node_file_fresh(mk, &node_id);
             }
         }
+
         let dispatched = self.dispatch_op(user_id, sid, op);
-        // The coach observes both the success and the failure path before we
-        // unwrap, so an error correction can ride the error response too.
-        if self.coach.is_some() {
-            self.observe_command(coords, op, &dispatched);
-        }
-        let mut result = dispatched?;
+
+        // The coach observes both the success and the failure path; the hint it
+        // returns travels back paired with the result, so it can ride an error
+        // response and can never leak onto the next command.
+        let coach = if self.coach.is_some() {
+            self.observe_command(coords, op, &dispatched)
+        } else {
+            None
+        };
+
+        let mut result = match dispatched {
+            Ok(result) => result,
+            Err(e) => {
+                return ExecOutcome {
+                    result: Err(e),
+                    coach,
+                };
+            }
+        };
 
         // Strip absolute worktree prefixes so results carry only relative paths.
         // This keeps MCP JSON compact and avoids leaking internal filesystem layout.
@@ -365,7 +393,10 @@ impl ForgeQLEngine {
         // Update the session line budget based on the result (see apply_budget).
         self.apply_budget(sid, op, &mut result);
 
-        Ok(result)
+        ExecOutcome {
+            result: Ok(result),
+            coach,
+        }
     }
 
     /// Execute an op and synchronously wait out any pending background
@@ -382,17 +413,19 @@ impl ForgeQLEngine {
         user_id: &str,
         coords: Option<&SessionCoords>,
         op: &ForgeQLIR,
-    ) -> Result<ForgeQLResult> {
-        match self.execute(user_id, coords, op)? {
-            ForgeQLResult::PendingExec(pending) => {
+    ) -> ExecOutcome {
+        let ExecOutcome { result, coach } = self.execute(user_id, coords, op);
+        let result = match result {
+            Ok(ForgeQLResult::PendingExec(pending)) => {
                 let snapshot = self.jobs.wait(
                     &pending.job_id,
                     std::time::Duration::from_secs(pending.wait_secs),
                 );
                 Ok(self.finish_pending(&pending, snapshot))
             }
-            other => Ok(other),
-        }
+            other => other,
+        };
+        ExecOutcome { result, coach }
     }
 
     /// Shared handle to the background job registry — lets a transport wait on
@@ -798,30 +831,22 @@ impl ForgeQLEngine {
         self.coach = Some(coach);
     }
 
-    /// Take the hint the coach produced for the most recent command, if any.
-    /// Transports call this after `execute` and deliver it on the response.
-    #[must_use]
-    pub const fn take_coach(&mut self) -> Option<String> {
-        self.pending_coach.take()
-    }
-
     /// Hand the just-executed command to the coach — on both the success and
-    /// the failure path — stashing any hint it returns for the transport.
+    /// the failure path — returning any hint it produces so the caller can pair
+    /// it with the result.
     fn observe_command(
         &mut self,
         coords: Option<&SessionCoords>,
         op: &ForgeQLIR,
         dispatched: &Result<ForgeQLResult>,
-    ) {
-        let Some(coords) = coords else {
-            return;
-        };
+    ) -> Option<String> {
+        let coords = coords?;
         let outcome = match dispatched {
             Ok(result) => Outcome::Ok {
                 capped: result.output_capped(),
                 truncated: result.output_truncated(),
             },
-            Err(err) => Outcome::Err(Self::classify_error(&err.to_string())),
+            Err(err) => Outcome::Err(Self::classify_rejection(err)),
         };
         let ev = CommandEvent {
             coords,
@@ -830,10 +855,10 @@ impl ForgeQLEngine {
             outcome,
             cmd_index: self.commands_served,
         };
-        let produced = self.coach.as_mut().and_then(|c| c.observe(&ev));
-        if let Some(hint) = produced {
-            self.pending_coach = Some(hint.text);
-        }
+        self.coach
+            .as_mut()
+            .and_then(|c| c.observe(&ev))
+            .map(|hint| hint.text)
     }
 
     /// Map an op to its coarse coach verb.
@@ -939,20 +964,18 @@ impl ForgeQLEngine {
 
     /// Classify a type-erased engine error into the coach taxonomy. Parse
     /// failures never reach here — the transport rejects them before `execute`.
-    fn classify_error(msg: &str) -> ErrKind {
-        if msg.contains("rev_mismatch") {
-            return ErrKind::RevMismatch;
+    fn classify_rejection(err: &anyhow::Error) -> ErrKind {
+        match err.downcast_ref::<ForgeError>() {
+            Some(ForgeError::Rejection { kind, .. }) => match kind {
+                RejectionKind::RevMismatch => ErrKind::RevMismatch,
+                RejectionKind::NodeNotFound => ErrKind::NodeNotFound,
+                RejectionKind::NoSession => ErrKind::NoSession,
+                RejectionKind::FoundRefusedNoLimit => ErrKind::FoundRefusedNoLimit,
+            },
+            Some(ForgeError::DslParse(attempted)) => ErrKind::ParseError {
+                attempted: attempted.clone(),
+            },
+            _ => ErrKind::Other,
         }
-        if msg.contains("node_not_found") {
-            return ErrKind::NodeNotFound;
-        }
-        let lower = msg.to_ascii_lowercase();
-        if lower.contains("no active session") || lower.contains("no session") {
-            return ErrKind::NoSession;
-        }
-        if lower.contains("without a limit") || lower.contains("no limit") {
-            return ErrKind::FoundRefusedNoLimit;
-        }
-        ErrKind::Other
     }
 }

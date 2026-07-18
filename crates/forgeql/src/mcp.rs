@@ -18,7 +18,7 @@ use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::compact;
 use forgeql_core::engine::{
     DEFAULT_BODY_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_QUERY_LIMIT, DEFAULT_SHOW_LINE_LIMIT,
-    ForgeQLEngine,
+    ExecOutcome, ForgeQLEngine,
 };
 use forgeql_core::error::ForgeError;
 use forgeql_core::ir::ForgeQLIR;
@@ -149,15 +149,15 @@ fn parse_error(err: ForgeError) -> ErrorData {
     ErrorData::internal_error(format!("{err:#}"), None)
 }
 
-/// Convert an `anyhow::Error` (from the engine) to an `rmcp` `ErrorData`.
-///
-/// Takes ownership because `map_err` passes the error by value.
+/// Convert an engine error into an `ErrorData`, attaching a coach hint (if any)
+/// so it rides the error response — a `"coach"` sibling when the payload is a
+/// JSON object, else a trailing line. `None` leaves the message byte-identical.
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "map_err requires taking ownership; the value cannot be passed by reference"
+    reason = "mirrors engine_error; the error is consumed by the returned ErrorData"
 )]
-fn engine_error(err: anyhow::Error) -> ErrorData {
-    ErrorData::internal_error(format!("{err:#}"), None)
+fn engine_error_with_coach(err: anyhow::Error, coach: Option<String>) -> ErrorData {
+    ErrorData::internal_error(crate::execute::with_coach(format!("{err:#}"), coach), None)
 }
 
 /// Return the error's message when it is itself a JSON object — the engine's
@@ -295,28 +295,32 @@ async fn exec_engine(
         .transpose()?;
 
     // Wrap execute() in catch_unwind to convert panics into error responses.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        guard.execute(user_id, coords.as_ref(), op)
-    }))
-    .map_err(|payload| {
-        let msg = payload
-            .downcast_ref::<&str>()
-            .map(|s| format!("engine panicked: {s}"))
-            .or_else(|| {
-                payload
-                    .downcast_ref::<String>()
-                    .map(|s| format!("engine panicked: {s}"))
-            })
-            .unwrap_or_else(|| "engine panicked: unknown cause".to_string());
-        error!(%msg, "engine panic caught — converting to error response");
-        ErrorData::internal_error(msg, None)
-    })?
-    .map_err(engine_error)?;
+    let ExecOutcome { result, coach } =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            guard.execute(user_id, coords.as_ref(), op)
+        }))
+        .map_err(|payload| {
+            let msg = payload
+                .downcast_ref::<&str>()
+                .map(|s| format!("engine panicked: {s}"))
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<String>()
+                        .map(|s| format!("engine panicked: {s}"))
+                })
+                .unwrap_or_else(|| "engine panicked: unknown cause".to_string());
+            error!(%msg, "engine panic caught — converting to error response");
+            ErrorData::internal_error(msg, None)
+        })?;
+    let result = match result {
+        Ok(r) => r,
+        Err(e) => return Err(engine_error_with_coach(e, coach)),
+    };
 
     // A pending VERIFY/RUN runs on the background job pool: release the engine
     // lock while waiting so a long gate never freezes other engine users, then
     // fold the outcome (and commit-gate bookkeeping) back in.
-    let (mut guard, result) = match result {
+    let (guard, result) = match result {
         ForgeQLResult::PendingExec(pending) => {
             let registry = guard.jobs_handle();
             drop(guard);
@@ -351,9 +355,8 @@ async fn exec_engine(
         |mk| guard.session_inline_cap(mk),
     );
 
-    let coach_hint = guard.take_coach();
     drop(guard);
-    Ok((result, budget_snap, worktree, inline_cap, coach_hint))
+    Ok((result, budget_snap, worktree, inline_cap, coach))
 }
 
 /// Apply the `SHOW MORE` buffering to a rendered CSV output when the result
@@ -480,10 +483,7 @@ impl ForgeQlMcp {
                 .as_ref()
                 .map(forgeql_core::budget::BudgetSnapshot::fixed_status_line);
             let output = append_meta(&output, budget_line.as_deref());
-            let output = match coach_hint {
-                Some(c) => format!("{output}\ncoach: {c}"),
-                None => output,
-            };
+            let output = crate::execute::with_coach(output, coach_hint);
             self.log_query(
                 source_text,
                 &result,

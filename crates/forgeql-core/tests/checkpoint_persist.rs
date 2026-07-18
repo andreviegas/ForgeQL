@@ -89,6 +89,7 @@ fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
     let coords = SessionCoords::from_session_id(sid).expect("valid sid");
     engine
         .execute(auth(AuthContext::Tester), Some(&coords), op)
+        .result
         .expect("execute")
 }
 
