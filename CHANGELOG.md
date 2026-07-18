@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — deleting by offset or line range now retires the deleted handle
+
+Deleting a construct by a line offset or a line range removed its bytes but
+left its node handle alive, because handle retirement was staged only for the
+bare whole-node delete form. A byte-identical sibling could then be reached
+through the dead handle, and because the two share a rev, `IF REV` could not
+tell them apart — so a stale edit landed on the wrong construct silently.
+
+Handle retirement is now derived from the byte range a delete removes rather
+than from the verb or addressing form that removed it: every root construct
+whose whole span falls inside the removed range has its handle retired.
+Whole-node delete is unchanged, since its own span is exactly its range.
+
 ## [0.121.0] — 2026-07-16 — fix(index): a file no longer inherits a byte-identical file's parse or node identities
 
 ### Fixed — one file could be served another file's index data

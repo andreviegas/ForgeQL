@@ -30,6 +30,52 @@
         { "fql": "DELETE NODE '${S}(1-1)' IF REV '${RS}'", "assert": { "applied": true } },
         { "fql": "FIND NODE '${S}'", "assert": { "error": true } }
       ]
+    },
+    {
+      "name": "change_to_empty_retires_the_handle",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "enforcement": "soft",
+      "steps": [
+        { "fql": "INSERT NODE FOR 'golden_twins.cpp'", "assert": { "applied": true }, "capture": { "F": "new_node_id" } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // FIRST'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // SECOND'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // THIRD'", "assert": { "applied": true } },
+        { "fql": "FIND symbols WHERE name = 'dup' IN 'golden_twins.cpp' ORDER BY line", "assert": { "row_count": 3 }, "capture": { "S": "results.1.node_id", "RS": "results.1.rev" } },
+        { "fql": "CHANGE NODE '${S}' IF REV '${RS}' WITH ''", "assert": { "applied": true } },
+        { "fql": "FIND NODE '${S}'", "assert": { "error": true } }
+      ]
+    },
+    {
+      "name": "rename_retires_the_freed_handle",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "enforcement": "soft",
+      "steps": [
+        { "fql": "INSERT NODE FOR 'golden_twins.cpp'", "assert": { "applied": true }, "capture": { "F": "new_node_id" } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // FIRST'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // SECOND'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // THIRD'", "assert": { "applied": true } },
+        { "fql": "FIND symbols WHERE name = 'dup' IN 'golden_twins.cpp' ORDER BY line", "assert": { "row_count": 3 }, "capture": { "A": "results.0.node_id", "RA": "results.0.rev" } },
+        { "fql": "CHANGE NODE '${A}' IF REV '${RA}' WITH 'void renamed_dup() {}'", "assert": { "applied": true } },
+        { "fql": "FIND NODE '${A}'", "assert": { "error": true } }
+      ]
+    },
+    {
+      "name": "undo_restores_the_deleted_handle",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "enforcement": "soft",
+      "steps": [
+        { "fql": "INSERT NODE FOR 'golden_twins.cpp'", "assert": { "applied": true }, "capture": { "F": "new_node_id" } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // FIRST'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // SECOND'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // THIRD'", "assert": { "applied": true } },
+        { "fql": "FIND symbols WHERE name = 'dup' IN 'golden_twins.cpp' ORDER BY line", "assert": { "row_count": 3 }, "capture": { "S": "results.1.node_id", "RS": "results.1.rev" } },
+        { "fql": "DELETE NODE '${S}' IF REV '${RS}'", "assert": { "applied": true } },
+        { "fql": "UNDO", "assert": { "applied": true } },
+        { "fql": "FIND NODE '${S}'", "assert": { "field": { "type": "find_node" } } }
+      ]
     }
   ]
 }
