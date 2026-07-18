@@ -2364,6 +2364,7 @@ fn query_logger_creates_csv_with_header() {
         branches: vec![],
         symbols_indexed: None,
         resumed: false,
+        base_commit: None,
         message: Some("ok".to_string()),
     });
     logger.log(
@@ -2408,6 +2409,7 @@ fn query_logger_appends_multiple_rows() {
         branches: vec![],
         symbols_indexed: None,
         resumed: false,
+        base_commit: None,
         message: Some("ok".to_string()),
     });
 
@@ -2525,6 +2527,7 @@ fn query_logger_session_column_strips_source() {
         branches: vec![],
         symbols_indexed: None,
         resumed: false,
+        base_commit: None,
         message: Some("ok".to_string()),
     });
 

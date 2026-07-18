@@ -343,6 +343,9 @@ impl fmt::Display for SourceOpResult {
         if self.resumed {
             write!(formatter, "  (resumed)")?;
         }
+        if let Some(ref base) = self.base_commit {
+            write!(formatter, "  (base {base})")?;
+        }
         writeln!(formatter)?;
         if let Some(ref message) = self.message {
             writeln!(formatter, "{message}")?;

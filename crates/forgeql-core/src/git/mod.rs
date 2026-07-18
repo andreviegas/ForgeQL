@@ -30,6 +30,19 @@ pub fn branch_head(repo_path: &Path, branch: &str) -> Option<String> {
     Some(commit.id().to_string())
 }
 
+/// Resolve a USE base token to its full commit hash.
+///
+/// Accepts a branch name or commit-ish, resolving it against the bare repo and
+/// returning `None` if it does not resolve. Lets a resumed session report the
+/// same base a fresh session gets from `worktree::create`.
+#[must_use]
+pub fn resolve_base_commit(repo_path: &Path, rev: &str) -> Option<String> {
+    let repo = git2::Repository::open_bare(repo_path).ok()?;
+    worktree::resolve_commit(&repo, rev)
+        .ok()
+        .map(|commit| commit.id().to_string())
+}
+
 /// Open the git repository containing `workspace_root`.
 ///
 /// # Errors

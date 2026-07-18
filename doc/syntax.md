@@ -63,6 +63,7 @@ CREATE SOURCE 'name' FROM 'url'
 REFRESH SOURCE 'name'
 
 USE source_name.branch AS 'alias'
+USE source_name.<commit-hash> AS 'alias'   -- base the session on an immutable commit (7-40 hex chars)
 
 SHOW SOURCES
 
@@ -70,6 +71,12 @@ SHOW BRANCHES
 
 SHOW VERSION
 ```
+
+`USE` bases a session on a branch head or, with a 7-40 character hex token in the
+branch position, directly on a commit: a local branch of that name is used if one
+exists, otherwise the token is resolved as a commit. Every `USE` response reports
+the `base_commit` it resolved to (the full hash), so a session can be handed to
+another agent by hex and that agent can confirm the exact commit it based on.
 
 `source_name` is an unquoted identifier that may contain hyphens (e.g. `pisco-code`).
 `branch` is an unquoted identifier that may contain hyphens (e.g. `main`, `v1_3_0`, `line-budget`).

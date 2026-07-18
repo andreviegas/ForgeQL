@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.123.0] — 2026-07-19 — feat(session): base a session on a commit, not only a branch
+
+### Added — `USE source.<commit-hash>` and the resolved base in every USE response
+
+`USE` now accepts a commit hash where it previously accepted only a branch
+name: `USE source.<commit-hash> AS 'alias'` bases a session on that immutable
+commit. The branch position accepts a 7–40 character hex token; resolution
+tries a local branch of that name first and otherwise resolves the token as a
+commit, so an existing branch always wins and a bare hash resolves when no such
+branch exists.
+
+Every `USE` response — for both the branch and the commit form — now reports
+the `base_commit` it resolved to (the full commit hash), so a second session
+can confirm exactly which commit it was based on.
+
 ## [0.122.0] — 2026-07-18 — fix(mutations): every removal form now retires the freed handle
 
 ### Added — JSON query results now carry `found_rev`

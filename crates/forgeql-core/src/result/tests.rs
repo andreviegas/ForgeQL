@@ -273,6 +273,7 @@ fn source_op_result_round_trips_through_json() {
         branches: vec!["main".to_string(), "develop".to_string()],
         symbols_indexed: Some(668),
         resumed: false,
+        base_commit: None,
         message: None,
     });
 
@@ -607,6 +608,7 @@ fn source_lines_count_zero_for_source_op_result() {
         branches: vec![],
         symbols_indexed: None,
         resumed: false,
+        base_commit: None,
         message: None,
     });
     assert_eq!(r.source_lines_count(), 0);

@@ -729,6 +729,11 @@ pub struct SourceOpResult {
     /// Human-readable status message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Base commit the session was created on (USE only) - the resolved hash a
+    /// branch name or `<commit-hex>` peeled to, so a stacking agent can confirm
+    /// exactly what it based on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
 }
 
 // -----------------------------------------------------------------------

@@ -224,6 +224,32 @@ fn parse_use_source_with_as() {
 }
 
 #[test]
+fn parse_use_source_commit_hash_branch() {
+    // Digit-led commit hash — unparseable before commit-base support was added.
+    let ops = parse("USE forgeql-pub.594cc8b AS 'review'").unwrap();
+    match &ops[0] {
+        ForgeQLIR::UseSource {
+            source,
+            branch,
+            as_branch,
+        } => {
+            assert_eq!(source, "forgeql-pub");
+            assert_eq!(branch, "594cc8b");
+            assert_eq!(as_branch, "review");
+        }
+        _ => panic!("wrong variant for commit-hash branch"),
+    }
+    // A full 40-char hash parses too.
+    let ops2 = parse("USE forgeql-pub.0c7a0fb14ea282d260b1b2af035c8c55a174e437 AS 'r2'").unwrap();
+    match &ops2[0] {
+        ForgeQLIR::UseSource { branch, .. } => {
+            assert_eq!(branch, "0c7a0fb14ea282d260b1b2af035c8c55a174e437");
+        }
+        _ => panic!("wrong variant for full-hash branch"),
+    }
+}
+
+#[test]
 fn parse_show_sources() {
     let ops = parse("SHOW SOURCES").unwrap();
     assert!(matches!(ops[0], ForgeQLIR::ShowSources));

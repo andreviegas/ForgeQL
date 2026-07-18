@@ -241,6 +241,7 @@ mod tests {
             branches: vec![],
             symbols_indexed: None,
             resumed: false,
+            base_commit: None,
             message: None,
         })
     }

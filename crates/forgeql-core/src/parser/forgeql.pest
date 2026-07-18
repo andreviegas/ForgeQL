@@ -183,7 +183,14 @@ vacuum_apply  = { "APPLY" }
 /// `USE pisco-code.main AS 'agent/refactor-signal-api'`
 /// Source names allow hyphens; AS target is string_literal to allow '/' in branch names.
 /// Note: AS 'branch-name' is MANDATORY — USE without AS is a parse error.
-use_stmt = { "USE" ~ source_name ~ "." ~ source_name ~ "AS" ~ any_value }
+/// Branch position of USE: a normal branch name (`source_name`) OR a bare
+/// commit hash (7-40 hex chars). Branch names cannot start with a digit, so a
+/// digit-led hash is unambiguous; an alpha-led token that also looks like a
+/// hash is still resolved branch-first by the engine. The trailing negative
+/// lookahead stops a hash from swallowing the head of a longer branch name.
+commit_hash = @{ ASCII_HEX_DIGIT{7,40} ~ !(ASCII_ALPHANUMERIC | "_" | "-") }
+branch_ref  = @{ commit_hash | source_name }
+use_stmt = { "USE" ~ source_name ~ "." ~ branch_ref ~ "AS" ~ any_value }
 
 show_sources_stmt  = { "SHOW" ~ "SOURCES" }
 show_branches_stmt = { "SHOW" ~ "BRANCHES" }

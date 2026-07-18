@@ -29,6 +29,8 @@ pub struct WorktreeInfo {
     pub branch: Option<String>,
     /// Whether the worktree has been locked via `git worktree lock`.
     pub is_locked: bool,
+    /// Full hash of the commit the session branch was born at (USE base).
+    pub base_commit: Option<String>,
 }
 
 // -----------------------------------------------------------------------
@@ -70,10 +72,7 @@ pub fn create(
     // checked out" in another worktree.
     let session_branch_name =
         custom_branch.map_or_else(|| format!("forgeql/{name}"), str::to_string);
-    let origin_commit = repo
-        .find_branch(branch, BranchType::Local)?
-        .into_reference()
-        .peel_to_commit()?;
+    let origin_commit = resolve_commit(&repo, branch)?;
 
     // If the branch already exists (e.g. server restarted and the previous
     // session's branch was never cleaned up), reuse it instead of failing.
@@ -121,6 +120,7 @@ pub fn create(
             name: name.to_string(),
             path: worktree_path.to_path_buf(),
             branch: Some(branch.to_string()),
+            base_commit: Some(origin_commit.id().to_string()),
             is_locked: false,
         });
     }
@@ -152,8 +152,31 @@ pub fn create(
         name: name.to_string(),
         path: worktree_path.to_path_buf(),
         branch: Some(branch.to_string()), // conceptual branch (what the user requested)
+        base_commit: Some(origin_commit.id().to_string()),
         is_locked: false,
     })
+}
+
+/// Resolve a USE base token to a commit.
+///
+/// A local branch of that name wins; otherwise the token is treated as a
+/// revision - a commit hash (full or abbreviated), tag, or any
+/// `revparse_single` input - and peeled to a commit. This lets
+/// `USE source.<commit-hash> AS '...'` base a session directly on an immutable
+/// commit, not only on a branch head.
+///
+/// # Errors
+/// Returns an error if `rev` is neither a local branch nor a resolvable commit.
+pub fn resolve_commit<'r>(repo: &'r Repository, rev: &str) -> Result<git2::Commit<'r>> {
+    if let Ok(branch) = repo.find_branch(rev, BranchType::Local) {
+        return Ok(branch.into_reference().peel_to_commit()?);
+    }
+    let object = repo.revparse_single(rev).map_err(|e| {
+        anyhow::anyhow!("USE base '{rev}' is neither a local branch nor a resolvable commit: {e}")
+    })?;
+    object
+        .peel_to_commit()
+        .map_err(|e| anyhow::anyhow!("USE base '{rev}' resolved to a non-commit object: {e}"))
 }
 
 /// List all worktrees in the repository at `repo_path`.
@@ -183,6 +206,7 @@ pub fn list(repo_path: &Path) -> Result<Vec<WorktreeInfo>> {
             path,
             branch,
             is_locked,
+            base_commit: None,
         });
     }
 
@@ -595,6 +619,47 @@ mod tests {
         assert!(
             repo.find_branch(session_branch, BranchType::Local).is_err(),
             "remove_with_branch must delete the backing branch, not orphan it"
+        );
+    }
+
+    #[test]
+    fn commit_based_session_creates_and_tears_down_cleanly() {
+        let tmp = tempdir().unwrap();
+        let bare = make_bare_repo(tmp.path());
+        let branch = default_branch(&bare);
+
+        // Resolve the commit the branch points at, then base the session on that
+        // hash directly (as `USE source.<commit-hash>` does) rather than on a name.
+        let repo = Repository::open_bare(&bare).unwrap();
+        let base_oid = repo
+            .find_branch(&branch, BranchType::Local)
+            .unwrap()
+            .into_reference()
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string();
+        drop(repo);
+
+        let wt_name = "bare.commit-x";
+        let wt_path = tmp.path().join(wt_name);
+        let session_branch = format!("fql/__commit__/{base_oid}/x");
+
+        let info = create(&bare, wt_name, &base_oid, &wt_path, Some(&session_branch)).unwrap();
+        assert_eq!(
+            info.base_commit.as_deref(),
+            Some(base_oid.as_str()),
+            "a commit-based session must report the commit it resolved"
+        );
+        assert!(wt_path.exists(), "worktree dir must be created");
+
+        remove_with_branch(&bare, &wt_path, wt_name, Some(&session_branch)).unwrap();
+        assert!(!wt_path.exists(), "worktree dir must be removed");
+        let repo = Repository::open_bare(&bare).unwrap();
+        assert!(
+            repo.find_branch(&session_branch, BranchType::Local)
+                .is_err(),
+            "teardown must delete the hex-based session branch, not orphan it"
         );
     }
 

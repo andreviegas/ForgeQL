@@ -28,6 +28,7 @@ impl ForgeQLEngine {
                 branches,
                 symbols_indexed: None,
                 resumed: true,
+                base_commit: None,
                 message: Some("source already registered".to_string()),
             }));
         }
@@ -87,6 +88,7 @@ impl ForgeQLEngine {
             branches,
             symbols_indexed: None,
             resumed: already_on_disk,
+            base_commit: None,
             message: template_msg,
         }))
     }
@@ -140,6 +142,7 @@ impl ForgeQLEngine {
             branches,
             symbols_indexed: None,
             resumed: false,
+            base_commit: None,
             message: None,
         }))
     }
@@ -399,13 +402,9 @@ impl ForgeQLEngine {
         }
 
         let wt_existed = wt_path.exists();
-        drop(worktree::create(
-            &repo_path,
-            &wt_name,
-            branch,
-            &wt_path,
-            Some(&git_branch),
-        )?);
+        let base_commit =
+            worktree::create(&repo_path, &wt_name, branch, &wt_path, Some(&git_branch))?
+                .base_commit;
         // Host tooling built against the pre-user-segment layout resolves
         // worktrees/{dir}; keep a compatibility symlink there so container
         // runners and mount scripts keep working (see ensure_legacy_link).
@@ -449,7 +448,14 @@ impl ForgeQLEngine {
             session.frozen_run_steps = Some(config.run_steps);
         }
 
-        Ok(self.finalize_use_source(session, &coords, source_name, session_token, wt_existed))
+        Ok(self.finalize_use_source(
+            session,
+            &coords,
+            source_name,
+            session_token,
+            wt_existed,
+            base_commit,
+        ))
     }
 
     /// Configure columnar shadow-write on `session` when a `.forgeql.yaml` is
@@ -521,6 +527,7 @@ impl ForgeQLEngine {
         source_name: &str,
         session_token: String,
         wt_existed: bool,
+        base_commit: Option<String>,
     ) -> ForgeQLResult {
         // PhaseFT5: prefer columnar stats; fall back to legacy table.
         let symbols_indexed = session.engine().index_stats().map_or_else(
@@ -544,6 +551,7 @@ impl ForgeQLEngine {
             branches: Vec::new(),
             symbols_indexed: Some(symbols_indexed),
             resumed: wt_existed,
+            base_commit,
             message: if wt_existed {
                 Some(format!(
                     "resumed existing worktree for {} — uncommitted changes preserved",
@@ -618,6 +626,10 @@ impl ForgeQLEngine {
                 None
             }
         };
+        let base_commit = self
+            .registry
+            .get(source_name)
+            .and_then(|src| crate::git::resolve_base_commit(src.path(), branch));
         match resume_outcome {
             Some((id, Some(symbols_indexed))) => {
                 Ok(Some(ForgeQLResult::SourceOp(SourceOpResult {
@@ -627,6 +639,7 @@ impl ForgeQLEngine {
                     branches: Vec::new(),
                     symbols_indexed: Some(symbols_indexed),
                     resumed: true,
+                    base_commit,
                     message: Some(format!(
                         "resumed in-memory session for {}",
                         coords.git_branch()
@@ -759,6 +772,7 @@ impl ForgeQLEngine {
             branches,
             symbols_indexed: None,
             resumed: false,
+            base_commit: None,
             message: None,
         }))
     }
@@ -774,6 +788,7 @@ impl ForgeQLEngine {
             branches: Vec::new(),
             symbols_indexed: None,
             resumed: false,
+            base_commit: None,
             message: Some(env!("CARGO_PKG_VERSION").to_string()),
         })
     }
