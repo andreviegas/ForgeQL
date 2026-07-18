@@ -267,6 +267,16 @@ underneath may have moved. A rev is the SHA-256 of the node's **whole span**, so
 an edit to any *child* changes the enclosing node's rev too. Nothing else can tell
 you that the node you remember is not the node that is there.
 
+**When a node is removed, its handle is retired — it never transfers to a
+look-alike.** Deleting a node, emptying it with `CHANGE … WITH ''`, blanking it
+in a `CHANGE NODES FOUND` sweep, or moving it out of a file all free that node's
+ordinal. On the reindex that follows, the freed handle is retired rather than
+reassigned to a surviving sibling — so a stale handle to a removed construct
+fails loudly with `node_not_found` instead of quietly resolving to a look-alike.
+This is what upholds the guarantee above between two byte-identical siblings:
+they share a rev, so `IF REV` alone cannot tell them apart, and only retiring the
+removed one keeps its handle from silently coming to mean the survivor.
+
 A stale rev is refused with `rev_mismatch`, which hands back the node's current
 rev, line range, and source — enough to re-target without another read.
 
@@ -307,6 +317,11 @@ looked — the set-level extension of the per-node `IF REV` contract. It is re-d
 members at mutation time, so a rev cached at FIND time proves nothing about now. Unlike a
 directory's membership rev, it covers **content** as well, because `CHANGE NODES FOUND` edits
 content.
+
+The master rev is reported as `found_rev`: a top-level `found_rev` field in
+`format=JSON`, and the `found_rev` metadata row in the default CSV. A FIND that
+armed no set — a `GROUP BY` aggregate, or a result truncated by its `LIMIT` —
+carries no `found_rev`, and every FOUND verb then refuses.
 
 Every member is mutated in **one plan**: one boundary diff, one `UNDO` step, never half-applied.
 
