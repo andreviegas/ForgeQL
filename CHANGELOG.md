@@ -6,6 +6,14 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — `CHANGE ... WITH ''` now retires the emptied construct's handle
+
+Emptying a construct's span with an empty replacement removes it, but its
+node handle stayed alive, and a byte-identical sibling re-claimed the emptied
+construct's ordinal on the reindex — so the dead handle silently repointed to
+the sibling. `CHANGE ... WITH ''` is the delete form of CHANGE, so it now
+retires handles by the same removed-range rule as a delete.
+
 ### Fixed — deleting by offset or line range now retires the deleted handle
 
 Deleting a construct by a line offset or a line range removed its bytes but

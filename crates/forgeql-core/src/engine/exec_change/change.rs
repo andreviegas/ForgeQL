@@ -46,6 +46,16 @@ impl ForgeQLEngine {
             }
             require_path_rev("CHANGE", node_id, &kind, if_rev)?;
         }
+
+        // `CHANGE ... WITH ''` empties the addressed span, which removes the
+        // construct — exactly like deleting it (WITH '' is the delete form of
+        // CHANGE). Retire the handle of every construct fully inside the
+        // replaced range, or a byte-identical sibling re-claims the emptied
+        // construct's ordinal on the reindex and its dead handle silently
+        // repoints to that sibling.
+        if content.is_empty() {
+            self.stage_removed_span(session_id, &rel_path, start, end)?;
+        }
         let ir = ForgeQLIR::ChangeContent {
             files: vec![rel_path.clone()],
             target: ChangeTarget::Lines {
@@ -55,7 +65,18 @@ impl ForgeQLEngine {
             },
             clauses: crate::ir::Clauses::default(),
         };
-        let mut result = self.exec_mutation(session_id, &ir, false)?;
+        let result = self.exec_mutation(session_id, &ir, false);
+        // If the mutation failed, no reindex consumed the tombstones a
+        // `WITH ''` change may have staged — drop them, or the next successful
+        // reindex on this file would wrongly retire a still-present node's
+        // ordinal (mirrors the guard in exec_delete_node).
+        if result.is_err()
+            && let Ok(sid) = require_session_id(session_id)
+            && let Some(session) = self.sessions.get_mut(sid)
+        {
+            session.pending_tombstones.clear();
+        }
+        let mut result = result?;
         // Re-resolve by the base node's start line (not its prior id) so the
         // caller learns the current handle even when the edit changed the node's
         // content_hash and the remapper assigned it a new ordinal.
