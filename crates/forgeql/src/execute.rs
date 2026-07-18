@@ -147,7 +147,12 @@ pub(crate) fn execute_and_print(
             Ok(result) => {
                 let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
                 update_session_from_result(session, op, &result, &mut log_source);
-                let output = format_result(&result, format);
+                let mut output = format_result(&result, format);
+                if let Some(coach) = engine.take_coach() {
+                    output.push('\n');
+                    output.push_str("coach: ");
+                    output.push_str(&coach);
+                }
                 if let Some(ref mut l) = log {
                     l.log(
                         source_text,

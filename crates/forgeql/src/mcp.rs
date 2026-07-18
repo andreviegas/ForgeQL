@@ -278,6 +278,7 @@ async fn exec_engine(
         Option<forgeql_core::budget::BudgetSnapshot>,
         Option<std::path::PathBuf>,
         usize,
+        Option<String>,
     ),
     ErrorData,
 > {
@@ -315,7 +316,7 @@ async fn exec_engine(
     // A pending VERIFY/RUN runs on the background job pool: release the engine
     // lock while waiting so a long gate never freezes other engine users, then
     // fold the outcome (and commit-gate bookkeeping) back in.
-    let (guard, result) = match result {
+    let (mut guard, result) = match result {
         ForgeQLResult::PendingExec(pending) => {
             let registry = guard.jobs_handle();
             drop(guard);
@@ -350,8 +351,9 @@ async fn exec_engine(
         |mk| guard.session_inline_cap(mk),
     );
 
+    let coach_hint = guard.take_coach();
     drop(guard);
-    Ok((result, budget_snap, worktree, inline_cap))
+    Ok((result, budget_snap, worktree, inline_cap, coach_hint))
 }
 
 /// Apply the `SHOW MORE` buffering to a rendered CSV output when the result
@@ -426,7 +428,7 @@ impl ForgeQlMcp {
         let mut outputs: Vec<String> = Vec::with_capacity(ops.len());
         for (source_text, op) in &ops {
             let t0 = std::time::Instant::now();
-            let (result, budget_snap, worktree, inline_cap) =
+            let (result, budget_snap, worktree, inline_cap, coach_hint) =
                 match exec_engine(&self.engine, user_id, params.session_id.as_deref(), op).await {
                     Ok(parts) => parts,
                     // Structured engine rejections are tool results the agent
@@ -478,6 +480,10 @@ impl ForgeQlMcp {
                 .as_ref()
                 .map(forgeql_core::budget::BudgetSnapshot::fixed_status_line);
             let output = append_meta(&output, budget_line.as_deref());
+            let output = match coach_hint {
+                Some(c) => format!("{output}\ncoach: {c}"),
+                None => output,
+            };
             self.log_query(
                 source_text,
                 &result,

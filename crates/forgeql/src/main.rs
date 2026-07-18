@@ -78,8 +78,16 @@ async fn main() -> Result<()> {
     languages.extend(text_languages());
     let lang_registry = Arc::new(LanguageRegistry::new(languages));
 
-    let engine = ForgeQLEngine::new(data_dir.clone(), lang_registry)
+    let mut engine = ForgeQLEngine::new(data_dir.clone(), lang_registry)
         .with_context(|| format!("initialising engine with data_dir '{}'", data_dir.display()))?;
+
+    // Enable the onboarding coach unless disabled via FORGEQL_COACH. Injected
+    // at the product entry point — before mode dispatch, so REPL, pipe,
+    // one-shot, and MCP stdio all inherit it — so library embedders and the
+    // test suites, which never call this, stay coach-free and deterministic.
+    if let Some(coach) = forgeql_coach::from_env(data_dir.clone()) {
+        engine.set_coach(coach);
+    }
 
     let logger = cli.log_queries.then(|| QueryLogger::new(data_dir.clone()));
 

@@ -293,6 +293,7 @@ async fn execute_fql(
         let result = guard
             .execute(user_id, coords.as_ref(), op)
             .map_err(|e| e.to_string())?;
+        let coach_hint = guard.take_coach();
         // A pending VERIFY/RUN runs on the background job pool: release the
         // engine lock while waiting so a long gate never blocks other tenants,
         // then fold the outcome (and commit-gate bookkeeping) back in.
@@ -336,6 +337,10 @@ async fn execute_fql(
             logger.log(text, &result, &rendered, elapsed, &source, sid, None);
         }
         drop(guard);
+        let rendered = match coach_hint {
+            Some(c) => format!("{rendered}\ncoach: {c}"),
+            None => rendered,
+        };
         outputs.push(rendered);
     }
 

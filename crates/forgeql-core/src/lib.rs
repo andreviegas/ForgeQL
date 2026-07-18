@@ -22,6 +22,7 @@
 pub mod ast;
 pub mod auth;
 pub mod budget;
+pub mod coach_api;
 pub mod compact;
 pub mod config;
 pub mod debug_log;

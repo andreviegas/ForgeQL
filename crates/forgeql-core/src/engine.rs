@@ -39,8 +39,9 @@ use tracing::{info, warn};
 
 use crate::{
     ast::lang::LanguageRegistry,
+    coach_api::{Clause, Coach, CommandEvent, ErrKind, Outcome, Verb},
     git::source::SourceRegistry,
-    ir::ForgeQLIR,
+    ir::{Clauses, ForgeQLIR},
     result::ForgeQLResult,
     session::{Session, SessionCoords},
 };
@@ -145,6 +146,13 @@ pub struct ForgeQLEngine {
     /// Gated verify jobs whose completion has not yet been folded into their
     /// session's `satisfied_gates` — see `reconcile_gate_jobs`.
     pending_gate_jobs: Vec<PendingGateJob>,
+    /// Optional onboarding coach — observes every command and may return a
+    /// hint. `None` unless a product entry point injects one via `set_coach`;
+    /// the engine's own constructor never builds one.
+    coach: Option<Box<dyn Coach>>,
+    /// Hint the coach produced for the current command, taken by the transport
+    /// via `take_coach` and delivered on the outbound response.
+    pending_coach: Option<String>,
 }
 
 /// A gated verify step running as a background job, awaiting reconciliation
@@ -218,6 +226,8 @@ impl ForgeQLEngine {
             lang_registry,
             jobs: Arc::new(crate::jobs::JobRegistry::from_env()),
             pending_gate_jobs: Vec::new(),
+            coach: None,
+            pending_coach: None,
         };
         Ok(engine)
     }
@@ -338,7 +348,13 @@ impl ForgeQLEngine {
                 self.ensure_node_file_fresh(mk, &node_id);
             }
         }
-        let mut result = self.dispatch_op(user_id, sid, op)?;
+        let dispatched = self.dispatch_op(user_id, sid, op);
+        // The coach observes both the success and the failure path before we
+        // unwrap, so an error correction can ride the error response too.
+        if self.coach.is_some() {
+            self.observe_command(coords, op, &dispatched);
+        }
+        let mut result = dispatched?;
 
         // Strip absolute worktree prefixes so results carry only relative paths.
         // This keeps MCP JSON compact and avoids leaking internal filesystem layout.
@@ -773,5 +789,170 @@ impl ForgeQLEngine {
     #[allow(clippy::missing_const_for_fn)] // PathBuf::as_path is not const
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// Inject an onboarding coach. Product entry points call this after
+    /// construction; `ForgeQLEngine::new` never builds one, so library
+    /// embedders and the test suites stay coach-free and deterministic.
+    pub fn set_coach(&mut self, coach: Box<dyn Coach>) {
+        self.coach = Some(coach);
+    }
+
+    /// Take the hint the coach produced for the most recent command, if any.
+    /// Transports call this after `execute` and deliver it on the response.
+    #[must_use]
+    pub const fn take_coach(&mut self) -> Option<String> {
+        self.pending_coach.take()
+    }
+
+    /// Hand the just-executed command to the coach — on both the success and
+    /// the failure path — stashing any hint it returns for the transport.
+    fn observe_command(
+        &mut self,
+        coords: Option<&SessionCoords>,
+        op: &ForgeQLIR,
+        dispatched: &Result<ForgeQLResult>,
+    ) {
+        let Some(coords) = coords else {
+            return;
+        };
+        let outcome = match dispatched {
+            Ok(result) => Outcome::Ok {
+                capped: result.output_capped(),
+                truncated: result.output_truncated(),
+            },
+            Err(err) => Outcome::Err(Self::classify_error(&err.to_string())),
+        };
+        let ev = CommandEvent {
+            coords,
+            verb: Self::verb_of(op),
+            clauses: Self::clauses_of(op),
+            outcome,
+            cmd_index: self.commands_served,
+        };
+        let produced = self.coach.as_mut().and_then(|c| c.observe(&ev));
+        if let Some(hint) = produced {
+            self.pending_coach = Some(hint.text);
+        }
+    }
+
+    /// Map an op to its coarse coach verb.
+    const fn verb_of(op: &ForgeQLIR) -> Verb {
+        match op {
+            ForgeQLIR::UseSource { .. } => Verb::Use,
+            ForgeQLIR::FindSymbols { .. }
+            | ForgeQLIR::FindUsages { .. }
+            | ForgeQLIR::FindFiles { .. }
+            | ForgeQLIR::FindNode { .. } => Verb::Find,
+            ForgeQLIR::ShowSources
+            | ForgeQLIR::ShowBranches
+            | ForgeQLIR::ShowVersion
+            | ForgeQLIR::ShowStats { .. }
+            | ForgeQLIR::ShowNode { .. }
+            | ForgeQLIR::ShowContext { .. }
+            | ForgeQLIR::ShowSignature { .. }
+            | ForgeQLIR::ShowOutline { .. }
+            | ForgeQLIR::ShowMembers { .. }
+            | ForgeQLIR::ShowBody { .. }
+            | ForgeQLIR::ShowCallees { .. }
+            | ForgeQLIR::ShowLines { .. }
+            | ForgeQLIR::ShowMore { .. }
+            | ForgeQLIR::ShowDiff { .. } => Verb::Show,
+            ForgeQLIR::ChangeNode { .. }
+            | ForgeQLIR::ChangeNodeMatching { .. }
+            | ForgeQLIR::ChangeNodesFound { .. }
+            | ForgeQLIR::ChangeContent { .. } => Verb::Change,
+            ForgeQLIR::InsertNode { .. } | ForgeQLIR::InsertNodeFor { .. } => Verb::Insert,
+            ForgeQLIR::DeleteNode { .. } | ForgeQLIR::DeleteNodesFound { .. } => Verb::Delete,
+            ForgeQLIR::MoveNode { .. }
+            | ForgeQLIR::MoveNodeTo { .. }
+            | ForgeQLIR::MoveNodesFoundTo { .. }
+            | ForgeQLIR::MoveLines { .. } => Verb::Move,
+            ForgeQLIR::CopyNodeTo { .. }
+            | ForgeQLIR::CopyNodesFoundTo { .. }
+            | ForgeQLIR::CopyLines { .. } => Verb::Copy,
+            ForgeQLIR::BeginTransaction { .. } => Verb::Begin,
+            ForgeQLIR::Commit { .. } => Verb::Commit,
+            ForgeQLIR::Rollback { .. } => Verb::Rollback,
+            ForgeQLIR::VerifyBuild { .. } => Verb::Verify,
+            ForgeQLIR::JobStart { .. } | ForgeQLIR::JobStatus { .. } | ForgeQLIR::JobList => {
+                Verb::Job
+            }
+            ForgeQLIR::Undo { .. } => Verb::Undo,
+            _ => Verb::Other,
+        }
+    }
+
+    /// Presence of read-verb clauses (WHERE, IN, LIMIT, DEPTH, …). Mutation
+    /// clauses are added when the curriculum begins consuming them.
+    fn clauses_of(op: &ForgeQLIR) -> Vec<Clause> {
+        let (ForgeQLIR::FindSymbols { clauses, .. }
+        | ForgeQLIR::FindUsages { clauses, .. }
+        | ForgeQLIR::FindFiles { clauses, .. }
+        | ForgeQLIR::ShowNode { clauses, .. }
+        | ForgeQLIR::ShowContext { clauses, .. }
+        | ForgeQLIR::ShowSignature { clauses, .. }
+        | ForgeQLIR::ShowOutline { clauses, .. }
+        | ForgeQLIR::ShowMembers { clauses, .. }
+        | ForgeQLIR::ShowBody { clauses, .. }
+        | ForgeQLIR::ShowCallees { clauses, .. }
+        | ForgeQLIR::ShowLines { clauses, .. }
+        | ForgeQLIR::ShowMore { clauses, .. }) = op
+        else {
+            return Vec::new();
+        };
+        Self::clauses_present(clauses)
+    }
+
+    /// Translate a populated `Clauses` into presence flags for the coach.
+    fn clauses_present(c: &Clauses) -> Vec<Clause> {
+        let mut v = Vec::new();
+        if !c.where_predicates.is_empty() {
+            v.push(Clause::Where);
+        }
+        if !c.having_predicates.is_empty() {
+            v.push(Clause::Having);
+        }
+        if c.in_glob.is_some() {
+            v.push(Clause::In);
+        }
+        if !c.exclude_globs.is_empty() {
+            v.push(Clause::Exclude);
+        }
+        if c.order_by.is_some() {
+            v.push(Clause::OrderBy);
+        }
+        if c.group_by.is_some() {
+            v.push(Clause::GroupBy);
+        }
+        if c.limit.is_some() {
+            v.push(Clause::Limit);
+        }
+        if c.offset.is_some() {
+            v.push(Clause::Offset);
+        }
+        if c.depth.is_some() {
+            v.push(Clause::Depth);
+        }
+        v
+    }
+
+    /// Classify a type-erased engine error into the coach taxonomy. Parse
+    /// failures never reach here — the transport rejects them before `execute`.
+    fn classify_error(msg: &str) -> ErrKind {
+        if msg.contains("rev_mismatch") {
+            return ErrKind::RevMismatch;
+        }
+        if msg.contains("node_not_found") {
+            return ErrKind::NodeNotFound;
+        }
+        let lower = msg.to_ascii_lowercase();
+        if lower.contains("no active session") || lower.contains("no session") {
+            return ErrKind::NoSession;
+        }
+        if lower.contains("without a limit") || lower.contains("no limit") {
+            return ErrKind::FoundRefusedNoLimit;
+        }
+        ErrKind::Other
     }
 }

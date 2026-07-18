@@ -1111,6 +1111,30 @@ impl ForgeQLResult {
         }
     }
 
+    /// Whether the output hit the implicit line cap — the agent saw only part
+    /// of the entity's lines (`SHOW`).
+    #[must_use]
+    pub const fn output_capped(&self) -> bool {
+        matches!(
+            self,
+            Self::Show(ShowResult {
+                total_lines: Some(_),
+                ..
+            })
+        )
+    }
+
+    /// Whether a result set was returned only in part — more rows matched than
+    /// were shown (a `FIND` capped by `LIMIT`).
+    #[must_use]
+    pub const fn output_truncated(&self) -> bool {
+        if let Self::Query(q) = self {
+            q.total > q.results.len()
+        } else {
+            false
+        }
+    }
+
     /// Inject a hint string into the result.
     ///
     /// For `Show` results, appends to the existing `hint` field.

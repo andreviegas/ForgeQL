@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.128.0] — 2026-07-18 — feat: introduce an optional onboarding coach
+
+### Added — an optional, decoupled onboarding coach
+
+ForgeQL can now carry short, just-in-time protocol hints alongside command
+responses, to help a caller become fluent without reading the syntax reference
+up front. The coach lives in a separate crate behind a small trait the engine
+owns, so the core takes on no dependency on it, and library embedders and the
+test suites run without it.
+
+- **Enabled by default; opt out with `FORGEQL_COACH`.** Set `FORGEQL_COACH` to
+  `0`, `off`, `false`, or `no` to disable it entirely, which leaves the command
+  path untouched.
+- **Per-learner state persists across restarts.** The coach keeps a small
+  per-branch cookie under `<data-dir>/coach/`, updated as commands run, so what
+  it has taught survives a server restart.
+- **Delivery.** When the coach emits a hint it rides the response as a trailing
+  `coach:` line (CSV) or field (JSON), at most one per response. In this release
+  the coach observes every command and records state but stays silent in normal
+  operation; a diagnostic mode (`FORGEQL_COACH_DEBUG`) surfaces its bookkeeping.
+
 ## [0.127.0] — 2026-07-19 — fix(storage): columnar test sessions served an empty index; WHERE no longer breaks SHOW resolution
 
 ### Fixed — the columnar test helper silently produced an empty index

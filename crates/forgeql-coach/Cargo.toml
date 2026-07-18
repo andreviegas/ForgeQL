@@ -1,0 +1,15 @@
+[package]
+name        = "forgeql-coach"
+description = "Adaptive onboarding coach for ForgeQL — optional, decoupled add-on"
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+
+[lints]
+workspace = true
+
+[dependencies]
+forgeql-core = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
