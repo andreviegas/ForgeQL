@@ -40,4 +40,22 @@ impl ForgeQLEngine {
         }
         Ok(())
     }
+
+    /// Drop any tombstones a verb staged for a mutation that then failed. A
+    /// failed mutation runs no reindex, so nothing consumed them; left in place
+    /// they would wrongly retire a still-present node's ordinal on the next
+    /// reindex of the same file. The mutation executors call this, so no verb
+    /// has to remember to clean up after a staging it did.
+    pub(in crate::engine) fn discard_tombstones_if_err<T>(
+        &mut self,
+        session_id: Option<&str>,
+        result: &Result<T>,
+    ) {
+        if result.is_err()
+            && let Ok(sid) = require_session_id(session_id)
+            && let Some(session) = self.sessions.get_mut(sid)
+        {
+            session.pending_tombstones.clear();
+        }
+    }
 }

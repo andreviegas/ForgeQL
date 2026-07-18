@@ -65,6 +65,17 @@ impl ForgeQLEngine {
     pub(super) fn apply_plan(
         &mut self,
         sid: &str,
+        plan: TransformPlan,
+        op_name: &str,
+        line_range: Option<(usize, usize)>,
+    ) -> Result<ForgeQLResult> {
+        let result = self.apply_plan_inner(sid, plan, op_name, line_range);
+        self.discard_tombstones_if_err(Some(sid), &result);
+        result
+    }
+    pub(super) fn apply_plan_inner(
+        &mut self,
+        sid: &str,
         mut plan: TransformPlan,
         op_name: &str,
         line_range: Option<(usize, usize)>,

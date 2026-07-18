@@ -65,18 +65,7 @@ impl ForgeQLEngine {
             },
             clauses: crate::ir::Clauses::default(),
         };
-        let result = self.exec_mutation(session_id, &ir, false);
-        // If the mutation failed, no reindex consumed the tombstones a
-        // `WITH ''` change may have staged — drop them, or the next successful
-        // reindex on this file would wrongly retire a still-present node's
-        // ordinal (mirrors the guard in exec_delete_node).
-        if result.is_err()
-            && let Ok(sid) = require_session_id(session_id)
-            && let Some(session) = self.sessions.get_mut(sid)
-        {
-            session.pending_tombstones.clear();
-        }
-        let mut result = result?;
+        let mut result = self.exec_mutation(session_id, &ir, false)?;
         // Re-resolve by the base node's start line (not its prior id) so the
         // caller learns the current handle even when the edit changed the node's
         // content_hash and the remapper assigned it a new ordinal.

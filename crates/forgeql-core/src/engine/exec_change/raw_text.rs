@@ -19,6 +19,16 @@ impl ForgeQLEngine {
         op: &ForgeQLIR,
         gate_indexed: bool,
     ) -> Result<ForgeQLResult> {
+        let result = self.exec_mutation_inner(session_id, op, gate_indexed);
+        self.discard_tombstones_if_err(session_id, &result);
+        result
+    }
+    pub(in crate::engine) fn exec_mutation_inner(
+        &mut self,
+        session_id: Option<&str>,
+        op: &ForgeQLIR,
+        gate_indexed: bool,
+    ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
 
         let mut plan = {

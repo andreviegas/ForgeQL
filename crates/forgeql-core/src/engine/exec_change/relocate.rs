@@ -273,15 +273,7 @@ impl ForgeQLEngine {
                 .or_default()
                 .push(ordinal);
         }
-        let result = self.apply_plan(sid, plan, "move_node", None);
-        // A failed apply ran no reindex, so the staged tombstone was not
-        // consumed — drop it before it can mis-key a later edit.
-        if result.is_err()
-            && let Some(session) = self.sessions.get_mut(sid)
-        {
-            session.pending_tombstones.clear();
-        }
-        let mut result = result?;
+        let mut result = self.apply_plan(sid, plan, "move_node", None)?;
 
         // Where the payload came to rest, in the POST-move numbering. Moving a
         // node DOWN inside one file first removes it from above the anchor, so

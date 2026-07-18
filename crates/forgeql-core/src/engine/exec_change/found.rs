@@ -271,16 +271,7 @@ impl ForgeQLEngine {
         for (rel_path, start, end) in &removed_spans {
             self.stage_removed_span(session_id, rel_path, *start, *end)?;
         }
-        let result = self.apply_plan(sid, plan, "change_nodes_found", None);
-        // If the mutation failed, no reindex consumed the tombstones we staged —
-        // drop them so a later successful reindex on this file cannot wrongly
-        // retire a still-present node's ordinal (mirrors exec_change_node).
-        if result.is_err()
-            && let Some(session) = self.sessions.get_mut(sid)
-        {
-            session.pending_tombstones.clear();
-        }
-        result
+        self.apply_plan(sid, plan, "change_nodes_found", None)
     }
     /// `DELETE NODES FOUND IF REV 'master'` — unlink every member of the set.
     ///

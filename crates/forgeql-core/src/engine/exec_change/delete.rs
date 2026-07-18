@@ -61,17 +61,7 @@ impl ForgeQLEngine {
             },
             clauses: crate::ir::Clauses::default(),
         };
-        let result = self.exec_mutation(session_id, &ir, false);
-        // If the mutation failed, no reindex ran and the staged tombstone was
-        // never consumed — drop it, or it would wrongly re-key a still-present
-        // node on a later, unrelated edit to the same file.
-        if result.is_err()
-            && let Ok(sid) = require_session_id(session_id)
-            && let Some(session) = self.sessions.get_mut(sid)
-        {
-            session.pending_tombstones.clear();
-        }
-        let mut result = result?;
+        let mut result = self.exec_mutation(session_id, &ir, false)?;
         // The line-delete plumbing reuses ChangeContent, but the agent issued
         // DELETE NODE — report it under its own op name.
         if let ForgeQLResult::Mutation(ref mut m) = result {
