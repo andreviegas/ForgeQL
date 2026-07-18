@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.129.0] — 2026-07-19 — fix: self-healing rejections render consistently across transports
+
+### Fixed — parseable rejections everywhere
+
+A structured self-healing rejection — one the caller recovers from by looking
+again (`rev_mismatch`, `node_not_found`) — is meant to come back as an
+error-flagged result whose body is a JSON payload the caller parses. Two gaps
+broke that promise:
+
+- **The bulk `NODES FOUND` verbs returned opaque strings when they could not
+  proceed** — no armed FIND, a truncated FIND (so no master rev was issued), or
+  a missing `IF REV`. Each now returns a structured payload
+  (`{"error":"no_found_set" | "found_truncated" | "found_refused", …}`) carrying
+  the same recovery guidance, parseable exactly like `rev_mismatch` and
+  `node_not_found`.
+- **The HTTP server buried every rejection inside a protocol-error string.**
+  It now hands structured rejections back as error-flagged tool results — the
+  JSON payload the caller is meant to act on — matching the stdio transport.
+  Plain precondition errors (missing session, invalid arguments) remain
+  JSON-RPC errors on every transport.
+
 ## [0.128.0] — 2026-07-18 — feat: introduce an optional onboarding coach
 
 ### Added — an optional, decoupled onboarding coach

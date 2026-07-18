@@ -174,7 +174,9 @@ MOVE NODE '<src_id>' (BEFORE | AFTER) NODE '<dst_id>'  -- relocate verbatim payl
 -- FOUND — the set the previous FIND returned. FIND is the set-selection syntax;
 -- these act on every member in ONE atomic mutation (one diff, one UNDO step).
 -- A complete FIND response carries the master rev to quote here as `found_rev`;
--- a truncated one carries none, and every FOUND verb then refuses.
+-- a truncated one carries none, and every FOUND verb then refuses. Each refusal is a structured
+-- {"error":...} payload (no_found_set / found_truncated / found_refused),
+-- returned as an error-flagged tool result you parse.
 CHANGE NODES FOUND IF REV '<master>' MATCHING [WORD] 'a' WITH 'b'  -- sweep each member's span
 DELETE NODES FOUND IF REV '<master>'                    -- IF REV mandatory: it destroys
 MOVE NODES FOUND IF REV '<master>' TO 'dir/'            -- each member keeps its basename

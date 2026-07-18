@@ -343,6 +343,10 @@ Every member is mutated in **one plan**: one boundary diff, one `UNDO` step, nev
 | `DELETE`/`MOVE`/`COPY NODES FOUND` need **handles** | Usage sites are lines, not nodes — arm them with `FIND files` or `FIND symbols` |
 | `IF REV` is **mandatory** for `CHANGE`/`DELETE`/`MOVE NODES FOUND`, absent from `COPY NODES FOUND` | Destroying N things you cannot see is the one mistake the diff cannot catch afterwards; a copy creates and destroys nothing |
 
+Each refusal above comes back as a structured self-healing payload you match on
+by tag — `no_found_set`, `found_truncated`, or `found_refused` (see the `IF REV`
+self-healing payloads above) — never an opaque string.
+
 The set is written to `.forgeql-foundset` in the worktree, so it survives a server restart between
 the FIND and the mutation. It is re-gated against live revs on use, so restoring it can only
 re-offer a target — never authorise a stale one.
@@ -548,6 +552,22 @@ payload** so you can re-target without another read:
   "current_content": "…the node's current source…"
 }
 ```
+
+The bulk `NODES FOUND` verbs refuse in the same self-healing form — each returns
+a JSON object you match on by its `error` tag, carrying a `suggested_next`
+string that names the recovery:
+
+- `no_found_set` — no FIND has armed a set this session; run a FIND first.
+- `found_truncated` — the arming FIND was capped by `LIMIT`, so no master rev
+  was issued; re-run it with a `LIMIT` that covers the whole result.
+- `found_refused` — a bulk mutation ran without the mandatory `IF REV`; re-run
+  the FIND to read the master rev off its response, then quote it.
+
+A handle that resolves to nothing returns `{"error": "node_not_found", …}` in
+the same form. Over MCP — stdio and HTTP alike — every one of these structured
+rejections comes back as an error-flagged (`isError`) tool result whose text is
+the JSON payload, not a buried protocol error, so the agent parses and acts on
+it exactly like an ordinary result.
 
 ---
 

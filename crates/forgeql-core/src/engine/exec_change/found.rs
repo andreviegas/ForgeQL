@@ -49,19 +49,17 @@ impl ForgeQLEngine {
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "no FIND result is armed in this session — run FIND symbols/usages/files \
-                     first, then re-issue the FOUND command"
+                    r#"{{"error":"no_found_set","suggested_next":"no FIND result is armed in this session — run FIND symbols/usages/files first, then re-issue the FOUND command"}}"#
                 )
             })?;
 
         if !set.complete {
             bail!(
-                "the previous {} was truncated, so no master rev was issued for it — a FOUND \
-                 mutation would act on rows you were never shown. Re-run the FIND with a LIMIT \
-                 that covers the whole result (or narrower filters), then repeat this command.",
-                set.origin
+                r#"{{"error":"found_truncated","origin":"{origin}","suggested_next":"the previous {origin} was truncated, so no master rev was issued for it — a FOUND mutation would act on rows you were never shown. Re-run the FIND with a LIMIT that covers the whole result (or narrower filters), then repeat this command."}}"#,
+                origin = set.origin
             );
         }
+
         Ok(set)
     }
     /// Re-derive the master rev from the live members and compare.
@@ -486,8 +484,7 @@ impl ForgeQLEngine {
 fn require_found_rev<'a>(if_rev: Option<&'a str>, verb: &str) -> Result<&'a str> {
     if_rev.ok_or_else(|| {
         anyhow::anyhow!(
-            "{verb} NODES FOUND requires IF REV '<master rev>' — it acts on every member of the \
-             set at once. Re-run the FIND: its response carries the master rev to quote here."
+            r#"{{"error":"found_refused","verb":"{verb}","suggested_next":"{verb} NODES FOUND requires IF REV '<master rev>' — it acts on every member of the set at once. Re-run the FIND: its response carries the master rev to quote here."}}"#
         )
     })
 }

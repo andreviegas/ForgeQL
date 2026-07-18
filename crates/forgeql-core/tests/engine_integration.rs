@@ -2468,10 +2468,15 @@ fn change_nodes_found_without_find_errors() {
     let coords = SessionCoords::from_session_id(&sid).expect("valid session_id");
     let err = engine
         .execute(auth(AuthContext::Tester), Some(&coords), &ops[0])
-        .expect_err("must fail without a previous FIND");
+        .expect_err("must fail without a previous FIND")
+        .to_string();
     assert!(
-        err.to_string().contains("no FIND result is armed"),
+        err.contains("no FIND result is armed"),
         "guidance expected: {err}"
+    );
+    assert!(
+        err.contains(r#""error":"no_found_set""#),
+        "the refusal is a structured self-healing rejection: {err}"
     );
 }
 
@@ -2560,6 +2565,10 @@ fn delete_node_last_requires_if_rev() {
     assert!(
         err.contains("requires IF REV"),
         "a bulk delete must demand the gate: {err}"
+    );
+    assert!(
+        err.contains(r#""error":"found_refused""#),
+        "the refusal is a structured self-healing rejection: {err}"
     );
 }
 

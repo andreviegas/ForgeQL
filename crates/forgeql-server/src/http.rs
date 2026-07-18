@@ -212,7 +212,7 @@ async fn tools_call(state: &AppState, headers: &HeaderMap, id: &Value, req: &Val
             }
             json!({ "jsonrpc": "2.0", "id": id.clone(), "result": result })
         }
-        Err(msg) => rpc_error(id, -32603, &msg),
+        Err(msg) => error_reply(id, &msg),
     }
 }
 
@@ -240,6 +240,29 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> Value {
         "id": id.clone(),
         "error": { "code": code, "message": message },
     })
+}
+
+/// A structured self-healing rejection carries a JSON-object message the agent
+/// is meant to parse and act on (`rev_mismatch`, `node_not_found`,
+/// `found_refused`). Return it as an error-flagged tool result — mirroring the
+/// stdio transport — instead of burying the JSON inside a protocol-error
+/// string. Every other error stays a JSON-RPC error.
+fn error_reply(id: &Value, msg: &str) -> Value {
+    let trimmed = msg.trim();
+    let structured = trimmed.starts_with('{')
+        && serde_json::from_str::<Value>(trimmed).is_ok_and(|v| v.is_object());
+    if structured {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id.clone(),
+            "result": {
+                "content": [{ "type": "text", "text": trimmed }],
+                "isError": true,
+            },
+        })
+    } else {
+        rpc_error(id, -32603, msg)
+    }
 }
 
 /// Parse and execute one or more FQL statements.
@@ -422,5 +445,26 @@ mod tests {
                 .unwrap(),
             "fql"
         );
+    }
+
+    #[test]
+    fn error_reply_flags_structured_rejections_and_keeps_plain_errors_as_protocol_errors() {
+        let id = Value::from(1);
+
+        // A JSON-object payload (a self-healing rejection) becomes an
+        // error-flagged tool result the agent parses — never a buried protocol
+        // error, mirroring the stdio transport.
+        let structured = error_reply(&id, r#"{"error":"found_refused"}"#);
+        assert_eq!(structured["result"]["isError"], json!(true));
+        assert_eq!(
+            structured["result"]["content"][0]["text"],
+            json!(r#"{"error":"found_refused"}"#)
+        );
+        assert!(structured.get("error").is_none());
+
+        // A plain-string precondition error stays a JSON-RPC error.
+        let plain = error_reply(&id, "session_id required — run USE first");
+        assert_eq!(plain["error"]["code"], json!(-32603));
+        assert!(plain.get("result").is_none());
     }
 }

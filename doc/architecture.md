@@ -203,6 +203,13 @@ Sessions start with `USE source.branch AS 'alias'` and are cleaned up automatica
 
 `CREATE SOURCE`, `REFRESH SOURCE`, and `VACUUM` are intentionally blocked through stdio MCP — they must be run via the interpreter or CLI. On `forgeql-server` they additionally require an admin bearer token from the `--auth-file` token store; normal and anonymous principals can only `USE` existing sources.
 
+Structured self-healing rejections — `rev_mismatch`, `node_not_found`, and the
+bulk-`FOUND` refusals (`no_found_set`, `found_truncated`, `found_refused`) — are
+returned as error-flagged (`isError`) tool results whose text is the JSON
+payload, on both stdio and HTTP, rather than buried inside a JSON-RPC protocol
+error. Plain precondition errors (missing session, invalid arguments) remain
+JSON-RPC errors on every transport.
+
 ### Agent Guardrails
 
 The MCP layer includes two mechanisms that prevent AI agents from misusing ForgeQL:
