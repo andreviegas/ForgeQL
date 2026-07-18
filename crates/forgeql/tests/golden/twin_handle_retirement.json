@@ -49,7 +49,6 @@
       "name": "rename_retires_the_freed_handle",
       "use": "forgeql-pub.frozen",
       "mode": "rw",
-      "enforcement": "soft",
       "steps": [
         { "fql": "INSERT NODE FOR 'golden_twins.cpp'", "assert": { "applied": true }, "capture": { "F": "new_node_id" } },
         { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // FIRST'", "assert": { "applied": true } },
@@ -64,7 +63,6 @@
       "name": "undo_restores_the_deleted_handle",
       "use": "forgeql-pub.frozen",
       "mode": "rw",
-      "enforcement": "soft",
       "steps": [
         { "fql": "INSERT NODE FOR 'golden_twins.cpp'", "assert": { "applied": true }, "capture": { "F": "new_node_id" } },
         { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // FIRST'", "assert": { "applied": true } },
