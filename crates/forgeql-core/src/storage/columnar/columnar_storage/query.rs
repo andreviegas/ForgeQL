@@ -53,6 +53,16 @@ impl StorageEngine for ColumnarStorage {
         self.innermost_nodes_for_lines_impl(rel_path, root, start, end)
     }
 
+    fn root_ordinals_within(
+        &self,
+        rel_path: &str,
+        root: &Path,
+        start: usize,
+        end: usize,
+    ) -> Vec<u32> {
+        self.root_ordinals_within_impl(rel_path, root, start, end)
+    }
+
     fn find_symbols(&self, clauses: &Clauses, root: &Path) -> Result<Vec<SymbolMatch>> {
         self.find_symbols_impl(clauses, root)
     }

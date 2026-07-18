@@ -47,23 +47,11 @@ impl ForgeQLEngine {
                 .map(|content| absorb_trailing_blank_lines(&content, node_end_line))
                 .unwrap_or(node_end_line)
         };
-        // Stage a tombstone for the removed root ordinal so the reindex
-        // this delete triggers keeps a byte-identical surviving sibling on its
-        // own ordinal instead of letting it silently adopt the deleted handle.
-        // Only a whole-node delete frees an ordinal — a line-range delete
-        // (`has_offset`) keeps the node, so it must not tombstone.
-        if !has_offset
-            && let Ok((base_id, _)) = crate::node_id::split_node_offset(node_id)
-            && let Some(ordinal) = crate::node_id::ordinal_of(base_id)
-            && let Ok(sid) = require_session_id(session_id)
-            && let Some(session) = self.sessions.get_mut(sid)
-        {
-            session
-                .pending_tombstones
-                .entry(rel_path.clone().into())
-                .or_default()
-                .push(ordinal);
-        }
+        // Retire the handle of every construct whose whole span this delete
+        // removes, so a byte-identical sibling can never adopt it. Derived from
+        // the removed line range, not the verb — so the offset and line-range
+        // forms are covered too, not just the bare whole-node handle.
+        self.stage_removed_span(session_id, &rel_path, start, end)?;
         let ir = ForgeQLIR::ChangeContent {
             files: vec![rel_path],
             target: ChangeTarget::Lines {

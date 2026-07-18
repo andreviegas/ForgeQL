@@ -17,3 +17,4 @@ mod plan;
 mod raw_text;
 mod relocate;
 mod resolve;
+mod tombstones;

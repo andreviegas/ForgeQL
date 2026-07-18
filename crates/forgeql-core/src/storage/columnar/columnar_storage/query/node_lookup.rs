@@ -533,6 +533,71 @@ impl ColumnarStorage {
         );
         out
     }
+
+    /// Root-node ordinals whose whole span lies inside `[start, end]` (1-based
+    /// lines). This is what a removal over that line range must tombstone so a
+    /// byte-identical sibling cannot adopt a freed handle — the rule is derived
+    /// from the touched range, not from which verb touched it. Root-only, so a
+    /// whole-node delete (its own span == its range) tombstones exactly its own
+    /// ordinal, unchanged. Mirrors the segment pick + newline end-line rule of
+    /// `innermost_nodes_for_lines_impl`.
+    pub(super) fn root_ordinals_within_impl(
+        &self,
+        rel_path: &str,
+        root: &Path,
+        start: usize,
+        end: usize,
+    ) -> Vec<u32> {
+        let file_bytes = std::fs::read(root.join(rel_path)).unwrap_or_default();
+        let newlines: Vec<usize> = file_bytes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &b)| (b == b'\n').then_some(i))
+            .collect();
+
+        let gather = |reader: &SegmentReader| -> Vec<u32> {
+            (0..reader.row_count)
+                .filter_map(|r| {
+                    // Root nodes only: a whole-node delete frees just its own
+                    // ordinal, so range-derived staging matches that and leaves
+                    // whole-node behaviour identical.
+                    if reader.parent_ordinal_of(r) != u32::MAX {
+                        return None;
+                    }
+                    let ord = reader.ordinal_of(r)?;
+                    let node_start = reader.line_of(r) as usize;
+                    if node_start == 0 || node_start < start {
+                        return None;
+                    }
+                    let byte_end = reader.byte_end_of(r) as usize;
+                    let node_end = if byte_end == 0 {
+                        node_start
+                    } else {
+                        content_end_line(&newlines, byte_end)
+                    };
+                    (node_end <= end).then_some(ord)
+                })
+                .collect()
+        };
+
+        // Dirty (reindexed-this-session) segment first: its byte offsets match
+        // the file on disk. Otherwise the committed segment.
+        if let Some(ds) = self
+            .dirty
+            .added
+            .iter()
+            .find(|ds| ds.source_path.to_str() == Some(rel_path))
+        {
+            return gather(&ds.reader);
+        }
+        self.overlay
+            .segments()
+            .iter()
+            .position(|s| s.source_path.to_str() == Some(rel_path))
+            .and_then(|seg_idx| self.segments.get(seg_idx))
+            .map(|seg| gather(seg))
+            .unwrap_or_default()
+    }
 }
 
 /// 1-based source line of a node's last content byte, from the file's sorted

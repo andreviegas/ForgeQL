@@ -402,6 +402,22 @@ pub trait StorageEngine: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Root-node ordinals whose whole span lies inside `[start, end]` (1-based
+    /// lines). A removal over that line range must tombstone exactly these so a
+    /// byte-identical sibling cannot adopt a freed handle — the rule is derived
+    /// from the touched range, not from which verb touched it. Empty for a
+    /// backend that keeps no columnar index.
+    fn root_ordinals_within(
+        &self,
+        rel_path: &str,
+        root: &Path,
+        start: usize,
+        end: usize,
+    ) -> Vec<u32> {
+        let _ = (rel_path, root, start, end);
+        Vec::new()
+    }
+
     /// Whether the indexed segment for `rel_path` still matches the file on
     /// disk (content-addressed freshness check).
     ///
