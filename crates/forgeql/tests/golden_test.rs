@@ -53,6 +53,14 @@ struct Case {
     /// per-case worktree off the corpus branch, discarded on teardown.
     #[serde(default = "mode_ro")]
     mode: String,
+
+    /// Enforcement level; omit for the default. "hard" (or absent): a failure
+    /// fails the gate. "soft": the case still runs, but a failure is reported
+    /// verbosely after the run and does NOT fail the gate — for pending or
+    /// known-broken behaviour you want visible without going red. "ignore": the
+    /// case is skipped entirely (shown as ignored).
+    #[serde(default)]
+    enforcement: Option<String>,
     /// One-shot read case: a single query + assert.
     #[serde(default)]
     fql: Option<String>,
@@ -613,16 +621,52 @@ fn main() {
 
     let harness = Arc::new(Mutex::new(Harness::new(&data_dir)));
     let mut trials = Vec::new();
+    // Soft-enforced cases push their failure here instead of failing the gate.
+    let soft_fails: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     for suite in suites {
         let sname = suite.suite;
         for case in suite.cases {
             let h = Arc::clone(&harness);
             let name = format!("{sname}::{}", case.name);
-            trials.push(Trial::test(name, move || run_case(&h, &case)));
+            match case.enforcement.as_deref() {
+                // Skipped entirely — shown as ignored, never run.
+                Some("ignore") => {
+                    trials.push(
+                        Trial::test(name, move || run_case(&h, &case)).with_ignored_flag(true),
+                    );
+                }
+                // Runs, but a failure is collected and reported without gating.
+                Some("soft") => {
+                    let soft = Arc::clone(&soft_fails);
+                    let label = name.clone();
+                    trials.push(Trial::test(name, move || {
+                        if let Err(e) = run_case(&h, &case) {
+                            soft.lock().unwrap().push(format!("{label}: {e:?}"));
+                        }
+                        Ok(())
+                    }));
+                }
+                // Default ("hard" or absent): a failure fails the gate.
+                _ => {
+                    trials.push(Trial::test(name, move || run_case(&h, &case)));
+                }
+            }
         }
     }
 
     let conclusion = libtest_mimic::run(&args, trials);
+    {
+        let soft = soft_fails.lock().unwrap();
+        if !soft.is_empty() {
+            eprintln!(
+                "\n── {} soft-enforced failure(s), not gating ──",
+                soft.len()
+            );
+            for f in soft.iter() {
+                eprintln!("  soft-fail: {f}");
+            }
+        }
+    }
     drop(harness);
     conclusion.exit();
 }

@@ -1,0 +1,36 @@
+{
+  "suite": "twin_handle_retirement",
+  "description": "Deleting one of several byte-identical functions must retire ITS handle, so a byte-identical sibling can never be reached through the dead handle. Built on a throwaway rw worktree off forgeql-pub.frozen; handles are captured at runtime, never hard-coded. The whole-node delete is correct today and gates hard. The offset-delete case pins a known leak and runs SOFT (visible, non-gating) until the removal-range fix lands, at which point it is promoted to hard.",
+  "cases": [
+    {
+      "name": "whole_node_delete_retires_the_handle",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "steps": [
+        { "fql": "INSERT NODE FOR 'golden_twins.cpp'", "assert": { "applied": true }, "capture": { "F": "new_node_id" } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // FIRST'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // SECOND'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // THIRD'", "assert": { "applied": true } },
+        { "fql": "FIND symbols WHERE name = 'dup' IN 'golden_twins.cpp' ORDER BY line", "assert": { "row_count": 3 }, "capture": { "S": "results.1.node_id", "RS": "results.1.rev", "T": "results.2.node_id" } },
+        { "fql": "DELETE NODE '${S}' IF REV '${RS}'", "assert": { "applied": true } },
+        { "fql": "FIND NODE '${S}'", "assert": { "error": true } },
+        { "fql": "FIND NODE '${T}'", "assert": { "field": { "type": "find_node" } } }
+      ]
+    },
+    {
+      "name": "offset_delete_retires_the_handle",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "enforcement": "soft",
+      "steps": [
+        { "fql": "INSERT NODE FOR 'golden_twins.cpp'", "assert": { "applied": true }, "capture": { "F": "new_node_id" } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // FIRST'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // SECOND'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {} // THIRD'", "assert": { "applied": true } },
+        { "fql": "FIND symbols WHERE name = 'dup' IN 'golden_twins.cpp' ORDER BY line", "assert": { "row_count": 3 }, "capture": { "S": "results.1.node_id", "RS": "results.1.rev" } },
+        { "fql": "DELETE NODE '${S}(1-1)' IF REV '${RS}'", "assert": { "applied": true } },
+        { "fql": "FIND NODE '${S}'", "assert": { "error": true } }
+      ]
+    }
+  ]
+}
