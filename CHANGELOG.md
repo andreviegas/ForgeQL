@@ -6,6 +6,8 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.122.0] — 2026-07-18 — fix(mutations): every removal form now retires the freed handle
+
 ### Added — JSON query results now carry `found_rev`
 
 A `FIND` that arms a set returns that set's master rev, which a following
