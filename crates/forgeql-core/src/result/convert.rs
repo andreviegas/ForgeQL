@@ -68,11 +68,14 @@ impl super::QueryResult {
                 obj
             })
             .collect();
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "op": self.op,
             "total": self.total,
             "results": rows,
         });
+        if let Some(ref rev) = self.found_rev {
+            result["found_rev"] = serde_json::json!(rev);
+        }
         if pretty {
             serde_json::to_string_pretty(&result).unwrap_or_default()
         } else {

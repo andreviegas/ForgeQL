@@ -216,6 +216,7 @@ impl ForgeQLEngine {
         self.verify_found_rev(session_id, &set, Some(if_rev))?;
         let member_count = set.members.len();
         let spans = self.found_set_spans(session_id, &set)?;
+        let mut removed_spans: Vec<(String, usize, usize)> = Vec::new();
 
         let plan = {
             let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
@@ -226,13 +227,24 @@ impl ForgeQLEngine {
                 let mut edits = Vec::new();
                 for (start, end) in ranges {
                     let (span_start, span_end) = lines_to_byte_range(&file_bytes, start, end)?;
-                    edits.extend(crate::transforms::matching_edits_in_range(
+                    let range_edits = crate::transforms::matching_edits_in_range(
                         &file_bytes,
                         pattern,
                         replacement,
                         word_boundary,
                         span_start..span_end,
-                    )?);
+                    )?;
+                    // A member whose whole node span is blanked by this sweep is
+                    // removed, not edited: stage its freed ordinal so a byte-identical
+                    // sibling cannot adopt the dead handle (the IF REV blind spot,
+                    // otherwise reached through this verb). A non-empty or partial
+                    // replacement leaves a node behind, so it keeps its handle.
+                    if !range_edits.is_empty()
+                        && span_becomes_blank(&file_bytes, span_start, span_end, &range_edits)
+                    {
+                        removed_spans.push((rel_path.clone(), start, end));
+                    }
+                    edits.extend(range_edits);
                 }
                 if edits.is_empty() {
                     continue;
@@ -256,7 +268,19 @@ impl ForgeQLEngine {
             }
         };
 
-        self.apply_plan(sid, plan, "change_nodes_found", None)
+        for (rel_path, start, end) in &removed_spans {
+            self.stage_removed_span(session_id, rel_path, *start, *end)?;
+        }
+        let result = self.apply_plan(sid, plan, "change_nodes_found", None);
+        // If the mutation failed, no reindex consumed the tombstones we staged —
+        // drop them so a later successful reindex on this file cannot wrongly
+        // retire a still-present node's ordinal (mirrors exec_change_node).
+        if result.is_err()
+            && let Some(session) = self.sessions.get_mut(sid)
+        {
+            session.pending_tombstones.clear();
+        }
+        result
     }
     /// `DELETE NODES FOUND IF REV 'master'` — unlink every member of the set.
     ///
@@ -475,4 +499,32 @@ fn require_found_rev<'a>(if_rev: Option<&'a str>, verb: &str) -> Result<&'a str>
              set at once. Re-run the FIND: its response carries the master rev to quote here."
         )
     })
+}
+
+/// True when applying `edits` to `source[span_start..span_end]` leaves only
+/// whitespace — the sweep blanked the member's whole node span, so the construct
+/// is gone and its freed ordinal must be retired rather than adopted by a
+/// byte-identical sibling. A non-empty or partial replacement leaves content
+/// behind, so the node survives and keeps its handle.
+fn span_becomes_blank(
+    source: &[u8],
+    span_start: usize,
+    span_end: usize,
+    edits: &[crate::transforms::ByteRangeEdit],
+) -> bool {
+    let mut sorted: Vec<&crate::transforms::ByteRangeEdit> = edits.iter().collect();
+    sorted.sort_by_key(|e| e.start);
+    let mut out: Vec<u8> = Vec::new();
+    let mut cursor = span_start;
+    for e in sorted {
+        if e.start > cursor {
+            out.extend_from_slice(&source[cursor..e.start]);
+        }
+        out.extend_from_slice(e.replacement.as_bytes());
+        cursor = e.end.max(cursor);
+    }
+    if cursor < span_end {
+        out.extend_from_slice(&source[cursor..span_end]);
+    }
+    out.iter().all(u8::is_ascii_whitespace)
 }

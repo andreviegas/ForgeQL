@@ -76,5 +76,22 @@
         { "fql": "FIND NODE '${S}'", "assert": { "field": { "type": "find_node" } } }
       ]
     }
+,
+    {
+      "name": "change_nodes_found_blank_retires_the_freed_handle",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+      "steps": [
+        { "fql": "INSERT NODE FOR 'golden_found_twins.cpp'", "assert": { "applied": true }, "capture": { "F": "new_node_id" } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {}'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {}'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void dup() {}'", "assert": { "applied": true } },
+        { "fql": "INSERT AFTER NODE '${F}' WITH 'void keep() {}'", "assert": { "applied": true } },
+        { "fql": "FIND symbols WHERE name = 'dup' IN 'golden_found_twins.cpp' WHERE line = 1", "assert": { "row_count": 1 }, "capture": { "A": "results.0.node_id" } },
+        { "fql": "FIND symbols WHERE name = 'dup' IN 'golden_found_twins.cpp' WHERE line <= 2 ORDER BY line", "assert": { "row_count": 2 }, "capture": { "R": "found_rev" } },
+        { "fql": "CHANGE NODES FOUND IF REV '${R}' MATCHING 'void dup() {}' WITH ''", "assert": { "applied": true } },
+        { "fql": "FIND NODE '${A}'", "assert": { "error": true } }
+      ]
+    }
   ]
 }

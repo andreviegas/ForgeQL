@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — JSON query results now carry `found_rev`
+
+A `FIND` that arms a set returns that set's master rev, which a following
+`... NODES FOUND` mutation must quote in `IF REV`. The rev was emitted only in
+the CSV rendering, so a caller reading results as `format=JSON` had no way to
+obtain it and could not use any `NODES FOUND` verb at all. The `found_rev`
+field is now included in the JSON result whenever a set is armed.
+
+### Fixed — `CHANGE NODES FOUND` now retires the handles it blanks away
+
+`CHANGE NODES FOUND ... WITH ''` sweeps an empty replacement across the matched
+nodes. Where the sweep blanked a construct's whole span it removed the
+construct, but — like the other removal paths — left its node handle alive, so a
+byte-identical sibling re-claimed the freed ordinal on the reindex and the dead
+handle silently repointed to it. The sweep now retires the handle of every
+member whose whole node span is left blank, by the same removed-range rule as a
+delete and `CHANGE ... WITH ''`; a rename or partial replacement leaves a node
+behind and keeps its handle.
+
 ### Fixed — `CHANGE ... WITH ''` now retires the emptied construct's handle
 
 Emptying a construct's span with an empty replacement removes it, but its
