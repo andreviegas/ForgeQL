@@ -1777,12 +1777,21 @@ column shows that field's value instead of `usages`:
 "struct","[MpptState,src/SolarCharger.h,57,11]"
 ```
 
-**FIND usages** — grouped by file:
+**FIND usages** — raw sites collapsed per file (`file,[lines]`):
 ```csv
-"find_usages","encenderMotor",5
+"find_usages","encenderMotor",3
 "file","[lines]"
 "src/motor_control.cpp","45,89"
 "include/motor_control.hpp","34"
+```
+
+**FIND usages OF … GROUP BY file** — per-file counts (`file,count`, the same aggregate the JSON `count` field carries):
+
+```csv
+"find_usages","encenderMotor",2
+"file","count"
+"src/motor_control.cpp",2
+"include/motor_control.hpp",1
 ```
 
 **SHOW outline** — grouped by kind, comments compressed to `len:N`:

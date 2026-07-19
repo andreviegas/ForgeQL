@@ -789,16 +789,35 @@ fn compact_show_commits(query: &QueryResult) -> String {
     out
 }
 
-/// FIND usages → grouped by file, values are comma-separated line numbers.
+/// FIND usages: grouped output (rows carry a per-group `count`) renders `file,count`;
+/// raw output collapses the sites per file into `file,[lines]`.
 fn compact_find_usages(query: &QueryResult) -> String {
     let mut out = String::with_capacity(query.results.len() * 30);
     // Header.
     let symbol = query.results.first().map_or("", |r| r.name.as_str());
     let tot = query.total.to_string();
     row(&mut out, &[&q("find_usages"), &q(symbol), &tot]);
-    // Schema hint.
+    // GROUP BY has already aggregated the sites when a row carries a per-group
+    // `count`. Surface that count instead of re-collapsing the rows into a
+    // `[lines]` list: re-collapsing drops the count the query ordered by and
+    // leaves a lone representative line (only the first site per group survives
+    // aggregation) masquerading as data. This mirrors the grouped-by-kind
+    // renderer and the JSON output, which both show `count`, so every format
+    // reports the same aggregate.
+    if query.results.iter().any(|r| r.count.is_some()) {
+        row(&mut out, &[&q("file"), &q("count")]);
+        for r in &query.results {
+            let file = r
+                .path
+                .as_ref()
+                .map_or(String::new(), |p| p.to_string_lossy().into_owned());
+            row(&mut out, &[&q(&file), &r.count.unwrap_or(0).to_string()]);
+        }
+        chomp(&mut out);
+        return out;
+    }
+    // No GROUP BY: collapse the raw usage sites per file into a line list.
     row(&mut out, &[&q("file"), &q("[lines]")]);
-    // Group by path.
     let groups = group_usages_by_file(query);
     for (file, lines) in &groups {
         let lines_str: Vec<String> = lines.iter().map(ToString::to_string).collect();

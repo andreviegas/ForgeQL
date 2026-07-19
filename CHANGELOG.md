@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.134.0] — 2026-07-19 — fix: grouped `FIND usages` CSV now reports the count, matching JSON
+
+### Fixed — every output format reports the same aggregate under GROUP BY
+
+`FIND usages OF 'x' GROUP BY file ORDER BY count DESC` returned different data
+depending on the output format. JSON carried the per-file `count` on every row;
+the default compact CSV silently dropped it. The CSV renderer ignored the
+counts the engine had already computed and re-collapsed the rows into a
+`file,[lines]` shape — so each cell showed a lone representative line number
+where the query had asked for a count, and the value the query was ordered by
+never appeared at all. A line number is easily misread as a count, so the
+blast-radius workflow the server instructions recommend returned quietly
+misleading output.
+
+Grouped `FIND usages` now renders `file,count`, reading the aggregate the engine
+attached to each group — the same value JSON shows and the same column the
+grouped `FIND symbols` renderer already emitted. Ungrouped `FIND usages` is
+unchanged: it still collapses raw sites into a `file,[lines]` list.
+
+This change alters no index output, so the enrichment cache version is unchanged.
+
 ## [0.133.0] — 2026-07-19 — fix: SHOW MORE no longer replays its own output
 
 ### Fixed — paging a buffer is now read-only

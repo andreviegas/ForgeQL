@@ -536,6 +536,60 @@ fn find_usages_groups_by_file() {
     assert_eq!(lines[3], r#""include/motor_control.hpp","34""#);
 }
 
+#[test]
+fn find_usages_grouped_by_file_shows_count() {
+    // GROUP BY file: the engine has already collapsed the sites to one row per
+    // file and stamped each with a per-group `count`. The compact renderer must
+    // surface that count (matching JSON), never re-collapse into a `[lines]`
+    // list that drops the count the query ordered by and shows a lone
+    // representative line where that count belongs.
+    let result = ForgeQLResult::Query(QueryResult {
+        op: "find_usages".into(),
+        total: 2,
+        metric_hint: None,
+        group_by_field: None,
+        found_rev: None,
+        hint: None,
+        results: vec![
+            SymbolMatch {
+                name: "encenderMotor".into(),
+                node_kind: None,
+                fql_kind: None,
+                language: None,
+                path: Some(PathBuf::from("src/motor_control.cpp")),
+                line: Some(45),
+                usages_count: None,
+                fields: HashMap::new(),
+                count: Some(7),
+                node_id: None,
+                rev: None,
+            },
+            SymbolMatch {
+                name: "encenderMotor".into(),
+                node_kind: None,
+                fql_kind: None,
+                language: None,
+                path: Some(PathBuf::from("include/motor_control.hpp")),
+                line: Some(34),
+                usages_count: None,
+                fields: HashMap::new(),
+                count: Some(2),
+                node_id: None,
+                rev: None,
+            },
+        ],
+    });
+    let csv = to_compact(&result);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[0], r#""find_usages","encenderMotor",2"#);
+    // Header names `count`, not `[lines]`.
+    assert_eq!(lines[1], r#""file","count""#);
+    // The aggregated count rides in the value cell, and row order is preserved
+    // (the engine already applied ORDER BY count DESC).
+    assert_eq!(lines[2], r#""src/motor_control.cpp",7"#);
+    assert_eq!(lines[3], r#""include/motor_control.hpp",2"#);
+}
+
 // -- COUNT usages --------------------------------------------------
 
 #[test]
