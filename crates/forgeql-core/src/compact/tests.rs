@@ -391,6 +391,58 @@ fn find_symbols_groups_by_kind() {
 }
 
 #[test]
+fn find_symbols_grouped_by_file_labels_file_column() {
+    // GROUP BY file must label the outer column `file` (the grouping key) and
+    // show the per-file count. Previously it mislabeled the column `fql_kind`
+    // (the WHERE field), left the key cell empty, and buried the path inside
+    // per-row tuples. `file` is an alias for `path`, so the group key resolves
+    // to the file path and the count matches what JSON returns.
+    let result = ForgeQLResult::Query(QueryResult {
+        op: "find_symbols".into(),
+        total: 2,
+        metric_hint: None,
+        group_by_field: Some("file".into()),
+        found_rev: None,
+        hint: None,
+        results: vec![
+            SymbolMatch {
+                name: String::new(),
+                node_kind: None,
+                fql_kind: None,
+                language: None,
+                path: Some(PathBuf::from("src/motor_control.cpp")),
+                line: Some(0),
+                usages_count: None,
+                fields: HashMap::new(),
+                count: Some(7),
+                node_id: None,
+                rev: None,
+            },
+            SymbolMatch {
+                name: String::new(),
+                node_kind: None,
+                fql_kind: None,
+                language: None,
+                path: Some(PathBuf::from("include/motor_control.hpp")),
+                line: Some(0),
+                usages_count: None,
+                fields: HashMap::new(),
+                count: Some(2),
+                node_id: None,
+                rev: None,
+            },
+        ],
+    });
+    let csv = to_compact(&result);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[0], r#""find_symbols",2"#);
+    // Outer column is the GROUP BY key (file), not fql_kind.
+    assert_eq!(lines[1], r#""file","[count]""#);
+    assert_eq!(lines[2], r#""src/motor_control.cpp",7"#);
+    assert_eq!(lines[3], r#""include/motor_control.hpp",2"#);
+}
+
+#[test]
 fn show_commits_renders_hash_and_subject() {
     let result = ForgeQLResult::Query(QueryResult {
         op: "show_commits".into(),

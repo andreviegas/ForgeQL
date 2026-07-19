@@ -108,8 +108,9 @@ pub struct QueryResult {
     /// as the last column instead of the default `usages`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric_hint: Option<String>,
-    /// When a GROUP BY on a custom field is used (e.g. `guard_kind`), this
-    /// stores the field name so the compact renderer can group by it.
+    /// When a GROUP BY targets a field other than `fql_kind` (e.g. `file` or
+    /// `guard_kind`), this stores the field name so the compact renderer labels
+    /// the outer column with it and groups by its value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_by_field: Option<String>,
     /// One-line guidance appended by the engine when the query shape is a
@@ -210,8 +211,8 @@ pub(crate) struct QueryContext<'a> {
     /// (e.g. `lines`, `param_count`), this names that field so its value
     /// appears as the metric column instead of `usages`.
     pub metric_hint: Option<&'a str>,
-    /// When GROUP BY targets a custom field (not `fql_kind`/`file`), this
-    /// names that field so its value is extracted into `SymbolRow::group_key`.
+    /// When GROUP BY targets a field other than `fql_kind`, this names that
+    /// field so its value is extracted into `SymbolRow::group_key`.
     pub group_by_field: Option<&'a str>,
 }
 
@@ -303,7 +304,7 @@ impl SymbolRow {
                 "node_kind" => row.node_kind.clone(),
                 "fql_kind" => row.fql_kind.clone(),
                 "name" => Some(row.name.clone()),
-                "path" => row.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                "file" | "path" => row.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
                 _ => row.fields.get(field).cloned(),
             }),
             node_id: surface_block_alias(row),

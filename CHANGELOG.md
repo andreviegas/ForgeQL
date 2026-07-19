@@ -6,6 +6,28 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.135.0] — 2026-07-19 — fix: grouped `FIND symbols … GROUP BY file` CSV labels the file column
+
+### Fixed — the grouped-CSV outer column names the actual GROUP BY key
+
+`FIND symbols … GROUP BY file` produced a compact-CSV response that
+contradicted its JSON. JSON returned clean `{path, count}` rows, but the CSV
+labeled the outer column `fql_kind` (the `WHERE` field, not the grouping key),
+left that key cell empty, and buried the file path inside per-row tuples with an
+empty name and a zero line — so the count sat behind a column header that named
+the wrong field entirely.
+
+The cause: the query layer set the renderer's group-by field for every custom
+field but deliberately excluded `file`, dropping `GROUP BY file` into the
+group-by-kind rendering path meant for `GROUP BY fql_kind`. `file` is now carried
+like any other grouping field (and resolves to the file path, as it does
+everywhere else `file` and `path` are interchangeable), so the response is
+`"file","[count]"` with one `path,count` row per file — the same data JSON
+returns. `GROUP BY fql_kind` still uses its own richer per-kind layout, and other
+grouping fields are unchanged.
+
+This change is confined to the query and output layers, so no index output or
+enrichment cache version changes.
 ## [0.134.0] — 2026-07-19 — fix: grouped `FIND usages` CSV now reports the count, matching JSON
 
 ### Fixed — every output format reports the same aggregate under GROUP BY

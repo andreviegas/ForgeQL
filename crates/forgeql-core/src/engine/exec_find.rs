@@ -35,7 +35,7 @@ impl ForgeQLEngine {
 
         let metric_hint = detect_metric_hint(clauses);
         let group_by_field = match &clauses.group_by {
-            Some(GroupBy::Field(f)) if f != "fql_kind" && f != "file" => Some(f.clone()),
+            Some(GroupBy::Field(f)) if f != "fql_kind" => Some(f.clone()),
             _ => None,
         };
         let hint = Self::unknown_where_field_hint(clauses, &results);
