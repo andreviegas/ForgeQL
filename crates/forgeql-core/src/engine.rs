@@ -39,7 +39,7 @@ use tracing::{info, warn};
 
 use crate::{
     ast::lang::LanguageRegistry,
-    coach_api::{Clause, Coach, CommandEvent, ErrKind, Outcome, Verb},
+    coach_api::{Clause, Coach, CommandEvent, ErrKind, Outcome, ReadSpan, Verb},
     error::{ForgeError, RejectionKind},
     git::source::SourceRegistry,
     ir::{Clauses, ForgeQLIR},
@@ -391,7 +391,7 @@ impl ForgeQLEngine {
         }
 
         // Update the session line budget based on the result (see apply_budget).
-        self.apply_budget(sid, op, &mut result);
+        self.apply_budget(sid, op, &result);
 
         ExecOutcome {
             result: Ok(result),
@@ -659,10 +659,10 @@ impl ForgeQLEngine {
     }
 
     /// Apply line-budget accounting for one executed op. Mutations earn back a
-    /// line per line written; read ops deduct disclosed source lines (and run
-    /// the SHOW LINES anti-pattern tracker). Admin / source-management commands
-    /// read no AST data and are exempt from both deduction and recovery.
-    fn apply_budget(&mut self, sid: Option<&str>, op: &ForgeQLIR, result: &mut ForgeQLResult) {
+    /// line per line written; read ops deduct disclosed source lines. Admin /
+    /// source-management commands read no AST data and are exempt from both
+    /// deduction and recovery.
+    fn apply_budget(&mut self, sid: Option<&str>, op: &ForgeQLIR, result: &ForgeQLResult) {
         let is_admin_op = matches!(
             op,
             ForgeQLIR::CreateSource { .. }
@@ -682,28 +682,12 @@ impl ForgeQLEngine {
         let Some(session) = self.sessions.get_mut(mk) else {
             return;
         };
-        if let ForgeQLResult::Mutation(m) = &*result {
+        if let ForgeQLResult::Mutation(m) = result {
             // Productive work: reward proportional to lines written.
             let _ = session.reward_budget(m.lines_written);
-            session.clear_recent_show_lines();
         } else {
             let lines = result.source_lines_count();
             let _ = session.deduct_budget(lines);
-            // Track SHOW LINES reads for anti-pattern detection: on 3+ sequential
-            // adjacent reads of the same file, inject a tip suggesting SHOW body.
-            if let ForgeQLIR::ShowLines {
-                file,
-                start_line,
-                end_line,
-                ..
-            } = op
-            {
-                if let Some(tip) = session.record_show_lines(file, *start_line, *end_line) {
-                    result.inject_hint(&tip);
-                }
-            } else {
-                session.clear_recent_show_lines();
-            }
         }
     }
 
@@ -859,6 +843,7 @@ impl ForgeQLEngine {
             clauses: Self::clauses_of(op),
             outcome,
             cmd_index: self.commands_served,
+            read_span: Self::read_span_of(op),
         };
         self.coach
             .as_mut()
@@ -888,6 +873,7 @@ impl ForgeQLEngine {
                     attempted: attempted.to_owned(),
                 }),
                 cmd_index: self.commands_served,
+                read_span: None,
             };
             self.coach
                 .as_mut()
@@ -964,6 +950,38 @@ impl ForgeQLEngine {
             return Vec::new();
         };
         Self::clauses_present(clauses)
+    }
+
+    /// The read span for a raw `SHOW LINES` command, so the coach can detect
+    /// fragmented reading. `None` for every other op: the coach then sees no read
+    /// target and infers nothing about what was read.
+    fn read_span_of(op: &ForgeQLIR) -> Option<ReadSpan> {
+        // FNV-1a: small and restart-stable, so a file's fingerprint survives the
+        // server restart the coach cookie persists across.
+        const fn fnv1a(bytes: &[u8]) -> u64 {
+            let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+            let mut i = 0;
+            while i < bytes.len() {
+                hash ^= bytes[i] as u64;
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+                i += 1;
+            }
+            hash
+        }
+        let ForgeQLIR::ShowLines {
+            file,
+            start_line,
+            end_line,
+            ..
+        } = op
+        else {
+            return None;
+        };
+        Some(ReadSpan {
+            file: fnv1a(file.as_bytes()),
+            start: u32::try_from(*start_line).unwrap_or(u32::MAX),
+            end: u32::try_from(*end_line).unwrap_or(u32::MAX),
+        })
     }
 
     /// Translate a populated `Clauses` into presence flags for the coach.

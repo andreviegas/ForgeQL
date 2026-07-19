@@ -6,6 +6,36 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.132.0] — 2026-07-19 — feat: the onboarding coach adapts to the session and paces itself
+
+### Added — proactive teaching, paced by mode and silenced by fluency
+
+The optional onboarding coach previously spoke only when a command failed. It
+now also teaches proactively: as an agent works, it surfaces the next protocol
+skill the agent has not yet shown — connect, then locating and filtering, then
+reading, then editing by handle and the `IF REV` contract — one short hint at a
+time.
+
+- **It follows the session.** A read-leaning session is taught reading and query
+  skills; a session that is editing is taught the mutation contract, with `IF REV`
+  surfaced ahead of enrichment trivia.
+- **It paces itself and goes quiet.** Proactive hints fire below a per-skill
+  recency threshold and on a cooldown, and stop entirely once the agent is fluent
+  in everything relevant — a fluent replay sees nothing at all.
+- **It notices two wasteful reading patterns.** Reading a file in many small
+  adjacent `SHOW LINES` ranges, or hitting the line cap again and again without
+  paging, each draws a one-time nudge toward reading a whole node at once.
+
+### Changed — one channel for the fragmented-read nudge
+
+The engine's built-in "sequential `SHOW LINES`" tip has been retired; the coach's
+repeated-read detector above replaces it, so a single channel owns that topic.
+That tip lived in the engine and fired even with the coach disabled; it no longer
+exists there. Disabling the coach with `FORGEQL_COACH=0` now opts out of that
+guidance too, by design.
+
+This change alters no index output, so the enrichment cache version is unchanged.
+
 ## [0.131.0] — 2026-07-19 — fix: CLI output windowing, node-not-found rejections, and cap-hint ownership
 
 ### Fixed — the CLI pipe now windows oversized output
@@ -34,6 +64,7 @@ detector aimed at the case the footer cannot see: capping repeatedly without
 ever paging.)
 
 This change alters no index output, so the enrichment cache version is unchanged.
+
 
 ## [0.130.0] — 2026-07-19 — feat: the onboarding coach now teaches from failures
 
@@ -4555,8 +4586,6 @@ es
   Added regression test `recursion_called_by_many` with a fixture function
   (`calledByMany`) that is called by three other functions in the same file and
   must not be flagged as recursive.
-
-
 
 ### Performance
 

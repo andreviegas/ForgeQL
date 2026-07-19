@@ -1919,13 +1919,28 @@ as the command that triggered it — never a separate message:
 At most one hint rides any response, and it is purely advisory — nothing about a
 command's result or error changes when a hint is present or absent.
 
-**When it fires.** The coach teaches primarily from failures, because an error
-is concrete evidence of a protocol gap. A hint may accompany:
+**When it fires — corrective hints.** The coach teaches first from failures,
+because an error is concrete evidence of a protocol gap. A hint may accompany:
 
-- a rejected mutation (an `IF REV` mismatch, or an unresolved node handle);
+- a rejected mutation or read (an `IF REV` mismatch, or an unresolved node handle);
 - a bulk `NODES FOUND` verb that could not proceed (no armed FIND, a truncated
   FIND, or a missing master `IF REV`);
 - a statement that failed to parse (with a nearest-verb correction).
+
+**When it fires — proactive hints.** As you work, the coach also surfaces the
+next protocol skill you have not yet used — connect, then locating and
+filtering, then reading and `DEPTH`, then editing by handle and the `IF REV`
+contract. These are rarer and self-pacing:
+
+- They follow the session. A read-leaning session is taught reading and query
+  skills; a session that is editing is taught the mutation contract, with
+  `IF REV` surfaced ahead of enrichment trivia.
+- They go quiet once you are fluent. A skill drops out of the rotation once you
+  have used it recently, so an agent already fluent in everything relevant sees
+  nothing at all.
+- Two wasteful reading patterns each draw a one-time nudge: reading a file in
+  many small adjacent `SHOW LINES` ranges, or hitting the line cap again and
+  again without paging.
 
 **Turning it off.** Set `FORGEQL_COACH=0` (or `off`, `false`, `no`) in the
 server's environment to disable the coach entirely; the hot path is then

@@ -26,6 +26,25 @@ pub struct CommandEvent<'a> {
     pub outcome: Outcome,
     /// Monotonic per-engine command counter at the time of this event.
     pub cmd_index: u64,
+    /// For a raw `SHOW LINES` read, the file's fingerprint and line range, so the
+    /// coach can spot fragmented reading without seeing the path or its contents.
+    /// `None` for every other command.
+    pub read_span: Option<ReadSpan>,
+}
+
+/// A raw line-range read (`SHOW LINES`).
+///
+/// Carries the file's identity fingerprint and the line range it covered. The
+/// fingerprint is an opaque hash — the coach compares read targets for
+/// fragmentation without ever seeing the path or the source.
+#[derive(Debug, Clone, Copy)]
+pub struct ReadSpan {
+    /// Stable fingerprint of the file path — identity only, not the path.
+    pub file: u64,
+    /// First line read (1-based).
+    pub start: u32,
+    /// Last line read (1-based).
+    pub end: u32,
 }
 
 /// Top-level command verb — a coarse, language-agnostic classification of the

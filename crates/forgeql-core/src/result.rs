@@ -1135,24 +1135,6 @@ impl ForgeQLResult {
             false
         }
     }
-
-    /// Inject a hint string into the result.
-    ///
-    /// For `Show` results, appends to the existing `hint` field.
-    /// For other result types, the hint is silently dropped.
-    pub fn inject_hint(&mut self, tip: &str) {
-        if let Self::Show(show) = self {
-            match show.hint {
-                Some(ref mut existing) => {
-                    existing.push(' ');
-                    existing.push_str(tip);
-                }
-                None => {
-                    show.hint = Some(tip.to_string());
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
