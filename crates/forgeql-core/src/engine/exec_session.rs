@@ -611,8 +611,7 @@ impl ForgeQLEngine {
         segments_dir: &Path,
         overlays_dir: &Path,
     ) -> Result<String> {
-        use crate::storage::columnar::overlay::Overlay;
-        use crate::storage::columnar::{ColumnarStorage, SegmentReader};
+        use crate::storage::columnar::{BuildInput, ColumnarStorage};
 
         let alias = crate::engine::exec_session::generate_session_id();
         let coords = SessionCoords::new(auth(AuthContext::Tester), "local", "test-branch", &alias);
@@ -625,14 +624,13 @@ impl ForgeQLEngine {
             &Arc::clone(&self.lang_registry),
         );
 
-        // Enable shadow-write: segments → `segments_dir/unknown/hex/`.
-        // provider_id "test" maps to "unknown" in build_index's static match.
-        let hash_fn: crate::storage::HashFn = Arc::new(|content: &[u8]| {
-            use std::hash::Hasher as _;
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            std::hash::Hash::hash_slice(content, &mut h);
-            h.finish().to_le_bytes().to_vec()
-        });
+        // Enable shadow-write: build_index writes segments + overlay through
+        // the ColumnarBuildContext exactly as a real `USE` does.
+        // Same content hash as production (`configure_columnar_build`): file
+        // revs derive from the content id, so a stand-in hasher here makes
+        // reads hand out revs the mutation layer then refuses.
+        let hash_fn: crate::storage::HashFn =
+            Arc::new(|b: &[u8]| crate::storage::git_sha1_provider::git_blob_sha1(b).to_vec());
         session.set_columnar_build(crate::storage::ColumnarBuildContext::new(
             segments_dir.to_path_buf(),
             overlays_dir.to_path_buf(),
@@ -640,40 +638,40 @@ impl ForgeQLEngine {
             hash_fn,
         ));
 
-        // Build the index.  This writes the legacy SymbolTable, segments, and
-        // (because columnar_overlays_dir is set) the overlay file.
+        // Build the index. This writes the legacy SymbolTable and shadow-writes
+        // columnar segments through the context configured above.
         session.build_index()?;
 
-        // The commit OID for a non-git dir is "" (get_head_oid returns Err,
-        // build_index falls back to unwrap_or_default → "").
-        // overlay_path = overlays_dir/{provider_id}/{commit}.bin
-        //              = overlays_dir/test/.bin  (provider_id="test", commit="")
-        let provider_id = "test";
-        let overlay_path = overlays_dir.join(provider_id).join(".bin");
+        // Install columnar through the same warm/open path a real `USE` takes
+        // (`load_session_index`): the storage layer owns the on-disk layout, so
+        // this helper cannot drift from it. A hand-rolled reader here once
+        // reconstructed segment paths itself and silently produced an empty
+        // index when the layout changed underneath it.
+        let ctx = session.columnar_build().cloned().ok_or_else(|| {
+            anyhow::anyhow!("register_local_session_with_columnar: columnar_build missing")
+        })?;
+        // A non-git workspace has no HEAD; overlay_path_for slices the first
+        // two chars of the snapshot hex, so an empty commit id would panic.
+        // Local sessions in plain directories use a fixed all-zero id.
+        let commit = match Session::get_head_oid(workspace_root) {
+            Ok(oid) if !oid.is_empty() => oid,
+            _ => "0".repeat(40),
+        };
+        let input = BuildInput {
+            table: session.legacy_storage().and_then(|l| l.table()),
+            prebuilt_segment_map: session.prebuilt_segment_map.clone(),
+        };
+        let storage = ColumnarStorage::warm_or_open(
+            &ctx,
+            input,
+            workspace_root.to_path_buf(),
+            &commit,
+            Arc::clone(&self.lang_registry),
+        )
+        .map_err(|e| anyhow::anyhow!("register_local_session_with_columnar: warm_or_open: {e}"))?;
+        session.install_columnar(Box::new(storage));
+        session.drop_legacy_index();
 
-        if overlay_path.exists() {
-            let overlay = Overlay::open(&overlay_path).map_err(|e| {
-                anyhow::anyhow!("register_local_session_with_columnar: overlay open: {e}")
-            })?;
-            let segs: Vec<Arc<SegmentReader>> = overlay
-                .segments()
-                .iter()
-                .filter_map(|meta| {
-                    let seg_path = segments_dir
-                        .join(provider_id)
-                        .join(format!("{}.fqsf", &meta.hex_content_id));
-                    SegmentReader::open(&seg_path).ok().map(Arc::new)
-                })
-                .collect();
-            let columnar = ColumnarStorage::new(
-                workspace_root.to_path_buf(),
-                segs,
-                overlay,
-                Arc::clone(&self.lang_registry),
-            );
-            session.install_columnar(Box::new(columnar));
-            session.drop_legacy_index();
-        }
         session.touch();
         drop(self.sessions.insert(coords.map_key(), session));
         Ok(coords.to_session_id())

@@ -4,16 +4,13 @@ use roaring::RoaringBitmap;
 
 use std::path::Path;
 
-use crate::filter::eval_predicate;
 use crate::ir::{Clauses, CompareOp, PredicateValue};
-use crate::result::SymbolMatch;
 use crate::storage::SymbolLocation;
 use crate::storage::columnar::columnar_storage::ColumnarStorage;
 use crate::storage::columnar::columnar_storage::fast_paths::{
     passes_resolve_glob, split_qualified_name,
 };
 use crate::storage::columnar::segment_builder::ZONEMAP_NUMERIC_FIELDS;
-use crate::storage::columnar::segment_reader::SegmentReader;
 /// Candidate `(segment_index, local_row)` pairs produced by a resolve scan:
 /// `(all, preferred)` — every passing candidate and the `prefer_kinds` subset.
 type ResolveCandidates = (Vec<(u32, u32)>, Vec<(u32, u32)>);
@@ -23,7 +20,8 @@ impl ColumnarStorage {
     /// Algorithm:
     /// 1. Split qualified name (`Owner::member` / `Owner.member`).
     /// 2. FST name lookup via the overlay bitmap.
-    /// 3. Filter candidates by enclosing-type, IN/EXCLUDE glob, and WHERE predicates.
+    /// 3. Filter candidates by enclosing-type and IN/EXCLUDE glob. WHERE
+    ///    predicates are NOT applied — they filter SHOW output, not resolution.
     /// 4. Collect two lists — `all` (every passing candidate) and `preferred`
     ///    (candidates whose `fql_kind` is in `prefer_kinds`, if given).
     /// 5. Pick: last preferred candidate → last definition candidate → last overall.
@@ -155,11 +153,9 @@ impl ColumnarStorage {
             let Some(seg) = self.segments.get(seg_idx as usize) else {
                 continue;
             };
-            let Some(seg_meta) = self.overlay.segments().get(seg_idx as usize) else {
+            if self.overlay.segments().get(seg_idx as usize).is_none() {
                 continue;
-            };
-            let relative_path = &seg_meta.source_path;
-
+            }
             // Enrichment-postings prefilter — bitmap intersection per allowlisted
             // field before any per-row work.  Mirrors the same step in materialize_all.
             let local_rows = seg.prefilter_enrichment_postings(local_rows.clone(), clauses);
@@ -178,17 +174,12 @@ impl ColumnarStorage {
                     continue;
                 }
 
-                // WHERE predicate filter — build a lightweight SymbolMatch for evaluation.
+                // WHERE predicates on a SHOW statement filter the output rows
+                // (body lines, callees, members), never the addressed symbol
+                // row itself — evaluating them against the candidate row turned
+                // every filtered SHOW into a false symbol-not-found, so none
+                // are applied during resolution.
                 let fql_kind_str = seg.fql_kind_of(local_row);
-                let sm = build_symbol_match(seg, local_row, relative_path);
-                if clauses
-                    .where_predicates
-                    .iter()
-                    .any(|p| !eval_predicate(&sm, p))
-                {
-                    continue;
-                }
-
                 all.push((seg_idx, local_row));
                 if let Some(kinds) = prefer_kinds
                     && kinds.contains(&fql_kind_str)
@@ -263,14 +254,6 @@ impl ColumnarStorage {
                 }
                 let fql_kind_str = ds.reader.fql_kind_of(local_row);
                 let line_num = ds.reader.line_of(local_row);
-                let sm = build_symbol_match(&ds.reader, local_row, &ds.source_path);
-                if clauses
-                    .where_predicates
-                    .iter()
-                    .any(|p| !eval_predicate(&sm, p))
-                {
-                    continue;
-                }
                 let blob_sha: Option<[u8; 20]> = ds.reader.content_id[..].try_into().ok();
                 let enrichment = ds.reader.enrichment_for_row(local_row);
                 let loc = SymbolLocation {
@@ -299,34 +282,5 @@ impl ColumnarStorage {
         }
         dirty_all.sort_by(|a, b| a.path.cmp(&b.path));
         dirty_all.pop()
-    }
-}
-
-/// Build a `SymbolMatch` for one row, used to evaluate WHERE predicates during
-/// resolution. Shared by the dirty-overlay and persistent-segment scans, which
-/// differ only in the reader and source path they pull the row from.
-fn build_symbol_match(reader: &SegmentReader, local_row: u32, source_path: &Path) -> SymbolMatch {
-    let fql_kind_str = reader.fql_kind_of(local_row);
-    let line_num = reader.line_of(local_row);
-    SymbolMatch {
-        name: reader.name_of(local_row).to_owned(),
-        node_kind: None,
-        fql_kind: (!fql_kind_str.is_empty()).then(|| fql_kind_str.to_owned()),
-        language: {
-            let l = reader.language_of(local_row);
-            (!l.is_empty()).then(|| l.to_owned())
-        },
-        path: Some(source_path.to_path_buf()),
-        line: (line_num != 0).then_some(line_num as usize),
-        usages_count: Some(reader.usages_count_of(local_row) as usize),
-        fields: reader.enrichment_for_row(local_row),
-        count: None,
-        node_id: reader
-            .ordinal_of(local_row)
-            .map(|ord| crate::node_id::make_node_id(&source_path.to_string_lossy(), ord)),
-        rev: reader
-            .ordinal_of(local_row)
-            .map(|_| crate::node_id::format_rev(reader.rev_of(local_row)))
-            .filter(|r| !r.is_empty()),
     }
 }

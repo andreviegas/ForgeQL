@@ -73,9 +73,11 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
 
     let data_dir = dir.path().join("data");
     let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
+    let segments_dir = dir.path().join("segments");
+    let overlays_dir = dir.path().join("overlays");
     let session_id = engine
-        .register_local_session(dir.path())
-        .expect("register session");
+        .register_local_session_with_columnar(dir.path(), &segments_dir, &overlays_dir)
+        .expect("register columnar session");
 
     (engine, session_id, dir)
 }
@@ -120,9 +122,11 @@ fn engine_with_git_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
 
     let data_dir = dir.path().join("data");
     let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
+    let segments_dir = dir.path().join("segments");
+    let overlays_dir = dir.path().join("overlays");
     let session_id = engine
-        .register_local_session(dir.path())
-        .expect("register session");
+        .register_local_session_with_columnar(dir.path(), &segments_dir, &overlays_dir)
+        .expect("register columnar session");
 
     (engine, session_id, dir)
 }

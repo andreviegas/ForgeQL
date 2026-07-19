@@ -6,6 +6,49 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.127.0] — 2026-07-19 — fix(storage): columnar test sessions served an empty index; WHERE no longer breaks SHOW resolution
+
+### Fixed — the columnar test helper silently produced an empty index
+
+`register_local_session_with_columnar` reconstructed segment paths against
+an obsolete storage layout (flat `{hex}.fqsf` files under an unversioned
+provider directory) and swallowed every failed segment open, leaving a
+columnar store with an overlay but no rows: symbol queries returned empty,
+no error anywhere. The helper now installs columnar through the same
+`warm_or_open` path a real `USE` takes, so the storage layer owns the
+on-disk layout end to end, and any failure is a hard error. It also uses
+the production `git_blob_sha1` content hash instead of a stand-in hasher,
+and synthesizes an all-zero snapshot id for non-git workspaces
+(`overlay_path_for` panics on an empty commit id).
+
+### Fixed — WHERE on a SHOW no longer breaks symbol resolution
+
+On the columnar backend, any filtered SHOW — body, callees, members —
+failed with a false `symbol not found`: the WHERE filter meant for the
+output rows was also applied to the symbol row during resolution, which
+it can never match. Resolution no longer applies WHERE predicates; they
+keep filtering the SHOW output as documented.
+
+### Changed — integration suites exercise the columnar read path
+
+`engine_integration` and `syntax_coverage` now register their local
+sessions through the columnar shadow-write helper — the backend real
+sessions serve reads from — instead of the legacy in-memory backend.
+Two genuine backend divergences surfaced and are recorded in the tests:
+
+- Unknown WHERE fields: legacy answered with an empty result plus a hint;
+  columnar refuses with an error naming the field. The refusal is the
+  behaviour real sessions exhibit, so the test now pins it.
+- File revs: the rev handed out by `FIND files` on columnar does not
+  round-trip through `IF REV` on the mutation layer; that test stays on
+  the legacy backend until the two derivations agree.
+
+`enrichment_integration` stays on the legacy backend entirely: columnar
+local sessions do not carry enrichment columns yet (the inline segment
+emit skips the enrichment post-pass), so enrichment behaviour currently
+has test coverage only on legacy. Real worktree sessions were probed
+live and do carry enrichment columns.
+
 ## [0.126.0] — 2026-07-19 — feat(session): idle sessions with no work reclaim faster
 
 ### Changed — a shorter TTL for sessions that did nothing

@@ -83,6 +83,9 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
             .unwrap_or_else(|e| panic!("copy {file}: {e}"));
     }
 
+    // Known divergence: columnar local sessions do not carry enrichment
+    // columns yet (the inline segment emit skips the enrichment post-pass),
+    // so this suite stays on the legacy backend until that is fixed.
     let data_dir = dir.path().join("data");
     let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
     let mut engine = ForgeQLEngine::new(data_dir, registry).expect("engine");
