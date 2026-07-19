@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.1] — 2026-07-19 — refactor: split the result module by response family
+
+### Changed — the result DTO catalog is now one file per response family
+
+`result.rs` had grown into a single ~1150-line catalog of every response
+struct. Its data types now live in a `result/` submodule directory — `query`,
+`show`, `mutation`, `source_ops`, `transaction`, `jobs`, and `diff_patch` —
+each holding the structs for one response family. `result.rs` keeps the shared
+`ForgeQLResult` enum, the small display/path helpers, and re-exports every
+moved type, so every `crate::result::…` path is unchanged.
+
+Pure code motion: no struct, field, derive, or serde attribute changed, so the
+JSON/CSV wire format is byte-for-byte identical and the enrichment cache
+version is unchanged.
+
 ## [0.139.0] — 2026-07-19 — fix: cap the node body echoed in a rev_mismatch error
 
 ### Fixed — a stale-rev refusal no longer dumps a whole file into the error
