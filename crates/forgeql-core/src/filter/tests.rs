@@ -390,6 +390,7 @@ use crate::result::SourceLine;
 fn make_lines() -> Vec<SourceLine> {
     vec![
         SourceLine {
+            rev: None,
             line: 10,
             text: "void setup() {".into(),
             marker: None,
@@ -397,6 +398,7 @@ fn make_lines() -> Vec<SourceLine> {
             node_offset: None,
         },
         SourceLine {
+            rev: None,
             line: 11,
             text: "    // TODO: fix this".into(),
             marker: None,
@@ -404,6 +406,7 @@ fn make_lines() -> Vec<SourceLine> {
             node_offset: None,
         },
         SourceLine {
+            rev: None,
             line: 12,
             text: "    int x = 42;".into(),
             marker: None,
@@ -411,6 +414,7 @@ fn make_lines() -> Vec<SourceLine> {
             node_offset: None,
         },
         SourceLine {
+            rev: None,
             line: 13,
             text: "    // FIXME: needs review".into(),
             marker: None,
@@ -418,6 +422,7 @@ fn make_lines() -> Vec<SourceLine> {
             node_offset: None,
         },
         SourceLine {
+            rev: None,
             line: 14,
             text: "}".into(),
             marker: None,

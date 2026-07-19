@@ -416,6 +416,11 @@ pub struct SourceLine {
     /// Stable node handle for lines that start an addressable node.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
+    /// SHA-256 rev of the innermost node named by `node_id`, as `h{:016x}` — the
+    /// value a mutation IF REV needs. Lets a SHOW NODE / SHOW LINES read feed a
+    /// CHANGE NODE id(off) edit directly, with no second FIND to learn the rev.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
     /// 1-based offset of this line within its innermost containing node, when
     /// `SHOW LINES` resolved one. Lets the agent target the line with
     /// `CHANGE NODE 'id(offset)'` instead of an absolute, drift-prone number.

@@ -1023,6 +1023,8 @@ Applies to: `SHOW body OF`, `SHOW LINES n-m OF`, `SHOW context OF`, `SHOW NODE`,
 | `text` | string | Line content (supports `LIKE`, `MATCHES`, `=`) |
 | `line` | integer | 1-based line number |
 | `marker` | string | Prefix marker (e.g. `+`, `-` in diff output) |
+| `node_id` | string | Stable handle of the innermost node containing the line |
+| `rev` | string | Edit fingerprint of that node — feeds a mutation's `IF REV` |
 
 Filtering runs **before** the implicit `DEFAULT_SHOW_LINE_LIMIT` cap, so the full function body is searched even when not all lines are returned.
 

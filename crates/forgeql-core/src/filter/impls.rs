@@ -192,6 +192,7 @@ impl ClauseTarget for crate::result::SourceLine {
             "text" | "content" => Some(&self.text),
             "marker" => self.marker.as_deref(),
             "node_id" => self.node_id.as_deref(),
+            "rev" => self.rev.as_deref(),
             _ => None,
         }
     }

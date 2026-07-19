@@ -343,11 +343,13 @@ fn extract_source_lines(json: &serde_json::Value) -> Vec<SourceLine> {
                 .get("offset")
                 .and_then(serde_json::Value::as_u64)
                 .and_then(|n| usize::try_from(n).ok());
+            let rev = item.get("rev").and_then(|v| v.as_str()).map(String::from);
             Some(SourceLine {
                 line,
                 text,
                 marker,
                 node_id,
+                rev,
                 node_offset,
             })
         })

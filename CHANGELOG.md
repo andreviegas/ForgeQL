@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.137.0] — 2026-07-19 — fix: SHOW NODE and SHOW LINES now carry the rev an edit needs
+
+### Fixed — read-then-edit no longer needs a second lookup
+
+Every mutation that names an existing node requires `IF REV '<rev>'`, but
+`SHOW NODE` and `SHOW LINES` reported no rev on the lines they returned. The
+natural `SHOW NODE` → `CHANGE NODE` flow therefore forced a separate `FIND`
+just to learn the rev of code already on screen.
+
+- Each returned line that resolves to an addressable node now carries that
+  node's `rev`. In JSON it is a per-line `rev` field; in the compact per-line
+  view it is a new `rev` column, printed once per node — on the node's first
+  line — to keep multi-line reads cheap. It is the same value `FIND` and
+  `FIND NODE` report, so it feeds `CHANGE NODE 'id(off)' IF REV '<rev>'`
+  directly.
+- The rev is resolved through the same node lookup the mutation layer uses, so
+  a block-surfaced handle reports the block's rev rather than a member's.
+
+This changes query output only; no index output changes, so the enrichment
+cache version is unchanged.
+
 ## [0.136.0] — 2026-07-19 — fix: reject an unsortable ORDER BY field on FIND symbols
 
 ### Fixed — ORDER BY on a non-symbol field no longer silently reorders

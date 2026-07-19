@@ -129,9 +129,11 @@ fn compact_lines(s: &ShowResult, lines: &[SourceLine]) -> String {
             .and_then(|id| id.split_once('.').map(|(p, _)| p))
             .unwrap_or_default();
         row(&mut out, &[&op, &sym, &file, &span, &q(prefix)]);
-        // Schema hint: `node` is the segment-relative ordinal, `off` the
-        // 1-based offset of the line within that node.
-        row(&mut out, &[&q("node"), &q("off"), &q("text")]);
+        // Schema hint: `node` is the segment-relative ordinal, `off` the 1-based
+        // offset of the line within that node, `rev` the node's edit fingerprint
+        // (shown once per node, on its first line) for a mutation's IF REV.
+        row(&mut out, &[&q("node"), &q("off"), &q("rev"), &q("text")]);
+        let mut prev_node: Option<&str> = None;
         for line in lines {
             let (node, off) = match (line.node_id.as_deref(), line.node_offset) {
                 (Some(id), Some(o)) => {
@@ -140,7 +142,14 @@ fn compact_lines(s: &ShowResult, lines: &[SourceLine]) -> String {
                 }
                 _ => (String::new(), String::new()),
             };
-            row(&mut out, &[&q(&node), &q(&off), &q(&line.text)]);
+            // Rev is a property of the whole node, so emit it once — on the first
+            // row of each node run — to keep the common multi-line read cheap.
+            let rev = match (line.node_id.as_deref(), line.rev.as_deref()) {
+                (Some(id), Some(r)) if prev_node != Some(id) => r,
+                _ => "",
+            };
+            prev_node = line.node_id.as_deref();
+            row(&mut out, &[&q(&node), &q(&off), &q(rev), &q(&line.text)]);
         }
     } else if let Some((node_id, start)) = frame {
         row(&mut out, &[&op, &sym, &file, &span, &q(&node_id)]);

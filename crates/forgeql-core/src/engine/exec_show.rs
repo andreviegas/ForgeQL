@@ -246,6 +246,7 @@ impl ForgeQLEngine {
             .window(selection)
             .into_iter()
             .map(|(idx, text)| SourceLine {
+                rev: None,
                 line: idx,
                 text: text.to_string(),
                 marker: None,
@@ -540,6 +541,10 @@ impl ForgeQLEngine {
         if refs.is_empty() {
             return json;
         }
+        // Resolve each node rev once (a node spans many lines) so SHOW output can
+        // carry the IF REV a mutation needs; see SourceLine::rev.
+        let mut rev_cache: std::collections::HashMap<String, Option<String>> =
+            std::collections::HashMap::new();
         if let Some(arr) = json.get_mut("lines").and_then(|v| v.as_array_mut()) {
             for (line_obj, node_ref) in arr.iter_mut().zip(refs) {
                 if let Some((node_id, node_start)) = node_ref {
@@ -549,6 +554,24 @@ impl ForgeQLEngine {
                         .and_then(|n| usize::try_from(n).ok())
                         .unwrap_or(0);
                     let offset = abs_line.saturating_sub(node_start) + 1;
+                    // Stamp the node rev so the read-then-edit flow (SHOW then
+                    // CHANGE NODE id(off) IF REV) needs no second FIND. find_node is
+                    // the canonical rev resolver — correct even for block-surfaced
+                    // handles — and the per-node cache keeps a multi-line read cheap.
+                    let rev = rev_cache
+                        .entry(node_id.clone())
+                        .or_insert_with(|| {
+                            engine
+                                .find_node(&node_id, workspace.root())
+                                .ok()
+                                .flatten()
+                                .map(|n| n.rev)
+                                .filter(|r| !r.is_empty())
+                        })
+                        .clone();
+                    if let Some(rev) = rev {
+                        line_obj["rev"] = serde_json::Value::String(rev);
+                    }
                     line_obj["node_id"] = serde_json::Value::String(node_id);
                     line_obj["offset"] = serde_json::json!(offset);
                 }

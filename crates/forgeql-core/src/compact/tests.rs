@@ -174,6 +174,7 @@ fn body_lines_two_columns() {
         content: ShowContent::Lines {
             lines: vec![
                 SourceLine {
+                    rev: None,
                     line: 42,
                     text: "float convert(uint8_t raw) {".into(),
                     marker: None,
@@ -181,6 +182,7 @@ fn body_lines_two_columns() {
                     node_offset: None,
                 },
                 SourceLine {
+                    rev: None,
                     line: 43,
                     text: "    return raw * 3.3f / 255.0f;".into(),
                     marker: None,
@@ -188,6 +190,7 @@ fn body_lines_two_columns() {
                     node_offset: None,
                 },
                 SourceLine {
+                    rev: None,
                     line: 44,
                     text: "}".into(),
                     marker: None,
@@ -896,6 +899,7 @@ fn compact_lines_node_framed_drops_absolute_lines() {
     // shows 1-based node-relative offsets instead of absolute line numbers.
     let lines = vec![
         SourceLine {
+            rev: None,
             line: 10,
             text: "fn foo() {".to_string(),
             marker: None,
@@ -903,6 +907,7 @@ fn compact_lines_node_framed_drops_absolute_lines() {
             node_offset: None,
         },
         SourceLine {
+            rev: None,
             line: 11,
             text: "    bar();".to_string(),
             marker: None,
@@ -910,6 +915,7 @@ fn compact_lines_node_framed_drops_absolute_lines() {
             node_offset: None,
         },
         SourceLine {
+            rev: None,
             line: 12,
             text: "}".to_string(),
             marker: None,
@@ -943,6 +949,7 @@ fn compact_lines_node_framed_drops_absolute_lines() {
 fn compact_lines_without_node_id_keeps_absolute_lines() {
     let lines = vec![
         SourceLine {
+            rev: None,
             line: 10,
             text: "a".to_string(),
             marker: None,
@@ -950,6 +957,7 @@ fn compact_lines_without_node_id_keeps_absolute_lines() {
             node_offset: None,
         },
         SourceLine {
+            rev: None,
             line: 11,
             text: "b".to_string(),
             marker: None,
@@ -978,13 +986,14 @@ fn chomp_only_newline_becomes_empty() {
 fn compact_lines_per_line_node_offsets_replace_absolute() {
     // SHOW LINES on a parsed file: each line carries its own innermost
     // containing node + a 1-based offset, so absolute line numbers give way
-    // to a hoisted `n<hex>` prefix (header) plus per-row `node`/`off`.
+    // to a hoisted `n<hex>` prefix (header) plus per-row `node`/`off`/`rev`.
     let lines = vec![
         SourceLine {
             line: 40,
             text: "    let x = 1;".to_string(),
             marker: None,
             node_id: Some("nabc123def456.0264".to_string()),
+            rev: Some("h0264000000000001".to_string()),
             node_offset: Some(1),
         },
         SourceLine {
@@ -992,6 +1001,7 @@ fn compact_lines_per_line_node_offsets_replace_absolute() {
             text: "    if x > 0 {".to_string(),
             marker: None,
             node_id: Some("nabc123def456.0265".to_string()),
+            rev: Some("h0265000000000002".to_string()),
             node_offset: Some(1),
         },
         SourceLine {
@@ -999,6 +1009,7 @@ fn compact_lines_per_line_node_offsets_replace_absolute() {
             text: "        log();".to_string(),
             marker: None,
             node_id: Some("nabc123def456.0265".to_string()),
+            rev: Some("h0265000000000002".to_string()),
             node_offset: Some(2),
         },
         // Gap line: no containing node (e.g. a top-level blank).
@@ -1007,22 +1018,30 @@ fn compact_lines_per_line_node_offsets_replace_absolute() {
             text: String::new(),
             marker: None,
             node_id: None,
+            rev: None,
             node_offset: None,
         },
     ];
     let s = lines_result("show_lines", 40, lines.len());
     let out = compact_lines(&s, &lines);
-    assert!(out.contains("nabc123def456"), "prefix hoisted: {out}");
     assert!(
-        out.contains("\"node\",\"off\",\"text\""),
-        "schema is node/off/text: {out}"
+        out.contains("\"node\",\"off\",\"rev\",\"text\""),
+        "schema is node/off/rev/text: {out}"
     );
-    assert!(out.contains("\".0264\",\"1\""), "ordinal + offset: {out}");
-    assert!(out.contains("\".0265\",\"1\""));
-    assert!(out.contains("\".0265\",\"2\""));
+    // First row of each node run carries its rev for a mutation's IF REV.
+    assert!(
+        out.contains("\".0264\",\"1\",\"h0264000000000001\""),
+        "node rev on first line: {out}"
+    );
+    assert!(out.contains("\".0265\",\"1\",\"h0265000000000002\""));
+    // Continuation line of the same node repeats the ordinal but drops the rev.
+    assert!(
+        out.contains("\".0265\",\"2\",\"\""),
+        "rev shown once per node run: {out}"
+    );
     assert!(!out.contains("40,\""), "absolute lines dropped: {out}");
     assert!(
-        out.contains("\"\",\"\",\"\""),
+        out.contains("\"\",\"\",\"\",\"\""),
         "gap line blank handle: {out}"
     );
 }

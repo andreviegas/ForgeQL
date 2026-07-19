@@ -189,6 +189,7 @@ fn show_result_round_trips_through_json() {
         content: ShowContent::Lines {
             lines: vec![
                 SourceLine {
+                    rev: None,
                     line: 42,
                     text: "float convertByte2Volts(uint8_t raw) {".to_string(),
                     marker: None,
@@ -196,6 +197,7 @@ fn show_result_round_trips_through_json() {
                     node_offset: None,
                 },
                 SourceLine {
+                    rev: None,
                     line: 43,
                     text: "    return raw * 3.3f / 255.0f;".to_string(),
                     marker: None,
@@ -509,6 +511,7 @@ fn make_lines_result(n: usize) -> ForgeQLResult {
         content: ShowContent::Lines {
             lines: (1..=n)
                 .map(|i| SourceLine {
+                    rev: None,
                     line: i,
                     text: format!("line {i}"),
                     marker: None,
@@ -712,6 +715,7 @@ fn display_show_result_lines_variant() {
         file: Some(PathBuf::from("src/lib.cpp")),
         content: ShowContent::Lines {
             lines: vec![SourceLine {
+                rev: None,
                 line: 10,
                 text: "void myFunc() {}".to_string(),
                 marker: None,

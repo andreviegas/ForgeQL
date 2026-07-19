@@ -746,6 +746,7 @@ impl ForgeQLEngine {
                         .lines()
                         .enumerate()
                         .map(|(i, l)| crate::result::SourceLine {
+                            rev: None,
                             line: i + 1,
                             text: l.to_string(),
                             marker: None,

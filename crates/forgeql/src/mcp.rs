@@ -848,6 +848,7 @@ mod tests {
         // replacing the old hard block that returned zero lines.
         let lines: Vec<SourceLine> = (1..=100)
             .map(|i| SourceLine {
+                rev: None,
                 line: i,
                 text: format!("source line {i}"),
                 marker: None,
