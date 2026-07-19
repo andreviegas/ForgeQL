@@ -138,17 +138,6 @@ pub(crate) struct RunFqlParams {
 // Helpers
 // -----------------------------------------------------------------------
 
-/// Convert a `ForgeError` (from the parser) to an `rmcp` `ErrorData`.
-///
-/// Takes ownership because `map_err` passes the error by value.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "map_err requires taking ownership; the value cannot be passed by reference"
-)]
-fn parse_error(err: ForgeError) -> ErrorData {
-    ErrorData::internal_error(format!("{err:#}"), None)
-}
-
 /// Convert an engine error into an `ErrorData`, attaching a coach hint (if any)
 /// so it rides the error response — a `"coach"` sibling when the payload is a
 /// JSON object, else a trailing line. `None` leaves the message byte-identical.
@@ -407,7 +396,21 @@ impl ForgeQlMcp {
         Parameters(params): Parameters<RunFqlParams>,
     ) -> Result<CallToolResult, ErrorData> {
         debug!(fql = %params.fql, format = ?params.format, "run_fql");
-        let ops = parser::parse_with_source(&params.fql).map_err(parse_error)?;
+        let ops = match parser::parse_with_source(&params.fql) {
+            Ok(ops) => ops,
+            Err(err) => {
+                let coords = params
+                    .session_id
+                    .as_deref()
+                    .and_then(|sid| SessionCoords::from_session_id(sid).ok());
+                let hint = self
+                    .engine
+                    .lock()
+                    .await
+                    .observe_parse_error(coords.as_ref(), &params.fql);
+                return Err(engine_error_with_coach(err.into(), hint));
+            }
+        };
         if ops.is_empty() {
             return Err(ErrorData::invalid_params("empty FQL statement", None));
         }

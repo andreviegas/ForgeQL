@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use forgeql_core::coach_api::{Coach, CommandEvent, Hint, Outcome, Verb};
+use forgeql_core::coach_api::{Coach, CommandEvent, ErrKind, Hint, Outcome, Verb};
 use serde::{Deserialize, Serialize};
 
 /// Build a coach from the environment, or `None` when disabled.
@@ -150,26 +150,128 @@ impl Coach for ForgeQLCoach {
         let key = format!("{}@{}", ev.coords.source, ev.coords.budget_branch());
         let mut state = self.load(&key);
         state.record(ev);
-        let hint = if self.debug {
-            Some(Hint {
-                text: format!(
-                    "[coach:debug] cmd #{} verb={:?} outcome={} seen={} errors={} cookie={}",
-                    ev.cmd_index,
-                    ev.verb,
-                    outcome_label(&ev.outcome),
-                    state.commands_seen,
-                    state.errors_seen,
-                    key,
-                ),
-            })
-        } else {
-            None
-        };
+        // Reactive teaching is the primary signal: a failure (or a capped read)
+        // is concrete evidence of a protocol gap, so the corrective hint rides
+        // the very response that carries it. The debug diagnostic is a fallback
+        // for the remaining commands, used to prove the wiring on a live binary.
+        let hint = reactive_hint(ev).or_else(|| self.debug.then(|| debug_hint(ev, &state, &key)));
         self.store(&key, state);
         hint
     }
 }
 
+/// A short corrective hint for a node handle that no longer resolves.
+const NODE_NOT_FOUND: &str = concat!(
+    "That handle no longer resolves — the node was deleted, moved, or its ordinal was ",
+    "remapped by an earlier edit.\n",
+    "Re-locate it before retrying: FIND symbols WHERE name = '...' (or SHOW outline OF '<file>') ",
+    "returns the current node_id and rev.",
+);
+
+/// A short corrective hint for an `IF REV` fingerprint mismatch.
+const REV_MISMATCH: &str = concat!(
+    "IF REV mismatch — the node changed since you read it.\n",
+    "The error payload carries its current rev, line range, and source; re-target with that rev: ",
+    "CHANGE NODE '<id>' IF REV '<current-rev>' WITH '...'.\n",
+    "If the change is unexpected, re-read the node first: SHOW NODE '<id>'.",
+);
+
+/// A short corrective hint for a bulk `FOUND` verb with no armed set.
+const NO_FOUND_SET: &str = concat!(
+    "A NODES FOUND verb needs an armed set.\n",
+    "Run the selecting FIND first (FIND symbols/usages/files WHERE ...), then re-issue the FOUND ",
+    "command in the same session — its response carries the master rev to quote in IF REV.",
+);
+
+/// A short corrective hint for a `FOUND` verb over a truncated arming FIND.
+const FOUND_TRUNCATED: &str = concat!(
+    "The arming FIND was truncated, so no master rev was issued — a FOUND mutation would touch ",
+    "rows you never saw.\n",
+    "Re-run the FIND with a LIMIT that covers the whole result (or tighter WHERE filters), then ",
+    "repeat the FOUND command.",
+);
+
+/// A short corrective hint for a `FOUND` verb missing its mandatory `IF REV`.
+const FOUND_REFUSED: &str = concat!(
+    "A NODES FOUND verb edits every member at once, so it requires IF REV '<master-rev>'.\n",
+    "Re-run the arming FIND — its response carries the master rev — then quote it: ",
+    "CHANGE NODES FOUND IF REV '<master-rev>' MATCHING 'a' WITH 'b'.",
+);
+
+/// A short corrective hint for output that hit the implicit line cap.
+const OUTPUT_CAPPED: &str = concat!(
+    "Output hit the line cap.\n",
+    "Read a whole node by handle — SHOW NODE '<node_id>' returns its full span. Page a buffered ",
+    "result with SHOW MORE HEAD n | TAIL n | n-m.\n",
+    "To read less, lower DEPTH (0 signature, 1 skeleton) or filter with WHERE text LIKE '%...%'.",
+);
+
+/// The reactive curriculum: map a command outcome to a short recovery hint.
+///
+/// Pure static data keyed on the coach-facing error taxonomy — no source is
+/// inspected. A hint fires only for a failure or a capped read; a clean success
+/// returns `None`.
+fn reactive_hint(ev: &CommandEvent<'_>) -> Option<Hint> {
+    let text = match &ev.outcome {
+        Outcome::Ok { capped: true, .. } | Outcome::Err(ErrKind::OutputCapped) => OUTPUT_CAPPED,
+        Outcome::Err(ErrKind::ParseError { attempted }) => return Some(parse_hint(attempted)),
+        Outcome::Err(ErrKind::RevMismatch) => REV_MISMATCH,
+        Outcome::Err(ErrKind::NodeNotFound) => NODE_NOT_FOUND,
+        Outcome::Err(ErrKind::NoFoundSet) => NO_FOUND_SET,
+        Outcome::Err(ErrKind::FoundTruncated) => FOUND_TRUNCATED,
+        Outcome::Err(ErrKind::FoundRefused) => FOUND_REFUSED,
+        // BudgetLow has no producer yet; its hint lands with the budget observer.
+        Outcome::Ok { .. } | Outcome::Err(ErrKind::BudgetLow | ErrKind::Other) => return None,
+    };
+    Some(Hint {
+        text: text.to_owned(),
+    })
+}
+
+/// Nearest-verb correction for a statement that did not parse.
+fn parse_hint(attempted: &str) -> Hint {
+    const VERBS: [&str; 14] = [
+        "USE", "FIND", "SHOW", "CHANGE", "INSERT", "DELETE", "MOVE", "COPY", "BEGIN", "COMMIT",
+        "ROLLBACK", "VERIFY", "UNDO", "JOB",
+    ];
+    let first = attempted
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let lead = if first.is_empty() {
+        "Empty statement.".to_owned()
+    } else if VERBS.contains(&first.as_str()) {
+        format!(
+            "'{first}' is a valid verb, but the statement did not parse — check clause order \
+             (IN -> EXCLUDE -> WHERE -> GROUP BY -> HAVING -> ORDER BY -> OFFSET -> LIMIT) and quoting."
+        )
+    } else {
+        format!("'{first}' is not a ForgeQL verb.")
+    };
+    Hint {
+        text: format!(
+            "{lead}\n\
+             Statements start with a verb: USE / FIND / SHOW / CHANGE / INSERT / DELETE / MOVE / COPY / BEGIN / COMMIT.\n\
+             Connect with USE source.branch AS 'alias'; locate with FIND symbols WHERE name LIKE '...'; read with SHOW NODE '<id>'."
+        ),
+    }
+}
+
+/// The debug-mode wiring diagnostic, emitted only when no reactive hint fires.
+fn debug_hint(ev: &CommandEvent<'_>, state: &LearnerState, key: &str) -> Hint {
+    Hint {
+        text: format!(
+            "[coach:debug] cmd #{} verb={:?} outcome={} seen={} errors={} cookie={}",
+            ev.cmd_index,
+            ev.verb,
+            outcome_label(&ev.outcome),
+            state.commands_seen,
+            state.errors_seen,
+            key,
+        ),
+    }
+}
 /// Short label for an outcome — used only by the debug diagnostic.
 fn outcome_label(outcome: &Outcome) -> String {
     match outcome {

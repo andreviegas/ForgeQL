@@ -861,6 +861,38 @@ impl ForgeQLEngine {
             .map(|hint| hint.text)
     }
 
+    /// Observe a statement that failed to parse before it could be executed.
+    ///
+    /// Parse errors never reach [`Self::execute`] — the transport parses first
+    /// and rejects — so this lets the coach still see them (the primary teaching
+    /// signal) and return a corrective hint the transport attaches to the error
+    /// response. A no-op without a coach or without session coords.
+    pub fn observe_parse_error(
+        &mut self,
+        coords: Option<&SessionCoords>,
+        attempted: &str,
+    ) -> Option<String> {
+        let coords = coords?;
+        if self.coach.is_some() {
+            self.commands_served += 1;
+            let ev = CommandEvent {
+                coords,
+                verb: Verb::Other,
+                clauses: Vec::new(),
+                outcome: Outcome::Err(ErrKind::ParseError {
+                    attempted: attempted.to_owned(),
+                }),
+                cmd_index: self.commands_served,
+            };
+            self.coach
+                .as_mut()
+                .and_then(|c| c.observe(&ev))
+                .map(|hint| hint.text)
+        } else {
+            None
+        }
+    }
+
     /// Map an op to its coarse coach verb.
     const fn verb_of(op: &ForgeQLIR) -> Verb {
         match op {

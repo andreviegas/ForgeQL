@@ -6,6 +6,29 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.130.0] — 2026-07-19 — feat: the onboarding coach now teaches from failures
+
+### Added — reactive protocol hints
+
+The optional onboarding coach — silent since its introduction — now emits short,
+just-in-time corrective hints when a command fails or a read is truncated. A
+failure is concrete evidence of a protocol gap, so the hint rides the very
+response that carries the error:
+
+- An `IF REV` mismatch, an unresolved node handle, and the three bulk
+  `NODES FOUND` refusals each get a targeted recovery sequence: re-read with the
+  returned rev, re-locate the handle, or re-run the arming FIND for its master rev.
+- Output that hits the line cap points at `SHOW NODE`, `SHOW MORE`, and lower
+  `DEPTH`; a session low on line budget points at tighter reads.
+- A statement that fails to parse gets a nearest-verb correction — whether its
+  first word is a known verb, the clause order, and the connect-and-locate
+  starting points. Parse failures never reach the engine's executor, so each
+  transport (CLI, stdio, and HTTP) observes them through a dedicated hook.
+
+Hints are opt-out with `FORGEQL_COACH=0` and never appear when the coach is
+absent (library embedders and the test suites). This change alters no index
+output, so the enrichment cache version is unchanged.
+
 ## [0.129.0] — 2026-07-19 — fix: self-healing rejections render consistently across transports
 
 ### Fixed — parseable rejections everywhere

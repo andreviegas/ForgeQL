@@ -36,6 +36,7 @@ Optimized for AI agent consumption — syntax first, advanced patterns second.
    - [Syntax Damage — the `error` kind](#syntax-damage--the-error-kind)
 7. [Advanced Patterns](#advanced-patterns)
 8. [Raw line and file operations (legacy, non-indexed files)](#raw-line-and-file-operations-legacy-non-indexed-files)
+9. [Onboarding Coach](#onboarding-coach)
 
 ---
 
@@ -1898,3 +1899,36 @@ appended when `AT LINE k` is omitted. **COPY** leaves `src` untouched; **MOVE**
 deletes the range from `src` after inserting. Same-file moves are atomic. A
 purely numeric `TO` destination is rejected (write `TO '<path>' AT LINE k`, not
 `TO 3`).
+
+---
+
+## Onboarding Coach
+
+ForgeQL ships an optional **onboarding coach**: a decoupled add-on that feeds an
+agent short, just-in-time hints about the ForgeQL protocol as it works, so an
+agent can become fluent without reading this reference up front. It is a
+temporary bridge for models not yet natively fluent in ForgeQL; it never
+inspects, transforms, or "fixes" your source — it teaches the *protocol* only.
+
+**How a hint arrives.** When the coach emits a hint, it rides the same response
+as the command that triggered it — never a separate message:
+
+- JSON output: a top-level `"coach"` field alongside the result.
+- CSV / text output: a trailing `coach: <text>` block.
+
+At most one hint rides any response, and it is purely advisory — nothing about a
+command's result or error changes when a hint is present or absent.
+
+**When it fires.** The coach teaches primarily from failures, because an error
+is concrete evidence of a protocol gap. A hint may accompany:
+
+- a rejected mutation (an `IF REV` mismatch, or an unresolved node handle);
+- a bulk `NODES FOUND` verb that could not proceed (no armed FIND, a truncated
+  FIND, or a missing master `IF REV`);
+- output that hit the line cap, or a session low on line budget;
+- a statement that failed to parse (with a nearest-verb correction).
+
+**Turning it off.** Set `FORGEQL_COACH=0` (or `off`, `false`, `no`) in the
+server's environment to disable the coach entirely; the hot path is then
+untouched and no `coach` field ever appears. The coach is also absent by default
+for library embedders and the test suites.

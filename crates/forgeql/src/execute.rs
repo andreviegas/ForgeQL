@@ -133,7 +133,14 @@ pub(crate) fn execute_and_print(
     let ops = match parser::parse_with_source(&fql_text) {
         Ok(ops) => ops,
         Err(err) => {
-            eprintln!("parse error: {err}");
+            let coords = session
+                .session_id
+                .as_deref()
+                .map(SessionCoords::from_session_id)
+                .transpose()
+                .unwrap_or(None);
+            let hint = engine.observe_parse_error(coords.as_ref(), &fql_text);
+            eprintln!("{}", with_coach(format!("parse error: {err}"), hint));
             return;
         }
     };

@@ -308,7 +308,7 @@ async fn execute_fql(
     session_id: Option<&str>,
     format: &str,
 ) -> Result<(String, Option<String>), ExecFailure> {
-    let ops = parser::parse_with_source(fql).map_err(|e| format!("parse error: {e}"))?;
+    let ops = parse_or_coach(state, session_id, fql).await?;
     if ops.is_empty() {
         return Err("empty FQL statement".to_string().into());
     }
@@ -408,6 +408,31 @@ async fn execute_fql(
     }
 
     Ok((outputs.join("\n"), new_session))
+}
+
+/// Parse `fql`, or observe the parse failure through the coach and return a
+/// coach-annotated failure for the transport to render. Parse errors never reach
+/// the engine's executor, so this is the coach's hook for seeing them.
+async fn parse_or_coach(
+    state: &AppState,
+    session_id: Option<&str>,
+    fql: &str,
+) -> Result<Vec<(String, ForgeQLIR)>, ExecFailure> {
+    match parser::parse_with_source(fql) {
+        Ok(ops) => Ok(ops),
+        Err(e) => {
+            let coords = session_id.and_then(|sid| SessionCoords::from_session_id(sid).ok());
+            let hint = state
+                .engine
+                .lock()
+                .await
+                .observe_parse_error(coords.as_ref(), fql);
+            Err(ExecFailure {
+                self_healing: false,
+                body: with_coach(format!("parse error: {e}"), hint),
+            })
+        }
+    }
 }
 
 /// Window over-cap CSV output into the session's `SHOW MORE` buffer (see
