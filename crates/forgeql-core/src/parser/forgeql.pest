@@ -93,6 +93,7 @@ statement = {
   | show_version_stmt
   | show_stats_stmt
   | show_diff_stmt
+  | show_commits_stmt
   | change_stmt
   | copy_stmt
   | move_nodes_found_to_stmt
@@ -194,6 +195,7 @@ use_stmt = { "USE" ~ source_name ~ "." ~ branch_ref ~ "AS" ~ any_value }
 
 show_sources_stmt  = { "SHOW" ~ "SOURCES" }
 show_branches_stmt = { "SHOW" ~ "BRANCHES" }
+show_commits_stmt  = { "SHOW" ~ "COMMITS" ~ clauses }
 show_version_stmt  = { "SHOW" ~ "VERSION" }
 show_stats_stmt    = { "SHOW" ~ "STATS" ~ ("FOR" ~ any_value)? }
 

@@ -2213,6 +2213,18 @@ fn parse_show_diff_of_commit() {
 }
 
 #[test]
+fn parse_show_commits() {
+    let ops = parser::parse("SHOW COMMITS").expect("parse SHOW COMMITS");
+    assert!(matches!(ops[0], ForgeQLIR::ShowCommits { .. }));
+
+    let ops = parser::parse("SHOW COMMITS LIMIT 5").expect("parse SHOW COMMITS LIMIT");
+    let ForgeQLIR::ShowCommits { ref clauses } = ops[0] else {
+        panic!("expected ShowCommits, got {:?}", ops[0]);
+    };
+    assert_eq!(clauses.limit, Some(5));
+}
+
+#[test]
 fn parse_move_lines_append() {
     parser::parse("MOVE LINES 1-5 OF 'src/lib.rs' TO 'dst/lib.rs'")
         .expect("parse MOVE LINES (append)");

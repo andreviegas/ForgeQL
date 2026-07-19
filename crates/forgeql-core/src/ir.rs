@@ -222,6 +222,15 @@ pub enum ForgeQLIR {
     /// `SHOW BRANCHES` — list branches of the current session source.
     /// `SHOW BRANCHES` — list branches of the current session source.
     ShowBranches,
+    /// `SHOW COMMITS [clauses]` — the commits this session's branch carries
+    /// since its base (`base..head`), newest first. Session-scoped: it reports
+    /// this session's own commits for handoff and deliberately does not list
+    /// other branches.
+    ShowCommits {
+        /// Universal clauses applied to the commit rows (default LIMIT 20).
+        #[serde(default)]
+        clauses: Clauses,
+    },
 
     /// `SHOW VERSION` — report the crate version of the running binary.
     ShowVersion,

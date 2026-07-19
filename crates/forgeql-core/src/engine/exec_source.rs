@@ -777,6 +777,53 @@ impl ForgeQLEngine {
         }))
     }
 
+    pub(super) fn exec_show_commits(
+        &self,
+        session_id: Option<&str>,
+        clauses: &crate::ir::Clauses,
+    ) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+        let session = self.require_session(sid)?;
+        let worktree = session.worktree_path.clone();
+        let base_ref = session.branch.clone();
+        let find_limit = session.output_config().find_limit;
+
+        let commits = crate::git::commits_since(&worktree, &base_ref)?;
+
+        let mut results: Vec<SymbolMatch> = commits
+            .into_iter()
+            .map(|(hash, subject)| SymbolMatch {
+                name: hash,
+                node_kind: Some("commit".to_string()),
+                fql_kind: None,
+                language: None,
+                path: None,
+                line: None,
+                usages_count: None,
+                fields: std::collections::HashMap::from([("subject".to_string(), subject)]),
+                count: None,
+                node_id: None,
+                rev: None,
+            })
+            .collect();
+
+        crate::filter::apply_clauses(&mut results, clauses);
+        let total = results.len();
+        if clauses.limit.is_none() {
+            results.truncate(find_limit);
+        }
+
+        Ok(ForgeQLResult::Query(QueryResult {
+            op: "show_commits".to_string(),
+            results,
+            total,
+            metric_hint: None,
+            group_by_field: None,
+            hint: None,
+            found_rev: None,
+        }))
+    }
+
     /// `SHOW VERSION` — report the crate version compiled into the running
     /// binary. Session-independent: reads no AST data, so it needs no active
     /// session.

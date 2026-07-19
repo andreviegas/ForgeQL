@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.125.0] — 2026-07-19 — feat(session): SHOW COMMITS lists a session's own commits
+
+### Added — a session reports its commits for handoff
+
+`SHOW COMMITS` lists the commits this session's branch carries over its base,
+newest first — the abbreviated hash and the subject line, and little else.
+Universal clauses apply (default `LIMIT 20`), so `WHERE`, `ORDER BY`, and `LIMIT`
+all work. It is deliberately session-scoped and does not enumerate other
+branches: an agent reports its own state with `SHOW COMMITS` and hands a hash to
+the next agent, who bases a session on it directly.
 ## [0.124.0] — 2026-07-19 — feat(diff): SHOW DIFF OF a committed hash
 
 ### Added — review any commit, not only the pending worktree diff

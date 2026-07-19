@@ -210,6 +210,12 @@ fn parse_show_diff_stmt(pair: pest::iterators::Pair<'_, Rule>) -> ForgeQLIR {
     ForgeQLIR::ShowDiff { stat, of, clauses }
 }
 
+/// Parse a `show_commits_stmt` rule into a [`ForgeQLIR::ShowCommits`].
+fn parse_show_commits_stmt(pair: pest::iterators::Pair<'_, Rule>) -> ForgeQLIR {
+    let clauses = parse_clauses(pair.into_inner());
+    ForgeQLIR::ShowCommits { clauses }
+}
+
 fn parse_job_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {
     let inner = pair
         .into_inner()
@@ -354,6 +360,7 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
         Rule::job_stmt => parse_job_stmt(pair),
         Rule::export_patch_stmt => parse_export_patch_stmt(pair),
         Rule::show_diff_stmt => Ok(parse_show_diff_stmt(pair)),
+        Rule::show_commits_stmt => Ok(parse_show_commits_stmt(pair)),
 
         Rule::statement => {
             let inner = pair

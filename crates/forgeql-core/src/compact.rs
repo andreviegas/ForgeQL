@@ -757,6 +757,7 @@ fn compact_query(query: &QueryResult) -> String {
     let mut out = match query.op.as_str() {
         "find_usages" => compact_find_usages(query),
         "count_usages" => compact_count_usages(query),
+        "show_commits" => compact_show_commits(query),
         _ => compact_find_grouped_by_kind(query),
     };
     // Engine-attached guidance (e.g. a WHERE field no row type carries):
@@ -769,6 +770,21 @@ fn compact_query(query: &QueryResult) -> String {
     // was issued: a truncated result deliberately has none.
     if let Some(rev) = &query.found_rev {
         row(&mut out, &[&q("found_rev"), &q(rev)]);
+    }
+    out
+}
+
+/// `SHOW COMMITS` — one row per commit: abbreviated hash and subject. A distinct
+/// renderer because the generic symbol schema drops the subject (it lives in the
+/// row's `fields`, not a fixed column).
+fn compact_show_commits(query: &QueryResult) -> String {
+    let mut out = String::with_capacity(query.results.len() * 60);
+    let tot = query.total.to_string();
+    row(&mut out, &[&q(&query.op), &tot]);
+    row(&mut out, &[&q("hash"), &q("[subject]")]);
+    for sr in &query.results {
+        let subject = sr.fields.get("subject").map_or("", String::as_str);
+        row(&mut out, &[&q(&sr.name), &q(subject)]);
     }
     out
 }

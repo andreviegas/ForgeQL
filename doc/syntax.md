@@ -68,6 +68,7 @@ USE source_name.<commit-hash> AS 'alias'   -- base the session on an immutable c
 SHOW SOURCES
 
 SHOW BRANCHES
+SHOW COMMITS [clauses]    -- this session's commits since its base (newest first)
 
 SHOW VERSION
 ```

@@ -391,6 +391,53 @@ fn find_symbols_groups_by_kind() {
 }
 
 #[test]
+fn show_commits_renders_hash_and_subject() {
+    let result = ForgeQLResult::Query(QueryResult {
+        op: "show_commits".into(),
+        total: 2,
+        metric_hint: None,
+        group_by_field: None,
+        found_rev: None,
+        hint: None,
+        results: vec![
+            SymbolMatch {
+                name: "d084cf1c807f".into(),
+                node_kind: Some("commit".into()),
+                fql_kind: None,
+                language: None,
+                path: None,
+                line: None,
+                usages_count: None,
+                fields: HashMap::from([("subject".to_string(), "sc: probe B".to_string())]),
+                count: None,
+                node_id: None,
+                rev: None,
+            },
+            SymbolMatch {
+                name: "e097db62d663".into(),
+                node_kind: Some("commit".into()),
+                fql_kind: None,
+                language: None,
+                path: None,
+                line: None,
+                usages_count: None,
+                fields: HashMap::from([("subject".to_string(), "sc: probe A".to_string())]),
+                count: None,
+                node_id: None,
+                rev: None,
+            },
+        ],
+    });
+    let csv = to_compact(&result);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[0], r#""show_commits",2"#);
+    assert_eq!(lines[1], r#""hash","[subject]""#);
+    assert_eq!(lines[2], r#""d084cf1c807f","sc: probe B""#);
+    assert_eq!(lines[3], r#""e097db62d663","sc: probe A""#);
+    assert_eq!(lines.len(), 4);
+}
+
+#[test]
 fn find_symbols_cf_rows_include_enclosing_fn() {
     let mut fields = HashMap::new();
     fields.insert("mixed_logic".to_string(), "true".to_string());

@@ -526,6 +526,7 @@ impl ForgeQLEngine {
             } => self.use_source(user_id, source, branch, as_branch),
             ForgeQLIR::ShowSources => self.show_sources(),
             ForgeQLIR::ShowBranches => self.show_branches(sid),
+            ForgeQLIR::ShowCommits { clauses } => self.exec_show_commits(sid, clauses),
             ForgeQLIR::ShowVersion => Ok(Self::show_version()),
             ForgeQLIR::ShowStats {
                 session_id: for_session,

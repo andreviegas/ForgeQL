@@ -677,6 +677,40 @@ pub fn commit_diff(repo_at: &Path, rev: &str) -> Result<Vec<DiffFile>> {
     accumulate_diff_files(&diff)
 }
 
+/// List the commits a session branch carries over its base, newest first.
+///
+/// Walks `base..head`, where `head` is the worktree's current HEAD and `base` is
+/// `base_ref` resolved to a commit. The fork point is an ancestor of `base` and
+/// so is hidden, leaving only the session's own commits. Each entry is the
+/// abbreviated hash and the commit subject line.
+///
+/// # Errors
+/// Returns an error if the worktree repo cannot be opened, HEAD cannot be
+/// resolved, or `base_ref` does not resolve to a commit.
+pub fn commits_since(worktree: &Path, base_ref: &str) -> Result<Vec<(String, String)>> {
+    let repo = Repository::open(worktree)
+        .with_context(|| format!("could not open worktree {}", worktree.display()))?;
+    let head = repo.head()?.peel_to_commit()?.id();
+    let base = worktree::resolve_commit(&repo, base_ref)?.id();
+
+    let mut walk = repo.revwalk()?;
+    walk.set_sorting(git2::Sort::TIME)?;
+    walk.push(head)?;
+    // Hiding `base` and its ancestors leaves only commits unique to `head`.
+    // When `base == head` the session has made no commits and the walk is empty.
+    let _ = walk.hide(base);
+
+    let mut out = Vec::new();
+    for oid in walk {
+        let oid = oid?;
+        let commit = repo.find_commit(oid)?;
+        let short: String = oid.to_string().chars().take(12).collect();
+        let subject = commit.summary().unwrap_or_default().to_string();
+        out.push((short, subject));
+    }
+    Ok(out)
+}
+
 /// Accumulate a libgit2 patch-format diff into per-file [`DiffFile`] entries.
 ///
 /// Shared by `worktree_diff` and `commit_diff`: libgit2 streams lines in delta
