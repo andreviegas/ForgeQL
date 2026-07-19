@@ -88,6 +88,7 @@ fn compact_show(s: &ShowResult) -> String {
         } => compact_callgraph(s, direction, entries),
         ShowContent::FileList { files, total } => compact_filelist(files, *total, s),
         ShowContent::Stats { sessions } => compact_stats(sessions),
+        ShowContent::Paged { lines } => compact_paged(s, lines),
     }
 }
 
@@ -197,6 +198,24 @@ fn compact_lines(s: &ShowResult, lines: &[SourceLine]) -> String {
         }
     }
     chomp(&mut out);
+    out
+}
+
+fn compact_paged(s: &ShowResult, lines: &[String]) -> String {
+    // These lines were ALREADY rendered — they are the buffered response text
+    // that overflowed. Emit them verbatim: routing them back through `q` (the
+    // field writer) would double-encode every field and turn the buffered
+    // header into a data row. That double-encoding is the whole reason this
+    // path exists.
+    let mut out = String::with_capacity(lines.iter().map(|l| l.len() + 1).sum());
+    for line in lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    // Preserve the paging footer so the agent still learns how much remains.
+    if let Some(ref hint) = s.hint {
+        row(&mut out, &[&q("hint"), &q(hint)]);
+    }
     out
 }
 

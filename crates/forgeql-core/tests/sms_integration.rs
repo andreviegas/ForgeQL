@@ -1315,6 +1315,7 @@ fn result_count(result: &ForgeQLResult) -> Option<usize> {
             ShowContent::FileList { files, .. } => Some(files.len()),
             ShowContent::Signature { .. } => Some(1),
             ShowContent::Stats { sessions } => Some(sessions.len()),
+            ShowContent::Paged { lines } => Some(lines.len()),
         },
         _ => None,
     }

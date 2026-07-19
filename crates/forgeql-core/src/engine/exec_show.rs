@@ -297,6 +297,20 @@ impl ForgeQLEngine {
             ));
         }
 
+        // The buffered window holds already-rendered response text. Hand it back
+        // as a paged block so the CSV writer emits it verbatim instead of
+        // re-quoting (double-encoding) every field. WHERE filtering and the
+        // LIMIT/OFFSET cap above already ran on the structured lines.
+        let paged: Option<Vec<String>> = match &mut show_result.content {
+            ShowContent::Lines { lines, .. } => {
+                Some(std::mem::take(lines).into_iter().map(|l| l.text).collect())
+            }
+            _ => None,
+        };
+        if let Some(lines) = paged {
+            show_result.content = ShowContent::Paged { lines };
+        }
+
         Ok(ForgeQLResult::Show(show_result))
     }
 

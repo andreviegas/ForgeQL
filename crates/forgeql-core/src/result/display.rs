@@ -220,6 +220,11 @@ impl fmt::Display for ShowResult {
                     writeln!(formatter, "{:>4} | {}", source_line.line, source_line.text,)?;
                 }
             }
+            ShowContent::Paged { lines } => {
+                for line in lines {
+                    writeln!(formatter, "{line}")?;
+                }
+            }
             ShowContent::Signature {
                 signature, line, ..
             } => {

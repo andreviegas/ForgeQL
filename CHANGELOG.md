@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.138.0] — 2026-07-19 — fix: SHOW MORE returns readable source, not a re-encoded blob
+
+### Fixed — paging a buffer no longer double-encodes its own output
+
+Paging a truncated response with `SHOW MORE` replayed the buffered text back
+through the CSV field writer, so every field was quoted a second time and the
+buffered column header resurfaced as a spurious data row. An agent that followed
+the paging footer to read the rest of a construct got an unreadable
+double-encoded blob instead of source lines.
+
+`SHOW MORE` now hands the buffered window back verbatim — the exact bytes the
+original response showed, windowed to the requested range — with the paging
+footer preserved. This change alters no index output, so the enrichment cache
+version is unchanged.
+
 ## [0.137.0] — 2026-07-19 — fix: SHOW NODE and SHOW LINES now carry the rev an edit needs
 
 ### Fixed — read-then-edit no longer needs a second lookup

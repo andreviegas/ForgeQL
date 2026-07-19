@@ -212,6 +212,47 @@ fn body_lines_two_columns() {
     assert_eq!(lines.len(), 5);
 }
 
+#[test]
+fn paged_emits_buffered_lines_verbatim_without_requoting() {
+    // SHOW MORE replays lines that were ALREADY rendered into the CSV buffer.
+    // They must come back byte-for-byte — never routed back through the field
+    // writer, or every field doubles its quotes and the buffered header row
+    // resurfaces as a bogus data row (the bug this variant exists to prevent).
+    let buffered = vec![
+        r#""node","off","rev","text""#.to_string(),
+        r#"".0000","1","hf74","    let x = 1;""#.to_string(),
+    ];
+    let result = ForgeQLResult::Show(ShowResult {
+        op: "show_more".into(),
+        symbol: Some("show".into()),
+        file: None,
+        start_line: None,
+        end_line: None,
+        total_lines: Some(2),
+        hint: Some("buffer 'show' has 2 lines; showing 2.".into()),
+        metadata: None,
+        content: ShowContent::Paged {
+            lines: buffered.clone(),
+        },
+    });
+    let csv = to_compact(&result);
+    let lines: Vec<&str> = csv.lines().collect();
+    // Buffered lines are emitted byte-for-byte.
+    assert_eq!(lines[0], buffered[0]);
+    assert_eq!(lines[1], buffered[1]);
+    // The paging footer survives as a hint row.
+    assert_eq!(
+        lines[2],
+        r#""hint","buffer 'show' has 2 lines; showing 2.""#
+    );
+    assert_eq!(lines.len(), 3);
+    // Re-quoting a quoted field yields a run of three quotes; verbatim never does.
+    assert!(
+        !csv.contains("\"\"\""),
+        "SHOW MORE output must not re-quote buffered fields"
+    );
+}
+
 // -- SHOW signature ------------------------------------------------
 
 #[test]

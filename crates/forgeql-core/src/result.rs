@@ -401,6 +401,11 @@ pub enum ShowContent {
     FileList { files: Vec<FileEntry>, total: usize },
     /// Internal stats: SHOW STATS.
     Stats { sessions: Vec<SessionStats> },
+    /// Pre-rendered paging output: SHOW MORE replays lines that were ALREADY
+    /// rendered into the continuation buffer. They must be emitted verbatim —
+    /// routing them back through the field-quoting CSV writer would double-encode
+    /// every field and surface the buffered header row as a bogus data row.
+    Paged { lines: Vec<String> },
 }
 
 /// A single source line in a SHOW result.
@@ -1056,7 +1061,8 @@ impl ForgeQLResult {
                     ShowContent::Lines { .. }
                     | ShowContent::Signature { .. }
                     | ShowContent::Members { .. }
-                    | ShowContent::Stats { .. } => {}
+                    | ShowContent::Stats { .. }
+                    | ShowContent::Paged { .. } => {}
                 }
             }
             Self::Mutation(m) => {
