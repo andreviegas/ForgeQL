@@ -185,6 +185,32 @@ fn node_span_text(src: &str, line_start: usize, line_end: usize) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+/// Line budget for the `current_content` echoed back in a `rev_mismatch`
+/// payload. Seeing a stale *statement* in full is invaluable for re-targeting;
+/// echoing a stale whole *file* buries the error under thousands of tokens.
+/// Past this many lines the body is elided to a head and a tail, with a note
+/// pointing at SHOW NODE for the complete text.
+const REV_MISMATCH_CONTENT_MAX_LINES: usize = 40;
+const REV_MISMATCH_CONTENT_HEAD_LINES: usize = 24;
+const REV_MISMATCH_CONTENT_TAIL_LINES: usize = 8;
+
+/// Elide an oversized node body for a `rev_mismatch` error, keeping the head
+/// and tail and noting how many lines were dropped. Content within the budget
+/// is returned verbatim, so small nodes are unaffected.
+fn cap_rev_mismatch_content(node_id: &str, content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() <= REV_MISMATCH_CONTENT_MAX_LINES {
+        return content.to_string();
+    }
+    let head = lines[..REV_MISMATCH_CONTENT_HEAD_LINES].join("\n");
+    let tail = lines[lines.len() - REV_MISMATCH_CONTENT_TAIL_LINES..].join("\n");
+    let elided = lines.len() - REV_MISMATCH_CONTENT_HEAD_LINES - REV_MISMATCH_CONTENT_TAIL_LINES;
+    format!(
+        "{head}\n… {elided} lines elided ({total} total) — SHOW NODE '{node_id}' for the full text …\n{tail}",
+        total = lines.len(),
+    )
+}
+
 /// Build the self-healing rejection payload for a failed `CHANGE NODE … IF REV`
 /// guard. Carries the node's current rev, line range, and source so the agent
 /// can re-target the edit without a follow-up read.
@@ -203,7 +229,7 @@ pub(super) fn rev_mismatch_payload(
         "current_rev": current_rev,
         "line_start": line_start,
         "line_end": line_end,
-        "current_content": current_content,
+        "current_content": cap_rev_mismatch_content(node_id, current_content),
     })
 }
 #[cfg(test)]
@@ -236,5 +262,31 @@ mod rev_mismatch_tests {
         assert_eq!(payload["line_start"], 10);
         assert_eq!(payload["line_end"], 14);
         assert_eq!(payload["current_content"], "int add() { return 1; }");
+    }
+
+    #[test]
+    fn rev_mismatch_payload_caps_oversized_content() {
+        // A small node is echoed verbatim.
+        let small = "line1\nline2\nline3";
+        let payload = rev_mismatch_payload("nabc.0000", "hexp", "hcur", 1, 3, small);
+        assert_eq!(payload["current_content"], small);
+
+        // A large (file-sized) node is elided head+tail with a pointer to SHOW.
+        let big: String = (1..=200)
+            .map(|n| format!("line{n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let payload = rev_mismatch_payload("nabc.0000", "hexp", "hcur", 1, 200, &big);
+        let content = payload["current_content"].as_str().unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        // head + note + tail, far short of the 200 original lines.
+        assert_eq!(
+            lines.len(),
+            super::REV_MISMATCH_CONTENT_HEAD_LINES + 1 + super::REV_MISMATCH_CONTENT_TAIL_LINES
+        );
+        assert_eq!(lines[0], "line1");
+        assert_eq!(*lines.last().unwrap(), "line200");
+        assert!(content.contains("SHOW NODE 'nabc.0000'"));
+        assert!(content.contains("168 lines elided"));
     }
 }

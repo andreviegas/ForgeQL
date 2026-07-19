@@ -6,6 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.0] — 2026-07-19 — fix: cap the node body echoed in a rev_mismatch error
+
+### Fixed — a stale-rev refusal no longer dumps a whole file into the error
+
+When a `CHANGE NODE … IF REV` (or `DELETE NODE … IF REV`) guard fails, the
+`rev_mismatch` payload hands back the node's current source so the agent can
+re-target without a second read. For a small statement that source is
+invaluable; for a whole-file node it embedded the entire file — hundreds of
+lines, thousands of tokens — in a single error body.
+
+- `current_content` is now capped: a node within a 40-line budget is echoed
+  verbatim (unchanged for statement-sized nodes), while anything larger is
+  elided to its first 24 and last 8 lines with a note reporting how many lines
+  were dropped and pointing at `SHOW NODE '<id>'` for the full text.
+
+This changes error-payload text only; no index output changes, so the
+enrichment cache version is unchanged.
+
 ## [0.138.0] — 2026-07-19 — fix: SHOW MORE returns readable source, not a re-encoded blob
 
 ### Fixed — paging a buffer no longer double-encodes its own output

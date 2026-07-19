@@ -554,6 +554,12 @@ payload** so you can re-target without another read:
 }
 ```
 
+For a large node the `current_content` is elided to its first 24 and last 8
+lines with a note giving the omitted-line count and a `SHOW NODE '<id>'`
+pointer, so a stale-rev refusal on a whole-file node no longer dumps the entire
+file into the error. The rev, line range, and head/tail are enough to re-target
+most edits; `SHOW NODE '<id>'` reads the full source when you need it.
+
 The bulk `NODES FOUND` verbs refuse in the same self-healing form — each returns
 a JSON object you match on by its `error` tag, carrying a `suggested_next`
 string that names the recovery:

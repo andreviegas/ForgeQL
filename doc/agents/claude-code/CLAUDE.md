@@ -195,7 +195,9 @@ comment inside a function, and the function's rev moves.
 That is the failure this prevents: you read a node, do a dozen other things, come
 back, and overwrite it from a mental model that is now stale. A wrong rev is
 refused with `rev_mismatch`, which hands back the node's current rev, line range,
-and source — enough to re-target on the spot.
+and source — enough to re-target on the spot. A large node's source is elided
+to a head and tail with a `SHOW NODE` pointer, so a whole-file refusal stays
+small rather than dumping the entire file into the error.
 
 Creation is ungated: `INSERT NODE FOR`, `COPY NODE … TO`, and appending to a
 whole-file handle. There is nothing there to fingerprint, and they cannot clobber.
