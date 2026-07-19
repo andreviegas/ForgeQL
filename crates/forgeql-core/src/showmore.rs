@@ -316,6 +316,12 @@ pub fn buffering_params(
             Direction::Tail,
             crate::config::SummaryConfig::default().lines,
         )),
+        // A SHOW MORE result pages an existing buffer. Buffering its own
+        // paged output would rotate the ring away from the real buffer (so the
+        // next SHOW MORE never advances) and re-escape the already-rendered
+        // lines on every call (the escaping compounds). Page reads are
+        // read-only: they never re-buffer.
+        ForgeQLResult::Show(s) if s.op == "show_more" => None,
         ForgeQLResult::Show(_) => Some(("show".to_string(), Direction::Head, inline_cap)),
         ForgeQLResult::Query(_) => Some(("find".to_string(), Direction::Head, inline_cap)),
         // Patch exports inline the whole mbox series; page from the top so

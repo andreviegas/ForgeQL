@@ -6,6 +6,28 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.133.0] — 2026-07-19 — fix: SHOW MORE no longer replays its own output
+
+### Fixed — paging a buffer is now read-only
+
+A bare `SHOW MORE` (and any `SHOW MORE` window large enough to be capped
+again) fed its own rendered output back into the paging buffer. Three
+things went wrong as a result:
+
+- the buffer's ring rotated on every page, so a second `SHOW MORE` never
+  advanced past the first window — it replayed the same opening lines;
+- the already-rendered output was re-escaped each time it was shown as a
+  buffered line, so quotes doubled, then quadrupled, on each replay;
+- the injected header rows inflated the reported "N lines total" on every
+  call.
+
+`SHOW MORE` now opts out of buffering: paging an existing buffer is a
+read, so it never rotates the ring or re-escapes its own output. A bare
+`SHOW MORE` returns the full buffered result once, cleanly.
+
+This change alters no index output, so the enrichment cache version is
+unchanged.
+
 ## [0.132.0] — 2026-07-19 — feat: the onboarding coach adapts to the session and paces itself
 
 ### Added — proactive teaching, paced by mode and silenced by fluency

@@ -901,6 +901,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn show_more_output_is_never_rebuffered() {
+        use forgeql_core::result::{ShowContent, ShowResult};
+
+        // Paging an existing buffer must not re-buffer its own rendering:
+        // doing so rotates the ring away from the real buffer (so the next
+        // SHOW MORE stops advancing) and re-escapes the already-rendered CSV
+        // lines, which compounds on every call. A `show_more` result opts OUT.
+        let paged = ForgeQLResult::Show(ShowResult {
+            op: "show_more".to_string(),
+            symbol: Some("show".to_string()),
+            file: None,
+            start_line: None,
+            end_line: None,
+            total_lines: None,
+            hint: None,
+            metadata: None,
+            content: ShowContent::Lines {
+                lines: vec![],
+                byte_start: None,
+                depth: None,
+            },
+        });
+        assert!(
+            buffering_params(&paged, 40).is_none(),
+            "SHOW MORE output must not re-buffer (would compound escaping and stall paging)"
+        );
+    }
+
     /// Automotive structured-XML end-to-end through the MCP tool: AUTOSAR
     /// ECUC parameter values and tresos datamodel entries are findable by
     /// their real names — the discovery half of the workflow that replaces
