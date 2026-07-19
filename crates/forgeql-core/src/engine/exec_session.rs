@@ -17,15 +17,93 @@ use super::ForgeQLEngine;
 use super::PendingSession;
 #[cfg(feature = "test-helpers")]
 use super::generate_session_id;
-use super::{SESSION_TTL_SECS, require_session_id};
+use super::{SESSION_TTL_SECS, require_session_id, short_session_ttl_secs};
+
+/// Whether a session at `idle` seconds should be reclaimed, given its explicit
+/// per-session TTL override (if any), the `short`/`long` idle thresholds, and a
+/// lazily-computed work check. An explicit override is honored as-is; otherwise
+/// a session younger than `short` always survives, one at or past `long` always
+/// expires, and one in between expires only if it carries no work.
+fn is_expired(
+    idle: u64,
+    explicit: Option<u64>,
+    short: u64,
+    long: u64,
+    has_work: impl FnOnce() -> bool,
+) -> bool {
+    if let Some(secs) = explicit {
+        return idle >= secs;
+    }
+    if idle < short {
+        return false;
+    }
+    if idle >= long {
+        return true;
+    }
+    !has_work()
+}
+
+/// True when a session has produced anything worth keeping past the short TTL:
+/// committed changes over its base branch, or uncommitted worktree changes. Any
+/// git error counts as work, so a session's changes are never reclaimed early.
+fn session_carries_work(
+    repo_path: &std::path::Path,
+    worktree_path: &std::path::Path,
+    base: &str,
+    session_branch: Option<&str>,
+) -> bool {
+    if let Some(branch) = session_branch {
+        match crate::git::source_changes(repo_path, base, branch) {
+            Ok(changed) if changed.is_empty() => {}
+            _ => return true,
+        }
+    }
+    crate::git::uncommitted_source_changes(worktree_path).map_or(true, |n| n > 0)
+}
+
+/// [`session_carries_work`] for a persisted sentinel: reconstructs the session
+/// branch from the sentinel's identity so committed trees can be compared.
+fn sentinel_carries_work(
+    data_dir: &std::path::Path,
+    sentinel: &SessionSentinel,
+    wt_path: &std::path::Path,
+) -> bool {
+    match (&sentinel.source, &sentinel.branch, &sentinel.alias) {
+        (Some(source), Some(base), Some(alias)) => {
+            let repo_path = data_dir.join(format!("{source}.git"));
+            let user = sentinel
+                .user
+                .as_deref()
+                .unwrap_or_else(|| auth(AuthContext::Session));
+            let session_branch = SessionCoords::new(user, source, base, alias).git_branch();
+            session_carries_work(&repo_path, wt_path, base, Some(&session_branch))
+        }
+        _ => crate::git::uncommitted_source_changes(wt_path).map_or(true, |n| n > 0),
+    }
+}
 
 impl ForgeQLEngine {
     pub fn evict_idle_sessions(&mut self) {
+        let data_dir = self.data_dir.clone();
         let expired_ids: Vec<String> = self
             .sessions
             .iter()
             .filter(|(_, session)| {
-                session.idle_secs() > session.ttl_secs.unwrap_or(SESSION_TTL_SECS)
+                is_expired(
+                    session.idle_secs(),
+                    session.ttl_secs,
+                    short_session_ttl_secs(),
+                    SESSION_TTL_SECS,
+                    || {
+                        let repo_path = data_dir.join(format!("{}.git", session.source_name));
+                        session_carries_work(
+                            &repo_path,
+                            &session.worktree_path,
+                            &session.branch,
+                            session.custom_branch.as_deref(),
+                        )
+                    },
+                )
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -171,6 +249,7 @@ impl ForgeQLEngine {
             warn!(%wt_name, "startup: not a git worktree, leaving untouched");
             return;
         }
+        let data_dir = self.data_dir.clone();
         match read_sentinel(wt_path) {
             None => {
                 // No readable sentinel — orphan from an older version or a
@@ -179,9 +258,14 @@ impl ForgeQLEngine {
                 self.prune_single_worktree(wt_path, wt_name);
                 *pruned += 1;
             }
-            Some(sentinel)
-                if now.saturating_sub(sentinel.last_active_secs)
-                    >= sentinel.ttl_secs.unwrap_or(SESSION_TTL_SECS) =>
+            Some(ref sentinel)
+                if is_expired(
+                    now.saturating_sub(sentinel.last_active_secs),
+                    sentinel.ttl_secs,
+                    short_session_ttl_secs(),
+                    SESSION_TTL_SECS,
+                    || sentinel_carries_work(&data_dir, sentinel, wt_path),
+                ) =>
             {
                 info!(%wt_name, "startup: TTL expired, pruning");
                 self.prune_single_worktree(wt_path, wt_name);
@@ -593,5 +677,49 @@ impl ForgeQLEngine {
         session.touch();
         drop(self.sessions.insert(coords.map_key(), session));
         Ok(coords.to_session_id())
+    }
+}
+
+#[cfg(test)]
+mod ttl_tests {
+    use super::is_expired;
+
+    #[test]
+    fn explicit_ttl_override_ignores_work_and_thresholds() {
+        // An explicit override is compared directly; the work check never runs.
+        assert!(is_expired(60, Some(60), 10, 100, || panic!(
+            "work check must not run"
+        )));
+        assert!(is_expired(120, Some(60), 10, 100, || panic!(
+            "work check must not run"
+        )));
+        assert!(!is_expired(30, Some(60), 10, 100, || panic!(
+            "work check must not run"
+        )));
+    }
+
+    #[test]
+    fn fresh_session_survives_without_a_work_check() {
+        // Below the short TTL, always alive — no git work check.
+        assert!(!is_expired(5, None, 10, 100, || panic!(
+            "work check must not run"
+        )));
+    }
+
+    #[test]
+    fn past_long_ttl_expires_without_a_work_check() {
+        assert!(is_expired(100, None, 10, 100, || panic!(
+            "work check must not run"
+        )));
+        assert!(is_expired(200, None, 10, 100, || panic!(
+            "work check must not run"
+        )));
+    }
+
+    #[test]
+    fn ambiguous_zone_expires_only_without_work() {
+        // Between short and long, the work check decides.
+        assert!(!is_expired(50, None, 10, 100, || true), "work → keep");
+        assert!(is_expired(50, None, 10, 100, || false), "no work → reclaim");
     }
 }

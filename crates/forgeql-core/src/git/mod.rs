@@ -448,10 +448,9 @@ pub fn source_changes(
 ) -> Result<Vec<String>> {
     let repo = Repository::open_bare(repo_path)?;
 
-    let base_tree = repo
-        .find_branch(base_branch, BranchType::Local)?
-        .into_reference()
-        .peel_to_tree()?;
+    // Resolve the base as a commit-ish (branch name or bare commit hash), so a
+    // session based on `USE source.<commit-hash>` is comparable too.
+    let base_tree = worktree::resolve_commit(&repo, base_branch)?.tree()?;
     let session_tree = repo
         .find_branch(session_branch, BranchType::Local)?
         .into_reference()
@@ -1184,6 +1183,20 @@ mod tests {
         assert!(
             source_changes(&bare, "main", "ctrl").unwrap().is_empty(),
             "a branch touching only control files must report no reviewable work"
+        );
+
+        // The base may be given as a bare commit hash, not just a branch name.
+        let base_hex = base_oid.to_string();
+        assert_eq!(
+            source_changes(&bare, &base_hex, "work").unwrap(),
+            vec!["a.cpp".to_string()],
+            "a commit-hash base must resolve and report the changed file"
+        );
+        assert!(
+            source_changes(&bare, &base_hex, "research")
+                .unwrap()
+                .is_empty(),
+            "a commit-hash base with no descendant changes must report none"
         );
     }
 

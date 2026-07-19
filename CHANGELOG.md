@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.126.0] — 2026-07-19 — feat(session): idle sessions with no work reclaim faster
+
+### Changed — a shorter TTL for sessions that did nothing
+
+A session that has produced no work — no commits over its base and no
+uncommitted changes — is now reclaimed after a much shorter idle period (2 hours
+by default) instead of the full session TTL (48 hours). Sessions that carry
+committed or uncommitted work keep the full TTL, and an explicit per-session TTL
+override still takes precedence. Both the live idle-eviction and the startup
+prune apply the same rule.
+
+The base a session is compared against may now be a commit hash, not only a
+branch name, so a session based on a commit is classified correctly.
+
+The short TTL is configurable via `FORGEQL_SHORT_SESSION_TTL_SECS`.
 ## [0.125.0] — 2026-07-19 — feat(session): SHOW COMMITS lists a session's own commits
 
 ### Added — a session reports its commits for handoff

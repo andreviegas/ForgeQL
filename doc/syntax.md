@@ -89,7 +89,7 @@ lose it, re-issue the same `USE` command with the same alias: you reconnect to
 the same worktree and receive the same token.
 
 Sessions start automatically on the first `USE` and persist until the worktree has been
-idle for 48 hours (server-side TTL). There is no explicit disconnect command — multiple
+idle — after about 2 hours if it carries no work (no commits over its base and no uncommitted changes), or 48 hours if it does (server-side TTL). There is no explicit disconnect command — multiple
 agents can reconnect to the same worktree at any time with the same `USE` command.
 
 Worktree identity uses a composite key: filesystem directory =

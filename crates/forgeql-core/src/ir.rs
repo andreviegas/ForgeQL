@@ -220,7 +220,6 @@ pub enum ForgeQLIR {
     ShowSources,
 
     /// `SHOW BRANCHES` — list branches of the current session source.
-    /// `SHOW BRANCHES` — list branches of the current session source.
     ShowBranches,
     /// `SHOW COMMITS [clauses]` — the commits this session's branch carries
     /// since its base (`base..head`), newest first. Session-scoped: it reports

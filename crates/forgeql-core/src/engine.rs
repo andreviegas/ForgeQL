@@ -53,6 +53,22 @@ use crate::{
 /// removes it.
 pub const SESSION_TTL_SECS: u64 = 48 * 60 * 60; // 48 hours (generous for dev)
 
+/// Idle seconds before a work-free session is reclaimed.
+///
+/// A session with no commits over its base and no uncommitted changes is
+/// reclaimed after this instead of [`SESSION_TTL_SECS`], so review and probe
+/// worktrees self-clean quickly. Overridable via `FORGEQL_SHORT_SESSION_TTL_SECS`.
+pub const SHORT_SESSION_TTL_SECS: u64 = 2 * 60 * 60; // 2 hours
+
+/// The short idle TTL, honoring the `FORGEQL_SHORT_SESSION_TTL_SECS` override.
+#[must_use]
+pub fn short_session_ttl_secs() -> u64 {
+    std::env::var("FORGEQL_SHORT_SESSION_TTL_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(SHORT_SESSION_TTL_SECS)
+}
+
 // -----------------------------------------------------------------------
 // ForgeQLEngine
 // -----------------------------------------------------------------------

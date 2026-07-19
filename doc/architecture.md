@@ -195,7 +195,7 @@ The MCP layer exposes a **single tool** to the agent via the MCP JSON-RPC protoc
 
 Every ForgeQL operation is accessible through `run_fql`. There are no separate tools for individual operations — one tool, one mental model, no ambiguity about which tool to reach for.
 
-Sessions start with `USE source.branch AS 'alias'` and are cleaned up automatically: worktrees idle for more than 48 hours are removed by a server-side background task. Multiple agents can work on the same branch by reconnecting with the same `USE` command — the worktree and any uncommitted changes are preserved.
+Sessions start with `USE source.branch AS 'alias'` and are cleaned up automatically: a worktree carrying no work (no commits over its base and no uncommitted changes) is removed after about 2 hours idle, one with work after 48 hours, by a server-side background task. Multiple agents can work on the same branch by reconnecting with the same `USE` command — the worktree and any uncommitted changes are preserved.
 
 **Over stdio, the alias you supply in `AS '...'` is the `session_id`** — it is deterministic and reconstructable from the `USE` command the model already knows; if a model forgets its `session_id` it simply re-issues `USE source.branch AS 'same-alias'` to reconnect. **Over HTTP (`forgeql-server`), the `session_id` is a server-issued token** scoped by the authenticated user and returned in the `USE` response — clients store it and pass it verbatim in every subsequent call instead of reconstructing it from the alias.
 
