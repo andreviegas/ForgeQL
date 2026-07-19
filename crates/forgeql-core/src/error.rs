@@ -106,9 +106,26 @@ pub enum RejectionKind {
     NodeNotFound,
     /// A session-dependent command ran with no session.
     NoSession,
-    /// A bulk `FOUND` verb could not proceed — no armed set, a truncated
-    /// arming FIND (so no master rev), or a missing `IF REV`.
-    FoundRefusedNoLimit,
+    /// A bulk `FOUND` verb ran with no armed set — no FIND was issued first.
+    NoFoundSet,
+    /// A bulk `FOUND` verb ran against a truncated arming FIND, so no master
+    /// rev was issued for the set.
+    FoundTruncated,
+    /// A bulk `FOUND` verb ran without the mandatory `IF REV` master rev.
+    FoundRefused,
+}
+
+impl RejectionKind {
+    /// Whether this rejection is a self-healing one the agent parses and
+    /// recovers from — delivered as an error-flagged result whose body is the
+    /// JSON payload. The alternative is a precondition/handshake denial
+    /// (`NoSession`, and future auth/policy kinds) delivered as a plain
+    /// protocol error. Transports branch on this instead of inspecting the
+    /// payload text.
+    #[must_use]
+    pub const fn is_self_healing(self) -> bool {
+        !matches!(self, Self::NoSession)
+    }
 }
 
 /// Convenience constructor: wrap a `std::io::Error` with the offending path.

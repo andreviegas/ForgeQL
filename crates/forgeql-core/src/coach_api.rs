@@ -81,16 +81,18 @@ pub enum Outcome {
 pub enum ErrKind {
     /// A DSL parse failure. `attempted` is the raw statement text.
     ParseError { attempted: String },
-    /// A session-dependent command issued with no live session.
-    NoSession,
     /// `IF REV` fingerprint did not match the node's current state.
     RevMismatch,
     /// A handle no longer resolves to a node.
     NodeNotFound,
     /// Output hit the implicit line cap.
     OutputCapped,
-    /// A `NODES FOUND` verb refused because the arming FIND had no LIMIT.
-    FoundRefusedNoLimit,
+    /// A bulk `FOUND` verb ran with no armed set — no FIND was issued first.
+    NoFoundSet,
+    /// A bulk `FOUND` verb ran against a truncated arming FIND (no master rev).
+    FoundTruncated,
+    /// A bulk `FOUND` verb ran without the mandatory `IF REV` master rev.
+    FoundRefused,
     /// Session line budget is running low.
     BudgetLow,
     /// Anything the classifier could not place more specifically.

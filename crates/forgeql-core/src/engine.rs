@@ -969,8 +969,11 @@ impl ForgeQLEngine {
             Some(ForgeError::Rejection { kind, .. }) => match kind {
                 RejectionKind::RevMismatch => ErrKind::RevMismatch,
                 RejectionKind::NodeNotFound => ErrKind::NodeNotFound,
-                RejectionKind::NoSession => ErrKind::NoSession,
-                RejectionKind::FoundRefusedNoLimit => ErrKind::FoundRefusedNoLimit,
+                RejectionKind::NoFoundSet => ErrKind::NoFoundSet,
+                RejectionKind::FoundTruncated => ErrKind::FoundTruncated,
+                RejectionKind::FoundRefused => ErrKind::FoundRefused,
+                // NoSession is a precondition/handshake denial, out of coach scope.
+                RejectionKind::NoSession => ErrKind::Other,
             },
             Some(ForgeError::DslParse(attempted)) => ErrKind::ParseError {
                 attempted: attempted.clone(),

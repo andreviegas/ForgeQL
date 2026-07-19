@@ -23,6 +23,7 @@ use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use forgeql_core::compact;
 use forgeql_core::engine::{ExecOutcome, ForgeQLEngine};
+use forgeql_core::error::ForgeError;
 use forgeql_core::ir::ForgeQLIR;
 use forgeql_core::parser;
 use forgeql_core::query_logger::QueryLogger;
@@ -212,7 +213,7 @@ async fn tools_call(state: &AppState, headers: &HeaderMap, id: &Value, req: &Val
             }
             json!({ "jsonrpc": "2.0", "id": id.clone(), "result": result })
         }
-        Err(msg) => error_reply(id, &msg),
+        Err(failure) => error_reply(id, &failure),
     }
 }
 
@@ -242,26 +243,39 @@ fn rpc_error(id: &Value, code: i64, message: &str) -> Value {
     })
 }
 
-/// A structured self-healing rejection carries a JSON-object message the agent
-/// is meant to parse and act on (`rev_mismatch`, `node_not_found`,
-/// `found_refused`). Return it as an error-flagged tool result — mirroring the
-/// stdio transport — instead of burying the JSON inside a protocol-error
-/// string. Every other error stays a JSON-RPC error.
-fn error_reply(id: &Value, msg: &str) -> Value {
-    let trimmed = msg.trim();
-    let structured = trimmed.starts_with('{')
-        && serde_json::from_str::<Value>(trimmed).is_ok_and(|v| v.is_object());
-    if structured {
+/// An engine failure plus whether it is a self-healing rejection the agent
+/// parses (delivered as an error-flagged tool result whose body is the JSON
+/// payload) rather than a precondition/protocol error. The distinction comes
+/// from the typed rejection kind, never from inspecting the payload text.
+struct ExecFailure {
+    self_healing: bool,
+    body: String,
+}
+
+impl From<String> for ExecFailure {
+    fn from(body: String) -> Self {
+        Self {
+            self_healing: false,
+            body,
+        }
+    }
+}
+
+/// Render an engine failure: a self-healing rejection becomes an error-flagged
+/// tool result (mirroring the stdio transport); anything else stays a JSON-RPC
+/// protocol error.
+fn error_reply(id: &Value, failure: &ExecFailure) -> Value {
+    if failure.self_healing {
         json!({
             "jsonrpc": "2.0",
             "id": id.clone(),
             "result": {
-                "content": [{ "type": "text", "text": trimmed }],
+                "content": [{ "type": "text", "text": failure.body }],
                 "isError": true,
             },
         })
     } else {
-        rpc_error(id, -32603, msg)
+        rpc_error(id, -32603, &failure.body)
     }
 }
 
@@ -293,10 +307,10 @@ async fn execute_fql(
     fql: &str,
     session_id: Option<&str>,
     format: &str,
-) -> Result<(String, Option<String>), String> {
+) -> Result<(String, Option<String>), ExecFailure> {
     let ops = parser::parse_with_source(fql).map_err(|e| format!("parse error: {e}"))?;
     if ops.is_empty() {
-        return Err("empty FQL statement".to_string());
+        return Err("empty FQL statement".to_string().into());
     }
 
     // Source-management commands are reserved for admin principals. Normal and
@@ -312,7 +326,8 @@ async fn execute_fql(
                 return Err(
                     "CREATE SOURCE, REFRESH SOURCE, and VACUUM require an admin token; \
                         use USE to connect to an existing source"
-                        .to_string(),
+                        .to_string()
+                        .into(),
                 );
             }
         }
@@ -335,7 +350,15 @@ async fn execute_fql(
         } = guard.execute(user_id, coords.as_ref(), op);
         let result = match result {
             Ok(r) => r,
-            Err(e) => return Err(with_coach(e.to_string(), coach_hint)),
+            Err(e) => {
+                let self_healing = e.downcast_ref::<ForgeError>().is_some_and(
+                    |fe| matches!(fe, ForgeError::Rejection { kind, .. } if kind.is_self_healing()),
+                );
+                return Err(ExecFailure {
+                    self_healing,
+                    body: with_coach(e.to_string(), coach_hint),
+                });
+            }
         };
         // A pending VERIFY/RUN runs on the background job pool: release the
         // engine lock while waiting so a long gate never blocks other tenants,
@@ -468,10 +491,15 @@ mod tests {
     fn error_reply_flags_structured_rejections_and_keeps_plain_errors_as_protocol_errors() {
         let id = Value::from(1);
 
-        // A JSON-object payload (a self-healing rejection) becomes an
-        // error-flagged tool result the agent parses — never a buried protocol
-        // error, mirroring the stdio transport.
-        let structured = error_reply(&id, r#"{"error":"found_refused"}"#);
+        // A self-healing rejection (typed flag set) becomes an error-flagged
+        // tool result the agent parses.
+        let structured = error_reply(
+            &id,
+            &ExecFailure {
+                self_healing: true,
+                body: r#"{"error":"found_refused"}"#.to_owned(),
+            },
+        );
         assert_eq!(structured["result"]["isError"], json!(true));
         assert_eq!(
             structured["result"]["content"][0]["text"],
@@ -479,8 +507,14 @@ mod tests {
         );
         assert!(structured.get("error").is_none());
 
-        // A plain-string precondition error stays a JSON-RPC error.
-        let plain = error_reply(&id, "session_id required — run USE first");
+        // A precondition error stays a JSON-RPC error.
+        let plain = error_reply(
+            &id,
+            &ExecFailure {
+                self_healing: false,
+                body: "no active session".to_owned(),
+            },
+        );
         assert_eq!(plain["error"]["code"], json!(-32603));
         assert!(plain.get("result").is_none());
     }

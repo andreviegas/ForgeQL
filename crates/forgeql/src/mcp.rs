@@ -160,22 +160,22 @@ fn engine_error_with_coach(err: anyhow::Error, coach: Option<String>) -> ErrorDa
     ErrorData::internal_error(crate::execute::with_coach(format!("{err:#}"), coach), None)
 }
 
-/// Return the error's message when it is itself a JSON object — the engine's
-/// structured self-healing rejections (e.g. `rev_mismatch` carrying the
-/// current rev, line range, and source; `node_not_found`).
-///
-/// Such payloads are results the agent is meant to parse and act on, so the
-/// transport returns them as an error-flagged tool result instead of burying
-/// the JSON inside a protocol-error string.
-fn json_object_message(err: &ErrorData) -> Option<String> {
-    let msg = err.message.trim();
-    if !msg.starts_with('{') {
-        return None;
+/// An engine error plus whether it is a self-healing rejection the agent parses
+/// (delivered as an error-flagged tool result) rather than a
+/// precondition/protocol error. Derived from the typed rejection kind, never
+/// from the payload text.
+struct EngineError {
+    self_healing: bool,
+    data: ErrorData,
+}
+
+impl From<ErrorData> for EngineError {
+    fn from(data: ErrorData) -> Self {
+        Self {
+            self_healing: false,
+            data,
+        }
     }
-    serde_json::from_str::<serde_json::Value>(msg)
-        .ok()
-        .filter(serde_json::Value::is_object)
-        .map(|_| msg.to_owned())
 }
 
 /// Build a successful `CallToolResult` containing JSON text.
@@ -280,7 +280,7 @@ async fn exec_engine(
         usize,
         Option<String>,
     ),
-    ErrorData,
+    EngineError,
 > {
     let mut guard = engine.lock().await;
 
@@ -314,7 +314,15 @@ async fn exec_engine(
         })?;
     let result = match result {
         Ok(r) => r,
-        Err(e) => return Err(engine_error_with_coach(e, coach)),
+        Err(e) => {
+            let self_healing = e.downcast_ref::<ForgeError>().is_some_and(
+                |fe| matches!(fe, ForgeError::Rejection { kind, .. } if kind.is_self_healing()),
+            );
+            return Err(EngineError {
+                self_healing,
+                data: engine_error_with_coach(e, coach),
+            });
+        }
     };
 
     // A pending VERIFY/RUN runs on the background job pool: release the engine
@@ -434,14 +442,16 @@ impl ForgeQlMcp {
             let (result, budget_snap, worktree, inline_cap, coach_hint) =
                 match exec_engine(&self.engine, user_id, params.session_id.as_deref(), op).await {
                     Ok(parts) => parts,
-                    // Structured engine rejections are tool results the agent
-                    // parses and acts on — return them error-flagged instead
-                    // of wrapping the JSON inside a protocol error.
-                    Err(e) => {
-                        if let Some(payload) = json_object_message(&e) {
-                            return Ok(CallToolResult::error(vec![Content::text(payload)]));
+                    // A structured self-healing rejection is a tool result the agent
+                    // parses and acts on — return it error-flagged, not buried in a
+                    // protocol error.
+                    Err(EngineError { self_healing, data }) => {
+                        if self_healing {
+                            return Ok(CallToolResult::error(vec![Content::text(
+                                data.message.to_string(),
+                            )]));
                         }
-                        return Err(e);
+                        return Err(data);
                     }
                 };
             let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -688,22 +698,6 @@ mod tests {
             }))
             .await;
         assert!(result.is_err(), "invalid FQL should return ErrorData");
-    }
-
-    #[test]
-    fn json_object_message_extracts_only_json_objects() {
-        let json_err = ErrorData::internal_error(
-            r#"{"error":"rev_mismatch","expected":"h1","actual":"h2"}"#.to_string(),
-            None,
-        );
-        let payload = json_object_message(&json_err).expect("JSON object message");
-        assert!(payload.contains("rev_mismatch"));
-
-        let plain = ErrorData::internal_error("no session named 'x'".to_string(), None);
-        assert!(json_object_message(&plain).is_none());
-
-        let brace_but_not_json = ErrorData::internal_error("{not json".to_string(), None);
-        assert!(json_object_message(&brace_but_not_json).is_none());
     }
 
     /// A rejected `IF REV` guard is a structured self-healing payload the

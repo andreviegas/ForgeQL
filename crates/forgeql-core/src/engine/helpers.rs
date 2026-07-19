@@ -59,13 +59,16 @@ pub(crate) fn generate_session_id() -> String {
 }
 
 /// Extract the `session_id` from `Option<&str>`, failing if absent or empty.
-#[allow(clippy::missing_const_for_fn)] // bail! prevents const
 pub(crate) fn require_session_id(session_id: Option<&str>) -> Result<&str> {
     match session_id {
         Some(sid) if !sid.is_empty() => Ok(sid),
         _ => Err(ForgeError::Rejection {
             kind: RejectionKind::NoSession,
-            payload: "session_id required — run USE <source>.<branch> first".to_owned(),
+            payload: "no active session — connect first with `USE <source>.<branch> AS \
+                      '<alias>'` (run `SHOW SOURCES` to list the sources you can use). The \
+                      USE response returns a session token — the alias you chose — and every \
+                      later command must pass it back as session_id."
+                .to_owned(),
         }
         .into()),
     }

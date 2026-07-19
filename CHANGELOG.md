@@ -27,6 +27,12 @@ broke that promise:
   Plain precondition errors (missing session, invalid arguments) remain
   JSON-RPC errors on every transport.
 
+- **Rejections now carry a typed kind end to end.** Each transport decides
+  whether a failure is a parseable self-healing rejection or a plain
+  precondition error from that typed kind, rather than by inspecting the
+  message text — so the two categories cannot be confused as the error
+  wording evolves.
+
 ## [0.128.0] — 2026-07-18 — feat: introduce an optional onboarding coach
 
 ### Added — an optional, decoupled onboarding coach
