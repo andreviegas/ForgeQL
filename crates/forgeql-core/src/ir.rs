@@ -609,6 +609,10 @@ pub enum ForgeQLIR {
         /// `STAT` — emit only the per-file map, omitting the diff text.
         #[serde(default)]
         stat: bool,
+        /// `OF '<commit>'` — diff that commit against its first parent instead of
+        /// the worktree's uncommitted changes. `None` = the pending worktree diff.
+        #[serde(default)]
+        of: Option<String>,
         /// Universal clauses; applied to the per-file rows, except `WHERE text`
         /// which filters the diff's own lines (as in `SHOW body`).
         #[serde(default)]

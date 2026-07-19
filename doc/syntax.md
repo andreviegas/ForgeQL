@@ -770,7 +770,14 @@ The counterpart for *uncommitted* work is [`SHOW DIFF`](#show-diff).
 SHOW DIFF                 -- file map + hunks for every uncommitted change
 SHOW DIFF STAT            -- the file map alone (cheapest; no hunk text)
 SHOW DIFF [clauses]       -- IN / EXCLUDE / WHERE / ORDER BY / LIMIT
+SHOW DIFF OF '<commit>'   -- diff a commit against its first parent (STAT + clauses too)
 ```
+
+`SHOW DIFF OF '<commit>'` reviews a committed hash — the diff of that commit
+against its first parent — from any session of the same source, since the commit
+lives in the shared repository. `STAT` and clauses apply exactly as for the
+pending diff. Without `OF`, `SHOW DIFF` shows the session worktree's uncommitted
+changes.
 
 The session worktree's **uncommitted** diff against `HEAD`, returned inline.
 `EXPORT PATCH` covers committed work only, so this is the way to see a change

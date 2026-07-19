@@ -2157,7 +2157,10 @@ fn parse_show_diff_forms() {
     use forgeql_core::ir::ForgeQLIR;
 
     let ops = parser::parse("SHOW DIFF").expect("parse SHOW DIFF");
-    let ForgeQLIR::ShowDiff { stat, ref clauses } = ops[0] else {
+    let ForgeQLIR::ShowDiff {
+        stat, ref clauses, ..
+    } = ops[0]
+    else {
         panic!("expected ShowDiff, got {:?}", ops[0]);
     };
     assert!(!stat);
@@ -2172,7 +2175,10 @@ fn parse_show_diff_forms() {
     // The reviewer's P2 triage query: is forgeql-core touched at all?
     let ops = parser::parse("SHOW DIFF STAT IN 'crates/forgeql-core/**'")
         .expect("parse SHOW DIFF STAT with IN");
-    let ForgeQLIR::ShowDiff { stat, ref clauses } = ops[0] else {
+    let ForgeQLIR::ShowDiff {
+        stat, ref clauses, ..
+    } = ops[0]
+    else {
         panic!("expected ShowDiff, got {:?}", ops[0]);
     };
     assert!(stat);
@@ -2187,6 +2193,23 @@ fn parse_show_diff_forms() {
     assert_eq!(clauses.where_predicates.len(), 1);
     assert_eq!(clauses.where_predicates[0].field, "text");
     assert_eq!(clauses.limit, Some(5));
+}
+
+#[test]
+fn parse_show_diff_of_commit() {
+    let ops = parser::parse("SHOW DIFF OF '594cc8b'").expect("parse SHOW DIFF OF");
+    let ForgeQLIR::ShowDiff { stat, ref of, .. } = ops[0] else {
+        panic!("expected ShowDiff, got {:?}", ops[0]);
+    };
+    assert!(!stat);
+    assert_eq!(of.as_deref(), Some("594cc8b"));
+
+    let ops = parser::parse("SHOW DIFF STAT OF 'deadbeef'").expect("parse SHOW DIFF STAT OF");
+    let ForgeQLIR::ShowDiff { stat, ref of, .. } = ops[0] else {
+        panic!("expected ShowDiff, got {:?}", ops[0]);
+    };
+    assert!(stat);
+    assert_eq!(of.as_deref(), Some("deadbeef"));
 }
 
 #[test]

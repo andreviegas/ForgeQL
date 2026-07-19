@@ -195,8 +195,19 @@ fn parse_show_diff_stmt(pair: pest::iterators::Pair<'_, Rule>) -> ForgeQLIR {
     if stat {
         let _ = inner.next();
     }
+    let of = if inner
+        .peek()
+        .is_some_and(|p| p.as_rule() == Rule::show_diff_of)
+    {
+        inner
+            .next()
+            .and_then(|of_pair| of_pair.into_inner().next())
+            .map(|v| unquote(v.as_str()))
+    } else {
+        None
+    };
     let clauses = parse_clauses(inner);
-    ForgeQLIR::ShowDiff { stat, clauses }
+    ForgeQLIR::ShowDiff { stat, of, clauses }
 }
 
 fn parse_job_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, ForgeError> {

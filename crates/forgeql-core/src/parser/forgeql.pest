@@ -254,7 +254,8 @@ export_last = { "LAST" ~ number }
 /// whole-file additions); ForgeQL runtime files are excluded. STAT emits the
 /// per-file map alone. Clauses apply to the file rows; WHERE text filters the
 /// diff's own lines, as in SHOW body.
-show_diff_stmt = { "SHOW" ~ "DIFF" ~ show_diff_stat? ~ clauses }
+show_diff_of = { "OF" ~ any_value }
+show_diff_stmt = { "SHOW" ~ "DIFF" ~ show_diff_stat? ~ show_diff_of? ~ clauses }
 show_diff_stat = { "STAT" }
 
 // -----------------------------------------------------------------------

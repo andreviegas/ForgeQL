@@ -6,6 +6,15 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.124.0] — 2026-07-19 — feat(diff): SHOW DIFF OF a committed hash
+
+### Added — review any commit, not only the pending worktree diff
+
+`SHOW DIFF OF '<commit>'` renders the diff of a commit against its first parent,
+in the same form as the pending-change `SHOW DIFF` — `STAT` for the file map and
+`IN` / `EXCLUDE` / `WHERE` / `ORDER BY` / `LIMIT` all apply. Because the commit
+lives in the shared repository, any session of the same source can review a
+committed hash without checking it out.
 ## [0.123.0] — 2026-07-19 — feat(session): base a session on a commit, not only a branch
 
 ### Added — `USE source.<commit-hash>` and the resolved base in every USE response

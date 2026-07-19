@@ -695,13 +695,17 @@ impl ForgeQLEngine {
         &self,
         session_id: Option<&str>,
         stat: bool,
+        of: Option<&str>,
         clauses: &crate::ir::Clauses,
     ) -> Result<ForgeQLResult> {
         let sid = require_session_id(session_id)?;
         let session = self.require_session(sid)?;
         let worktree = session.worktree_path.clone();
 
-        let diff = git::worktree_diff(&worktree)?;
+        let diff = match of {
+            Some(rev) => git::commit_diff(&worktree, rev)?,
+            None => git::worktree_diff(&worktree)?,
+        };
 
         // Split the predicates: `text` targets diff lines, everything else
         // targets the file rows.

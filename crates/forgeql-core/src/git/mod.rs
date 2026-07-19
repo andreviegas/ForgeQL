@@ -645,9 +645,44 @@ pub fn worktree_diff(worktree: &Path) -> Result<Vec<DiffFile>> {
         .include_typechange(true);
 
     let diff = repo.diff_tree_to_workdir_with_index(Some(&head_tree), Some(&mut opts))?;
+    accumulate_diff_files(&diff)
+}
 
-    // Accumulate per-file: libgit2 streams lines in delta order, so a plain
-    // ordered Vec keyed by the delta's new path is enough — no map needed.
+/// Diff a commit against its first parent, in the same shape as `worktree_diff`.
+///
+/// Resolves `rev` (a commit hash or other commit-ish) against the repository at
+/// `repo_at` and diffs the commit's tree against its first parent's, or the
+/// empty tree for a root commit so an initial commit shows as all-added.
+///
+/// # Errors
+/// Returns an error if the repo cannot be opened or `rev` is not a commit.
+pub fn commit_diff(repo_at: &Path, rev: &str) -> Result<Vec<DiffFile>> {
+    let repo = Repository::open(repo_at)
+        .with_context(|| format!("could not open repo {}", repo_at.display()))?;
+    let commit = repo
+        .revparse_single(rev)
+        .with_context(|| format!("SHOW DIFF OF '{rev}': not a resolvable commit"))?
+        .peel_to_commit()
+        .with_context(|| format!("SHOW DIFF OF '{rev}': object is not a commit"))?;
+    let commit_tree = commit.tree()?;
+    let parent_tree = match commit.parent(0) {
+        Ok(parent) => Some(parent.tree()?),
+        Err(_) => None,
+    };
+
+    let mut opts = git2::DiffOptions::new();
+    let _ = opts.include_typechange(true);
+
+    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), Some(&mut opts))?;
+    accumulate_diff_files(&diff)
+}
+
+/// Accumulate a libgit2 patch-format diff into per-file [`DiffFile`] entries.
+///
+/// Shared by `worktree_diff` and `commit_diff`: libgit2 streams lines in delta
+/// order, so a plain ordered Vec keyed by the delta's path is enough. Runtime
+/// and control files are skipped.
+fn accumulate_diff_files(diff: &git2::Diff<'_>) -> Result<Vec<DiffFile>> {
     let mut files: Vec<DiffFile> = Vec::new();
 
     diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
@@ -671,6 +706,7 @@ pub fn worktree_diff(worktree: &Path) -> Result<Vec<DiffFile>> {
                 patch: String::new(),
             });
         }
+
         let Some(entry) = files.last_mut() else {
             return true;
         };
