@@ -4759,6 +4759,52 @@ fn unknown_where_field_is_rejected_with_guidance() {
     );
 }
 
+/// An ORDER BY field with no per-symbol value must be rejected, not ignored.
+///
+/// `size` is a FIND-files concept; on a symbol it resolves to nothing, so the
+/// old comparator silently fell back to name order and returned alphabetical
+/// rows under a `size` header.  A real enrichment metric (`lines`) must still
+/// order without complaint — the guard rejects only unsortable fields.
+#[test]
+fn order_by_unsortable_field_is_rejected() {
+    use forgeql_core::ir::{OrderBy, SortDirection};
+    use forgeql_core::storage::StorageEngine;
+
+    let (_table, _tmp, storage) = single_segment_cpp_overlay();
+
+    let size_clauses = forgeql_core::ir::Clauses {
+        order_by: Some(OrderBy {
+            field: "size".to_owned(),
+            direction: SortDirection::Desc,
+        }),
+        ..forgeql_core::ir::Clauses::default()
+    };
+    let err = storage
+        .find_symbols(&size_clauses, std::path::Path::new("."))
+        .expect_err("ORDER BY size on symbols must be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unknown ORDER BY field 'size'"),
+        "error should name the field: {msg}"
+    );
+    assert!(
+        msg.contains("FIND files"),
+        "error should redirect size/depth to FIND files: {msg}"
+    );
+
+    // A genuine enrichment metric still orders fine — no over-rejection.
+    let lines_clauses = forgeql_core::ir::Clauses {
+        order_by: Some(OrderBy {
+            field: "lines".to_owned(),
+            direction: SortDirection::Desc,
+        }),
+        ..forgeql_core::ir::Clauses::default()
+    };
+    let _rows = storage
+        .find_symbols(&lines_clauses, std::path::Path::new("."))
+        .expect("ORDER BY lines is a valid enrichment ordering");
+}
+
 /// `naming` is written by the universal naming enricher but is absent from
 /// the static field→kind map — it must be accepted because the segments
 /// store it as an enrichment column.

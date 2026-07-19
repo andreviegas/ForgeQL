@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.136.0] — 2026-07-19 — fix: reject an unsortable ORDER BY field on FIND symbols
+
+### Fixed — ORDER BY on a non-symbol field no longer silently reorders
+
+`FIND symbols … ORDER BY size` — and any other field that carries no
+per-symbol value, such as `depth` — was silently ignored. The rows came
+back in alphabetical name order while the requested column was still
+printed in the output, so an agent reasoning over "the top N by size"
+was handed unrelated rows with no error or warning. `size` and `depth`
+describe files and outline entries, not symbols, so they never resolve
+on a symbol row and every row tied and fell back to the name tie-break.
+
+The columnar backend now rejects an `ORDER BY` field that is neither a
+sortable symbol field, a known enrichment field, nor a materialised
+column. The error names the field and points `size`/`depth` at
+`FIND files`; to rank functions by span, order by an enrichment metric
+such as `lines`. This matches the validation the legacy backend already
+performed — the columnar (production) path simply never ran it.
+
 ## [0.135.0] — 2026-07-19 — fix: grouped `FIND symbols … GROUP BY file` CSV labels the file column
 
 ### Fixed — the grouped-CSV outer column names the actual GROUP BY key

@@ -66,6 +66,29 @@ pub const CORE_WHERE_FIELDS: &[&str] = &[
     "declaration",
 ];
 
+/// Fields that can order a `FIND symbols` result directly.
+///
+/// Each resolves on every `SymbolMatch` via `field_str` / `field_num`.
+/// File- and outline-only fields (`size`, `depth`, `extension`) are
+/// deliberately absent — they never carry a per-symbol value, so ordering
+/// symbols by them is meaningless.  The columnar backend rejects an ORDER BY
+/// field that is neither listed here, a known enrichment field, nor a
+/// materialised extra column, rather than silently falling back to name order.
+pub const SORTABLE_SYMBOL_FIELDS: &[&str] = &[
+    "name",
+    "fql_kind",
+    "kind",
+    "node_kind",
+    "node_id",
+    "path",
+    "file",
+    "language",
+    "lang",
+    "line",
+    "usages",
+    "count",
+];
+
 // -----------------------------------------------------------------------
 // Glob matching
 // -----------------------------------------------------------------------

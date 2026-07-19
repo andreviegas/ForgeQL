@@ -40,6 +40,7 @@ impl ColumnarStorage {
         // count-based GROUP BY paths are only valid when source paths are unique;
         // duplicates overcount, so fall through to the deduplicating pipeline.
         self.reject_unknown_where_fields(clauses)?;
+        self.reject_unknown_order_by_field(clauses)?;
         let no_dup_paths = !self.overlay.has_duplicate_paths();
         if group_by_kind_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
             return Ok(self.fast_group_by_kind(clauses));
@@ -106,6 +107,47 @@ impl ColumnarStorage {
             );
         }
         Ok(())
+    }
+
+    /// Reject an `ORDER BY` on a field that can never sort a symbol row.
+    ///
+    /// A field orders symbols only if it is a sortable core field, a known
+    /// enrichment field, or a materialised extra column somewhere in this
+    /// index.  Anything else (e.g. `size` / `depth`, which belong to
+    /// `FIND files`) produces `None` for every row, so the comparator would
+    /// silently fall back to name order and hand the agent alphabetical rows
+    /// mislabelled as "top N by <field>".  Fail loudly instead — matching the
+    /// legacy backend's `validate_order_by_field` contract.
+    fn reject_unknown_order_by_field(&self, clauses: &Clauses) -> anyhow::Result<()> {
+        let Some(ref order) = clauses.order_by else {
+            return Ok(());
+        };
+        let field = order.field.as_str();
+        if crate::filter::SORTABLE_SYMBOL_FIELDS.contains(&field) {
+            return Ok(());
+        }
+        if crate::storage::legacy::is_known_enrichment_field(field) {
+            return Ok(());
+        }
+        if self.segments.iter().any(|s| s.has_extra_col(field)) {
+            return Ok(());
+        }
+        if self
+            .dirty
+            .added
+            .iter()
+            .any(|ds| ds.reader.has_extra_col(field))
+        {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "unknown ORDER BY field '{field}': it is not a sortable symbol field \
+             and no indexed row carries an enrichment column with that name, so \
+             every symbol would tie and fall back to name order.  Sortable \
+             fields: name, fql_kind, path, file, line, usages, count, plus any \
+             enrichment field (lines, param_count, branch_count, …).  'size' and \
+             'depth' apply to FIND files, not FIND symbols."
+        );
     }
 
     /// Stage 4b (BUG-006 U3): overwrite each row's `usages_count` with the
