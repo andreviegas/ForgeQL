@@ -1111,16 +1111,17 @@ impl ForgeQLResult {
         }
     }
 
-    /// Whether the output hit the implicit line cap — the agent saw only part
-    /// of the entity's lines (`SHOW`).
+    /// Whether the inline source-line output exceeds `cap` and will be windowed
+    /// for `SHOW MORE` — computed from the line count at execute time so the
+    /// coach observes capping before any transport renders it.
     #[must_use]
-    pub const fn output_capped(&self) -> bool {
+    pub const fn output_capped(&self, cap: usize) -> bool {
         matches!(
             self,
             Self::Show(ShowResult {
-                total_lines: Some(_),
+                content: ShowContent::Lines { lines, .. },
                 ..
-            })
+            }) if lines.len() > cap
         )
     }
 

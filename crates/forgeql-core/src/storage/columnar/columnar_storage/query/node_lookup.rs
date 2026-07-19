@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::error::{ForgeError, RejectionKind};
 use crate::result::FindNodeResult;
 use crate::storage::StorageEngine;
 use crate::storage::SymbolLocation;
@@ -167,7 +168,11 @@ impl ColumnarStorage {
             return Ok(Some(result));
         }
 
-        Err(anyhow::anyhow!("node_id not found: {node_id}"))
+        Err(ForgeError::Rejection {
+            kind: RejectionKind::NodeNotFound,
+            payload: format!("node_id not found: {node_id}"),
+        }
+        .into())
     }
 
     /// Resolve a bare-hex handle — `n<hex>` — to the file or directory whose

@@ -6,6 +6,35 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.131.0] — 2026-07-19 — fix: CLI output windowing, node-not-found rejections, and cap-hint ownership
+
+### Fixed — the CLI pipe now windows oversized output
+
+The CLI pipe rendered `SHOW` results in full — no inline cap, no `show_more`
+footer, and no paging buffer — while the stdio and HTTP transports windowed
+them. Oversized reads now cap and buffer identically on every transport, so
+`SHOW MORE` pages a CLI result just as it does an MCP one.
+
+### Fixed — a missing handle now reports a structured rejection
+
+A node handle whose file resolves but whose ordinal does not exist (the common
+"stale handle" case) returned an untyped error. It now returns the same
+structured `node_not_found` rejection as the other resolution paths — the
+message text is unchanged, but callers can now classify it like `rev_mismatch`
+and the other self-healing rejections. The onboarding coach, in turn, can offer
+its re-locate guidance for this case.
+
+### Changed — the line-cap footer owns the "output capped" topic
+
+A capped response already carries the `show_more` footer, which names the
+cheaper alternatives (`SHOW NODE`, `SHOW MORE`, a lower `DEPTH`). The coach no
+longer adds a second, redundant hint for a single capped read; that guidance now
+comes from the footer alone. (The coach still observes capping, for a future
+detector aimed at the case the footer cannot see: capping repeatedly without
+ever paging.)
+
+This change alters no index output, so the enrichment cache version is unchanged.
+
 ## [0.130.0] — 2026-07-19 — feat: the onboarding coach now teaches from failures
 
 ### Added — reactive protocol hints

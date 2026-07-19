@@ -89,6 +89,36 @@ pub(crate) fn format_result(result: &ForgeQLResult, format: CliFormat) -> String
     }
 }
 
+/// Apply the inline `SHOW MORE` window to CLI output, mirroring the MCP/HTTP
+/// render boundary. Without this the CLI pipe dumps an oversized result whole —
+/// no cap, no paging buffer — unlike the other transports. JSON is left intact
+/// (only the human/CSV renderings are windowed, as on the MCP transport).
+fn finalize_cli(
+    engine: &ForgeQLEngine,
+    coords: Option<&SessionCoords>,
+    result: &ForgeQLResult,
+    rendered: String,
+    format: CliFormat,
+) -> String {
+    if matches!(format, CliFormat::Json) {
+        return rendered;
+    }
+    let Some(key) = coords.map(SessionCoords::map_key) else {
+        return rendered;
+    };
+    let Some(root) = engine.session_worktree(&key) else {
+        return rendered;
+    };
+    let cap = engine.session_inline_cap(&key);
+    let Some((label, dir, cap)) = forgeql_core::showmore::buffering_params(result, cap) else {
+        return rendered;
+    };
+    match forgeql_core::showmore::finalize(&root, &rendered, &label, dir, cap) {
+        Ok(fin) => fin.text,
+        Err(_) => rendered,
+    }
+}
+
 /// Attach a coach hint to a rendered response: a top-level `"coach"` sibling
 /// when the body is a JSON object, else a trailing `coach:` line. A `None` hint
 /// leaves the body byte-identical.
@@ -171,7 +201,9 @@ pub(crate) fn execute_and_print(
             Ok(result) => {
                 let elapsed_ms = u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX);
                 update_session_from_result(session, op, &result, &mut log_source);
-                let output = with_coach(format_result(&result, format), coach);
+                let rendered = format_result(&result, format);
+                let windowed = finalize_cli(engine, coords.as_ref(), &result, rendered, format);
+                let output = with_coach(windowed, coach);
                 if let Some(ref mut l) = log {
                     l.log(
                         source_text,

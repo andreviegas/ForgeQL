@@ -198,30 +198,26 @@ const FOUND_REFUSED: &str = concat!(
     "CHANGE NODES FOUND IF REV '<master-rev>' MATCHING 'a' WITH 'b'.",
 );
 
-/// A short corrective hint for output that hit the implicit line cap.
-const OUTPUT_CAPPED: &str = concat!(
-    "Output hit the line cap.\n",
-    "Read a whole node by handle — SHOW NODE '<node_id>' returns its full span. Page a buffered ",
-    "result with SHOW MORE HEAD n | TAIL n | n-m.\n",
-    "To read less, lower DEPTH (0 signature, 1 skeleton) or filter with WHERE text LIKE '%...%'.",
-);
-
 /// The reactive curriculum: map a command outcome to a short recovery hint.
 ///
 /// Pure static data keyed on the coach-facing error taxonomy — no source is
-/// inspected. A hint fires only for a failure or a capped read; a clean success
-/// returns `None`.
+/// inspected. A hint fires only for a self-healing failure; a capped read is
+/// left to the `show_more` footer, and a clean success returns `None`.
 fn reactive_hint(ev: &CommandEvent<'_>) -> Option<Hint> {
     let text = match &ev.outcome {
-        Outcome::Ok { capped: true, .. } | Outcome::Err(ErrKind::OutputCapped) => OUTPUT_CAPPED,
         Outcome::Err(ErrKind::ParseError { attempted }) => return Some(parse_hint(attempted)),
         Outcome::Err(ErrKind::RevMismatch) => REV_MISMATCH,
         Outcome::Err(ErrKind::NodeNotFound) => NODE_NOT_FOUND,
         Outcome::Err(ErrKind::NoFoundSet) => NO_FOUND_SET,
         Outcome::Err(ErrKind::FoundTruncated) => FOUND_TRUNCATED,
         Outcome::Err(ErrKind::FoundRefused) => FOUND_REFUSED,
-        // BudgetLow has no producer yet; its hint lands with the budget observer.
-        Outcome::Ok { .. } | Outcome::Err(ErrKind::BudgetLow | ErrKind::Other) => return None,
+        // A single capped read is already taught by the `show_more` footer that
+        // rides the same response, so the coach cedes that topic to it. The
+        // repeated-capping case the footer cannot see (capping again and again
+        // without ever paging) is a later, stateful detector. BudgetLow has no
+        // producer yet; its hint lands with the budget observer.
+        Outcome::Ok { .. }
+        | Outcome::Err(ErrKind::OutputCapped | ErrKind::BudgetLow | ErrKind::Other) => return None,
     };
     Some(Hint {
         text: text.to_owned(),

@@ -1925,7 +1925,6 @@ is concrete evidence of a protocol gap. A hint may accompany:
 - a rejected mutation (an `IF REV` mismatch, or an unresolved node handle);
 - a bulk `NODES FOUND` verb that could not proceed (no armed FIND, a truncated
   FIND, or a missing master `IF REV`);
-- output that hit the line cap, or a session low on line budget;
 - a statement that failed to parse (with a nearest-verb correction).
 
 **Turning it off.** Set `FORGEQL_COACH=0` (or `off`, `false`, `no`) in the

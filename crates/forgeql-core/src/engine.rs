@@ -841,9 +841,14 @@ impl ForgeQLEngine {
         dispatched: &Result<ForgeQLResult>,
     ) -> Option<String> {
         let coords = coords?;
+        // The inline line cap is applied at the render boundary, after this
+        // point, so `output_capped` recomputes it here from the line count and
+        // the session's configured cap — the coach must see capping at observe
+        // time, on every transport, not only where a footer is later attached.
+        let cap = self.session_inline_cap(&coords.map_key());
         let outcome = match dispatched {
             Ok(result) => Outcome::Ok {
-                capped: result.output_capped(),
+                capped: result.output_capped(cap),
                 truncated: result.output_truncated(),
             },
             Err(err) => Outcome::Err(Self::classify_rejection(err)),

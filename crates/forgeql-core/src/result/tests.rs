@@ -537,6 +537,27 @@ fn source_lines_count_matches_lines_vec_length() {
 }
 
 #[test]
+fn output_capped_is_true_only_above_the_cap() {
+    // A read whose source-line count exceeds the cap would be windowed for
+    // SHOW MORE, so the coach must observe it as capped at execute time —
+    // before, and regardless of, whichever transport attaches the footer.
+    assert!(!make_lines_result(40).output_capped(40));
+    assert!(make_lines_result(41).output_capped(40));
+    assert!(!make_lines_result(39).output_capped(40));
+    // A non-line result is never a capped source read.
+    let q = ForgeQLResult::Query(QueryResult {
+        op: "find_symbols".to_string(),
+        results: vec![],
+        total: 0,
+        metric_hint: None,
+        group_by_field: None,
+        found_rev: None,
+        hint: None,
+    });
+    assert!(!q.output_capped(0));
+}
+
+#[test]
 fn source_lines_count_increases_with_more_lines() {
     // Simulates SHOW BODY DEPTH 1 (10 lines) vs DEPTH 2 (13 lines).
     assert!(
