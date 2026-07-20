@@ -13,36 +13,22 @@
 )]
 
 use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
 
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
-use forgeql_core::auth::{AuthContext, auth};
-use forgeql_core::engine::ForgeQLEngine;
-use forgeql_core::parser;
 use forgeql_core::result::ForgeQLResult;
-use forgeql_core::session::{Session, SessionCoords};
+use forgeql_core::session::Session;
 use tempfile::tempdir;
+
+mod common;
 
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
 
-fn make_registry() -> Arc<LanguageRegistry> {
-    Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
-}
-
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("tests/fixtures")
-}
-
 /// Create a temp dir with a git repo + initial commit + `motor_control` fixtures.
-/// Returns `(engine, session_id, TempDir)`.  `TempDir` must stay alive.
-fn engine_with_git_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
+/// Returns a `TestSession` whose `Drop` frees the workspace.
+fn engine_with_git_session() -> common::TestSession {
     let dir = tempdir().expect("tempdir");
-    let src = fixtures_dir();
+    let src = common::fixtures_dir();
 
     let repo = git2::Repository::init(dir.path()).expect("git init");
     let mut cfg = repo.config().unwrap();
@@ -75,22 +61,7 @@ fn engine_with_git_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
     repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
         .unwrap();
 
-    let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
-    let session_id = engine
-        .register_local_session(dir.path())
-        .expect("register session");
-    (engine, session_id, dir)
-}
-
-fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
-    let ops = parser::parse(fql).expect("parse");
-    let op = ops.first().expect("op");
-    let coords = SessionCoords::from_session_id(sid).expect("valid sid");
-    engine
-        .execute(auth(AuthContext::Tester), Some(&coords), op)
-        .result
-        .expect("execute")
+    common::legacy_session_in(dir)
 }
 
 // -----------------------------------------------------------------------
@@ -103,7 +74,7 @@ fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
 #[test]
 fn checkpoint_survives_restart() {
     let dir = tempdir().expect("tempdir");
-    let reg = make_registry();
+    let reg = common::make_registry();
 
     // Build a session with two checkpoints in memory.
     let mut session_a = Session::new(
@@ -165,7 +136,7 @@ fn checkpoint_survives_restart() {
 #[test]
 fn stale_checkpoint_file_is_discarded() {
     let dir = tempdir().expect("tempdir");
-    let reg = make_registry();
+    let reg = common::make_registry();
 
     let mut session_a = Session::new(
         "sid",
@@ -212,19 +183,19 @@ fn stale_checkpoint_file_is_discarded() {
 /// `COMMIT MESSAGE` removes it.
 #[test]
 fn commit_clears_checkpoint_file() {
-    let (mut engine, sid, dir) = engine_with_git_session();
+    let mut t = engine_with_git_session();
 
-    let checkpoint_file = dir.path().join(".forgeql-checkpoints");
+    let checkpoint_file = t.workspace().join(".forgeql-checkpoints");
     assert!(
         !checkpoint_file.exists(),
         "file must not exist before BEGIN"
     );
 
-    let r = exec(&mut engine, &sid, "BEGIN TRANSACTION 'txn-a'");
+    let r = t.exec("BEGIN TRANSACTION 'txn-a'");
     assert!(matches!(r, ForgeQLResult::BeginTransaction(_)));
     assert!(checkpoint_file.exists(), "file must exist after BEGIN");
 
-    exec(&mut engine, &sid, "COMMIT MESSAGE 'clean commit'");
+    t.exec("COMMIT MESSAGE 'clean commit'");
     assert!(
         !checkpoint_file.exists(),
         ".forgeql-checkpoints must be removed after COMMIT"
@@ -237,22 +208,22 @@ fn commit_clears_checkpoint_file() {
 /// when the stack is empty — that is acceptable and tested here).
 #[test]
 fn nested_checkpoints_rollback() {
-    let (mut engine, sid, dir) = engine_with_git_session();
-    let checkpoint_file = dir.path().join(".forgeql-checkpoints");
+    let mut t = engine_with_git_session();
+    let checkpoint_file = t.workspace().join(".forgeql-checkpoints");
 
-    exec(&mut engine, &sid, "BEGIN TRANSACTION 'txn-a'");
+    t.exec("BEGIN TRANSACTION 'txn-a'");
     assert!(
         checkpoint_file.exists(),
         "file must exist after first BEGIN"
     );
 
-    exec(&mut engine, &sid, "BEGIN TRANSACTION 'txn-b'");
+    t.exec("BEGIN TRANSACTION 'txn-b'");
     assert!(
         checkpoint_file.exists(),
         "file must still exist after second BEGIN"
     );
 
-    let r = exec(&mut engine, &sid, "ROLLBACK TRANSACTION 'txn-b'");
+    let r = t.exec("ROLLBACK TRANSACTION 'txn-b'");
     assert!(
         matches!(r, ForgeQLResult::Rollback(_)),
         "ROLLBACK txn-b failed"
@@ -263,7 +234,7 @@ fn nested_checkpoints_rollback() {
         "file must persist after partial ROLLBACK"
     );
 
-    let r = exec(&mut engine, &sid, "ROLLBACK TRANSACTION 'txn-a'");
+    let r = t.exec("ROLLBACK TRANSACTION 'txn-a'");
     assert!(
         matches!(r, ForgeQLResult::Rollback(_)),
         "ROLLBACK txn-a failed"

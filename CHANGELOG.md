@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.4] — 2026-07-20 — test: migrate checkpoint_persist onto the shared harness
+
+### Changed — the checkpoint suite now uses the shared session helpers
+
+`checkpoint_persist` dropped its private `make_registry`, `fixtures_dir`, and
+`exec` copies in favour of the shared `tests/common` harness. Its git-repo
+setup keeps a local helper, but that helper now returns a `TestSession` whose
+`Drop` frees the temp workspace, and the engine-level tests inspect the
+`.forgeql-checkpoints` file through the new `workspace()` accessor. Pure motion:
+the four tests and their assertions are unchanged.
+
+Test infrastructure only — no index output change, so the enrichment cache
+version is unchanged.
+
 ## [0.139.3] — 2026-07-20 — test: prove the shared harness API before rolling it out
 
 ### Added — a smoke suite that exercises every shared-harness helper
