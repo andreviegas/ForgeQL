@@ -1,0 +1,174 @@
+//! Shared test harness for the `forgeql-core` integration suites.
+//!
+//! Cargo treats `tests/common/mod.rs` as a shared module (not its own test
+//! binary), pulled into a suite with `mod common;`. It owns the one language
+//! registry, the session setup/teardown mechanism, and the exec/assert helpers
+//! that every suite used to copy-paste.
+//!
+//! Rust has no `@Before`/`@After`; the equivalents live here:
+//!  - `setup()`  → [`legacy_session`] / [`columnar_session`] build a fresh temp
+//!    workspace, copy fixtures, and register a session.
+//!  - `teardown()` → [`TestSession`]'s `Drop` frees the temp workspace at end of
+//!    scope, even on panic — strictly better than a teardown a failing test skips.
+#![allow(
+    dead_code,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    unreachable_pub
+)]
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use forgeql_core::ast::lang::{
+    CppLanguageInline, LanguageRegistry, PythonLanguageInline, RustLanguageInline,
+};
+use forgeql_core::auth::{AuthContext, auth};
+use forgeql_core::engine::ForgeQLEngine;
+use forgeql_core::parser;
+use forgeql_core::result::ForgeQLResult;
+use forgeql_core::session::SessionCoords;
+use tempfile::tempdir;
+
+/// The single language registry every suite shares — the one place the language
+/// set is defined. Inline clones FOR NOW; flipping this one function to the real
+/// `forgeql-lang-*` plugins migrates every suite at once.
+pub fn make_registry() -> Arc<LanguageRegistry> {
+    let mut langs = forgeql_lang_text::text_languages();
+    langs.push(Arc::new(CppLanguageInline));
+    langs.push(Arc::new(RustLanguageInline));
+    langs.push(Arc::new(PythonLanguageInline));
+    Arc::new(LanguageRegistry::new(langs))
+}
+
+/// The repository `tests/fixtures` directory. Fixture arguments to the session
+/// constructors are paths relative to here (e.g. `"canonical/canonical.cpp"`);
+/// each is copied into the temp workspace under its file name.
+pub fn fixtures_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("tests/fixtures")
+}
+
+/// The handle an agent would read off a `FIND files` row, computed the same way
+/// the engine does: `n` + 12 hex of the SHA-256 of the workspace-relative path.
+pub fn path_handle(rel: &str) -> String {
+    format!(
+        "n{}",
+        forgeql_core::node_id::hex_prefix(&forgeql_core::node_id::sha256_of_path(rel), 12)
+    )
+}
+
+/// Copy each fixture (a path under `tests/fixtures`) into `dir`, flattening to
+/// its file name.
+fn copy_fixtures(dir: &Path, fixtures: &[&str]) {
+    let src = fixtures_dir();
+    for rel in fixtures {
+        let name = Path::new(rel).file_name().expect("fixture has a file name");
+        let _ = fs::copy(src.join(rel), dir.join(name)).expect("copy fixture");
+    }
+}
+
+/// RAII test session — the `setup()`/`teardown()` mechanism. Owns the engine, its
+/// session id, and the temp workspace; `Drop` (fields drop in declaration order:
+/// engine first, temp dir last) frees the workspace at end of scope, even on panic.
+pub struct TestSession {
+    pub engine: ForgeQLEngine,
+    pub sid: String,
+    _dir: tempfile::TempDir,
+}
+
+impl TestSession {
+    /// Parse FQL and execute the first op; panics on error (the common path).
+    pub fn exec(&mut self, fql: &str) -> ForgeQLResult {
+        let ops = parser::parse(fql).expect("parse");
+        let op = ops.first().expect("at least one op");
+        let coords = SessionCoords::from_session_id(&self.sid).expect("valid session_id");
+        self.engine
+            .execute(auth(AuthContext::Tester), Some(&coords), op)
+            .result
+            .expect("execute")
+    }
+
+    /// Parse and execute, returning the error instead of panicking on it.
+    pub fn try_fql(&mut self, fql: &str) -> anyhow::Result<ForgeQLResult> {
+        let ops = parser::parse(fql).expect("parse");
+        let op = ops.first().expect("at least one op");
+        let coords = SessionCoords::from_session_id(&self.sid).expect("valid session_id");
+        self.engine
+            .execute(auth(AuthContext::Tester), Some(&coords), op)
+            .result
+    }
+
+    /// Run a statement that must be refused, and hand back the refusal message —
+    /// the message is the contract for every gate.
+    pub fn err(&mut self, fql: &str) -> String {
+        self.try_fql(fql).expect_err("must be refused").to_string()
+    }
+
+    /// `(node_id, rev)` for a workspace file: the handle computed like the engine
+    /// does, plus its current rev read back via `FIND NODE`.
+    pub fn file_handle(&mut self, rel: &str) -> (String, String) {
+        let handle = path_handle(rel);
+        let rev = self.node_rev(&handle);
+        (handle, rev)
+    }
+
+    /// Current rev of a node handle, via `FIND NODE`.
+    pub fn node_rev(&mut self, handle: &str) -> String {
+        match self.exec(&format!("FIND NODE '{handle}'")) {
+            ForgeQLResult::FindNode(node) => node.rev,
+            other => panic!("expected FindNode, got {other:?}"),
+        }
+    }
+}
+
+/// `setup()` on the legacy in-memory backend: fresh temp workspace, `fixtures`
+/// copied in, a local session registered.
+pub fn legacy_session(fixtures: &[&str]) -> TestSession {
+    let dir = tempdir().expect("tempdir");
+    copy_fixtures(dir.path(), fixtures);
+    legacy_session_in(dir)
+}
+
+/// Register a legacy-backend session over an already-populated temp workspace.
+/// Use when a test writes bespoke files rather than copying named fixtures.
+pub fn legacy_session_in(dir: tempfile::TempDir) -> TestSession {
+    let data_dir = dir.path().join("data");
+    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
+    let sid = engine
+        .register_local_session(dir.path())
+        .expect("register session");
+    TestSession {
+        engine,
+        sid,
+        _dir: dir,
+    }
+}
+
+/// `setup()` on the columnar backend — the production read path. Mirrors a real
+/// `USE`: builds `segments`/`overlays` dirs under the temp workspace and installs
+/// columnar via `register_local_session_with_columnar`.
+pub fn columnar_session(fixtures: &[&str]) -> TestSession {
+    let dir = tempdir().expect("tempdir");
+    copy_fixtures(dir.path(), fixtures);
+    columnar_session_in(dir)
+}
+
+/// Register a columnar-backend session over an already-populated temp workspace.
+pub fn columnar_session_in(dir: tempfile::TempDir) -> TestSession {
+    let data_dir = dir.path().join("data");
+    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
+    let segments_dir = dir.path().join("segments");
+    let overlays_dir = dir.path().join("overlays");
+    let sid = engine
+        .register_local_session_with_columnar(dir.path(), &segments_dir, &overlays_dir)
+        .expect("register columnar session");
+    TestSession {
+        engine,
+        sid,
+        _dir: dir,
+    }
+}

@@ -12,75 +12,19 @@
 )]
 
 use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
 
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry, RustLanguageInline};
-use forgeql_core::auth::{AuthContext, auth};
-use forgeql_core::engine::ForgeQLEngine;
-use forgeql_core::parser;
 use forgeql_core::result::ForgeQLResult;
-use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
+
+mod common;
 
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
 
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("tests/fixtures/canonical")
-}
-
-fn make_registry() -> Arc<LanguageRegistry> {
-    Arc::new(LanguageRegistry::new(vec![
-        Arc::new(CppLanguageInline),
-        Arc::new(RustLanguageInline),
-    ]))
-}
-
-/// Create a temp workspace with both canonical.cpp and canonical.rs,
-/// boot an engine with a session pointing at that workspace.
-fn multilang_engine() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    let dir = tempdir().expect("tempdir");
-    let src = fixtures_dir();
-
-    let _ =
-        fs::copy(src.join("canonical.cpp"), dir.path().join("canonical.cpp")).expect("copy .cpp");
-    let _ = fs::copy(src.join("canonical.rs"), dir.path().join("canonical.rs")).expect("copy .rs");
-
-    let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
-    let session_id = engine
-        .register_local_session(dir.path())
-        .expect("register session");
-
-    (engine, session_id, dir)
-}
-
-/// Parse and execute FQL, return the result.
-fn exec(engine: &mut ForgeQLEngine, session: &str, fql: &str) -> ForgeQLResult {
-    let ops = parser::parse(fql).expect("parse");
-    let op = ops.first().expect("at least one op");
-    let coords = SessionCoords::from_session_id(session).expect("valid session");
-    engine
-        .execute(auth(AuthContext::Tester), Some(&coords), op)
-        .result
-        .expect("execute")
-}
-
-/// Parse and execute FQL, expecting an error. Returns the error message.
-fn exec_err(engine: &mut ForgeQLEngine, session: &str, fql: &str) -> String {
-    let ops = parser::parse(fql).expect("parse");
-    let op = ops.first().expect("at least one op");
-    let coords = SessionCoords::from_session_id(session).expect("valid session");
-    engine
-        .execute(auth(AuthContext::Tester), Some(&coords), op)
-        .result
-        .expect_err("expected error")
-        .to_string()
-}
+/// The `canonical.cpp` + `canonical.rs` fixtures — both define `foo`, `bar`, and
+/// `Motor`, the cross-language ambiguity every test below turns on.
+const CANONICAL: &[&str] = &["canonical/canonical.cpp", "canonical/canonical.rs"];
 
 /// Assert the result is a successful SHOW with the expected op name.
 fn assert_show_ok(result: &ForgeQLResult, expected_op: &str) {
@@ -98,9 +42,9 @@ fn assert_show_ok(result: &ForgeQLResult, expected_op: &str) {
 
 #[test]
 fn show_body_ambiguous_symbol_returns_error() {
-    let (mut engine, sid, _dir) = multilang_engine();
+    let mut t = common::legacy_session(CANONICAL);
     // 'foo' exists in both canonical.cpp and canonical.rs
-    let err = exec_err(&mut engine, &sid, "SHOW body OF 'foo'");
+    let err = t.err("SHOW body OF 'foo'");
     assert!(
         err.contains("multiple languages"),
         "expected ambiguity error, got: {err}"
@@ -111,8 +55,8 @@ fn show_body_ambiguous_symbol_returns_error() {
 
 #[test]
 fn show_signature_ambiguous_symbol_returns_error() {
-    let (mut engine, sid, _dir) = multilang_engine();
-    let err = exec_err(&mut engine, &sid, "SHOW signature OF 'bar'");
+    let mut t = common::legacy_session(CANONICAL);
+    let err = t.err("SHOW signature OF 'bar'");
     assert!(
         err.contains("multiple languages"),
         "expected ambiguity error, got: {err}"
@@ -121,8 +65,8 @@ fn show_signature_ambiguous_symbol_returns_error() {
 
 #[test]
 fn show_context_ambiguous_symbol_returns_error() {
-    let (mut engine, sid, _dir) = multilang_engine();
-    let err = exec_err(&mut engine, &sid, "SHOW context OF 'foo'");
+    let mut t = common::legacy_session(CANONICAL);
+    let err = t.err("SHOW context OF 'foo'");
     assert!(
         err.contains("multiple languages"),
         "expected ambiguity error, got: {err}"
@@ -131,9 +75,9 @@ fn show_context_ambiguous_symbol_returns_error() {
 
 #[test]
 fn show_members_ambiguous_symbol_returns_error() {
-    let (mut engine, sid, _dir) = multilang_engine();
+    let mut t = common::legacy_session(CANONICAL);
     // 'Motor' struct exists in both languages
-    let err = exec_err(&mut engine, &sid, "SHOW members OF 'Motor'");
+    let err = t.err("SHOW members OF 'Motor'");
     assert!(
         err.contains("multiple languages"),
         "expected ambiguity error, got: {err}"
@@ -146,23 +90,15 @@ fn show_members_ambiguous_symbol_returns_error() {
 
 #[test]
 fn show_body_disambiguate_with_where_language() {
-    let (mut engine, sid, _dir) = multilang_engine();
-    let result = exec(
-        &mut engine,
-        &sid,
-        "SHOW body OF 'foo' WHERE language = 'cpp'",
-    );
+    let mut t = common::legacy_session(CANONICAL);
+    let result = t.exec("SHOW body OF 'foo' WHERE language = 'cpp'");
     assert_show_ok(&result, "show_body");
 }
 
 #[test]
 fn show_body_disambiguate_with_where_language_rust() {
-    let (mut engine, sid, _dir) = multilang_engine();
-    let result = exec(
-        &mut engine,
-        &sid,
-        "SHOW body OF 'foo' WHERE language = 'rust'",
-    );
+    let mut t = common::legacy_session(CANONICAL);
+    let result = t.exec("SHOW body OF 'foo' WHERE language = 'rust'");
     assert_show_ok(&result, "show_body");
 }
 
@@ -172,37 +108,23 @@ fn show_body_disambiguate_with_where_language_rust() {
 
 #[test]
 fn show_signature_disambiguate_with_in_glob() {
-    let (mut engine, sid, _dir) = multilang_engine();
-    let result = exec(&mut engine, &sid, "SHOW signature OF 'bar' IN '*.rs'");
+    let mut t = common::legacy_session(CANONICAL);
+    let result = t.exec("SHOW signature OF 'bar' IN '*.rs'");
     assert_show_ok(&result, "show_signature");
 }
 
 #[test]
 fn show_context_disambiguate_with_in_glob_cpp() {
-    let (mut engine, sid, _dir) = multilang_engine();
-    let result = exec(&mut engine, &sid, "SHOW context OF 'foo' IN '*.cpp'");
+    let mut t = common::legacy_session(CANONICAL);
+    let result = t.exec("SHOW context OF 'foo' IN '*.cpp'");
     assert_show_ok(&result, "show_context");
 }
 
-// -----------------------------------------------------------------------
-// Single-language workspace — no ambiguity
-// -----------------------------------------------------------------------
-
 #[test]
 fn show_body_single_language_no_ambiguity() {
-    // Create a workspace with only C++ — no disambiguation needed.
-    let dir = tempdir().expect("tempdir");
-    let src = fixtures_dir();
-    let _ =
-        fs::copy(src.join("canonical.cpp"), dir.path().join("canonical.cpp")).expect("copy .cpp");
-
-    let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
-    let sid = engine
-        .register_local_session(dir.path())
-        .expect("register session");
-
-    let result = exec(&mut engine, &sid, "SHOW body OF 'foo'");
+    // Only C++ present — no disambiguation needed.
+    let mut t = common::legacy_session(&["canonical/canonical.cpp"]);
+    let result = t.exec("SHOW body OF 'foo'");
     assert_show_ok(&result, "show_body");
 }
 
@@ -224,13 +146,8 @@ fn show_body_resolves_attributed_function() {
     )
     .expect("write rs");
 
-    let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
-    let sid = engine
-        .register_local_session(dir.path())
-        .expect("register session");
-
-    let result = exec(&mut engine, &sid, "SHOW body OF 'decorated'");
+    let mut t = common::legacy_session_in(dir);
+    let result = t.exec("SHOW body OF 'decorated'");
     match &result {
         ForgeQLResult::Show(sr) => match &sr.content {
             forgeql_core::result::ShowContent::Lines { lines, .. } => {

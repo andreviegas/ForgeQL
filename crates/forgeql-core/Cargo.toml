@@ -65,6 +65,9 @@ insta        = { workspace = true }
 criterion    = { workspace = true }
 forgeql-core = { path = ".", features = ["test-helpers"] }
 forgeql-lang-text = { workspace = true }
+forgeql-lang-cpp    = { workspace = true }
+forgeql-lang-rust   = { workspace = true }
+forgeql-lang-python = { workspace = true }
 
 [[bench]]
 name              = "columnar_filter"

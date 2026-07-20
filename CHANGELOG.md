@@ -6,6 +6,30 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.2] — 2026-07-20 — chore: shared integration-test harness
+
+### Changed — one place for the test registry, session setup, and teardown
+
+The `forgeql-core` integration suites each carried their own copy of the same
+fixture-loading, registry-building, and session-registration boilerplate, so the
+language set and backend choice could silently drift between suites. A new shared
+`crates/forgeql-core/tests/common/mod.rs` module now owns them in one place:
+
+- `make_registry()` — the single language registry every suite builds from.
+- `legacy_session()` / `columnar_session()` — temp-workspace setup that copies
+  fixtures and registers a session on the legacy or the columnar backend.
+- `TestSession` — an RAII guard whose `Drop` frees the temp workspace at end of
+  scope, even on panic, plus `exec` / `try_fql` / `err` / `file_handle` helpers.
+
+The `forgeql-lang-cpp`, `forgeql-lang-rust`, and `forgeql-lang-python` crates are
+added under `[dev-dependencies]` (mirroring the existing `forgeql-lang-text`
+entry) so the shared registry can later be pointed at the real language plugins.
+The `multilang_resolve_integration` suite is migrated onto the shared harness as
+the pilot, deleting its duplicated helpers.
+
+Test infrastructure only — no index output changes, so the enrichment cache
+version is unchanged.
+
 ## [0.139.1] — 2026-07-19 — refactor: split the result module by response family
 
 ### Changed — the result DTO catalog is now one file per response family
