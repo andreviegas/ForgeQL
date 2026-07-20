@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.6] — 2026-07-20 — test: migrate the engine-integration suite onto the shared harness
+
+### Changed — the engine-integration suite now boots sessions through `tests/common`
+
+The `engine_integration` suite dropped its private `make_registry`,
+`fixtures_dir`, and `path_handle` copies, along with the two bespoke
+engine-and-session builders that duplicated the shared harness. It now boots
+every session through `tests/common`. To keep the suite's `(engine,
+session_id, TempDir)` tuple idiom — and so leave every test body unchanged — a
+new `TestSession::into_parts` hands back the three owned pieces. Pure motion:
+all 92 tests and their assertions are unchanged.
+
 ## [0.139.5] — 2026-07-20 — test: migrate commit_gate onto the shared harness
 
 ### Changed — the commit-gate suite now uses the shared session helpers

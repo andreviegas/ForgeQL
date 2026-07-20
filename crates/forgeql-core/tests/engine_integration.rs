@@ -16,10 +16,7 @@
 )]
 
 use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
 
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
 use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::ir::{Backend, Clauses, ForgeQLIR};
@@ -28,60 +25,22 @@ use forgeql_core::result::{ForgeQLResult, ShowContent};
 use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
-fn make_registry() -> Arc<LanguageRegistry> {
-    let mut langs = forgeql_lang_text::text_languages();
-    langs.push(Arc::new(CppLanguageInline));
-    Arc::new(LanguageRegistry::new(langs))
-}
+mod common;
 
 // -----------------------------------------------------------------------
-// Helpers
+// Helpers — the shared harness lives in `tests/common`; these thin adapters
+// keep the `(engine, session_id, TempDir)` tuple idiom this suite's bodies use.
 // -----------------------------------------------------------------------
 
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("tests/fixtures")
-}
-
-/// Create a temp workspace with motor_control fixtures and boot an engine
-/// with a local session pointing at that workspace.
-///
-/// Returns `(engine, session_id, TempDir)`.  `TempDir` must stay alive.
+/// Create a temp workspace with `motor_control` fixtures (plus any extras) and
+/// boot a columnar session over it. Returns `(engine, session_id, TempDir)`;
+/// the `TempDir` must stay alive.
 fn engine_with_session_with_extra_files(
     extra_files: &[&str],
 ) -> (ForgeQLEngine, String, tempfile::TempDir) {
-    let dir = tempdir().expect("tempdir");
-    let src = fixtures_dir();
-
-    // Copy fixtures into the temp workspace.
-    let _ = fs::copy(
-        src.join("motor_control.h"),
-        dir.path().join("motor_control.h"),
-    )
-    .expect("copy .h");
-    let _ = fs::copy(
-        src.join("motor_control.cpp"),
-        dir.path().join("motor_control.cpp"),
-    )
-    .expect("copy .cpp");
-    for file in extra_files {
-        let _ = fs::copy(src.join(file), dir.path().join(file)).expect("copy extra fixture");
-    }
-
-    // Create an engine with a data_dir inside the temp dir.
-    let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
-
-    // Register a local session.  The engine doesn't have a direct method
-    // for this — we use the internal test helper.
-    let segments_dir = dir.path().join("segments");
-    let overlays_dir = dir.path().join("overlays");
-    let session_id = engine
-        .register_local_session_with_columnar(dir.path(), &segments_dir, &overlays_dir)
-        .expect("register columnar session");
-
-    (engine, session_id, dir)
+    let mut fixtures = vec!["motor_control.h", "motor_control.cpp"];
+    fixtures.extend_from_slice(extra_files);
+    common::columnar_session(&fixtures).into_parts()
 }
 
 fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
@@ -92,28 +51,8 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
 /// known legacy/columnar behaviour divergences; flip each caller back to
 /// `engine_with_session` once the columnar side is fixed.
 fn engine_with_session_legacy() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    let dir = tempdir().expect("tempdir");
-    let src = fixtures_dir();
-
-    let _ = fs::copy(
-        src.join("motor_control.h"),
-        dir.path().join("motor_control.h"),
-    )
-    .expect("copy .h");
-    let _ = fs::copy(
-        src.join("motor_control.cpp"),
-        dir.path().join("motor_control.cpp"),
-    )
-    .expect("copy .cpp");
-
-    let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
-    let session_id = engine
-        .register_local_session(dir.path())
-        .expect("register session");
-    (engine, session_id, dir)
+    common::legacy_session(&["motor_control.h", "motor_control.cpp"]).into_parts()
 }
-
 /// Parse FQL and execute the first op against the engine.
 fn execute_fql(engine: &mut ForgeQLEngine, session_id: &str, fql: &str) -> ForgeQLResult {
     let ops = parser::parse(fql).expect("parse");
@@ -151,15 +90,6 @@ fn fql_err(engine: &mut ForgeQLEngine, session_id: &str, fql: &str) -> String {
 // Files and directories as addressable nodes (bare-hex `n<hex>` handles)
 // -----------------------------------------------------------------------
 
-/// The handle an agent would read off a `FIND files` row, computed the same way
-/// the engine does: `n` + 12 hex of the SHA-256 of the workspace-relative path.
-fn path_handle(rel: &str) -> String {
-    format!(
-        "n{}",
-        forgeql_core::node_id::hex_prefix(&forgeql_core::node_id::sha256_of_path(rel), 12)
-    )
-}
-
 fn node_rev(engine: &mut ForgeQLEngine, session_id: &str, handle: &str) -> String {
     match execute_fql(engine, session_id, &format!("FIND NODE '{handle}'")) {
         ForgeQLResult::FindNode(node) => node.rev,
@@ -172,7 +102,7 @@ fn bare_hex_resolves_the_whole_file() {
     let (mut engine, sid, dir) = engine_with_session();
     fs::write(dir.path().join("notes.txt"), "one\ntwo\nthree\n").unwrap();
 
-    let handle = path_handle("notes.txt");
+    let handle = common::path_handle("notes.txt");
     match execute_fql(&mut engine, &sid, &format!("FIND NODE '{handle}'")) {
         ForgeQLResult::FindNode(node) => {
             assert_eq!(node.fql_kind, "file");
@@ -201,7 +131,7 @@ fn bare_hex_offset_reads_a_line_range_of_the_file() {
     let (mut engine, sid, dir) = engine_with_session();
     fs::write(dir.path().join("notes.txt"), "one\ntwo\nthree\n").unwrap();
 
-    let handle = path_handle("notes.txt");
+    let handle = common::path_handle("notes.txt");
     match execute_fql(&mut engine, &sid, &format!("SHOW NODE '{handle}(2-3)'")) {
         ForgeQLResult::Show(show) => {
             let text = format!("{show}");
@@ -218,7 +148,7 @@ fn delete_node_bare_hex_requires_if_rev() {
     let path = dir.path().join("notes.txt");
     fs::write(&path, "one\n").unwrap();
 
-    let handle = path_handle("notes.txt");
+    let handle = common::path_handle("notes.txt");
     let err = try_fql(&mut engine, &sid, &format!("DELETE NODE '{handle}'")).unwrap_err();
     assert!(err.to_string().contains("requires IF REV"), "got: {err}");
     assert!(path.exists(), "the refused delete must not touch the file");
@@ -230,7 +160,7 @@ fn delete_node_bare_hex_unlinks_the_file_rather_than_emptying_it() {
     let path = dir.path().join("notes.txt");
     fs::write(&path, "one\ntwo\n").unwrap();
 
-    let handle = path_handle("notes.txt");
+    let handle = common::path_handle("notes.txt");
     let rev = node_rev(&mut engine, &sid, &handle);
     let _ = execute_fql(
         &mut engine,
@@ -251,7 +181,7 @@ fn change_node_bare_hex_requires_if_rev() {
     let path = dir.path().join("notes.txt");
     fs::write(&path, "one\ntwo\n").unwrap();
 
-    let handle = path_handle("notes.txt");
+    let handle = common::path_handle("notes.txt");
     let err = try_fql(
         &mut engine,
         &sid,
@@ -276,7 +206,7 @@ fn insert_around_bare_hex_prepends_at_bof_and_appends_at_eof() {
     let path = dir.path().join("notes.txt");
     fs::write(&path, "middle\n").unwrap();
 
-    let handle = path_handle("notes.txt");
+    let handle = common::path_handle("notes.txt");
     // Creating is not destructive, so neither form needs a rev.
     let _ = execute_fql(
         &mut engine,
@@ -303,7 +233,7 @@ fn insert_after_bare_hex_writes_into_an_empty_file() {
 
     // The create-then-write bootstrap: a 0-byte file has no lines to map, but
     // line 1 of it must still be a valid insert target.
-    let handle = path_handle("empty.txt");
+    let handle = common::path_handle("empty.txt");
     let _ = execute_fql(
         &mut engine,
         &sid,
@@ -318,7 +248,7 @@ fn dir_rev_tracks_membership_not_content() {
     fs::create_dir_all(dir.path().join("pkg/deep")).unwrap();
     fs::write(dir.path().join("pkg/a.txt"), "a\n").unwrap();
 
-    let handle = path_handle("pkg");
+    let handle = common::path_handle("pkg");
     let before = node_rev(&mut engine, &sid, &handle);
     assert!(before.starts_with('h'));
 
@@ -340,7 +270,7 @@ fn delete_node_dir_hex_removes_the_whole_subtree() {
     fs::write(dir.path().join("pkg/a.txt"), "a\n").unwrap();
     fs::write(dir.path().join("pkg/deep/b.txt"), "b\n").unwrap();
 
-    let handle = path_handle("pkg");
+    let handle = common::path_handle("pkg");
     let err = try_fql(&mut engine, &sid, &format!("DELETE NODE '{handle}'")).unwrap_err();
     assert!(err.to_string().contains("requires IF REV"), "got: {err}");
 
@@ -367,8 +297,8 @@ fn find_files_hands_out_a_handle_and_a_rev_per_row() {
             let text = format!("{show}");
             // Every listed row is actionable as it stands — the handle and the
             // rev are both there, so DELETE NODE ... IF REV is one round trip.
-            assert!(text.contains(&path_handle("pkg/a.txt")), "{text}");
-            assert!(text.contains(&path_handle("pkg")), "{text}");
+            assert!(text.contains(&common::path_handle("pkg/a.txt")), "{text}");
+            assert!(text.contains(&common::path_handle("pkg")), "{text}");
             // Directories are marked by a trailing slash on the path — no extra
             // column, and `WHERE path LIKE '%/'` selects them.
             assert!(text.contains("pkg/\n") || text.contains("pkg/ "), "{text}");
@@ -389,7 +319,7 @@ fn insert_node_for_creates_an_empty_file_and_returns_its_handle() {
         ForgeQLResult::Mutation(m) => {
             assert_eq!(
                 m.new_node_id.as_deref(),
-                Some(path_handle("notes/readme.md").as_str())
+                Some(common::path_handle("notes/readme.md").as_str())
             );
         }
         other => panic!("expected Mutation, got {other:?}"),
@@ -398,7 +328,7 @@ fn insert_node_for_creates_an_empty_file_and_returns_its_handle() {
     assert_eq!(fs::read_to_string(&path).unwrap(), "", "created empty");
 
     // The bootstrap: create, then write into it by handle.
-    let handle = path_handle("notes/readme.md");
+    let handle = common::path_handle("notes/readme.md");
     let _ = execute_fql(
         &mut engine,
         &sid,
@@ -423,7 +353,7 @@ fn move_node_to_path_renames_the_file_and_keeps_its_rev() {
     let (mut engine, sid, dir) = engine_with_session();
     fs::write(dir.path().join("old.txt"), "body\n").unwrap();
 
-    let handle = path_handle("old.txt");
+    let handle = common::path_handle("old.txt");
     let rev = node_rev(&mut engine, &sid, &handle);
     match execute_fql(
         &mut engine,
@@ -434,7 +364,7 @@ fn move_node_to_path_renames_the_file_and_keeps_its_rev() {
             // The handle is path-derived, so a rename earns a new one.
             assert_eq!(
                 m.new_node_id.as_deref(),
-                Some(path_handle("new.txt").as_str())
+                Some(common::path_handle("new.txt").as_str())
             );
         }
         other => panic!("expected Mutation, got {other:?}"),
@@ -448,7 +378,10 @@ fn move_node_to_path_renames_the_file_and_keeps_its_rev() {
         "body\n"
     );
     // Same bytes at the new path, so the same rev.
-    assert_eq!(node_rev(&mut engine, &sid, &path_handle("new.txt")), rev);
+    assert_eq!(
+        node_rev(&mut engine, &sid, &common::path_handle("new.txt")),
+        rev
+    );
 }
 
 #[test]
@@ -457,7 +390,7 @@ fn move_node_to_requires_if_rev_and_refuses_an_existing_destination() {
     fs::write(dir.path().join("a.txt"), "a\n").unwrap();
     fs::write(dir.path().join("b.txt"), "b\n").unwrap();
 
-    let handle = path_handle("a.txt");
+    let handle = common::path_handle("a.txt");
     let err = try_fql(
         &mut engine,
         &sid,
@@ -483,8 +416,8 @@ fn copy_node_to_a_directory_handle_keeps_the_basename() {
     fs::write(dir.path().join("a.txt"), "a\n").unwrap();
     fs::create_dir_all(dir.path().join("pkg")).unwrap();
 
-    let file = path_handle("a.txt");
-    let pkg = path_handle("pkg");
+    let file = common::path_handle("a.txt");
+    let pkg = common::path_handle("pkg");
     // Creation only, so no rev needed.
     let _ = execute_fql(&mut engine, &sid, &format!("COPY NODE '{file}' TO '{pkg}'"));
     assert_eq!(
@@ -504,7 +437,7 @@ fn copy_node_to_a_trailing_slash_path_is_the_same_as_a_directory_handle() {
 
     // `api/v2/` does not exist yet — a path is the only way to name it, which is
     // exactly why the TO argument accepts one.
-    let file = path_handle("a.txt");
+    let file = common::path_handle("a.txt");
     let _ = execute_fql(
         &mut engine,
         &sid,
@@ -523,7 +456,7 @@ fn copy_node_to_a_trailing_slash_path_is_the_same_as_a_directory_handle() {
 #[test]
 fn engine_starts_with_zero_state() {
     let tmp = tempdir().unwrap();
-    let engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
+    let engine = ForgeQLEngine::new(tmp.path().to_path_buf(), common::make_registry()).unwrap();
     assert_eq!(engine.session_count(), 0);
     assert_eq!(engine.source_count(), 0);
     assert_eq!(engine.commands_served(), 0);
@@ -532,7 +465,7 @@ fn engine_starts_with_zero_state() {
 #[test]
 fn show_sources_on_empty_engine() {
     let tmp = tempdir().unwrap();
-    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
+    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), common::make_registry()).unwrap();
     let result = engine
         .execute(auth(AuthContext::Tester), None, &ForgeQLIR::ShowSources)
         .result
@@ -923,7 +856,7 @@ fn mutation_reports_structural_error_when_it_breaks_json() {
     let (mut engine, sid, dir) = engine_with_session();
     let path = dir.path().join("cfg.json");
     fs::write(&path, "{ \"a\": 1 }\n").unwrap();
-    let handle = path_handle("cfg.json");
+    let handle = common::path_handle("cfg.json");
 
     // valid -> valid: nothing to report.
     let rev = node_rev(&mut engine, &sid, &handle);
@@ -982,7 +915,7 @@ fn jsonc_dialect_is_not_strictly_validated() {
     let (mut engine, sid, dir) = engine_with_session();
     let path = dir.path().join("cfg.jsonc");
     fs::write(&path, "{ \"a\": 1 }\n").unwrap();
-    let handle = path_handle("cfg.jsonc");
+    let handle = common::path_handle("cfg.jsonc");
 
     // A trailing comma is legal JSONC but not strict JSON; it must not be flagged.
     let rev = node_rev(&mut engine, &sid, &handle);
@@ -1015,7 +948,7 @@ fn mutation_reports_structural_errors_for_yaml_toml_and_xml() {
         let (mut engine, sid, dir) = engine_with_session();
         let path = dir.path().join(name);
         fs::write(&path, valid).unwrap();
-        let handle = path_handle(name);
+        let handle = common::path_handle(name);
 
         let rev = node_rev(&mut engine, &sid, &handle);
         match execute_fql(
@@ -1060,7 +993,7 @@ fn mutation_reports_structural_errors_for_yaml_toml_and_xml() {
 #[test]
 fn find_symbols_without_session_fails() {
     let tmp = tempdir().unwrap();
-    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
+    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), common::make_registry()).unwrap();
     let op = ForgeQLIR::FindSymbols {
         backend: Backend::default(),
         clauses: Clauses::default(),
@@ -1917,7 +1850,7 @@ int Widget::width() const {
     .expect("write cpp");
 
     let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
+    let mut engine = ForgeQLEngine::new(data_dir, common::make_registry()).expect("engine");
     let sid = engine
         .register_local_session(dir.path())
         .expect("register session");
@@ -2615,7 +2548,7 @@ fn found_set_survives_a_restart() {
     drop(engine); // the server goes away between the FIND and the sweep
 
     let mut restarted =
-        ForgeQLEngine::new(dir.path().join("data"), make_registry()).expect("engine");
+        ForgeQLEngine::new(dir.path().join("data"), common::make_registry()).expect("engine");
     let sid2 = restarted
         .register_local_session(dir.path())
         .expect("register session");
@@ -2661,7 +2594,7 @@ fn a_mutation_clears_the_set_on_disk_too() {
     drop(engine);
 
     let mut restarted =
-        ForgeQLEngine::new(dir.path().join("data"), make_registry()).expect("engine");
+        ForgeQLEngine::new(dir.path().join("data"), common::make_registry()).expect("engine");
     let sid2 = restarted
         .register_local_session(dir.path())
         .expect("register session");

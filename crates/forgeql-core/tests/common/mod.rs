@@ -151,6 +151,13 @@ impl TestSession {
     pub fn workspace(&self) -> &std::path::Path {
         self.dir.path()
     }
+
+    /// Consume the session into its owned `(engine, session_id, TempDir)` parts.
+    /// For suites mid-migration that still thread the three pieces explicitly
+    /// rather than calling the methods above; the `TempDir` must stay alive.
+    pub fn into_parts(self) -> (ForgeQLEngine, String, tempfile::TempDir) {
+        (self.engine, self.sid, self.dir)
+    }
 }
 
 /// `setup()` on the legacy in-memory backend: fresh temp workspace, `fixtures`
