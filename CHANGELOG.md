@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.5] — 2026-07-20 — test: migrate commit_gate onto the shared harness
+
+### Changed — the commit-gate suite now uses the shared session helpers
+
+`commit_gate` dropped its private `make_registry`, `exec`, and `try_exec` copies
+in favour of the shared `tests/common` harness. Its bespoke setup (a git repo
+carrying a commit-gated `.forgeql.yaml`) keeps a local `gated_session` helper,
+which now returns a `TestSession`; the blocking `exec_blocking` /
+`try_fql_blocking` variants drive the gate/job statements, and the filesystem
+assertions read the workspace through `workspace()`. The restart test rebuilds
+the engine in place over the same `TestSession` workspace. Pure motion: all
+fifteen tests and their assertions are unchanged.
+
+Test infrastructure only — no index output change, so the enrichment cache
+version is unchanged.
+
 ## [0.139.4] — 2026-07-20 — test: migrate checkpoint_persist onto the shared harness
 
 ### Changed — the checkpoint suite now uses the shared session helpers
