@@ -77,7 +77,7 @@ fn copy_fixtures(dir: &Path, fixtures: &[&str]) {
 pub struct TestSession {
     pub engine: ForgeQLEngine,
     pub sid: String,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
 }
 
 impl TestSession {
@@ -102,6 +102,28 @@ impl TestSession {
             .result
     }
 
+    /// Like [`Self::exec`] but waits for any background job the op spawns
+    /// (JOB / VERIFY) to finish — the deterministic choice for gate/job tests.
+    pub fn exec_blocking(&mut self, fql: &str) -> ForgeQLResult {
+        let ops = parser::parse(fql).expect("parse");
+        let op = ops.first().expect("at least one op");
+        let coords = SessionCoords::from_session_id(&self.sid).expect("valid session_id");
+        self.engine
+            .execute_blocking(auth(AuthContext::Tester), Some(&coords), op)
+            .result
+            .expect("execute")
+    }
+
+    /// Blocking variant of [`Self::try_fql`] — returns the error instead of panicking.
+    pub fn try_fql_blocking(&mut self, fql: &str) -> anyhow::Result<ForgeQLResult> {
+        let ops = parser::parse(fql).expect("parse");
+        let op = ops.first().expect("at least one op");
+        let coords = SessionCoords::from_session_id(&self.sid).expect("valid session_id");
+        self.engine
+            .execute_blocking(auth(AuthContext::Tester), Some(&coords), op)
+            .result
+    }
+
     /// Run a statement that must be refused, and hand back the refusal message —
     /// the message is the contract for every gate.
     pub fn err(&mut self, fql: &str) -> String {
@@ -123,6 +145,12 @@ impl TestSession {
             other => panic!("expected FindNode, got {other:?}"),
         }
     }
+
+    /// The temp workspace root the session was registered on — needed by tests
+    /// that inspect on-disk artifacts (e.g. `.forgeql-checkpoints`).
+    pub fn workspace(&self) -> &std::path::Path {
+        self.dir.path()
+    }
 }
 
 /// `setup()` on the legacy in-memory backend: fresh temp workspace, `fixtures`
@@ -141,11 +169,7 @@ pub fn legacy_session_in(dir: tempfile::TempDir) -> TestSession {
     let sid = engine
         .register_local_session(dir.path())
         .expect("register session");
-    TestSession {
-        engine,
-        sid,
-        _dir: dir,
-    }
+    TestSession { engine, sid, dir }
 }
 
 /// `setup()` on the columnar backend — the production read path. Mirrors a real
@@ -166,9 +190,5 @@ pub fn columnar_session_in(dir: tempfile::TempDir) -> TestSession {
     let sid = engine
         .register_local_session_with_columnar(dir.path(), &segments_dir, &overlays_dir)
         .expect("register columnar session");
-    TestSession {
-        engine,
-        sid,
-        _dir: dir,
-    }
+    TestSession { engine, sid, dir }
 }

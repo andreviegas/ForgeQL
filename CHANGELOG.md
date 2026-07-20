@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.3] — 2026-07-20 — test: prove the shared harness API before rolling it out
+
+### Added — a smoke suite that exercises every shared-harness helper
+
+Before migrating the remaining integration suites onto the shared
+`tests/common` harness, its API is now proven end to end by a dedicated
+`common_smoke` suite. It drives `legacy_session` and `columnar_session` (both
+backends), `columnar_session_in` over a hand-built workspace, the `exec` /
+`exec_blocking` / `try_fql` / `try_fql_blocking` / `err` query paths, and the
+`file_handle` / `path_handle` / `workspace` accessors. Several of these helpers
+were unreferenced by any suite, so a regression in them would have passed the
+gate unnoticed.
+
+`TestSession` also gains blocking `exec_blocking` / `try_fql_blocking` variants
+(for suites whose statements spawn gate or verify jobs) and a `workspace()`
+accessor (for tests that inspect on-disk session artifacts such as the
+checkpoint file).
+
+Test infrastructure only — no index output change, so the enrichment cache
+version is unchanged.
+
 ## [0.139.2] — 2026-07-20 — chore: shared integration-test harness
 
 ### Changed — one place for the test registry, session setup, and teardown
