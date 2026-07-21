@@ -29,12 +29,12 @@ use std::sync::Arc;
 
 use forgeql_core::ast::enrich::default_enrichers;
 use forgeql_core::ast::index::{IndexContext, SymbolTable, index_file};
-use forgeql_core::ast::lang::{
-    CppLanguageInline, LanguageRegistry, LanguageSupport, RustLanguageInline,
-};
+use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
 use forgeql_core::ir::Clauses;
 use forgeql_core::result::SymbolMatch;
 use forgeql_core::storage::columnar::{OverlayBuilder, SegmentBuilder, SegmentReader, SymbolRow};
+use forgeql_lang_cpp::CppLanguage;
+use forgeql_lang_rust::RustLanguage;
 use tempfile::TempDir;
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -215,8 +215,8 @@ fn columnar_key_tuples(results: &[SymbolMatch]) -> Vec<(String, String, usize)> 
 /// (name, fql_kind, line) triples as the merged legacy tables.
 #[test]
 fn overlay_find_symbols_matches_legacy_merged() {
-    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
-    let table_rust = index_fixture(&RustLanguageInline, "canonical.rs");
+    let table_cpp = index_fixture(&CppLanguage, "canonical.cpp");
+    let table_rust = index_fixture(&RustLanguage, "canonical.rs");
 
     let tmp = TempDir::new().expect("tempdir");
     let segments_dir = tmp.path().join("segments");
@@ -328,7 +328,7 @@ fn overlay_find_symbols_matches_legacy_merged() {
 /// rows with that kind — same count as legacy.
 #[test]
 fn overlay_kind_prefilter_matches_legacy() {
-    let table = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let table = index_fixture(&CppLanguage, "canonical.cpp");
 
     let tmp = TempDir::new().expect("tempdir");
     let segments_dir = tmp.path().join("segments");
@@ -415,7 +415,7 @@ fn single_segment_cpp_overlay() -> (
     use forgeql_core::storage::columnar::ColumnarStorage;
     use forgeql_core::storage::columnar::overlay::Overlay;
 
-    let table = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let table = index_fixture(&CppLanguage, "canonical.cpp");
     let tmp = TempDir::new().expect("tempdir");
     let segments_dir = tmp.path().join("segments");
     let overlays_dir = tmp.path().join("overlays");
@@ -615,8 +615,8 @@ fn overlay_lookup_name_spans_segments() {
     use forgeql_core::storage::columnar::ColumnarStorage;
     use forgeql_core::storage::columnar::overlay::Overlay;
 
-    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
-    let table_rust = index_fixture(&RustLanguageInline, "canonical.rs");
+    let table_cpp = index_fixture(&CppLanguage, "canonical.cpp");
+    let table_rust = index_fixture(&RustLanguage, "canonical.rs");
 
     let tmp = TempDir::new().expect("tempdir");
     let segments_dir = tmp.path().join("segments");
@@ -689,8 +689,8 @@ fn parse_cache_hit_and_lru_eviction() {
     use forgeql_core::ast::parse_cache::ParseCache;
 
     let registry = LanguageRegistry::new(vec![
-        Arc::new(CppLanguageInline) as Arc<dyn LanguageSupport>,
-        Arc::new(RustLanguageInline) as Arc<dyn LanguageSupport>,
+        Arc::new(CppLanguage) as Arc<dyn LanguageSupport>,
+        Arc::new(RustLanguage) as Arc<dyn LanguageSupport>,
     ]);
 
     let cpp_path = fixture_path("canonical.cpp");
@@ -762,8 +762,8 @@ fn parse_cache_speeds_up_repeat_runs() {
     const CORPUS_REPEATS: usize = 100;
 
     let registry = LanguageRegistry::new(vec![
-        Arc::new(CppLanguageInline) as Arc<dyn LanguageSupport>,
-        Arc::new(RustLanguageInline) as Arc<dyn LanguageSupport>,
+        Arc::new(CppLanguage) as Arc<dyn LanguageSupport>,
+        Arc::new(RustLanguage) as Arc<dyn LanguageSupport>,
     ]);
 
     // All 5 available fixture files: three C++ (large → parse dominates),
@@ -844,7 +844,7 @@ fn columnar_show_outline_matches_legacy() {
     use forgeql_core::storage::columnar::overlay::Overlay;
     use forgeql_core::workspace::Workspace;
 
-    let table = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let table = index_fixture(&CppLanguage, "canonical.cpp");
     let workspace = Workspace::new(fixtures_dir()).expect("workspace");
 
     let tmp = TempDir::new().expect("tempdir");
@@ -937,8 +937,7 @@ fn cpp_cached_parse() -> std::sync::Arc<forgeql_core::ast::parse_cache::CachedPa
     use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
     use forgeql_core::ast::parse_cache::ParseCache;
 
-    let registry =
-        LanguageRegistry::new(vec![Arc::new(CppLanguageInline) as Arc<dyn LanguageSupport>]);
+    let registry = LanguageRegistry::new(vec![Arc::new(CppLanguage) as Arc<dyn LanguageSupport>]);
     let mut cache = ParseCache::with_capacity(1);
     cache
         .get_or_parse(&fixture_path("canonical.cpp"), &registry)
@@ -955,8 +954,7 @@ fn columnar_show_body_matches_legacy() {
 
     let (table, _tmp, storage) = single_segment_cpp_overlay();
     let workspace = Workspace::new(fixtures_dir()).expect("workspace");
-    let registry =
-        LanguageRegistry::new(vec![Arc::new(CppLanguageInline) as Arc<dyn LanguageSupport>]);
+    let registry = LanguageRegistry::new(vec![Arc::new(CppLanguage) as Arc<dyn LanguageSupport>]);
     let cached = cpp_cached_parse();
     let cpp_path = fixture_path("canonical.cpp");
     let clauses = Clauses::default();
@@ -1021,8 +1019,7 @@ fn columnar_show_signature_matches_legacy() {
 
     let (table, _tmp, storage) = single_segment_cpp_overlay();
     let workspace = Workspace::new(fixtures_dir()).expect("workspace");
-    let registry =
-        LanguageRegistry::new(vec![Arc::new(CppLanguageInline) as Arc<dyn LanguageSupport>]);
+    let registry = LanguageRegistry::new(vec![Arc::new(CppLanguage) as Arc<dyn LanguageSupport>]);
     let cached = cpp_cached_parse();
     let cpp_path = fixture_path("canonical.cpp");
     let clauses = Clauses::default();
@@ -1083,8 +1080,7 @@ fn columnar_show_members_matches_legacy() {
 
     let (_table, _tmp, storage) = single_segment_cpp_overlay();
     let workspace = Workspace::new(fixtures_dir()).expect("workspace");
-    let registry =
-        LanguageRegistry::new(vec![Arc::new(CppLanguageInline) as Arc<dyn LanguageSupport>]);
+    let registry = LanguageRegistry::new(vec![Arc::new(CppLanguage) as Arc<dyn LanguageSupport>]);
     let cached = cpp_cached_parse();
     let clauses = Clauses::default();
 
@@ -1153,8 +1149,7 @@ fn columnar_show_context_matches_legacy() {
 
     let (table, _tmp, storage) = single_segment_cpp_overlay();
     let workspace = Workspace::new(fixtures_dir()).expect("workspace");
-    let registry =
-        LanguageRegistry::new(vec![Arc::new(CppLanguageInline) as Arc<dyn LanguageSupport>]);
+    let registry = LanguageRegistry::new(vec![Arc::new(CppLanguage) as Arc<dyn LanguageSupport>]);
     let cpp_path = fixture_path("canonical.cpp");
     let clauses = Clauses::default();
 
@@ -1213,8 +1208,7 @@ fn columnar_show_callees_matches_legacy() {
 
     let (table, _tmp, storage) = single_segment_cpp_overlay();
     let workspace = Workspace::new(fixtures_dir()).expect("workspace");
-    let registry =
-        LanguageRegistry::new(vec![Arc::new(CppLanguageInline) as Arc<dyn LanguageSupport>]);
+    let registry = LanguageRegistry::new(vec![Arc::new(CppLanguage) as Arc<dyn LanguageSupport>]);
     let cached = cpp_cached_parse();
     let cpp_path = fixture_path("canonical.cpp");
     let clauses = Clauses::default();
@@ -1442,8 +1436,7 @@ fn bare_repo_show_reads_bytes_from_git() {
     );
 
     // ── 5. Build CachedParse from the git-fetched bytes ──────────────────────
-    let registry =
-        LanguageRegistry::new(vec![Arc::new(CppLanguageInline) as Arc<dyn LanguageSupport>]);
+    let registry = LanguageRegistry::new(vec![Arc::new(CppLanguage) as Arc<dyn LanguageSupport>]);
     let hash = sha1_of_bytes(&fetched);
     let mut cache = ParseCache::with_capacity(4);
     let cached = cache
@@ -1451,7 +1444,7 @@ fn bare_repo_show_reads_bytes_from_git() {
         .expect("get_or_parse_with_bytes on git-fetched bytes");
 
     // ── 6. Locate `bar` in the legacy table for a valid byte-range ───────────
-    let table = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let table = index_fixture(&CppLanguage, "canonical.cpp");
     let row = table.find_def("bar").expect("bar in legacy table");
 
     // ── 7. show_context — takes raw &[u8] directly ───────────────────────────
@@ -1605,8 +1598,8 @@ fn combined_path_glob_and_enrichment_parity() {
     use forgeql_core::storage::columnar::overlay::Overlay;
     use forgeql_core::storage::columnar::{ColumnarStorage, OverlayBuilder, SegmentReader};
 
-    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
-    let table_rust = index_fixture(&RustLanguageInline, "canonical.rs");
+    let table_cpp = index_fixture(&CppLanguage, "canonical.cpp");
+    let table_rust = index_fixture(&RustLanguage, "canonical.rs");
 
     let tmp = TempDir::new().expect("tempdir");
     let segments_dir = tmp.path().join("segments");
@@ -2701,11 +2694,11 @@ fn dirty_overlay_resolve_uses_alphabetical_not_insertion_order() {
 /// 3. Leave unchanged files' symbols unaffected.
 #[test]
 fn reindex_updates_dirty_overlay() {
-    use forgeql_core::ast::lang::CppLanguageInline;
     use forgeql_core::ir::Clauses;
     use forgeql_core::storage::StorageEngine;
     use forgeql_core::storage::columnar::ColumnarStorage;
     use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_lang_cpp::CppLanguage;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -2724,8 +2717,8 @@ fn reindex_updates_dirty_overlay() {
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
 
-    let table1 = index_at_path(&CppLanguageInline, &file1);
-    let table2 = index_at_path(&CppLanguageInline, &file2);
+    let table1 = index_at_path(&CppLanguage, &file1);
+    let table2 = index_at_path(&CppLanguage, &file2);
     let cid1 = build_segment(&table1, &file1, seg_dir.parent().unwrap());
     let cid2 = build_segment(&table2, &file2, seg_dir.parent().unwrap());
 
@@ -2759,7 +2752,7 @@ fn reindex_updates_dirty_overlay() {
         })
         .collect();
 
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
     let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
 
     // Rewrite file1 with new symbols (SymbolD, SymbolE); SymbolA + SymbolB disappear.
@@ -2828,7 +2821,7 @@ fn find_symbols_matches_regex_alternation() {
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
 
-    let table = index_at_path(&CppLanguageInline, &file);
+    let table = index_at_path(&CppLanguage, &file);
     let cid = build_segment(&table, &file, seg_dir.parent().unwrap());
     let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
     let _ = segment_map.insert(file, cid);
@@ -2857,7 +2850,7 @@ fn find_symbols_matches_regex_alternation() {
             )
         })
         .collect();
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
     let storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
 
     // Parse a real alternation query to obtain its clauses.
@@ -2901,7 +2894,7 @@ fn find_node_resolves_newly_created_dirty_node() {
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
 
-    let table = index_at_path(&CppLanguageInline, &file);
+    let table = index_at_path(&CppLanguage, &file);
     let cid = build_segment(&table, &file, seg_dir.parent().unwrap());
     let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
     let _ = segment_map.insert(file.clone(), cid);
@@ -2930,7 +2923,7 @@ fn find_node_resolves_newly_created_dirty_node() {
             )
         })
         .collect();
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
     let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
 
     // Add a brand-new function and reindex — ZetaFn lands only in the dirty
@@ -2987,7 +2980,7 @@ fn find_node_round_trips_after_ordinal_reassignment() {
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
 
-    let table = index_at_path(&CppLanguageInline, &file);
+    let table = index_at_path(&CppLanguage, &file);
     let cid = build_segment(&table, &file, seg_dir.parent().unwrap());
     let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
     let _ = segment_map.insert(file.clone(), cid);
@@ -3016,7 +3009,7 @@ fn find_node_round_trips_after_ordinal_reassignment() {
             )
         })
         .collect();
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
     let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
 
     // Insert a third IDENTICAL `if (cond) { same(); }` at the front. The second
@@ -3073,7 +3066,7 @@ fn is_path_fresh_detects_external_edit() {
 
     // Build a git-sha1 content-addressed committed segment, matching the
     // production shadow-write hash, so the freshness compare is meaningful.
-    let table = index_at_path(&CppLanguageInline, &file);
+    let table = index_at_path(&CppLanguage, &file);
     let bytes = std::fs::read(&file).expect("read");
     let content_id: Vec<u8> = git_blob_sha1(&bytes).to_vec();
     let hex = content_id.iter().fold(String::new(), |mut acc, b| {
@@ -3137,7 +3130,7 @@ fn is_path_fresh_detects_external_edit() {
         })
         .collect();
 
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
     let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
 
     let rel = std::path::Path::new("fresh.cpp");
@@ -3173,11 +3166,11 @@ fn is_path_fresh_detects_external_edit() {
 /// file while leaving other files' symbols untouched.
 #[test]
 fn purge_removes_file_symbols() {
-    use forgeql_core::ast::lang::CppLanguageInline;
     use forgeql_core::ir::Clauses;
     use forgeql_core::storage::StorageEngine;
     use forgeql_core::storage::columnar::ColumnarStorage;
     use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_lang_cpp::CppLanguage;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -3194,8 +3187,8 @@ fn purge_removes_file_symbols() {
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
 
-    let table1 = index_at_path(&CppLanguageInline, &file1);
-    let table2 = index_at_path(&CppLanguageInline, &file2);
+    let table1 = index_at_path(&CppLanguage, &file1);
+    let table2 = index_at_path(&CppLanguage, &file2);
     let cid1 = build_segment(&table1, &file1, seg_dir.parent().unwrap());
     let cid2 = build_segment(&table2, &file2, seg_dir.parent().unwrap());
 
@@ -3229,7 +3222,7 @@ fn purge_removes_file_symbols() {
         })
         .collect();
 
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
     let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
 
     // Purge file1 — its symbols should vanish.
@@ -3297,10 +3290,10 @@ fn delta_file_roundtrip() {
 /// correct staged metadata matching the dirty overlay state.
 #[test]
 fn reindex_writes_delta_file() {
-    use forgeql_core::ast::lang::CppLanguageInline;
     use forgeql_core::storage::StorageEngine;
     use forgeql_core::storage::columnar::overlay::Overlay;
     use forgeql_core::storage::columnar::{ColumnarStorage, DeltaFile};
+    use forgeql_lang_cpp::CppLanguage;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -3317,8 +3310,8 @@ fn reindex_writes_delta_file() {
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
 
-    let table1 = index_at_path(&CppLanguageInline, &file1);
-    let table2 = index_at_path(&CppLanguageInline, &file2);
+    let table1 = index_at_path(&CppLanguage, &file1);
+    let table2 = index_at_path(&CppLanguage, &file2);
     let cid1 = build_segment(&table1, &file1, seg_dir.parent().unwrap());
     let cid2 = build_segment(&table2, &file2, seg_dir.parent().unwrap());
 
@@ -3352,7 +3345,7 @@ fn reindex_writes_delta_file() {
         })
         .collect();
 
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
     let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
 
     let delta_path = worktree.join(".forgeql-columnar-delta");
@@ -3402,11 +3395,11 @@ fn reindex_writes_delta_file() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn delta_survives_simulated_restart() {
-    use forgeql_core::ast::lang::CppLanguageInline;
     use forgeql_core::ir::Clauses;
     use forgeql_core::storage::StorageEngine;
     use forgeql_core::storage::columnar::ColumnarStorage;
     use forgeql_core::storage::columnar::overlay::Overlay;
+    use forgeql_lang_cpp::CppLanguage;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -3423,8 +3416,8 @@ fn delta_survives_simulated_restart() {
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
 
-    let table1 = index_at_path(&CppLanguageInline, &file1);
-    let table2 = index_at_path(&CppLanguageInline, &file2);
+    let table1 = index_at_path(&CppLanguage, &file1);
+    let table2 = index_at_path(&CppLanguage, &file2);
     let cid1 = build_segment(&table1, &file1, seg_dir.parent().unwrap());
     let cid2 = build_segment(&table2, &file2, seg_dir.parent().unwrap());
 
@@ -3464,7 +3457,7 @@ fn delta_survives_simulated_restart() {
             worktree.clone(),
             segments,
             overlay,
-            Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)])),
+            Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)])),
         )
     };
 
@@ -3532,11 +3525,11 @@ fn delta_survives_simulated_restart() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn rollback_gcs_orphaned_staging_segments() {
-    use forgeql_core::ast::lang::CppLanguageInline;
     use forgeql_core::ir::Clauses;
     use forgeql_core::storage::StorageEngine;
     use forgeql_core::storage::columnar::overlay::Overlay;
     use forgeql_core::storage::columnar::{ColumnarStorage, DeltaFile};
+    use forgeql_lang_cpp::CppLanguage;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -3553,8 +3546,8 @@ fn rollback_gcs_orphaned_staging_segments() {
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
 
-    let t1 = index_at_path(&CppLanguageInline, &file1);
-    let t2 = index_at_path(&CppLanguageInline, &file2);
+    let t1 = index_at_path(&CppLanguage, &file1);
+    let t2 = index_at_path(&CppLanguage, &file2);
     let c1 = build_segment(&t1, &file1, seg_dir.parent().unwrap());
     let c2 = build_segment(&t2, &file2, seg_dir.parent().unwrap());
 
@@ -3593,7 +3586,7 @@ fn rollback_gcs_orphaned_staging_segments() {
             worktree.clone(),
             segs,
             ov,
-            Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)])),
+            Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)])),
         )
     };
 
@@ -3687,11 +3680,11 @@ fn rollback_gcs_orphaned_staging_segments() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn nested_rollback_restores_correct_delta() {
-    use forgeql_core::ast::lang::CppLanguageInline;
     use forgeql_core::ir::Clauses;
     use forgeql_core::storage::StorageEngine;
     use forgeql_core::storage::columnar::overlay::Overlay;
     use forgeql_core::storage::columnar::{ColumnarStorage, DeltaFile};
+    use forgeql_lang_cpp::CppLanguage;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -3708,8 +3701,8 @@ fn nested_rollback_restores_correct_delta() {
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
 
-    let t1 = index_at_path(&CppLanguageInline, &file1);
-    let t2 = index_at_path(&CppLanguageInline, &file2);
+    let t1 = index_at_path(&CppLanguage, &file1);
+    let t2 = index_at_path(&CppLanguage, &file2);
     let c1 = build_segment(&t1, &file1, seg_dir.parent().unwrap());
     let c2 = build_segment(&t2, &file2, seg_dir.parent().unwrap());
 
@@ -3748,7 +3741,7 @@ fn nested_rollback_restores_correct_delta() {
             worktree.clone(),
             segs,
             ov,
-            Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)])),
+            Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)])),
         )
     };
 
@@ -3832,11 +3825,11 @@ fn nested_rollback_restores_correct_delta() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn commit_promotes_segments_and_builds_new_overlay() {
-    use forgeql_core::ast::lang::CppLanguageInline;
     use forgeql_core::ir::Clauses;
     use forgeql_core::storage::columnar::overlay::Overlay;
     use forgeql_core::storage::columnar::{ColumnarStorage, OverlayBuilder};
     use forgeql_core::storage::{ColumnarBuildContext, StorageEngine};
+    use forgeql_lang_cpp::CppLanguage;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -3860,8 +3853,8 @@ fn commit_promotes_segments_and_builds_new_overlay() {
     let wt_seg_dir = tmp.path().join("segments");
     std::fs::create_dir_all(wt_seg_dir.join("test")).expect("wt seg dir");
 
-    let table1 = index_at_path(&CppLanguageInline, &file1);
-    let table2 = index_at_path(&CppLanguageInline, &file2);
+    let table1 = index_at_path(&CppLanguage, &file1);
+    let table2 = index_at_path(&CppLanguage, &file2);
     let cid1 = build_segment(&table1, &file1, &tmp.path().join("segments"));
     let cid2 = build_segment(&table2, &file2, &tmp.path().join("segments"));
 
@@ -3912,7 +3905,7 @@ fn commit_promotes_segments_and_builds_new_overlay() {
     );
 
     // Open ColumnarStorage backed by the base overlay.
-    let lang_reg = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let lang_reg = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
     let overlay = Overlay::open(&base_overlay_path).expect("open base overlay");
     let seg_root = segments_dir.join(vp());
     let segments: Vec<Arc<SegmentReader>> = overlay
@@ -4039,11 +4032,11 @@ fn commit_promotes_segments_and_builds_new_overlay() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn new_session_hits_promoted_overlay_cache() {
-    use forgeql_core::ast::lang::CppLanguageInline;
     use forgeql_core::ir::Clauses;
     use forgeql_core::storage::columnar::overlay::Overlay;
     use forgeql_core::storage::columnar::{ColumnarStorage, OverlayBuilder};
     use forgeql_core::storage::{ColumnarBuildContext, StorageEngine};
+    use forgeql_lang_cpp::CppLanguage;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -4063,7 +4056,7 @@ fn new_session_hits_promoted_overlay_cache() {
     let wt_seg_dir = tmp.path().join("segments");
     std::fs::create_dir_all(wt_seg_dir.join("test")).expect("wt seg dir");
 
-    let table1 = index_at_path(&CppLanguageInline, &file1);
+    let table1 = index_at_path(&CppLanguage, &file1);
     let cid1 = build_segment(&table1, &file1, &tmp.path().join("segments"));
     let hex1 = cid1.iter().fold(String::new(), |mut a, b| {
         use std::fmt::Write as _;
@@ -4094,7 +4087,7 @@ fn new_session_hits_promoted_overlay_cache() {
         "test",
         Arc::new(|b: &[u8]| b.to_vec()),
     );
-    let lang_reg = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let lang_reg = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
 
     // Session A: change file1 and commit.
     let seg_root = segments_dir.join(vp());
@@ -4193,10 +4186,10 @@ fn new_session_hits_promoted_overlay_cache() {
 /// `stats.rows` equals the overlay row count.
 #[test]
 fn ft5_columnar_index_stats_rows_match_overlay() {
-    use forgeql_core::ast::lang::CppLanguageInline;
     use forgeql_core::storage::StorageEngine;
     use forgeql_core::storage::columnar::overlay::Overlay;
     use forgeql_core::storage::columnar::{ColumnarStorage, OverlayBuilder};
+    use forgeql_lang_cpp::CppLanguage;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -4205,7 +4198,7 @@ fn ft5_columnar_index_stats_rows_match_overlay() {
     let overlays_dir = tmp.path().join("overlays");
 
     let cpp_path = fixture_path("canonical.cpp");
-    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let table_cpp = index_fixture(&CppLanguage, "canonical.cpp");
     let cpp_cid = build_segment(&table_cpp, &cpp_path, &segments_dir);
 
     let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
@@ -4256,10 +4249,11 @@ fn ft5_columnar_index_stats_rows_match_overlay() {
 #[test]
 #[cfg(feature = "test-helpers")]
 fn ft5_session_has_columnar_after_install() {
-    use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
+    use forgeql_core::ast::lang::LanguageRegistry;
     use forgeql_core::engine::ForgeQLEngine;
     use forgeql_core::storage::columnar::overlay::Overlay;
     use forgeql_core::storage::columnar::{ColumnarStorage, OverlayBuilder};
+    use forgeql_lang_cpp::CppLanguage;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -4269,7 +4263,7 @@ fn ft5_session_has_columnar_after_install() {
 
     // Build a 1-segment overlay from canonical.cpp.
     let cpp_path = fixture_path("canonical.cpp");
-    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
+    let table_cpp = index_fixture(&CppLanguage, "canonical.cpp");
     let cpp_cid = build_segment(&table_cpp, &cpp_path, &segments_dir);
     let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
     let _ = segment_map.insert(cpp_path, cpp_cid);
@@ -4345,8 +4339,8 @@ fn overlay_segments_are_in_path_order() {
     // Build two segments from the two canonical fixtures.
     let cpp_path = fixture_path("canonical.cpp");
     let rs_path = fixture_path("canonical.rs");
-    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
-    let table_rs = index_fixture(&RustLanguageInline, "canonical.rs");
+    let table_cpp = index_fixture(&CppLanguage, "canonical.cpp");
+    let table_rs = index_fixture(&RustLanguage, "canonical.rs");
     let cid_cpp = build_segment(&table_cpp, &cpp_path, &segments_dir);
     let cid_rs = build_segment(&table_rs, &rs_path, &segments_dir);
 
@@ -4387,8 +4381,8 @@ fn overlay_segment_row_ranges_are_contiguous() {
 
     let cpp_path = fixture_path("canonical.cpp");
     let rs_path = fixture_path("canonical.rs");
-    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
-    let table_rs = index_fixture(&RustLanguageInline, "canonical.rs");
+    let table_cpp = index_fixture(&CppLanguage, "canonical.cpp");
+    let table_rs = index_fixture(&RustLanguage, "canonical.rs");
     let cid_cpp = build_segment(&table_cpp, &cpp_path, &segments_dir);
     let cid_rs = build_segment(&table_rs, &rs_path, &segments_dir);
 
@@ -4444,8 +4438,8 @@ fn overlay_path_seg_range_exact_match() {
 
     let cpp_path = fixture_path("canonical.cpp");
     let rs_path = fixture_path("canonical.rs");
-    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
-    let table_rs = index_fixture(&RustLanguageInline, "canonical.rs");
+    let table_cpp = index_fixture(&CppLanguage, "canonical.cpp");
+    let table_rs = index_fixture(&RustLanguage, "canonical.rs");
     let cid_cpp = build_segment(&table_cpp, &cpp_path, &segments_dir);
     let cid_rs = build_segment(&table_rs, &rs_path, &segments_dir);
 
@@ -4504,8 +4498,8 @@ fn overlay_path_row_range_covers_segment_rows() {
 
     let cpp_path = fixture_path("canonical.cpp");
     let rs_path = fixture_path("canonical.rs");
-    let table_cpp = index_fixture(&CppLanguageInline, "canonical.cpp");
-    let table_rs = index_fixture(&RustLanguageInline, "canonical.rs");
+    let table_cpp = index_fixture(&CppLanguage, "canonical.cpp");
+    let table_rs = index_fixture(&RustLanguage, "canonical.rs");
     let cid_cpp = build_segment(&table_cpp, &cpp_path, &segments_dir);
     let cid_rs = build_segment(&table_rs, &rs_path, &segments_dir);
 
@@ -4584,7 +4578,7 @@ fn find_node_reports_not_found_for_committed_node_deleted_in_dirty() {
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
 
-    let table = index_at_path(&CppLanguageInline, &file);
+    let table = index_at_path(&CppLanguage, &file);
     let cid = build_segment(&table, &file, seg_dir.parent().unwrap());
     let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
     let _ = segment_map.insert(file.clone(), cid);
@@ -4613,7 +4607,7 @@ fn find_node_reports_not_found_for_committed_node_deleted_in_dirty() {
             )
         })
         .collect();
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
     let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
 
     // Capture OmegaFn's committed node_id while it still exists.
@@ -4668,7 +4662,7 @@ fn show_outline_reflects_dirty_deletions() {
     std::fs::create_dir_all(&seg_dir).expect("seg_dir");
     std::fs::create_dir_all(&overlay_dir).expect("overlay_dir");
 
-    let table = index_at_path(&CppLanguageInline, &file);
+    let table = index_at_path(&CppLanguage, &file);
     let cid = build_segment(&table, &file, seg_dir.parent().unwrap());
     let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
     let _ = segment_map.insert(file.clone(), cid);
@@ -4697,7 +4691,7 @@ fn show_outline_reflects_dirty_deletions() {
             )
         })
         .collect();
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
     let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
 
     // Delete BetaFn and reindex so the file gains a dirty segment.

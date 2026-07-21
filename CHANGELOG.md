@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.16] — 2026-07-22 — test: index the overlay-parity suite with the real language plugins
+
+### Changed — the overlay-parity suite drops the inline clones
+
+The `overlay_parity` suite — the A/B harness that checks the columnar overlay
+and segment path against the legacy merged view — referenced the inline clones
+in one top-level import, ten function-local imports, and dozens of body sites.
+All now resolve to `CppLanguage` from `forgeql-lang-cpp` and `RustLanguage` from
+`forgeql-lang-rust`. Both sides of every parity comparison use the same real
+plugin, so the legacy-versus-columnar parity holds. This was the last suite
+under `tests/` to reference the inline language clones; every integration suite
+now indexes through the production plugins. No drift surfaced.
+
 ## [0.139.15] — 2026-07-22 — test: index the direct-index suites with the real language plugins
 
 ### Changed — three low-level index suites drop the inline clones
