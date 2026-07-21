@@ -28,10 +28,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
 
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
 use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::ir::ForgeQLIR;
@@ -41,51 +38,22 @@ use forgeql_core::result::{ForgeQLResult, ShowContent};
 use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
-fn make_registry() -> Arc<LanguageRegistry> {
-    Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
-}
+mod common;
 
 // -----------------------------------------------------------------------
-// Helpers
+// Helpers — the shared harness lives in `tests/common`; these thin adapters
+// keep the `(engine, session_id, TempDir)` tuple idiom this suite's bodies use.
 // -----------------------------------------------------------------------
 
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("tests/fixtures")
-}
-
-/// Create a temp workspace with motor_control fixtures and boot an engine.
+/// Create a temp workspace with `motor_control` fixtures and boot a columnar
+/// session over it. Returns `(engine, session_id, TempDir)`.
 fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    let dir = tempdir().expect("tempdir");
-    let src = fixtures_dir();
-
-    fs::copy(
-        src.join("motor_control.h"),
-        dir.path().join("motor_control.h"),
-    )
-    .expect("copy .h");
-    fs::copy(
-        src.join("motor_control.cpp"),
-        dir.path().join("motor_control.cpp"),
-    )
-    .expect("copy .cpp");
-
-    let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
-    let segments_dir = dir.path().join("segments");
-    let overlays_dir = dir.path().join("overlays");
-    let session_id = engine
-        .register_local_session_with_columnar(dir.path(), &segments_dir, &overlays_dir)
-        .expect("register columnar session");
-
-    (engine, session_id, dir)
+    common::columnar_session(&["motor_control.h", "motor_control.cpp"]).into_parts()
 }
 
 /// Like `engine_with_session` but also initializes a git repo (needed for transactions).
 fn engine_with_git_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
     let dir = tempdir().expect("tempdir");
-    let src = fixtures_dir();
 
     // Init git repo.
     let repo = git2::Repository::init(dir.path()).expect("git init");
@@ -94,16 +62,7 @@ fn engine_with_git_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
     cfg.set_str("user.email", "test@test.com").unwrap();
     drop(cfg);
 
-    fs::copy(
-        src.join("motor_control.h"),
-        dir.path().join("motor_control.h"),
-    )
-    .expect("copy .h");
-    fs::copy(
-        src.join("motor_control.cpp"),
-        dir.path().join("motor_control.cpp"),
-    )
-    .expect("copy .cpp");
+    common::copy_fixtures(dir.path(), &["motor_control.h", "motor_control.cpp"]);
 
     // Stage and commit so git operations work.
     let mut index = repo.index().unwrap();
@@ -120,15 +79,7 @@ fn engine_with_git_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
     repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
         .unwrap();
 
-    let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
-    let segments_dir = dir.path().join("segments");
-    let overlays_dir = dir.path().join("overlays");
-    let session_id = engine
-        .register_local_session_with_columnar(dir.path(), &segments_dir, &overlays_dir)
-        .expect("register columnar session");
-
-    (engine, session_id, dir)
+    common::columnar_session_in(dir).into_parts()
 }
 
 /// Parse FQL and execute the first op.
@@ -154,30 +105,6 @@ fn exec_err(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> String {
         .to_string()
 }
 
-/// Extract query results or panic.
-fn as_query(r: &ForgeQLResult) -> &forgeql_core::result::QueryResult {
-    match r {
-        ForgeQLResult::Query(qr) => qr,
-        other => panic!("expected Query, got: {other:?}"),
-    }
-}
-
-/// Extract show result or panic.
-fn as_show(r: &ForgeQLResult) -> &forgeql_core::result::ShowResult {
-    match r {
-        ForgeQLResult::Show(sr) => sr,
-        other => panic!("expected Show, got: {other:?}"),
-    }
-}
-
-/// Extract mutation result or panic.
-fn as_mutation(r: &ForgeQLResult) -> &forgeql_core::result::MutationResult {
-    match r {
-        ForgeQLResult::Mutation(mr) => mr,
-        other => panic!("expected Mutation, got: {other:?}"),
-    }
-}
-
 // =======================================================================
 // Phase 1 — FIND symbols
 // =======================================================================
@@ -186,7 +113,7 @@ fn as_mutation(r: &ForgeQLResult) -> &forgeql_core::result::MutationResult {
 fn find_symbols_bare() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     assert!(qr.total > 0);
 }
@@ -200,7 +127,7 @@ fn find_symbols_where_fql_kind_eq_function() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     for row in &qr.results {
         assert_eq!(row.fql_kind.as_deref(), Some("function"));
@@ -217,7 +144,7 @@ fn find_symbols_where_fql_kind_eq_class() {
         &sid,
         "FIND symbols WHERE fql_kind = 'class'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // May be empty for this fixture — that's valid.
     for row in &qr.results {
         assert_eq!(row.fql_kind.as_deref(), Some("class"));
@@ -234,7 +161,7 @@ fn find_symbols_where_fql_kind_eq_struct() {
         &sid,
         "FIND symbols WHERE fql_kind = 'struct'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_eq!(row.fql_kind.as_deref(), Some("struct"));
     }
@@ -249,7 +176,7 @@ fn find_symbols_where_fql_kind_eq_enum() {
         &sid,
         "FIND symbols WHERE fql_kind = 'enum'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // motor_control.h has ErrorMotor and ErrorSensor enums.
     for row in &qr.results {
         assert_eq!(row.fql_kind.as_deref(), Some("enum"));
@@ -260,7 +187,7 @@ fn find_symbols_where_fql_kind_eq_enum() {
 fn find_symbols_where_fql_kind_eq_macro() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE fql_kind = 'macro'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "fixture has #define macros");
     for row in &qr.results {
         assert_eq!(row.fql_kind.as_deref(), Some("macro"));
@@ -281,7 +208,7 @@ fn find_symbols_where_fql_kind_eq_import() {
         &sid,
         "FIND symbols WHERE fql_kind = 'import'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "fixture has #include directives");
     for row in &qr.results {
         assert_eq!(row.fql_kind.as_deref(), Some("import"));
@@ -296,7 +223,7 @@ fn find_symbols_where_fql_kind_eq_variable() {
         &sid,
         "FIND symbols WHERE fql_kind = 'variable' LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_eq!(row.fql_kind.as_deref(), Some("variable"));
     }
@@ -310,7 +237,7 @@ fn find_symbols_where_fql_kind_eq_comment() {
         &sid,
         "FIND symbols WHERE fql_kind = 'comment' LIMIT 10",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_eq!(row.fql_kind.as_deref(), Some("comment"));
     }
@@ -322,7 +249,7 @@ fn find_symbols_where_fql_kind_eq_comment() {
 fn find_symbols_where_name_like_prefix() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name LIKE 'encender%'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     for row in &qr.results {
         assert!(
@@ -338,7 +265,7 @@ fn find_symbols_where_name_like_suffix() {
     let (mut e, sid, _d) = engine_with_session();
     // LIKE is case-insensitive in ForgeQL, so '%Motor' matches 'MOTOR' too.
     let r = exec(&mut e, &sid, "FIND symbols WHERE name LIKE '%Motor'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     for row in &qr.results {
         let lower = row.name.to_lowercase();
@@ -355,7 +282,7 @@ fn find_symbols_where_name_like_contains() {
     let (mut e, sid, _d) = engine_with_session();
     // LIKE is case-insensitive in ForgeQL.
     let r = exec(&mut e, &sid, "FIND symbols WHERE name LIKE '%Motor%'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     for row in &qr.results {
         let lower = row.name.to_lowercase();
@@ -375,7 +302,7 @@ fn find_symbols_where_name_not_like() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE name NOT LIKE 'encender%'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert!(
             !row.name.starts_with("encender"),
@@ -389,7 +316,7 @@ fn find_symbols_where_name_not_like() {
 fn find_symbols_where_name_eq_exact() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'encenderMotor'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     for row in &qr.results {
         assert_eq!(row.name, "encenderMotor");
@@ -404,7 +331,7 @@ fn find_symbols_where_name_neq() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE name != 'encenderMotor' LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_ne!(row.name, "encenderMotor");
     }
@@ -416,7 +343,7 @@ fn find_symbols_where_name_neq() {
 fn find_symbols_where_usages_eq_zero() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE usages = 0 LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_eq!(
             row.usages_count.unwrap_or(0),
@@ -431,7 +358,7 @@ fn find_symbols_where_usages_eq_zero() {
 fn find_symbols_where_usages_neq_zero() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE usages != 0 LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_ne!(
             row.usages_count.unwrap_or(0),
@@ -446,7 +373,7 @@ fn find_symbols_where_usages_neq_zero() {
 fn find_symbols_where_usages_gte() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE usages >= 5 LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert!(
             row.usages_count.unwrap_or(0) >= 5,
@@ -460,7 +387,7 @@ fn find_symbols_where_usages_gte() {
 fn find_symbols_where_usages_gt() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE usages > 0 LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert!(
             row.usages_count.unwrap_or(0) > 0,
@@ -474,7 +401,7 @@ fn find_symbols_where_usages_gt() {
 fn find_symbols_where_usages_lte() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE usages <= 2 LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert!(
             row.usages_count.unwrap_or(0) <= 2,
@@ -488,7 +415,7 @@ fn find_symbols_where_usages_lte() {
 fn find_symbols_where_usages_lt() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE usages < 3 LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert!(
             row.usages_count.unwrap_or(0) < 3,
@@ -504,7 +431,7 @@ fn find_symbols_where_usages_lt() {
 fn find_symbols_where_line_gte() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE line >= 50 LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert!(
             row.line.unwrap_or(0) >= 50,
@@ -518,7 +445,7 @@ fn find_symbols_where_line_gte() {
 fn find_symbols_where_line_lt() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE line < 30 LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert!(
             row.line.unwrap_or(0) < 30,
@@ -538,7 +465,7 @@ fn find_symbols_two_where_clauses() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE usages >= 1 LIMIT 50",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_eq!(row.fql_kind.as_deref(), Some("function"));
         assert!(row.usages_count.unwrap_or(0) >= 1);
@@ -553,7 +480,7 @@ fn find_symbols_three_where_clauses() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE usages >= 1 WHERE name LIKE 'encender%'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_eq!(row.fql_kind.as_deref(), Some("function"));
         assert!(row.usages_count.unwrap_or(0) >= 1);
@@ -571,7 +498,7 @@ fn find_symbols_order_by_name_asc() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
     for w in names.windows(2) {
         assert!(
@@ -591,7 +518,7 @@ fn find_symbols_order_by_name_desc() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' ORDER BY name DESC LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
     for w in names.windows(2) {
         assert!(
@@ -611,7 +538,7 @@ fn find_symbols_order_by_usages_desc() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' ORDER BY usages DESC LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let counts: Vec<usize> = qr
         .results
         .iter()
@@ -635,7 +562,7 @@ fn find_symbols_order_by_line_asc() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' ORDER BY line ASC LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let lines: Vec<usize> = qr.results.iter().map(|r| r.line.unwrap_or(0)).collect();
     for w in lines.windows(2) {
         assert!(
@@ -656,7 +583,7 @@ fn find_symbols_order_by_default_is_asc() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' ORDER BY name LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     // Run it again to verify deterministic output.
     let r2 = exec(
@@ -665,7 +592,7 @@ fn find_symbols_order_by_default_is_asc() {
         "FIND symbols WHERE fql_kind = 'function' ORDER BY name LIMIT 100",
     );
     let names1: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
-    let names2: Vec<&str> = as_query(&r2)
+    let names2: Vec<&str> = common::as_query(&r2)
         .results
         .iter()
         .map(|r| r.name.as_str())
@@ -679,7 +606,7 @@ fn find_symbols_order_by_default_is_asc() {
 fn find_symbols_limit_1() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols LIMIT 1");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert_eq!(qr.results.len(), 1);
 }
 
@@ -687,7 +614,7 @@ fn find_symbols_limit_1() {
 fn find_symbols_limit_5() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols LIMIT 5");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(qr.results.len() <= 5);
 }
 
@@ -702,12 +629,12 @@ fn find_symbols_limit_offset() {
         &sid,
         "FIND symbols ORDER BY name ASC LIMIT 1000 OFFSET 3",
     );
-    let all_names: Vec<&str> = as_query(&all)
+    let all_names: Vec<&str> = common::as_query(&all)
         .results
         .iter()
         .map(|r| r.name.as_str())
         .collect();
-    let paged_names: Vec<&str> = as_query(&paged)
+    let paged_names: Vec<&str> = common::as_query(&paged)
         .results
         .iter()
         .map(|r| r.name.as_str())
@@ -722,7 +649,7 @@ fn find_symbols_limit_offset() {
 fn find_symbols_in_glob_h() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols IN '*.h' LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     for row in &qr.results {
         let p = row.path.as_ref().expect("path present").to_string_lossy();
@@ -734,7 +661,7 @@ fn find_symbols_in_glob_h() {
 fn find_symbols_in_glob_cpp() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols IN '*.cpp' LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     for row in &qr.results {
         let p = row.path.as_ref().expect("path present").to_string_lossy();
@@ -748,7 +675,7 @@ fn find_symbols_in_glob_cpp() {
 fn find_symbols_exclude_glob() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols EXCLUDE '*.h' LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         let p = row.path.as_ref().expect("path present").to_string_lossy();
         assert!(!p.ends_with(".h"), "EXCLUDE '*.h' still returned '{p}'");
@@ -766,7 +693,7 @@ fn find_symbols_in_and_exclude() {
         &sid,
         "FIND symbols IN '*.cpp' EXCLUDE '*.cpp' LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         qr.results.is_empty(),
         "IN + EXCLUDE same glob should return empty"
@@ -783,7 +710,7 @@ fn find_symbols_group_by_fql_kind() {
         &sid,
         "FIND symbols GROUP BY fql_kind ORDER BY count DESC",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     // Each row should have a count > 0.
     for row in &qr.results {
@@ -802,7 +729,7 @@ fn find_symbols_group_by_file() {
         &sid,
         "FIND symbols GROUP BY file ORDER BY count DESC LIMIT 20",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     for row in &qr.results {
         assert!(row.count.unwrap_or(0) > 0);
@@ -820,7 +747,7 @@ fn find_symbols_full_clause_combination() {
         "FIND symbols WHERE fql_kind = 'function' \
          ORDER BY usages DESC LIMIT 3 OFFSET 1",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(qr.results.len() <= 3);
     for row in &qr.results {
         assert_eq!(row.fql_kind.as_deref(), Some("function"));
@@ -837,7 +764,7 @@ fn find_symbols_where_type_like_void() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE type LIKE 'void%' LIMIT 50",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // All returned symbols should have type starting with "void"
     for row in &qr.results {
         if let Some(t) = row.fields.get("type") {
@@ -858,7 +785,7 @@ fn find_symbols_where_scope_eq_local() {
         &sid,
         "FIND symbols WHERE fql_kind = 'variable' WHERE scope = 'local' LIMIT 50",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_eq!(
             row.fields.get("scope").map(String::as_str),
@@ -877,7 +804,7 @@ fn find_symbols_where_scope_eq_file() {
         &sid,
         "FIND symbols WHERE fql_kind = 'variable' WHERE scope = 'file' LIMIT 50",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_eq!(
             row.fields.get("scope").map(String::as_str),
@@ -896,7 +823,7 @@ fn find_symbols_where_storage_eq_static() {
         &sid,
         "FIND symbols WHERE fql_kind = 'variable' WHERE storage = 'static' LIMIT 50",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_eq!(
             row.fields.get("storage").map(String::as_str),
@@ -915,7 +842,7 @@ fn find_symbols_where_storage_neq_static() {
         &sid,
         "FIND symbols WHERE fql_kind = 'variable' WHERE storage != 'static' LIMIT 50",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_ne!(
             row.fields.get("storage").map(String::as_str),
@@ -934,7 +861,7 @@ fn find_symbols_where_storage_neq_static() {
 fn find_usages_basic() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND usages OF 'encenderMotor'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "encenderMotor should have usages");
 }
 
@@ -946,7 +873,7 @@ fn find_usages_group_by_file() {
         &sid,
         "FIND usages OF 'encenderMotor' GROUP BY file ORDER BY count DESC",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     let paths: Vec<_> = qr
         .results
@@ -968,7 +895,7 @@ fn find_usages_group_by_file() {
 fn find_usages_in_glob() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND usages OF 'encenderMotor' IN '*.cpp'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         let p = row.path.as_ref().expect("path").to_string_lossy();
         assert!(p.ends_with(".cpp"), "IN '*.cpp' returned '{p}'");
@@ -979,7 +906,7 @@ fn find_usages_in_glob() {
 fn find_usages_with_limit() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND usages OF 'encenderMotor' LIMIT 2");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(qr.results.len() <= 2);
 }
 
@@ -991,7 +918,7 @@ fn find_usages_order_by_line() {
         &sid,
         "FIND usages OF 'encenderMotor' ORDER BY line ASC LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let lines: Vec<usize> = qr.results.iter().map(|r| r.line.unwrap_or(0)).collect();
     for w in lines.windows(2) {
         assert!(
@@ -1011,7 +938,7 @@ fn find_usages_nonexistent_symbol_returns_empty() {
         &sid,
         "FIND usages OF 'zzz_nonexistent_symbol_12345'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(qr.results.is_empty());
 }
 
@@ -1020,7 +947,7 @@ fn find_callees_basic() {
     let (mut e, sid, _d) = engine_with_session();
     // encenderSistema calls encenderMotor and memset etc.
     let r = exec(&mut e, &sid, "FIND callees OF 'encenderSistema'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::CallGraph { entries, .. } => {
             assert!(!entries.is_empty(), "encenderSistema should have callees");
@@ -1033,7 +960,7 @@ fn find_callees_basic() {
 fn find_callees_with_limit() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND callees OF 'encenderSistema' LIMIT 2");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::CallGraph { entries, .. } => {
             // LIMIT may not apply to callees — just verify it parses and executes.
@@ -1051,7 +978,7 @@ fn find_callees_with_limit() {
 fn find_files_bare() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND files");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::FileList { files, total } => {
             assert!(*total >= 2, "fixture should have at least 2 files");
@@ -1065,7 +992,7 @@ fn find_files_bare() {
 fn find_files_where_extension_cpp() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND files WHERE extension = 'cpp'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::FileList { files, .. } => {
             assert!(!files.is_empty());
@@ -1081,7 +1008,7 @@ fn find_files_where_extension_cpp() {
 fn find_files_where_extension_h() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND files WHERE extension = 'h'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::FileList { files, .. } => {
             assert!(!files.is_empty());
@@ -1101,7 +1028,7 @@ fn find_files_where_size_gt() {
         &sid,
         "FIND files WHERE size > 100 ORDER BY size DESC",
     );
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::FileList { files, .. } => {
             for f in files {
@@ -1122,7 +1049,7 @@ fn find_files_where_depth() {
     // WHERE depth on FIND files: depth is not populated per-entry in the
     // current implementation; just verify the clause is accepted and runs.
     let r = exec(&mut e, &sid, "FIND files WHERE depth <= 999");
-    let _sr = as_show(&r);
+    let _sr = common::as_show(&r);
     // No assertion on results — the engine returns empty when depth is unset.
 }
 
@@ -1130,7 +1057,7 @@ fn find_files_where_depth() {
 fn find_files_depth_clause() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND files DEPTH 1");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::FileList { .. } => {} // Just verify it doesn't error.
         other => panic!("expected FileList, got {other:?}"),
@@ -1145,7 +1072,7 @@ fn find_files_group_by_extension() {
         &sid,
         "FIND files GROUP BY extension ORDER BY count DESC",
     );
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::FileList { .. } => {} // Just verify it doesn't error.
         other => panic!("expected FileList, got {other:?}"),
@@ -1156,7 +1083,7 @@ fn find_files_group_by_extension() {
 fn find_files_in_glob() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND files IN '*.h'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::FileList { files, .. } => {
             for f in files {
@@ -1175,7 +1102,7 @@ fn find_files_in_glob() {
 fn find_globals_bare() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND globals LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     for row in &qr.results {
         assert_eq!(row.fql_kind.as_deref(), Some("variable"));
@@ -1191,7 +1118,7 @@ fn find_globals_where_storage_static() {
         &sid,
         "FIND globals WHERE storage = 'static' LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_eq!(
             row.fields.get("storage").map(String::as_str),
@@ -1208,7 +1135,7 @@ fn find_globals_where_storage_neq_static() {
         &sid,
         "FIND globals WHERE storage != 'static' LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         assert_ne!(
             row.fields.get("storage").map(String::as_str),
@@ -1221,7 +1148,7 @@ fn find_globals_where_storage_neq_static() {
 fn find_globals_order_by_usages_desc() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND globals ORDER BY usages DESC LIMIT 100");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let counts: Vec<usize> = qr
         .results
         .iter()
@@ -1247,7 +1174,7 @@ fn find_globals_order_by_usages_desc() {
 fn show_body_default_depth() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW body OF 'encenderMotor'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     assert_eq!(sr.op, "show_body");
     assert_eq!(sr.symbol.as_deref(), Some("encenderMotor"));
     assert!(sr.start_line.is_some());
@@ -1258,7 +1185,7 @@ fn show_body_default_depth() {
 fn show_body_depth_0() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW body OF 'encenderMotor' DEPTH 0");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Lines { lines, .. } => {
             assert!(
@@ -1275,11 +1202,11 @@ fn show_body_depth_1() {
     let (mut e, sid, _d) = engine_with_session();
     let r0 = exec(&mut e, &sid, "SHOW body OF 'encenderMotor' DEPTH 0");
     let r1 = exec(&mut e, &sid, "SHOW body OF 'encenderMotor' DEPTH 1");
-    let lines0 = match &as_show(&r0).content {
+    let lines0 = match &common::as_show(&r0).content {
         ShowContent::Lines { lines, .. } => lines.len(),
         other => panic!("expected Lines, got {other:?}"),
     };
-    let lines1 = match &as_show(&r1).content {
+    let lines1 = match &common::as_show(&r1).content {
         ShowContent::Lines { lines, .. } => lines.len(),
         other => panic!("expected Lines, got {other:?}"),
     };
@@ -1293,7 +1220,7 @@ fn show_body_depth_1() {
 fn show_body_depth_99() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW body OF 'encenderMotor' DEPTH 99");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     let text = format!("{r}");
     assert!(
         text.contains("encenderMotor"),
@@ -1312,7 +1239,7 @@ fn show_body_depth_99() {
 fn show_signature() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW signature OF 'encenderMotor'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     assert_eq!(sr.op, "show_signature");
     match &sr.content {
         ShowContent::Signature { signature, .. } => {
@@ -1329,7 +1256,7 @@ fn show_signature() {
 fn show_signature_another_symbol() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW signature OF 'apagarMotor'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Signature { signature, .. } => {
             assert!(signature.contains("apagarMotor"));
@@ -1344,7 +1271,7 @@ fn show_signature_another_symbol() {
 fn show_outline() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW outline OF 'motor_control.h'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     assert_eq!(sr.op, "show_outline");
     match &sr.content {
         ShowContent::Outline { entries } => {
@@ -1361,7 +1288,7 @@ fn show_outline() {
 fn show_outline_cpp_file() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW outline OF 'motor_control.cpp'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Outline { entries } => {
             assert!(!entries.is_empty());
@@ -1374,7 +1301,7 @@ fn show_outline_cpp_file() {
 fn show_outline_with_limit() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW outline OF 'motor_control.h' LIMIT 2");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Outline { entries } => {
             assert!(entries.len() <= 2);
@@ -1389,7 +1316,7 @@ fn show_outline_with_limit() {
 fn show_members_enum() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW members OF 'ErrorMotor'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     assert_eq!(sr.op, "show_members");
     match &sr.content {
         ShowContent::Members { members, .. } => {
@@ -1408,7 +1335,7 @@ fn show_members_enum() {
 fn show_members_with_limit() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW members OF 'ErrorMotor' LIMIT 1");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Members { members, .. } => {
             assert_eq!(members.len(), 1);
@@ -1421,7 +1348,7 @@ fn show_members_with_limit() {
 fn show_members_another_enum() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW members OF 'ErrorSensor'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Members { members, .. } => {
             assert!(members.len() >= 3, "ErrorSensor should have >= 3 members");
@@ -1436,7 +1363,7 @@ fn show_members_another_enum() {
 fn show_context() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW context OF 'VELOCIDAD_MAX'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     assert_eq!(sr.op, "show_context");
     assert!(sr.start_line.is_some());
     assert!(sr.end_line.is_some());
@@ -1446,7 +1373,7 @@ fn show_context() {
 fn show_context_function() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW context OF 'encenderMotor'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     assert_eq!(sr.op, "show_context");
 }
 
@@ -1456,7 +1383,7 @@ fn show_context_function() {
 fn show_callees() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW callees OF 'encenderSistema'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     assert_eq!(sr.op, "show_callees");
     match &sr.content {
         ShowContent::CallGraph { entries, direction } => {
@@ -1476,7 +1403,7 @@ fn show_callees() {
 fn show_lines_basic() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW LINES 1-5 OF 'motor_control.h'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Lines { lines, .. } => {
             assert_eq!(
@@ -1495,7 +1422,7 @@ fn show_lines_basic() {
 fn show_lines_single_line() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW LINES 1-1 OF 'motor_control.h'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Lines { lines, .. } => {
             assert_eq!(lines.len(), 1);
@@ -1509,7 +1436,7 @@ fn show_lines_single_line() {
 fn show_lines_middle_range() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW LINES 10-15 OF 'motor_control.h'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Lines { lines, .. } => {
             assert_eq!(lines.len(), 6, "lines 10-15 = 6 lines");
@@ -1524,7 +1451,7 @@ fn show_lines_middle_range() {
 fn show_lines_cpp_file() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "SHOW LINES 1-3 OF 'motor_control.cpp'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Lines { lines, .. } => {
             assert_eq!(lines.len(), 3);
@@ -1553,7 +1480,7 @@ fn change_matching_and_rollback() {
         &sid,
         "CHANGE FILE 'motor_control.cpp' MATCHING 'void encenderMotor' WITH 'void startMotor'",
     );
-    let mr = as_mutation(&r);
+    let mr = common::as_mutation(&r);
     assert!(mr.applied);
     assert!(mr.edit_count > 0);
 
@@ -1588,7 +1515,7 @@ fn change_lines_replace_and_rollback() {
         &sid,
         "CHANGE FILE 'motor_control.h' LINES 1-1 WITH '// REPLACED BY TEST'",
     );
-    let mr = as_mutation(&r);
+    let mr = common::as_mutation(&r);
     assert!(mr.applied);
 
     // Verify.
@@ -1618,7 +1545,7 @@ fn change_with_content_and_rollback() {
         &sid,
         "CHANGE FILE 'motor_control.h' WITH '// OVERWRITTEN\n'",
     );
-    let mr = as_mutation(&r);
+    let mr = common::as_mutation(&r);
     assert!(mr.applied);
 
     // Verify.
@@ -1652,7 +1579,7 @@ fn change_lines_delete_nothing_and_rollback() {
         &sid,
         "CHANGE FILE 'motor_control.h' LINES 3-3 NOTHING",
     );
-    let mr = as_mutation(&r);
+    let mr = common::as_mutation(&r);
     assert!(mr.applied);
 
     // Rollback to restore.
@@ -1683,7 +1610,7 @@ fn change_lines_delete_with_nothing_and_rollback() {
         &sid,
         "CHANGE FILE 'motor_control.h' LINES 3-3 WITH NOTHING",
     );
-    let mr = as_mutation(&r);
+    let mr = common::as_mutation(&r);
     assert!(mr.applied);
 
     exec(
@@ -1708,7 +1635,7 @@ fn change_with_nothing_and_rollback() {
     exec(&mut e, &sid, "BEGIN TRANSACTION 'test-delete'");
 
     let r = exec(&mut e, &sid, "CHANGE FILE 'motor_control.h' WITH NOTHING");
-    let mr = as_mutation(&r);
+    let mr = common::as_mutation(&r);
     assert!(mr.applied);
 
     // Rollback.
@@ -1736,7 +1663,7 @@ fn change_files_glob_matching_and_rollback() {
         &sid,
         "CHANGE FILES '*.cpp', '*.h' MATCHING 'encenderMotor' WITH 'startMotor'",
     );
-    let mr = as_mutation(&r);
+    let mr = common::as_mutation(&r);
     assert!(mr.applied);
     assert!(mr.edit_count >= 2, "should edit both .h and .cpp");
 
@@ -1868,7 +1795,7 @@ fn error_malformed_fql() {
 #[test]
 fn error_find_without_session() {
     let tmp = tempdir().unwrap();
-    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), make_registry()).unwrap();
+    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), common::make_registry()).unwrap();
     let ops = parser::parse("FIND symbols").unwrap();
     let op = ops.first().unwrap();
     assert!(
@@ -1898,7 +1825,7 @@ fn error_show_outline_nonexistent_file() {
     let (mut e, sid, _d) = engine_with_session();
     // Engine returns empty outline for nonexistent files rather than an error.
     let r = exec(&mut e, &sid, "SHOW outline OF 'no_such_file.xyz'");
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Outline { entries } => {
             assert!(
@@ -2708,7 +2635,7 @@ fn parse_not_matches_operator() {
 fn find_symbols_where_name_matches_regex() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name MATCHES '^encender'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "should find encender* functions");
     for sym in &qr.results {
         assert!(
@@ -2723,14 +2650,14 @@ fn find_symbols_where_name_matches_regex() {
 fn and_is_alias_for_where_in_find_symbols() {
     let (mut e, sid, _d) = engine_with_session();
     // `AND` must be a pure synonym for a repeated `WHERE`: both predicates apply.
-    let with_where = as_query(&exec(
+    let with_where = common::as_query(&exec(
         &mut e,
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES '^encender'",
     ))
     .results
     .len();
-    let with_and = as_query(&exec(
+    let with_and = common::as_query(&exec(
         &mut e,
         &sid,
         "FIND symbols WHERE fql_kind = 'function' AND name MATCHES '^encender'",
@@ -2751,7 +2678,7 @@ fn find_symbols_where_name_not_matches_regex() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE name NOT MATCHES '^encender'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for sym in &qr.results {
         assert!(
             !sym.name.starts_with("encender"),
@@ -2770,7 +2697,7 @@ fn show_callees_where_name_eq() {
         &sid,
         "SHOW callees OF 'encenderSistema' WHERE name = 'encenderMotor'",
     );
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::CallGraph { entries, .. } => {
             assert_eq!(
@@ -2792,7 +2719,7 @@ fn show_callees_where_name_matches() {
         &sid,
         "SHOW callees OF 'encenderSistema' WHERE name MATCHES '^encender'",
     );
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::CallGraph { entries, .. } => {
             assert!(
@@ -2819,7 +2746,7 @@ fn show_body_where_text_matches() {
         &sid,
         "SHOW body OF 'encenderMotor' DEPTH 99 WHERE text MATCHES 'return' LIMIT 100",
     );
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Lines { lines, .. } => {
             for line in lines {
@@ -2843,7 +2770,7 @@ fn show_body_where_text_like() {
         &sid,
         "SHOW body OF 'encenderMotor' DEPTH 99 WHERE text LIKE '%motor%' LIMIT 100",
     );
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Lines { lines, .. } => {
             for line in lines {
@@ -2867,7 +2794,7 @@ fn show_lines_where_text_matches() {
         &sid,
         "SHOW LINES 1-50 OF 'motor_control.h' WHERE text MATCHES '#include' LIMIT 100",
     );
-    let sr = as_show(&r);
+    let sr = common::as_show(&r);
     match &sr.content {
         ShowContent::Lines { lines, .. } => {
             for line in lines {
@@ -2900,7 +2827,7 @@ fn undo_restores_previous_file_contents() {
 
     // UNDO (LAST-0) reverses the most recent mutation back to 'first'.
     let r = exec(&mut e, &sid, "UNDO");
-    assert_eq!(as_mutation(&r).op, "undo");
+    assert_eq!(common::as_mutation(&r).op, "undo");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
 
     // UNDO LAST-1 reverses two mutations back: the file returns to its

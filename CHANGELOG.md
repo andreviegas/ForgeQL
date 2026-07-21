@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.7] — 2026-07-21 — test: migrate the syntax-coverage suite onto the shared harness
+
+### Changed — the syntax-coverage suite now boots sessions through `tests/common`
+
+The `syntax_coverage` suite dropped its private `make_registry` and
+`fixtures_dir` copies and its inline session-and-registry construction in
+favour of the shared `tests/common` harness. `engine_with_session` now
+delegates to `common::columnar_session`; the git-backed
+`engine_with_git_session` keeps its local repo setup but delegates
+fixture-copying and registration to `common::copy_fixtures` /
+`common::columnar_session_in`. The `as_query`, `as_show`, and `as_mutation`
+result extractors moved into the shared harness (alongside a now-public
+`copy_fixtures`) so every suite can share them. The `(engine, session_id,
+TempDir)` tuple idiom is preserved via `TestSession::into_parts`, leaving every
+test body unchanged. Pure motion: all 189 tests and their assertions are
+unchanged.
+
 ## [0.139.6] — 2026-07-20 — test: migrate the engine-integration suite onto the shared harness
 
 ### Changed — the engine-integration suite now boots sessions through `tests/common`

@@ -63,7 +63,7 @@ pub fn path_handle(rel: &str) -> String {
 
 /// Copy each fixture (a path under `tests/fixtures`) into `dir`, flattening to
 /// its file name.
-fn copy_fixtures(dir: &Path, fixtures: &[&str]) {
+pub fn copy_fixtures(dir: &Path, fixtures: &[&str]) {
     let src = fixtures_dir();
     for rel in fixtures {
         let name = Path::new(rel).file_name().expect("fixture has a file name");
@@ -198,4 +198,32 @@ pub fn columnar_session_in(dir: tempfile::TempDir) -> TestSession {
         .register_local_session_with_columnar(dir.path(), &segments_dir, &overlays_dir)
         .expect("register columnar session");
     TestSession { engine, sid, dir }
+}
+
+// -----------------------------------------------------------------------
+// Result extractors — pull a typed result out of a `ForgeQLResult` or panic.
+// -----------------------------------------------------------------------
+
+/// Extract the query result or panic.
+pub fn as_query(r: &ForgeQLResult) -> &forgeql_core::result::QueryResult {
+    match r {
+        ForgeQLResult::Query(qr) => qr,
+        other => panic!("expected Query, got: {other:?}"),
+    }
+}
+
+/// Extract the show result or panic.
+pub fn as_show(r: &ForgeQLResult) -> &forgeql_core::result::ShowResult {
+    match r {
+        ForgeQLResult::Show(sr) => sr,
+        other => panic!("expected Show, got: {other:?}"),
+    }
+}
+
+/// Extract the mutation result or panic.
+pub fn as_mutation(r: &ForgeQLResult) -> &forgeql_core::result::MutationResult {
+    match r {
+        ForgeQLResult::Mutation(mr) => mr,
+        other => panic!("expected Mutation, got: {other:?}"),
+    }
 }
