@@ -48,10 +48,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
-use std::sync::Arc;
 
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
 use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
@@ -59,85 +56,38 @@ use forgeql_core::result::{ForgeQLResult, SymbolMatch};
 use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
+mod common;
+
 // -----------------------------------------------------------------------
-// Helpers
+// Helpers — the shared harness lives in `tests/common`; these thin adapters
+// keep the `(engine, session_id, TempDir)` tuple idiom this suite's bodies use.
+//
+// This suite stays on the LEGACY backend: columnar local sessions do not carry
+// enrichment columns yet (the inline segment emit skips the enrichment
+// post-pass), so every session here is a `common::legacy_session`.
 // -----------------------------------------------------------------------
 
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("tests/fixtures")
-}
-
-/// Create a temp workspace with ALL fixtures and boot the engine.
+/// Temp workspace with the `motor_control` + `enrichment_patterns` fixtures on
+/// the legacy backend. Returns `(engine, session_id, TempDir)`.
 fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    let dir = tempdir().expect("tempdir");
-    let src = fixtures_dir();
-
-    for file in &[
+    common::legacy_session(&[
         "motor_control.h",
         "motor_control.cpp",
         "enrichment_patterns.cpp",
-    ] {
-        fs::copy(src.join(file), dir.path().join(file))
-            .unwrap_or_else(|e| panic!("copy {file}: {e}"));
-    }
-
-    // Known divergence: columnar local sessions do not carry enrichment
-    // columns yet (the inline segment emit skips the enrichment post-pass),
-    // so this suite stays on the legacy backend until that is fixed.
-    let data_dir = dir.path().join("data");
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
-    let mut engine = ForgeQLEngine::new(data_dir, registry).expect("engine");
-    let session_id = engine
-        .register_local_session(dir.path())
-        .expect("register session");
-
-    (engine, session_id, dir)
+    ])
+    .into_parts()
 }
 
-/// Create a temp workspace with ONLY enrichment_patterns.cpp.
+/// Temp workspace with ONLY `enrichment_patterns.cpp`.
 fn engine_enrichment_only() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    let dir = tempdir().expect("tempdir");
-    let src = fixtures_dir();
-
-    fs::copy(
-        src.join("enrichment_patterns.cpp"),
-        dir.path().join("enrichment_patterns.cpp"),
-    )
-    .expect("copy enrichment_patterns.cpp");
-
-    let data_dir = dir.path().join("data");
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
-    let mut engine = ForgeQLEngine::new(data_dir, registry).expect("engine");
-    let session_id = engine
-        .register_local_session(dir.path())
-        .expect("register session");
-
-    (engine, session_id, dir)
+    common::legacy_session(&["enrichment_patterns.cpp"]).into_parts()
 }
 
 /// Engine that indexes only `enrichment_bug2b.c` — the Bug-2b regression
 /// fixture containing `module_param` / `MODULE_PARM_DESC` calls that trigger
 /// tree-sitter ERROR-recovery phantom `number_literal` nodes.
 fn engine_bug2b_only() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    let dir = tempdir().expect("tempdir");
-    let src = fixtures_dir();
-
-    fs::copy(
-        src.join("enrichment_bug2b.c"),
-        dir.path().join("enrichment_bug2b.c"),
-    )
-    .expect("copy enrichment_bug2b.c");
-
-    let data_dir = dir.path().join("data");
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
-    let mut engine = ForgeQLEngine::new(data_dir, registry).expect("engine");
-    let session_id = engine
-        .register_local_session(dir.path())
-        .expect("register session");
-
-    (engine, session_id, dir)
+    common::legacy_session(&["enrichment_bug2b.c"]).into_parts()
 }
 
 fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
@@ -148,13 +98,6 @@ fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
         .execute(auth(AuthContext::Tester), Some(&coords), op)
         .result
         .unwrap_or_else(|e| panic!("execute failed for: {fql}: {e}"))
-}
-
-fn as_query(r: &ForgeQLResult) -> &forgeql_core::result::QueryResult {
-    match r {
-        ForgeQLResult::Query(qr) => qr,
-        other => panic!("expected Query, got: {other:?}"),
-    }
 }
 
 /// Find first result matching a given name.
@@ -197,7 +140,7 @@ fn field_opt<'a>(m: &'a SymbolMatch, key: &str) -> Option<&'a str> {
 fn naming_camel_case() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'camelCase'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"camelCaseVar"),
@@ -213,7 +156,7 @@ fn naming_camel_case() {
 fn naming_pascal_case() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'PascalCase'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"PascalCaseVar"),
@@ -241,7 +184,7 @@ fn naming_snake_case() {
         &sid,
         "FIND symbols WHERE naming = 'snake_case' LIMIT 1000",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"snake_case_var"),
@@ -253,7 +196,7 @@ fn naming_snake_case() {
 fn naming_upper_snake() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'UPPER_SNAKE'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"UPPER_SNAKE_VAR"),
@@ -272,7 +215,7 @@ fn naming_flatcase() {
         &sid,
         "FIND symbols WHERE naming = 'flatcase' LIMIT 1000",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"flatcasevar"),
@@ -285,7 +228,7 @@ fn naming_name_length() {
     let (mut e, sid, _d) = engine_enrichment_only();
     // camelCaseVar has 12 chars
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'camelCaseVar'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     let m = &qr.results[0];
     assert_eq!(field(m, "name_length"), "12");
@@ -297,7 +240,7 @@ fn naming_name_length_numeric_comparison() {
     let (mut e, sid, _d) = engine_enrichment_only();
     // Find symbols with name_length > 20 (long identifiers)
     let r = exec(&mut e, &sid, "FIND symbols WHERE name_length > 20");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // All returned symbols must have name_length > 20
     for m in &qr.results {
         let len: usize = field(m, "name_length").parse().unwrap();
@@ -321,7 +264,7 @@ fn comment_style_doc_line() {
         &sid,
         "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'doc_line'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one doc_line comment"
@@ -339,7 +282,7 @@ fn comment_style_doc_block() {
         &sid,
         "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'doc_block'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one doc_block comment"
@@ -357,7 +300,7 @@ fn comment_style_block() {
         &sid,
         "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'block'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one block comment"
@@ -375,7 +318,7 @@ fn comment_style_line() {
         &sid,
         "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'line'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected at least one line comment");
     for m in &qr.results {
         assert_eq!(field(m, "comment_style"), "line");
@@ -390,7 +333,7 @@ fn comment_has_doc_true() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE has_doc = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     // docBlockFunction is preceded by a /** comment
     assert!(
@@ -409,7 +352,7 @@ fn comment_has_doc_false() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE has_doc = 'false' LIMIT 1000",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     // noDocFunction is preceded by a /* comment (not doc)
     assert!(
@@ -436,7 +379,7 @@ fn number_format_dec() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'dec' LIMIT 1000",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected decimal numbers");
     // 42 should be among them
     let ns: Vec<&str> = names(&qr.results);
@@ -454,7 +397,7 @@ fn number_format_hex() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'hex'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected hex numbers");
     let ns: Vec<&str> = names(&qr.results);
     assert!(
@@ -471,7 +414,7 @@ fn number_format_bin() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'bin'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected binary numbers");
     let ns: Vec<&str> = names(&qr.results);
     assert!(
@@ -488,7 +431,7 @@ fn number_format_oct() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'oct'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected octal numbers");
     let ns: Vec<&str> = names(&qr.results);
     assert!(
@@ -505,7 +448,7 @@ fn number_format_float() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'float'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected float numbers");
     let ns: Vec<&str> = names(&qr.results);
     assert!(
@@ -522,7 +465,7 @@ fn number_format_scientific() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'scientific'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected scientific numbers");
     let ns: Vec<&str> = names(&qr.results);
     assert!(
@@ -539,7 +482,7 @@ fn number_suffix_u() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'u'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected unsigned suffix numbers");
     let ns: Vec<&str> = names(&qr.results);
     assert!(
@@ -556,7 +499,7 @@ fn number_suffix_ul() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'ul'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"200UL"),
@@ -572,7 +515,7 @@ fn number_suffix_ll() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'll'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"300LL"),
@@ -588,7 +531,7 @@ fn number_is_magic_true() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE is_magic = 'true' LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected magic numbers");
     // 42, 0xFF, 0b1010, etc. are all magic
     let ns: Vec<&str> = names(&qr.results);
@@ -603,7 +546,7 @@ fn number_is_magic_false() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE is_magic = 'false'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected non-magic numbers");
     // Values in named-constant contexts (init_declarator, enumerator, preproc_def)
     // are not magic regardless of their value.  zeroVal=0 and oneVal=1 (both in
@@ -627,7 +570,7 @@ fn number_is_magic_false_enumerator() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '8' WHERE is_magic = 'false'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "8 in enum NamedConstants must NOT be magic (BUG-06)"
@@ -643,7 +586,7 @@ fn number_is_magic_false_const_var() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '3' WHERE is_magic = 'false'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "3 in 'const int kMaxRetries = 3' must NOT be magic (BUG-06)"
@@ -659,7 +602,7 @@ fn number_is_magic_true_bare_expr_regression() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '42' WHERE is_magic = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "42 in bare expression must still be magic after BUG-06 fix"
@@ -679,7 +622,7 @@ fn number_is_magic_true_one_in_comparison() {
         "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '1' \
          WHERE is_magic = 'true' LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "1 in `if (status == 1)` must be is_magic='true' (Bug 2a regression)"
@@ -696,7 +639,7 @@ fn number_is_magic_true_zero_in_comparison() {
         "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '0' \
          WHERE is_magic = 'true' LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "0 in `if (status == 0)` must be is_magic='true' (Bug 2a regression)"
@@ -714,7 +657,7 @@ fn number_is_magic_false_subscript_zero() {
         "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '0' \
          WHERE is_magic = 'false' LIMIT 100",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // At least one '0' must be non-magic (the one in buf[0] subscript context,
     // plus any zeros in init_declarator contexts).
     assert!(
@@ -737,7 +680,7 @@ fn number_not_indexed_inside_string_literal() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE name = '9999'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         qr.results.is_empty(),
         "9999 inside a string literal must NOT be indexed as a number (Bug 2b-A regression)"
@@ -758,7 +701,7 @@ fn number_not_indexed_inside_error_recovery_node() {
         let q =
             format!("FIND symbols WHERE node_kind = 'number_literal' WHERE name = '{sentinel}'");
         let r = exec(&mut e, &sid, &q);
-        let qr = as_query(&r);
+        let qr = common::as_query(&r);
         assert!(
             qr.results.is_empty(),
             "{sentinel} inside a tree-sitter ERROR-recovery string must NOT be indexed (Bug 2b-B regression)"
@@ -774,7 +717,7 @@ fn number_sign_zero() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_sign = 'zero'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected zero-valued numbers");
     for m in &qr.results {
         assert_eq!(
@@ -793,7 +736,7 @@ fn number_sign_positive() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_sign = 'positive'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected positive numbers");
     for m in &qr.results {
         let val: i64 = field(m, "num_value").parse().unwrap();
@@ -814,7 +757,7 @@ fn number_value_numeric_comparison() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_value > 200",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected numbers with value > 200");
     for m in &qr.results {
         let val: i64 = field(m, "num_value").parse().unwrap();
@@ -838,7 +781,7 @@ fn control_flow_if_statement_exists() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(qr.total > 0, "expected at least one if_statement");
 }
 
@@ -851,7 +794,7 @@ fn control_flow_condition_tests_simple() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement' WHERE condition_tests = 1",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected if_statements with 1 condition test"
@@ -867,7 +810,7 @@ fn control_flow_condition_tests_complex() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement' WHERE condition_tests > 2",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected if_statements with > 2 condition tests"
@@ -884,7 +827,7 @@ fn control_flow_paren_depth() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement' WHERE paren_depth > 2",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected if_statements with paren_depth > 2"
@@ -900,7 +843,7 @@ fn control_flow_mixed_logic() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement' WHERE mixed_logic = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected if_statements with mixed_logic=true"
@@ -915,7 +858,7 @@ fn control_flow_has_assignment_in_condition() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement' WHERE has_assignment_in_condition = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one if_statement with assignment in condition"
@@ -933,7 +876,7 @@ fn control_flow_no_false_positive_comparisons() {
         &sid,
         "FIND symbols WHERE name = 'noAssignCompare' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let _func = find_by_name(&qr.results, "noAssignCompare");
 
     // Now find all if_statements inside that function's file
@@ -942,7 +885,7 @@ fn control_flow_no_false_positive_comparisons() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement' WHERE has_assignment_in_condition = 'true'",
     );
-    let qr2 = as_query(&r2);
+    let qr2 = common::as_query(&r2);
     // None of the if-statements from noAssignCompare should be flagged
     for row in &qr2.results {
         // The condition skeletons from noAssignCompare are ((a)||((b-c)<d)) and (a&&(a))
@@ -969,7 +912,7 @@ fn control_flow_no_false_positive_zephyr_like() {
         &sid,
         "FIND symbols WHERE fql_kind = 'if' WHERE has_assignment_in_condition = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let mut fps: Vec<String> = Vec::new();
     for row in &qr.results {
         let path = row
@@ -1007,7 +950,7 @@ fn control_flow_switch_has_catch_all() {
         &sid,
         "FIND symbols WHERE node_kind = 'switch_statement' WHERE has_catch_all = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one switch with default"
@@ -1022,7 +965,7 @@ fn control_flow_switch_no_default() {
         &sid,
         "FIND symbols WHERE node_kind = 'switch_statement' WHERE has_catch_all = 'false'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one switch without default"
@@ -1037,7 +980,7 @@ fn control_flow_while_statement() {
         &sid,
         "FIND symbols WHERE node_kind = 'while_statement'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected while_statement");
     // while (a > 0 && b != 0) has 2 condition tests: one && joining two clauses
     let with_two = qr
@@ -1055,7 +998,7 @@ fn control_flow_for_statement() {
         &sid,
         "FIND symbols WHERE node_kind = 'for_statement'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected for_statement");
 }
 
@@ -1067,7 +1010,7 @@ fn control_flow_do_statement() {
         &sid,
         "FIND symbols WHERE node_kind = 'do_statement'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected do_statement");
 }
 
@@ -1079,7 +1022,7 @@ fn control_flow_condition_text_has_skeleton() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement' WHERE condition_tests > 1",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     // Skeleton should use lowercase letters, not the original identifiers
     for m in &qr.results {
@@ -1113,7 +1056,7 @@ fn skeleton_keeps_assignment_operator() {
         &sid,
         "FIND symbols WHERE fql_kind = 'if' WHERE has_assignment_in_condition = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert_eq!(
         qr.results.len(),
         1,
@@ -1144,7 +1087,7 @@ fn skeleton_no_adjacent_letters() {
         "FIND symbols WHERE node_kind = 'if_statement' \
          WHERE condition_text LIKE '%>%&&%<%||%!=%'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected skeleton with > && < || != operators"
@@ -1171,7 +1114,7 @@ fn skeleton_bitwise_operators_preserved() {
         "FIND symbols WHERE node_kind = 'switch_statement' \
          WHERE condition_text LIKE '%&%'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected switch skeleton with & operator"
@@ -1194,7 +1137,7 @@ fn skeleton_overflow_uses_uppercase() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement' WHERE condition_tests > 13",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected if_statement with >13 condition tests (28-term condition)"
@@ -1219,7 +1162,7 @@ fn skeleton_all_letters_have_operators() {
     // there must be no adjacent leaf-letters without an operator.
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE condition_tests > 1");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
 
     for m in &qr.results {
@@ -1246,7 +1189,7 @@ fn control_flow_branch_count_on_function() {
         &sid,
         "FIND symbols WHERE name = 'controlFlowPatterns'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     let m = find_by_name(&qr.results, "controlFlowPatterns");
     // controlFlowPatterns has: 4 ifs + 2 switches + 1 while + 1 for + 1 do = 9 control-flow nodes
@@ -1265,7 +1208,7 @@ fn control_flow_max_condition_tests_on_function() {
         &sid,
         "FIND symbols WHERE name = 'controlFlowPatterns'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "controlFlowPatterns");
     // The most complex condition has 4+ tests
     let mct: usize = field(m, "max_condition_tests").parse().unwrap();
@@ -1283,7 +1226,7 @@ fn control_flow_max_paren_depth_on_function() {
         &sid,
         "FIND symbols WHERE name = 'controlFlowPatterns'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "controlFlowPatterns");
     let mpd: usize = field(m, "max_paren_depth").parse().unwrap();
     assert!(
@@ -1304,7 +1247,7 @@ fn operator_prefix_increment() {
         &sid,
         "FIND symbols WHERE node_kind = 'update_expression' WHERE increment_style = 'prefix' WHERE increment_op = '++'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected prefix ++ update_expression"
@@ -1324,7 +1267,7 @@ fn operator_prefix_decrement() {
         &sid,
         "FIND symbols WHERE node_kind = 'update_expression' WHERE increment_style = 'prefix'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // At least one should be a -- (--val)
     let has_dec = qr.results.iter().any(|m| field(m, "increment_op") == "--");
     assert!(has_dec, "expected prefix -- update_expression");
@@ -1338,7 +1281,7 @@ fn operator_postfix_increment() {
         &sid,
         "FIND symbols WHERE node_kind = 'update_expression' WHERE increment_style = 'postfix' WHERE increment_op = '++'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected postfix ++ update_expression"
@@ -1354,7 +1297,7 @@ fn operator_postfix_decrement() {
         &sid,
         "FIND symbols WHERE node_kind = 'update_expression' WHERE increment_style = 'postfix'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // At least one should be a -- (val--)
     let has_dec = qr.results.iter().any(|m| field(m, "increment_op") == "--");
     assert!(has_dec, "expected postfix -- update_expression");
@@ -1368,7 +1311,7 @@ fn operator_compound_add() {
         &sid,
         "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '+='",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected += compound_assignment");
     for m in &qr.results {
         assert_eq!(field(m, "compound_op"), "+=");
@@ -1383,7 +1326,7 @@ fn operator_compound_sub() {
         &sid,
         "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '-='",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected -= compound_assignment");
 }
 
@@ -1398,7 +1341,7 @@ fn operator_compound_mul_div_mod() {
                 "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '{op}'"
             ),
         );
-        let qr = as_query(&r);
+        let qr = common::as_query(&r);
         assert!(!qr.results.is_empty(), "expected {op} compound_assignment");
     }
 }
@@ -1414,7 +1357,7 @@ fn operator_compound_bitwise() {
                 "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '{op}'"
             ),
         );
-        let qr = as_query(&r);
+        let qr = common::as_query(&r);
         assert!(!qr.results.is_empty(), "expected {op} compound_assignment");
     }
 }
@@ -1427,7 +1370,7 @@ fn operator_compound_has_operand() {
         &sid,
         "FIND symbols WHERE node_kind = 'compound_assignment'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // Every compound assignment should have an operand (right-hand side)
     for m in &qr.results {
         assert!(
@@ -1446,7 +1389,7 @@ fn operator_shift_left() {
         &sid,
         "FIND symbols WHERE node_kind = 'shift_expression' WHERE shift_direction = 'left'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected left shift_expression");
     for m in &qr.results {
         assert_eq!(field(m, "shift_direction"), "left");
@@ -1466,7 +1409,7 @@ fn operator_shift_right() {
         &sid,
         "FIND symbols WHERE node_kind = 'shift_expression' WHERE shift_direction = 'right'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected right shift_expression");
     for m in &qr.results {
         assert_eq!(field(m, "shift_direction"), "right");
@@ -1481,7 +1424,7 @@ fn operator_shift_amount_value() {
         &sid,
         "FIND symbols WHERE node_kind = 'shift_expression'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // val << 4 has shift_amount = "4", val >> 2 has shift_amount = "2"
     let amounts: Vec<&str> = qr
         .results
@@ -1506,7 +1449,7 @@ fn operator_shift_operand_present() {
         &sid,
         "FIND symbols WHERE node_kind = 'shift_expression'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for m in &qr.results {
         assert!(
             field_opt(m, "shift_operand").is_some(),
@@ -1528,7 +1471,7 @@ fn metrics_lines_on_function() {
         &sid,
         "FIND symbols WHERE name = 'controlFlowPatterns'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "controlFlowPatterns");
     let lines: usize = field(m, "lines").parse().unwrap();
     assert!(
@@ -1545,7 +1488,7 @@ fn metrics_lines_numeric_comparison() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE lines > 10",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected functions with lines > 10");
     for m in &qr.results {
         let l: usize = field(m, "lines").parse().unwrap();
@@ -1561,7 +1504,7 @@ fn metrics_lines_order_by_desc() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' ORDER BY lines DESC LIMIT 5",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     // Verify descending order
     let line_values: Vec<usize> = qr
@@ -1581,7 +1524,7 @@ fn metrics_lines_order_by_desc() {
 fn metrics_param_count() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'manyParams'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "manyParams");
     assert_eq!(field(m, "param_count"), "5", "manyParams has 5 parameters");
 }
@@ -1594,7 +1537,7 @@ fn metrics_param_count_comparison() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE param_count > 3",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected functions with > 3 params");
     let ns: Vec<&str> = names(&qr.results);
     assert!(
@@ -1612,7 +1555,7 @@ fn metrics_param_count_no_lambda_inflation() {
     // outerNoParams has 0 outer params; lambda inside has 2 — must report 0 (BUG-05/NEW-01)
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'outerNoParams'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "outerNoParams");
     let pc: usize = field(m, "param_count").parse().unwrap();
     assert_eq!(
@@ -1626,7 +1569,7 @@ fn metrics_param_count_lambda_sibling() {
     // outerTwoParams has 2 outer params; lambda inside has 3 — must report 2 (BUG-05/NEW-01)
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'outerTwoParams'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "outerTwoParams");
     let pc: usize = field(m, "param_count").parse().unwrap();
     assert_eq!(
@@ -1640,7 +1583,7 @@ fn metrics_return_count_no_lambda_inflation() {
     // outerOneReturn has 1 outer return; lambda inside has another — must report 1 (BUG-05/NEW-01)
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'outerOneReturn'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "outerOneReturn");
     let rc: usize = field(m, "return_count").parse().unwrap();
     assert_eq!(
@@ -1652,7 +1595,7 @@ fn metrics_return_count_no_lambda_inflation() {
 fn metrics_return_count() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'multiReturn'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "multiReturn");
     let rc: usize = field(m, "return_count").parse().unwrap();
     assert_eq!(rc, 3, "multiReturn has 3 return statements");
@@ -1666,7 +1609,7 @@ fn metrics_return_count_comparison() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE return_count > 1",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"multiReturn"),
@@ -1678,7 +1621,7 @@ fn metrics_return_count_comparison() {
 fn metrics_string_count() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'withStrings'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "withStrings");
     let sc: usize = field(m, "string_count").parse().unwrap();
     assert_eq!(sc, 3, "withStrings has 3 string literals");
@@ -1688,7 +1631,7 @@ fn metrics_string_count() {
 fn metrics_member_count_struct() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'SimpleStruct'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "SimpleStruct");
     assert_eq!(field(m, "member_count"), "3", "SimpleStruct has 3 fields");
 }
@@ -1697,7 +1640,7 @@ fn metrics_member_count_struct() {
 fn metrics_member_count_enum() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'SimpleEnum'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "SimpleEnum");
     assert_eq!(
         field(m, "member_count"),
@@ -1710,7 +1653,7 @@ fn metrics_member_count_enum() {
 fn metrics_member_count_class() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'SimpleClass'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "SimpleClass");
     let mc: usize = field(m, "member_count").parse().unwrap();
     // SimpleClass has: publicField, publicMethod, privateField, protectedField = 4 field_declarations
@@ -1721,7 +1664,7 @@ fn metrics_member_count_class() {
 fn metrics_is_inline() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'inlineFunc'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "inlineFunc");
     assert_eq!(field(m, "is_inline"), "true", "inlineFunc should be inline");
 }
@@ -1730,7 +1673,7 @@ fn metrics_is_inline() {
 fn metrics_is_const() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'constVar'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "constVar");
     assert_eq!(field(m, "is_const"), "true", "constVar should be const");
 }
@@ -1739,7 +1682,7 @@ fn metrics_is_const() {
 fn metrics_is_volatile() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'volatileVar'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "volatileVar");
     assert_eq!(
         field(m, "is_volatile"),
@@ -1758,7 +1701,7 @@ fn metrics_is_volatile() {
 fn metrics_class_has_member_count() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'SimpleClass'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "SimpleClass");
     let mc: usize = field(m, "member_count").parse().unwrap();
     assert!(
@@ -1771,7 +1714,7 @@ fn metrics_class_has_member_count() {
 fn metrics_lines_on_struct() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'SimpleStruct'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "SimpleStruct");
     let lines: usize = field(m, "lines").parse().unwrap();
     assert!(
@@ -1787,7 +1730,7 @@ fn metrics_lines_not_clipped_for_clean_function() {
     // must retain its original line count (first_absorbed_toplevel_in_compound returns None).
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'multiReturn'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "multiReturn");
     let lines: usize = field(m, "lines").parse().unwrap();
     assert_eq!(
@@ -1809,7 +1752,7 @@ fn metrics_lines_not_clipped_for_c99_designator_array() {
         &sid,
         "FIND symbols WHERE name = 'withC99DesignatorArray'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "withC99DesignatorArray");
     let lines: usize = field(m, "lines").parse().unwrap();
     assert!(
@@ -1831,7 +1774,7 @@ fn cast_c_style() {
         &sid,
         "FIND symbols WHERE node_kind = 'cast_expression' WHERE cast_style = 'c_style'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected at least one C-style cast");
     for m in &qr.results {
         assert_eq!(field(m, "cast_style"), "c_style");
@@ -1850,7 +1793,7 @@ fn cast_c_style_has_target_type() {
         &sid,
         "FIND symbols WHERE node_kind = 'cast_expression'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     // C-style casts should have cast_target_type
     for m in &qr.results {
@@ -1869,7 +1812,7 @@ fn cast_c_style_count() {
         &sid,
         "FIND symbols WHERE node_kind = 'cast_expression' WHERE cast_style = 'c_style'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // enrichment_patterns.cpp has at least one C-style cast: (int)x
     assert!(
         qr.total >= 1,
@@ -1890,7 +1833,7 @@ fn redundancy_has_repeated_condition_calls() {
         &sid,
         "FIND symbols WHERE name = 'redundancyPatterns'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "redundancyPatterns");
     assert_eq!(
         field(m, "has_repeated_condition_calls"),
@@ -1907,7 +1850,7 @@ fn redundancy_repeated_condition_calls_contains_get_value() {
         &sid,
         "FIND symbols WHERE name = 'redundancyPatterns'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "redundancyPatterns");
     let calls = field(m, "repeated_condition_calls");
     assert!(
@@ -1924,7 +1867,7 @@ fn redundancy_repeated_condition_calls_contains_is_ready() {
         &sid,
         "FIND symbols WHERE name = 'redundancyPatterns'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "redundancyPatterns");
     let calls = field(m, "repeated_condition_calls");
     assert!(
@@ -1941,7 +1884,7 @@ fn redundancy_null_check_count() {
         &sid,
         "FIND symbols WHERE name = 'redundancyPatterns'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "redundancyPatterns");
     let ncc: usize = field(m, "null_check_count").parse().unwrap();
     // ptr1 != nullptr, ptr2 != nullptr, ptr1 != nullptr, ptr2 == nullptr = 4 null checks
@@ -1959,7 +1902,7 @@ fn redundancy_no_repeated_calls_for_simple_function() {
         &sid,
         "FIND symbols WHERE name = 'controlFlowPatterns'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "controlFlowPatterns");
     assert_eq!(
         field(m, "has_repeated_condition_calls"),
@@ -1972,7 +1915,7 @@ fn redundancy_no_repeated_calls_for_simple_function() {
 fn redundancy_null_check_count_zero_for_no_checks() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'operatorPatterns'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "operatorPatterns");
     assert_eq!(
         field(m, "null_check_count"),
@@ -1990,7 +1933,7 @@ fn redundancy_duplicate_condition_detected() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement' WHERE duplicate_condition = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one if_statement with duplicate_condition=true"
@@ -2013,7 +1956,7 @@ fn redundancy_duplicate_condition_skips_simple_guards() {
         &sid,
         "FIND symbols WHERE fql_kind = 'if' WHERE duplicate_condition = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for row in &qr.results {
         let path = row
             .path
@@ -2044,7 +1987,7 @@ fn redundancy_filter_repeated_calls_query() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE has_repeated_condition_calls = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"redundancyPatterns"),
@@ -2062,7 +2005,7 @@ fn redundancy_null_check_count_on_motor_control() {
     let (mut e, sid, _d) = engine_with_session();
     // encenderMotor has: if (gCallbackEncendido != nullptr) → 1 null check
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'encenderMotor'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // Find the function_definition (not declaration)
     let func = qr
         .results
@@ -2092,7 +2035,7 @@ fn scope_file_for_static_declaration() {
         &sid,
         "FIND symbols WHERE storage = 'static' WHERE scope = 'file'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one file-scope static declaration"
@@ -2116,7 +2059,7 @@ fn scope_local_for_regular_function() {
         &sid,
         "FIND symbols WHERE name = 'controlFlowPatterns'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "controlFlowPatterns");
     // Non-static functions should not have scope=file
     let scope = field_opt(m, "scope").unwrap_or("global");
@@ -2130,7 +2073,7 @@ fn scope_local_for_regular_function() {
 fn scope_storage_static() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE storage = 'static'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one static-storage symbol"
@@ -2141,7 +2084,7 @@ fn scope_storage_static() {
 fn scope_filter_file_scope() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE scope = 'file'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one file-scoped symbol"
@@ -2156,7 +2099,7 @@ fn scope_filter_file_scope() {
 fn field_num_name_length_greater_than() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name_length > 15");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     for m in &qr.results {
         let len: usize = field(m, "name_length").parse().unwrap();
@@ -2172,7 +2115,7 @@ fn field_num_name_length_greater_than() {
 fn field_num_name_length_less_than() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name_length < 3");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // All returned symbols must have name_length < 3
     for m in &qr.results {
         let len: usize = field(m, "name_length").parse().unwrap();
@@ -2188,7 +2131,7 @@ fn field_num_name_length_less_than() {
 fn field_num_condition_tests_gte() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE condition_tests >= 3");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for m in &qr.results {
         let ct: i64 = field(m, "condition_tests").parse().unwrap();
         assert!(
@@ -2207,7 +2150,7 @@ fn field_num_lines_lte() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE lines <= 3",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for m in &qr.results {
         let l: usize = field(m, "lines").parse().unwrap();
         assert!(l <= 3, "lines should be <= 3, got {l} for '{}'", m.name);
@@ -2222,7 +2165,7 @@ fn field_num_return_count_eq() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE return_count = 3",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"multiReturn"),
@@ -2238,7 +2181,7 @@ fn field_num_branch_count_comparison() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE branch_count > 5",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"controlFlowPatterns"),
@@ -2250,7 +2193,7 @@ fn field_num_branch_count_comparison() {
 fn field_num_member_count_comparison() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE member_count >= 3");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"SimpleStruct"),
@@ -2262,7 +2205,7 @@ fn field_num_member_count_comparison() {
 fn field_num_null_check_count_comparison() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE null_check_count > 3");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     assert!(
         ns.contains(&"redundancyPatterns"),
@@ -2282,7 +2225,7 @@ fn cross_enricher_long_camel_case_functions() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE naming = 'camelCase' WHERE lines > 5",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for m in &qr.results {
         assert_eq!(field(m, "naming"), "camelCase");
         let lines: usize = field(m, "lines").parse().unwrap();
@@ -2298,7 +2241,7 @@ fn cross_enricher_complex_conditions_in_long_functions() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE max_condition_tests > 2 WHERE lines > 10",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for m in &qr.results {
         let mct: usize = field(m, "max_condition_tests").parse().unwrap();
         let lines: usize = field(m, "lines").parse().unwrap();
@@ -2315,7 +2258,7 @@ fn cross_enricher_magic_hex_numbers() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'hex' WHERE is_magic = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected magic hex numbers");
     for m in &qr.results {
         assert_eq!(field(m, "num_format"), "hex");
@@ -2331,7 +2274,7 @@ fn cross_enricher_functions_with_many_params_and_returns() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE param_count > 2 WHERE return_count > 0",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for m in &qr.results {
         let pc: usize = field(m, "param_count").parse().unwrap();
         let rc: usize = field(m, "return_count").parse().unwrap();
@@ -2349,7 +2292,7 @@ fn cross_enricher_functions_with_many_params_and_returns() {
 fn motor_control_functions_have_naming() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'encenderMotor'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     for m in &qr.results {
         assert_eq!(field(m, "naming"), "camelCase");
@@ -2361,7 +2304,7 @@ fn motor_control_functions_have_naming() {
 fn motor_control_enum_naming() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'VELOCIDAD_MAX'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty());
     let m = &qr.results[0];
     assert_eq!(field(m, "naming"), "UPPER_SNAKE");
@@ -2371,7 +2314,7 @@ fn motor_control_enum_naming() {
 fn motor_control_switch_in_leer_sensor() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'leerSensor'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let func = qr
         .results
         .iter()
@@ -2391,7 +2334,7 @@ fn motor_control_struct_member_count() {
         &sid,
         "FIND symbols WHERE node_kind = 'struct_specifier'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // The typedef struct in motor_control.h should have member_count
     for m in &qr.results {
         assert!(
@@ -2410,7 +2353,7 @@ fn motor_control_has_doc_on_functions() {
         &sid,
         "FIND symbols WHERE node_kind = 'function_definition' WHERE has_doc = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // encenderSistema is preceded by a /** comment
     let ns: Vec<&str> = names(&qr.results);
     assert!(
@@ -2432,7 +2375,7 @@ fn dup_logic_detected_bitwise() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement' WHERE dup_logic = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         qr.total >= 4,
         "expected at least 4 if_statements with dup_logic=true, got {}",
@@ -2450,7 +2393,7 @@ fn dup_logic_false_for_non_duplicates() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement' WHERE dup_logic = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let ns: Vec<&str> = names(&qr.results);
     // None of the dup_logic=true names should be for the "clean" conditions.
     // The clean conditions in dupLogicPatterns have skeletons:
@@ -2484,7 +2427,7 @@ fn dup_logic_pointer_expression_not_false_positive() {
         &sid,
         "FIND symbols WHERE node_kind = 'if_statement' WHERE condition_text LIKE '%a!=b&&c!=d%'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for m in &qr.results {
         let dl = field(m, "dup_logic");
         assert_eq!(
@@ -2509,7 +2452,7 @@ fn dup_logic_not_false_positive_pointer_increment() {
         &sid,
         "FIND symbols WHERE fql_kind = 'if' WHERE enclosing_fn = 'dupLogicNotFalsePositiveIncrement'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     for m in &qr.results {
         let dl = field(m, "dup_logic");
         assert_eq!(
@@ -2529,7 +2472,7 @@ fn no_repeated_calls_with_side_effectful_args() {
         &sid,
         "FIND symbols WHERE name = 'noRepeatedCallsWithSideEffects'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert_eq!(
         qr.results.len(),
         1,
@@ -2556,7 +2499,7 @@ fn number_suffix_meaning_unsigned() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'u'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one 'u' suffix literal"
@@ -2579,7 +2522,7 @@ fn number_suffix_meaning_unsigned_long() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'ul'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one 'ul' suffix literal"
@@ -2597,7 +2540,7 @@ fn number_suffix_meaning_long_long() {
         &sid,
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'll'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one 'll' suffix literal"
@@ -2617,7 +2560,7 @@ fn control_flow_catch_all_kind_default() {
         &sid,
         "FIND symbols WHERE node_kind = 'switch_statement' WHERE has_catch_all = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected switch with catch_all");
     for m in &qr.results {
         assert_eq!(
@@ -2637,7 +2580,7 @@ fn control_flow_catch_all_kind_absent_when_no_default() {
         &sid,
         "FIND symbols WHERE node_kind = 'switch_statement' WHERE has_catch_all = 'false'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected switch without catch_all");
     for m in &qr.results {
         assert!(
@@ -2658,7 +2601,7 @@ fn control_flow_for_style_traditional() {
         &sid,
         "FIND symbols WHERE node_kind = 'for_statement'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one for_statement"
@@ -2681,7 +2624,7 @@ fn control_flow_for_style_range() {
         &sid,
         "FIND symbols WHERE node_kind = 'for_range_loop'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one for_range_loop"
@@ -2706,7 +2649,7 @@ fn operator_category_increment() {
         &sid,
         "FIND symbols WHERE node_kind = 'update_expression'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected update expressions");
     for m in &qr.results {
         assert_eq!(field(m, "operator_category"), "increment");
@@ -2721,7 +2664,7 @@ fn operator_category_compound_arithmetic() {
         &sid,
         "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '+='",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected += compound assignments");
     for m in &qr.results {
         assert_eq!(field(m, "operator_category"), "arithmetic");
@@ -2736,7 +2679,7 @@ fn operator_category_compound_bitwise() {
         &sid,
         "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '&='",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected &= compound assignments");
     for m in &qr.results {
         assert_eq!(field(m, "operator_category"), "bitwise");
@@ -2751,7 +2694,7 @@ fn operator_category_shift() {
         &sid,
         "FIND symbols WHERE node_kind = 'shift_expression'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected shift expressions");
     for m in &qr.results {
         assert_eq!(field(m, "operator_category"), "bitwise");
@@ -2764,7 +2707,7 @@ fn operator_category_shift() {
 fn metrics_throw_count() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'throwingFunction'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "throwingFunction");
     assert_eq!(
         field(m, "throw_count"),
@@ -2783,7 +2726,7 @@ fn cast_safety_c_style_unsafe() {
         &sid,
         "FIND symbols WHERE node_kind = 'cast_expression'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected c-style cast");
     for m in &qr.results {
         assert_eq!(field(m, "cast_safety"), "unsafe");
@@ -2804,7 +2747,7 @@ fn cast_safety_static_cast_safe() {
         &sid,
         "FIND symbols WHERE cast_style = 'static_cast'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one static_cast symbol"
@@ -2827,7 +2770,7 @@ fn cast_safety_reinterpret_cast_unsafe() {
         &sid,
         "FIND symbols WHERE cast_style = 'reinterpret_cast'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one reinterpret_cast symbol"
@@ -2846,7 +2789,7 @@ fn cast_safety_reinterpret_cast_unsafe() {
 fn cast_safety_const_cast_moderate() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE cast_style = 'const_cast'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(
         !qr.results.is_empty(),
         "expected at least one const_cast symbol"
@@ -2870,7 +2813,7 @@ fn cast_safety_named_cast_has_target_type() {
         &sid,
         "FIND symbols WHERE fql_kind = 'cast' WHERE cast_style = 'static_cast'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected static_cast rows");
     for m in &qr.results {
         assert!(
@@ -2887,7 +2830,7 @@ fn cast_count_includes_named_casts() {
     // castPatterns() contains: 2 c_style + 1 reinterpret_cast + 1 const_cast
     //                          + 1 static_cast + 1 dynamic_cast  = 6 casts
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'castPatterns'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let func = qr
         .results
         .iter()
@@ -2908,7 +2851,7 @@ fn scope_binding_kind_variable() {
     let (mut e, sid, _d) = engine_enrichment_only();
     // static const int decNum = 42 → declaration with scope=file, binding_kind=variable
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'decNum'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "decNum");
     assert_eq!(field(m, "binding_kind"), "variable");
 }
@@ -2918,7 +2861,7 @@ fn scope_is_exported_static_not_exported() {
     let (mut e, sid, _d) = engine_enrichment_only();
     // static declarations should NOT be exported
     let r = exec(&mut e, &sid, "FIND symbols WHERE storage = 'static'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "expected static declarations");
     for m in &qr.results {
         assert!(
@@ -2936,7 +2879,7 @@ fn member_kind_method() {
     let (mut e, sid, _d) = engine_enrichment_only();
     // declaredMethod is a field_declaration with function_declarator (method prototype)
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'declaredMethod'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "declaredMethod");
     assert_eq!(field(m, "member_kind"), "method");
 }
@@ -2945,7 +2888,7 @@ fn member_kind_method() {
 fn member_kind_field() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'publicField'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "publicField");
     assert_eq!(field(m, "member_kind"), "field");
 }
@@ -2954,7 +2897,7 @@ fn member_kind_field() {
 fn member_owner_kind_class() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'publicField'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "publicField");
     assert_eq!(field(m, "owner_kind"), "class_specifier");
 }
@@ -2963,7 +2906,7 @@ fn member_owner_kind_class() {
 fn member_owner_kind_struct() {
     let (mut e, sid, _d) = engine_enrichment_only();
     let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'fieldA'");
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "fieldA");
     assert_eq!(field(m, "member_kind"), "field");
     assert_eq!(field(m, "owner_kind"), "struct_specifier");
@@ -2982,7 +2925,7 @@ fn parameter_declaration_has_fql_kind_variable() {
         &sid,
         "FIND symbols WHERE node_kind = 'parameter_declaration' WHERE name = 'a'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     assert!(!qr.results.is_empty(), "parameter 'a' should be indexed");
     let m = find_by_name(&qr.results, "a");
     assert_eq!(
@@ -3001,7 +2944,7 @@ fn parameter_fql_kind_variable_filter() {
         &sid,
         "FIND symbols WHERE fql_kind = 'variable' WHERE name = 'a'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     // Parameter 'a' should appear when filtering by fql_kind = 'variable'
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
     assert!(
@@ -3022,7 +2965,7 @@ fn decl_distance_no_locals() {
         &sid,
         "FIND symbols WHERE name = 'noLocals' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "noLocals");
     assert_eq!(m.fields.get("decl_distance").map(String::as_str), Some("0"));
     assert_eq!(
@@ -3043,7 +2986,7 @@ fn decl_distance_all_nearby() {
         &sid,
         "FIND symbols WHERE name = 'allNearby' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "allNearby");
     assert_eq!(m.fields.get("decl_distance").map(String::as_str), Some("0"));
     assert_eq!(
@@ -3060,7 +3003,7 @@ fn decl_distance_one_far_decl() {
         &sid,
         "FIND symbols WHERE name = 'oneFarDecl' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "oneFarDecl");
     let dist: usize = m
         .fields
@@ -3089,7 +3032,7 @@ fn decl_distance_two_far_decls() {
         &sid,
         "FIND symbols WHERE name = 'twoFarDecls' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "twoFarDecls");
     let dist: usize = m
         .fields
@@ -3118,7 +3061,7 @@ fn decl_distance_dead_store() {
         &sid,
         "FIND symbols WHERE name = 'deadStorePattern' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "deadStorePattern");
     assert_eq!(
         m.fields.get("has_unused_reassign").map(String::as_str),
@@ -3135,7 +3078,7 @@ fn decl_distance_compound_assign_not_dead_store() {
         &sid,
         "FIND symbols WHERE name = 'compoundAssignNotDeadStore' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "compoundAssignNotDeadStore");
     assert_eq!(
         m.fields.get("has_unused_reassign").map(String::as_str),
@@ -3152,7 +3095,7 @@ fn decl_distance_param_excluded() {
         &sid,
         "FIND symbols WHERE name = 'paramExcluded' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "paramExcluded");
     // Only 'loc' should be counted (1 far local), not 'param'
     let count: usize = m
@@ -3175,7 +3118,7 @@ fn decl_distance_where_filter() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE decl_distance > 0",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
     // Functions with far declarations should appear
     assert!(
@@ -3201,7 +3144,7 @@ fn escape_direct_addr() {
         &sid,
         "FIND symbols WHERE name = 'escapeDirectAddr' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "escapeDirectAddr");
     assert_eq!(m.fields.get("has_escape").map(String::as_str), Some("true"),);
     assert_eq!(
@@ -3242,7 +3185,7 @@ fn escape_array_decay() {
         &sid,
         "FIND symbols WHERE name = 'escapeArrayDecay' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "escapeArrayDecay");
     assert_eq!(m.fields.get("has_escape").map(String::as_str), Some("true"),);
     let tier: u8 = m
@@ -3280,7 +3223,7 @@ fn escape_indirect_alias() {
         &sid,
         "FIND symbols WHERE name = 'escapeIndirectAlias' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "escapeIndirectAlias");
     assert_eq!(m.fields.get("has_escape").map(String::as_str), Some("true"),);
     let tier: u8 = m
@@ -3318,7 +3261,7 @@ fn escape_static_safe() {
         &sid,
         "FIND symbols WHERE name = 'escapeStaticSafe' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "escapeStaticSafe");
     assert!(
         m.fields.get("has_escape").is_none(),
@@ -3335,7 +3278,7 @@ fn escape_no_escape_param() {
         &sid,
         "FIND symbols WHERE name = 'escapeNoEscapeParam' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "escapeNoEscapeParam");
     assert!(
         m.fields.get("has_escape").is_none(),
@@ -3351,7 +3294,7 @@ fn escape_no_locals() {
         &sid,
         "FIND symbols WHERE name = 'escapeNoLocals' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "escapeNoLocals");
     assert!(
         m.fields.get("has_escape").is_none(),
@@ -3367,7 +3310,7 @@ fn escape_ternary() {
         &sid,
         "FIND symbols WHERE name = 'escapeTernary' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "escapeTernary");
     assert_eq!(
         m.fields.get("has_escape").map(String::as_str),
@@ -3389,7 +3332,7 @@ fn escape_where_filter() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE has_escape = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
     // Should contain escaping functions
     assert!(
@@ -3418,7 +3361,7 @@ fn shadow_basic() {
         &sid,
         "FIND symbols WHERE name = 'shadowBasic' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "shadowBasic");
     assert_eq!(
         m.fields.get("has_shadow").map(String::as_str),
@@ -3449,7 +3392,7 @@ fn shadow_for_loop() {
         &sid,
         "FIND symbols WHERE name = 'shadowForLoop' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "shadowForLoop");
     assert_eq!(
         m.fields.get("has_shadow").map(String::as_str),
@@ -3475,7 +3418,7 @@ fn shadow_multiple() {
         &sid,
         "FIND symbols WHERE name = 'shadowMultiple' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "shadowMultiple");
     assert_eq!(m.fields.get("has_shadow").map(String::as_str), Some("true"),);
     let count: usize = m
@@ -3508,7 +3451,7 @@ fn shadow_none() {
         &sid,
         "FIND symbols WHERE name = 'shadowNone' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "shadowNone");
     assert!(
         m.fields.get("has_shadow").is_none(),
@@ -3525,7 +3468,7 @@ fn shadow_nested() {
         &sid,
         "FIND symbols WHERE name = 'shadowNested' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "shadowNested");
     assert_eq!(m.fields.get("has_shadow").map(String::as_str), Some("true"),);
     let vars = m
@@ -3547,7 +3490,7 @@ fn shadow_where_filter() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE has_shadow = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
     assert!(
         names.contains(&"shadowBasic"),
@@ -3574,7 +3517,7 @@ fn unused_param_one() {
         &sid,
         "FIND symbols WHERE name = 'unusedParamOne' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "unusedParamOne");
     assert_eq!(
         m.fields.get("has_unused_param").map(String::as_str),
@@ -3605,7 +3548,7 @@ fn unused_param_none() {
         &sid,
         "FIND symbols WHERE name = 'unusedParamNone' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "unusedParamNone");
     assert!(
         m.fields.get("has_unused_param").is_none(),
@@ -3622,7 +3565,7 @@ fn unused_param_all() {
         &sid,
         "FIND symbols WHERE name = 'unusedParamAll' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "unusedParamAll");
     assert_eq!(
         m.fields.get("has_unused_param").map(String::as_str),
@@ -3653,7 +3596,7 @@ fn unused_param_empty() {
         &sid,
         "FIND symbols WHERE name = 'unusedParamEmpty' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "unusedParamEmpty");
     assert!(
         m.fields.get("has_unused_param").is_none(),
@@ -3669,7 +3612,7 @@ fn unused_param_where_filter() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE has_unused_param = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
     assert!(
         names.contains(&"unusedParamOne"),
@@ -3696,7 +3639,7 @@ fn fallthrough_one() {
         &sid,
         "FIND symbols WHERE name = 'fallthroughOne' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "fallthroughOne");
     assert_eq!(
         m.fields.get("has_fallthrough").map(String::as_str),
@@ -3717,7 +3660,7 @@ fn fallthrough_none() {
         &sid,
         "FIND symbols WHERE name = 'fallthroughNone' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "fallthroughNone");
     assert!(
         m.fields.get("has_fallthrough").is_none(),
@@ -3734,7 +3677,7 @@ fn fallthrough_grouped() {
         &sid,
         "FIND symbols WHERE name = 'fallthroughGrouped' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "fallthroughGrouped");
     assert_eq!(
         m.fields.get("has_fallthrough").map(String::as_str),
@@ -3756,7 +3699,7 @@ fn fallthrough_no_switch() {
         &sid,
         "FIND symbols WHERE name = 'fallthroughNoSwitch' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "fallthroughNoSwitch");
     assert!(
         m.fields.get("has_fallthrough").is_none(),
@@ -3772,7 +3715,7 @@ fn fallthrough_where_filter() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE has_fallthrough = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
     assert!(
         names.contains(&"fallthroughOne"),
@@ -3793,7 +3736,7 @@ fn fallthrough_annotated_zephyr_style() {
         &sid,
         "FIND symbols WHERE name = 'fallthroughAnnotated' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "fallthroughAnnotated");
     assert!(
         m.fields.get("has_fallthrough").is_none(),
@@ -3811,7 +3754,7 @@ fn fallthrough_annotated_cpp17_attr() {
         &sid,
         "FIND symbols WHERE name = 'fallthroughAttr' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "fallthroughAttr");
     assert!(
         m.fields.get("has_fallthrough").is_none(),
@@ -3830,7 +3773,7 @@ fn recursion_factorial() {
         &sid,
         "FIND symbols WHERE name = 'recursiveFactorial' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "recursiveFactorial");
     assert_eq!(
         m.fields.get("is_recursive").map(String::as_str),
@@ -3851,7 +3794,7 @@ fn recursion_fib() {
         &sid,
         "FIND symbols WHERE name = 'recursiveFib' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "recursiveFib");
     assert_eq!(
         m.fields.get("is_recursive").map(String::as_str),
@@ -3872,7 +3815,7 @@ fn recursion_not_recursive() {
         &sid,
         "FIND symbols WHERE name = 'notRecursive' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "notRecursive");
     assert!(
         !m.fields.contains_key("is_recursive"),
@@ -3892,7 +3835,7 @@ fn recursion_called_by_many() {
         &sid,
         "FIND symbols WHERE name = 'calledByMany' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "calledByMany");
     assert!(
         !m.fields.contains_key("is_recursive"),
@@ -3914,7 +3857,7 @@ fn recursion_calls_other() {
         &sid,
         "FIND symbols WHERE name = 'callsOther' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "callsOther");
     assert!(
         !m.fields.contains_key("is_recursive"),
@@ -3930,7 +3873,7 @@ fn recursion_where_filter() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE is_recursive = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
     assert!(
         names.contains(&"recursiveFactorial"),
@@ -3960,7 +3903,7 @@ fn todo_single() {
         &sid,
         "FIND symbols WHERE name = 'todoSingle' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "todoSingle");
     assert_eq!(m.fields.get("has_todo").map(String::as_str), Some("true"),);
     assert_eq!(m.fields.get("todo_count").map(String::as_str), Some("1"),);
@@ -3975,7 +3918,7 @@ fn todo_multiple_markers() {
         &sid,
         "FIND symbols WHERE name = 'todoMultiple' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "todoMultiple");
     assert_eq!(m.fields.get("has_todo").map(String::as_str), Some("true"),);
     assert_eq!(
@@ -3998,7 +3941,7 @@ fn todo_none() {
         &sid,
         "FIND symbols WHERE name = 'todoNone' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "todoNone");
     assert!(
         !m.fields.contains_key("has_todo"),
@@ -4014,7 +3957,7 @@ fn todo_repeated_same_marker() {
         &sid,
         "FIND symbols WHERE name = 'todoRepeated' WHERE fql_kind = 'function'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let m = find_by_name(&qr.results, "todoRepeated");
     assert_eq!(m.fields.get("has_todo").map(String::as_str), Some("true"),);
     assert_eq!(
@@ -4036,7 +3979,7 @@ fn todo_where_filter() {
         &sid,
         "FIND symbols WHERE fql_kind = 'function' WHERE has_todo = 'true'",
     );
-    let qr = as_query(&r);
+    let qr = common::as_query(&r);
     let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
     assert!(
         names.contains(&"todoSingle"),
@@ -4100,7 +4043,7 @@ int fact(int n) {
     .expect("write z_recursive.cpp");
 
     let data_dir = dir.path().join("data");
-    let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]));
+    let registry = common::make_registry();
     let mut engine = ForgeQLEngine::new(data_dir, registry).expect("engine");
     let session_id = engine
         .register_local_session(dir.path())
@@ -4118,7 +4061,7 @@ fn fetch_cap_limit_enrichment_only_no_false_zero() {
 
     // No LIMIT — must find `fact` as recursive.
     let r_all = exec(&mut e, &sid, "FIND symbols WHERE is_recursive = 'true'");
-    let qr_all = as_query(&r_all);
+    let qr_all = common::as_query(&r_all);
     let names_all: Vec<&str> = qr_all.results.iter().map(|r| r.name.as_str()).collect();
     assert!(
         names_all.contains(&"fact"),
@@ -4131,7 +4074,7 @@ fn fetch_cap_limit_enrichment_only_no_false_zero() {
         &sid,
         "FIND symbols WHERE is_recursive = 'true' LIMIT 1",
     );
-    let qr_lim = as_query(&r_lim);
+    let qr_lim = common::as_query(&r_lim);
     assert_eq!(
         qr_lim.results.len(),
         1,

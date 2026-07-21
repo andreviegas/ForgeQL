@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.8] — 2026-07-21 — test: migrate the enrichment-integration suite onto the shared harness
+
+### Changed — the enrichment-integration suite now boots sessions through `tests/common`
+
+The `enrichment_integration` suite dropped its private `make_registry`
+(constructed inline), `fixtures_dir`, and local `as_query` copies in favour of
+the shared `tests/common` harness. Its three engine builders
+(`engine_with_session`, `engine_enrichment_only`, `engine_bug2b_only`) now
+delegate to `common::legacy_session` — this suite stays on the legacy backend
+because columnar local sessions do not yet carry enrichment columns, and that
+constraint is now documented on the helpers block. The `as_query` extractor
+routes to the shared harness; the enrichment-specific assertion helpers
+(`find_by_name`, `names`, `field`, `field_opt`) stay local. The `(engine,
+session_id, TempDir)` tuple idiom is preserved via `TestSession::into_parts`,
+leaving every test body unchanged. Pure motion: all 204 tests and their
+assertions are unchanged.
+
 ## [0.139.7] — 2026-07-21 — test: migrate the syntax-coverage suite onto the shared harness
 
 ### Changed — the syntax-coverage suite now boots sessions through `tests/common`
