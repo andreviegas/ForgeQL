@@ -61,7 +61,7 @@ fn engine_with_git_session() -> common::TestSession {
     repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
         .unwrap();
 
-    common::legacy_session_in(dir)
+    common::legacy_session_in_real(dir)
 }
 
 // -----------------------------------------------------------------------
@@ -74,7 +74,7 @@ fn engine_with_git_session() -> common::TestSession {
 #[test]
 fn checkpoint_survives_restart() {
     let dir = tempdir().expect("tempdir");
-    let reg = common::make_registry();
+    let reg = common::make_registry_real();
 
     // Build a session with two checkpoints in memory.
     let mut session_a = Session::new(
@@ -136,7 +136,7 @@ fn checkpoint_survives_restart() {
 #[test]
 fn stale_checkpoint_file_is_discarded() {
     let dir = tempdir().expect("tempdir");
-    let reg = common::make_registry();
+    let reg = common::make_registry_real();
 
     let mut session_a = Session::new(
         "sid",

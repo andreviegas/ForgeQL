@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.12] — 2026-07-21 — test: index the checkpoint-persist and commit-gate suites with the real language plugins
+
+### Changed — the two git-based structural suites index through the real plugins
+
+The `checkpoint_persist` and `commit_gate` suites flipped their engine
+construction from the inline-clone `make_registry`/`legacy_session_in` to the
+real-plugin `make_registry_real`/`legacy_session_in_real`. Both are
+structural suites (checkpoint files and the pre-commit gate) that index a C++
+fixture only as scaffolding, so they now build that scaffolding with the same
+language plugins the deployed engine ships. The inline-clone constructors stay
+for the suites not yet flipped. No drift surfaced for either suite.
+
 ## [0.139.11] — 2026-07-21 — test: index the multilang-resolve suite with the real language plugins
 
 ### Changed — cross-language resolution now runs against the real C++ and Rust plugins
