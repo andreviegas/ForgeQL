@@ -192,6 +192,25 @@ pub fn legacy_session_in(dir: tempfile::TempDir) -> TestSession {
     TestSession { engine, sid, dir }
 }
 
+/// Real-plugin variant of [`legacy_session`] — indexes with the production
+/// `forgeql-lang-*` plugins via [`make_registry_real`] instead of the inline
+/// clones. The two coexist while suites move over one at a time.
+pub fn legacy_session_real(fixtures: &[&str]) -> TestSession {
+    let dir = tempdir().expect("tempdir");
+    copy_fixtures(dir.path(), fixtures);
+    legacy_session_in_real(dir)
+}
+
+/// Real-plugin variant of [`legacy_session_in`].
+pub fn legacy_session_in_real(dir: tempfile::TempDir) -> TestSession {
+    let data_dir = dir.path().join("data");
+    let mut engine = ForgeQLEngine::new(data_dir, make_registry_real()).expect("engine");
+    let sid = engine
+        .register_local_session(dir.path())
+        .expect("register session");
+    TestSession { engine, sid, dir }
+}
+
 /// `setup()` on the columnar backend — the production read path. Mirrors a real
 /// `USE`: builds `segments`/`overlays` dirs under the temp workspace and installs
 /// columnar via `register_local_session_with_columnar`.

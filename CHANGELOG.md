@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.11] — 2026-07-21 — test: index the multilang-resolve suite with the real language plugins
+
+### Changed — cross-language resolution now runs against the real C++ and Rust plugins
+
+The shared `tests/common` harness gained real-plugin session constructors —
+`legacy_session_real` and `legacy_session_in_real` — that mirror
+`legacy_session`/`legacy_session_in` but index through `make_registry_real()`.
+The `multilang_resolve_integration` suite, which checks ambiguous-symbol
+resolution across a C++ and a Rust canonical fixture, flipped to them, so its
+disambiguation assertions run against the same C++ and Rust plugins the deployed
+engine ships. The inline-clone constructors stay for the suites not yet flipped.
+
 ## [0.139.10] — 2026-07-21 — test: index the reconnect-dirty suite with the real language plugins
 
 ### Changed — the shared harness gains a real-plugin registry, and reconnect_dirty uses it
