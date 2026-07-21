@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.10] — 2026-07-21 — test: index the reconnect-dirty suite with the real language plugins
+
+### Changed — the shared harness gains a real-plugin registry, and reconnect_dirty uses it
+
+The shared `tests/common` harness gained `make_registry_real()`, which builds
+its registry from the production `CppLanguage`, `RustLanguage`, and
+`PythonLanguage` plugins (plus the text languages) rather than the in-crate
+inline clones the integration suites have indexed against until now. The
+`reconnect_dirty` suite — which constructs its engines directly — now indexes
+through `make_registry_real()`, so its git-reindex assertions run against the
+same language implementations the deployed engine ships. The inline
+`make_registry()` stays for the suites not yet flipped, so they can move over
+one at a time.
+
 ## [0.139.9] — 2026-07-21 — test: migrate the reconnect-dirty and change-integration suites onto the shared harness
 
 ### Changed — two more suites drop their private registry/fixtures copies

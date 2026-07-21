@@ -43,6 +43,19 @@ pub fn make_registry() -> Arc<LanguageRegistry> {
     Arc::new(LanguageRegistry::new(langs))
 }
 
+/// The real production language plugins — `CppLanguage`/`RustLanguage`/
+/// `PythonLanguage` from the `forgeql-lang-*` crates, plus `text_languages()`.
+/// Suites migrate from [`make_registry`] (inline clones) to this one
+/// at a time so drift surfaces per suite; the inline registry stays until every
+/// suite has flipped.
+pub fn make_registry_real() -> Arc<LanguageRegistry> {
+    let mut langs = forgeql_lang_text::text_languages();
+    langs.push(Arc::new(forgeql_lang_cpp::CppLanguage));
+    langs.push(Arc::new(forgeql_lang_rust::RustLanguage));
+    langs.push(Arc::new(forgeql_lang_python::PythonLanguage));
+    Arc::new(LanguageRegistry::new(langs))
+}
+
 /// The repository `tests/fixtures` directory. Fixture arguments to the session
 /// constructors are paths relative to here (e.g. `"canonical/canonical.cpp"`);
 /// each is copied into the temp workspace under its file name.

@@ -98,7 +98,8 @@ fn engine_with_source_session() -> (
 
     let data_dir = tempdir().expect("data tempdir");
     let mut engine =
-        ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry()).expect("engine");
+        ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry_real())
+            .expect("engine");
 
     // CREATE SOURCE — clones the non-bare source repo into data_dir/mysrc.git.
     let create_fql = format!("CREATE SOURCE 'mysrc' FROM '{}'", src_dir.path().display());
@@ -186,8 +187,9 @@ fn reconnect_reindexes_dirty_files() {
     drop(engine);
 
     // New engine with same data_dir — auto-discovers the bare repo.
-    let mut new_engine = ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry())
-        .expect("new engine");
+    let mut new_engine =
+        ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry_real())
+            .expect("new engine");
 
     // Reconnect: USE calls use_source → resume_index → FT7 dirty reindex.
     let use_fql = format!("USE mysrc.{branch} AS 'sess'");
@@ -215,8 +217,9 @@ fn reconnect_does_not_reindex_clean_files() {
     // No changes — drop engine to simulate a clean restart.
     drop(engine);
 
-    let mut new_engine = ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry())
-        .expect("new engine");
+    let mut new_engine =
+        ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry_real())
+            .expect("new engine");
 
     // Reconnect — git diff HEAD must be empty; index is restored from cache.
     let use_fql = format!("USE mysrc.{branch} AS 'sess'");
@@ -259,8 +262,9 @@ fn reconnect_after_begin_does_not_double_index() {
     // --- Simulate crash. ---
     drop(engine);
 
-    let mut new_engine = ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry())
-        .expect("new engine");
+    let mut new_engine =
+        ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry_real())
+            .expect("new engine");
 
     // Reconnect: the file was modified AFTER the checkpoint commit, so it IS
     // dirty relative to HEAD.  FT7 will reindex it.
