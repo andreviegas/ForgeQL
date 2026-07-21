@@ -232,6 +232,26 @@ pub fn columnar_session_in(dir: tempfile::TempDir) -> TestSession {
     TestSession { engine, sid, dir }
 }
 
+/// Real-plugin variant of [`columnar_session`] — indexes with the production
+/// `forgeql-lang-*` plugins via [`make_registry_real`].
+pub fn columnar_session_real(fixtures: &[&str]) -> TestSession {
+    let dir = tempdir().expect("tempdir");
+    copy_fixtures(dir.path(), fixtures);
+    columnar_session_in_real(dir)
+}
+
+/// Real-plugin variant of [`columnar_session_in`].
+pub fn columnar_session_in_real(dir: tempfile::TempDir) -> TestSession {
+    let data_dir = dir.path().join("data");
+    let mut engine = ForgeQLEngine::new(data_dir, make_registry_real()).expect("engine");
+    let segments_dir = dir.path().join("segments");
+    let overlays_dir = dir.path().join("overlays");
+    let sid = engine
+        .register_local_session_with_columnar(dir.path(), &segments_dir, &overlays_dir)
+        .expect("register columnar session");
+    TestSession { engine, sid, dir }
+}
+
 // -----------------------------------------------------------------------
 // Result extractors — pull a typed result out of a `ForgeQLResult` or panic.
 // -----------------------------------------------------------------------

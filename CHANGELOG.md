@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.13] — 2026-07-21 — test: index the engine-integration and syntax-coverage suites with the real language plugins
+
+### Changed — the two large columnar C++ suites index through the real plugins
+
+The `engine_integration` and `syntax_coverage` suites flipped their columnar
+session construction from the inline-clone `make_registry`/`columnar_session`/
+`columnar_session_in` (and, in `engine_integration`, the legacy-backend
+divergence helper) to the real-plugin `make_registry_real`/
+`columnar_session_real`/`columnar_session_in_real`/`legacy_session_real`. Both
+exercise the C++ plugin heavily — the full FIND/SHOW/CHANGE command surface and
+every clause — so they now run against the same C++ plugin the deployed engine
+ships. The shared harness gained `columnar_session_real` and
+`columnar_session_in_real` to carry this. The inline-clone constructors stay for
+the suites not yet flipped. No drift surfaced for either suite.
+
 ## [0.139.12] — 2026-07-21 — test: index the checkpoint-persist and commit-gate suites with the real language plugins
 
 ### Changed — the two git-based structural suites index through the real plugins
