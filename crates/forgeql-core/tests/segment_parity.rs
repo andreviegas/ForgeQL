@@ -33,10 +33,12 @@ use std::path::{Path, PathBuf};
 
 use forgeql_core::ast::enrich::default_enrichers;
 use forgeql_core::ast::index::{IndexContext, SymbolTable, index_file};
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageSupport, RustLanguageInline};
+use forgeql_core::ast::lang::LanguageSupport;
 use forgeql_core::ir::Clauses;
 use forgeql_core::result::SymbolMatch;
 use forgeql_core::storage::columnar::{SegmentBuilder, SegmentReader, SymbolRow};
+use forgeql_lang_cpp::CppLanguage;
+use forgeql_lang_rust::RustLanguage;
 use tempfile::TempDir;
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -274,12 +276,12 @@ fn run_parity(lang: &dyn LanguageSupport, filename: &str) {
 
 #[test]
 fn parity_cpp_canonical() {
-    run_parity(&CppLanguageInline, "canonical.cpp");
+    run_parity(&CppLanguage, "canonical.cpp");
 }
 
 #[test]
 fn parity_rust_canonical() {
-    run_parity(&RustLanguageInline, "canonical.rs");
+    run_parity(&RustLanguage, "canonical.rs");
 }
 
 /// WHERE fql_kind = 'function' produces the same symbol set in both backends.
@@ -287,7 +289,7 @@ fn parity_rust_canonical() {
 fn parity_filter_fql_kind_function_cpp() {
     use forgeql_core::ir::{CompareOp, Predicate, PredicateValue};
 
-    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let table = index_canonical(&CppLanguage, "canonical.cpp");
     let (_tmp, seg_dir) = build_segment_from_table(&table);
     let reader = SegmentReader::open(&seg_dir).expect("open");
 
@@ -330,7 +332,7 @@ fn parity_filter_fql_kind_function_cpp() {
 fn parity_order_by_line_asc_cpp() {
     use forgeql_core::ir::{OrderBy, SortDirection};
 
-    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let table = index_canonical(&CppLanguage, "canonical.cpp");
     let (_tmp, seg_dir) = build_segment_from_table(&table);
     let reader = SegmentReader::open(&seg_dir).expect("open");
 
@@ -355,7 +357,7 @@ fn parity_order_by_line_asc_cpp() {
 fn parity_order_by_line_desc_cpp() {
     use forgeql_core::ir::{OrderBy, SortDirection};
 
-    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let table = index_canonical(&CppLanguage, "canonical.cpp");
     let (_tmp, seg_dir) = build_segment_from_table(&table);
     let reader = SegmentReader::open(&seg_dir).expect("open");
 
@@ -396,7 +398,7 @@ fn parity_order_by_line_desc_cpp() {
 fn parity_like_name_cpp() {
     use forgeql_core::ir::{CompareOp, Predicate, PredicateValue};
 
-    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let table = index_canonical(&CppLanguage, "canonical.cpp");
     let (_tmp, seg_dir) = build_segment_from_table(&table);
     let reader = SegmentReader::open(&seg_dir).expect("open");
 
@@ -434,7 +436,7 @@ fn parity_like_name_cpp() {
 /// (Gap 4 fix).
 #[test]
 fn parity_byte_ranges_cpp() {
-    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let table = index_canonical(&CppLanguage, "canonical.cpp");
     let (_tmp, seg_dir) = build_segment_from_table(&table);
     let reader = SegmentReader::open(&seg_dir).expect("open");
 
@@ -478,7 +480,7 @@ fn parity_byte_ranges_cpp() {
 /// `SegmentReader::lookup_name` returns the correct row IDs for a known symbol.
 #[test]
 fn parity_lookup_name_cpp() {
-    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let table = index_canonical(&CppLanguage, "canonical.cpp");
     let (_tmp, seg_dir) = build_segment_from_table(&table);
     let reader = SegmentReader::open(&seg_dir).expect("open");
 
@@ -495,7 +497,7 @@ fn parity_lookup_name_cpp() {
 /// `extra_field_str` on the same row IDs returned by `lookup_name`.
 #[test]
 fn parity_enrichment_fields_cpp() {
-    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let table = index_canonical(&CppLanguage, "canonical.cpp");
     let (_tmp, seg_dir) = build_segment_from_table(&table);
     let reader = SegmentReader::open(&seg_dir).expect("open");
 
@@ -548,7 +550,7 @@ fn memory_budget_fql_kind_prefilter_cpp() {
     use forgeql_core::ir::{CompareOp, Predicate, PredicateValue};
 
     // ── build segment ──────────────────────────────────────────────────────
-    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let table = index_canonical(&CppLanguage, "canonical.cpp");
     let (_tmp, seg_dir) = build_segment_from_table(&table);
 
     // Open the reader (this loads postings + FST into memory; all mmap

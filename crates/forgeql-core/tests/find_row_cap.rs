@@ -19,13 +19,14 @@ use std::sync::Arc;
 
 use forgeql_core::ast::enrich::default_enrichers;
 use forgeql_core::ast::index::{IndexContext, SymbolTable, index_file};
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry, LanguageSupport};
+use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
 use forgeql_core::ir::Clauses;
 use forgeql_core::storage::StorageEngine;
 use forgeql_core::storage::columnar::overlay::Overlay;
 use forgeql_core::storage::columnar::{
     ColumnarStorage, OverlayBuilder, SegmentBuilder, SegmentReader, SymbolRow,
 };
+use forgeql_lang_cpp::CppLanguage;
 use tempfile::TempDir;
 
 fn fixtures_dir() -> PathBuf {
@@ -53,7 +54,7 @@ fn seg_path(
 /// Index `canonical.cpp` and build a single-segment `ColumnarStorage`
 /// around it — a miniature of the `overlay_parity` harness.
 fn single_segment_cpp_storage() -> (TempDir, ColumnarStorage) {
-    let lang = CppLanguageInline;
+    let lang = CppLanguage;
     let src = fixtures_dir().join("canonical.cpp");
     assert!(src.exists(), "fixture missing: {}", src.display());
 

@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.15] — 2026-07-22 — test: index the direct-index suites with the real language plugins
+
+### Changed — three low-level index suites drop the inline clones
+
+The `find_row_cap`, `lang_coverage_integration`, and `segment_parity` suites
+drive the index and columnar-segment layers directly (via `index_file` /
+`index_canonical`) rather than through a session. They referenced the inline
+clones by type name; each now imports `CppLanguage` from `forgeql-lang-cpp` and
+`RustLanguage` from `forgeql-lang-rust` and indexes the canonical fixtures with
+those production plugins. `segment_parity` compares legacy versus columnar
+segment output — both A/B sides use the same real plugin, so the parity holds.
+No drift surfaced for any of the three.
+
 ## [0.139.14] — 2026-07-22 — test: index the enrichment-integration suite with the real language plugins
 
 ### Changed — the enrichment field suite indexes through the real plugins

@@ -10,7 +10,9 @@ use std::path::PathBuf;
 
 use forgeql_core::ast::enrich::default_enrichers;
 use forgeql_core::ast::index::{IndexContext, SymbolTable, index_file};
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageSupport, RustLanguageInline};
+use forgeql_core::ast::lang::LanguageSupport;
+use forgeql_lang_cpp::CppLanguage;
+use forgeql_lang_rust::RustLanguage;
 
 // ---------------------------------------------------------------------------
 // Canonical line contract (see tests/fixtures/canonical/CONTRACT.md)
@@ -119,19 +121,19 @@ fn assert_universal_defs(lang_name: &str, table: &SymbolTable) {
 
 #[test]
 fn cpp_canonical_universal_defs() {
-    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let table = index_canonical(&CppLanguage, "canonical.cpp");
     assert_universal_defs("cpp", &table);
 }
 
 #[test]
 fn rust_canonical_universal_defs() {
-    let table = index_canonical(&RustLanguageInline, "canonical.rs");
+    let table = index_canonical(&RustLanguage, "canonical.rs");
     assert_universal_defs("rust", &table);
 }
 
 #[test]
 fn cpp_bar_has_doc() {
-    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let table = index_canonical(&CppLanguage, "canonical.cpp");
     let bar = table.find_def("bar").expect("bar not found");
     assert_eq!(
         table.field_str(&bar.fields, "has_doc"),
@@ -142,7 +144,7 @@ fn cpp_bar_has_doc() {
 
 #[test]
 fn rust_bar_has_doc() {
-    let table = index_canonical(&RustLanguageInline, "canonical.rs");
+    let table = index_canonical(&RustLanguage, "canonical.rs");
     let bar = table.find_def("bar").expect("bar not found");
     assert_eq!(
         table.field_str(&bar.fields, "has_doc"),
@@ -153,7 +155,7 @@ fn rust_bar_has_doc() {
 
 #[test]
 fn cpp_language_field_populated() {
-    let table = index_canonical(&CppLanguageInline, "canonical.cpp");
+    let table = index_canonical(&CppLanguage, "canonical.cpp");
     for row in &table.rows {
         assert_eq!(
             table.language_of(row),
@@ -166,7 +168,7 @@ fn cpp_language_field_populated() {
 
 #[test]
 fn rust_language_field_populated() {
-    let table = index_canonical(&RustLanguageInline, "canonical.rs");
+    let table = index_canonical(&RustLanguage, "canonical.rs");
     for row in &table.rows {
         assert_eq!(
             table.language_of(row),
@@ -199,14 +201,14 @@ fn walk_for_macros(
 
 #[test]
 fn rust_macro_invocation_indexed_as_macro_call() {
-    let table = index_canonical(&RustLanguageInline, "canonical.rs");
+    let table = index_canonical(&RustLanguage, "canonical.rs");
 
     // Debug: parse the file and walk looking for macro_invocation nodes
     let path = fixtures_dir().join("canonical.rs");
     let source = std::fs::read(&path).expect("read fixture");
     let mut parser = tree_sitter::Parser::new();
     parser
-        .set_language(&RustLanguageInline.tree_sitter_language())
+        .set_language(&RustLanguage.tree_sitter_language())
         .expect("set_language");
     let tree = parser.parse(&source, None).expect("parse");
 
@@ -244,7 +246,7 @@ fn rust_cfg_attribute_ast_structure() {
     let source = b"#[cfg(test)]\nfn guarded_fn() {}\n";
     let mut parser = tree_sitter::Parser::new();
     parser
-        .set_language(&RustLanguageInline.tree_sitter_language())
+        .set_language(&RustLanguage.tree_sitter_language())
         .expect("set_language");
     let tree = parser.parse(&source[..], None).expect("parse");
     let root = tree.root_node();
@@ -290,7 +292,7 @@ fn rust_cfg_attribute_guard_indexed() {
     let path = dir.join("test_guard.rs");
     std::fs::write(&path, source).unwrap();
 
-    let lang = RustLanguageInline;
+    let lang = RustLanguage;
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&lang.tree_sitter_language())
