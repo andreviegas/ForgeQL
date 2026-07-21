@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.9] — 2026-07-21 — test: migrate the reconnect-dirty and change-integration suites onto the shared harness
+
+### Changed — two more suites drop their private registry/fixtures copies
+
+The `reconnect_dirty` and `change_integration` suites dropped their private
+`make_registry` and `fixtures_dir` copies in favour of the shared `tests/common`
+harness. `reconnect_dirty` routes its four inline engine constructions to
+`common::make_registry()` and its source-repo fixture copy to
+`common::fixtures_dir()`, keeping its bespoke git-repo and branch helpers local.
+`change_integration` builds a `Workspace` (not a session), so it keeps
+`setup_workspace` but delegates the fixture copy to `common::copy_fixtures`.
+Pure motion: all three reconnect-dirty tests and all eight change-integration
+tests are unchanged.
+
 ## [0.139.8] — 2026-07-21 — test: migrate the enrichment-integration suite onto the shared harness
 
 ### Changed — the enrichment-integration suite now boots sessions through `tests/common`

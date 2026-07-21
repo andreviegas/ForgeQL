@@ -7,37 +7,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, unused_results)]
 
 use std::fs;
-use std::path::PathBuf;
 
 use forgeql_core::{ir::ChangeTarget, transforms::change::ChangeFiles, workspace::Workspace};
 use tempfile::tempdir;
+
+mod common;
 
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
 
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("tests/fixtures")
-}
-
 /// Copy fixtures into a temp dir and return the workspace.
 fn setup_workspace() -> (tempfile::TempDir, Workspace) {
     let dir = tempdir().expect("tempdir");
-    let src = fixtures_dir();
-
-    fs::copy(
-        src.join("motor_control.h"),
-        dir.path().join("motor_control.h"),
-    )
-    .expect("copy .h");
-    fs::copy(
-        src.join("motor_control.cpp"),
-        dir.path().join("motor_control.cpp"),
-    )
-    .expect("copy .cpp");
-
+    common::copy_fixtures(dir.path(), &["motor_control.h", "motor_control.cpp"]);
     let ws = Workspace::new(dir.path()).expect("new workspace");
     (dir, ws)
 }

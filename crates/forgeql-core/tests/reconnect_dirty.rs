@@ -16,9 +16,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry};
 use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
@@ -26,19 +24,11 @@ use forgeql_core::result::{ForgeQLResult, QueryResult};
 use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
+mod common;
+
 // -----------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------
-
-fn make_registry() -> Arc<LanguageRegistry> {
-    Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguageInline)]))
-}
-
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("tests/fixtures")
-}
 
 /// Execute a FQL statement, return the result.
 fn exec(engine: &mut ForgeQLEngine, session_id: Option<&str>, fql: &str) -> ForgeQLResult {
@@ -60,7 +50,7 @@ fn make_source_repo(dir: &Path) -> git2::Repository {
     cfg.set_str("user.email", "test@test.com").unwrap();
     drop(cfg);
 
-    let src = fixtures_dir();
+    let src = common::fixtures_dir();
     fs::copy(src.join("motor_control.h"), dir.join("motor_control.h")).expect("copy .h");
     fs::copy(src.join("motor_control.cpp"), dir.join("motor_control.cpp")).expect("copy .cpp");
 
@@ -108,7 +98,7 @@ fn engine_with_source_session() -> (
 
     let data_dir = tempdir().expect("data tempdir");
     let mut engine =
-        ForgeQLEngine::new(data_dir.path().to_path_buf(), make_registry()).expect("engine");
+        ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry()).expect("engine");
 
     // CREATE SOURCE — clones the non-bare source repo into data_dir/mysrc.git.
     let create_fql = format!("CREATE SOURCE 'mysrc' FROM '{}'", src_dir.path().display());
@@ -196,8 +186,8 @@ fn reconnect_reindexes_dirty_files() {
     drop(engine);
 
     // New engine with same data_dir — auto-discovers the bare repo.
-    let mut new_engine =
-        ForgeQLEngine::new(data_dir.path().to_path_buf(), make_registry()).expect("new engine");
+    let mut new_engine = ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry())
+        .expect("new engine");
 
     // Reconnect: USE calls use_source → resume_index → FT7 dirty reindex.
     let use_fql = format!("USE mysrc.{branch} AS 'sess'");
@@ -225,8 +215,8 @@ fn reconnect_does_not_reindex_clean_files() {
     // No changes — drop engine to simulate a clean restart.
     drop(engine);
 
-    let mut new_engine =
-        ForgeQLEngine::new(data_dir.path().to_path_buf(), make_registry()).expect("new engine");
+    let mut new_engine = ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry())
+        .expect("new engine");
 
     // Reconnect — git diff HEAD must be empty; index is restored from cache.
     let use_fql = format!("USE mysrc.{branch} AS 'sess'");
@@ -269,8 +259,8 @@ fn reconnect_after_begin_does_not_double_index() {
     // --- Simulate crash. ---
     drop(engine);
 
-    let mut new_engine =
-        ForgeQLEngine::new(data_dir.path().to_path_buf(), make_registry()).expect("new engine");
+    let mut new_engine = ForgeQLEngine::new(data_dir.path().to_path_buf(), common::make_registry())
+        .expect("new engine");
 
     // Reconnect: the file was modified AFTER the checkpoint commit, so it IS
     // dirty relative to HEAD.  FT7 will reindex it.
