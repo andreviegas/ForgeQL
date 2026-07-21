@@ -64,13 +64,13 @@ mod common;
 //
 // This suite stays on the LEGACY backend: columnar local sessions do not carry
 // enrichment columns yet (the inline segment emit skips the enrichment
-// post-pass), so every session here is a `common::legacy_session`.
+// post-pass), so every session here is a `common::legacy_session_real`.
 // -----------------------------------------------------------------------
 
 /// Temp workspace with the `motor_control` + `enrichment_patterns` fixtures on
 /// the legacy backend. Returns `(engine, session_id, TempDir)`.
 fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    common::legacy_session(&[
+    common::legacy_session_real(&[
         "motor_control.h",
         "motor_control.cpp",
         "enrichment_patterns.cpp",
@@ -80,14 +80,14 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
 
 /// Temp workspace with ONLY `enrichment_patterns.cpp`.
 fn engine_enrichment_only() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    common::legacy_session(&["enrichment_patterns.cpp"]).into_parts()
+    common::legacy_session_real(&["enrichment_patterns.cpp"]).into_parts()
 }
 
 /// Engine that indexes only `enrichment_bug2b.c` — the Bug-2b regression
 /// fixture containing `module_param` / `MODULE_PARM_DESC` calls that trigger
 /// tree-sitter ERROR-recovery phantom `number_literal` nodes.
 fn engine_bug2b_only() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    common::legacy_session(&["enrichment_bug2b.c"]).into_parts()
+    common::legacy_session_real(&["enrichment_bug2b.c"]).into_parts()
 }
 
 fn exec(engine: &mut ForgeQLEngine, sid: &str, fql: &str) -> ForgeQLResult {
@@ -4043,7 +4043,7 @@ int fact(int n) {
     .expect("write z_recursive.cpp");
 
     let data_dir = dir.path().join("data");
-    let registry = common::make_registry();
+    let registry = common::make_registry_real();
     let mut engine = ForgeQLEngine::new(data_dir, registry).expect("engine");
     let session_id = engine
         .register_local_session(dir.path())

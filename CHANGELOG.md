@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.14] — 2026-07-22 — test: index the enrichment-integration suite with the real language plugins
+
+### Changed — the enrichment field suite indexes through the real plugins
+
+The `enrichment_integration` suite flipped its three legacy-backend engine
+builders and its one inline registry construction from the inline-clone
+`make_registry`/`legacy_session` to the real-plugin
+`make_registry_real`/`legacy_session_real`. This suite asserts on every
+enrichment field (naming, comments, numbers, control flow, operators, metrics,
+casts, redundancy, scope, members, shadow, unused params, fallthrough,
+recursion, todo) across a C++ fixture, so it is the most exacting check that the
+inline clone and the real `CppLanguage` agree. They do: all 204 tests pass
+unchanged against the real plugin — no field drifted. The suite stays on the
+legacy backend because columnar local sessions do not yet carry enrichment
+columns.
+
 ## [0.139.13] — 2026-07-21 — test: index the engine-integration and syntax-coverage suites with the real language plugins
 
 ### Changed — the two large columnar C++ suites index through the real plugins
