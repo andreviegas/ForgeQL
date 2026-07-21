@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.17] — 2026-07-22 — test: index the benches and the sms suite with the real language plugins
+
+### Changed — the columnar benches and the sms suite drop the inline clones
+
+The `columnar_filter` and `columnar_range` benches and the `sms_integration`
+suite built their registries from the inline clones. Each now imports
+`CppLanguage` from `forgeql-lang-cpp` and `RustLanguage` from `forgeql-lang-rust`
+and indexes through those production plugins. The sms suite keeps its bespoke
+deterministic-PRNG harness untouched — only its registry construction moved to
+the real plugins. With this, the only remaining references to the inline
+`CppLanguageInline`/`RustLanguageInline` clones are the deliberately retained
+inline `make_registry` in `tests/common` and the in-crate `#[cfg(test)]` unit
+tests, which cannot use the real plugins directly. No drift surfaced.
+
 ## [0.139.16] — 2026-07-22 — test: index the overlay-parity suite with the real language plugins
 
 ### Changed — the overlay-parity suite drops the inline clones

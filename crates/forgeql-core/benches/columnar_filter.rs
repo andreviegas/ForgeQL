@@ -29,15 +29,15 @@ use std::sync::Arc;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use forgeql_core::ast::enrich::default_enrichers;
 use forgeql_core::ast::index::{IndexContext, SymbolTable, index_file};
-use forgeql_core::ast::lang::{
-    CppLanguageInline, LanguageRegistry, LanguageSupport, RustLanguageInline,
-};
+use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
 use forgeql_core::ir::{Clauses, CompareOp, Predicate, PredicateValue};
 use forgeql_core::storage::StorageEngine;
 use forgeql_core::storage::columnar::overlay::Overlay;
 use forgeql_core::storage::columnar::{
     ColumnarStorage, OverlayBuilder, SegmentBuilder, SegmentReader, SymbolRow,
 };
+use forgeql_lang_cpp::CppLanguage;
+use forgeql_lang_rust::RustLanguage;
 use tempfile::TempDir;
 
 // ── fixture helpers ───────────────────────────────────────────────────────────
@@ -110,8 +110,8 @@ fn build_segment(
 /// Build a two-segment (canonical.cpp + canonical.rs) overlay in a temp dir.
 /// Returns `(TempDir, ColumnarStorage)`.  The `TempDir` must outlive the storage.
 fn build_two_segment_overlay() -> (TempDir, ColumnarStorage) {
-    let cpp_lang = CppLanguageInline;
-    let rs_lang = RustLanguageInline;
+    let cpp_lang = CppLanguage;
+    let rs_lang = RustLanguage;
     let table_cpp = index_fixture(&cpp_lang, "canonical.cpp");
     let table_rs = index_fixture(&rs_lang, "canonical.rs");
 

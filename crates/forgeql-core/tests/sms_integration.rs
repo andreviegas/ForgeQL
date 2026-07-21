@@ -48,12 +48,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use forgeql_core::ast::lang::{CppLanguageInline, LanguageRegistry, RustLanguageInline};
+use forgeql_core::ast::lang::LanguageRegistry;
 use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::result::{ForgeQLResult, ShowContent};
 use forgeql_core::session::SessionCoords;
+use forgeql_lang_cpp::CppLanguage;
+use forgeql_lang_rust::RustLanguage;
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -794,8 +796,8 @@ fn fixtures_dir() -> PathBuf {
 
 fn make_registry() -> Arc<LanguageRegistry> {
     Arc::new(LanguageRegistry::new(vec![
-        Arc::new(CppLanguageInline),
-        Arc::new(RustLanguageInline),
+        Arc::new(CppLanguage),
+        Arc::new(RustLanguage),
     ]))
 }
 
