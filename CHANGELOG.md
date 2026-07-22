@@ -5,6 +5,20 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.139.22] — 2026-07-22 — test: collapse the fql_kind coverage family into a table
+
+### Changed — the fql_kind FIND coverage is now table-driven
+
+The `syntax_coverage` suite had eight near-identical `#[test]` functions, one per
+`fql_kind` value, each running `FIND symbols WHERE fql_kind = '<kind>'` and
+asserting every returned row carried that kind. They are replaced by a single
+`fql_kind_case!` macro that generates the same named tests from a compact table,
+so adding a kind is one line instead of a fourteen-line copy. Each case stays its
+own named test, and every query string and per-case expectation is preserved
+unchanged — including the kinds the fixture may legitimately lack, which keep
+their "may be empty" allowance. The one case with an extra assertion (the `macro`
+kind, which also checks a specific name is present) stays a standalone test.
+Test-only — the engine and its index output are unchanged.
 
 ## [0.139.21] — 2026-07-22 — test: remove the unused Python inline language double
 

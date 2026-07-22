@@ -118,69 +118,47 @@ fn find_symbols_bare() {
     assert!(qr.total > 0);
 }
 
-#[rustfmt::skip]
-#[test]
-fn find_symbols_where_fql_kind_eq_function() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'function'",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty());
-    for row in &qr.results {
-        assert_eq!(row.fql_kind.as_deref(), Some("function"));
-    }
+/// Table-driven coverage for `FIND symbols WHERE fql_kind = '<kind>'`.
+///
+/// Each case asserts every returned row carries the queried kind.
+/// `must_exist = true` additionally asserts the fixture yields at least one
+/// match; kinds the `motor_control.h` fixture may legitimately lack use
+/// `must_exist = false`. The query string is spelled out per row so the
+/// coverage inventory stays greppable.
+macro_rules! fql_kind_case {
+    ($($name:ident: $query:literal => $kind:literal, must_exist = $must:literal;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let (mut e, sid, _d) = engine_with_session();
+                let r = exec(&mut e, &sid, $query);
+                let qr = common::as_query(&r);
+                if $must {
+                    assert!(!qr.results.is_empty(), "expected matches for `{}`", $query);
+                }
+                for row in &qr.results {
+                    assert_eq!(row.fql_kind.as_deref(), Some($kind));
+                }
+            }
+        )*
+    };
 }
 
-#[rustfmt::skip]
-#[test]
-fn find_symbols_where_fql_kind_eq_class() {
-    let (mut e, sid, _d) = engine_with_session();
-    // motor_control.h has no class — expect empty results (not an error).
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'class'",
-    );
-    let qr = common::as_query(&r);
-    // May be empty for this fixture — that's valid.
-    for row in &qr.results {
-        assert_eq!(row.fql_kind.as_deref(), Some("class"));
-    }
-}
-
-#[rustfmt::skip]
-#[test]
-fn find_symbols_where_fql_kind_eq_struct() {
-    let (mut e, sid, _d) = engine_with_session();
-    // motor_control.h has typedef struct — may or may not be indexed as struct.
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'struct'",
-    );
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert_eq!(row.fql_kind.as_deref(), Some("struct"));
-    }
-}
-
-#[rustfmt::skip]
-#[test]
-fn find_symbols_where_fql_kind_eq_enum() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'enum'",
-    );
-    let qr = common::as_query(&r);
-    // motor_control.h has ErrorMotor and ErrorSensor enums.
-    for row in &qr.results {
-        assert_eq!(row.fql_kind.as_deref(), Some("enum"));
-    }
+fql_kind_case! {
+    find_symbols_where_fql_kind_eq_function:
+        "FIND symbols WHERE fql_kind = 'function'" => "function", must_exist = true;
+    find_symbols_where_fql_kind_eq_class:
+        "FIND symbols WHERE fql_kind = 'class'" => "class", must_exist = false;
+    find_symbols_where_fql_kind_eq_struct:
+        "FIND symbols WHERE fql_kind = 'struct'" => "struct", must_exist = false;
+    find_symbols_where_fql_kind_eq_enum:
+        "FIND symbols WHERE fql_kind = 'enum'" => "enum", must_exist = false;
+    find_symbols_where_fql_kind_eq_import:
+        "FIND symbols WHERE fql_kind = 'import'" => "import", must_exist = true;
+    find_symbols_where_fql_kind_eq_variable:
+        "FIND symbols WHERE fql_kind = 'variable' LIMIT 100" => "variable", must_exist = false;
+    find_symbols_where_fql_kind_eq_comment:
+        "FIND symbols WHERE fql_kind = 'comment' LIMIT 10" => "comment", must_exist = false;
 }
 
 #[test]
@@ -197,50 +175,6 @@ fn find_symbols_where_fql_kind_eq_macro() {
         names.contains(&"VELOCIDAD_MAX"),
         "expected VELOCIDAD_MAX in {names:?}"
     );
-}
-
-#[rustfmt::skip]
-#[test]
-fn find_symbols_where_fql_kind_eq_import() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'import'",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "fixture has #include directives");
-    for row in &qr.results {
-        assert_eq!(row.fql_kind.as_deref(), Some("import"));
-    }
-}
-
-#[test]
-fn find_symbols_where_fql_kind_eq_variable() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'variable' LIMIT 100",
-    );
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert_eq!(row.fql_kind.as_deref(), Some("variable"));
-    }
-}
-
-#[test]
-fn find_symbols_where_fql_kind_eq_comment() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'comment' LIMIT 10",
-    );
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert_eq!(row.fql_kind.as_deref(), Some("comment"));
-    }
 }
 
 // --- WHERE name operators ---
