@@ -6,6 +6,26 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.19] — 2026-07-22 — test: relocate the C++ language-behaviour tests to an integration suite
+
+### Changed — the src/ast/lang.rs language tests now run against the real plugin
+
+The `#[cfg(test)]` module in `src/ast/lang.rs` tested the C++ language
+implementation — `map_kind`, `extract_name`, `config`, and registry resolution —
+against the in-crate inline clone, because a crate's own unit tests cannot link a
+`forgeql-lang-*` plugin (Cargo reports "multiple different versions of crate
+forgeql_core"). Most of that module — the `map_kind`, `extract_name`, registry
+resolution, and query-method accessor tests — moved to a new
+`tests/lang_behavior.rs` integration suite, where it runs against the real
+`forgeql-lang-cpp` `CppLanguage`. A `tree-sitter` dev-dependency was added for
+the one test that builds a parse tree directly. Two tests that inspect
+`LanguageConfig`'s private fields (config consistency and the C++ feature flags)
+stay in-crate on the clone, because those fields are not public API and so are
+unreachable from an integration test. The move surfaced one real divergence: the
+inline clone claimed the `.c` extension for C++, but the production `CppLanguage`
+resolves only `cpp`/`cc`/`cxx`/`h`/`hpp`/`hxx`/`ino` (a `.c` file is C, not C++),
+so the extension-resolution assertion now matches the shipping plugin.
+
 ## [0.139.18] — 2026-07-22 — test: route the last two straggler suites through the real-plugin registry
 
 ### Changed — restore_scan_safety and sms now use make_registry_real
