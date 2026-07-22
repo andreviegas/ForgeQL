@@ -712,10 +712,7 @@ impl LanguageRegistry {
 mod inline;
 
 #[cfg(any(test, feature = "test-helpers"))]
-pub use inline::{
-    CppLanguageInline, PythonLanguageInline, RustLanguageInline, cpp_config, python_config,
-    rust_config,
-};
+pub use inline::{CppLanguageInline, RustLanguageInline, cpp_config, rust_config};
 
 #[cfg(test)]
 mod tests {

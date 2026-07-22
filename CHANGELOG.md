@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.21] — 2026-07-22 — test: remove the unused Python inline language double
+
+### Removed — the in-crate Python test double, now that nothing uses it
+
+`forgeql-core` keeps inline in-crate clones of its language support so its own
+unit and integration tests can build a language registry without depending on
+the external `forgeql-lang-*` plugins. Nothing references the Python clone any
+more — every integration suite builds its registry from the real plugins, and no
+in-crate test needs Python — so `PythonLanguageInline`, its `python_config`
+helper, and the `python_node_text` helper are removed, together with the
+`tree-sitter-python` dev-dependency and its slot in the `test-helpers` feature.
+The C++ and Rust clones are retained by design: a handful of in-crate unit tests
+both parse real source and assert on `pub(crate)` interning state, so they can
+neither move to an integration test nor run on a fake language stub; a comment
+atop `inline.rs` now records why. Test-only — the engine and its index output are
+unchanged.
+
 ## [0.139.20] — 2026-07-22 — test: collapse the shared harness onto a single real-plugin registry
 
 ### Changed — the test harness now has one registry, built from the real language plugins
