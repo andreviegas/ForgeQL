@@ -794,7 +794,7 @@ fn fixtures_dir() -> PathBuf {
 
 mod common;
 fn make_registry() -> Arc<LanguageRegistry> {
-    common::make_registry_real()
+    common::make_registry()
 }
 
 fn build_engine() -> (ForgeQLEngine, String, tempfile::TempDir) {

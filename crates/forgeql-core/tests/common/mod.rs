@@ -22,9 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use forgeql_core::ast::lang::{
-    CppLanguageInline, LanguageRegistry, PythonLanguageInline, RustLanguageInline,
-};
+use forgeql_core::ast::lang::LanguageRegistry;
 use forgeql_core::auth::{AuthContext, auth};
 use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
@@ -33,22 +31,9 @@ use forgeql_core::session::SessionCoords;
 use tempfile::tempdir;
 
 /// The single language registry every suite shares — the one place the language
-/// set is defined. Inline clones FOR NOW; flipping this one function to the real
-/// `forgeql-lang-*` plugins migrates every suite at once.
+/// set is defined: the production `forgeql-lang-*` plugins (`CppLanguage`,
+/// `RustLanguage`, `PythonLanguage`) plus `text_languages()`.
 pub fn make_registry() -> Arc<LanguageRegistry> {
-    let mut langs = forgeql_lang_text::text_languages();
-    langs.push(Arc::new(CppLanguageInline));
-    langs.push(Arc::new(RustLanguageInline));
-    langs.push(Arc::new(PythonLanguageInline));
-    Arc::new(LanguageRegistry::new(langs))
-}
-
-/// The real production language plugins — `CppLanguage`/`RustLanguage`/
-/// `PythonLanguage` from the `forgeql-lang-*` crates, plus `text_languages()`.
-/// Suites migrate from [`make_registry`] (inline clones) to this one
-/// at a time so drift surfaces per suite; the inline registry stays until every
-/// suite has flipped.
-pub fn make_registry_real() -> Arc<LanguageRegistry> {
     let mut langs = forgeql_lang_text::text_languages();
     langs.push(Arc::new(forgeql_lang_cpp::CppLanguage));
     langs.push(Arc::new(forgeql_lang_rust::RustLanguage));
@@ -192,25 +177,6 @@ pub fn legacy_session_in(dir: tempfile::TempDir) -> TestSession {
     TestSession { engine, sid, dir }
 }
 
-/// Real-plugin variant of [`legacy_session`] — indexes with the production
-/// `forgeql-lang-*` plugins via [`make_registry_real`] instead of the inline
-/// clones. The two coexist while suites move over one at a time.
-pub fn legacy_session_real(fixtures: &[&str]) -> TestSession {
-    let dir = tempdir().expect("tempdir");
-    copy_fixtures(dir.path(), fixtures);
-    legacy_session_in_real(dir)
-}
-
-/// Real-plugin variant of [`legacy_session_in`].
-pub fn legacy_session_in_real(dir: tempfile::TempDir) -> TestSession {
-    let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir, make_registry_real()).expect("engine");
-    let sid = engine
-        .register_local_session(dir.path())
-        .expect("register session");
-    TestSession { engine, sid, dir }
-}
-
 /// `setup()` on the columnar backend — the production read path. Mirrors a real
 /// `USE`: builds `segments`/`overlays` dirs under the temp workspace and installs
 /// columnar via `register_local_session_with_columnar`.
@@ -224,26 +190,6 @@ pub fn columnar_session(fixtures: &[&str]) -> TestSession {
 pub fn columnar_session_in(dir: tempfile::TempDir) -> TestSession {
     let data_dir = dir.path().join("data");
     let mut engine = ForgeQLEngine::new(data_dir, make_registry()).expect("engine");
-    let segments_dir = dir.path().join("segments");
-    let overlays_dir = dir.path().join("overlays");
-    let sid = engine
-        .register_local_session_with_columnar(dir.path(), &segments_dir, &overlays_dir)
-        .expect("register columnar session");
-    TestSession { engine, sid, dir }
-}
-
-/// Real-plugin variant of [`columnar_session`] — indexes with the production
-/// `forgeql-lang-*` plugins via [`make_registry_real`].
-pub fn columnar_session_real(fixtures: &[&str]) -> TestSession {
-    let dir = tempdir().expect("tempdir");
-    copy_fixtures(dir.path(), fixtures);
-    columnar_session_in_real(dir)
-}
-
-/// Real-plugin variant of [`columnar_session_in`].
-pub fn columnar_session_in_real(dir: tempfile::TempDir) -> TestSession {
-    let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir, make_registry_real()).expect("engine");
     let segments_dir = dir.path().join("segments");
     let overlays_dir = dir.path().join("overlays");
     let sid = engine

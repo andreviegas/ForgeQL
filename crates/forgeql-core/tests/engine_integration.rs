@@ -40,7 +40,7 @@ fn engine_with_session_with_extra_files(
 ) -> (ForgeQLEngine, String, tempfile::TempDir) {
     let mut fixtures = vec!["motor_control.h", "motor_control.cpp"];
     fixtures.extend_from_slice(extra_files);
-    common::columnar_session_real(&fixtures).into_parts()
+    common::columnar_session(&fixtures).into_parts()
 }
 
 fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
@@ -51,7 +51,7 @@ fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
 /// known legacy/columnar behaviour divergences; flip each caller back to
 /// `engine_with_session` once the columnar side is fixed.
 fn engine_with_session_legacy() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    common::legacy_session_real(&["motor_control.h", "motor_control.cpp"]).into_parts()
+    common::legacy_session(&["motor_control.h", "motor_control.cpp"]).into_parts()
 }
 /// Parse FQL and execute the first op against the engine.
 fn execute_fql(engine: &mut ForgeQLEngine, session_id: &str, fql: &str) -> ForgeQLResult {
@@ -456,8 +456,7 @@ fn copy_node_to_a_trailing_slash_path_is_the_same_as_a_directory_handle() {
 #[test]
 fn engine_starts_with_zero_state() {
     let tmp = tempdir().unwrap();
-    let engine =
-        ForgeQLEngine::new(tmp.path().to_path_buf(), common::make_registry_real()).unwrap();
+    let engine = ForgeQLEngine::new(tmp.path().to_path_buf(), common::make_registry()).unwrap();
     assert_eq!(engine.session_count(), 0);
     assert_eq!(engine.source_count(), 0);
     assert_eq!(engine.commands_served(), 0);
@@ -466,8 +465,7 @@ fn engine_starts_with_zero_state() {
 #[test]
 fn show_sources_on_empty_engine() {
     let tmp = tempdir().unwrap();
-    let mut engine =
-        ForgeQLEngine::new(tmp.path().to_path_buf(), common::make_registry_real()).unwrap();
+    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), common::make_registry()).unwrap();
     let result = engine
         .execute(auth(AuthContext::Tester), None, &ForgeQLIR::ShowSources)
         .result
@@ -995,8 +993,7 @@ fn mutation_reports_structural_errors_for_yaml_toml_and_xml() {
 #[test]
 fn find_symbols_without_session_fails() {
     let tmp = tempdir().unwrap();
-    let mut engine =
-        ForgeQLEngine::new(tmp.path().to_path_buf(), common::make_registry_real()).unwrap();
+    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), common::make_registry()).unwrap();
     let op = ForgeQLIR::FindSymbols {
         backend: Backend::default(),
         clauses: Clauses::default(),
@@ -1853,7 +1850,7 @@ int Widget::width() const {
     .expect("write cpp");
 
     let data_dir = dir.path().join("data");
-    let mut engine = ForgeQLEngine::new(data_dir, common::make_registry_real()).expect("engine");
+    let mut engine = ForgeQLEngine::new(data_dir, common::make_registry()).expect("engine");
     let sid = engine
         .register_local_session(dir.path())
         .expect("register session");
@@ -2551,7 +2548,7 @@ fn found_set_survives_a_restart() {
     drop(engine); // the server goes away between the FIND and the sweep
 
     let mut restarted =
-        ForgeQLEngine::new(dir.path().join("data"), common::make_registry_real()).expect("engine");
+        ForgeQLEngine::new(dir.path().join("data"), common::make_registry()).expect("engine");
     let sid2 = restarted
         .register_local_session(dir.path())
         .expect("register session");
@@ -2597,7 +2594,7 @@ fn a_mutation_clears_the_set_on_disk_too() {
     drop(engine);
 
     let mut restarted =
-        ForgeQLEngine::new(dir.path().join("data"), common::make_registry_real()).expect("engine");
+        ForgeQLEngine::new(dir.path().join("data"), common::make_registry()).expect("engine");
     let sid2 = restarted
         .register_local_session(dir.path())
         .expect("register session");

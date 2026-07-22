@@ -41,7 +41,7 @@ fn restore_scan_ignores_legacy_symlinks_and_non_worktrees() {
     fs::write(stray.join("precious.txt"), "do not delete").expect("test setup");
 
     let mut engine =
-        ForgeQLEngine::new(data_dir.clone(), common::make_registry_real()).expect("test setup");
+        ForgeQLEngine::new(data_dir.clone(), common::make_registry()).expect("test setup");
     engine.restore_sessions_from_disk();
 
     // The symlink was not traversed: the worktree's contents are intact.

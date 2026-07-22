@@ -48,7 +48,7 @@ mod common;
 /// Create a temp workspace with `motor_control` fixtures and boot a columnar
 /// session over it. Returns `(engine, session_id, TempDir)`.
 fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    common::columnar_session_real(&["motor_control.h", "motor_control.cpp"]).into_parts()
+    common::columnar_session(&["motor_control.h", "motor_control.cpp"]).into_parts()
 }
 
 /// Like `engine_with_session` but also initializes a git repo (needed for transactions).
@@ -79,7 +79,7 @@ fn engine_with_git_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
     repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
         .unwrap();
 
-    common::columnar_session_in_real(dir).into_parts()
+    common::columnar_session_in(dir).into_parts()
 }
 
 /// Parse FQL and execute the first op.
@@ -1795,8 +1795,7 @@ fn error_malformed_fql() {
 #[test]
 fn error_find_without_session() {
     let tmp = tempdir().unwrap();
-    let mut engine =
-        ForgeQLEngine::new(tmp.path().to_path_buf(), common::make_registry_real()).unwrap();
+    let mut engine = ForgeQLEngine::new(tmp.path().to_path_buf(), common::make_registry()).unwrap();
     let ops = parser::parse("FIND symbols").unwrap();
     let op = ops.first().unwrap();
     assert!(

@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.20] — 2026-07-22 — test: collapse the shared harness onto a single real-plugin registry
+
+### Changed — the test harness now has one registry, built from the real language plugins
+
+The shared `tests/common` harness carried two parallel registries during the
+migration: one built from in-crate inline language clones and one built from the
+real `forgeql-lang-*` plugins, each with its own set of session constructors.
+Now that every integration suite runs on the real plugins, the inline
+`make_registry` and its inline session constructors are removed, and the
+real-plugin variants are renamed to the canonical names — `make_registry`,
+`legacy_session`, `legacy_session_in`, `columnar_session`, and
+`columnar_session_in`. Every suite calls those names and indexes with the
+production plugins; no `tests/` file references an inline language clone. This is
+a test-only change — the engine and its index output are untouched.
+
 ## [0.139.19] — 2026-07-22 — test: relocate the C++ language-behaviour tests to an integration suite
 
 ### Changed — the src/ast/lang.rs language tests now run against the real plugin

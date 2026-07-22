@@ -50,7 +50,7 @@ fn gated_session() -> common::TestSession {
     repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
         .unwrap();
 
-    common::legacy_session_in_real(dir)
+    common::legacy_session_in(dir)
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn rollback_after_a_server_restart_still_removes_created_files() {
     // same on-disk workspace.
     let data_dir = t.workspace().join("data");
     let ws = t.workspace().to_path_buf();
-    t.engine = ForgeQLEngine::new(data_dir, common::make_registry_real()).expect("engine");
+    t.engine = ForgeQLEngine::new(data_dir, common::make_registry()).expect("engine");
     t.sid = t
         .engine
         .register_local_session(&ws)

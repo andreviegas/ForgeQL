@@ -42,7 +42,7 @@ fn assert_show_ok(result: &ForgeQLResult, expected_op: &str) {
 
 #[test]
 fn show_body_ambiguous_symbol_returns_error() {
-    let mut t = common::legacy_session_real(CANONICAL);
+    let mut t = common::legacy_session(CANONICAL);
     // 'foo' exists in both canonical.cpp and canonical.rs
     let err = t.err("SHOW body OF 'foo'");
     assert!(
@@ -55,7 +55,7 @@ fn show_body_ambiguous_symbol_returns_error() {
 
 #[test]
 fn show_signature_ambiguous_symbol_returns_error() {
-    let mut t = common::legacy_session_real(CANONICAL);
+    let mut t = common::legacy_session(CANONICAL);
     let err = t.err("SHOW signature OF 'bar'");
     assert!(
         err.contains("multiple languages"),
@@ -65,7 +65,7 @@ fn show_signature_ambiguous_symbol_returns_error() {
 
 #[test]
 fn show_context_ambiguous_symbol_returns_error() {
-    let mut t = common::legacy_session_real(CANONICAL);
+    let mut t = common::legacy_session(CANONICAL);
     let err = t.err("SHOW context OF 'foo'");
     assert!(
         err.contains("multiple languages"),
@@ -75,7 +75,7 @@ fn show_context_ambiguous_symbol_returns_error() {
 
 #[test]
 fn show_members_ambiguous_symbol_returns_error() {
-    let mut t = common::legacy_session_real(CANONICAL);
+    let mut t = common::legacy_session(CANONICAL);
     // 'Motor' struct exists in both languages
     let err = t.err("SHOW members OF 'Motor'");
     assert!(
@@ -90,14 +90,14 @@ fn show_members_ambiguous_symbol_returns_error() {
 
 #[test]
 fn show_body_disambiguate_with_where_language() {
-    let mut t = common::legacy_session_real(CANONICAL);
+    let mut t = common::legacy_session(CANONICAL);
     let result = t.exec("SHOW body OF 'foo' WHERE language = 'cpp'");
     assert_show_ok(&result, "show_body");
 }
 
 #[test]
 fn show_body_disambiguate_with_where_language_rust() {
-    let mut t = common::legacy_session_real(CANONICAL);
+    let mut t = common::legacy_session(CANONICAL);
     let result = t.exec("SHOW body OF 'foo' WHERE language = 'rust'");
     assert_show_ok(&result, "show_body");
 }
@@ -108,14 +108,14 @@ fn show_body_disambiguate_with_where_language_rust() {
 
 #[test]
 fn show_signature_disambiguate_with_in_glob() {
-    let mut t = common::legacy_session_real(CANONICAL);
+    let mut t = common::legacy_session(CANONICAL);
     let result = t.exec("SHOW signature OF 'bar' IN '*.rs'");
     assert_show_ok(&result, "show_signature");
 }
 
 #[test]
 fn show_context_disambiguate_with_in_glob_cpp() {
-    let mut t = common::legacy_session_real(CANONICAL);
+    let mut t = common::legacy_session(CANONICAL);
     let result = t.exec("SHOW context OF 'foo' IN '*.cpp'");
     assert_show_ok(&result, "show_context");
 }
@@ -123,7 +123,7 @@ fn show_context_disambiguate_with_in_glob_cpp() {
 #[test]
 fn show_body_single_language_no_ambiguity() {
     // Only C++ present — no disambiguation needed.
-    let mut t = common::legacy_session_real(&["canonical/canonical.cpp"]);
+    let mut t = common::legacy_session(&["canonical/canonical.cpp"]);
     let result = t.exec("SHOW body OF 'foo'");
     assert_show_ok(&result, "show_body");
 }
@@ -146,7 +146,7 @@ fn show_body_resolves_attributed_function() {
     )
     .expect("write rs");
 
-    let mut t = common::legacy_session_in_real(dir);
+    let mut t = common::legacy_session_in(dir);
     let result = t.exec("SHOW body OF 'decorated'");
     match &result {
         ForgeQLResult::Show(sr) => match &sr.content {
