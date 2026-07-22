@@ -30,7 +30,7 @@ default-members = [
 ]
 
 [workspace.package]
-version   = "0.139.17"
+version   = "0.139.18"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"

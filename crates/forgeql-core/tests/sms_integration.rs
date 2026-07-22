@@ -54,8 +54,6 @@ use forgeql_core::engine::ForgeQLEngine;
 use forgeql_core::parser;
 use forgeql_core::result::{ForgeQLResult, ShowContent};
 use forgeql_core::session::SessionCoords;
-use forgeql_lang_cpp::CppLanguage;
-use forgeql_lang_rust::RustLanguage;
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -794,11 +792,9 @@ fn fixtures_dir() -> PathBuf {
         .join("tests/fixtures/canonical")
 }
 
+mod common;
 fn make_registry() -> Arc<LanguageRegistry> {
-    Arc::new(LanguageRegistry::new(vec![
-        Arc::new(CppLanguage),
-        Arc::new(RustLanguage),
-    ]))
+    common::make_registry_real()
 }
 
 fn build_engine() -> (ForgeQLEngine, String, tempfile::TempDir) {

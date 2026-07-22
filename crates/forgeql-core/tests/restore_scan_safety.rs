@@ -7,11 +7,10 @@
 //! pruned every subdirectory that lacked a session sentinel.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::fs;
-use std::sync::Arc;
-
-use forgeql_core::ast::lang::{LanguageRegistry, RustLanguageInline};
 use forgeql_core::engine::ForgeQLEngine;
+use std::fs;
+
+mod common;
 
 #[cfg(unix)]
 #[test]
@@ -41,11 +40,8 @@ fn restore_scan_ignores_legacy_symlinks_and_non_worktrees() {
     fs::create_dir_all(&stray).expect("test setup");
     fs::write(stray.join("precious.txt"), "do not delete").expect("test setup");
 
-    let mut engine = ForgeQLEngine::new(
-        data_dir.clone(),
-        Arc::new(LanguageRegistry::new(vec![Arc::new(RustLanguageInline)])),
-    )
-    .expect("test setup");
+    let mut engine =
+        ForgeQLEngine::new(data_dir.clone(), common::make_registry_real()).expect("test setup");
     engine.restore_sessions_from_disk();
 
     // The symlink was not traversed: the worktree's contents are intact.

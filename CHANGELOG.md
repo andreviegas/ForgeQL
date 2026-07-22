@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.18] — 2026-07-22 — test: route the last two straggler suites through the real-plugin registry
+
+### Changed — restore_scan_safety and sms now use make_registry_real
+
+The `restore_scan_safety` and `sms_integration` suites built their registries
+inline from the language clones. Both now build through the shared
+`common::make_registry_real()`, so no `tests/` file constructs an inline-clone
+registry any more. `restore_scan_safety` only needs a language to exist for its
+filesystem-scan assertions; `sms_integration` keeps its deterministic-PRNG
+harness and only its registry moved. This takes the entire `tests/` tree off the
+inline clones. No drift surfaced.
+
 ## [0.139.17] — 2026-07-22 — test: index the benches and the sms suite with the real language plugins
 
 ### Changed — the columnar benches and the sms suite drop the inline clones
