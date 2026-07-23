@@ -177,216 +177,150 @@ fn find_symbols_where_fql_kind_eq_macro() {
     );
 }
 
-// --- WHERE name operators ---
+// -----------------------------------------------------------------------
+// Collapsed WHERE / ORDER BY / LIMIT coverage families.
+//
+// Each table row below is one #[test]; the macro keeps the per-case function
+// name so `cargo test <name>` still selects a single case and a failure names
+// it. Adding a case is one line. Cases whose assertion shape differs (an extra
+// check, a determinism probe, an OFFSET comparison) stay standalone below.
+// -----------------------------------------------------------------------
 
-#[test]
-fn find_symbols_where_name_like_prefix() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name LIKE 'encender%'");
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty());
-    for row in &qr.results {
-        assert!(
-            row.name.starts_with("encender"),
-            "name '{}' doesn't start with 'encender'",
-            row.name
-        );
-    }
+/// `FIND … WHERE name <op>` — every returned row's name satisfies the per-case
+/// predicate; `non_empty` also asserts the query returned rows at all.
+macro_rules! name_predicate_case {
+    ($($name:ident: $query:literal, non_empty = $ne:literal, |$n:ident| $pred:expr;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let (mut e, sid, _d) = engine_with_session();
+                let r = exec(&mut e, &sid, $query);
+                let qr = common::as_query(&r);
+                if $ne {
+                    assert!(!qr.results.is_empty(), "expected matches for `{}`", $query);
+                }
+                for row in &qr.results {
+                    let $n = row.name.as_str();
+                    assert!($pred, "name '{}' failed the predicate for `{}`", row.name, $query);
+                }
+            }
+        )*
+    };
 }
 
-#[test]
-fn find_symbols_where_name_like_suffix() {
-    let (mut e, sid, _d) = engine_with_session();
-    // LIKE is case-insensitive in ForgeQL, so '%Motor' matches 'MOTOR' too.
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name LIKE '%Motor'");
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty());
-    for row in &qr.results {
-        let lower = row.name.to_lowercase();
-        assert!(
-            lower.ends_with("motor"),
-            "name '{}' doesn't end with 'Motor' (case-insensitive)",
-            row.name
-        );
-    }
+name_predicate_case! {
+    find_symbols_where_name_like_prefix:
+        "FIND symbols WHERE name LIKE 'encender%'", non_empty = true,
+        |n| n.starts_with("encender");
+    find_symbols_where_name_like_suffix:
+        "FIND symbols WHERE name LIKE '%Motor'", non_empty = true,
+        |n| n.to_lowercase().ends_with("motor");
+    find_symbols_where_name_like_contains:
+        "FIND symbols WHERE name LIKE '%Motor%'", non_empty = true,
+        |n| n.to_lowercase().contains("motor");
+    find_symbols_where_name_not_like:
+        "FIND symbols WHERE fql_kind = 'function' WHERE name NOT LIKE 'encender%'", non_empty = false,
+        |n| !n.starts_with("encender");
+    find_symbols_where_name_eq_exact:
+        "FIND symbols WHERE name = 'encenderMotor'", non_empty = true,
+        |n| n == "encenderMotor";
+    find_symbols_where_name_neq:
+        "FIND symbols WHERE fql_kind = 'function' WHERE name != 'encenderMotor' LIMIT 100", non_empty = false,
+        |n| n != "encenderMotor";
 }
 
-#[test]
-fn find_symbols_where_name_like_contains() {
-    let (mut e, sid, _d) = engine_with_session();
-    // LIKE is case-insensitive in ForgeQL.
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name LIKE '%Motor%'");
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty());
-    for row in &qr.results {
-        let lower = row.name.to_lowercase();
-        assert!(
-            lower.contains("motor"),
-            "name '{}' doesn't contain 'Motor' (case-insensitive)",
-            row.name
-        );
-    }
+/// `FIND … WHERE <numeric field> <op> <bound>` — every row's field satisfies
+/// the bound. The accessor closure picks the field, so `usages` and `line`
+/// share one shape.
+macro_rules! row_bound_case {
+    ($($name:ident: $query:literal, |$r:ident| $lhs:expr, $op:tt $rhs:literal;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let (mut e, sid, _d) = engine_with_session();
+                let r = exec(&mut e, &sid, $query);
+                let qr = common::as_query(&r);
+                for row in &qr.results {
+                    let $r = row;
+                    assert!(
+                        $lhs $op $rhs,
+                        "row '{}' violates the bound for `{}`",
+                        row.name,
+                        $query
+                    );
+                }
+            }
+        )*
+    };
 }
 
-#[test]
-fn find_symbols_where_name_not_like() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'function' WHERE name NOT LIKE 'encender%'",
-    );
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert!(
-            !row.name.starts_with("encender"),
-            "NOT LIKE failed for '{}'",
-            row.name
-        );
-    }
+row_bound_case! {
+    find_symbols_where_usages_eq_zero:
+        "FIND symbols WHERE usages = 0 LIMIT 100", |r| r.usages_count.unwrap_or(0), == 0;
+    find_symbols_where_usages_neq_zero:
+        "FIND symbols WHERE usages != 0 LIMIT 100", |r| r.usages_count.unwrap_or(0), != 0;
+    find_symbols_where_usages_gte:
+        "FIND symbols WHERE usages >= 5 LIMIT 100", |r| r.usages_count.unwrap_or(0), >= 5;
+    find_symbols_where_usages_gt:
+        "FIND symbols WHERE usages > 0 LIMIT 100", |r| r.usages_count.unwrap_or(0), > 0;
+    find_symbols_where_usages_lte:
+        "FIND symbols WHERE usages <= 2 LIMIT 100", |r| r.usages_count.unwrap_or(0), <= 2;
+    find_symbols_where_usages_lt:
+        "FIND symbols WHERE usages < 3 LIMIT 100", |r| r.usages_count.unwrap_or(0), < 3;
+    find_symbols_where_line_gte:
+        "FIND symbols WHERE line >= 50 LIMIT 100", |r| r.line.unwrap_or(0), >= 50;
+    find_symbols_where_line_lt:
+        "FIND symbols WHERE line < 30 LIMIT 100", |r| r.line.unwrap_or(0), < 30;
 }
 
-#[test]
-fn find_symbols_where_name_eq_exact() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'encenderMotor'");
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty());
-    for row in &qr.results {
-        assert_eq!(row.name, "encenderMotor");
-    }
+/// `FIND … ORDER BY <field> <dir>` — the returned rows are monotonic in the
+/// per-case key. `$ord` is the adjacent-pair relation (`<=` for ASC, `>=` DESC).
+macro_rules! order_by_case {
+    ($($name:ident: $query:literal, |$r:ident| $key:expr, $ord:tt;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let (mut e, sid, _d) = engine_with_session();
+                let r = exec(&mut e, &sid, $query);
+                let qr = common::as_query(&r);
+                let keys: Vec<_> = qr.results.iter().map(|$r| $key).collect();
+                for w in keys.windows(2) {
+                    assert!(w[0] $ord w[1], "ORDER BY broken in `{}`: {:?} then {:?}", $query, w[0], w[1]);
+                }
+            }
+        )*
+    };
 }
 
-#[test]
-fn find_symbols_where_name_neq() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'function' WHERE name != 'encenderMotor' LIMIT 100",
-    );
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert_ne!(row.name, "encenderMotor");
-    }
+order_by_case! {
+    find_symbols_order_by_name_asc:
+        "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 100", |r| r.name.as_str(), <=;
+    find_symbols_order_by_name_desc:
+        "FIND symbols WHERE fql_kind = 'function' ORDER BY name DESC LIMIT 100", |r| r.name.as_str(), >=;
+    find_symbols_order_by_usages_desc:
+        "FIND symbols WHERE fql_kind = 'function' ORDER BY usages DESC LIMIT 100", |r| r.usages_count.unwrap_or(0), >=;
+    find_symbols_order_by_line_asc:
+        "FIND symbols WHERE fql_kind = 'function' ORDER BY line ASC LIMIT 100", |r| r.line.unwrap_or(0), <=;
 }
 
-// --- WHERE usages operators ---
-
-#[test]
-fn find_symbols_where_usages_eq_zero() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE usages = 0 LIMIT 100");
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert_eq!(
-            row.usages_count.unwrap_or(0),
-            0,
-            "expected 0 usages for '{}'",
-            row.name
-        );
-    }
+/// `FIND … LIMIT n` — the row count obeys the per-case relation to `n`.
+macro_rules! limit_case {
+    ($($name:ident: $query:literal, $op:tt $rhs:literal;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let (mut e, sid, _d) = engine_with_session();
+                let r = exec(&mut e, &sid, $query);
+                let qr = common::as_query(&r);
+                assert!(qr.results.len() $op $rhs, "LIMIT count wrong for `{}`", $query);
+            }
+        )*
+    };
 }
 
-#[test]
-fn find_symbols_where_usages_neq_zero() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE usages != 0 LIMIT 100");
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert_ne!(
-            row.usages_count.unwrap_or(0),
-            0,
-            "expected non-zero usages for '{}'",
-            row.name
-        );
-    }
-}
-
-#[test]
-fn find_symbols_where_usages_gte() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE usages >= 5 LIMIT 100");
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert!(
-            row.usages_count.unwrap_or(0) >= 5,
-            "expected >= 5 usages for '{}'",
-            row.name
-        );
-    }
-}
-
-#[test]
-fn find_symbols_where_usages_gt() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE usages > 0 LIMIT 100");
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert!(
-            row.usages_count.unwrap_or(0) > 0,
-            "expected > 0 usages for '{}'",
-            row.name
-        );
-    }
-}
-
-#[test]
-fn find_symbols_where_usages_lte() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE usages <= 2 LIMIT 100");
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert!(
-            row.usages_count.unwrap_or(0) <= 2,
-            "expected <= 2 usages for '{}'",
-            row.name
-        );
-    }
-}
-
-#[test]
-fn find_symbols_where_usages_lt() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE usages < 3 LIMIT 100");
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert!(
-            row.usages_count.unwrap_or(0) < 3,
-            "expected < 3 usages for '{}'",
-            row.name
-        );
-    }
-}
-
-// --- WHERE line operators ---
-
-#[test]
-fn find_symbols_where_line_gte() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE line >= 50 LIMIT 100");
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert!(
-            row.line.unwrap_or(0) >= 50,
-            "expected line >= 50 for '{}'",
-            row.name
-        );
-    }
-}
-
-#[test]
-fn find_symbols_where_line_lt() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE line < 30 LIMIT 100");
-    let qr = common::as_query(&r);
-    for row in &qr.results {
-        assert!(
-            row.line.unwrap_or(0) < 30,
-            "expected line < 30 for '{}'",
-            row.name
-        );
-    }
+limit_case! {
+    find_symbols_limit_1: "FIND symbols LIMIT 1", == 1;
+    find_symbols_limit_5: "FIND symbols LIMIT 5", <= 5;
 }
 
 // --- Multiple WHERE clauses (AND) ---
@@ -425,90 +359,6 @@ fn find_symbols_three_where_clauses() {
 // --- ORDER BY ---
 
 #[test]
-fn find_symbols_order_by_name_asc() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 100",
-    );
-    let qr = common::as_query(&r);
-    let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
-    for w in names.windows(2) {
-        assert!(
-            w[0] <= w[1],
-            "ORDER BY name ASC broken: '{}' > '{}'",
-            w[0],
-            w[1]
-        );
-    }
-}
-
-#[test]
-fn find_symbols_order_by_name_desc() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'function' ORDER BY name DESC LIMIT 100",
-    );
-    let qr = common::as_query(&r);
-    let names: Vec<&str> = qr.results.iter().map(|r| r.name.as_str()).collect();
-    for w in names.windows(2) {
-        assert!(
-            w[0] >= w[1],
-            "ORDER BY name DESC broken: '{}' < '{}'",
-            w[0],
-            w[1]
-        );
-    }
-}
-
-#[test]
-fn find_symbols_order_by_usages_desc() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'function' ORDER BY usages DESC LIMIT 100",
-    );
-    let qr = common::as_query(&r);
-    let counts: Vec<usize> = qr
-        .results
-        .iter()
-        .map(|r| r.usages_count.unwrap_or(0))
-        .collect();
-    for w in counts.windows(2) {
-        assert!(
-            w[0] >= w[1],
-            "ORDER BY usages DESC broken: {} < {}",
-            w[0],
-            w[1]
-        );
-    }
-}
-
-#[test]
-fn find_symbols_order_by_line_asc() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE fql_kind = 'function' ORDER BY line ASC LIMIT 100",
-    );
-    let qr = common::as_query(&r);
-    let lines: Vec<usize> = qr.results.iter().map(|r| r.line.unwrap_or(0)).collect();
-    for w in lines.windows(2) {
-        assert!(
-            w[0] <= w[1],
-            "ORDER BY line ASC broken: {} > {}",
-            w[0],
-            w[1]
-        );
-    }
-}
-
-#[test]
 fn find_symbols_order_by_default_is_asc() {
     let (mut e, sid, _d) = engine_with_session();
     // ORDER BY without explicit direction — verify it parses and returns consistent results.
@@ -532,24 +382,6 @@ fn find_symbols_order_by_default_is_asc() {
         .map(|r| r.name.as_str())
         .collect();
     assert_eq!(names1, names2, "ORDER BY name should be deterministic");
-}
-
-// --- LIMIT ---
-
-#[test]
-fn find_symbols_limit_1() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols LIMIT 1");
-    let qr = common::as_query(&r);
-    assert_eq!(qr.results.len(), 1);
-}
-
-#[test]
-fn find_symbols_limit_5() {
-    let (mut e, sid, _d) = engine_with_session();
-    let r = exec(&mut e, &sid, "FIND symbols LIMIT 5");
-    let qr = common::as_query(&r);
-    assert!(qr.results.len() <= 5);
 }
 
 // --- OFFSET ---

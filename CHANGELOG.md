@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.24] — 2026-07-23 — test: collapse the WHERE / ORDER BY / LIMIT coverage families into tables
+
+### Changed — repetitive one-test-per-case families are now table-driven
+
+The `syntax_coverage` suite had families of near-identical `#[test]` functions
+that differed only in a query string and a single comparison — one function per
+`WHERE name` operator, per `WHERE usages`/`line` bound, per `ORDER BY` field, and
+per `LIMIT`. Each family is now a small `macro_rules!` plus a data table: one
+table row per case, generating the same named test so `cargo test <name>` still
+selects a single case and a failure still names it. Every query string and
+expected value is preserved verbatim; cases with a distinct assertion shape (a
+determinism probe, an OFFSET comparison, an extra membership check) stay as
+standalone functions. Test-only — no engine or index-output change.
+
 ## [0.139.23] — 2026-07-23 — fix: DELETE NODES FOUND removed the whole file instead of the armed nodes
 
 ### Fixed — bulk-deleting a subset of a file's nodes no longer deletes the file
