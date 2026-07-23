@@ -5,6 +5,25 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.139.23] — 2026-07-23 — fix: DELETE NODES FOUND removed the whole file instead of the armed nodes
+
+### Fixed — bulk-deleting a subset of a file's nodes no longer deletes the file
+
+Arming `DELETE NODES FOUND` with a `FIND symbols` result and deleting it removed
+the entire containing file, not the armed nodes. The bulk delete mapped every
+armed member to its containing file path and unlinked those whole files, so
+deleting a handful of a file's functions destroyed the file and everything else
+in it — silent data loss, recoverable only by `UNDO`.
+
+The bulk delete now routes each member the way the single-node `DELETE NODE`
+already does: a whole-file or directory handle (from `FIND files`) removes the
+path, while a node handle (from `FIND symbols`) removes only that node's line
+span, merged per file and applied as one atomic plan. Freed ordinals are
+tombstoned so a byte-identical sibling cannot adopt a dead handle, matching
+`CHANGE NODES FOUND`. A set that mixes whole-file and in-file handles is refused
+before anything is removed rather than guessed at.
+
 ## [0.139.22] — 2026-07-22 — test: collapse the fql_kind coverage family into a table
 
 ### Changed — the fql_kind FIND coverage is now table-driven

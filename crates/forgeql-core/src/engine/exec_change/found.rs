@@ -12,10 +12,11 @@ use crate::result::{ForgeQLResult, MutationResult};
 use crate::session::found_set::{self, FoundMember, FoundSet};
 use crate::transforms::change::lines_to_byte_range;
 use crate::transforms::copy_move::plan_copy_lines;
-use crate::transforms::{FileEdit, TransformPlan};
+use crate::transforms::{ByteRangeEdit, FileEdit, TransformPlan};
 
 use super::delete::remove_empty_dirs;
 use super::plan::missing_ancestors;
+use super::resolve::is_path_kind;
 
 impl ForgeQLEngine {
     /// Drop the armed set, in RAM and on disk, in one place.
@@ -279,10 +280,13 @@ impl ForgeQLEngine {
         }
         self.apply_plan(sid, plan, "change_nodes_found", None)
     }
-    /// `DELETE NODES FOUND IF REV 'master'` — unlink every member of the set.
+    /// `DELETE NODES FOUND IF REV 'master'` — remove every member of the set.
     ///
-    /// Lowered to the same whole-path delete as `DELETE NODE`, but as one plan:
-    /// a half-applied bulk delete is not something an agent can reason about.
+    /// Each member is removed the same way the single-node `DELETE NODE` would
+    /// remove it — a `FIND files` handle unlinks its whole file or directory, a
+    /// `FIND symbols` handle deletes only that node's line span — but the whole
+    /// set is one atomic plan: a half-applied bulk delete is not something an
+    /// agent can reason about.
     pub(in crate::engine) fn exec_delete_nodes_found(
         &mut self,
         session_id: Option<&str>,
@@ -294,16 +298,55 @@ impl ForgeQLEngine {
         };
         let if_rev = require_found_rev(if_rev, "DELETE")?;
         let set = self.armed_found_set(session_id)?;
-        let paths = Self::found_set_paths(&set, "DELETE")?;
+        // Rejects site rows (FIND usages) with a message that names the query.
+        let _ = Self::found_set_paths(&set, "DELETE")?;
         self.verify_found_rev(session_id, &set, Some(if_rev))?;
 
-        // A directory member expands to the files under it, exactly as the
-        // single-node recursive delete does.
+        // Route each armed member by what its handle addresses. A bare-hex
+        // file/dir handle (from FIND files) removes the whole path; a node
+        // handle (from FIND symbols) removes only that node's line span — the
+        // bulk form of DELETE NODE, never the whole file. A FOUND set comes from
+        // a single FIND, so it is all paths or all nodes; a mix is refused
+        // rather than guessed at, before anything is removed.
+        let mut whole_paths: Vec<String> = Vec::new();
+        let mut span_by_file: std::collections::BTreeMap<String, Vec<(usize, usize)>> =
+            std::collections::BTreeMap::new();
+        for member in &set.members {
+            // found_set_paths above already rejected handle-less site rows, so
+            // every member here carries a node_id; skip defensively otherwise.
+            let Some(id) = member.node_id.as_deref() else {
+                continue;
+            };
+            let span = self.resolve_node_span(session_id, id, None)?;
+            if is_path_kind(&span.kind) && !span.has_offset {
+                whole_paths.push(span.rel_path);
+            } else {
+                span_by_file
+                    .entry(span.rel_path)
+                    .or_default()
+                    .push((span.start, span.end));
+            }
+        }
+        if !whole_paths.is_empty() && !span_by_file.is_empty() {
+            bail!(
+                "DELETE NODES FOUND: the armed set mixes whole-file handles and \
+                 in-file node handles; re-arm with a single FIND (all files, or \
+                 all symbols)."
+            );
+        }
+
+        // FIND symbols: delete exactly the armed spans, never the files holding them.
+        if whole_paths.is_empty() {
+            return self.delete_found_spans(session_id, span_by_file);
+        }
+
+        // FIND files: delete the whole files/dirs. A directory member expands to
+        // the files under it, exactly as the single-node recursive delete does.
         let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
         let root = workspace.root().to_path_buf();
         let mut files: Vec<String> = Vec::new();
         let mut dirs: Vec<PathBuf> = Vec::new();
-        for rel in &paths {
+        for rel in &whole_paths {
             let abs = workspace.safe_path(rel)?;
             if abs.is_dir() {
                 dirs.push(abs.clone());
@@ -355,6 +398,68 @@ impl ForgeQLEngine {
             m.op = "delete_nodes_found".to_string();
         }
         Ok(result)
+    }
+
+    /// Delete exactly the armed node spans, merged per file, in one atomic plan
+    /// — the bulk form of `DELETE NODE`. Each span becomes an empty-replacement
+    /// byte edit; a node whose whole span is removed retires its freed ordinal
+    /// so a byte-identical sibling cannot adopt the dead handle (the same
+    /// tombstoning `CHANGE NODES FOUND` and `DELETE NODE` perform).
+    fn delete_found_spans(
+        &mut self,
+        session_id: Option<&str>,
+        mut span_by_file: std::collections::BTreeMap<String, Vec<(usize, usize)>>,
+    ) -> Result<ForgeQLResult> {
+        let sid = require_session_id(session_id)?;
+
+        // Merge adjacent/overlapping spans per file so the byte ranges an edit
+        // list carries never overlap.
+        for spans in span_by_file.values_mut() {
+            spans.sort_unstable();
+            let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+            for (start, end) in spans.iter().copied() {
+                match merged.last_mut() {
+                    Some(last) if start <= last.1.saturating_add(1) => last.1 = last.1.max(end),
+                    _ => merged.push((start, end)),
+                }
+            }
+            *spans = merged;
+        }
+
+        let mut removed_spans: Vec<(String, usize, usize)> = Vec::new();
+        let plan = {
+            let (workspace, _engine) = self.require_workspace_and_engine(session_id)?;
+            let mut file_edits = Vec::new();
+            for (rel_path, ranges) in &span_by_file {
+                let abs_path = workspace.safe_path(rel_path)?;
+                let file_bytes = crate::workspace::file_io::read_bytes(&abs_path)?;
+                let mut edits = Vec::new();
+                for (start, end) in ranges.iter().copied() {
+                    let (span_start, span_end) = lines_to_byte_range(&file_bytes, start, end)?;
+                    edits.push(ByteRangeEdit {
+                        start: span_start,
+                        end: span_end,
+                        replacement: String::new(),
+                    });
+                    removed_spans.push((rel_path.clone(), start, end));
+                }
+                file_edits.push(FileEdit {
+                    path: abs_path,
+                    edits,
+                    delete: false,
+                });
+            }
+            TransformPlan {
+                file_edits,
+                suggestions: Vec::new(),
+            }
+        };
+
+        for (rel_path, start, end) in &removed_spans {
+            self.stage_removed_span(session_id, rel_path, *start, *end)?;
+        }
+
+        self.apply_plan(sid, plan, "delete_nodes_found", None)
     }
     /// `MOVE|COPY NODES FOUND … TO 'dir/'` — relocate every member into one
     /// directory, each keeping its basename.

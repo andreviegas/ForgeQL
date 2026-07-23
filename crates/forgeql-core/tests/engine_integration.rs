@@ -2420,6 +2420,76 @@ fn change_nodes_found_without_find_errors() {
     );
 }
 
+#[test]
+fn delete_nodes_found_removes_only_armed_spans_not_the_whole_file() {
+    // Regression: arming DELETE NODES FOUND with a strict, non-contiguous subset
+    // of a file's symbol nodes must remove exactly those node spans — never the
+    // whole file. The bug deleted the entire file when the armed set was a few
+    // of its functions.
+    let (mut engine, sid, dir) = engine_with_session();
+
+    let path = dir.path().join("motor_control.cpp");
+    let before = fs::read_to_string(&path).expect("read cpp");
+    let lines_before = before.lines().count();
+
+    // Arm 9 of the 10 top-level functions; leerTemperatura is excluded, so the
+    // armed set is non-contiguous — a gap in the middle of the file, exactly the
+    // shape that tripped the whole-file delete.
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE fql_kind = 'function' IN 'motor_control.cpp' \
+         WHERE name != 'leerTemperatura'",
+    );
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    assert_eq!(qr.results.len(), 9, "nine functions armed, one excluded");
+    let rev = qr.found_rev.expect("a complete FIND issues a master rev");
+
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        &format!("DELETE NODES FOUND IF REV '{rev}'"),
+    );
+    let ForgeQLResult::Mutation(mr) = r else {
+        panic!("expected Mutation result");
+    };
+    assert!(mr.applied);
+
+    // The file must survive — wiping it was the bug.
+    let after = fs::read_to_string(&path).expect("file must survive, not be deleted");
+    assert!(
+        after.contains("#include \"motor_control.h\""),
+        "file header far above the first armed node must survive"
+    );
+    assert!(
+        after.contains("leerTemperatura"),
+        "the one un-armed function must survive"
+    );
+    assert!(
+        mr.lines_removed > 0 && mr.lines_removed < lines_before,
+        "only the armed spans are removed ({}), never the whole {}-line file",
+        mr.lines_removed,
+        lines_before
+    );
+
+    // Re-indexing after the delete sees only the un-armed function.
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE fql_kind = 'function' IN 'motor_control.cpp'",
+    );
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    assert_eq!(
+        qr.results.len(),
+        1,
+        "only the un-armed function remains indexed"
+    );
+}
+
 /// A complete FIND issues a master rev; quoting it back runs the sweep.
 #[test]
 fn found_rev_gates_the_sweep() {
