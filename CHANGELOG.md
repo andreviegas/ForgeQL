@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.26] — 2026-07-24 — test: table-drive the number-format and suffix enrichment families
+
+### Changed — the number_format and number_suffix families are now table-driven
+
+Continuing the enrichment coverage cleanup, the `number_format_*` (dec, hex, bin,
+oct, float, scientific) and `number_suffix_*` (u, ul, ll) families move onto the
+`names_contains_case!` table macro — one row per case, each generating the same
+named test. Every query string and expected value is preserved verbatim. The
+number edge-case tests (magic-number regressions, string/error-recovery
+suppression, sign, numeric comparison) keep their per-case comments and stay
+standalone. The suite still runs on the legacy backend. Test-only — no engine or
+index-output change.
+
 ## [0.139.25] — 2026-07-24 — test: begin table-driving the enrichment coverage families
 
 ### Changed — the naming and comment enrichment families are now table-driven

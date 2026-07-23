@@ -250,158 +250,25 @@ names_contains_case! {
 // §3 — NumberEnricher
 // =======================================================================
 
-#[test]
-fn number_format_dec() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    // Explicit LIMIT — number names sort lexically, so `-1,-2,...,0,...`
-    // fill the implicit DEFAULT_QUERY_LIMIT=20 before `42`.
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'dec' LIMIT 1000",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected decimal numbers");
-    // 42 should be among them
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"42"),
-        "expected '42' in decimal numbers: {ns:?}"
-    );
-}
-
-#[test]
-fn number_format_hex() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'hex'",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected hex numbers");
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"0xFF"),
-        "expected '0xFF' in hex numbers: {ns:?}"
-    );
-}
-
-#[test]
-fn number_format_bin() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'bin'",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected binary numbers");
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"0b1010"),
-        "expected '0b1010' in binary numbers: {ns:?}"
-    );
-}
-
-#[test]
-fn number_format_oct() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'oct'",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected octal numbers");
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"0777"),
-        "expected '0777' in octal numbers: {ns:?}"
-    );
-}
-
-#[test]
-fn number_format_float() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'float'",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected float numbers");
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"3.14"),
-        "expected '3.14' in float numbers: {ns:?}"
-    );
-}
-
-#[test]
-fn number_format_scientific() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'scientific'",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected scientific numbers");
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"1.5e-3"),
-        "expected '1.5e-3' in scientific numbers: {ns:?}"
-    );
-}
-
-#[test]
-fn number_suffix_u() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'u'",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected unsigned suffix numbers");
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"100u"),
-        "expected '100u' in u-suffix numbers: {ns:?}"
-    );
-}
-
-#[test]
-fn number_suffix_ul() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'ul'",
-    );
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"200UL"),
-        "expected '200UL' in ul-suffix numbers: {ns:?}"
-    );
-}
-
-#[test]
-fn number_suffix_ll() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'll'",
-    );
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"300LL"),
-        "expected '300LL' in ll-suffix numbers: {ns:?}"
-    );
+names_contains_case! {
+    number_format_dec:
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'dec' LIMIT 1000" => ["42"];
+    number_format_hex:
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'hex'" => ["0xFF"];
+    number_format_bin:
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'bin'" => ["0b1010"];
+    number_format_oct:
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'oct'" => ["0777"];
+    number_format_float:
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'float'" => ["3.14"];
+    number_format_scientific:
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_format = 'scientific'" => ["1.5e-3"];
+    number_suffix_u:
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'u'" => ["100u"];
+    number_suffix_ul:
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'ul'" => ["200UL"];
+    number_suffix_ll:
+        "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'll'" => ["300LL"];
 }
 
 #[test]
