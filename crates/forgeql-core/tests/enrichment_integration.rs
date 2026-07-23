@@ -132,95 +132,67 @@ fn field_opt<'a>(m: &'a SymbolMatch, key: &str) -> Option<&'a str> {
     m.fields.get(key).map(String::as_str)
 }
 
+// -----------------------------------------------------------------------
+// Table macros for the per-enricher coverage families. Each row is one
+// #[test] keeping its own name (so `cargo test <name>` selects one case and a
+// failure names it). Families with a uniform shape use these; a case with an
+// extra check or a negative assertion stays a standalone #[test].
+// -----------------------------------------------------------------------
+
+/// `exec` the query, then assert every listed name appears among the results.
+/// Some queries carry an explicit `LIMIT` so a target identifier is not crowded
+/// past the default limit by comment rows — the query string is kept verbatim.
+macro_rules! names_contains_case {
+    ($($name:ident: $query:literal => [$($expect:literal),+ $(,)?];)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let (mut e, sid, _d) = engine_enrichment_only();
+                let r = exec(&mut e, &sid, $query);
+                let qr = common::as_query(&r);
+                let ns: Vec<&str> = names(&qr.results);
+                $(
+                    assert!(ns.contains(&$expect), "expected {} in {ns:?}", $expect);
+                )+
+            }
+        )*
+    };
+}
+
+/// `exec` the query, assert it returned rows, then assert every row carries the
+/// expected value for the named enrichment field.
+macro_rules! field_all_case {
+    ($($name:ident: $query:literal, field = $key:literal => $val:literal;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let (mut e, sid, _d) = engine_enrichment_only();
+                let r = exec(&mut e, &sid, $query);
+                let qr = common::as_query(&r);
+                assert!(!qr.results.is_empty(), "expected at least one match for `{}`", $query);
+                for m in &qr.results {
+                    assert_eq!(field(m, $key), $val);
+                }
+            }
+        )*
+    };
+}
+
 // =======================================================================
 // §1 — NamingEnricher
 // =======================================================================
 
-#[test]
-fn naming_camel_case() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'camelCase'");
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"camelCaseVar"),
-        "expected camelCaseVar in {ns:?}"
-    );
-    assert!(
-        ns.contains(&"docLineTarget"),
-        "expected docLineTarget in {ns:?}"
-    );
-}
-
-#[test]
-fn naming_pascal_case() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'PascalCase'");
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"PascalCaseVar"),
-        "expected PascalCaseVar in {ns:?}"
-    );
-    assert!(
-        ns.contains(&"SimpleStruct"),
-        "expected SimpleStruct in {ns:?}"
-    );
-    assert!(ns.contains(&"SimpleEnum"), "expected SimpleEnum in {ns:?}");
-    assert!(
-        ns.contains(&"SimpleClass"),
-        "expected SimpleClass in {ns:?}"
-    );
-}
-
-#[test]
-fn naming_snake_case() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    // Explicit LIMIT — default sort by (name,line,path) lets comments (names
-    // beginning with `/`) crowd out real identifiers under the implicit
-    // DEFAULT_QUERY_LIMIT=20.
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE naming = 'snake_case' LIMIT 1000",
-    );
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"snake_case_var"),
-        "expected snake_case_var in {ns:?}"
-    );
-}
-
-#[test]
-fn naming_upper_snake() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE naming = 'UPPER_SNAKE'");
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"UPPER_SNAKE_VAR"),
-        "expected UPPER_SNAKE_VAR in {ns:?}"
-    );
-    assert!(ns.contains(&"ENUM_A"), "expected ENUM_A in {ns:?}");
-    assert!(ns.contains(&"ENUM_B"), "expected ENUM_B in {ns:?}");
-}
-
-#[test]
-fn naming_flatcase() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    // Explicit LIMIT — see naming_snake_case for rationale.
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE naming = 'flatcase' LIMIT 1000",
-    );
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"flatcasevar"),
-        "expected flatcasevar in {ns:?}"
-    );
+names_contains_case! {
+    naming_camel_case:
+        "FIND symbols WHERE naming = 'camelCase'" => ["camelCaseVar", "docLineTarget"];
+    naming_pascal_case:
+        "FIND symbols WHERE naming = 'PascalCase'" => ["PascalCaseVar", "SimpleStruct", "SimpleEnum", "SimpleClass"];
+    naming_snake_case:
+        "FIND symbols WHERE naming = 'snake_case' LIMIT 1000" => ["snake_case_var"];
+    naming_upper_snake:
+        "FIND symbols WHERE naming = 'UPPER_SNAKE'" => ["UPPER_SNAKE_VAR", "ENUM_A", "ENUM_B"];
+    naming_flatcase:
+        "FIND symbols WHERE naming = 'flatcase' LIMIT 1000" => ["flatcasevar"];
 }
 
 #[test]
@@ -256,113 +228,22 @@ fn naming_name_length_numeric_comparison() {
 // §2 — CommentEnricher
 // =======================================================================
 
-#[test]
-fn comment_style_doc_line() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'doc_line'",
-    );
-    let qr = common::as_query(&r);
-    assert!(
-        !qr.results.is_empty(),
-        "expected at least one doc_line comment"
-    );
-    for m in &qr.results {
-        assert_eq!(field(m, "comment_style"), "doc_line");
-    }
+field_all_case! {
+    comment_style_doc_line:
+        "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'doc_line'", field = "comment_style" => "doc_line";
+    comment_style_doc_block:
+        "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'doc_block'", field = "comment_style" => "doc_block";
+    comment_style_block:
+        "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'block'", field = "comment_style" => "block";
+    comment_style_line:
+        "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'line'", field = "comment_style" => "line";
 }
 
-#[test]
-fn comment_style_doc_block() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'doc_block'",
-    );
-    let qr = common::as_query(&r);
-    assert!(
-        !qr.results.is_empty(),
-        "expected at least one doc_block comment"
-    );
-    for m in &qr.results {
-        assert_eq!(field(m, "comment_style"), "doc_block");
-    }
-}
-
-#[test]
-fn comment_style_block() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'block'",
-    );
-    let qr = common::as_query(&r);
-    assert!(
-        !qr.results.is_empty(),
-        "expected at least one block comment"
-    );
-    for m in &qr.results {
-        assert_eq!(field(m, "comment_style"), "block");
-    }
-}
-
-#[test]
-fn comment_style_line() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'comment' WHERE comment_style = 'line'",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected at least one line comment");
-    for m in &qr.results {
-        assert_eq!(field(m, "comment_style"), "line");
-    }
-}
-
-#[test]
-fn comment_has_doc_true() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' WHERE has_doc = 'true'",
-    );
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    // docBlockFunction is preceded by a /** comment
-    assert!(
-        ns.contains(&"docBlockFunction"),
-        "expected docBlockFunction in has_doc=true results: {ns:?}"
-    );
-}
-
-#[test]
-fn comment_has_doc_false() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    // Explicit LIMIT — `noDocFunction` sorts past the implicit
-    // DEFAULT_QUERY_LIMIT=20 under the default (name,line,path) order.
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' WHERE has_doc = 'false' LIMIT 1000",
-    );
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    // noDocFunction is preceded by a /* comment (not doc)
-    assert!(
-        ns.contains(&"noDocFunction"),
-        "expected noDocFunction in has_doc=false results: {ns:?}"
-    );
-    assert!(
-        ns.contains(&"anotherNoDocFunction"),
-        "expected anotherNoDocFunction in has_doc=false results: {ns:?}"
-    );
+names_contains_case! {
+    comment_has_doc_true:
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE has_doc = 'true'" => ["docBlockFunction"];
+    comment_has_doc_false:
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE has_doc = 'false' LIMIT 1000" => ["noDocFunction", "anotherNoDocFunction"];
 }
 
 // =======================================================================

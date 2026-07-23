@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.25] — 2026-07-24 — test: begin table-driving the enrichment coverage families
+
+### Changed — the naming and comment enrichment families are now table-driven
+
+The `enrichment_integration` suite had families of near-identical `#[test]`
+functions that differed only in a query string and an expected value. Two reusable
+table macros are introduced — `names_contains_case!` (assert the listed names
+appear among the results) and `field_all_case!` (assert every returned row carries
+the expected value for a named enrichment field) — and the naming-style and
+comment families are moved onto them: one table row per case, generating the same
+named test so `cargo test <name>` still selects a single case. Every query string
+and expected value is preserved verbatim; cases with a different shape (a scalar
+`name_length` check, a numeric comparison) stay standalone. The suite still runs on
+the legacy backend. Test-only — no engine or index-output change.
+
 ## [0.139.24] — 2026-07-23 — test: collapse the WHERE / ORDER BY / LIMIT coverage families into tables
 
 ### Changed — repetitive one-test-per-case families are now table-driven
