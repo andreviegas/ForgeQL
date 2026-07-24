@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.34] — 2026-07-24 — fix: point the missing-IF-REV hint at a handle FIND NODE can resolve
+
+### Fixed — the "requires IF REV" error no longer suggests an unresolvable FIND NODE
+
+When a mutation that needs `IF REV` is issued without one, the error tells you
+to recover the current rev with `FIND NODE '<handle>'`. For a handle that
+carries an offset or line-range suffix — `n<hex>(a-b)` (a file line range) or
+`<id>(n)` (a node-relative offset) — `FIND NODE` rejects that form with
+`invalid node_id format`, so the suggested command could not be run. The hint
+now strips the suffix and names the addressable base handle, which `FIND NODE`
+resolves: for a line-range handle that is the enclosing file handle, whose rev
+is exactly the one the mutation gates on. Plain node handles are unaffected.
 ## [0.139.33] — 2026-07-24 — test: split the query surface into its own suite
 
 ### Changed — engine_queries is a new themed test file carved from engine_integration

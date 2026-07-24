@@ -170,10 +170,15 @@ pub(super) fn require_rev<'a>(
     node_id: &str,
 ) -> Result<&'a str> {
     if_rev.ok_or_else(|| {
+        // FIND NODE resolves the addressable base handle, not an offset/range
+        // suffix like `(a-b)` or `(n)`; strip it so the suggested command parses.
+        // For a line-range handle the base is the file handle, whose rev is the
+        // one the mutation gates on.
+        let base = node_id.split_once('(').map_or(node_id, |(head, _)| head);
         anyhow::anyhow!(
             "{verb} requires IF REV '<rev>'. The rev travels with the handle: it is on the \
              FIND / SHOW row that handed you '{node_id}', and on the result of the mutation \
-             that last touched it. If you no longer have it, FIND NODE '{node_id}' returns it."
+             that last touched it. If you no longer have it, FIND NODE '{base}' returns it."
         )
     })
 }
@@ -234,7 +239,7 @@ pub(super) fn rev_mismatch_payload(
 }
 #[cfg(test)]
 mod rev_mismatch_tests {
-    use super::{node_span_text, rev_mismatch_payload};
+    use super::{node_span_text, require_rev, rev_mismatch_payload};
 
     #[test]
     fn node_span_text_extracts_inclusive_1based_range() {
@@ -288,5 +293,46 @@ mod rev_mismatch_tests {
         assert_eq!(*lines.last().unwrap(), "line200");
         assert!(content.contains("SHOW NODE 'nabc.0000'"));
         assert!(content.contains("168 lines elided"));
+    }
+
+    #[test]
+    fn require_rev_missing_points_find_node_at_the_base_handle() {
+        // A line-range file handle: FIND NODE rejects the `(a-b)` suffix, so the
+        // recovery suggestion must strip it to the bare file handle.
+        let err = require_rev(None, "MOVE NODE", "n06b86936d4e7(1855-1943)")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("FIND NODE 'n06b86936d4e7' returns it"),
+            "{err}"
+        );
+        assert!(
+            !err.contains("FIND NODE 'n06b86936d4e7(1855-1943)'"),
+            "must not suggest FIND NODE on a handle it cannot parse: {err}"
+        );
+
+        // A node-relative offset handle strips to its addressable node handle.
+        let err = require_rev(None, "CHANGE NODE", "n06b86936d4e7.0091(3)")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("FIND NODE 'n06b86936d4e7.0091' returns it"),
+            "{err}"
+        );
+
+        // A plain node handle is unchanged (base == the whole handle).
+        let err = require_rev(None, "DELETE NODE", "n06b86936d4e7.0091")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("FIND NODE 'n06b86936d4e7.0091' returns it"),
+            "{err}"
+        );
+
+        // A present rev short-circuits and is returned as-is.
+        assert_eq!(
+            require_rev(Some("habc"), "MOVE NODE", "n1(2-3)").unwrap(),
+            "habc"
+        );
     }
 }
