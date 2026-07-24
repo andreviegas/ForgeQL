@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.31] — 2026-07-24 — test: split the bare-hex addressing cases into their own suite
+
+### Changed — engine_addressing is a new themed test file carved from engine_integration
+
+The `engine_integration` suite mixed many unrelated engine concerns in one large
+file. This begins splitting it into navigable themed files: the ten tests that
+exercise bare-hex file and directory handles and directory-rev tracking —
+resolving, reading, deleting, changing, and inserting around files and
+directories by their stable `n<hex>` handles — move verbatim into a new
+`engine_addressing` suite. No test body changed; the functions only relocated,
+each keeping its exact name so `cargo test <name>` still selects it. The shared
+helpers they use already live in `tests/common`. Test inventory is unchanged:
+the ten cases left `engine_integration` and now run under `engine_addressing`,
+none lost or duplicated. Test-only — no engine or index-output change.
 ## [0.139.30] — 2026-07-24 — test: promote the shared engine-integration helpers into the common harness
 
 ### Changed — engine_integration's tuple-style helpers now live in tests/common
