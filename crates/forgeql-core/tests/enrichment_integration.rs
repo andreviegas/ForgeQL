@@ -178,6 +178,26 @@ macro_rules! field_all_case {
     };
 }
 
+macro_rules! field_num_bound_case {
+    ($($name:ident: $query:literal, field = $key:literal, |$v:ident| $pred:expr, non_empty = $ne:literal;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let (mut e, sid, _d) = engine_enrichment_only();
+                let r = exec(&mut e, &sid, $query);
+                let qr = common::as_query(&r);
+                if $ne {
+                    assert!(!qr.results.is_empty(), "expected at least one match for `{}`", $query);
+                }
+                for m in &qr.results {
+                    let $v: i64 = field(m, $key).parse().unwrap();
+                    assert!($pred, "field `{}` bound check failed: got {} for `{}`", $key, $v, m.name);
+                }
+            }
+        )*
+    };
+}
+
 // =======================================================================
 // §1 — NamingEnricher
 // =======================================================================
@@ -1843,122 +1863,26 @@ fn scope_filter_file_scope() {
 // §10 — field_num() fallback (numeric comparison on dynamic fields)
 // =======================================================================
 
-#[test]
-fn field_num_name_length_greater_than() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name_length > 15");
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty());
-    for m in &qr.results {
-        let len: usize = field(m, "name_length").parse().unwrap();
-        assert!(
-            len > 15,
-            "name_length should be > 15, got {len} for '{}'",
-            m.name
-        );
-    }
+field_num_bound_case! {
+    field_num_name_length_greater_than:
+        "FIND symbols WHERE name_length > 15", field = "name_length", |v| v > 15, non_empty = true;
+    field_num_name_length_less_than:
+        "FIND symbols WHERE name_length < 3", field = "name_length", |v| v < 3, non_empty = false;
+    field_num_condition_tests_gte:
+        "FIND symbols WHERE condition_tests >= 3", field = "condition_tests", |v| v >= 3, non_empty = false;
+    field_num_lines_lte:
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE lines <= 3", field = "lines", |v| v <= 3, non_empty = false;
 }
 
-#[test]
-fn field_num_name_length_less_than() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name_length < 3");
-    let qr = common::as_query(&r);
-    // All returned symbols must have name_length < 3
-    for m in &qr.results {
-        let len: usize = field(m, "name_length").parse().unwrap();
-        assert!(
-            len < 3,
-            "name_length should be < 3, got {len} for '{}'",
-            m.name
-        );
-    }
-}
-
-#[test]
-fn field_num_condition_tests_gte() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE condition_tests >= 3");
-    let qr = common::as_query(&r);
-    for m in &qr.results {
-        let ct: i64 = field(m, "condition_tests").parse().unwrap();
-        assert!(
-            ct >= 3,
-            "condition_tests should be >= 3, got {ct} for '{}'",
-            m.name
-        );
-    }
-}
-
-#[test]
-fn field_num_lines_lte() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' WHERE lines <= 3",
-    );
-    let qr = common::as_query(&r);
-    for m in &qr.results {
-        let l: usize = field(m, "lines").parse().unwrap();
-        assert!(l <= 3, "lines should be <= 3, got {l} for '{}'", m.name);
-    }
-}
-
-#[test]
-fn field_num_return_count_eq() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' WHERE return_count = 3",
-    );
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"multiReturn"),
-        "multiReturn should have return_count=3: {ns:?}"
-    );
-}
-
-#[test]
-fn field_num_branch_count_comparison() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE node_kind = 'function_definition' WHERE branch_count > 5",
-    );
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"controlFlowPatterns"),
-        "controlFlowPatterns should have branch_count > 5: {ns:?}"
-    );
-}
-
-#[test]
-fn field_num_member_count_comparison() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE member_count >= 3");
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"SimpleStruct"),
-        "SimpleStruct should have member_count >= 3: {ns:?}"
-    );
-}
-
-#[test]
-fn field_num_null_check_count_comparison() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE null_check_count > 3");
-    let qr = common::as_query(&r);
-    let ns: Vec<&str> = names(&qr.results);
-    assert!(
-        ns.contains(&"redundancyPatterns"),
-        "redundancyPatterns should have null_check_count > 3: {ns:?}"
-    );
+names_contains_case! {
+    field_num_return_count_eq:
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE return_count = 3" => ["multiReturn"];
+    field_num_branch_count_comparison:
+        "FIND symbols WHERE node_kind = 'function_definition' WHERE branch_count > 5" => ["controlFlowPatterns"];
+    field_num_member_count_comparison:
+        "FIND symbols WHERE member_count >= 3" => ["SimpleStruct"];
+    field_num_null_check_count_comparison:
+        "FIND symbols WHERE null_check_count > 3" => ["redundancyPatterns"];
 }
 
 // =======================================================================
@@ -2374,91 +2298,25 @@ fn metrics_throw_count() {
 
 // --- CastEnricher: cast_safety ---
 
-#[test]
-fn cast_safety_c_style_unsafe() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
+field_all_case! {
+    cast_safety_c_style_unsafe:
         "FIND symbols WHERE node_kind = 'cast_expression'",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected c-style cast");
-    for m in &qr.results {
-        assert_eq!(field(m, "cast_safety"), "unsafe");
-    }
+        field = "cast_safety" => "unsafe";
+    cast_safety_static_cast_safe:
+        "FIND symbols WHERE cast_style = 'static_cast'",
+        field = "cast_safety" => "safe";
+    cast_safety_reinterpret_cast_unsafe:
+        "FIND symbols WHERE cast_style = 'reinterpret_cast'",
+        field = "cast_safety" => "unsafe";
+    cast_safety_const_cast_moderate:
+        "FIND symbols WHERE cast_style = 'const_cast'",
+        field = "cast_safety" => "moderate";
 }
 
 // In tree-sitter-cpp 0.23, named C++ casts (static_cast, reinterpret_cast,
 // etc.) are parsed as call_expression(template_function(identifier)) rather
 // than as distinct node kinds.  CastEnricher detects them via
 // LanguageConfig::named_cast_keywords.
-
-#[test]
-fn cast_safety_static_cast_safe() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    // static_cast<T>() → call_expression with template_function "static_cast"
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE cast_style = 'static_cast'",
-    );
-    let qr = common::as_query(&r);
-    assert!(
-        !qr.results.is_empty(),
-        "expected at least one static_cast symbol"
-    );
-    for m in &qr.results {
-        assert_eq!(
-            field(m, "cast_safety"),
-            "safe",
-            "static_cast should have cast_safety='safe' on '{}'",
-            m.name
-        );
-    }
-}
-
-#[test]
-fn cast_safety_reinterpret_cast_unsafe() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
-        "FIND symbols WHERE cast_style = 'reinterpret_cast'",
-    );
-    let qr = common::as_query(&r);
-    assert!(
-        !qr.results.is_empty(),
-        "expected at least one reinterpret_cast symbol"
-    );
-    for m in &qr.results {
-        assert_eq!(
-            field(m, "cast_safety"),
-            "unsafe",
-            "reinterpret_cast should have cast_safety='unsafe' on '{}'",
-            m.name
-        );
-    }
-}
-
-#[test]
-fn cast_safety_const_cast_moderate() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE cast_style = 'const_cast'");
-    let qr = common::as_query(&r);
-    assert!(
-        !qr.results.is_empty(),
-        "expected at least one const_cast symbol"
-    );
-    for m in &qr.results {
-        assert_eq!(
-            field(m, "cast_safety"),
-            "moderate",
-            "const_cast should have cast_safety='moderate' on '{}'",
-            m.name
-        );
-    }
-}
 
 #[test]
 fn cast_safety_named_cast_has_target_type() {

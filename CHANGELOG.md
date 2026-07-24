@@ -6,6 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.28] — 2026-07-24 — test: table-drive the numeric-field and cast-safety enrichment families
+
+### Changed — the field_num and cast_safety families are now table-driven
+
+Continuing the enrichment coverage cleanup, the `field_num_*` family is fully
+collapsed: the four "assert an expected name appears" cases (return-count,
+branch-count, member-count, null-check-count) move onto the existing
+`names_contains_case!` macro, and the four "parse a numeric field and check a
+per-row bound" cases (name-length greater/less, condition-tests, lines) move
+onto a new `field_num_bound_case!` macro that preserves each query, the parsed
+field, the comparison, and the per-case non-empty expectation. The
+`cast_safety_*` family's four uniform cases (c-style unsafe, static_cast safe,
+reinterpret_cast unsafe, const_cast moderate) move onto `field_all_case!`. Cases
+with a different shape — cast target-type presence, cast-count totals, and the
+member/parameter kind checks — stay standalone. Every query string and expected
+value is preserved verbatim, and each generated test keeps its original name so
+`cargo test <name>` still selects a single case. The suite still runs on the
+legacy backend. Test-only — no engine or index-output change.
 ## [0.139.27] — 2026-07-24 — test: table-drive the suffix-meaning and operator-category enrichment families
 
 ### Changed — the number suffix_meaning and operator_category families are now table-driven
