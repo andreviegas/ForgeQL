@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.32] — 2026-07-24 — test: split the file-lifecycle cases into their own suite
+
+### Changed — engine_file_ops is a new themed test file carved from engine_integration
+
+Continuing the split of the large `engine_integration` suite, the seven tests
+that exercise whole-file and directory lifecycle mutations — creating files and
+directories (`INSERT NODE FOR`), renaming and moving them (`MOVE NODE … TO`),
+copying them (`COPY NODE … TO`), and listing them (`FIND files`) — move verbatim
+into a new `engine_file_ops` suite. No test body changed; the functions only
+relocated, each keeping its exact name so `cargo test <name>` still selects it.
+The shared helpers they use already live in `tests/common`. Test inventory is
+unchanged: the seven cases left `engine_integration` and now run under
+`engine_file_ops`, none lost or duplicated. Test-only — no engine or
+index-output change.
 ## [0.139.31] — 2026-07-24 — test: split the bare-hex addressing cases into their own suite
 
 ### Changed — engine_addressing is a new themed test file carved from engine_integration
