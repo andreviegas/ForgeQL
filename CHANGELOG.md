@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.29] — 2026-07-24 — test: table-drive the single-symbol field-assertion enrichment families
+
+### Changed — the metrics-flag, member-count, and member-kind families are now table-driven
+
+Continuing the enrichment coverage cleanup, several families shared one shape —
+look up a single symbol by name and assert one enrichment field on it. They move
+onto a new `named_field_case!` macro: the metrics inline/const/volatile flags and
+the struct/enum member-count checks, plus the member-kind and owner-kind checks.
+Each generated test keeps its original name so `cargo test <name>` still selects
+a single case, and every query string, looked-up name, and expected value is
+preserved verbatim. Cases with a different shape — the member-count that parses
+and compares, the two-field owner/kind check, and the scope filters — stay
+standalone. The suite still runs on the legacy backend. Test-only — no engine or
+index-output change.
 ## [0.139.28] — 2026-07-24 — test: table-drive the numeric-field and cast-safety enrichment families
 
 ### Changed — the field_num and cast_safety families are now table-driven

@@ -198,6 +198,21 @@ macro_rules! field_num_bound_case {
     };
 }
 
+macro_rules! named_field_case {
+    ($($name:ident: $query:literal, find = $target:literal, field = $key:literal => $val:literal;)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let (mut e, sid, _d) = engine_enrichment_only();
+                let r = exec(&mut e, &sid, $query);
+                let qr = common::as_query(&r);
+                let m = find_by_name(&qr.results, $target);
+                assert_eq!(field(m, $key), $val);
+            }
+        )*
+    };
+}
+
 // =======================================================================
 // §1 — NamingEnricher
 // =======================================================================
@@ -1395,26 +1410,17 @@ fn metrics_string_count() {
     assert_eq!(sc, 3, "withStrings has 3 string literals");
 }
 
-#[test]
-fn metrics_member_count_struct() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'SimpleStruct'");
-    let qr = common::as_query(&r);
-    let m = find_by_name(&qr.results, "SimpleStruct");
-    assert_eq!(field(m, "member_count"), "3", "SimpleStruct has 3 fields");
-}
-
-#[test]
-fn metrics_member_count_enum() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'SimpleEnum'");
-    let qr = common::as_query(&r);
-    let m = find_by_name(&qr.results, "SimpleEnum");
-    assert_eq!(
-        field(m, "member_count"),
-        "4",
-        "SimpleEnum has 4 enumerators"
-    );
+named_field_case! {
+    metrics_member_count_struct:
+        "FIND symbols WHERE name = 'SimpleStruct'", find = "SimpleStruct", field = "member_count" => "3";
+    metrics_member_count_enum:
+        "FIND symbols WHERE name = 'SimpleEnum'", find = "SimpleEnum", field = "member_count" => "4";
+    metrics_is_inline:
+        "FIND symbols WHERE name = 'inlineFunc'", find = "inlineFunc", field = "is_inline" => "true";
+    metrics_is_const:
+        "FIND symbols WHERE name = 'constVar'", find = "constVar", field = "is_const" => "true";
+    metrics_is_volatile:
+        "FIND symbols WHERE name = 'volatileVar'", find = "volatileVar", field = "is_volatile" => "true";
 }
 
 #[test]
@@ -1426,37 +1432,6 @@ fn metrics_member_count_class() {
     let mc: usize = field(m, "member_count").parse().unwrap();
     // SimpleClass has: publicField, publicMethod, privateField, protectedField = 4 field_declarations
     assert!(mc >= 3, "SimpleClass should have >= 3 members, got {mc}");
-}
-
-#[test]
-fn metrics_is_inline() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'inlineFunc'");
-    let qr = common::as_query(&r);
-    let m = find_by_name(&qr.results, "inlineFunc");
-    assert_eq!(field(m, "is_inline"), "true", "inlineFunc should be inline");
-}
-
-#[test]
-fn metrics_is_const() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'constVar'");
-    let qr = common::as_query(&r);
-    let m = find_by_name(&qr.results, "constVar");
-    assert_eq!(field(m, "is_const"), "true", "constVar should be const");
-}
-
-#[test]
-fn metrics_is_volatile() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'volatileVar'");
-    let qr = common::as_query(&r);
-    let m = find_by_name(&qr.results, "volatileVar");
-    assert_eq!(
-        field(m, "is_volatile"),
-        "true",
-        "volatileVar should be volatile"
-    );
 }
 
 // NOTE: field_declaration nodes are not indexed by extract_name() in
@@ -2388,32 +2363,13 @@ fn scope_is_exported_static_not_exported() {
 
 // --- MemberEnricher: member_kind, owner_kind ---
 
-#[test]
-fn member_kind_method() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    // declaredMethod is a field_declaration with function_declarator (method prototype)
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'declaredMethod'");
-    let qr = common::as_query(&r);
-    let m = find_by_name(&qr.results, "declaredMethod");
-    assert_eq!(field(m, "member_kind"), "method");
-}
-
-#[test]
-fn member_kind_field() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'publicField'");
-    let qr = common::as_query(&r);
-    let m = find_by_name(&qr.results, "publicField");
-    assert_eq!(field(m, "member_kind"), "field");
-}
-
-#[test]
-fn member_owner_kind_class() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(&mut e, &sid, "FIND symbols WHERE name = 'publicField'");
-    let qr = common::as_query(&r);
-    let m = find_by_name(&qr.results, "publicField");
-    assert_eq!(field(m, "owner_kind"), "class_specifier");
+named_field_case! {
+    member_kind_method:
+        "FIND symbols WHERE name = 'declaredMethod'", find = "declaredMethod", field = "member_kind" => "method";
+    member_kind_field:
+        "FIND symbols WHERE name = 'publicField'", find = "publicField", field = "member_kind" => "field";
+    member_owner_kind_class:
+        "FIND symbols WHERE name = 'publicField'", find = "publicField", field = "owner_kind" => "class_specifier";
 }
 
 #[test]
