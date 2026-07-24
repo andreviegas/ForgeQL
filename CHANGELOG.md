@@ -6,6 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.43] — 2026-07-24 — refactor: give the diff math its own module
+
+### Changed — LCS and hunk assembly move to `transforms/diff/lcs.rs`
+
+`transforms/diff.rs` had grown to hold three separate concerns: the layer that
+turns edits into a plan and applies them, the token-thrifted compact preview,
+and — underneath both — the diff computation itself. The last of those now
+lives in its own module: the `ChangeRange` type, the line-level LCS
+(`lcs_matches`, `gaps_from_matches`, `change_ranges`), unified-diff hunk
+assembly (`build_hunks`, `render_hunk`), the byte-offset helpers
+(`line_start_offsets`, `byte_offset_to_line`), in-place range merging
+(`merge_change_ranges`), and the context-line constant they share.
+
+The move is verbatim: no function body, no signature, and no rendered diff byte
+changed. The moved items are `pub(super)`, so nothing new is reachable from
+outside `transforms::diff` and every existing call path still resolves as it
+did. Nothing written into an index segment is affected, so cached segments stay
+valid.
 ## [0.139.42] — 2026-07-25 — test: finish splitting overlay_parity.rs into focused files
 
 ### Changed — overlay_parity.rs fully dissolved into single-concern files
