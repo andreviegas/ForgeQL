@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.33] — 2026-07-24 — test: split the query surface into its own suite
+
+### Changed — engine_queries is a new themed test file carved from engine_integration
+
+Continuing the split of the large `engine_integration` suite, the read/query
+surface moves into a new `engine_queries` suite: the `FIND symbols` /
+`FIND usages` / `FIND globals` / `FIND variables` tests and the `SHOW body` /
+`SHOW context` / `SHOW outline` / `SHOW members` tests, together with their
+filter, ordering, pagination, projection, and result-shape cases, and the small
+class-method fixture helper two of them share. The tests were relocated in whole
+contiguous blocks so their doc comments and section headers travel with them; no
+test body changed and each keeps its exact name. The shared session and exec
+helpers already live in `tests/common`. After the move, the `Backend`/`Clauses`
+IR imports and the extra-files session helper are no longer used in
+`engine_integration` and are dropped there. Test inventory is unchanged: the
+query cases left `engine_integration` and now run under `engine_queries`, none
+lost or duplicated. Test-only — no engine or index-output change.
 ## [0.139.32] — 2026-07-24 — test: split the file-lifecycle cases into their own suite
 
 ### Changed — engine_file_ops is a new themed test file carved from engine_integration
