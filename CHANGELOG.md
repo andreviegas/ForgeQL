@@ -6,6 +6,15 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.35] — 2026-07-25 — test: extract a shared overlay parity harness
+
+### Changed — overlay parity setup helpers moved to a reusable harness module
+
+- The overlay/columnar parity suite's setup helpers (fixture indexing, segment
+  building, result key-tuple flattening) now live in a dedicated
+  `overlay_harness` test module that also re-exports the shared types. This lets
+  the large parity suite be split into small, single-concern files without
+  duplicating setup. No test behavior changes.
 ## [0.139.34] — 2026-07-24 — fix: point the missing-IF-REV hint at a handle FIND NODE can resolve
 
 ### Fixed — the "requires IF REV" error no longer suggests an unresolvable FIND NODE
