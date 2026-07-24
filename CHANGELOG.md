@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.44] — 2026-07-25 — refactor: give the compact diff preview its own module
+
+### Changed — the compact preview moves to `transforms/diff/compact.rs`
+
+Second step of separating the three concerns that shared `transforms/diff.rs`.
+The token-bounded preview rendered for a pending change — `CompactDiffConfig`,
+`compact_diff_plan`, `compact_diff_addressed`, the hunk builder and its
+renderer, the edit-driven change-range derivation, and line truncation — now
+lives in its own module, leaving `diff.rs` with the plan/apply layer and the
+module wiring.
+
+Verbatim motion again: no rendered preview byte changed. The three public names
+are re-exported from `transforms::diff`, so every existing call path still
+resolves as it did, and the rest of the module is `pub(super)` or private.
+Nothing written into an index segment is affected, so cached segments stay
+valid.
+## [0.139.34] — 2026-07-24 — refactor: give the diff math its own module
 ## [0.139.43] — 2026-07-24 — refactor: give the diff math its own module
 
 ### Changed — LCS and hunk assembly move to `transforms/diff/lcs.rs`
