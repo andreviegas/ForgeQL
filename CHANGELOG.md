@@ -6,6 +6,26 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.46] — 2026-07-25 — refactor: move the diff tests into their own file
+
+### Changed — `transforms/diff.rs` is now 24 lines of module wiring
+
+Final step of the `transforms/diff.rs` split. The inline `#[cfg(test)] mod
+tests` block — around 670 lines, roughly a third of the original file — moves
+into `transforms/diff/tests.rs`, declared from the parent as `mod tests;`. The
+same shape the `result.rs` split settled on.
+
+Every test keeps its exact name and body, and the module's imports are
+unchanged, so `super::` still resolves to `transforms::diff` exactly as it did
+when the module was inline. The only edit beyond the move is dropping the
+now-pointless section banner that separated tests from code in the old
+single-file layout.
+
+That completes the split: `diff.rs` went from 52 036 bytes holding three
+concerns plus its tests to 24 lines of documentation, `mod` declarations and
+re-exports, over `apply.rs`, `compact.rs`, `lcs.rs` and `tests.rs`. Public
+paths are unchanged throughout, and nothing written into an index segment is
+affected.
 ## [0.139.45] — 2026-07-25 — refactor: give the plan/apply layer its own module
 
 ### Changed — `transforms/diff.rs` is now only module wiring
@@ -24,7 +44,6 @@ Verbatim motion: no function body or signature changed, `diff_file_edit` and
 `diff_plan` stay public at the same paths, and the two helpers the other
 submodules and the tests need are `pub(super)`. Nothing written into an index
 segment is affected, so cached segments stay valid.
-## [0.139.35] — 2026-07-25 — refactor: give the compact diff preview its own module
 ## [0.139.44] — 2026-07-25 — refactor: give the compact diff preview its own module
 
 ### Changed — the compact preview moves to `transforms/diff/compact.rs`
@@ -41,7 +60,6 @@ are re-exported from `transforms::diff`, so every existing call path still
 resolves as it did, and the rest of the module is `pub(super)` or private.
 Nothing written into an index segment is affected, so cached segments stay
 valid.
-## [0.139.34] — 2026-07-24 — refactor: give the diff math its own module
 ## [0.139.43] — 2026-07-24 — refactor: give the diff math its own module
 
 ### Changed — LCS and hunk assembly move to `transforms/diff/lcs.rs`
