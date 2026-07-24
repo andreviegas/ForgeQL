@@ -2239,63 +2239,16 @@ fn no_repeated_calls_with_side_effectful_args() {
 
 // --- NumberEnricher: suffix_meaning ---
 
-#[test]
-fn number_suffix_meaning_unsigned() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
+field_all_case! {
+    number_suffix_meaning_unsigned:
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'u'",
-    );
-    let qr = common::as_query(&r);
-    assert!(
-        !qr.results.is_empty(),
-        "expected at least one 'u' suffix literal"
-    );
-    for m in &qr.results {
-        assert_eq!(
-            field(m, "suffix_meaning"),
-            "unsigned",
-            "suffix 'u' should have suffix_meaning 'unsigned' on '{}'",
-            m.name,
-        );
-    }
-}
-
-#[test]
-fn number_suffix_meaning_unsigned_long() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
+        field = "suffix_meaning" => "unsigned";
+    number_suffix_meaning_unsigned_long:
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'ul'",
-    );
-    let qr = common::as_query(&r);
-    assert!(
-        !qr.results.is_empty(),
-        "expected at least one 'ul' suffix literal"
-    );
-    for m in &qr.results {
-        assert_eq!(field(m, "suffix_meaning"), "unsigned_long");
-    }
-}
-
-#[test]
-fn number_suffix_meaning_long_long() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
+        field = "suffix_meaning" => "unsigned_long";
+    number_suffix_meaning_long_long:
         "FIND symbols WHERE node_kind = 'number_literal' WHERE num_suffix = 'll'",
-    );
-    let qr = common::as_query(&r);
-    assert!(
-        !qr.results.is_empty(),
-        "expected at least one 'll' suffix literal"
-    );
-    for m in &qr.results {
-        assert_eq!(field(m, "suffix_meaning"), "long_long");
-    }
+        field = "suffix_meaning" => "long_long";
 }
 
 // --- ControlFlowEnricher: catch_all_kind ---
@@ -2389,64 +2342,19 @@ fn control_flow_for_style_range() {
 
 // --- OperatorEnricher: operator_category ---
 
-#[test]
-fn operator_category_increment() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
+field_all_case! {
+    operator_category_increment:
         "FIND symbols WHERE node_kind = 'update_expression'",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected update expressions");
-    for m in &qr.results {
-        assert_eq!(field(m, "operator_category"), "increment");
-    }
-}
-
-#[test]
-fn operator_category_compound_arithmetic() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
+        field = "operator_category" => "increment";
+    operator_category_compound_arithmetic:
         "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '+='",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected += compound assignments");
-    for m in &qr.results {
-        assert_eq!(field(m, "operator_category"), "arithmetic");
-    }
-}
-
-#[test]
-fn operator_category_compound_bitwise() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
+        field = "operator_category" => "arithmetic";
+    operator_category_compound_bitwise:
         "FIND symbols WHERE node_kind = 'compound_assignment' WHERE compound_op = '&='",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected &= compound assignments");
-    for m in &qr.results {
-        assert_eq!(field(m, "operator_category"), "bitwise");
-    }
-}
-
-#[test]
-fn operator_category_shift() {
-    let (mut e, sid, _d) = engine_enrichment_only();
-    let r = exec(
-        &mut e,
-        &sid,
+        field = "operator_category" => "bitwise";
+    operator_category_shift:
         "FIND symbols WHERE node_kind = 'shift_expression'",
-    );
-    let qr = common::as_query(&r);
-    assert!(!qr.results.is_empty(), "expected shift expressions");
-    for m in &qr.results {
-        assert_eq!(field(m, "operator_category"), "bitwise");
-    }
+        field = "operator_category" => "bitwise";
 }
 
 // --- MetricsEnricher: throw_count ---

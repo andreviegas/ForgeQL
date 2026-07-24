@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.27] — 2026-07-24 — test: table-drive the suffix-meaning and operator-category enrichment families
+
+### Changed — the number suffix_meaning and operator_category families are now table-driven
+
+Continuing the enrichment coverage cleanup, the `number_suffix_meaning_*` (u, ul,
+ll) and `operator_category_*` (increment, compound arithmetic, compound bitwise,
+shift) families move onto the `field_all_case!` table macro — one row per case,
+each generating the same named test and asserting the expected value for the
+named enrichment field on every returned row. Every query string and expected
+value is preserved verbatim. The broader operator family (prefix/postfix
+increment and decrement, compound-operator and shift-amount checks) has
+non-uniform assertion shapes and stays standalone. The suite still runs on the
+legacy backend. Test-only — no engine or index-output change.
 ## [0.139.26] — 2026-07-24 — test: table-drive the number-format and suffix enrichment families
 
 ### Changed — the number_format and number_suffix families are now table-driven
