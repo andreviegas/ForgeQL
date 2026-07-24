@@ -9,7 +9,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::apply_in_memory;
+use super::apply::apply_in_memory;
 use super::lcs::{ChangeRange, byte_offset_to_line, line_start_offsets, merge_change_ranges};
 use crate::transforms::{ByteRangeEdit, FileEdit, TransformPlan};
 use crate::workspace::file_io;

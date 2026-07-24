@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.45] — 2026-07-25 — refactor: give the plan/apply layer its own module
+
+### Changed — `transforms/diff.rs` is now only module wiring
+
+Third step of separating the concerns that shared `transforms/diff.rs`. The
+layer that turns a plan into a diff — `diff_file_edit`, `diff_plan`, the
+in-memory edit application, and unified-diff rendering — moves to
+`transforms/diff/apply.rs`.
+
+What remains in `diff.rs` is the module documentation, three `mod`
+declarations, the re-exports that keep `transforms::diff::…` paths resolving
+for callers, and the test module. `diff.rs` is down from 52 036 bytes before
+this series to roughly 25 000, nearly all of it tests.
+
+Verbatim motion: no function body or signature changed, `diff_file_edit` and
+`diff_plan` stay public at the same paths, and the two helpers the other
+submodules and the tests need are `pub(super)`. Nothing written into an index
+segment is affected, so cached segments stay valid.
+## [0.139.35] — 2026-07-25 — refactor: give the compact diff preview its own module
 ## [0.139.44] — 2026-07-25 — refactor: give the compact diff preview its own module
 
 ### Changed — the compact preview moves to `transforms/diff/compact.rs`
