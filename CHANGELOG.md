@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.30] — 2026-07-24 — test: promote the shared engine-integration helpers into the common harness
+
+### Changed — engine_integration's tuple-style helpers now live in tests/common
+
+As a prerequisite for splitting the large `engine_integration` suite into
+themed files, the helpers every test in it uses — `engine_with_session` and its
+extra-files and legacy variants, plus `execute_fql`, `try_fql`, `fql_err`, and
+`node_rev` — move into the shared `tests/common` module. Each `tests/*.rs` file
+is its own crate, so a split-off file cannot see another file's private
+helpers; hosting them in `common` lets every future themed file call them. The
+helper bodies are unchanged; `engine_integration` now imports them from
+`common` and every call site is otherwise untouched. The columnar/legacy
+session constructors these adapters wrap already lived in `common`.
+`syntax_coverage` keeps its own local `engine_with_session` (a different body)
+and is not affected. Test-only — no engine or index-output change.
 ## [0.139.29] — 2026-07-24 — test: table-drive the single-symbol field-assertion enrichment families
 
 ### Changed — the metrics-flag, member-count, and member-kind families are now table-driven

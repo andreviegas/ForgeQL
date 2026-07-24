@@ -27,75 +27,14 @@ use tempfile::tempdir;
 
 mod common;
 
-// -----------------------------------------------------------------------
-// Helpers — the shared harness lives in `tests/common`; these thin adapters
-// keep the `(engine, session_id, TempDir)` tuple idiom this suite's bodies use.
-// -----------------------------------------------------------------------
-
-/// Create a temp workspace with `motor_control` fixtures (plus any extras) and
-/// boot a columnar session over it. Returns `(engine, session_id, TempDir)`;
-/// the `TempDir` must stay alive.
-fn engine_with_session_with_extra_files(
-    extra_files: &[&str],
-) -> (ForgeQLEngine, String, tempfile::TempDir) {
-    let mut fixtures = vec!["motor_control.h", "motor_control.cpp"];
-    fixtures.extend_from_slice(extra_files);
-    common::columnar_session(&fixtures).into_parts()
-}
-
-fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    engine_with_session_with_extra_files(&[])
-}
-
-/// Legacy-backend variant of `engine_with_session`. Pins tests that document
-/// known legacy/columnar behaviour divergences; flip each caller back to
-/// `engine_with_session` once the columnar side is fixed.
-fn engine_with_session_legacy() -> (ForgeQLEngine, String, tempfile::TempDir) {
-    common::legacy_session(&["motor_control.h", "motor_control.cpp"]).into_parts()
-}
-/// Parse FQL and execute the first op against the engine.
-fn execute_fql(engine: &mut ForgeQLEngine, session_id: &str, fql: &str) -> ForgeQLResult {
-    let ops = parser::parse(fql).expect("parse");
-    let op = ops.first().expect("at least one op");
-    let coords = SessionCoords::from_session_id(session_id).expect("valid session_id");
-    engine
-        .execute(auth(AuthContext::Tester), Some(&coords), op)
-        .result
-        .expect("execute")
-}
-
-/// Parse and execute, returning the error instead of panicking on it.
-fn try_fql(
-    engine: &mut ForgeQLEngine,
-    session_id: &str,
-    fql: &str,
-) -> anyhow::Result<ForgeQLResult> {
-    let ops = parser::parse(fql).expect("parse");
-    let op = ops.first().expect("at least one op");
-    let coords = SessionCoords::from_session_id(session_id).expect("valid session_id");
-    engine
-        .execute(auth(AuthContext::Tester), Some(&coords), op)
-        .result
-}
-
-/// Run a statement that must be refused, and hand back the message it was
-/// refused with — the message is the contract for every LAST gate.
-fn fql_err(engine: &mut ForgeQLEngine, session_id: &str, fql: &str) -> String {
-    try_fql(engine, session_id, fql)
-        .expect_err("must be refused")
-        .to_string()
-}
+use common::{
+    engine_with_session, engine_with_session_legacy, engine_with_session_with_extra_files,
+    execute_fql, fql_err, node_rev, try_fql,
+};
 
 // -----------------------------------------------------------------------
 // Files and directories as addressable nodes (bare-hex `n<hex>` handles)
 // -----------------------------------------------------------------------
-
-fn node_rev(engine: &mut ForgeQLEngine, session_id: &str, handle: &str) -> String {
-    match execute_fql(engine, session_id, &format!("FIND NODE '{handle}'")) {
-        ForgeQLResult::FindNode(node) => node.rev,
-        other => panic!("expected FindNode, got {other:?}"),
-    }
-}
 
 #[test]
 fn bare_hex_resolves_the_whole_file() {

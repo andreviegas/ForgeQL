@@ -199,6 +199,74 @@ pub fn columnar_session_in(dir: tempfile::TempDir) -> TestSession {
 }
 
 // -----------------------------------------------------------------------
+// Tuple-style adapters — for suites that thread the explicit
+// `(engine, session_id, TempDir)` parts rather than calling the TestSession
+// methods above. The `TempDir` must stay alive.
+// -----------------------------------------------------------------------
+
+/// Boot a columnar session over `motor_control` fixtures plus any extras.
+/// Returns `(engine, session_id, TempDir)`; the `TempDir` must stay alive.
+pub fn engine_with_session_with_extra_files(
+    extra_files: &[&str],
+) -> (ForgeQLEngine, String, tempfile::TempDir) {
+    let mut fixtures = vec!["motor_control.h", "motor_control.cpp"];
+    fixtures.extend_from_slice(extra_files);
+    columnar_session(&fixtures).into_parts()
+}
+
+/// Columnar session over just the `motor_control` fixtures.
+pub fn engine_with_session() -> (ForgeQLEngine, String, tempfile::TempDir) {
+    engine_with_session_with_extra_files(&[])
+}
+
+/// Legacy-backend variant of [`engine_with_session`]. Pins tests that document
+/// known legacy/columnar behaviour divergences.
+pub fn engine_with_session_legacy() -> (ForgeQLEngine, String, tempfile::TempDir) {
+    legacy_session(&["motor_control.h", "motor_control.cpp"]).into_parts()
+}
+
+/// Parse FQL and execute the first op against the engine.
+pub fn execute_fql(engine: &mut ForgeQLEngine, session_id: &str, fql: &str) -> ForgeQLResult {
+    let ops = parser::parse(fql).expect("parse");
+    let op = ops.first().expect("at least one op");
+    let coords = SessionCoords::from_session_id(session_id).expect("valid session_id");
+    engine
+        .execute(auth(AuthContext::Tester), Some(&coords), op)
+        .result
+        .expect("execute")
+}
+
+/// Parse and execute, returning the error instead of panicking on it.
+pub fn try_fql(
+    engine: &mut ForgeQLEngine,
+    session_id: &str,
+    fql: &str,
+) -> anyhow::Result<ForgeQLResult> {
+    let ops = parser::parse(fql).expect("parse");
+    let op = ops.first().expect("at least one op");
+    let coords = SessionCoords::from_session_id(session_id).expect("valid session_id");
+    engine
+        .execute(auth(AuthContext::Tester), Some(&coords), op)
+        .result
+}
+
+/// Run a statement that must be refused, and hand back the refusal message —
+/// the message is the contract for every gate.
+pub fn fql_err(engine: &mut ForgeQLEngine, session_id: &str, fql: &str) -> String {
+    try_fql(engine, session_id, fql)
+        .expect_err("must be refused")
+        .to_string()
+}
+
+/// Current rev of a node handle, via `FIND NODE`.
+pub fn node_rev(engine: &mut ForgeQLEngine, session_id: &str, handle: &str) -> String {
+    match execute_fql(engine, session_id, &format!("FIND NODE '{handle}'")) {
+        ForgeQLResult::FindNode(node) => node.rev,
+        other => panic!("expected FindNode, got {other:?}"),
+    }
+}
+
+// -----------------------------------------------------------------------
 // Result extractors — pull a typed result out of a `ForgeQLResult` or panic.
 // -----------------------------------------------------------------------
 
