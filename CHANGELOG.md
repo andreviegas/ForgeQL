@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.47] — 2026-07-25 — refactor: isolate the commit-exclude policy
+
+### Changed — which files ForgeQL refuses to commit now lives in `git/excludes.rs`
+
+`git/mod.rs` had grown into a plumbing catch-all mixing five concerns. The
+first one out is the exclude policy, which is the safety-critical one: it
+decides which paths never reach a commit, and a regression there puts
+ForgeQL's own runtime artifacts into user history.
+
+Moved verbatim into `git/excludes.rs`: the two exclusion lists — the wider set
+a user-facing commit drops and the narrower set an internal checkpoint drops —
+their `is_*_excluded` predicates, the component-wise directory check, the
+index sweep that removes excluded entries staged by an earlier pass, the
+runtime-artifact block written into the repository's exclude file, and the
+`is_runtime_or_control` test that keeps those files out of diffs and patches.
+
+`ensure_runtime_excludes` and `PATCHES_DIR_NAME` are re-exported from
+`git`, so callers outside the module are unaffected; everything else is
+`pub(super)` or private to the new module. No behaviour change, and the
+existing exclude tests are untouched and still cover the policy.
+## [0.139.37] — 2026-07-25 — refactor: move the diff tests into their own file
 ## [0.139.46] — 2026-07-25 — refactor: move the diff tests into their own file
 
 ### Changed — `transforms/diff.rs` is now 26 lines of module wiring
