@@ -6,6 +6,29 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.49] — 2026-07-25 — refactor: separate committing from patch export
+
+### Changed — `git/commit.rs` and `git/patch.rs`
+
+Third and fourth concerns out of the `git/mod.rs` catch-all, in one step
+because they are small and independent.
+
+`git/commit.rs` holds the four staging-and-commit entry points: the internal
+checkpoint that keeps the index cache so a hard reset can restore it, the
+user-facing commit that strips it, the squash-onto-a-branch variant, and the
+path-scoped commit. Putting them together makes the distinction between the
+commit shapes legible — each pairs one staging filter from `excludes` with one
+commit — which was hard to see when they were 170 lines apart from the policy
+they use.
+
+`git/patch.rs` holds `ExportedPatch` and `export_patches`, the `git am`-ready
+mbox export, reordered so the record type reads before the function producing
+it.
+
+Six public names, all re-exported from `git`, so no call site changes.
+`git/mod.rs` is now 26 KB — repository basics, the git-subcommand runner, and
+the test module.
+## [0.139.39] — 2026-07-25 — refactor: gather the change-reporting surface in one module
 ## [0.139.48] — 2026-07-25 — refactor: gather the change-reporting surface in one module
 
 ### Changed — everything that answers "what changed" moves to `git/diff.rs`

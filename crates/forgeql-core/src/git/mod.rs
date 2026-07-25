@@ -6,27 +6,28 @@
 /// - `worktree` — per-session worktree lifecycle (Phase B)
 ///
 /// Low-level branch/commit helpers are in this module (Phase 3 stub).
+mod commit;
 mod diff;
 mod excludes;
+mod patch;
 pub mod source;
 pub mod worktree;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use git2::{BranchType, Repository};
 use tracing::debug;
 
+pub use commit::{
+    squash_commit_on_branch, stage_and_commit, stage_and_commit_clean, stage_paths_and_commit,
+};
 pub use diff::{
     DiffFile, FORGEQL_CONTROL_FILES, changed_files_between, commit_diff, commits_since,
     diff_head_to_worktree, dirty_paths, source_changes, uncommitted_source_changes, worktree_diff,
 };
 pub use excludes::{PATCHES_DIR_NAME, ensure_runtime_excludes};
-
-use excludes::{
-    CHECKPOINT_EXCLUDED, is_checkpoint_excluded, is_clean_commit_excluded,
-    purge_excluded_index_entries,
-};
+pub use patch::{ExportedPatch, export_patches};
 
 /// Return the current HEAD commit hash of a local branch in a bare repo.
 ///
@@ -119,198 +120,6 @@ pub fn soft_reset(repo: &Repository, oid_hex: &str) -> Result<()> {
     Ok(())
 }
 
-/// Stage all modified files and commit as an internal checkpoint.
-///
-/// The `.forgeql-index` cache is **included** so that `git reset --hard`
-/// restores it, enabling instant rollback without re-indexing.
-/// Only `.forgeql-session` is excluded.
-///
-/// # Errors
-/// Returns `Err` if staging, tree writing, or the commit itself fails.
-pub fn stage_and_commit(repo: &Repository, message: &str) -> Result<()> {
-    let mut index = repo.index()?;
-    index.add_all(
-        std::iter::once("*"),
-        git2::IndexAddOption::DEFAULT,
-        Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_checkpoint_excluded(path))),
-    )?;
-    for f in CHECKPOINT_EXCLUDED {
-        let _ = index.remove_path(std::path::Path::new(f));
-    }
-    index.write()?;
-
-    let tree_id = index.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-    let sig = repo
-        .signature()
-        .or_else(|_| git2::Signature::now("ForgeQL", "forgeql@localhost"))?;
-    let parent = repo.head()?.peel_to_commit()?;
-
-    let _oid = repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
-    debug!(message, "committed (checkpoint)");
-    Ok(())
-}
-
-/// Stage all modified files (excluding runtime and index files) and commit.
-///
-/// Produces a clean user-facing commit that never contains `.forgeql-index`
-/// or `.forgeql-session`. Any previously tracked copies are also removed.
-///
-/// # Errors
-/// Returns `Err` if staging, tree writing, or the commit itself fails.
-pub fn stage_and_commit_clean(repo: &Repository, message: &str) -> Result<()> {
-    let mut index = repo.index()?;
-    index.add_all(
-        std::iter::once("*"),
-        git2::IndexAddOption::DEFAULT,
-        Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_clean_commit_excluded(path))),
-    )?;
-    purge_excluded_index_entries(&mut index);
-    index.write()?;
-
-    let tree_id = index.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-    let sig = repo
-        .signature()
-        .or_else(|_| git2::Signature::now("ForgeQL", "forgeql@localhost"))?;
-    let parent = repo.head()?.peel_to_commit()?;
-
-    let _oid = repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
-    debug!(message, "committed (clean, no runtime files)");
-    Ok(())
-}
-
-/// Stage working-tree changes and create a squashed commit whose parent is
-/// `parent_oid`, updating the branch that HEAD points to **by name**.
-///
-/// Unlike [`stage_and_commit_clean`], this function never calls
-/// `git reset --soft` and never relies on HEAD-chasing through `Some("HEAD")`.
-/// Instead it:
-///
-/// 1. Resolves HEAD → branch ref name (e.g. `refs/heads/forgeql/s123`)
-///    *before* any destructive operation.
-/// 2. Stages all working-tree changes (excluding runtime files).
-/// 3. Creates the commit with an explicit parent OID.
-/// 4. Updates the branch ref **directly by name**.
-///
-/// This is safe in linked worktrees where `git reset --soft` can detach
-/// HEAD and leave the branch ref stale.
-///
-/// Returns the hex SHA of the new commit.
-///
-/// # Errors
-/// Returns `Err` if HEAD is detached, staging fails, or the commit fails.
-pub fn squash_commit_on_branch(
-    repo: &Repository,
-    parent_oid: &str,
-    message: &str,
-) -> Result<String> {
-    // 1. Capture the branch ref name HEAD points to.
-    let head_ref = repo.find_reference("HEAD")?;
-    let branch_ref_name = head_ref
-        .symbolic_target()
-        .ok_or_else(|| anyhow::anyhow!("HEAD is detached — cannot determine target branch"))?
-        .to_string();
-
-    // 2. Stage working-tree changes (excluding runtime + index files).
-    let mut index = repo.index()?;
-    index.add_all(
-        std::iter::once("*"),
-        git2::IndexAddOption::DEFAULT,
-        Some(&mut |path: &std::path::Path, _: &[u8]| i32::from(is_clean_commit_excluded(path))),
-    )?;
-    purge_excluded_index_entries(&mut index);
-    index.write()?;
-
-    let tree_id = index.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-
-    let sig = repo
-        .signature()
-        .or_else(|_| git2::Signature::now("ForgeQL", "forgeql@localhost"))?;
-
-    // 3. Explicit parent — not derived from HEAD.
-    let parent = repo.find_commit(git2::Oid::from_str(parent_oid)?)?;
-
-    // 4. Create the commit *without* updating any ref — this avoids
-    //    libgit2's compare-and-swap check which would fail because the
-    //    branch tip (a checkpoint commit) differs from `parent_oid`
-    //    (the pre-transaction base).
-    let oid = repo.commit(None, &sig, &sig, message, &tree, &[&parent])?;
-
-    // 5. Force-update the branch ref to point to the new squash commit.
-    let _ref = repo.reference(
-        &branch_ref_name,
-        oid,
-        true, // force
-        &format!("ForgeQL squash: {message}"),
-    )?;
-
-    debug!(%message, oid = %oid, branch = %branch_ref_name, "squash-committed on branch");
-    Ok(oid.to_string())
-}
-
-/// Stage only `touched` files and commit with `message` on the current HEAD branch.
-///
-/// `worktree_root` is the working directory of the git checkout.  All paths in
-/// `touched` must be absolute children of `worktree_root`.
-///
-/// Returns the SHA-1 hex string of the new commit.
-///
-/// # Errors
-/// Returns `Err` if any path cannot be relativised, staging fails, or the
-/// commit itself fails.
-pub fn stage_paths_and_commit(
-    repo: &Repository,
-    worktree_root: &Path,
-    touched: &[PathBuf],
-    message: &str,
-) -> Result<String> {
-    let mut index = repo.index()?;
-    for abs in touched {
-        let rel = abs.strip_prefix(worktree_root).map_err(|_| {
-            anyhow::anyhow!(
-                "path {} is outside worktree {}",
-                abs.display(),
-                worktree_root.display()
-            )
-        })?;
-        // A path that no longer exists on disk was deleted by the mutation
-        // (`CHANGE FILE … WITH NOTHING`) — stage the removal instead.
-        if abs.exists() {
-            index.add_path(rel)?;
-        } else {
-            index.remove_path(rel)?;
-        }
-    }
-    index.write()?;
-    let tree_id = index.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-    let sig = repo
-        .signature()
-        .or_else(|_| git2::Signature::now("ForgeQL", "forgeql@localhost"))?;
-    let parent = repo.head()?.peel_to_commit()?;
-    let oid = repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
-    debug!(%message, oid = %oid, "committed");
-    Ok(oid.to_string())
-}
-
-// -----------------------------------------------------------------------
-// EXPORT PATCH — format-patch export of session commits
-// -----------------------------------------------------------------------
-
-/// One mbox patch file produced by [`export_patches`].
-#[derive(Debug, Clone)]
-pub struct ExportedPatch {
-    /// Absolute path of the patch file inside the worktree.
-    pub path: std::path::PathBuf,
-    /// File size in bytes.
-    pub bytes: u64,
-    /// SHA-256 of the file contents (hex) — verify after transfer with
-    /// `sha256sum` before `git am`.
-    pub sha256: String,
-}
-
 /// Run one git subcommand in `worktree` and return its stdout as a string.
 ///
 /// Arguments are passed as separate argv entries (no shell), so nothing the
@@ -351,59 +160,15 @@ pub fn head_oid_of(worktree: &Path) -> Result<String> {
     Ok(run_git(worktree, &["rev-parse", "HEAD"])?.trim().to_owned())
 }
 
-/// Write `git am`-ready mbox files for `range_args` into
-/// `.forgeql-patches/` in `worktree` (the directory is cleared first).
-///
-/// Every patch is generated with an exclude pathspec for `.forgeql-*` paths
-/// at any depth, so commits touching only `ForgeQL` runtime files — such as
-/// transaction checkpoints — produce no patch at all, and commits mixing
-/// source and runtime files export only their source part. `--binary`
-/// includes base85 literal data so binary files survive `git am`.
-///
-/// `range_args` is either `["<oid>..HEAD"]` or `["-<n>", "HEAD"]`, always
-/// engine-computed — never user text.
-///
-/// # Errors
-/// Returns an error when the output directory cannot be cleared, git cannot
-/// be spawned, `format-patch` fails, or a produced file cannot be read back.
-pub fn export_patches(worktree: &Path, range_args: &[String]) -> Result<Vec<ExportedPatch>> {
-    use sha2::{Digest, Sha256};
-
-    let out_dir = worktree.join(PATCHES_DIR_NAME);
-    if out_dir.exists() {
-        std::fs::remove_dir_all(&out_dir)
-            .with_context(|| format!("could not clear {}", out_dir.display()))?;
-    }
-
-    let mut args: Vec<&str> = vec!["format-patch", "--binary", "-o", PATCHES_DIR_NAME];
-    args.extend(range_args.iter().map(String::as_str));
-    args.extend(["--", ":(exclude,glob)**/.forgeql-*"]);
-    let stdout = run_git(worktree, &args)?;
-
-    // format-patch prints one created file per line, in series order.
-    let mut files = Vec::new();
-    for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        let abs = worktree.join(line);
-        let data =
-            std::fs::read(&abs).with_context(|| format!("could not read {}", abs.display()))?;
-        let bytes = u64::try_from(data.len()).unwrap_or(u64::MAX);
-        let sha256 = format!("{:x}", Sha256::digest(&data));
-        files.push(ExportedPatch {
-            path: abs,
-            bytes,
-            sha256,
-        });
-    }
-    Ok(files)
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
     use tempfile::tempdir;
 
-    use super::excludes::RUNTIME_EXCLUDE_MARKER;
+    use super::excludes::{
+        RUNTIME_EXCLUDE_MARKER, is_checkpoint_excluded, is_clean_commit_excluded,
+    };
     use super::*;
 
     fn make_normal_repo(dir: &Path) -> git2::Repository {
