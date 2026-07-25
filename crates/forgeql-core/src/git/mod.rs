@@ -1,11 +1,17 @@
-/// Git integration — bare-repo management, worktree lifecycle, and
-/// low-level branch/commit helpers.
-///
-/// Submodules:
-/// - `source`  — `Source` + `SourceRegistry` (Phase B)
-/// - `worktree` — per-session worktree lifecycle (Phase B)
-///
-/// Low-level branch/commit helpers are in this module (Phase 3 stub).
+//! Git integration — bare-repo management, worktree lifecycle, and the
+//! plumbing behind commits, diffs and patch export.
+//!
+//! Submodules:
+//! - `commit`   — the staging-and-commit shapes (checkpoint, clean, squash)
+//! - `diff`     — change lists, dirty paths, and the `SHOW DIFF` surface
+//! - `excludes` — which files never reach a commit, and the runtime-exclude block
+//! - `patch`    — `git am`-ready patch export
+//! - `source`   — `Source` + `SourceRegistry`
+//! - `worktree` — per-session worktree lifecycle
+//!
+//! What stays here is the repository basics every submodule builds on: opening
+//! a repo, resolving and creating branches, resetting, and running a single git
+//! subcommand.
 mod commit;
 mod diff;
 mod excludes;

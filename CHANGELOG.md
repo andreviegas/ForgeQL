@@ -29,7 +29,6 @@ repository basics and the git-subcommand runner — over `excludes.rs` (10 KB),
 `commit.rs` (10 KB), `diff.rs` (23 KB) and `patch.rs` (7 KB), alongside the
 pre-existing `source.rs` and `worktree.rs`. Every public name is re-exported
 from `git`, so no call site anywhere changed.
-## [0.139.40] — 2026-07-25 — refactor: separate committing from patch export
 ## [0.139.49] — 2026-07-25 — refactor: separate committing from patch export
 
 ### Changed — `git/commit.rs` and `git/patch.rs`
@@ -52,7 +51,6 @@ it.
 Six public names, all re-exported from `git`, so no call site changes.
 `git/mod.rs` is now 26 KB — repository basics, the git-subcommand runner, and
 the test module.
-## [0.139.39] — 2026-07-25 — refactor: gather the change-reporting surface in one module
 ## [0.139.48] — 2026-07-25 — refactor: gather the change-reporting surface in one module
 
 ### Changed — everything that answers "what changed" moves to `git/diff.rs`
@@ -71,7 +69,6 @@ exclude policy, so runtime artifacts cannot leak into a diff or a patch.
 
 All ten public names are re-exported from `git`, so no call site changes.
 `git/mod.rs` is down from 55 KB to 35 KB.
-## [0.139.38] — 2026-07-25 — refactor: isolate the commit-exclude policy
 ## [0.139.47] — 2026-07-25 — refactor: isolate the commit-exclude policy
 
 ### Changed — which files ForgeQL refuses to commit now lives in `git/excludes.rs`
@@ -92,7 +89,6 @@ runtime-artifact block written into the repository's exclude file, and the
 `git`, so callers outside the module are unaffected; everything else is
 `pub(super)` or private to the new module. No behaviour change, and the
 existing exclude tests are untouched and still cover the policy.
-## [0.139.37] — 2026-07-25 — refactor: move the diff tests into their own file
 ## [0.139.46] — 2026-07-25 — refactor: move the diff tests into their own file
 
 ### Changed — `transforms/diff.rs` is now 26 lines of module wiring

@@ -334,7 +334,11 @@ ForgeQL/
 │   │       │   ├── forgeql.pest  # PEG grammar
 │   │       │   └── mod.rs        # Parser functions → IR
 │   │       ├── git/
-│   │       │   ├── mod.rs        # Branch, stage, commit via git2
+│   │       │   ├── mod.rs        # Repo basics: open, branch, reset, run_git
+│   │       │   ├── commit.rs     # Staging + commit shapes (checkpoint, clean, squash)
+│   │       │   ├── diff.rs       # Change lists, dirty paths, SHOW DIFF surface
+│   │       │   ├── excludes.rs   # Which files never reach a commit
+│   │       │   ├── patch.rs      # EXPORT PATCH: git am-ready mbox files
 │   │       │   ├── source.rs     # Source + SourceRegistry (bare repo management)
 │   │       │   └── worktree.rs   # Worktree lifecycle: create, list, remove
 │   │       ├── session/          # Session management (user → worktree → index)
