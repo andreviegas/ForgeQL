@@ -1,10 +1,10 @@
-//! Which files ForgeQL refuses to commit, and the runtime-exclude block.
+//! Which files `ForgeQL` refuses to commit, and the runtime-exclude block.
 //!
 //! Two separate policies live here. `CLEAN_COMMIT_EXCLUDED` is what a
 //! user-facing commit drops; `CHECKPOINT_EXCLUDED` is the narrower set an
 //! internal checkpoint drops. `ensure_runtime_excludes` writes the managed
 //! block into the worktree's exclude file so git itself stops offering
-//! ForgeQL's own runtime artifacts.
+//! `ForgeQL`'s own runtime artifacts.
 
 use std::path::Path;
 

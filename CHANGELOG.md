@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.48] — 2026-07-25 — refactor: gather the change-reporting surface in one module
+
+### Changed — everything that answers "what changed" moves to `git/diff.rs`
+
+Second concern out of the `git/mod.rs` catch-all. `git/diff.rs` now holds the
+whole change-reporting surface: the source-change list between a session
+branch and its base, the file list between two arbitrary commits, dirty
+working-tree paths, the HEAD-to-worktree path list, the `DiffFile` record and
+the patch accumulator behind it, the uncommitted diff that `SHOW DIFF` renders,
+a single commit's diff, the commit list a session branch carries, and the
+uncommitted-change count that `EXPORT PATCH` reports as a hint.
+
+Grouping them makes one invariant visible that was previously spread over
+340 lines: every path these functions return has already been through the
+exclude policy, so runtime artifacts cannot leak into a diff or a patch.
+
+All ten public names are re-exported from `git`, so no call site changes.
+`git/mod.rs` is down from 55 KB to 35 KB.
+## [0.139.38] — 2026-07-25 — refactor: isolate the commit-exclude policy
 ## [0.139.47] — 2026-07-25 — refactor: isolate the commit-exclude policy
 
 ### Changed — which files ForgeQL refuses to commit now lives in `git/excludes.rs`
