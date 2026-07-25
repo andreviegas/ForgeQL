@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.54] — 2026-07-25 — refactor: separate reading source text from paging it
+
+### Changed — the source-reading and `SHOW MORE` verbs moved into their own modules
+
+- `SHOW context`, `SHOW signature`, `SHOW body`, `SHOW LINES` and `SHOW NODE` now
+  live together in `engine/exec_show/read.rs`. They all end in the same place —
+  a span of lines out of one file — so keeping them together makes the shared
+  line cap, `WHERE text` predicate and budget accounting visible in one screen
+  instead of scattered through a thousand-line executor.
+- `SHOW MORE` moved to `engine/exec_show/more.rs`, on its own because it reads
+  the buffered window a capped read left behind rather than the source file.
+- Pure code motion. Two functions that the wider engine calls, `exec_show_node`
+  and `exec_show_more`, keep their exact previous reach: one level deeper in the
+  module tree `pub(super)` would have meant something narrower, so they are now
+  spelled `pub(in crate::engine)`.
+
 ## [0.139.53] — 2026-07-25 — refactor: give SHOW's handle stamping its own module
 
 ### Changed — handle and metadata stamping moved out of the SHOW executor
