@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.52] — 2026-07-25 — test: split the tail enrichers out of enrichment_integration.rs
+
+### Changed — eight per-enricher files carved out of enrichment_integration.rs
+
+- Split the DeclDistance, Escape, Shadow, UnusedParam, Fallthrough, Recursion,
+  and Todo enricher tests, plus the fetch-cap early-exit regression test, into
+  eight focused files (`enrichment_decl_distance.rs`, `enrichment_escape.rs`,
+  `enrichment_shadow.rs`, `enrichment_unused_param.rs`,
+  `enrichment_fallthrough.rs`, `enrichment_recursion.rs`, `enrichment_todo.rs`,
+  and `enrichment_fetch_cap.rs`), each including the shared `enrichment_harness`
+  module. Test bodies are unchanged.
+
 ## [0.139.51] — 2026-07-25 — test: extract a shared prelude for the enrichment integration suite
 
 ### Changed — enrichment integration tests now share a prelude module
