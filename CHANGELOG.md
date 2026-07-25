@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.42] — 2026-07-25 — test: finish splitting overlay_parity.rs into focused files
+
+### Changed — overlay_parity.rs fully dissolved into single-concern files
+
+- Split the last three clusters into small, focused files (test bodies
+  unchanged): `overlay_parse_cache.rs` (parse-cache hit / LRU eviction /
+  repeat-run speedup, 2 tests), `overlay_segment_layout_parity.rs` (segment
+  path order and row-range contiguity plus index stats, 6 tests), and
+  `overlay_validation_parity.rs` (dirty-deletion visibility and query
+  validation, 5 tests).
+- Removed the now-empty `overlay_parity.rs`. The original 4850-line suite is now
+  eleven focused parity files sharing the `overlay_harness` test module.
+
 ## [0.139.41] — 2026-07-25 — test: split overlay find-node, persistence, and commit/rollback parity into their own files
 
 ### Changed — three more overlay parity clusters carved out of overlay_parity.rs
