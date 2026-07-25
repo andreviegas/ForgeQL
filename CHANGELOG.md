@@ -6,6 +6,15 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.40] — 2026-07-25 — test: split overlay dirty-overlay parity into its own file
+
+### Changed — overlay dirty-overlay parity carved out of overlay_parity.rs
+
+- The six dirty-overlay parity tests (shadowing and union of uncommitted edits
+  across find_symbols, find_usages, and symbol resolution, plus the re-index
+  refresh) now live in a small, focused `overlay_dirty_parity.rs` that includes
+  the shared `overlay_harness` module. Test bodies are unchanged.
+
 ## [0.139.39] — 2026-07-25 — test: split overlay segment-pruning parity into its own file
 
 ### Changed — overlay pruning / fast-path parity carved out of overlay_parity.rs
