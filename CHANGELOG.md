@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.38] — 2026-07-25 — test: split overlay SHOW-surface parity into its own file
+
+### Changed — overlay SHOW parity carved out of overlay_parity.rs
+
+- The SHOW-surface parity tests (show_outline, show_body, show_signature,
+  show_members, show_context, and show_callees) plus the bare-repo fallback
+  test (source bytes read from the git blob when the file is absent from disk)
+  now live in a small, focused `overlay_show_parity.rs` that includes the
+  shared `overlay_harness` module. Test bodies are unchanged.
+
 ## [0.139.37] — 2026-07-25 — test: split overlay query-surface parity into its own file
 
 ### Changed — overlay query parity carved out of overlay_parity.rs
