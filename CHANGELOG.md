@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.51] — 2026-07-25 — test: extract a shared prelude for the enrichment integration suite
+
+### Changed — enrichment integration tests now share a prelude module
+
+- Added `tests/enrichment_harness/mod.rs`, which holds the thin
+  `(engine, session_id, TempDir)` adapters and the `*_case!` table macros that
+  the enrichment integration tests rely on, so their assertions can be split
+  across small per-enricher files without duplicating setup.
+  `enrichment_integration.rs` now pulls them in with
+  `mod enrichment_harness; use enrichment_harness::*;`; every test body is
+  unchanged. This is the first step of breaking the ~3500-line suite into
+  focused, single-enricher files.
+
 ## [0.139.50] — 2026-07-25 — refactor: move each git test beside the code it covers
 
 ### Changed — the `git/mod.rs` test module is distributed across the submodules
