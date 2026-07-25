@@ -161,3 +161,73 @@ fn ensure_trailing_newline(mut text: String) -> String {
     }
     text
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn clean_commit_excludes_staging_contents_and_runtime_files() {
+        use std::path::Path;
+        // Entries inside the staging dir have ordinary leaf names — the
+        // component-wise check must still exclude them.
+        assert!(is_clean_commit_excluded(Path::new(
+            ".forgeql-staging/ab/cdef0123.fqsf"
+        )));
+        assert!(is_clean_commit_excluded(Path::new(".forgeql-showmore-3")));
+        assert!(is_clean_commit_excluded(Path::new(".forgeql-index")));
+        assert!(is_clean_commit_excluded(Path::new(
+            crate::session::found_set::FILE_NAME
+        )));
+        assert!(!is_clean_commit_excluded(Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn checkpoint_excludes_showmore_but_keeps_index() {
+        use std::path::Path;
+        assert!(is_checkpoint_excluded(Path::new(".forgeql-showmore-0")));
+        assert!(is_checkpoint_excluded(Path::new(
+            ".forgeql-staging/ab/cdef0123.fqsf"
+        )));
+        // The index cache is intentionally checkpoint-committed so
+        // `git reset --hard` restores it without a re-index.
+        assert!(!is_checkpoint_excluded(Path::new(".forgeql-index")));
+        assert!(!is_checkpoint_excluded(Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn runtime_excludes_written_once_and_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_runtime_excludes(dir.path());
+        ensure_runtime_excludes(dir.path());
+        let content = std::fs::read_to_string(dir.path().join("info/exclude")).unwrap();
+        assert_eq!(content.matches(RUNTIME_EXCLUDE_MARKER).count(), 1);
+        assert!(content.contains(".forgeql-session"));
+        assert!(content.contains(".forgeql-staging/"));
+        assert!(content.contains(".forgeql-showmore*"));
+        assert!(content.contains(".forgeql-patches/"));
+        // Checkpoint-committed files must never be git-ignored.
+        assert!(!content.contains(".forgeql-index"));
+        assert!(!content.contains(".forgeql-undo"));
+    }
+
+    /// A block written by an earlier version (no patches entry) gains the
+    /// missing line on the next call — exactly once.
+    #[test]
+    fn runtime_excludes_upgrades_existing_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let info = dir.path().join("info");
+        std::fs::create_dir_all(&info).unwrap();
+        let old_block = format!("{RUNTIME_EXCLUDE_MARKER}\n.forgeql-session\n");
+        std::fs::write(info.join("exclude"), &old_block).unwrap();
+
+        ensure_runtime_excludes(dir.path());
+        ensure_runtime_excludes(dir.path());
+        let content = std::fs::read_to_string(info.join("exclude")).unwrap();
+        assert_eq!(content.matches(RUNTIME_EXCLUDE_MARKER).count(), 1);
+        assert_eq!(content.matches(".forgeql-patches/").count(), 1);
+        assert!(
+            content.starts_with(&old_block),
+            "existing entries preserved"
+        );
+    }
+}

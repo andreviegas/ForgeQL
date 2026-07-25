@@ -191,3 +191,78 @@ pub fn stage_paths_and_commit(
     debug!(%message, oid = %oid, "committed");
     Ok(oid.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::git::testutil::{make_normal_repo, raw_commit_all};
+    #[test]
+    fn stage_paths_and_commit_creates_commit_with_message() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path();
+        let repo = make_normal_repo(dir);
+
+        // Modify the file after the initial commit.
+        std::fs::write(dir.join("file.cpp"), b"int main() { return 0; }\n").unwrap();
+        let touched = vec![dir.join("file.cpp")];
+
+        let oid_str =
+            stage_paths_and_commit(&repo, dir, &touched, "refactor: update main").unwrap();
+
+        // The newly created commit must be HEAD.
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head_commit.id().to_string(), oid_str);
+        assert_eq!(
+            head_commit.message().unwrap().trim(),
+            "refactor: update main"
+        );
+        // The parent of HEAD is the initial commit.
+        assert_eq!(head_commit.parent_count(), 1);
+    }
+
+    #[test]
+    fn stage_paths_and_commit_errors_on_path_outside_worktree() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path();
+        let repo = make_normal_repo(dir);
+
+        let outside = std::path::PathBuf::from("/tmp/not-in-worktree.cpp");
+        let result = stage_paths_and_commit(&repo, dir, &[outside], "oops");
+        assert!(result.is_err(), "must fail when path is outside worktree");
+    }
+    #[test]
+    fn squash_commit_drops_checkpoint_inherited_undo_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_normal_repo(dir.path());
+
+        std::fs::write(dir.path().join("file.cpp"), b"int main(){return 1;}\n").unwrap();
+        raw_commit_all(dir.path(), "base");
+        let base = repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string();
+
+        // Checkpoint commits keep undo slots on purpose (restart durability),
+        // so by the final squash the slot file is already tracked at the
+        // branch tip — `add_all`'s callback never sees it.
+        std::fs::write(dir.path().join(".forgeql-undo-0"), b"FQLUNDO\tv1\n").unwrap();
+        std::fs::write(dir.path().join("file.cpp"), b"int main(){return 2;}\n").unwrap();
+        raw_commit_all(dir.path(), "forgeql: checkpoint 'txn'");
+
+        let sha = squash_commit_on_branch(&repo, &base, "user commit").unwrap();
+        let commit = repo
+            .find_commit(git2::Oid::from_str(&sha).unwrap())
+            .unwrap();
+        let tree = commit.tree().unwrap();
+        assert!(tree.get_name("file.cpp").is_some(), "source change kept");
+        assert!(
+            tree.get_name(".forgeql-undo-0").is_none(),
+            "undo slot inherited from a checkpoint must not reach the user-facing commit"
+        );
+    }
+}

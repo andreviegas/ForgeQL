@@ -6,6 +6,30 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.50] — 2026-07-25 — refactor: move each git test beside the code it covers
+
+### Changed — the `git/mod.rs` test module is distributed across the submodules
+
+Final step of the `git/mod.rs` split. The single 490-line test module is gone;
+each test now lives in the module it exercises: the exclude-policy tests in
+`excludes.rs`, the staging and squash tests in `commit.rs`, the
+change-reporting tests in `diff.rs`, and the patch-export tests in `patch.rs`.
+
+The two shared fixtures — building a normal repository with one commit, and
+committing everything raw the way a checkpoint would — stay in `git/mod.rs` as
+a small `#[cfg(test)] mod testutil`, which is where the submodule tests import
+them from.
+
+No test body or name changed. Two doc comments that documented moved tests
+were left behind by the move and have been restored above the tests they
+describe.
+
+That completes the split. `git/mod.rs` is down from 55 KB to 7 KB —
+repository basics and the git-subcommand runner — over `excludes.rs` (10 KB),
+`commit.rs` (10 KB), `diff.rs` (23 KB) and `patch.rs` (7 KB), alongside the
+pre-existing `source.rs` and `worktree.rs`. Every public name is re-exported
+from `git`, so no call site anywhere changed.
+## [0.139.40] — 2026-07-25 — refactor: separate committing from patch export
 ## [0.139.49] — 2026-07-25 — refactor: separate committing from patch export
 
 ### Changed — `git/commit.rs` and `git/patch.rs`
