@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.39] — 2026-07-25 — test: split overlay segment-pruning parity into its own file
+
+### Changed — overlay pruning / fast-path parity carved out of overlay_parity.rs
+
+- The nine segment-pruning and fast-path parity tests (path-glob and
+  short-prefix prefilters, zone-map range pruning, enrichment posting filters,
+  the enrichment-only fast path, and their combined and negative cases) now
+  live in a small, focused `overlay_prune_parity.rs` that includes the shared
+  `overlay_harness` module. Test bodies are unchanged.
+
 ## [0.139.38] — 2026-07-25 — test: split overlay SHOW-surface parity into its own file
 
 ### Changed — overlay SHOW parity carved out of overlay_parity.rs
