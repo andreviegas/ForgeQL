@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.55] — 2026-07-25 — refactor: gather the row-building SHOW verbs in one module
+
+### Changed — `exec_show.rs` is now a dispatcher over four focused modules
+
+- `SHOW outline`, `SHOW members`, `SHOW callees` and `FIND files` moved into
+  `engine/exec_show/listings.rs`, together with the two helpers that shape their
+  JSON. What these four share, and what separates them from the reading verbs,
+  is that their rows are *built* rather than quoted: each produces a set the
+  clause pipeline then filters, sorts and caps.
+- `engine/exec_show.rs` keeps only what every verb shares — the dispatcher, the
+  clause pipeline, and the two readers that fetch a symbol's bytes — and gained
+  a module header explaining the split. This step takes it from 502 lines to
+  266; across the three steps, from 1,026.
+- Pure code motion; no behaviour change and no response byte altered.
+
 ## [0.139.54] — 2026-07-25 — refactor: separate reading source text from paging it
 
 ### Changed — the source-reading and `SHOW MORE` verbs moved into their own modules
