@@ -6,6 +6,16 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.37] — 2026-07-25 — test: split overlay query-surface parity into its own file
+
+### Changed — overlay query parity carved out of overlay_parity.rs
+
+- The seven query-surface parity tests (find_symbols, kind prefilter,
+  exact-name and LIKE filters, ORDER BY, enrichment-field filter, and
+  multi-segment name lookup) now live in a small, focused
+  `overlay_query_parity.rs` that includes the shared `overlay_harness` module.
+  Test bodies are unchanged.
+
 ## [0.139.36] — 2026-07-25 — test: split overlay symbol-resolution parity into its own file
 
 ### Changed — overlay resolve parity carved out of overlay_parity.rs
