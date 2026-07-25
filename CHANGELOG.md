@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.36] — 2026-07-25 — test: split overlay symbol-resolution parity into its own file
+
+### Changed — overlay resolve parity carved out of overlay_parity.rs
+
+- The three symbol-resolution parity tests (type-preference, body-symbol
+  redirect, and deterministic resolution on duplicates) now live in a small,
+  focused `overlay_resolve_parity.rs` that includes the shared `overlay_harness`
+  module. Test bodies are unchanged. Continues breaking the oversized overlay
+  parity suite into single-concern files.
+- The remaining shared overlay builders (`single_segment_cpp_overlay`,
+  `cpp_cached_parse`, `build_dirty_segment`, `build_dirty_segment_with_usages`)
+  moved into `overlay_harness` too, so every future split file reaches them
+  through the shared module.
+
 ## [0.139.35] — 2026-07-25 — test: extract a shared overlay parity harness
 
 ### Changed — overlay parity setup helpers moved to a reusable harness module

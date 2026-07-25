@@ -225,51 +225,6 @@ fn overlay_kind_prefilter_matches_legacy() {
 // Helper: build a single-segment overlay from canonical.cpp and open it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Shared setup used by the name-lookup, LIKE, ORDER BY and enrichment tests.
-fn single_segment_cpp_overlay() -> (
-    SymbolTable,
-    TempDir,
-    forgeql_core::storage::columnar::ColumnarStorage,
-) {
-    use forgeql_core::storage::columnar::ColumnarStorage;
-    use forgeql_core::storage::columnar::overlay::Overlay;
-
-    let table = index_fixture(&CppLanguage, "canonical.cpp");
-    let tmp = TempDir::new().expect("tempdir");
-    let segments_dir = tmp.path().join("segments");
-    let overlays_dir = tmp.path().join("overlays");
-
-    let cpp_path = fixture_path("canonical.cpp");
-    let cid = build_segment(&table, &cpp_path, &segments_dir);
-
-    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
-    let _ = segment_map.insert(cpp_path, cid);
-
-    let overlay_path = overlays_dir.join("test").join("cpp_single.bin");
-    OverlayBuilder::new("test", segments_dir.clone(), fixtures_dir(), segment_map)
-        .build_and_persist(&overlay_path)
-        .expect("overlay build");
-
-    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
-    let segs: Vec<Arc<SegmentReader>> = overlay
-        .segments()
-        .iter()
-        .map(|m| {
-            Arc::new(
-                SegmentReader::open(&seg_path(&segments_dir, &m.source_path, &m.hex_content_id))
-                    .expect("open segment"),
-            )
-        })
-        .collect();
-    let storage = ColumnarStorage::new(
-        fixtures_dir(),
-        segs,
-        overlay,
-        Arc::new(LanguageRegistry::new(vec![])),
-    );
-    (table, tmp, storage)
-}
-
 /// `WHERE name = 'foo'` returns exactly the same rows as the legacy table.
 #[test]
 fn overlay_exact_name_lookup_matches_legacy() {
@@ -750,19 +705,6 @@ fn columnar_show_outline_matches_legacy() {
 
 // ── Phase 06b: SHOW parity tests ──────────────────────────────────────────────
 
-/// Helper: build a `LanguageRegistry` with C++ support and parse `canonical.cpp`
-/// into a `ParseCache`, returning the `Arc<CachedParse>`.
-fn cpp_cached_parse() -> std::sync::Arc<forgeql_core::ast::parse_cache::CachedParse> {
-    use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
-    use forgeql_core::ast::parse_cache::ParseCache;
-
-    let registry = LanguageRegistry::new(vec![Arc::new(CppLanguage) as Arc<dyn LanguageSupport>]);
-    let mut cache = ParseCache::with_capacity(1);
-    cache
-        .get_or_parse(&fixture_path("canonical.cpp"), &registry)
-        .expect("parse canonical.cpp")
-}
-
 /// Verify `SHOW body` on the columnar backend emits the same `start_line` as legacy.
 #[test]
 fn columnar_show_body_matches_legacy() {
@@ -1079,108 +1021,6 @@ fn columnar_show_callees_matches_legacy() {
     assert!(
         col_names.contains("bar") && col_names.contains("factorial"),
         "expected bar and factorial as callees, got: {col_names:?}"
-    );
-}
-
-// ── Phase 06b: resolve edge-case tests ───────────────────────────────────────
-
-/// When a name resolves to both a struct and a function, `resolve_type_symbol`
-/// must return the struct (type-preference semantics).
-///
-/// Fixture: canonical.cpp defines both `struct Motor { ... }` and
-/// `int Motor(int rpm) { ... }`.
-#[test]
-fn resolve_type_prefers_type_over_function() {
-    use forgeql_core::storage::StorageEngine;
-
-    let (_table, _tmp, storage) = single_segment_cpp_overlay();
-    let clauses = Clauses::default();
-
-    let loc = storage
-        .resolve_type_symbol("Motor", &clauses, &fixtures_dir())
-        .expect("resolve_type_symbol")
-        .expect("Motor not found");
-
-    // The resolved location must be the struct definition, not the function.
-    // The columnar segment stores the fql_kind in `node_kind`; for the struct
-    // definition the kind is "struct".
-    assert_eq!(
-        loc.node_kind, "struct",
-        "resolve_type_symbol should return the struct row, got node_kind={:?}",
-        loc.node_kind
-    );
-}
-
-/// When a row carries a `body_symbol` enrichment field, `resolve_body_symbol`
-/// must follow the redirect and return the out-of-line definition.
-///
-/// Fixture: canonical.cpp has `class Engine { void start(); }` (in-class
-/// declaration) and `void Engine::start() { }` (out-of-line definition).
-#[test]
-fn resolve_body_follows_body_symbol_redirect() {
-    use forgeql_core::storage::StorageEngine;
-
-    let (_table, _tmp, storage) = single_segment_cpp_overlay();
-    let clauses = Clauses::default();
-
-    // resolve_body_symbol("start") should follow body_symbol → "Engine::start".
-    // If there is no body_symbol enrichment (MemberEnricher not applied to the
-    // test segment), it will fall back to whichever "start" row is resolved —
-    // that is also acceptable as a no-op redirect test.
-    let loc = storage
-        .resolve_body_symbol("start", &clauses, &fixtures_dir())
-        .expect("resolve_body_symbol")
-        .expect("start not found");
-
-    // Whether a redirect happened or not, the resolved location must be for a
-    // function (the out-of-line body, or the in-class decl as fallback).
-    // The key invariant: both columnar and legacy resolve to the same line.
-    let (table, _tmp2, _storage2) = single_segment_cpp_overlay();
-    let leg_row = table
-        .find_all_defs("start")
-        .into_iter()
-        .chain(table.find_all_defs("Engine::start"))
-        .next()
-        .expect("start not in legacy table");
-
-    // Both should be on the same line (± the redirect).
-    // The columnar segment does not run MemberEnricher, so no redirect happens
-    // and the line should equal the in-class declaration line.
-    assert_eq!(
-        loc.line, leg_row.line,
-        "resolve_body_symbol line mismatch: col={} leg={}",
-        loc.line, leg_row.line
-    );
-}
-
-/// Calling `resolve_symbol` twice on the same name produces the same location
-/// (determinism / last-write-wins stability).
-#[test]
-fn resolve_symbol_deterministic_on_duplicates() {
-    use forgeql_core::storage::StorageEngine;
-
-    let (_table, _tmp, storage) = single_segment_cpp_overlay();
-    let clauses = Clauses::default();
-
-    // `noop_dup` has two rows: a forward-declaration and a definition.
-    // resolve_symbol must always return the same (last-indexed) row.
-    let loc1 = storage
-        .resolve_symbol("noop_dup", &clauses, &fixtures_dir())
-        .expect("resolve 1")
-        .expect("noop_dup not found (call 1)");
-    let loc2 = storage
-        .resolve_symbol("noop_dup", &clauses, &fixtures_dir())
-        .expect("resolve 2")
-        .expect("noop_dup not found (call 2)");
-
-    assert_eq!(
-        loc1.line, loc2.line,
-        "resolve_symbol is non-deterministic: call1={} call2={}",
-        loc1.line, loc2.line
-    );
-    assert_eq!(
-        loc1.byte_range, loc2.byte_range,
-        "resolve_symbol byte_range differs between calls"
     );
 }
 
@@ -1765,53 +1605,6 @@ fn negative_line_predicate_returns_empty() {
 // ─────────────────────────────────────────────────────────────────────────────
 // PhaseFT1 gate tests — DirtyOverlay shadowing + union
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Build a minimal segment from raw (name, fql_kind, line) tuples.
-/// Returns an opened `SegmentReader` stored at `dir`.
-fn build_dirty_segment(
-    rows: &[(&str, &str, u32)],
-    content_id_bytes: &[u8],
-    dir: &std::path::Path,
-) -> SegmentReader {
-    let mut builder = SegmentBuilder::new("test", content_id_bytes);
-    for &(name, kind, line) in rows {
-        let _ = builder.emit_row(SymbolRow {
-            name,
-            fql_kind: kind,
-            language: "rust",
-            line,
-            byte_start: 0,
-            byte_end: 10,
-            usages_count: 0,
-        });
-    }
-    builder.flush(dir).expect("dirty segment flush");
-    SegmentReader::open(dir).expect("dirty SegmentReader::open")
-}
-
-/// Like [`build_dirty_segment`], but records a usage posting per row
-/// (BUG-006 U2: `find_usages` reads usage postings, not definition rows).
-fn build_dirty_segment_with_usages(
-    rows: &[(&str, &str, u32)],
-    content_id_bytes: &[u8],
-    dir: &std::path::Path,
-) -> SegmentReader {
-    let mut builder = SegmentBuilder::new("test", content_id_bytes);
-    for &(name, kind, line) in rows {
-        let _ = builder.emit_row(SymbolRow {
-            name,
-            fql_kind: kind,
-            language: "rust",
-            line,
-            byte_start: 0,
-            byte_end: 10,
-            usages_count: 0,
-        });
-        builder.add_usage(name, line);
-    }
-    builder.flush(dir).expect("dirty segment flush");
-    SegmentReader::open(dir).expect("dirty SegmentReader::open")
-}
 
 /// PhaseFT1 gate: dirty overlay shadows persistent segment and unions dirty rows.
 ///

@@ -11,7 +11,9 @@
     clippy::items_after_statements,
     clippy::doc_markdown,
     clippy::missing_panics_doc,
-    unreachable_pub
+    unreachable_pub,
+    unused_imports,
+    dead_code
 )]
 
 pub use std::collections::HashMap;
@@ -198,4 +200,106 @@ pub fn columnar_key_tuples(results: &[SymbolMatch]) -> Vec<(String, String, usiz
         .collect();
     v.sort_unstable();
     v
+}
+/// Shared setup used by the name-lookup, LIKE, ORDER BY and enrichment tests.
+pub fn single_segment_cpp_overlay() -> (
+    SymbolTable,
+    TempDir,
+    forgeql_core::storage::columnar::ColumnarStorage,
+) {
+    use forgeql_core::storage::columnar::ColumnarStorage;
+    use forgeql_core::storage::columnar::overlay::Overlay;
+
+    let table = index_fixture(&CppLanguage, "canonical.cpp");
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let overlays_dir = tmp.path().join("overlays");
+
+    let cpp_path = fixture_path("canonical.cpp");
+    let cid = build_segment(&table, &cpp_path, &segments_dir);
+
+    let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(cpp_path, cid);
+
+    let overlay_path = overlays_dir.join("test").join("cpp_single.bin");
+    OverlayBuilder::new("test", segments_dir.clone(), fixtures_dir(), segment_map)
+        .build_and_persist(&overlay_path)
+        .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+    let segs: Vec<Arc<SegmentReader>> = overlay
+        .segments()
+        .iter()
+        .map(|m| {
+            Arc::new(
+                SegmentReader::open(&seg_path(&segments_dir, &m.source_path, &m.hex_content_id))
+                    .expect("open segment"),
+            )
+        })
+        .collect();
+    let storage = ColumnarStorage::new(
+        fixtures_dir(),
+        segs,
+        overlay,
+        Arc::new(LanguageRegistry::new(vec![])),
+    );
+    (table, tmp, storage)
+}
+/// Helper: build a `LanguageRegistry` with C++ support and parse `canonical.cpp`
+/// into a `ParseCache`, returning the `Arc<CachedParse>`.
+pub fn cpp_cached_parse() -> std::sync::Arc<forgeql_core::ast::parse_cache::CachedParse> {
+    use forgeql_core::ast::lang::{LanguageRegistry, LanguageSupport};
+    use forgeql_core::ast::parse_cache::ParseCache;
+
+    let registry = LanguageRegistry::new(vec![Arc::new(CppLanguage) as Arc<dyn LanguageSupport>]);
+    let mut cache = ParseCache::with_capacity(1);
+    cache
+        .get_or_parse(&fixture_path("canonical.cpp"), &registry)
+        .expect("parse canonical.cpp")
+}
+/// Build a minimal segment from raw (name, fql_kind, line) tuples.
+/// Returns an opened `SegmentReader` stored at `dir`.
+pub fn build_dirty_segment(
+    rows: &[(&str, &str, u32)],
+    content_id_bytes: &[u8],
+    dir: &std::path::Path,
+) -> SegmentReader {
+    let mut builder = SegmentBuilder::new("test", content_id_bytes);
+    for &(name, kind, line) in rows {
+        let _ = builder.emit_row(SymbolRow {
+            name,
+            fql_kind: kind,
+            language: "rust",
+            line,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
+    }
+    builder.flush(dir).expect("dirty segment flush");
+    SegmentReader::open(dir).expect("dirty SegmentReader::open")
+}
+
+/// Like [`build_dirty_segment`], but records a usage posting per row
+/// (BUG-006 U2: `find_usages` reads usage postings, not definition rows).
+pub fn build_dirty_segment_with_usages(
+    rows: &[(&str, &str, u32)],
+    content_id_bytes: &[u8],
+    dir: &std::path::Path,
+) -> SegmentReader {
+    let mut builder = SegmentBuilder::new("test", content_id_bytes);
+    for &(name, kind, line) in rows {
+        let _ = builder.emit_row(SymbolRow {
+            name,
+            fql_kind: kind,
+            language: "rust",
+            line,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
+        builder.add_usage(name, line);
+    }
+    builder.flush(dir).expect("dirty segment flush");
+    SegmentReader::open(dir).expect("dirty SegmentReader::open")
 }
