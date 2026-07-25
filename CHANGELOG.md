@@ -6,6 +6,19 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.41] — 2026-07-25 — test: split overlay find-node, persistence, and commit/rollback parity into their own files
+
+### Changed — three more overlay parity clusters carved out of overlay_parity.rs
+
+- Split into three small, focused files (each including the shared
+  `overlay_harness` module), test bodies unchanged:
+  - `overlay_find_node_parity.rs` — find_symbols regex-alternation matching and
+    find_node handle resolution over the dirty overlay (3 tests).
+  - `overlay_persistence_parity.rs` — external-edit freshness, file purge, and
+    the delta write / reindex / simulated-restart round-trip (5 tests).
+  - `overlay_commit_rollback_parity.rs` — rollback GC of orphaned staging
+    segments and commit promotion into a fresh overlay (4 tests).
+
 ## [0.139.40] — 2026-07-25 — test: split overlay dirty-overlay parity into its own file
 
 ### Changed — overlay dirty-overlay parity carved out of overlay_parity.rs
