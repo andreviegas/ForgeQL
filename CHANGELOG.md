@@ -8,10 +8,10 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.139.46] — 2026-07-25 — refactor: move the diff tests into their own file
 
-### Changed — `transforms/diff.rs` is now 24 lines of module wiring
+### Changed — `transforms/diff.rs` is now 26 lines of module wiring
 
 Final step of the `transforms/diff.rs` split. The inline `#[cfg(test)] mod
-tests` block — around 670 lines, roughly a third of the original file — moves
+tests` block — around 670 lines, over 40% of the original file — moves
 into `transforms/diff/tests.rs`, declared from the parent as `mod tests;`. The
 same shape the `result.rs` split settled on.
 
@@ -22,7 +22,7 @@ now-pointless section banner that separated tests from code in the old
 single-file layout.
 
 That completes the split: `diff.rs` went from 52 036 bytes holding three
-concerns plus its tests to 24 lines of documentation, `mod` declarations and
+concerns plus its tests to 26 lines of documentation, `mod` declarations and
 re-exports, over `apply.rs`, `compact.rs`, `lcs.rs` and `tests.rs`. Public
 paths are unchanged throughout, and nothing written into an index segment is
 affected.

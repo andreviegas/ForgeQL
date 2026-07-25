@@ -347,7 +347,7 @@ ForgeQL/
 │   │       │   ├── mod.rs        # TransformPlan, ByteRangeEdit, FileEdit
 │   │       │   ├── change.rs     # File mutation: matching, lines, with, delete
 │   │       │   ├── copy_move.rs  # COPY LINES / MOVE LINES planning and execution
-│   │       │   └── diff.rs       # Boundary diff with inline node_id(offset) handles
+│   │       │   └── diff.rs + diff/  # Unified + compact diff: apply, compact, lcs
 │   │       ├── verify/           # Run build/test verification steps + typed params
 │   │       ├── workspace/
 │   │       │   ├── mod.rs        # Workspace root discovery, safe_path confinement
@@ -361,7 +361,7 @@ ForgeQL/
 │   │       ├── compact.rs        # Compact CSV output renderer (MCP mode)
 │   │       ├── filter.rs         # apply_clauses(), ClauseTarget trait
 │   │       ├── ir.rs             # ForgeQLIR, Clauses, Predicate, ChangeTarget
-│   │       ├── result.rs         # ForgeQLResult, SymbolMatch, ShowResult
+│   │       ├── result.rs + result/ # ForgeQLResult, SymbolMatch, ShowResult
 │   │       ├── config.rs         # .forgeql.yaml deserialization
 │   │       ├── auth.rs           # Bearer-token authentication (server mode)
 │   │       ├── error.rs          # ForgeError (thiserror)
