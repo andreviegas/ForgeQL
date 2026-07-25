@@ -6,6 +6,18 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.53] — 2026-07-25 — refactor: give SHOW's handle stamping its own module
+
+### Changed — handle and metadata stamping moved out of the SHOW executor
+
+- Moved the three helpers that stamp `node_id`, `rev` and error counts onto
+  `SHOW` result rows, together with the predicate that decides whether a query
+  asked for error counts at all, out of `engine/exec_show.rs` and into
+  `engine/exec_show/stamps.rs`. They sat at the far end of a thousand-line file,
+  which made their differing schedules hard to see: path handles are stamped
+  after LIMIT, while error counts must be filled in before filtering because
+  the clauses filter on them. Pure code motion — no behaviour change.
+
 ## [0.139.52] — 2026-07-25 — test: split the tail enrichers out of enrichment_integration.rs
 
 ### Changed — eight per-enricher files carved out of enrichment_integration.rs
