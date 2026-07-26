@@ -39,6 +39,8 @@
 //! - `exec_*` — one module per verb family, each owning its own handlers
 //! - `coach_report` — what the engine reports to the onboarding coach, which
 //!   observes an already-decided outcome and never steers one
+//! - `jobs` — collecting background work, and the worktree guard around it
+//! - `status` — read-only views: counters, budgets, worktree paths
 //! - `warm`, `convert`, `helpers` — shared plumbing
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -202,6 +204,8 @@ mod exec_session;
 mod exec_show;
 mod exec_source;
 mod exec_transaction;
+mod jobs;
+mod status;
 pub mod warm;
 
 pub mod convert;
@@ -438,143 +442,6 @@ impl ForgeQLEngine {
         ExecOutcome { result, coach }
     }
 
-    /// Shared handle to the background job registry — lets a transport wait on
-    /// a job (`JobRegistry::wait`) without holding its engine lock.
-    #[must_use]
-    pub fn jobs_handle(&self) -> Arc<crate::jobs::JobRegistry> {
-        Arc::clone(&self.jobs)
-    }
-
-    /// Convert a finished (or still-running) pending job into its final result.
-    ///
-    /// Reconciles gate bookkeeping first, so a gated `VERIFY build` that just
-    /// completed can immediately satisfy `COMMIT`. A job still running at the
-    /// wait deadline (or an unknown id) is surfaced as `JobStarted` — the
-    /// caller keeps polling with `JOB STATUS`.
-    pub fn finish_pending(
-        &mut self,
-        pending: &crate::result::PendingExecResult,
-        snapshot: Option<crate::jobs::JobSnapshot>,
-    ) -> ForgeQLResult {
-        self.reconcile_gate_jobs();
-        let started = |job_id: &str, step: &str| {
-            ForgeQLResult::JobStarted(crate::result::JobStartedResult {
-                id: job_id.to_string(),
-                label: step.to_string(),
-            })
-        };
-        let Some(snap) = snapshot else {
-            return started(&pending.job_id, &pending.step);
-        };
-        if !matches!(
-            snap.state,
-            crate::jobs::JobState::Succeeded | crate::jobs::JobState::Failed
-        ) {
-            return started(&pending.job_id, &pending.step);
-        }
-        let success = matches!(snap.state, crate::jobs::JobState::Succeeded);
-        match pending.kind {
-            crate::result::PendingExecKind::Verify => {
-                ForgeQLResult::VerifyBuild(crate::result::VerifyBuildResult {
-                    step: pending.step.clone(),
-                    success,
-                    output: snap.output,
-                    summary_lines: pending.summary_lines,
-                    summary_direction: pending.summary_direction,
-                })
-            }
-            crate::result::PendingExecKind::Run => ForgeQLResult::Run(crate::result::RunResult {
-                step: pending.step.clone(),
-                success,
-                output: snap.output,
-                summary_lines: pending.summary_lines,
-                summary_direction: pending.summary_direction,
-            }),
-        }
-    }
-
-    /// Fold finished gated background jobs into their session's
-    /// `satisfied_gates`. A completed gate only counts when the session's
-    /// `mutation_seq` is unchanged since submission — otherwise the job tested
-    /// stale sources and the gate stays unsatisfied. Failed and stale entries
-    /// are dropped; running ones are kept for the next reconcile.
-    pub(crate) fn reconcile_gate_jobs(&mut self) {
-        let mut remaining = Vec::with_capacity(self.pending_gate_jobs.len());
-        let entries: Vec<PendingGateJob> = self.pending_gate_jobs.drain(..).collect();
-        for entry in entries {
-            let Some(snap) = self.jobs.status(&entry.job_id) else {
-                // Evicted from the registry ring — nothing left to reconcile.
-                continue;
-            };
-            match snap.state {
-                crate::jobs::JobState::Queued | crate::jobs::JobState::Running => {
-                    remaining.push(entry);
-                }
-                crate::jobs::JobState::Failed => {}
-                crate::jobs::JobState::Succeeded => {
-                    if let Some(session) = self.sessions.get_mut(&entry.sid)
-                        && session.mutation_seq == entry.mutation_seq_at_start
-                    {
-                        let _ = session.satisfied_gates.insert(entry.step);
-                    }
-                }
-            }
-        }
-        self.pending_gate_jobs = remaining;
-    }
-
-    /// Guard for session-dependent operations: FIND / SHOW / mutations need a
-    /// live worktree directory on disk. Source-management commands (CREATE, USE,
-    /// DISCONNECT, SHOW SOURCES/BRANCHES) do not and are exempt. Errors if the
-    /// session's worktree has been removed underneath us.
-    fn check_worktree_alive(&self, sid: Option<&str>, op: &ForgeQLIR) -> Result<()> {
-        let Some(mk) = sid else {
-            return Ok(());
-        };
-        let needs_worktree = matches!(
-            op,
-            ForgeQLIR::FindSymbols { .. }
-                | ForgeQLIR::FindUsages { .. }
-                | ForgeQLIR::ShowContext { .. }
-                | ForgeQLIR::ShowSignature { .. }
-                | ForgeQLIR::ShowOutline { .. }
-                | ForgeQLIR::ShowMembers { .. }
-                | ForgeQLIR::ShowBody { .. }
-                | ForgeQLIR::ShowCallees { .. }
-                | ForgeQLIR::ShowLines { .. }
-                | ForgeQLIR::FindFiles { .. }
-                | ForgeQLIR::ChangeContent { .. }
-                | ForgeQLIR::FindNode { .. }
-                | ForgeQLIR::ShowNode { .. }
-                | ForgeQLIR::ShowMore { .. }
-                | ForgeQLIR::ChangeNode { .. }
-                | ForgeQLIR::ChangeNodeMatching { .. }
-                | ForgeQLIR::ChangeNodesFound { .. }
-                | ForgeQLIR::InsertNode { .. }
-                | ForgeQLIR::DeleteNode { .. }
-                | ForgeQLIR::DeleteNodesFound { .. }
-                | ForgeQLIR::MoveNodesFoundTo { .. }
-                | ForgeQLIR::CopyNodesFoundTo { .. }
-                | ForgeQLIR::BeginTransaction { .. }
-                | ForgeQLIR::Commit { .. }
-                | ForgeQLIR::Rollback { .. }
-                | ForgeQLIR::VerifyBuild { .. }
-                | ForgeQLIR::Run { .. }
-        );
-        if needs_worktree
-            && let Some(session) = self.sessions.get(mk)
-            && !session.worktree_path.is_dir()
-        {
-            anyhow::bail!(
-                "session '{mk}' is stale — the worktree directory \
-                 '{}' no longer exists on disk.  \
-                 Run USE <source>.<branch> to start a new session.",
-                session.worktree_path.display()
-            );
-        }
-        Ok(())
-    }
-
     /// Dispatch a parsed operation to its handler. Pure routing — the
     /// surrounding session/worktree guards, path relativization, and budget
     /// accounting live in `execute`.
@@ -739,82 +606,5 @@ impl ForgeQLEngine {
         // Phase 2 (mutable borrow): reindex the single stale file so the next
         // find_node resolves against fresh content. Best-effort (logs on error).
         self.reindex_session(session_id, &[stale_abs_path]);
-    }
-
-    /// Number of commands served since engine creation.
-    #[must_use]
-    pub const fn commands_served(&self) -> u64 {
-        self.commands_served
-    }
-
-    /// Number of active sessions (in-memory) plus pending sessions (on-disk, not yet loaded).
-    #[must_use]
-    pub fn session_count(&self) -> usize {
-        self.sessions.len() + self.pending_sessions.len()
-    }
-
-    /// Return the current budget snapshot for a session.
-    /// Returns `None` if no budget is active OR if the last operation was an
-    /// admin-exempt command (`CreateSource`, `RefreshSource`, `ShowSources`, `ShowBranches`, `ShowVersion`)
-    /// — those commands should not appear in the budget log.
-    #[must_use]
-    pub fn budget_status(&self, session_id: &str) -> Option<crate::budget::BudgetSnapshot> {
-        self.sessions
-            .get(session_id)
-            .and_then(Session::budget_snapshot)
-    }
-
-    /// Worktree root for a loaded session, used by transports to locate the
-    /// session's `SHOW MORE` buffer. `None` when the session is not in memory.
-    #[must_use]
-    pub fn session_worktree(&self, session_id: &str) -> Option<std::path::PathBuf> {
-        self.sessions
-            .get(session_id)
-            .map(|s| s.worktree_path.clone())
-    }
-
-    /// Inline output cap (lines) for a loaded session, used by transports to
-    /// window over-cap CSV output into the `SHOW MORE` buffer. Falls back to
-    /// the configured default when the session is not resident in memory.
-    #[must_use]
-    pub fn session_inline_cap(&self, session_id: &str) -> usize {
-        self.sessions.get(session_id).map_or_else(
-            || crate::config::OutputConfig::default().show_lines,
-            |s| s.output_config().show_lines,
-        )
-    }
-
-    /// Return `Some(snapshot)` only for non-admin ops, `None` for admin-exempt commands.
-    #[must_use]
-    pub fn budget_status_for_op(
-        &self,
-        session_id: &str,
-        op: &ForgeQLIR,
-    ) -> Option<crate::budget::BudgetSnapshot> {
-        let is_admin = matches!(
-            op,
-            ForgeQLIR::CreateSource { .. }
-                | ForgeQLIR::RefreshSource { .. }
-                | ForgeQLIR::ShowSources
-                | ForgeQLIR::ShowBranches
-                | ForgeQLIR::ShowVersion
-        );
-        if is_admin {
-            None
-        } else {
-            self.budget_status(session_id)
-        }
-    }
-    /// Number of registered sources.
-    #[must_use]
-    pub fn source_count(&self) -> usize {
-        self.registry.len()
-    }
-
-    /// The data directory path.
-    #[must_use]
-    #[allow(clippy::missing_const_for_fn)] // PathBuf::as_path is not const
-    pub fn data_dir(&self) -> &Path {
-        &self.data_dir
     }
 }

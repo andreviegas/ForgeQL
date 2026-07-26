@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.57] — 2026-07-26 — refactor: give background jobs and status reads their own modules
+
+### Changed — two more concerns lifted out of the engine dispatcher
+
+- Collecting background work now lives in `engine/jobs.rs`: `finish_pending`,
+  which turns a job snapshot into a result, and `reconcile_gate_jobs`, which
+  folds finished gated jobs back into the transaction waiting on them. The
+  worktree liveness guard moved with them, because it defends the same
+  assumption from the other side — that the worktree a session was opened
+  against still exists when the work lands.
+- The read-only accessors moved to `engine/status.rs`: command counts, budget
+  snapshots, worktree paths, the inline cap. They answer questions without
+  changing anything, and transports call them to build status output.
+- Pure code motion. Only `check_worktree_alive` changed visibility, from
+  private to `pub(super)`, which is the reach it already had.
+
 ## [0.139.56] — 2026-07-25 — refactor: separate coach reporting from the engine, and fix the engine's module doc
 
 ### Changed — coach telemetry moved out of the dispatcher
