@@ -6,6 +6,21 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.60] — 2026-07-26 — refactor: gather index and backend management in one module
+
+### Changed — the session's index lifecycle now lives beside itself
+
+- The twenty methods that build, persist, resume, re-index and drop a
+  session's index — and that install the columnar backend or retire the legacy
+  one — moved from `session/mod.rs` to `session/indexing.rs`. They were more
+  than half the file, and they are the part with a real invariant to state: a
+  session outlives the process that created it, so an index that lived only in
+  memory would be rebuilt on every reconnect.
+- `session/mod.rs` keeps the session's identity, lifecycle and persistence:
+  the sentinel, the last-active timestamp, the checkpoint plumbing. It goes
+  from 932 lines to 626.
+- Pure code motion; no visibility changed and no persist call moved.
+
 ## [0.139.59] — 2026-07-26 — refactor: give the session line budget its own module, and fix two module docs
 
 ### Changed — the line budget moved out of the session god-object

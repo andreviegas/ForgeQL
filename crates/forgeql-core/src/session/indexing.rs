@@ -1,0 +1,334 @@
+//! The session's index, and the storage backends that serve it.
+//!
+//! A session owns one index of the tree checked out in its worktree. This is
+//! where that index is built, persisted, resumed from disk when the commit
+//! still matches, re-indexed file-by-file after a mutation, and dropped — and
+//! where the columnar backend is installed and the legacy one retired.
+//!
+//! Persisting the index is a cache, not a correctness requirement:
+//! `resume_index` rebuilds from scratch on a miss. What it buys is latency,
+//! because a session outlives the process that created it and a memory-only
+//! index would be rebuilt on every reconnect. On a columnar session it is
+//! skipped altogether — the overlay and the transaction delta carry that state
+//! instead, so `build_index` writes no `.forgeql-index` and `flush_if_dirty`
+//! has nothing to flush.
+
+use std::path::PathBuf;
+
+use anyhow::Result;
+use tracing::{debug, info};
+
+use crate::ast::index::SymbolTable;
+use crate::session::Session;
+use crate::storage::StorageEngine;
+use crate::workspace::Workspace;
+
+impl Session {
+    /// Configure columnar shadow-write.
+    ///
+    /// Must be called **before** `build_index` / `resume_index`.  When set,
+    /// each full build writes one segment per source file to
+    /// `<segments_dir>/<provider_id>/<content-hex>/` and builds an overlay
+    /// at `<overlays_dir>/<provider_id>/<commit>.bin`.
+    pub fn set_columnar_build(&mut self, ctx: crate::storage::ColumnarBuildContext) {
+        self.columnar_build = Some(ctx);
+    }
+
+    /// Columnar build context, if shadow-write was enabled at session creation.
+    #[must_use]
+    pub const fn columnar_build(&self) -> Option<&crate::storage::ColumnarBuildContext> {
+        self.columnar_build.as_ref()
+    }
+
+    /// Parse all source files in the worktree and build a fresh `SymbolTable`.
+    ///
+    /// The resulting index is persisted to `<worktree>/.forgeql-index` for
+    /// future `resume_index` calls.
+    ///
+    /// # Errors
+    /// Returns `Err` if:
+    /// - the workspace cannot be created (e.g. path does not exist)
+    /// - tree-sitter parsing fails fatally
+    /// - the cache file cannot be written
+    pub fn build_index(&mut self) -> Result<()> {
+        info!(
+            session = %self.id,
+            path = %self.worktree_path.display(),
+            "building symbol index"
+        );
+
+        let workspace = Workspace::new(&self.worktree_path)?;
+        // PhaseFT5: build and persist always operate on the legacy backend
+        // explicitly; after the route-flip `default_engine_mut()` returns
+        // columnar (which has no `build` or `persist_to_cache` semantics).
+        let legacy = self
+            .backends
+            .legacy_storage_mut()
+            .ok_or_else(|| anyhow::anyhow!("no legacy backend"))?;
+
+        // Columnar inline fast-path: build a SegmentBuildCtx so SymbolTable::build
+        // writes segments inline per-file (with per-file post_pass), skipping the
+        // 2-minute sequential merge. Passed to build_with_seg_ctx (not stored on legacy).
+        let worktree_root = self.worktree_path.clone();
+        let (seg_ctx, inline_state) = self.columnar_build.as_ref().map_or_else(
+            || (None, None),
+            |ctx| {
+                let (sc, state) = ctx.make_inline_ctx(&worktree_root);
+                (Some(sc), Some(state))
+            },
+        );
+
+        legacy.build_with_seg_ctx(&workspace, seg_ctx.as_ref())?;
+
+        // After build (all rayon threads done), extract the inline segment_map
+        // and store it on the Session for warm_or_open to consume.
+        if let Some(state) = inline_state {
+            let map = std::sync::Arc::try_unwrap(state).map_or_else(
+                |arc| {
+                    arc.segment_map
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone()
+                },
+                |s| s.segment_map.into_inner().unwrap_or_default(),
+            );
+            self.prebuilt_segment_map = Some(map);
+        }
+
+        // When columnar is configured, the legacy SymbolTable is a transient
+        // build artefact used only to shadow-write segments and build the
+        // overlay. It is freed by `drop_legacy_index()` immediately after
+        // `warm_or_open` completes, so writing it to `.forgeql-index` wastes
+        // I/O and produces a file that is never read on future sessions
+        // (the warm path skips `resume_index()` when an overlay exists).
+        if self.columnar_build.is_none() {
+            let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
+            legacy.persist_to_cache(&self.worktree_path, &commit_hash, &self.source_name)?;
+            debug!(
+                session = %self.id,
+                commit = %commit_hash,
+                "index built and saved"
+            );
+            self.cached_commit = Some(commit_hash);
+        } else {
+            debug!(
+                session = %self.id,
+                "index built in-memory (columnar configured — skipping .forgeql-index write)"
+            );
+        }
+
+        self.index_dirty = false;
+        Ok(())
+    }
+
+    /// Load the index from disk if it is fresh, otherwise rebuild from scratch.
+    ///
+    /// "Fresh" means the cached commit hash equals the current HEAD of the
+    /// worktree's repository. This is an O(1) check (one `git rev-parse`).
+    ///
+    /// # Errors
+    /// Propagates errors from `build_index` if a rebuild is needed.
+    pub fn resume_index(&mut self) -> Result<()> {
+        let head_oid = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
+
+        // PhaseFT5: legacy must be loaded explicitly; `default_engine_mut()`
+        // now returns columnar once installed, which has no cache semantics.
+        let loaded = self
+            .backends
+            .legacy_storage_mut()
+            .map(|l| l.load_from_cache(&self.worktree_path, &head_oid, &self.source_name))
+            .transpose()?
+            .unwrap_or(false);
+
+        if loaded {
+            debug!(
+                session = %self.id,
+                commit = %head_oid,
+                "cache hit — restoring index from disk"
+            );
+            self.cached_commit = Some(head_oid);
+            self.index_dirty = false;
+        } else {
+            debug!(
+                session = %self.id,
+                "cache miss — building fresh index"
+            );
+            self.build_index()?;
+        }
+
+        Ok(())
+    }
+
+    /// Return a reference to the legacy `SymbolTable`, if the engine holds one.
+    /// Provided for SHOW / exec paths that still work directly with the table.
+    /// Returns `None` for non-legacy backends, or before the index is built.
+    #[must_use]
+    pub fn index(&self) -> Option<&SymbolTable> {
+        self.backends.legacy_storage().and_then(|l| l.table())
+    }
+
+    /// `true` when an index has been built (or loaded from cache) for this
+    /// session.  Used by callers that need to distinguish "no index yet"
+    /// from "empty index" — e.g. ROLLBACK's smart-rollback path.
+    #[must_use]
+    pub fn has_index(&self) -> bool {
+        self.backends.default_engine().has_index()
+    }
+
+    /// Return a reference to the legacy backend, if present.
+    ///
+    /// Used by call sites that need `&SymbolTable` directly (e.g. on-demand
+    /// overlay builds in `exec_source`).  Returns `None` in Phase 09+ when
+    /// the default backend is no longer legacy.
+    #[must_use]
+    pub const fn legacy_storage(&self) -> Option<&crate::storage::LegacyMemoryStorage> {
+        self.backends.legacy_storage()
+    }
+
+    /// The commit hash the current index was built from, if available.
+    #[must_use]
+    pub fn cached_commit(&self) -> Option<&str> {
+        self.cached_commit.as_deref()
+    }
+
+    /// Return a reference to the default (legacy) storage engine.
+    #[must_use]
+    pub fn engine(&self) -> &dyn StorageEngine {
+        self.backends.default_engine()
+    }
+
+    /// Return a mutable reference to the default (legacy) storage engine.
+    #[must_use]
+    pub fn engine_mut(&mut self) -> &mut dyn StorageEngine {
+        self.backends.default_engine_mut()
+    }
+
+    /// Return a reference to the storage engine to use for a given backend selector.
+    ///
+    /// - [`Backend::Default`] and [`Backend::Legacy`] → the legacy in-memory engine.
+    /// - [`Backend::Columnar`] → the columnar engine, if one is installed.
+    ///   Returns an error when no columnar engine has been installed.
+    ///
+    /// # Errors
+    /// Returns `Err` if `backend` is [`Backend::Columnar`] and no columnar engine
+    /// has been installed for this session.
+    pub fn engine_for(&self, backend: &crate::ir::Backend) -> Result<&dyn StorageEngine> {
+        self.backends.engine_for(backend)
+    }
+
+    /// Returns `true` if a columnar backend is installed on this session.
+    #[must_use]
+    pub fn has_columnar(&self) -> bool {
+        self.backends.has_columnar()
+    }
+
+    /// Install (or replace) the columnar storage backend.
+    ///
+    /// In production this is called by `exec_source` when an overlay file is
+    /// found on disk. In tests it can be called directly via
+    /// [`ForgeQLEngine::install_columnar_for_session`].
+    pub fn install_columnar(&mut self, columnar: Box<dyn StorageEngine>) {
+        self.backends.set_columnar(columnar);
+    }
+
+    /// Free the legacy `SymbolTable` from memory.
+    ///
+    /// Called immediately after `install_columnar` (`PhaseFT5`) so that the
+    /// legacy RAM is released once columnar is the default engine.
+    pub fn drop_legacy_index(&mut self) {
+        if let Some(legacy) = self.backends.legacy_storage_mut() {
+            legacy.drop_stored_index();
+        }
+    }
+
+    /// Incrementally re-index the given files after a mutation.
+    ///
+    /// Each path is purged (all stale entries removed) then re-parsed.
+    /// Deleted files are purged only.
+    ///
+    /// # Errors
+    /// Returns `Err` if the index has not been built yet, or if tree-sitter
+    /// parsing fails.
+    pub fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
+        // A node-removal verb may have staged tombstones for this reindex; take
+        // them (so they never leak into a later mutation) and hand them to both
+        // backends. The tombstoned root ordinals stop a byte-identical
+        // surviving sibling from adopting a just-deleted node's handle.
+        let tombstones = std::mem::take(&mut self.pending_tombstones);
+        // PhaseFT5: target both backends explicitly.
+        // Legacy may have no table after `drop_legacy_index()` — treat as non-fatal.
+        if let Some(legacy) = self.backends.legacy_storage_mut()
+            && let Err(e) = legacy.reindex_files_tombstoned(paths, &tombstones)
+        {
+            tracing::warn!("legacy reindex_files (non-fatal): {e}");
+        }
+        if let Some(columnar) = self.backends.columnar_engine_mut()
+            && let Err(e) = columnar.reindex_files_tombstoned(paths, &tombstones)
+        {
+            tracing::warn!("columnar reindex_files failed (non-fatal): {e}");
+        }
+        self.index_dirty = true;
+        Ok(())
+    }
+
+    /// Persist the current in-memory index to `.forgeql-index`.
+    ///
+    /// # Errors
+    /// Returns `Err` if no index has been built yet, or if serialisation /
+    /// I/O fails.
+    pub fn save_index(&mut self) -> Result<()> {
+        let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
+        // PhaseFT5: persist explicitly via legacy; `default_engine_mut()` now
+        // returns columnar when installed.
+        if let Some(legacy) = self.backends.legacy_storage_mut() {
+            legacy.persist_to_cache(&self.worktree_path, &commit_hash, &self.source_name)?;
+        }
+        debug!(
+            session = %self.id,
+            commit = %commit_hash,
+            "index saved to disk"
+        );
+        self.cached_commit = Some(commit_hash);
+        self.index_dirty = false;
+        Ok(())
+    }
+
+    /// Save the index to disk if it has been modified since the last save.
+    ///
+    /// Cheap no-op when `index_dirty` is `false`.
+    ///
+    /// # Errors
+    /// Propagates `save_index` errors when a flush actually happens.
+    pub fn flush_if_dirty(&mut self) -> Result<()> {
+        if self.index_dirty {
+            if self.backends.has_columnar() {
+                // PhaseFT5: columnar sessions manage their delta file at
+                // BEGIN TRANSACTION time (git-tracked).  Nothing to flush here.
+            } else {
+                self.save_index()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Mark the in-memory index as having diverged from the on-disk cache.
+    pub const fn mark_index_dirty(&mut self) {
+        self.index_dirty = true;
+    }
+
+    /// Drop the in-memory index without saving.  Used by `ROLLBACK` so
+    /// the next `resume_index` reads the freshly-restored
+    /// `.forgeql-index` from disk instead of keeping a stale view.
+    pub fn drop_index(&mut self) {
+        self.backends.default_engine_mut().drop_stored_index();
+        self.cached_commit = None;
+        self.index_dirty = false;
+    }
+
+    /// Mutable access to the columnar storage backend, if installed.
+    ///
+    /// Returns `None` when the columnar backend is not enabled for this session.
+    pub fn columnar_storage_mut(&mut self) -> Option<&mut dyn crate::storage::StorageEngine> {
+        self.backends.columnar_engine_mut()
+    }
+}
