@@ -6,6 +6,32 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.66] — 2026-07-26 — refactor: give the tree walk its own module
+
+### Changed — `file_indexer.rs` is now the entry surface, not the whole pass
+
+- `collect_nodes`, `update_guard_stack` and `ascend_to_next_sibling` moved from
+  `ast/index/file_indexer.rs` into `ast/index/file_indexer/walk.rs`. They are
+  the depth-first pass itself, and they own the state that only means anything
+  mid-walk: the parent/ordinal stacks, the guard stack recording which
+  conditional a node sits under, and the block run currently being spanned.
+- The module doc records why the traversal order is load-bearing: a newly seen
+  node takes the next value from the per-file counter as the walk reaches it,
+  so reordering the walk renumbers every handle it cannot match to a prior
+  hint.
+- `ast/index/file_indexer.rs` is down to the entry surface it is named for —
+  macro collection, `IndexContext`, the addressability predicate, and
+  `index_file` / `index_file_from_source` — from 1,436 lines to 340, of which
+  the inline ordinal-remapper tests are now the bulk.
+- Code motion with two deliberate exceptions, both outside the logic:
+  `collect_nodes` gained `pub(super)` on its signature, and one line of its body
+  was requalified from `ordinals::OrdinalRemapper::next_ordinal` to
+  `OrdinalRemapper::next_ordinal`. The bare `ordinals::` prefix resolved only
+  from the parent module; the new import names the same
+  `file_indexer::ordinals::OrdinalRemapper`, so the call is unchanged. Every
+  other line of all three functions is byte-identical, which is what makes this
+  safe to ship without an `ENRICH_VER` bump.
+
 ## [0.139.65] — 2026-07-26 — refactor: gather row emission in one module
 
 ### Changed — the code that decides what a row *is* now has its own module
