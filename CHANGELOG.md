@@ -6,6 +6,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.62] — 2026-07-26 — refactor: give the rev content hashes their own module
+
+### Changed — the hashing behind a node's `rev` is now one small file
+
+- `short_sha256_hex`, `first_body_statement_fingerprint` and
+  `node_content_hash` moved from `ast/index/file_indexer.rs` into
+  `ast/index/file_indexer/hash.rs`. They are the three functions that decide
+  what a `rev` is — an eight-byte SHA-256 prefix, short enough to travel in a
+  CSV row beside its handle — and they had no business being buried at line
+  1,267 of the file that walks the tree.
+- Pure code motion. All three keep byte-identical bodies; the only change is
+  `pub(super)` on each, which is the minimum the move forces since the parent
+  calls all three.
+
 ## [0.139.61] — 2026-07-26 — refactor: move the index unit tests out of the index
 
 ### Changed — `ast/index.rs` is the runtime core again, not mostly tests

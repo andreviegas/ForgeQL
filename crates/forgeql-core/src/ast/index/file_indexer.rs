@@ -15,6 +15,10 @@ use crate::ast::lang::{BlockGroupSpec, FQL_ERROR, LanguageConfig, LanguageSuppor
 use crate::error::ForgeError;
 
 use super::{IndexRow, SegmentBuildCtx, SymbolTable, node_text};
+
+mod hash;
+
+use hash::{first_body_statement_fingerprint, node_content_hash, short_sha256_hex};
 // First-pass macro collector
 // -----------------------------------------------------------------------
 
@@ -1262,33 +1266,6 @@ fn emit_extra_rows(
         }
     }
     self_ordinal
-}
-
-fn short_sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(16);
-    for byte in &digest[..8] {
-        use std::fmt::Write as _;
-        let _ = write!(&mut out, "{byte:02x}");
-    }
-    out
-}
-
-fn first_body_statement_fingerprint(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-    let body = node.child_by_field_name("body")?;
-    let mut cursor = body.walk();
-    let first = body.named_children(&mut cursor).next()?;
-    let text = node_text(source, first);
-    if text.is_empty() {
-        return None;
-    }
-    Some(short_sha256_hex(text.as_bytes()))
-}
-
-fn node_content_hash(node: tree_sitter::Node<'_>, source: &[u8]) -> String {
-    let range = node.byte_range();
-    let slice = source.get(range).unwrap_or_default();
-    short_sha256_hex(slice)
 }
 
 /// Extract all grammar fields from a tree-sitter node into a string map.
