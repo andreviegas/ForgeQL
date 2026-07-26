@@ -17,8 +17,12 @@ use crate::error::ForgeError;
 use super::{IndexRow, SegmentBuildCtx, SymbolTable, node_text};
 
 mod hash;
+mod ordinals;
 
 use hash::{first_body_statement_fingerprint, node_content_hash, short_sha256_hex};
+use ordinals::{OrdinalMatchKey, assign_ordinal};
+
+pub use ordinals::{OrdinalHint, OrdinalRemapper, OrdinalTombstones};
 // First-pass macro collector
 // -----------------------------------------------------------------------
 
@@ -91,42 +95,6 @@ pub struct IndexContext<'a> {
     pub table: &'a mut SymbolTable,
 }
 
-#[derive(Clone)]
-pub struct OrdinalHint {
-    pub name: String,
-    pub fql_kind: String,
-    pub parent_ordinal: u32,
-    pub guard_group_id: Option<String>,
-    pub guard_branch: Option<String>,
-    pub first_body_statement_fingerprint: Option<String>,
-    pub content_hash: Option<String>,
-    pub ordinal: u32,
-}
-
-/// Per-file removed **root** ordinals staged for the next reindex.
-///
-/// Marking these hints consumed before `assign()` runs stops a byte-identical
-/// surviving sibling from adopting a just-deleted node's ordinal — the survivor
-/// keeps its own ordinal, and the deleted handle then resolves to nothing
-/// instead of silently re-pointing at the survivor. Keyed by worktree-relative
-/// path; empty for every non-removal mutation.
-pub type OrdinalTombstones = std::collections::BTreeMap<std::path::PathBuf, Vec<u32>>;
-pub struct OrdinalRemapper {
-    previous: Vec<OrdinalHint>,
-    used: Vec<bool>,
-    next_ordinal: u32,
-}
-
-struct OrdinalMatchKey<'a> {
-    name: &'a str,
-    fql_kind: &'a str,
-    parent_ordinal: u32,
-    guard_group_id: Option<&'a str>,
-    guard_branch: Option<&'a str>,
-    first_body_statement_fingerprint: Option<&'a str>,
-    content_hash: Option<&'a str>,
-}
-
 /// Returns true when a row kind should receive a stable node `ordinal/node_id`.
 ///
 /// Phase A policy: only addressable semantic nodes get `node_ids`; analysis-only
@@ -186,149 +154,6 @@ fn is_addressable_fql_kind(fql_kind: &str) -> bool {
     )
 }
 
-impl OrdinalRemapper {
-    #[must_use]
-    pub fn from_previous(previous: Vec<OrdinalHint>) -> Self {
-        let next_ordinal = previous
-            .iter()
-            .map(|h| h.ordinal)
-            .max()
-            .map_or(0, |m| m.saturating_add(1));
-        let used = vec![false; previous.len()];
-        Self {
-            previous,
-            used,
-            next_ordinal,
-        }
-    }
-
-    /// Mark the hints for `ordinals` as already consumed, before any `assign()`.
-    ///
-    /// A removal verb passes the removed node's root ordinal(s). The matching
-    /// hint is then invisible to `assign`, so a byte-identical surviving sibling
-    /// can no longer win it on the min-ordinal tiebreak — it keeps its own
-    /// ordinal, and the removed node's handle resolves to nothing. `next_ordinal`
-    /// is unaffected (the hint stays in `previous`, still bounding the max), so
-    /// the retired ordinal is never reissued.
-    pub fn tombstone(&mut self, ordinals: &[u32]) {
-        for (idx, hint) in self.previous.iter().enumerate() {
-            if ordinals.contains(&hint.ordinal) {
-                self.used[idx] = true;
-            }
-        }
-    }
-
-    fn primary_matches(
-        hint: &OrdinalHint,
-        name: &str,
-        fql_kind: &str,
-        parent_ordinal: u32,
-    ) -> bool {
-        hint.name == name && hint.fql_kind == fql_kind && hint.parent_ordinal == parent_ordinal
-    }
-
-    fn guard_matches(
-        hint: &OrdinalHint,
-        guard_group_id: Option<&str>,
-        guard_branch: Option<&str>,
-    ) -> bool {
-        hint.guard_group_id.as_deref() == guard_group_id
-            && hint.guard_branch.as_deref() == guard_branch
-    }
-
-    fn assign(&mut self, key: &OrdinalMatchKey<'_>) -> u32 {
-        let mut candidates: Vec<usize> = self
-            .previous
-            .iter()
-            .enumerate()
-            .filter(|(idx, hint)| {
-                !self.used[*idx]
-                    && Self::primary_matches(hint, key.name, key.fql_kind, key.parent_ordinal)
-            })
-            .map(|(idx, _)| idx)
-            .collect();
-
-        if candidates.len() > 1 {
-            let guard_filtered: Vec<usize> = candidates
-                .iter()
-                .copied()
-                .filter(|idx| {
-                    Self::guard_matches(&self.previous[*idx], key.guard_group_id, key.guard_branch)
-                })
-                .collect();
-            if !guard_filtered.is_empty() {
-                candidates = guard_filtered;
-            }
-        }
-
-        if candidates.len() > 1 && key.first_body_statement_fingerprint.is_some() {
-            let fp_filtered: Vec<usize> = candidates
-                .iter()
-                .copied()
-                .filter(|idx| {
-                    self.previous[*idx]
-                        .first_body_statement_fingerprint
-                        .as_deref()
-                        == key.first_body_statement_fingerprint
-                })
-                .collect();
-            if !fp_filtered.is_empty() {
-                candidates = fp_filtered;
-            }
-        }
-
-        if candidates.len() > 1 && key.content_hash.is_some() {
-            let hash_filtered: Vec<usize> = candidates
-                .iter()
-                .copied()
-                .filter(|idx| self.previous[*idx].content_hash.as_deref() == key.content_hash)
-                .collect();
-            if !hash_filtered.is_empty() {
-                candidates = hash_filtered;
-            }
-        }
-
-        if let Some(best_idx) = candidates
-            .into_iter()
-            .min_by_key(|idx| self.previous[*idx].ordinal)
-        {
-            self.used[best_idx] = true;
-            let ordinal = self.previous[best_idx].ordinal;
-            crate::debug_log!(
-                "assign MATCH name={:?} kind={:?} parent_ord={} -> ord={} (reused)",
-                key.name,
-                key.fql_kind,
-                key.parent_ordinal,
-                ordinal
-            );
-            return ordinal;
-        }
-
-        let ordinal = self.next_ordinal;
-        self.next_ordinal = self.next_ordinal.saturating_add(1);
-        if crate::debug_log::is_enabled() {
-            // On a fresh allocation, surface any prior hints that matched on
-            // name+kind but were rejected — their parent_ordinal reveals whether
-            // the miss is a structural (flat vs nested) mismatch.
-            let rejected_parent_ords: Vec<u32> = self
-                .previous
-                .iter()
-                .filter(|h| h.name == key.name && h.fql_kind == key.fql_kind)
-                .map(|h| h.parent_ordinal)
-                .collect();
-            crate::debug_log!(
-                "assign NEW   name={:?} kind={:?} parent_ord={} -> ord={} (name+kind priors={}, their parent_ords={:?})",
-                key.name,
-                key.fql_kind,
-                key.parent_ordinal,
-                ordinal,
-                rejected_parent_ords.len(),
-                rejected_parent_ords
-            );
-        }
-        ordinal
-    }
-}
 // -----------------------------------------------------------------------
 // Index one file (second pass)
 // -----------------------------------------------------------------------
@@ -454,7 +279,10 @@ fn collect_nodes(
     };
     // Per-file DFS ordinal counter — each named row gets the next value so
     // callers can compute a stable node_id handle without re-parsing.
-    let mut row_ordinal_counter: u32 = ctx.ordinal_remapper.as_ref().map_or(0, |r| r.next_ordinal);
+    let mut row_ordinal_counter: u32 = ctx
+        .ordinal_remapper
+        .as_ref()
+        .map_or(0, ordinals::OrdinalRemapper::next_ordinal);
     // Parallel to parent_kind_stack: propagates the enclosing row's ordinal
     // to unnamed descendant nodes so they inherit their nearest named ancestor.
     let mut parent_ordinal_stack: Vec<u32> = Vec::new();
@@ -905,24 +733,6 @@ fn build_row_fields(ctx: &EnrichContext<'_>, ts_language: &tree_sitter::Language
         guard_branch,
         first_body_statement_fingerprint,
     }
-}
-
-/// Assign a node ordinal: reuse a prior one via the remapper when available
-/// (keeps `node_id` handles stable across re-indexes), otherwise hand out the
-/// next value from the per-file counter.
-fn assign_ordinal(
-    remapper: Option<&mut OrdinalRemapper>,
-    row_ordinal_counter: &mut u32,
-    key: &OrdinalMatchKey<'_>,
-) -> u32 {
-    remapper.map_or_else(
-        || {
-            let next = *row_ordinal_counter;
-            *row_ordinal_counter = row_ordinal_counter.saturating_add(1);
-            next
-        },
-        |remapper| remapper.assign(key),
-    )
 }
 
 /// Content revision for an addressable row: the first 8 bytes of the SHA-256 of

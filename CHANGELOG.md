@@ -6,6 +6,28 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.63] — 2026-07-26 — refactor: gather ordinal assignment in one module
+
+### Changed — what keeps a `node_id` stable now lives in one place
+
+- `OrdinalHint`, `OrdinalTombstones`, `OrdinalRemapper`, `OrdinalMatchKey`,
+  the whole `impl OrdinalRemapper`, and `assign_ordinal` moved from
+  `ast/index/file_indexer.rs` into `ast/index/file_indexer/ordinals.rs`. This
+  is the machinery that lets a handle survive a re-index — match each node of
+  the new pass against the previous pass's hints, and tombstone the ordinals a
+  removal freed so a byte-identical surviving sibling cannot adopt one.
+- `ast::index` keeps re-exporting `OrdinalHint`, `OrdinalRemapper` and
+  `OrdinalTombstones` at their existing paths, so nothing outside the crate
+  changes.
+- Pure code motion. Every body is byte-identical; the only changes are the
+  visibility keywords the move forces, on the items the parent still reaches:
+  `OrdinalMatchKey` and its seven fields (the parent builds the literal in six
+  places), `assign_ordinal`, and `OrdinalRemapper::assign`.
+- `OrdinalRemapper::next_ordinal` gained a read-only accessor rather than
+  becoming a visible field. The parent only reads the counter, and leaving the
+  field private is what keeps "only `from_previous` and `assign` may move it"
+  enforced by the compiler rather than by convention.
+
 ## [0.139.62] — 2026-07-26 — refactor: give the rev content hashes their own module
 
 ### Changed — the hashing behind a node's `rev` is now one small file
