@@ -6,6 +6,26 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.64] — 2026-07-26 — refactor: gather block-group synthesis in one module
+
+### Changed — the synthetic block nodes now have their own module
+
+- `ActiveBlock`, `BlockTag`, `block_group_key`, `scan_block_run`,
+  `emit_block_row` and `attr_extended_start` moved from
+  `ast/index/file_indexer.rs` into `ast/index/file_indexer/blocks.rs`. This is
+  what turns a run of adjacent same-kind siblings into one addressable node —
+  the `comment_block` and `array_block` kinds that exist in no grammar — while
+  leaving each member its own row and tagging it with the block's address.
+- The module doc now records why `scan_block_run` walks with
+  `next_named_sibling` rather than `next_sibling`: run members are often
+  separated by anonymous punctuation, so a raw sibling walk breaks the run at
+  the first separator. That is the bug that once made `array_block` emit
+  nothing at all, and it hid because Rust comment runs have no separator, so
+  for them the two walks agree.
+- Pure code motion. Every body is byte-identical; the only changes are the
+  visibility keywords the move forces on the six items and on the fields of
+  the two structs, which the parent both builds and reads.
+
 ## [0.139.63] — 2026-07-26 — refactor: gather ordinal assignment in one module
 
 ### Changed — what keeps a `node_id` stable now lives in one place
