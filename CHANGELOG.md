@@ -6,6 +6,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.58] — 2026-07-26 — refactor: separate engine construction from command dispatch
+
+### Changed — `engine.rs` is now state plus a single dispatch path
+
+- `ForgeQLEngine::new` and the startup scan that rediscovers sources left by an
+  earlier process moved to `engine/construct.rs`. Both run once, before any
+  command does, which is what separates them from everything left in
+  `engine.rs`.
+- That completes the split: `engine.rs` goes from 1,039 lines to 535, and what
+  remains is what its own header claims — the engine's state, and the single
+  path every operation takes through `execute` and `dispatch_op`. The other
+  concerns now sit in `coach_report`, `construct`, `jobs` and `status`
+  alongside the existing `exec_*` modules.
+- Pure code motion, with no visibility change at all: `new` was already public
+  and stays so, and the scan is private to the new module because its only
+  caller moved with it.
+
 ## [0.139.57] — 2026-07-26 — refactor: give background jobs and status reads their own modules
 
 ### Changed — two more concerns lifted out of the engine dispatcher
