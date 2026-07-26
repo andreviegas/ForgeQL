@@ -320,7 +320,7 @@ ForgeQL/
 │   │   └── src/
 │   │       ├── ast/
 │   │       │   ├── lang.rs       # LanguageSupport trait, LanguageConfig, LanguageRegistry
-│   │       │   ├── index.rs      # IndexRow, SymbolTable, collect_nodes, node-id assignment
+│   │       │   ├── index.rs + index/  # IndexRow, SymbolTable, node-id assignment; index/ holds the file indexer, build, and tests
 │   │       │   ├── query.rs      # find_symbols, find_usages
 │   │       │   ├── show.rs       # show_body, show_signature, show_outline, …
 │   │       │   ├── cache.rs      # Index serialization/deserialization (bincode)

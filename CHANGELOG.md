@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.61] — 2026-07-26 — refactor: move the index unit tests out of the index
+
+### Changed — `ast/index.rs` is the runtime core again, not mostly tests
+
+- The inline test module was roughly three quarters of `ast/index.rs`. It moved
+  into `ast/index/tests/`, split by what each group covers: `table.rs` for the
+  symbol table and its secondary indexes, `snippets.rs` for what indexing a
+  snippet actually produces (comment blocks, error rows, block aliases, and
+  node-id stability across an unrelated edit), `cpp.rs` for the C++ node kinds,
+  and `util.rs` for the two snippet-indexing helpers the others share.
+- `ast/index.rs` goes from 1,574 lines to 361. What remains is the runtime: the
+  table types, the stats accessors, `reassign_intern_ids` and `node_text`. The
+  file was never as large as its size suggested, and now it does not look it.
+- Pure code motion: no test was added, dropped or reordered, and every body is
+  semantically unchanged. The only edits are each file's imports, the two shared
+  helpers becoming `pub(super)` so the sibling test modules can call them, and
+  five wrapped expressions that rustfmt re-flowed once the de-indent freed four
+  columns.
+
 ## [0.139.60] — 2026-07-26 — refactor: gather index and backend management in one module
 
 ### Changed — the session's index lifecycle now lives beside itself
