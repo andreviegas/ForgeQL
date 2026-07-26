@@ -5,6 +5,36 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.5] — 2026-07-26 — refactor: the ordinal tests move next to the ordinal code
+
+### Changed — `file_indexer.rs` no longer carries the remapper's unit tests
+
+- The `identical_sibling_tombstone_tests` module moved from
+  `ast/index/file_indexer.rs` into `ast/index/file_indexer/ordinals.rs`. Its
+  nine items — the `twin_hint` / `twin_key` / `fn_hint` / `child_hint` /
+  `fn_key` builders and four `#[test]` functions — construct and call nothing
+  but `ordinals.rs`'s own types, so they belong beside the code they cover.
+  `file_indexer.rs` drops from 340 to 218 lines: the per-file entry surface —
+  macro collection, `IndexContext`, `is_addressable_fql_kind`, `index_file`,
+  `index_file_from_source` — plus the submodule declarations and the
+  `pub use ordinals::{…}` re-export that five other modules reach those types
+  by.
+
+- **`OrdinalRemapper::assign` is private again.** It was widened to
+  `pub(super)` in an earlier step for one reason only: the test module sat in
+  the parent and had to reach down into `ordinals`. With the tests inside
+  `ordinals.rs` that reason is gone — the only remaining callers are
+  `assign_ordinal`, in the same file, and the tests themselves. Narrowing it
+  in the same commit as the move is what keeps a temporary widening from
+  becoming permanent by accident.
+
+- Otherwise pure motion. The moved module is byte-identical apart from a
+  single deleted line: `use super::ordinals::OrdinalMatchKey;` is gone,
+  because from inside `ordinals.rs` that path no longer resolves and no
+  longer needs to — `OrdinalMatchKey` is a sibling now and arrives through
+  the `use super::*;` that the module already had. Four tests before, four
+  after, same names.
+
 
 ## [0.148.4] — 2026-08-05 — refactor: `exec_source.rs` becomes a table of contents
 
