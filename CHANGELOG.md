@@ -5,6 +5,41 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.6] — 2026-07-26 — refactor: start splitting the parser test suite
+
+### Changed — the `USING` clause tests get their own file
+
+`crates/forgeql-core/src/parser/tests.rs` was 1,340 lines and 91 tests in one
+flat `#[cfg(test)]` module, grown by appending rather than organised by what
+each test covers. This is the first of seven cuts turning it into a parent
+over themed children.
+
+- The `USING` clause block — eight tests covering backend routing, from
+  `parse_find_symbols_no_using_defaults_to_default_backend` to
+  `change_file_has_no_using_clause`, together with the banner comment that
+  already fenced them off — moved verbatim into `parser/tests/backends.rs`.
+  It went first because it is the only themed run that never recurs later in
+  the file; each of the remaining six clusters is spread over two to four
+  separate line ranges.
+- `parser/tests.rs` drops to 1,236 lines and gains `mod backends;`. Its
+  `use crate::ir::{…}` line loses `Backend`, which no longer has a user
+  there; the child carries its own `use crate::ir::Backend;`, since
+  `parser/mod.rs` does not import that name and so cannot supply it.
+- Everything else the child needs arrives through `use crate::parser::*;`
+  where the parent used `use super::*;`. That is the same set of names read
+  from one level deeper: a module can see an ancestor's private items, and
+  the glob re-exposes the ancestor's own private `use` bindings too, which is
+  what carries `ForgeQLIR` and `parse` into scope.
+
+91 tests before, 91 after, same names, bodies byte-identical.
+
+No `ENRICH_VER` bump — but not because these are tests. The indexer has no
+notion of `#[cfg(test)]`; it indexes this file like any other source, and this
+change does alter what gets stored for it: a new file's rows appear and the
+parent's ordinals shift. The reason no bump is owed is that no *indexing* code
+changed, so a segment cached under the current version is merely older than
+the tree, never wrong about it.
+
 ## [0.148.5] — 2026-07-26 — refactor: the ordinal tests move next to the ordinal code
 
 ### Changed — `file_indexer.rs` no longer carries the remapper's unit tests
