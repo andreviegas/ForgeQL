@@ -5,6 +5,46 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.9] — 2026-07-26 — refactor: parser source-and-session tests into their own file
+
+### Changed — cut four of seven on `parser/tests.rs`
+
+- Seventeen tests moved into `parser/tests/sources.rs`, in five ranges: the
+  original `CREATE SOURCE` / `REFRESH SOURCE` / `VACUUM` / `USE` /
+  `SHOW SOURCES|BRANCHES|VERSION|STATS` run (twelve tests), two later `USE`
+  tests, `parse_use_source_hyphenated_branch`, `parse_use_source_bare_as_branch`
+  and `parse_use_missing_dot_is_error`.
+- `parser/tests.rs` drops from 954 to 708 lines and gains `mod sources;`; the
+  new file is 258 lines. It needs nothing from `crate::ir`, and all four names
+  the parent imports still have users there.
+- Two banners were split rather than moved whole, because each headed a run
+  that no longer belongs to one file:
+  - `── Relaxed quoting (double-quoted and bare values) ──` went with the two
+    `USE` quoting tests it mostly covers. The third test under it,
+    `parse_show_body_bare_name`, stays in the parent for the code-exposure
+    cut, and would otherwise have been left inside the
+    `── FIND globals / ORDER BY / LIMIT ──` section above it — a `SHOW body`
+    test under a `FIND` heading. It gets a
+    `── Relaxed quoting (bare symbol names) ──` line of its own, which will
+    travel with it in the next cut.
+  - `-- missing error path tests --` stayed in the parent, where it still
+    heads `parse_find_unknown_target_is_error`.
+    `parse_use_missing_dot_is_error` moved out from under it, and sits in
+    `sources.rs` directly after the other `USE` tests rather than at the end
+    of the file, so that it does not land under the relaxed-quoting banner
+    there — which would not describe it either.
+- The `// (parse_disconnect test removed — DISCONNECT command eliminated)`
+  note travels with the source tests it was appended to. The
+  `// SHOW commands (Code Exposure API)` banner directly below it does not —
+  it heads the next cut's material and stays.
+
+91 tests before, 91 after, same names, bodies byte-identical.
+
+No `ENRICH_VER` bump. A segment is keyed by path, content id and enrichment
+version, so the files this cut touches re-index on their own; a bump exists to
+invalidate segments whose content did *not* change, and no indexing code
+changed here.
+
 ## [0.148.8] — 2026-07-26 — refactor: parser WHERE-predicate tests into their own file
 
 ### Changed — cut three of seven on `parser/tests.rs`
