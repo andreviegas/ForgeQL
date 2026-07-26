@@ -5,6 +5,33 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.7] — 2026-07-26 — refactor: parser transaction tests into their own file
+
+### Changed — cut two of seven on `parser/tests.rs`
+
+- Four tests moved into `parser/tests/transactions.rs`: `parse_transaction`,
+  `parse_commit_standalone` and `parse_checkpoint_sequence`, which form one
+  contiguous run, plus `parse_job_commands`, which the file kept some 640
+  lines further down because it was appended much later. `JOB START` can
+  stand in for a synchronous `VERIFY` on a commit-gate step, so the `JOB`
+  verbs read closest to the transaction tests — that is a proximity argument,
+  which is all the grouping needs. Two further transaction-adjacent tests stay
+  in the parent with the statement they are really about:
+  `parse_commit_message_heredoc_with_apostrophes` is a heredoc-quoting test
+  and `parse_change_in_transaction_sequence` is a `CHANGE` test.
+- `parser/tests.rs` drops from 1,236 to 1,173 lines and gains
+  `mod transactions;`. The child needs nothing from `crate::ir` — every name
+  the four bodies reference arrives through `use crate::parser::*;`.
+
+91 tests before, 91 after, same names, bodies byte-identical.
+
+No `ENRICH_VER` bump. A segment is keyed by path, content id and enrichment
+version, so the two files this cut touches re-index on their own — their
+content ids moved, and nothing cached for them can be served. What a bump
+exists for is invalidating segments whose content did *not* change; no
+indexing code changed here, so every other file's cached segment is still
+correct.
+
 ## [0.148.6] — 2026-07-26 — refactor: start splitting the parser test suite
 
 ### Changed — the `USING` clause tests get their own file
