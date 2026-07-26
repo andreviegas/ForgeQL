@@ -19,9 +19,10 @@ use crate::ast::lang::{BlockGroupSpec, LanguageSupport};
 
 use crate::ast::index::IndexRow;
 
+use super::IndexContext;
 use super::hash::short_sha256_hex;
 use super::ordinals::{OrdinalMatchKey, assign_ordinal};
-use super::{IndexContext, row_rev};
+use super::rows::row_rev;
 
 /// Grouping key for a block-group member. Members that share a key AND are
 /// adjacent tree siblings coalesce into one block. For `split_on_attr =

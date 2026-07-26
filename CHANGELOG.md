@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.65] — 2026-07-26 — refactor: gather row emission in one module
+
+### Changed — the code that decides what a row *is* now has its own module
+
+- `PreparedRow`, `RowSink`, `MAX_ERROR_SNIPPET`, `error_snippet`,
+  `process_node_rows`, `build_row_fields`, `row_rev`, `emit_addressable_row`,
+  `emit_extra_rows` and `extract_fields` moved from
+  `ast/index/file_indexer.rs` into
+  `ast/index/file_indexer/rows.rs`. This is the centre of the indexing pass:
+  for one node it decides addressability, assigns the ordinal, gathers the
+  enrichment fields, and emits the addressable row plus whatever the enrichers
+  contributed. Nearly everything a later query sees — a row's name, kind,
+  fields, `node_id` and `rev` — is decided here.
+- Pure code motion. Every body is byte-identical, and the cluster turned out to
+  be almost entirely self-contained: only `process_node_rows` (called by the
+  tree walk) and `row_rev` (called by block emission) needed `pub(super)`. The
+  other eight items stayed private — now to a focused module rather than to a
+  1,400-line file.
+
 ## [0.139.64] — 2026-07-26 — refactor: gather block-group synthesis in one module
 
 ### Changed — the synthetic block nodes now have their own module
