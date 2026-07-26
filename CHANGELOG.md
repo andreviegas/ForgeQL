@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.56] — 2026-07-25 — refactor: separate coach reporting from the engine, and fix the engine's module doc
+
+### Changed — coach telemetry moved out of the dispatcher
+
+- The eight functions that describe a finished command to the onboarding coach
+  moved from `engine.rs` into `engine/coach_report.rs` — roughly a fifth of the
+  file, and the one concern in it that has nothing to do with executing a
+  command. Gathering them makes the direction of the relationship legible: the
+  coach is handed an outcome that has already been decided, and the hint it
+  returns can change what the user is told, never what the engine did.
+- Five of the eight are now private to that module rather than merely private
+  to a 1,039-line file. `observe_command` becomes `pub(super)`, which is the
+  same reach it already had.
+
+### Fixed — the engine's architecture doc was attached to an import
+
+- `engine.rs` opened with a 32-line `///` *outer* doc comment, so the
+  architecture diagram documented `use std::collections::HashMap;` rather than
+  the module. It is now `//!`, and carries a short index of the modules
+  alongside it.
+
 ## [0.139.55] — 2026-07-25 — refactor: gather the row-building SHOW verbs in one module
 
 ### Changed — `exec_show.rs` is now a dispatcher over four focused modules
