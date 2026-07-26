@@ -5,6 +5,64 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.12] — 2026-07-27 — refactor: parser mutation tests out, `tests.rs` becomes a table of contents
+
+### Changed — cut seven of seven on `parser/tests.rs`
+
+The last nineteen tests moved into `parser/tests/mutations.rs` as one range: the
+`CHANGE` command, heredoc-payload, `CHANGE FILE … LINES n-m NOTHING` regression
+and `UNDO` sections, all four of their banner comments with them. Two rejection
+tests came along, and the new file's header says why: what
+`parse_top_level_rename_is_rejected` and `parse_error_missing_quote` reject is a
+mutation — the top-level `RENAME` removed in v0.10.0, and an unterminated quote
+in a `CHANGE FILE`.
+
+`parser/tests.rs` is now **15 lines**: a module header and seven `mod`
+declarations. It holds no tests, no imports and no `use super::*;` — the last
+was deleted because nothing in the file names anything any more.
+
+### The arc, end to end
+
+`crates/forgeql-core/src/parser/tests.rs` was 1,340 lines and 91 `#[test]`
+functions in one flat `#[cfg(test)]` module with no helpers, ordered by when
+each test was written rather than by what it covers. Seven cuts later:
+
+| file | tests |
+|---|---|
+| `tests/mutations.rs` | 19 |
+| `tests/sources.rs` | 17 |
+| `tests/clauses.rs` | 15 |
+| `tests/show.rs` | 15 |
+| `tests/find.rs` | 13 |
+| `tests/backends.rs` | 8 |
+| `tests/transactions.rs` | 4 |
+
+91 before, 91 after, same names, every body byte-identical. Six of the original
+1,340 lines did not move: the two top-level `use` statements, deleted because
+nothing in the parent names anything any more, and four duplicate `#[test]`
+attributes discarded where a moved range carried the following test's attribute
+along with it.
+
+Eighty-three lines were written rather than moved, all of them scaffolding
+rather than test content: forty-five `//!` lines making up eight module headers
+(the seven children and the parent), eleven `use` lines, seven `mod`
+declarations, sixteen blank separators, three section banners — two new, for
+groups that would otherwise have landed under a heading that did not describe
+them, and one rename of a banner whose section got split across cuts — and one
+`#[test]` attribute retyped to re-head a range whose own attribute stayed
+behind.
+
+Because the file was ordered chronologically, most families were not
+contiguous — the seven children came out of eighteen separate line ranges. Each
+cut moved its ranges in descending order, anchored at a fixed node in the child
+so they stacked back into source order, which is why no test changed position
+relative to its neighbours.
+
+No `ENRICH_VER` bump on any cut in the arc. A segment is keyed by path, content
+id and enrichment version, so an edited or new file re-indexes on its own; a
+bump exists to invalidate segments whose content did *not* change, and no
+indexing code changed here.
+
 ## [0.148.11] — 2026-07-27 — refactor: parser FIND tests into their own file
 
 ### Changed — cut six of seven on `parser/tests.rs`

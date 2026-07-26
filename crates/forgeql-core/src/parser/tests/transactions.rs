@@ -1,8 +1,8 @@
 //! Parser tests for `BEGIN TRANSACTION` / `VERIFY` / `COMMIT` sequences and
 //! the `JOB` verbs.
 //!
-//! Not every test that mentions a transaction is here. Two live in the parent
-//! with the statement they are really about:
+//! Not every test that mentions a transaction is here. Two live in
+//! `mutations.rs` with the statement they are really about:
 //! `parse_commit_message_heredoc_with_apostrophes` is a heredoc-quoting test
 //! and `parse_change_in_transaction_sequence` is a `CHANGE` test.
 
