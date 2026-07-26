@@ -1,16 +1,16 @@
-/// Persistent checkpoint stack — serialized to `.forgeql-checkpoints` in the
-/// worktree so the stack survives server restarts.
-///
-/// ## Invariant (holds after every completed operation)
-///
-/// `file on disk == in-memory stack`  AND
-/// `checkpoints.last().oid` (or `last_clean_oid` when stack is empty) == `HEAD`
-///
-/// The invariant is maintained by:
-/// - **BEGIN**: `stage_and_commit` → push → `save`  (file = full new stack)
-/// - **ROLLBACK**: pop in-memory → `reset_hard` → `save`  (overwrites whatever
-///   git restored the file to with the correct popped stack)
-/// - **COMMIT**: squash → `checkpoints.clear()` → `remove_file`
+//! Persistent checkpoint stack — serialized to `.forgeql-checkpoints` in the
+//! worktree so the stack survives server restarts.
+//!
+//! ## Invariant (holds after every completed operation)
+//!
+//! `file on disk == in-memory stack`  AND
+//! `checkpoints.last().oid` (or `last_clean_oid` when stack is empty) == `HEAD`
+//!
+//! The invariant is maintained by:
+//! - **BEGIN**: `stage_and_commit` → push → `save`  (file = full new stack)
+//! - **ROLLBACK**: pop in-memory → `reset_hard` → `save`  (overwrites whatever
+//!   git restored the file to with the correct popped stack)
+//! - **COMMIT**: squash → `checkpoints.clear()` → `remove_file`
 use std::path::Path;
 
 use anyhow::Result;

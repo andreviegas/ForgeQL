@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.59] — 2026-07-26 — refactor: give the session line budget its own module, and fix two module docs
+
+### Changed — the line budget moved out of the session god-object
+
+- The seven budget methods moved from `session/mod.rs` to `session/budget.rs`.
+  They were already a separate `impl Session` block behind a section banner, so
+  the move is the banner made real: reading deducts the source lines it
+  discloses, writing credits back a line for every line a mutation wrote up to
+  the configured ceiling, and the persisted fields are written as they change
+  so a budget survives a restart with the session it belongs to.
+
+### Fixed — two module docs were attached to the following item
+
+- `session/mod.rs` and `session/checkpoint_file.rs` both opened with a `///`
+  *outer* doc comment, so each documented the first `use` statement below it
+  rather than its own module. Both are now `//!`. The session header also
+  dropped two references to private planning phases, which mean nothing to a
+  reader of this repository, and gained an index of the submodules.
+
 ## [0.139.58] — 2026-07-26 — refactor: separate engine construction from command dispatch
 
 ### Changed — `engine.rs` is now state plus a single dispatch path

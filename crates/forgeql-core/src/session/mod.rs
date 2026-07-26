@@ -1,15 +1,27 @@
-/// Per-session state — Phase B of the v2 architecture.
-///
-/// A `Session` ties together exactly one git worktree, one user identity,
-/// and one `StorageEngine` (the index of the source tree checked out in
-/// that worktree). Sessions are created when a user issues `USE source.branch`
-/// and destroyed when the session ends.
-///
-/// Index caching follows a two-phase strategy:
-///   1. On first use: build the full index and persist it to disk.
-///   2. On resume: reload from disk if the HEAD commit hash matches;
-///      otherwise fall back to a full rebuild.
-///      (True incremental re-index is deferred to Phase D.)
+//! Per-session state.
+//!
+//! A `Session` ties together exactly one git worktree, one user identity,
+//! and one `StorageEngine` (the index of the source tree checked out in
+//! that worktree). Sessions are created when a user issues `USE source.branch`
+//! and destroyed when the session ends.
+//!
+//! Index caching follows a two-phase strategy:
+//!   1. On first use: build the full index and persist it to disk.
+//!   2. On resume: reload from disk if the HEAD commit hash matches;
+//!      otherwise fall back to a full rebuild.
+//!
+//! Resume is wholesale, but within a live session only the files a mutation
+//! touched are re-indexed.
+//!
+//! A session outlives the process that created it. That is the constraint this
+//! module exists to honour: state a later command depends on is written as it
+//! changes, not held in memory and lost to a restart.
+//!
+//! Submodules:
+//! - `budget` — the per-session line budget
+//! - `checkpoint_file` — the checkpoint stack, persisted so it survives a restart
+//! - `coords` — `SessionCoords`, the identity everything else is derived from
+//! - `found_set` — the `FOUND` set a `FIND` arms, and the rev that gates it
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -19,11 +31,12 @@ use tracing::{debug, info, warn};
 use crate::ast::index::{OrdinalTombstones, SymbolTable};
 use crate::ast::lang::LanguageRegistry;
 use crate::ast::parse_cache::ParseCache;
-use crate::budget::{BudgetSnapshot, BudgetState};
-use crate::config::{LineBudgetConfig, RunStep, VerifyStep};
+use crate::budget::BudgetState;
+use crate::config::{RunStep, VerifyStep};
 use crate::storage::{BackendSet, LegacyMemoryStorage, StorageEngine};
 use crate::workspace::Workspace;
 
+mod budget;
 pub mod checkpoint_file;
 pub mod coords;
 pub mod found_set;
@@ -762,85 +775,6 @@ impl Session {
             self.source_name, self.branch, self.id, self.user_id,
         );
         let _ = std::fs::write(self.worktree_path.join(SESSION_SENTINEL), contents);
-    }
-}
-
-// -----------------------------------------------------------------------
-// Budget integration
-
-impl Session {
-    /// Initialise the line-budget for this session.
-    ///
-    /// `data_dir` is the `ForgeQL` data root (`~/.forgeql`).
-    /// `budget_branch` is the computed budget key — the feature branch name,
-    /// derived by the engine from the `USE` command (see `use_source`).
-    /// When `resumed` is `true` the persisted budget is restored from disk;
-    /// otherwise a fresh budget is created.
-    pub fn init_budget(
-        &mut self,
-        config: &LineBudgetConfig,
-        resumed: bool,
-        data_dir: &std::path::Path,
-        budget_branch: &str,
-    ) {
-        self.budget_data_dir = Some(data_dir.to_path_buf());
-        self.budget_branch = Some(budget_branch.to_string());
-        self.budget = Some(if resumed {
-            BudgetState::load(config, data_dir, &self.source_name, budget_branch)
-        } else {
-            BudgetState::new(config)
-        });
-    }
-
-    /// Deduct `lines` from the budget and persist the new state.
-    /// Returns `None` when no budget is configured.
-    pub fn deduct_budget(&mut self, lines: usize) -> Option<BudgetSnapshot> {
-        let data_dir = self.budget_data_dir.clone()?;
-        let budget_branch = self.budget_branch.clone()?;
-        let budget = self.budget.as_mut()?;
-        let snap = budget.deduct(lines);
-        budget.save(&data_dir, &self.source_name, &budget_branch);
-        Some(snap)
-    }
-
-    /// Grant proportional budget recovery for a mutation that wrote code.
-    ///
-    /// Unlike `deduct_budget(0)` which triggers the rolling-window recovery,
-    /// this rewards the agent 1:1 for every line written.
-    pub fn reward_budget(&mut self, lines_written: usize) -> Option<BudgetSnapshot> {
-        let data_dir = self.budget_data_dir.clone()?;
-        let budget_branch = self.budget_branch.clone()?;
-        let budget = self.budget.as_mut()?;
-        let snap = budget.reward_mutation(lines_written);
-        budget.save(&data_dir, &self.source_name, &budget_branch);
-        Some(snap)
-    }
-
-    /// Reset the budget delta to zero for non-consuming commands.
-    pub const fn reset_budget_delta(&mut self) {
-        if let Some(ref mut b) = self.budget {
-            b.reset_delta();
-        }
-    }
-
-    /// Return `true` if a budget is active and in critical state.
-    #[must_use]
-    pub fn is_budget_critical(&self) -> bool {
-        self.budget.as_ref().is_some_and(BudgetState::is_critical)
-    }
-    /// Maximum lines allowed when in critical state.
-    #[must_use]
-    pub fn budget_critical_max_lines(&self) -> Option<usize> {
-        self.budget
-            .as_ref()
-            .filter(|b| b.is_critical())
-            .map(BudgetState::critical_max_lines)
-    }
-
-    /// Current budget snapshot (without deducting).
-    #[must_use]
-    pub fn budget_snapshot(&self) -> Option<BudgetSnapshot> {
-        self.budget.as_ref().map(BudgetState::snapshot)
     }
 }
 
