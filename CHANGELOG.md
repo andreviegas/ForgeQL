@@ -5,6 +5,40 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.10] — 2026-07-27 — refactor: parser code-exposure tests into their own file
+
+### Changed — cut five of seven on `parser/tests.rs`
+
+- Fifteen tests moved into `parser/tests/show.rs`, in four ranges: the
+  `SHOW commands (Code Exposure API)` block (`context`, `signature`, `outline`,
+  `members`, `body`, `callees` — eight tests), two later runs of `SHOW MORE`
+  and `SHOW LINES` tests, and `parse_show_body_bare_name` with the
+  `── Relaxed quoting (bare symbol names) ──` banner it was given in the
+  previous cut.
+- `parser/tests.rs` drops from 708 to 481 lines and gains `mod show;`; the new
+  file is 236 lines. It needs no file-level `crate::ir` import — the three
+  `SHOW MORE` tests that touch `ShowMoreWindow` either name it fully qualified
+  or import it inside the function body, exactly as they did in the parent.
+  All four names the parent imports still have users there.
+- The `SHOW commands (Code Exposure API)` banner heads everything in the child
+  up to the relaxed-quoting banner, `SHOW MORE` and `SHOW LINES` included, so
+  no new banner had to be written for them.
+- One banner was renamed rather than moved. `── SHOW LINES / FIND files ──`
+  named two groups this cut separates: the `SHOW LINES` tests leave, the
+  `FIND files` tests stay. Left alone it would have been wrong on both halves —
+  no `SHOW LINES` test remains under it, and its first member is now
+  `parse_undo_last_n`, which was never a `SHOW LINES` test either. It reads
+  `── UNDO / FIND files ──` in the parent from here on. That is the one line in
+  this cut that is written rather than moved; it is a line that stayed put, so
+  the byte-identity of the moved payload is untouched.
+
+91 tests before, 91 after, same names, bodies byte-identical.
+
+No `ENRICH_VER` bump. A segment is keyed by path, content id and enrichment
+version, so the files this cut touches re-index on their own; a bump exists to
+invalidate segments whose content did *not* change, and no indexing code
+changed here.
+
 ## [0.148.9] — 2026-07-26 — refactor: parser source-and-session tests into their own file
 
 ### Changed — cut four of seven on `parser/tests.rs`
