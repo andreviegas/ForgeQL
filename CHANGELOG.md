@@ -5,6 +5,34 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.11] — 2026-07-27 — refactor: parser FIND tests into their own file
+
+### Changed — cut six of seven on `parser/tests.rs`
+
+- Thirteen tests moved into `parser/tests/find.rs` in two ranges: the four
+  `FIND symbols` / `FIND usages` tests near the top of the file, and one
+  contiguous run from `parse_find_files_no_in` to the end — five `FIND files`
+  tests, the `── FIND globals / ORDER BY / LIMIT ──` block, and
+  `parse_find_unknown_target_is_error` under its `-- missing error path tests --`
+  banner. Both banners moved with the tests they head.
+- `parser/tests.rs` drops from 481 to 269 lines and gains `mod find;`; the new
+  file is 221 lines and takes `CompareOp`, `PredicateValue` and
+  `SortDirection` from `crate::ir`.
+- **The parent's import line narrows to `use crate::ir::ChangeTarget;`.** With
+  the `FIND` tests gone, the other three names have no user left in it. That is
+  forced by `-D warnings`, not a tidy-up.
+- The `── UNDO / FIND files ──` banner, renamed one cut ago, is renamed again to
+  `── UNDO ──`: the `FIND files` half has now left too, and what remains under
+  it is the single `parse_undo_last_n`. It should travel unchanged when the
+  mutation tests are cut next.
+
+91 tests before, 91 after, same names, bodies byte-identical.
+
+No `ENRICH_VER` bump. A segment is keyed by path, content id and enrichment
+version, so the files this cut touches re-index on their own; a bump exists to
+invalidate segments whose content did *not* change, and no indexing code
+changed here.
+
 ## [0.148.10] — 2026-07-27 — refactor: parser code-exposure tests into their own file
 
 ### Changed — cut five of seven on `parser/tests.rs`
