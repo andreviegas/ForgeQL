@@ -5,6 +5,45 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.8] — 2026-07-26 — refactor: parser WHERE-predicate tests into their own file
+
+### Changed — cut three of seven on `parser/tests.rs`
+
+- Fifteen tests moved into `parser/tests/clauses.rs`, in four ranges: the
+  `── WHERE predicates ──` block (three tests), the
+  `── Comparison operators in WHERE ──` block together with the
+  `── Negative number literals in predicates ──` subsection nested inside it
+  (seven), two relaxed-quoting value tests, and the
+  `-- comparison operator round-trips --` block (three). All four section
+  banners travel with the tests they head.
+- The first of those was going to go to a `find.rs`. The file's own banner
+  says otherwise and it is right: `parse_find_symbols_usages_n`,
+  `parse_find_symbols_where_name_like` and
+  `parse_find_symbols_where_name_not_like` use `FIND symbols` only as a
+  carrier — what each one asserts is the predicate the clause parser built.
+- `parser/tests.rs` drops from 1,173 to 954 lines and gains `mod clauses;`;
+  the new file is 232 lines. It imports `CompareOp`, `PredicateValue` and
+  `SortDirection` from `crate::ir`, and all three still have users left in the
+  parent, so the parent's import line is unchanged.
+
+One banner stayed behind deliberately. `── Relaxed quoting (double-quoted and
+bare values) ──` heads a run of four tests that mixes three concerns: two `USE`
+tests on branch-name quoting, two bare-or-quoted `WHERE` values, and
+`SHOW body` with an unquoted name. Only the `WHERE` pair belongs in
+`clauses.rs`, so the banner stays in the parent, where it still describes the
+three tests left under it. The pair arrives in the child under a new
+`── Relaxed quoting in predicate values ──` banner of its own — the one line in
+this cut that is written rather than moved. Without it those two tests would
+have landed under `── Negative number literals in predicates ──`, which does
+not describe them.
+
+91 tests before, 91 after, same names, bodies byte-identical.
+
+No `ENRICH_VER` bump. A segment is keyed by path, content id and enrichment
+version, so the files this cut touches re-index on their own; a bump exists to
+invalidate segments whose content did *not* change, and no indexing code
+changed here.
+
 ## [0.148.7] — 2026-07-26 — refactor: parser transaction tests into their own file
 
 ### Changed — cut two of seven on `parser/tests.rs`
