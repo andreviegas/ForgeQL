@@ -5,6 +5,45 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.13] — 2026-07-27 — refactor: lift `Overlay`'s unit tests out of `overlay.rs`
+
+### Changed — first of four cuts on `storage/columnar/overlay.rs`
+
+`crates/forgeql-core/src/storage/columnar/overlay.rs` is 1,119 lines, most of it
+a single 833-line `impl Overlay`. This cut takes the one part that needs no
+surgery on that impl.
+
+- The inline `#[cfg(test)] mod tests` — 122 lines, four tests and one helper —
+  moved to `storage/columnar/overlay/tests.rs`; the parent now declares
+  `#[cfg(test)] mod tests;` and drops to 996 lines.
+- **No import rewiring at all.** The module path does not change: it was
+  `columnar::overlay::tests` as an inline module and it is
+  `columnar::overlay::tests` as a file, so the `use super::*;` the block already
+  carried still resolves to the same `overlay` scope, and so do its three other
+  imports.
+- The `// Unit tests` box-rule banner stays in the parent above the
+  declaration, which is still exactly what it heads.
+
+**This cut is not byte-identical, but the difference is only whitespace.**
+Un-nesting a `mod tests` de-indents every line of the block by four columns.
+That is the whole of it here: 122 body lines before, 122 after, so rustfmt
+found nothing the freed columns let it re-join, and no assertion, name, literal
+or call differs. On a block with longer expressions the de-indent can also
+trigger re-wrapping; on this one it did not.
+
+The three remaining cuts split `impl Overlay` itself, and their contract is
+narrower rather than looser: the moved *method bodies* must be byte-identical,
+while each child necessarily adds lines that exist nowhere in the parent — a
+`//!` header, its own `impl Overlay { … }` wrapper, and its own `use` lines.
+Imports do not travel the way they did here: `mod tests` rode on
+`use super::*;`, whereas a non-test child must name what it needs, and the
+parent will in turn lose imports that only the moved methods used. So the
+parent changes textually too, and only the bodies are the invariant.
+
+No `ENRICH_VER` bump, and the reason here is simpler than usual: nothing in this
+diff changes what is written into a segment. `Overlay` is the segment *read*
+path, and the only non-test line that changed is a `mod` declaration.
+
 ## [0.148.12] — 2026-07-27 — refactor: parser mutation tests out, `tests.rs` becomes a table of contents
 
 ### Changed — cut seven of seven on `parser/tests.rs`
