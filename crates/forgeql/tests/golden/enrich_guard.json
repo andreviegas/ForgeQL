@@ -1,0 +1,82 @@
+{
+  "suite": "enrich_guard",
+  "description": "GuardEnricher: guard, guard_defines, guard_negates, guard_mentions, guard_group_id, guard_branch. Grounded on the frozen zephyr corpus, where every case has a real ground-truth file whose raw directives were read by hand. Cases marked \"expect_fail\" assert the CORRECT value for a defect that is still open: they fail today by design, and the change that fixes the defect must promote them to hard in the same commit.",
+
+  "cases": [
+    { "name": "simple_forms_if_arm", "use": "zephyr-andre.frozen",
+      "fql": "FIND symbols IN 'subsys/net/ip/net_private.h' WHERE guard = 'defined(CONFIG_NET_IPV4_IGMP)' WHERE guard_defines LIKE '%CONFIG_NET_IPV4_IGMP%' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count": 7, "all_same": "path", "ordered": { "by": "line", "dir": "asc" } } },
+
+    { "name": "simple_forms_else_arm", "use": "zephyr-andre.frozen",
+      "fql": "FIND symbols IN 'subsys/net/ip/net_private.h' WHERE guard = '!defined(CONFIG_NET_IPV4_IGMP)' WHERE guard_negates LIKE '%CONFIG_NET_IPV4_IGMP%' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count": 3, "all_same": "path" } },
+
+    { "name": "nested_and_composition", "use": "zephyr-andre.frozen",
+      "fql": "FIND symbols IN 'subsys/net/ip/net_private.h' WHERE guard = 'CONFIG_NET_MGMT_EVENT_INFO && CONFIG_NET_L2_WIFI_MGMT' ORDER BY line ASC LIMIT 20",
+      "assert": { "row_count": 3, "all_same": "path", "rows": [ { "line": 24 }, { "line": 25 }, { "line": 26 } ] } },
+
+    { "name": "branch_ordinals_first_arm", "use": "zephyr-andre.frozen",
+      "fql": "FIND symbols IN 'soc/nordic/common/gppi_init.c' WHERE guard_branch = '0' ORDER BY line ASC LIMIT 50",
+      "assert": { "row_count": 7, "all_same": "path", "ordered": { "by": "line", "dir": "asc" } } },
+
+    { "name": "arm_rows_share_one_guard_group", "use": "zephyr-andre.frozen",
+      "fql": "FIND symbols IN 'soc/nordic/common/gppi_init.c' WHERE guard = 'defined(CONFIG_SOC_NRF54H20_CPUAPP)' WHERE line > 15 ORDER BY line ASC LIMIT 100",
+      "assert": { "row_count": 72, "all_same": "path", "ordered": { "by": "line", "dir": "asc" } } },
+
+    { "name": "known_field_with_no_carriers_is_an_empty_set", "use": "zephyr-andre.frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'if' WHERE guard != '' LIMIT 5",
+      "assert": { "row_count": 0 } },
+
+    { "name": "extern_c_minimal", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "the #endif closing an `#ifdef __cplusplus` / `extern \"C\" {` pair does not pop the guard stack, so the file's second __cplusplus group opens inside the first and its rows carry the conjunct twice",
+      "fql": "FIND symbols IN 'samples/bluetooth/peripheral_ht/src/hts.h' WHERE guard MATCHES '__cplusplus.*__cplusplus' LIMIT 10",
+      "assert": { "row_count": 0 } },
+
+    { "name": "extern_c_header", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "everything after `extern \"C\" {` inherits a false `&& __cplusplus`; the 123 symbols between the two __cplusplus groups belong to the enclosing !_ASMLANGUAGE region, and only the two `#ifdef __cplusplus` conditions themselves are genuinely C++-only",
+      "steps": [
+        { "fql": "FIND symbols IN 'include/zephyr/arch/arm/syscall.h' WHERE guard = '!ZEPHYR_INCLUDE_ARCH_ARM_SYSCALL_H_ && CONFIG_USERSPACE && !_ASMLANGUAGE' LIMIT 300",
+          "assert": { "row_count": 128, "all_same": "path" } },
+        { "fql": "FIND symbols IN 'include/zephyr/arch/arm/syscall.h' WHERE guard MATCHES '__cplusplus$' LIMIT 300",
+          "assert": { "row_count": 2 } }
+      ] },
+
+    { "name": "elif_chain_negation", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "an #elif arm is reported as if it were a standalone #if: the fourth arm of the gppi chain drops the negations of the three arms before it, so guard_negates never mentions PPI_PRESENT",
+      "fql": "FIND symbols IN 'soc/nordic/common/gppi_init.c' WHERE guard_defines LIKE '%CONFIG_SOC_NRF54H20_CPUAPP%' WHERE guard_negates LIKE '%PPI_PRESENT%' ORDER BY line ASC LIMIT 100",
+      "assert": { "row_count": 72, "all_same": "path" } },
+
+    { "name": "elif_parenthesis", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "a child condition containing a top-level || is spliced into its parent with && and no parentheses, so the emitted string parses as (A && B) || C; this row also carries the false && __cplusplus conjunct",
+      "fql": "FIND symbols IN 'include/zephyr/irq_multilevel.h' WHERE guard = '!ZEPHYR_INCLUDE_IRQ_MULTILEVEL_H_ && !_ASMLANGUAGE && (defined(CONFIG_MULTI_LEVEL_INTERRUPTS) || defined(__DOXYGEN__))' LIMIT 200",
+      "assert": { "row_count": 82, "all_same": "path" } },
+
+    { "name": "else_demorgan", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "negating a disjunction does not decompose: !(A || B) is equivalent to !A && !B, so both symbols belong in guard_negates, but only guard_mentions lists them",
+      "fql": "FIND symbols WHERE guard = '!(defined(CONFIG_NET_NATIVE) || defined(CONFIG_NET_OFFLOAD))' WHERE guard_negates LIKE '%CONFIG_NET_NATIVE%' WHERE guard_negates LIKE '%CONFIG_NET_OFFLOAD%' LIMIT 50",
+      "assert": { "row_count": 27, "all_same": "path" } },
+
+    { "name": "guard_whitespace_normalised", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "a multi-line #if keeps its backslash continuations, newlines and leading tabs verbatim, so GROUP BY guard splits identical conditions and the value cannot be written in a WHERE clause",
+      "fql": "FIND symbols WHERE guard = 'CONFIG_BT_AUDIO_CODEC_CFG_MAX_METADATA_SIZE > 0 || CONFIG_BT_AUDIO_CODEC_CAP_MAX_METADATA_SIZE > 0' LIMIT 300",
+      "assert": { "row_count": 225 } },
+
+    { "name": "guard_on_expression_rows", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "guard fields are injected only into declaration-like rows; expression and control-flow rows never carry them, so the literal 32 on line 24 shows no guard even though it sits inside the DPPIC_PRESENT arm",
+      "fql": "FIND symbols IN 'soc/nordic/common/gppi_init.c' WHERE fql_kind = 'number' WHERE guard_defines LIKE '%DPPIC_PRESENT%' ORDER BY line ASC LIMIT 5",
+      "assert": { "row_count": 1, "rows": [ { "name": "32", "line": 24 } ] } },
+
+    { "name": "guard_reaches_every_row_kind_in_a_region", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "within one guarded region the guard reaches declaration-like rows but stops at control flow: eight rows of ticker_job_op_inquire carry the ticker-config guard and the switch on line 2989 does not, so the region reports three row kinds where it should report four",
+      "fql": "FIND symbols IN 'subsys/bluetooth/controller/ticker/ticker.c' WHERE guard_mentions LIKE '%CONFIG_BT_TICKER_JOB_IDLE_GET%' WHERE line >= 2975 WHERE line <= 3010 ORDER BY line ASC LIMIT 50",
+      "assert": { "row_count": 9, "all_same": "path", "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "fql_kind", "count": 4 } } }
+  ]
+}

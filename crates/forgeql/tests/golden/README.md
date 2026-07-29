@@ -49,6 +49,48 @@ registered; without it the harness skips (exit 0).
 Suites use the `.json` extension so they are indexed by ForgeQL and editable by node
 handle (`CHANGE NODE` / `INSERT NODE`) rather than raw text.
 
+## Enforcement
+
+Every case may carry an optional `enforcement` key. Omit it for the default.
+
+| Value | Behaviour |
+|---|---|
+| `"hard"` (or absent) | A failure fails the gate. |
+| `"soft"` | The case runs; a failure is printed verbosely after the run and does **not** gate — for pending behaviour you want visible without going red. |
+| `"ignore"` | The case is skipped entirely (shown as ignored). |
+| `"expect_fail"` | The case asserts behaviour that is **correct but does not hold yet**. A failure is the expected state and does not gate; a **pass fails the gate**. |
+
+`"expect_fail"` additionally requires `expect_fail_reason` — one sentence on why
+the asserted behaviour does not hold. It is printed beside each expected failure
+and quoted back in the promotion message; an empty one fails the case.
+
+```
+{ "name": "elif_negation_accumulates",
+  "use": "zephyr-andre.frozen",
+  "enforcement": "expect_fail",
+  "expect_fail_reason": "#elif arms do not accumulate the negations of preceding arms",
+  "fql": "…", "assert": { …correct values… } }
+```
+
+The asymmetry is the point. It lets a defect's *correct* behaviour be pinned the
+day the defect is diagnosed rather than the day it is fixed, and because an
+unexpected pass is hard, the change that fixes the defect is forced to promote
+exactly the cases it fixed, in the same commit where they are reviewable. The run
+ends with a count of expected failures, so the open defect inventory is visible in
+every test run.
+
+One rot to watch: an `expect_fail` case whose asserted value is itself wrong stays
+"expected failure" forever and never announces itself. When a fix lands, re-check
+that the cases still marked `expect_fail` fail for the reason they state, not for
+a new one.
+
+The second rot mode is environmental, and it inverts the usual reading of a
+result. An `expect_fail` case counts *any* error as its expected failure,
+including "this corpus is not registered here". So in a data dir that is set but
+missing a suite's corpus, the hard cases of that suite go red while every
+`expect_fail` case in it passes — vacuously. Read a run where the hard cases fail
+and the expected failures all "pass" as a missing corpus, not as progress.
+
 ## Assertion vocabulary
 
 | Key | Checks |

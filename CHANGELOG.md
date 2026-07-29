@@ -6,6 +6,70 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.67] — 2026-07-29 — test: pin the preprocessor-guard contract
+
+### Added — `enforcement: "expect_fail"` for golden cases
+
+- Golden cases already carried an `enforcement` level (`hard`, `soft`,
+  `ignore`). A fourth value, `expect_fail`, marks a case that asserts *correct*
+  behaviour the engine does not produce yet: a failure is the expected state and
+  does not gate, while an unexpected **pass** fails the gate.
+- The asymmetry is the point. A defect's correct behaviour can be pinned the day
+  it is diagnosed rather than the day it is fixed, and because passing is hard,
+  the change that fixes it cannot forget the case — the run goes red until the
+  key is removed, in the same commit where the promotion is reviewable.
+- `expect_fail_reason` is required beside it and says why the behaviour does not
+  hold. It is printed with each expected failure and quoted back in the
+  promotion message, and the run ends with a count, so the open inventory is
+  visible in every test run.
+- `tests/golden/README.md` documents the value and the two ways it rots: a case
+  whose asserted value is itself wrong stays "expected failure" silently, so each
+  fix must re-check that the remaining cases still fail for the reason they state;
+  and because any error counts as the expected failure, a data dir missing a
+  suite's corpus reds the suite's hard cases while passing every `expect_fail`
+  case in it vacuously.
+
+### Added — two golden suites for preprocessor guards
+
+- `enrich_guard.json` (14 cases) and `probes_guard.json` (3 cases), over a
+  frozen Zephyr corpus. A single Rust `#[cfg]` test had been the whole of the
+  guard feature's coverage; the C preprocessor path — `#ifdef`, `#elif` chains,
+  `#else` negation, `extern "C"` headers — had none.
+- Seven cases pin behaviour that is already correct, so later changes cannot
+  quietly break it: `#ifdef X` / `#else` yielding `X` and `!X` with matching
+  `guard_defines` / `guard_negates`, a nested `#ifdef` composing with `&&`, arm
+  ordinals, rows of one arm sharing a group, and a known field with no carriers
+  returning an empty set rather than an error.
+- Ten cases are `expect_fail`, each pinning the value a hand-read of the source
+  says the field should carry: an `#endif` that fails to close an `extern "C"`
+  block so the rest of the header inherits `&& __cplusplus`; `#elif` arms
+  reported as if they were standalone `#if`s, dropping the negations of the arms
+  before them; a child condition holding a top-level `||` spliced under `&&`
+  without parentheses, which parses as a weaker predicate than the source; a
+  negated disjunction that populates neither term of `guard_negates`; line
+  continuations and tabs kept verbatim in `guard`, which splits `GROUP BY guard`
+  on whitespace alone; and guard fields never reaching control-flow or
+  expression rows, which silently empties any query pairing a guard with
+  `is_magic`, `has_catch_all` or a control-flow field.
+- Every pinned value was captured from a live query against the corpus or
+  derived by reading the file's raw directives.
+
+### Added — unit coverage for the guard helpers
+
+- Direct tests for `parse_condition_text`, `negate_frame`,
+  `inject_guard_fields` and `are_guards_exclusive`: the empty stack, a negation
+  with no parent frame, two-arm negation reading `!X` rather than `!(X)`,
+  innermost-arm deduplication when a chain puts every arm on the stack at once,
+  and the positive terms a disjunction withholds from `guard_defines` while
+  still listing them in `guard_mentions`. They need no corpus and localise a
+  failure that the end-to-end suites can only report.
+
+### Changed
+
+- `golden_test.rs`: trial construction moved to `build_trial`, and the two
+  end-of-run summaries to `report_non_gating`, keeping `main` within the
+  function-length lint after the new enforcement arm.
+
 ## [0.139.66] — 2026-07-26 — refactor: give the tree walk its own module
 
 ### Changed — `file_indexer.rs` is now the entry surface, not the whole pass

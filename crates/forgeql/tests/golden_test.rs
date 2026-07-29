@@ -58,9 +58,18 @@ struct Case {
     /// fails the gate. "soft": the case still runs, but a failure is reported
     /// verbosely after the run and does NOT fail the gate — for pending or
     /// known-broken behaviour you want visible without going red. "ignore": the
-    /// case is skipped entirely (shown as ignored).
+    /// case is skipped entirely (shown as ignored). "expect_fail": the case
+    /// asserts behaviour that is correct but does not hold yet — a failure is
+    /// expected and does not gate, while a PASS fails the gate, so the change
+    /// that fixes the defect is forced to promote the case in the same commit.
+    /// Requires `expect_fail_reason`.
     #[serde(default)]
     enforcement: Option<String>,
+    /// Why the asserted behaviour does not hold yet. Required by — and only
+    /// read for — `"enforcement": "expect_fail"`; the run prints it beside each
+    /// expected failure, and the promotion message quotes it back.
+    #[serde(default)]
+    expect_fail_reason: Option<String>,
     /// One-shot read case: a single query + assert.
     #[serde(default)]
     fql: Option<String>,
@@ -592,6 +601,70 @@ fn run_case(h: &Arc<Mutex<Harness>>, case: &Case) -> Result<(), Failed> {
 }
 
 // ───────────────────────── entrypoint ─────────────────────────
+/// Print a non-gating summary block after the run; no-op when nothing was collected.
+fn report_non_gating(headline: &str, prefix: &str, entries: &[String]) {
+    if entries.is_empty() {
+        return;
+    }
+    eprintln!("\n── {} {headline} ──", entries.len());
+    for e in entries {
+        eprintln!("  {prefix}: {e}");
+    }
+}
+
+/// Wrap one case in a libtest trial according to its `enforcement` level.
+fn build_trial(
+    h: Arc<Mutex<Harness>>,
+    name: String,
+    case: Case,
+    soft_fails: &Arc<Mutex<Vec<String>>>,
+    expected_fails: &Arc<Mutex<Vec<String>>>,
+) -> Trial {
+    match case.enforcement.as_deref() {
+        // Skipped entirely — shown as ignored, never run.
+        Some("ignore") => Trial::test(name, move || run_case(&h, &case)).with_ignored_flag(true),
+        // Runs, but a failure is collected and reported without gating.
+        Some("soft") => {
+            let soft = Arc::clone(soft_fails);
+            let label = name.clone();
+            Trial::test(name, move || {
+                if let Err(e) = run_case(&h, &case) {
+                    soft.lock().unwrap().push(format!("{label}: {e:?}"));
+                }
+                Ok(())
+            })
+        }
+        // Asserts the correct behaviour for a defect that is still open: failing
+        // is the expected state, passing means the defect is fixed and the case
+        // must be promoted to hard in that same commit.
+        Some("expect_fail") => {
+            let expected = Arc::clone(expected_fails);
+            let label = name.clone();
+            Trial::test(name, move || {
+                let reason = case.expect_fail_reason.clone().unwrap_or_default();
+                if reason.is_empty() {
+                    return Err(Failed::from(
+                        "\"enforcement\": \"expect_fail\" requires a non-empty \
+                         \"expect_fail_reason\" saying why the asserted behaviour \
+                         does not hold yet",
+                    ));
+                }
+                if run_case(&h, &case).is_err() {
+                    expected.lock().unwrap().push(format!("{label}: {reason}"));
+                    Ok(())
+                } else {
+                    Err(Failed::from(format!(
+                        "expected failure now passes — promote {label} to hard by \
+                         dropping its \"enforcement\" and \"expect_fail_reason\" keys \
+                         (recorded reason: {reason})"
+                    )))
+                }
+            })
+        }
+        // Default ("hard" or absent): a failure fails the gate.
+        _ => Trial::test(name, move || run_case(&h, &case)),
+    }
+}
 fn main() {
     let args = Arguments::from_args();
 
@@ -623,50 +696,34 @@ fn main() {
     let mut trials = Vec::new();
     // Soft-enforced cases push their failure here instead of failing the gate.
     let soft_fails: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    // Cases asserting behaviour that is correct but not yet implemented: a
+    // failure is the expected state and is only reported; a pass fails the gate.
+    let expected_fails: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     for suite in suites {
         let sname = suite.suite;
         for case in suite.cases {
-            let h = Arc::clone(&harness);
             let name = format!("{sname}::{}", case.name);
-            match case.enforcement.as_deref() {
-                // Skipped entirely — shown as ignored, never run.
-                Some("ignore") => {
-                    trials.push(
-                        Trial::test(name, move || run_case(&h, &case)).with_ignored_flag(true),
-                    );
-                }
-                // Runs, but a failure is collected and reported without gating.
-                Some("soft") => {
-                    let soft = Arc::clone(&soft_fails);
-                    let label = name.clone();
-                    trials.push(Trial::test(name, move || {
-                        if let Err(e) = run_case(&h, &case) {
-                            soft.lock().unwrap().push(format!("{label}: {e:?}"));
-                        }
-                        Ok(())
-                    }));
-                }
-                // Default ("hard" or absent): a failure fails the gate.
-                _ => {
-                    trials.push(Trial::test(name, move || run_case(&h, &case)));
-                }
-            }
+            trials.push(build_trial(
+                Arc::clone(&harness),
+                name,
+                case,
+                &soft_fails,
+                &expected_fails,
+            ));
         }
     }
 
     let conclusion = libtest_mimic::run(&args, trials);
-    {
-        let soft = soft_fails.lock().unwrap();
-        if !soft.is_empty() {
-            eprintln!(
-                "\n── {} soft-enforced failure(s), not gating ──",
-                soft.len()
-            );
-            for f in soft.iter() {
-                eprintln!("  soft-fail: {f}");
-            }
-        }
-    }
+    report_non_gating(
+        "soft-enforced failure(s), not gating",
+        "soft-fail",
+        &soft_fails.lock().unwrap(),
+    );
+    report_non_gating(
+        "expected failure(s) — open defects, not gating",
+        "expect-fail",
+        &expected_fails.lock().unwrap(),
+    );
     drop(harness);
     conclusion.exit();
 }

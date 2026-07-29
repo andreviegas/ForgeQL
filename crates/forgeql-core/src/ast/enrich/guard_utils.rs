@@ -776,4 +776,206 @@ mod tests {
         let parts = split_cfg_top_level("");
         assert_eq!(parts, vec![""]);
     }
+
+    // -- parse_condition_text ---------------------------------------------
+
+    #[test]
+    fn parse_condition_splits_defined_from_negated() {
+        let (defines, negates, mentions) = parse_condition_text("defined(A) && !defined(B)");
+        assert_eq!(defines, ["A"]);
+        assert_eq!(negates, ["B"]);
+        assert_eq!(mentions, ["A", "B"]);
+    }
+
+    #[test]
+    fn parse_condition_withholds_positives_under_a_top_level_or() {
+        // Under a top-level `||` no single identifier is required, so positive
+        // terms are deliberately kept out of `defines`. `mentions` still lists
+        // them, which is why guard_mentions is the field to filter on when a
+        // condition is disjunctive.
+        let (defines, negates, mentions) = parse_condition_text("defined(A) || defined(B)");
+        assert!(defines.is_empty());
+        assert!(negates.is_empty());
+        assert_eq!(mentions, ["A", "B"]);
+    }
+
+    #[test]
+    fn parse_condition_ignores_defined_without_parentheses() {
+        let (defines, negates, mentions) = parse_condition_text("defined A && B");
+        assert!(defines.is_empty());
+        assert!(negates.is_empty());
+        assert!(mentions.is_empty());
+    }
+
+    #[test]
+    fn parse_condition_of_a_bare_macro_name_finds_nothing() {
+        // `#ifdef X` never reaches this function: its identifier comes from the
+        // directive's name field, not from condition parsing.
+        let (defines, _, mentions) = parse_condition_text("X");
+        assert!(defines.is_empty());
+        assert!(mentions.is_empty());
+    }
+
+    // -- negate_frame ------------------------------------------------------
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    fn test_frame(text: &str, defines: &[&str], negates: &[&str], mentions: &[&str]) -> GuardFrame {
+        GuardFrame {
+            guard_text: text.to_string(),
+            guard_group_id: 1,
+            guard_branch: 0,
+            guard_kind: "preprocessor",
+            defines: strs(defines),
+            negates: strs(negates),
+            mentions: strs(mentions),
+            guard_byte_range: 0..0,
+        }
+    }
+
+    #[test]
+    fn negate_of_a_bare_ifdef_is_not_parenthesised() {
+        // `#ifdef X` / `#else` must read `!X`, never `!(X)`.
+        let (text, defines, negates, mentions) =
+            negate_frame(&test_frame("X", &["X"], &[], &["X"]));
+        assert_eq!(text, "!X");
+        assert!(defines.is_empty());
+        assert_eq!(negates, ["X"]);
+        assert_eq!(mentions, ["X"]);
+    }
+
+    #[test]
+    fn negate_wraps_a_compound_condition_and_swaps_the_lists() {
+        let (text, defines, negates, _) = negate_frame(&test_frame(
+            "defined(A) && !defined(B)",
+            &["A"],
+            &["B"],
+            &["A", "B"],
+        ));
+        assert_eq!(text, "!(defined(A) && !defined(B))");
+        assert_eq!(defines, ["B"]);
+        assert_eq!(negates, ["A"]);
+    }
+
+    #[test]
+    fn negate_of_an_already_negated_frame_keeps_its_parentheses() {
+        let (text, ..) = negate_frame(&test_frame("!(A || B)", &[], &[], &[]));
+        assert_eq!(text, "!(!(A || B))");
+    }
+
+    #[test]
+    fn negate_of_a_disjunction_does_not_decompose_today() {
+        // Characterisation, not endorsement: !(A || B) is equivalent to
+        // !A && !B, so both identifiers belong in the negated frame's
+        // `negates`. They are absent because a disjunction contributes no
+        // `defines` to swap. When that is restored this assertion flips, and
+        // the matching end-to-end case is promoted at the same time.
+        let (text, _, negates, mentions) = negate_frame(&test_frame(
+            "defined(A) || defined(B)",
+            &[],
+            &[],
+            &["A", "B"],
+        ));
+        assert_eq!(text, "!(defined(A) || defined(B))");
+        assert!(negates.is_empty());
+        assert_eq!(mentions, ["A", "B"]);
+    }
+
+    #[test]
+    fn negate_of_an_empty_frame_stays_empty() {
+        let (text, defines, negates, mentions) = negate_frame(&test_frame("", &[], &[], &[]));
+        assert!(text.is_empty());
+        assert!(defines.is_empty());
+        assert!(negates.is_empty());
+        assert!(mentions.is_empty());
+    }
+
+    // -- inject_guard_fields -----------------------------------------------
+
+    #[test]
+    fn inject_on_an_empty_stack_writes_nothing() {
+        let mut fields: HashMap<String, String> = HashMap::new();
+        inject_guard_fields(&[], &mut fields);
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn inject_joins_nested_groups_outermost_first() {
+        let mut outer = test_frame("A", &["A"], &[], &["A"]);
+        outer.guard_group_id = 7;
+        let mut inner = test_frame("B", &["B"], &[], &["B"]);
+        inner.guard_group_id = 8;
+
+        let mut fields: HashMap<String, String> = HashMap::new();
+        inject_guard_fields(&[outer, inner], &mut fields);
+
+        assert_eq!(fields["guard"], "A && B");
+        assert_eq!(fields["guard_defines"], "A,B");
+        assert_eq!(fields["guard_group_id"], "8");
+        assert_eq!(fields["guard_branch"], "0");
+    }
+
+    #[test]
+    fn inject_keeps_only_the_innermost_arm_of_one_group() {
+        // tree-sitter nests `#elif` arms, so every arm of a chain is on the
+        // stack at once; the row must describe the arm it actually sits in.
+        let mut if_arm = test_frame("A", &["A"], &[], &["A"]);
+        if_arm.guard_group_id = 9;
+        let mut elif_arm = test_frame("B", &["B"], &[], &["B"]);
+        elif_arm.guard_group_id = 9;
+        elif_arm.guard_branch = 1;
+
+        let mut fields: HashMap<String, String> = HashMap::new();
+        inject_guard_fields(&[if_arm, elif_arm], &mut fields);
+
+        assert_eq!(fields["guard"], "B");
+        assert_eq!(fields["guard_branch"], "1");
+        assert_eq!(fields["guard_group_id"], "9");
+    }
+
+    // -- are_guards_exclusive ----------------------------------------------
+
+    fn info(group: u64, branch: u8, kind: &'static str) -> GuardInfo {
+        GuardInfo {
+            guard_group_id: group,
+            guard_branch: branch,
+            guard_kind: kind,
+        }
+    }
+
+    #[test]
+    fn same_group_different_branch_is_exclusive() {
+        assert!(are_guards_exclusive(
+            &info(3, 0, "preprocessor"),
+            &info(3, 1, "preprocessor")
+        ));
+    }
+
+    #[test]
+    fn same_group_same_branch_is_not_exclusive() {
+        assert!(!are_guards_exclusive(
+            &info(3, 1, "preprocessor"),
+            &info(3, 1, "preprocessor")
+        ));
+    }
+
+    #[test]
+    fn different_groups_are_not_exclusive() {
+        assert!(!are_guards_exclusive(
+            &info(3, 0, "preprocessor"),
+            &info(4, 1, "preprocessor")
+        ));
+    }
+
+    #[test]
+    fn a_heuristic_guard_is_never_exclusive() {
+        // Heuristic frames are inferred, not read off a directive, so they
+        // carry no exclusivity claim.
+        assert!(!are_guards_exclusive(
+            &info(3, 0, "heuristic"),
+            &info(3, 1, "preprocessor")
+        ));
+    }
 }
