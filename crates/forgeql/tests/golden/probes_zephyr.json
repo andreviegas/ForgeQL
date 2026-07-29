@@ -4,7 +4,7 @@
   "cases": [
     {
       "name": "escaping_recursive_midsize_fn_nested_ifs_and_gotos",
-      "use": "zephyr-andre.zephyr-main",
+      "use": "zephyr-andre.frozen",
       "steps": [
         {
           "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines >= 100 WHERE lines <= 150 WHERE is_recursive = 'true' WHERE has_escape = 'true' WHERE naming = 'snake_case' IN 'subsys/**'",
@@ -50,7 +50,7 @@
     },
     {
       "name": "duplicate_logic_conditions_carry_normalized_skeletons",
-      "use": "zephyr-andre.zephyr-main",
+      "use": "zephyr-andre.frozen",
       "fql": "FIND symbols WHERE fql_kind = 'if' WHERE dup_logic = 'true' WHERE condition_tests >= 3 IN 'subsys/**' ORDER BY line ASC",
       "assert": {
         "total": 3,
@@ -64,7 +64,7 @@
     },
     {
       "name": "fallthrough_switch_fn_with_shadowing",
-      "use": "zephyr-andre.zephyr-main",
+      "use": "zephyr-andre.frozen",
       "steps": [
         {
           "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_fallthrough = 'true' WHERE branch_count >= 10 WHERE lines >= 50 WHERE has_shadow = 'true' IN 'drivers/**'",
@@ -95,7 +95,7 @@
     },
     {
       "name": "dead_store_far_decl_and_shadow_fn_with_nested_for",
-      "use": "zephyr-andre.zephyr-main",
+      "use": "zephyr-andre.frozen",
       "steps": [
         {
           "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_unused_reassign = 'true' WHERE decl_far_count >= 25 WHERE has_shadow = 'true' IN 'subsys/**'",
@@ -128,7 +128,7 @@
     },
     {
       "name": "repeated_condition_calls_with_many_null_checks_and_gotos",
-      "use": "zephyr-andre.zephyr-main",
+      "use": "zephyr-andre.frozen",
       "fql": "FIND symbols WHERE fql_kind = 'function' WHERE has_repeated_condition_calls = 'true' WHERE null_check_count >= 16 WHERE goto_count >= 2 IN 'subsys/**' ORDER BY name ASC",
       "assert": {
         "total": 4,
@@ -143,7 +143,7 @@
     },
     {
       "name": "magic_hex_literals_with_digit_separators_group_by_file",
-      "use": "zephyr-andre.zephyr-main",
+      "use": "zephyr-andre.frozen",
       "fql": "FIND symbols WHERE fql_kind = 'number' WHERE is_magic = 'true' WHERE num_format = 'hex' WHERE has_separator = 'true' GROUP BY file ORDER BY count DESC",
       "assert": {
         "total": 2,
@@ -156,7 +156,7 @@
     },
     {
       "name": "unsafe_c_style_casts_to_mbox_struct_pointers",
-      "use": "zephyr-andre.zephyr-main",
+      "use": "zephyr-andre.frozen",
       "fql": "FIND symbols WHERE fql_kind = 'cast' WHERE cast_safety = 'unsafe' WHERE cast_target_type LIKE '%k_mbox%' IN 'kernel/**' ORDER BY line ASC",
       "assert": {
         "total": 4,

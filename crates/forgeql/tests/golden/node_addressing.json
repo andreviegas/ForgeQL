@@ -3,7 +3,7 @@
   "description": "Node handles on a real C source (zephyr kernel/sched.c). Migrated from the FCN/FSD/FE cases in the legacy tests/golden.json, which HARDCODED node_ids inside their fql strings ('n097e974b9c6e.0031' = thread_runq, '.0037' = curr_cpu_runq, '.0039' = runq_add). Those pins made the suite a liability: any change that gives a new fql_kind an ordinal shifts every later node_id in a file, and the pinned mutation cases then fire at the WRONG node — a DELETE that removed the wrong node and an INSERT that landed in the wrong place, duplicating thread_runq and producing failures that look like indexer bugs. GOLDEN_UPDATE=1 cannot fix that: it rewrites expect_* values, not the pins inside fql, so blessing would record the corruption as correct. Here every handle is CAPTURED from a FIND-by-name at run time, so the suite is immune to ordinal shifts by construction. Reads share one ro session; all mutations live in a single rw case so the big corpus needs only one throwaway worktree.",
   "cases": [
 
-    { "name": "node_handles_resolve_and_read_back", "use": "zephyr-andre.main",
+    { "name": "node_handles_resolve_and_read_back", "use": "zephyr-andre.frozen",
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
           "assert": { "row_count": 1, "pointer": { "/results/0/line": 51 } },
@@ -37,7 +37,7 @@
                                    "/content/lines/0/text": "static ALWAYS_INLINE void *curr_cpu_runq(void)" } } }
       ] },
 
-    { "name": "find_node_resolves_captured_handles_across_files", "use": "zephyr-andre.main",
+    { "name": "find_node_resolves_captured_handles_across_files", "use": "zephyr-andre.frozen",
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'runq_add' LIMIT 1",
           "assert": { "row_count": 1 },
@@ -70,7 +70,7 @@
                                    "/content/lines/0/text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)" } } }
       ] },
 
-    { "name": "node_mutations_round_trip_on_c_source", "use": "zephyr-andre.main", "mode": "rw",
+    { "name": "node_mutations_round_trip_on_c_source", "use": "zephyr-andre.frozen", "mode": "rw",
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
           "assert": { "row_count": 1 },
@@ -128,7 +128,7 @@
           "assert": { "row_count": 0 } }
       ] },
 
-    { "name": "sequential_change_does_not_duplicate_symbols", "use": "zephyr-andre.main", "mode": "rw",
+    { "name": "sequential_change_does_not_duplicate_symbols", "use": "zephyr-andre.frozen", "mode": "rw",
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
           "assert": { "row_count": 1 },
@@ -154,7 +154,7 @@
           "assert": { "row_count": 1 } }
       ] },
 
-    { "name": "move_node_relocates_a_function_byte_exact", "use": "zephyr-andre.main", "mode": "rw",
+    { "name": "move_node_relocates_a_function_byte_exact", "use": "zephyr-andre.frozen", "mode": "rw",
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'runq_add' LIMIT 1",
           "assert": { "row_count": 1, "pointer": { "/results/0/line": 80 } },
@@ -181,7 +181,7 @@
           "assert": { "row_count": 1, "pointer": { "/results/0/line": 80 } } }
       ] },
 
-    { "name": "move_node_into_itself_is_refused", "use": "zephyr-andre.main", "mode": "rw",
+    { "name": "move_node_into_itself_is_refused", "use": "zephyr-andre.frozen", "mode": "rw",
       "steps": [
         { "fql": "FIND symbols IN 'kernel/sched.c' WHERE fql_kind = 'function' WHERE name = 'thread_runq' LIMIT 1",
           "capture": { "T": "results.0.node_id", "RT": "results.0.rev" } },

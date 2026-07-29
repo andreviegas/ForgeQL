@@ -2,7 +2,7 @@
  {
   "alias": "golden",
   "expect_symbols_indexed": 2948962,
-  "use": "zephyr-andre.zephyr-main"
+  "use": "zephyr-andre.frozen"
  },
  {
   "expect_row_count": 5,
