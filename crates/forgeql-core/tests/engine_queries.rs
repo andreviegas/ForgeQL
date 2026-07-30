@@ -1522,4 +1522,26 @@ fn unknown_where_field_gets_hint() {
         "a valid enrichment field must not hint: {:?}",
         qr.hint
     );
+
+    // A guard field is documented and queryable, so it must behave like any
+    // other valid enrichment field. Before the guard fields were registered
+    // this drew the "check the spelling" hint for a correctly spelled field.
+    //
+    // The same gap had a second, corpus-dependent consequence — the query was
+    // refused outright wherever no loaded segment carried a column by that name
+    // — but this fixture set does carry guard rows, so that path is not what
+    // this case exercises.
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND symbols WHERE guard != \"\" WHERE name = \"no_such_fn_zz\"",
+    );
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    assert!(
+        qr.hint.is_none(),
+        "a guard field must not hint: {:?}",
+        qr.hint
+    );
 }

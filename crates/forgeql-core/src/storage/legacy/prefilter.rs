@@ -257,12 +257,35 @@ fn field_to_kinds(configs: &[&LanguageConfig], field: &str) -> Option<Vec<String
     }
 }
 
-/// Whether `field` is a known enrichment field name for ANY language —
-/// membership in the static field→kind map. Used by the engine to tell a
-/// misspelled WHERE field (matches nothing, worth a hint) apart from a
-/// valid enrichment field that simply has no matching rows.
+/// Enrichment fields that any indexed row can carry, so they have no node-kind
+/// narrowing to declare.
+///
+/// They are held here rather than in [`get_field_kind_map`] because that map's
+/// values drive prefilter narrowing: an entry there needs a kind list, and a
+/// guessed one would silently drop rows that do carry the field. Membership
+/// still matters — an unregistered field name is reported to the caller as a
+/// misspelling, and rejected outright wherever no loaded segment happens to
+/// carry a column by that name.
+const UNSCOPED_ENRICHMENT_FIELDS: &[&str] = &[
+    // guard_utils.rs — a row carries these when it sits inside a conditional
+    // region, which cuts across kinds rather than selecting any.
+    "guard",
+    "guard_defines",
+    "guard_negates",
+    "guard_mentions",
+    "guard_group_id",
+    "guard_branch",
+    "guard_kind",
+    // naming.rs — applies to every named symbol.
+    "naming",
+    "name_length",
+];
+/// Whether `field` is a known enrichment field name for ANY language — the
+/// field→kind map, plus the unscoped fields that map declares no kinds for.
+/// Used by the engine to tell a misspelled WHERE field (matches nothing, worth
+/// a hint) apart from a valid enrichment field that simply has no matching rows.
 pub(super) fn is_known_enrichment_field(field: &str) -> bool {
-    get_field_kind_map().contains_key(field)
+    get_field_kind_map().contains_key(field) || UNSCOPED_ENRICHMENT_FIELDS.contains(&field)
 }
 
 /// Inspect WHERE predicates for enrichment fields and, when all resolvable
@@ -670,5 +693,49 @@ mod tests {
     fn validate_order_by_field_no_order_by_always_ok() {
         let results = vec![make_sym("foo")];
         assert!(validate_order_by_field(&Clauses::default(), &results, &[]).is_ok());
+    }
+
+    #[test]
+    fn guard_fields_are_known_enrichment_fields() {
+        // Unregistered names are reported to the caller as misspellings, and
+        // rejected outright wherever no loaded segment happens to carry a column
+        // by that name — so the same query errors on one corpus and returns rows
+        // on another. Registration is what makes the behaviour uniform.
+        for field in [
+            "guard",
+            "guard_defines",
+            "guard_negates",
+            "guard_mentions",
+            "guard_group_id",
+            "guard_branch",
+            "guard_kind",
+        ] {
+            assert!(is_known_enrichment_field(field), "{field} not registered");
+        }
+    }
+
+    #[test]
+    fn unscoped_fields_declare_no_kind_narrowing() {
+        // Being known must not imply a kind list. The map's values drive
+        // prefilter narrowing, so an entry there needs the node kinds that carry
+        // the field, and a guessed list would silently drop rows that do.
+        //
+        // Absence from the map is the invariant to assert. Asserting
+        // `field_to_kinds(&[], f).is_none()` would prove nothing: that folds
+        // over the configs it is given, so an empty slice yields None for every
+        // field, registered or not.
+        for field in UNSCOPED_ENRICHMENT_FIELDS {
+            assert!(
+                !get_field_kind_map().contains_key(field),
+                "{field} declares a kind list and would narrow the prefilter"
+            );
+        }
+    }
+
+    #[test]
+    fn a_misspelled_field_stays_unknown() {
+        assert!(!is_known_enrichment_field("guardd"));
+        assert!(!is_known_enrichment_field("guard_define"));
+        assert!(!is_known_enrichment_field(""));
     }
 }

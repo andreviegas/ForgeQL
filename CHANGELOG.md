@@ -6,6 +6,45 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.68] — 2026-07-29 — fix: stop reporting valid guard fields as misspellings
+
+### Fixed — the seven guard fields are now registered field names
+
+- `WHERE guard = …` and its six siblings (`guard_defines`, `guard_negates`,
+  `guard_mentions`, `guard_group_id`, `guard_branch`, `guard_kind`) were absent
+  from the enrichment-field registry, with two consequences. An empty result was
+  reported as *"unknown WHERE fields match nothing. Check the spelling…"* for a
+  correctly spelled, documented field. And on any corpus where no loaded segment
+  happened to carry a column by that name, the query was **rejected outright** —
+  so the same query errored on one repository and returned rows on another.
+- `naming` and `name_length` were unregistered for the same reason and are
+  included: they apply to every named symbol, so like the guard fields they have
+  no node-kind list to declare.
+- The registry is still not exhaustive. `suffix_meaning`, `binding_kind` and
+  `owner_kind` are documented and remain unregistered, so they keep the same
+  corpus-dependent refusal. They are kind-scoped, unlike the fields above, so
+  fixing them means giving the field→kind map a real kind list rather than adding
+  a name — left for whoever does that work.
+- Registration is deliberately kept out of the field→kind map. That map's values
+  drive prefilter narrowing, so an entry there needs a list of the kinds that
+  carry the field — and a guessed list would silently drop rows that do carry it.
+  These fields cut across kinds rather than selecting any, so they live in a
+  separate name list and continue to narrow nothing.
+
+### Tests
+
+- `unknown_where_field_gets_hint` gains a guard case, pinning the fix where the
+  contract it belongs to already lives: a documented, queryable guard field must
+  come back as an ordinary empty result, with no hint. That assertion fails on
+  the previous revision. It does not cover the outright refusal — that path is
+  corpus-dependent and this fixture set carries guard rows, so no segment lacks
+  the column.
+- Unit tests cover the registry directly: the seven names are recognised, a
+  misspelling still is not, and none of the unscoped fields appears in the
+  field→kind map. The last of those is the one that matters going forward — it is
+  what stops a kind list being added here on a guess, which would silently drop
+  rows that do carry the field.
+
 ## [0.139.67] — 2026-07-29 — test: pin the preprocessor-guard contract
 
 ### Added — `enforcement: "expect_fail"` for golden cases
