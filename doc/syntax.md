@@ -1282,6 +1282,14 @@ into **every** indexed symbol row by `collect_nodes()` — no separate enricher
 call is needed.  All seven fields are queryable via `WHERE`, `ORDER BY`, and
 `GROUP BY`.
 
+A region ends at its own closing directive, located by scanning the directives
+themselves rather than by trusting where the parser ended the guard node. The
+two differ whenever a construct swallows the closing directive — the C idiom
+`#ifdef __cplusplus` / `extern "C" {` / `#endif` does exactly that, and the
+parser then runs the node on to the *next* close, which would place the rest of
+the header inside a group it never belonged to. Where the directives do not
+balance, the parser's span is used unchanged.
+
 | Field | Applies to | Description |
 |---|---|---|
 | `guard` | all symbols | Raw guard condition text (e.g. `"defined(CONFIG_SMP)"`, `"!X"`, `"Y && X"`) |

@@ -197,6 +197,81 @@ pub fn inject_guard_fields<S: std::hash::BuildHasher>(
 // build_guard_frame
 // -----------------------------------------------------------------------
 
+/// Does the already-left-trimmed `line` open with the directive `marker`?
+///
+/// The word boundary after the marker is what stops `#if` matching an `#ifdef`
+/// line. A directive written with space between the sigil and the word
+/// (`#  ifdef`) is not recognised; the scan then leaves that region to the
+/// grammar's own span rather than guessing at it.
+fn starts_with_directive(line: &str, marker: &str) -> bool {
+    line.strip_prefix(marker)
+        .is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_'))
+}
+
+/// Byte span of the conditional region `node` opens, taken from the directives
+/// themselves rather than from where the grammar decided the node stops.
+///
+/// tree-sitter consumes block items until it finds a closing directive, so a
+/// construct that swallows the real one runs the node on to the *next* close.
+/// The C idiom `#ifdef __cplusplus` / `extern "C" {` / `#endif` does exactly
+/// that: the brace opens a linkage specification whose body absorbs the
+/// `#endif`, and the node then spans two unrelated groups.
+///
+/// The node therefore over-extends, but it never stops short — which is what
+/// lets its own end both bound the scan and stand in as the answer when the
+/// directives do not balance. Nothing here repairs a malformed file; it falls
+/// back to what the grammar said.
+fn region_span(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    config: &LanguageConfig,
+) -> std::ops::Range<usize> {
+    let span = node.byte_range();
+    let openers = config.region_openers();
+    let closer = config.region_closer();
+    if openers.is_empty() || closer.is_empty() {
+        return span;
+    }
+    let Ok(text) = std::str::from_utf8(&source[span.clone()]) else {
+        return span;
+    };
+    match scan_region_len(text, openers, closer) {
+        Some(len) => span.start..span.start + len,
+        None => span,
+    }
+}
+
+/// Length of the balanced region starting at the first line of `text`, or
+/// `None` when the directives never balance.
+///
+/// Split out from [`region_span`] so the walk can be exercised without a parse
+/// tree: everything that can go wrong here is about counting lines.
+fn scan_region_len(text: &str, openers: &[String], closer: &str) -> Option<usize> {
+    let mut depth: usize = 0;
+    let mut offset: usize = 0;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if openers.iter().any(|m| starts_with_directive(trimmed, m)) {
+            depth += 1;
+        } else if starts_with_directive(trimmed, closer) {
+            if depth == 0 {
+                // A close with nothing open. The opener was not recognised — a
+                // directive shape this scan does not read, or a kind the language
+                // does not declare — so the region cannot be balanced from here.
+                // Bailing hands the caller back the parser's span; ending the
+                // region on this line instead would cut it short and strip the
+                // guard from rows that are inside it.
+                return None;
+            }
+            depth -= 1;
+            if depth == 0 {
+                return Some(offset + line.len());
+            }
+        }
+        offset += line.len();
+    }
+    None
+}
 /// Build a [`GuardFrame`] for a guard-opening AST node.
 ///
 /// `stack` is the current guard stack; it is used to inherit the parent
@@ -208,6 +283,17 @@ pub fn build_guard_frame(
     stack: &[GuardFrame],
 ) -> GuardFrame {
     let kind = node.kind();
+    // Only a group opener owns a closing directive, so only it can have its end
+    // derived from one. An arm begins with `#elif`/`#else`, which is not an
+    // opener, so scanning from there would start at depth 0 and let the first
+    // balanced region *inside* the arm close it — ending the arm at that inner
+    // directive and handing every row after it the group's positive condition
+    // instead of the negated arm. Arms keep the grammar's span, unchanged.
+    let region = if config.is_elif_kind(kind) || config.is_else_kind(kind) {
+        node.byte_range()
+    } else {
+        region_span(node, source, config)
+    };
 
     if config.is_elif_kind(kind) || config.is_else_kind(kind) {
         // Sibling arm: inherit group from the top of the stack.
@@ -237,7 +323,7 @@ pub fn build_guard_frame(
             defines,
             negates,
             mentions,
-            guard_byte_range: node.byte_range(),
+            guard_byte_range: region,
         }
     } else {
         // New guard group (preproc_ifdef, preproc_if, etc.)
@@ -251,7 +337,7 @@ pub fn build_guard_frame(
             defines,
             negates,
             mentions,
-            guard_byte_range: node.byte_range(),
+            guard_byte_range: region,
         }
     }
 }
@@ -977,5 +1063,111 @@ mod tests {
             &info(3, 0, "heuristic"),
             &info(3, 1, "preprocessor")
         ));
+    }
+
+    // -- scan_region_len ----------------------------------------------------
+
+    fn c_openers() -> Vec<String> {
+        vec![
+            "#if".to_string(),
+            "#ifdef".to_string(),
+            "#ifndef".to_string(),
+        ]
+    }
+
+    #[test]
+    fn scan_stops_at_the_matching_close() {
+        let text = "#ifdef A\nint x;\n#endif\nint y;\n";
+        let len = scan_region_len(text, &c_openers(), "#endif").expect("balanced");
+        assert_eq!(&text[..len], "#ifdef A\nint x;\n#endif\n");
+    }
+
+    #[test]
+    fn scan_counts_nesting_and_ignores_inner_closes() {
+        let text = "#if A\n#ifdef B\nint x;\n#endif\n#endif\ntail\n";
+        let len = scan_region_len(text, &c_openers(), "#endif").expect("balanced");
+        assert_eq!(&text[..len], "#if A\n#ifdef B\nint x;\n#endif\n#endif\n");
+    }
+
+    #[test]
+    fn scan_ends_the_extern_c_group_at_its_own_endif() {
+        // The defect this exists for: the grammar runs the node on to the second
+        // group's `#endif` because `extern "C" {` swallows the first one.
+        let text = concat!(
+            "#ifdef __cplusplus\n",
+            "extern \"C\" {\n",
+            "#endif\n",
+            "int api(void);\n",
+            "#ifdef __cplusplus\n",
+            "}\n",
+            "#endif\n"
+        );
+        let len = scan_region_len(text, &c_openers(), "#endif").expect("balanced");
+        assert_eq!(&text[..len], "#ifdef __cplusplus\nextern \"C\" {\n#endif\n");
+    }
+
+    #[test]
+    fn scan_does_not_confuse_if_with_ifdef() {
+        // `#ifdef` starts with `#if`; without a word boundary the opener would
+        // be counted twice and the region would never balance.
+        let text = "#ifdef A\n#endif\n";
+        let len = scan_region_len(text, &["#if".to_string()], "#endif");
+        assert_eq!(len, None, "#if must not match an #ifdef line");
+    }
+
+    #[test]
+    fn scan_tolerates_indentation_and_trailing_comments() {
+        let text = "  #ifdef A\n\tint x;\n  #endif /* A */\n";
+        let len = scan_region_len(text, &c_openers(), "#endif").expect("balanced");
+        assert_eq!(len, text.len());
+    }
+
+    #[test]
+    fn scan_gives_up_on_an_unbalanced_region() {
+        // No close at all, and a nested region that closes but does not settle
+        // the outer one. Both must return None so the caller keeps the
+        // grammar's span rather than inventing an end.
+        assert_eq!(
+            scan_region_len("#ifdef A\nint x;\n", &c_openers(), "#endif"),
+            None
+        );
+        assert_eq!(
+            scan_region_len("#if A\n#ifdef B\n#endif\n", &c_openers(), "#endif"),
+            None
+        );
+    }
+
+    #[test]
+    fn scan_handles_a_region_with_no_trailing_newline() {
+        let text = "#ifdef A\n#endif";
+        let len = scan_region_len(text, &c_openers(), "#endif").expect("balanced");
+        assert_eq!(len, text.len());
+    }
+
+    #[test]
+    fn a_spaced_directive_is_not_recognised() {
+        // Documented limit: `#  ifdef` is a valid directive that this scan does
+        // not see. It yields None rather than a wrong end, so the caller falls
+        // back to the grammar's span.
+        assert_eq!(
+            scan_region_len("#  ifdef A\n#  endif\n", &c_openers(), "#endif"),
+            None
+        );
+    }
+
+    #[test]
+    fn scanning_from_a_non_opener_closes_on_the_first_nested_region() {
+        // Why `build_guard_frame` must not derive an end for `#elif`/`#else`
+        // arms. An arm's first line is not an opener, so the walk starts at
+        // depth 0 and the first *balanced* region inside the arm takes depth
+        // 1 -> 0 and ends it there — far short of the arm's real extent.
+        //
+        // The consequence is worse than a short range: the arm frame pops early,
+        // dedup then keeps the group's `#if` frame, and every row after the
+        // nested region reports the positive condition instead of the negated
+        // arm. Arms therefore keep the grammar's span.
+        let text = "#else\n#ifdef B\nint b;\n#endif\nint c;\n#endif\n";
+        let len = scan_region_len(text, &c_openers(), "#endif").expect("closes early");
+        assert_eq!(&text[..len], "#else\n#ifdef B\nint b;\n#endif\n");
     }
 }

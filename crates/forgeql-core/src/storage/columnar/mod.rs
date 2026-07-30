@@ -192,7 +192,15 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        byte-identical files with different extensions must not share a segment.
 ///        v34 segment/overlay trees are laid out under the old content-only names
 ///        and cannot be resolved by the new key.
-pub const ENRICH_VER: u32 = 35;
+///   36 — a guard region ends where its own closing directive is, not where the
+///        grammar stopped the guard node. A construct that swallows the closing
+///        directive used to run the region on to the next one, so v35 segments
+///        carry a conjunct on rows that were never inside the region.
+///   37 — that end is derived for group openers only. An `#elif`/`#else` arm does
+///        not begin with an opening directive, so deriving its end let the first
+///        balanced region inside the arm close it early; v36 segments can report
+///        a group's positive condition on rows that belong to a negated arm.
+pub const ENRICH_VER: u32 = 37;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

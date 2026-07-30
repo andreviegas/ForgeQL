@@ -6,6 +6,61 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.69] — 2026-07-30 — fix: end a guard region at its own closing directive
+
+### Fixed — `extern "C"` no longer leaks its condition into the rest of a header
+
+- A guard region took its extent from the parser's guard node. That node is not
+  bounded by the directive that closes the region: the grammar consumes block
+  items until it finds a closing directive, so anything that swallows the real
+  one runs the node on to the *next* close. The C idiom
+  `#ifdef __cplusplus` / `extern "C" {` / `#endif` does exactly that — the brace
+  opens a linkage specification whose body absorbs the `#endif` — and the node
+  then spans two unrelated groups.
+- Everything between them inherited a `&& __cplusplus` conjunct it was never
+  subject to. In a Zephyr snapshot that was 128,451 of 2.9M indexed symbols,
+  including 1,548 carrying the condition twice over. `GROUP BY guard` and
+  `WHERE guard = …` were unusable on C public headers, and anything reading
+  `guard` as a boolean concluded most of the API existed only in C++.
+- A region now ends at its own closing directive, found by counting directive
+  nesting forward from the opener. The parser's span still bounds the scan and
+  is still the answer when the directives do not balance: the node over-extends
+  but never stops short, so its end is a safe cap and a safe fallback. Nothing
+  repairs a malformed file.
+- The directive markers are language configuration, not core knowledge — a
+  language that declares none keeps the previous behaviour untouched.
+
+### Known limits
+
+- A directive written with space between the sigil and the word (`#  ifdef`) is
+  not recognised. The scan then declines to balance and the parser's span stands,
+  so that region behaves as it did before.
+- The scan reads lines, not tokens, so a directive inside a comment or a string
+  literal counts. The two directions are not symmetric. A commented *opening*
+  directive is harmless: it inflates the nesting, the real close no longer settles
+  it, and the scan declines — the parser's span stands. A commented *closing*
+  directive with no commented opener to match it will end the region early, which
+  strips the guard from rows that are inside it. A fully commented-out pair is
+  balanced and therefore also harmless, which is the common shape.
+- Making the scan comment-aware needs the comment delimiters declared as language
+  configuration, the same way the directive markers now are; it is not something
+  core can infer.
+
+### Tests
+
+- The two golden cases that pinned the correct values for this defect now pass
+  and are promoted to hard. The arch header they use accounts exactly: 124 rows
+  ended in `&& __cplusplus` before, of which 122 belonged to the enclosing
+  `!_ASMLANGUAGE` region and join its bucket (5 there already, 127 after), while 2
+  remain — the two `#ifdef __cplusplus` conditions themselves, each genuinely
+  inside its own group. The second step pins that 2, so the split is asserted
+  from both sides rather than taken on trust.
+- Unit tests drive the scan directly: nesting, the `extern "C"` shape, an
+  unbalanced region, a region with no trailing newline, indentation and trailing
+  comments, and the two documented limits. One pins that `#if` must not match an
+  `#ifdef` line — without a word boundary the opener is counted twice and the
+  region never balances.
+
 ## [0.139.68] — 2026-07-29 — fix: stop reporting valid guard fields as misspellings
 
 ### Fixed — the seven guard fields are now registered field names

@@ -158,6 +158,22 @@ impl LanguageConfig {
         &self.negate_ifdef_variant
     }
 
+    /// Directive prefixes that open a conditional region (e.g. `"#if"`).
+    #[must_use]
+    pub fn region_openers(&self) -> &[String] {
+        &self.region_openers
+    }
+
+    /// Directive prefix that closes a conditional region (e.g. `"#endif"`).
+    ///
+    /// Empty — or an empty [`Self::region_openers`] — means the language
+    /// declares no line-directive regions, and callers fall back to the guard
+    /// node's own span.
+    #[must_use]
+    pub fn region_closer(&self) -> &str {
+        &self.region_closer
+    }
+
     /// Regex for OS/arch extraction from file suffix.
     #[must_use]
     pub fn file_guard_suffix_pattern(&self) -> &str {

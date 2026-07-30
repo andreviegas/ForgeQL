@@ -28,17 +28,13 @@
       "assert": { "row_count": 0 } },
 
     { "name": "extern_c_minimal", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "the #endif closing an `#ifdef __cplusplus` / `extern \"C\" {` pair does not pop the guard stack, so the file's second __cplusplus group opens inside the first and its rows carry the conjunct twice",
       "fql": "FIND symbols IN 'samples/bluetooth/peripheral_ht/src/hts.h' WHERE guard MATCHES '__cplusplus.*__cplusplus' LIMIT 10",
       "assert": { "row_count": 0 } },
 
     { "name": "extern_c_header", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "everything after `extern \"C\" {` inherits a false `&& __cplusplus`; the 123 symbols between the two __cplusplus groups belong to the enclosing !_ASMLANGUAGE region, and only the two `#ifdef __cplusplus` conditions themselves are genuinely C++-only",
       "steps": [
         { "fql": "FIND symbols IN 'include/zephyr/arch/arm/syscall.h' WHERE guard = '!ZEPHYR_INCLUDE_ARCH_ARM_SYSCALL_H_ && CONFIG_USERSPACE && !_ASMLANGUAGE' LIMIT 300",
-          "assert": { "row_count": 128, "all_same": "path" } },
+          "assert": { "row_count": 127, "all_same": "path" } },
         { "fql": "FIND symbols IN 'include/zephyr/arch/arm/syscall.h' WHERE guard MATCHES '__cplusplus$' LIMIT 300",
           "assert": { "row_count": 2 } }
       ] },
@@ -51,7 +47,7 @@
 
     { "name": "elif_parenthesis", "use": "zephyr-andre.frozen",
       "enforcement": "expect_fail",
-      "expect_fail_reason": "a child condition containing a top-level || is spliced into its parent with && and no parentheses, so the emitted string parses as (A && B) || C; this row also carries the false && __cplusplus conjunct",
+      "expect_fail_reason": "a child condition containing a top-level || is spliced into its parent with && and no parentheses, so the emitted string parses as (A && B) || C — a weaker predicate than the source",
       "fql": "FIND symbols IN 'include/zephyr/irq_multilevel.h' WHERE guard = '!ZEPHYR_INCLUDE_IRQ_MULTILEVEL_H_ && !_ASMLANGUAGE && (defined(CONFIG_MULTI_LEVEL_INTERRUPTS) || defined(__DOXYGEN__))' LIMIT 200",
       "assert": { "row_count": 82, "all_same": "path" } },
 

@@ -169,7 +169,9 @@
     "else_kinds": ["preproc_else"],
     "condition_field": "condition",
     "name_field": "name",
-    "negate_ifdef_variant": "#ifndef"
+    "negate_ifdef_variant": "#ifndef",
+    "region_openers": ["#if", "#ifdef", "#ifndef"],
+    "region_closer": "#endif"
   },
 
   "macros": {

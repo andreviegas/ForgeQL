@@ -531,6 +531,15 @@ pub struct GuardsSection {
     #[serde(default)]
     pub negate_ifdef_variant: String,
 
+    /// Directive prefixes that open a conditional region (e.g. `"#if"`,
+    /// `"#ifdef"`, `"#ifndef"`).
+    #[serde(default)]
+    pub region_openers: Vec<String>,
+
+    /// Directive prefix that closes a conditional region (e.g. `"#endif"`).
+    #[serde(default)]
+    pub region_closer: String,
+
     /// Attribute name for item-level guards (e.g. `"cfg"` for Rust).
     #[serde(default)]
     pub item_guard_attribute: String,
@@ -720,6 +729,8 @@ impl LanguageConfigJson {
             guard_condition_field: self.guards.condition_field,
             guard_name_field: self.guards.name_field,
             negate_ifdef_variant: self.guards.negate_ifdef_variant,
+            region_openers: self.guards.region_openers,
+            region_closer: self.guards.region_closer,
             item_guard_attribute: self.guards.item_guard_attribute,
             file_guard_pattern: self.guards.file_guard_pattern,
             file_guard_suffix_pattern: self.guards.file_guard_suffix_pattern,

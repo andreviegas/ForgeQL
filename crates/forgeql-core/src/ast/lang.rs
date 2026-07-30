@@ -418,6 +418,12 @@ pub struct LanguageConfig {
     pub(crate) guard_name_field: String,
     /// Token text that marks the negated guard variant (e.g. `"#ifndef"`).
     pub(crate) negate_ifdef_variant: String,
+    /// Directive prefixes that open a conditional region (e.g. `"#if"`).
+    /// Empty when the language has no line-directive regions, which makes the
+    /// region scan fall back to the guard node's own span.
+    pub(crate) region_openers: Vec<String>,
+    /// Directive prefix that closes a conditional region (e.g. `"#endif"`).
+    pub(crate) region_closer: String,
     /// Attribute name for item-level guards (e.g. `"cfg"` for Rust).
     pub(crate) item_guard_attribute: String,
     /// Regex for file-level guard comments (e.g. Go build tags).
