@@ -1292,7 +1292,7 @@ balance, the parser's span is used unchanged.
 
 | Field | Applies to | Description |
 |---|---|---|
-| `guard` | all symbols | Raw guard condition text (e.g. `"defined(CONFIG_SMP)"`, `"!X"`, `"Y && X"`) |
+| `guard` | all symbols | The condition controlling compilation, whitespace-normalised. On an `#elif`/`#else` arm it is the accumulated `!(c₀) && … && cₖ`, not the arm's own condition (e.g. `"defined(CONFIG_SMP)"`, `"!X"`, `"Y && X"`) |
 | `guard_defines` | all symbols | Comma-separated symbols that **must be defined** for this branch |
 | `guard_negates` | all symbols | Comma-separated symbols that **must be undefined** for this branch |
 | `guard_mentions` | all symbols | All symbols mentioned in the condition (superset of defines + negates) |
@@ -1309,6 +1309,25 @@ balance, the parser's span is used unchanged.
 | `#if defined(A) && defined(B)` | `"defined(A) && defined(B)"` | `"A,B"` | `""` | `"A,B"` |
 | `#else` of `#ifdef X` | `"!X"` | `""` | `"X"` | `"X"` |
 | Nested `#ifdef X` inside `#ifdef Y` | `"Y && X"` | `"Y,X"` | `""` | `"Y,X"` |
+| `#elif defined(B)` after `#if defined(A)` | `"!defined(A) && defined(B)"` | `"B"` | `"A"` | `"A,B"` |
+| `#else` after `#if defined(A)` / `#elif defined(B)` | `"!defined(A) && !defined(B)"` | `""` | `"A,B"` | `"A,B"` |
+| `#else` of `#if defined(A) \|\| defined(B)` | `"!(defined(A) \|\| defined(B))"` | `""` | `"A,B"` | `"A,B"` |
+| `#if A \|\| B` nested inside `#ifdef Y` | `"Y && (A \|\| B)"` | `"Y"` | `""` | `"Y"` |
+
+An arm is reached only when every arm before it was false, so it carries their
+negations. This is what makes the negative-form query above answer correctly on a
+chain: without it, the `#else` of a three-arm chain would claim only the last
+arm's condition is false, and match builds the arm never compiles in.
+
+Two limits on that decomposition, both deliberate. Negating a condition that
+mixes `&&` yields a disjunction, where no identifier is individually required
+either way — such an arm contributes nothing to `guard_defines`/`guard_negates`
+and the raw `guard` text remains the record. And a conjunct holding a top-level
+`||` is parenthesised before joining, because `&&` binds tighter: `A && B || C`
+would parse as `(A && B) || C`, a weaker predicate than the source.
+
+`guard` is whitespace-normalised — a directive continued across lines with `\`
+groups with the same condition written on one.
 
 **Example queries:**
 

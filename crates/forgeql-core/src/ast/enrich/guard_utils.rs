@@ -32,8 +32,34 @@ fn next_group_id() -> u64 {
 /// (`preproc_ifdef`, `preproc_if`, `preproc_elif`, `preproc_else`, etc.)
 /// encountered during the tree walk in `collect_nodes()`.
 pub struct GuardFrame {
-    /// Raw condition text (e.g. `"defined(CONFIG_SMP)"` or `"!X"`).
+    /// Rendered condition for this frame: for an `#elif`/`#else` arm this is the
+    /// accumulated `!(c₀) && … && cₖ`, not the arm's own condition.
     pub guard_text: String,
+    /// This frame's **own** condition, whitespace-normalised and never negated
+    /// or accumulated. A later arm folds the negations of the arms before it,
+    /// and it cannot recover them from `guard_text` once that is accumulated —
+    /// this is the field it reads.
+    pub raw_condition: String,
+    /// Identifiers appearing positively in the condition, including those a
+    /// top-level `||` withholds from `defines`. Negating a pure disjunction
+    /// needs them: `!(A || B)` is `!A && !B`, so every one must be undefined.
+    pub positive_terms: Vec<String>,
+    /// Whether [`Self::guard_text`] holds a top-level `||`, and so must be
+    /// bracketed when joined into an `&&` chain.
+    ///
+    /// Cached at construction because the join runs once per indexed row: the
+    /// answer is a property of the frame, not of the row.
+    pub needs_parens: bool,
+    /// This frame's own `defines`/`negates`, before any arm accumulation.
+    ///
+    /// A later arm folds the negation of every earlier arm, and it must fold
+    /// each arm's *own* terms. Folding the accumulated ones instead makes arm
+    /// *k* contain arm *k-1*'s fold, which already contained *k-2*'s: the lists
+    /// then double per arm and a long `#elif` chain exhausts memory during
+    /// indexing.
+    pub own_defines: Vec<String>,
+    /// See [`Self::own_defines`].
+    pub own_negates: Vec<String>,
     /// Unique ID shared by all arms of the same `if`/`elif`/`else` group.
     pub guard_group_id: u64,
     /// Ordinal within the group: 0 = if, 1 = first elif/else, 2 = second, …
@@ -150,8 +176,29 @@ pub fn inject_guard_fields<S: std::hash::BuildHasher>(
     // active[0] = innermost unique; reverse to outermost-first for combined text.
     active.reverse();
 
-    let texts: Vec<&str> = active.iter().map(|f| f.guard_text.as_str()).collect();
-    let guard = texts.join(" && ");
+    // Each frame is a conjunct of the whole, so one holding a top-level `||` is
+    // bracketed: `&&` binds tighter, and joining it bare would reassociate the
+    // condition into something weaker than the source. Only a real join can
+    // reassociate — bracketing a lone frame would add parentheses the source
+    // never had and split `GROUP BY guard`.
+    //
+    // Built in one pass with `needs_parens` read off the frame: this runs once
+    // per indexed row, so neither the scan nor a per-frame allocation belongs
+    // here.
+    let multi = active.len() > 1;
+    let mut guard = String::new();
+    for (i, frame) in active.iter().enumerate() {
+        if i > 0 {
+            guard.push_str(" && ");
+        }
+        if multi && frame.needs_parens {
+            guard.push('(');
+            guard.push_str(&frame.guard_text);
+            guard.push(')');
+        } else {
+            guard.push_str(&frame.guard_text);
+        }
+    }
 
     let mut all_defines: Vec<&str> = Vec::new();
     let mut all_negates: Vec<&str> = Vec::new();
@@ -197,6 +244,108 @@ pub fn inject_guard_fields<S: std::hash::BuildHasher>(
 // build_guard_frame
 // -----------------------------------------------------------------------
 
+/// Does `text` hold a `||` outside every parenthesis?
+///
+/// A paren-depth count, not a boolean parser: it answers where an operator sits,
+/// never what the condition means. Two callers need exactly that — one to decide
+/// whether joining with `&&` would reassociate, the other to recognise a pure
+/// disjunction it can negate term by term.
+fn has_top_level_or(text: &str) -> bool {
+    top_level_operators(text).0
+}
+
+/// Which of `||` and `&&` appear in `text` outside every parenthesis, as
+/// `(has_or, has_and)`.
+///
+/// A paren-depth count, not a boolean parser: it answers where an operator sits,
+/// never what the condition means. That is enough for the three things callers
+/// need — whether joining would reassociate, whether a condition is a pure
+/// disjunction, and whether it is a single term at all.
+fn top_level_operators(text: &str) -> (bool, bool) {
+    let bytes = text.as_bytes();
+    let mut depth: i32 = 0;
+    let (mut has_or, mut has_and) = (false, false);
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b'|' if depth == 0 && bytes.get(i + 1) == Some(&b'|') => has_or = true,
+            b'&' if depth == 0 && bytes.get(i + 1) == Some(&b'&') => has_and = true,
+            _ => {}
+        }
+    }
+    (has_or, has_and)
+}
+
+/// Collapse a directive's line continuations and whitespace runs to single
+/// spaces, so a condition written across several lines groups with the same
+/// condition written on one.
+fn normalise_condition(text: &str) -> String {
+    text.split_whitespace()
+        .map(|t| t.trim_end_matches('\\'))
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Render `cond` as a conjunct of an `&&` chain.
+///
+/// A conjunct holding a top-level `||` has to be wrapped, because `&&` binds
+/// tighter: splicing `A` into `B || C` unparenthesised yields `A && B || C`,
+/// which parses as `(A && B) || C` — satisfied by `C` alone, and so a weaker
+/// predicate than the source. Anything without a top-level `||` is left as it
+/// was, to keep the strings readable and groupable.
+fn as_conjunct(cond: &str) -> String {
+    if has_top_level_or(cond) {
+        format!("({cond})")
+    } else {
+        cond.to_string()
+    }
+}
+
+/// Render the negation of `cond`.
+fn negate_text(cond: &str) -> String {
+    if cond.is_empty() {
+        return String::new();
+    }
+    let (has_or, has_and) = top_level_operators(cond);
+    // `!X` negates back to `X` rather than to `!!X` — but only when the `!`
+    // governs the whole condition. `!A && B` starts with `!` and does not:
+    // stripping it there yields `A && B`, which asserts both operands and is the
+    // opposite of the arm being false.
+    if let Some(rest) = cond.strip_prefix('!')
+        && !rest.starts_with('(')
+        && !has_or
+        && !has_and
+    {
+        return rest.to_string();
+    }
+    if has_or || has_and || cond.contains(' ') {
+        format!("!({cond})")
+    } else {
+        format!("!{cond}")
+    }
+}
+
+/// The `(defines, negates)` a frame's condition contributes once negated.
+///
+/// Only two shapes decompose. A single term simply swaps sides. A pure top-level
+/// disjunction of positives decomposes by De Morgan — `!(A || B)` is `!A && !B`,
+/// so every term must be undefined. A condition mixing in `&&` yields a
+/// disjunction when negated, where no identifier is individually required either
+/// way; deciding that would need a boolean evaluator, so it contributes nothing
+/// and the raw text remains the record.
+fn negated_terms(frame: &GuardFrame) -> (Vec<String>, Vec<String>) {
+    if frame.raw_condition.contains("&&") {
+        return (Vec::new(), Vec::new());
+    }
+    if has_top_level_or(&frame.raw_condition) {
+        return (Vec::new(), frame.positive_terms.clone());
+    }
+    // The frame's OWN terms, never its accumulated ones: on an arm those already
+    // hold every earlier arm's, and folding them again doubles per arm.
+    (frame.own_negates.clone(), frame.own_defines.clone())
+}
 /// Does the already-left-trimmed `line` open with the directive `marker`?
 ///
 /// The word boundary after the marker is what stops `#if` matching an `#ifdef`
@@ -274,8 +423,10 @@ fn scan_region_len(text: &str, openers: &[String], closer: &str) -> Option<usize
 }
 /// Build a [`GuardFrame`] for a guard-opening AST node.
 ///
-/// `stack` is the current guard stack; it is used to inherit the parent
-/// group's ID and branch count for `elif`/`else` nodes.
+/// `stack` is the current guard stack: an `#elif`/`#else` node inherits its
+/// group and branch from it, and folds the negations of the arms before it,
+/// which tree-sitter's nesting leaves sitting on that same stack.
+#[must_use]
 pub fn build_guard_frame(
     node: tree_sitter::Node<'_>,
     source: &[u8],
@@ -283,19 +434,20 @@ pub fn build_guard_frame(
     stack: &[GuardFrame],
 ) -> GuardFrame {
     let kind = node.kind();
+    let is_arm = config.is_elif_kind(kind) || config.is_else_kind(kind);
     // Only a group opener owns a closing directive, so only it can have its end
     // derived from one. An arm begins with `#elif`/`#else`, which is not an
     // opener, so scanning from there would start at depth 0 and let the first
     // balanced region *inside* the arm close it — ending the arm at that inner
     // directive and handing every row after it the group's positive condition
     // instead of the negated arm. Arms keep the grammar's span, unchanged.
-    let region = if config.is_elif_kind(kind) || config.is_else_kind(kind) {
+    let region = if is_arm {
         node.byte_range()
     } else {
         region_span(node, source, config)
     };
 
-    if config.is_elif_kind(kind) || config.is_else_kind(kind) {
+    if is_arm {
         // Sibling arm: inherit group from the top of the stack.
         let (group_id, prev_branch) = stack.last().map_or_else(
             || (next_group_id(), 0),
@@ -303,34 +455,79 @@ pub fn build_guard_frame(
         );
         let branch = prev_branch.saturating_add(1);
 
-        let (guard_text, defines, negates, mentions) = if config.is_elif_kind(kind) {
-            let cond = field_text(node, source, config.guard_condition_field());
-            let (defs, negs, ments) = parse_condition_text(cond);
-            (cond.to_string(), defs, negs, ments)
+        // This arm's own condition. `#else` has none — it is reached purely by
+        // every earlier arm being false.
+        let raw_condition = if config.is_elif_kind(kind) {
+            normalise_condition(field_text(node, source, config.guard_condition_field()))
         } else {
-            // #else: negate the parent frame's condition.
-            stack.last().map_or_else(
-                || (String::new(), Vec::new(), Vec::new(), Vec::new()),
-                negate_frame,
-            )
+            String::new()
         };
+        let (defines, negates, mentions, positive_terms) = parse_condition_text(&raw_condition);
 
+        // An arm is reached only when every arm before it was false, so it
+        // carries their negations. tree-sitter nests the arms, so all of them
+        // are on the stack; the ones sharing this group are the earlier arms.
+        let mut conjuncts: Vec<String> = Vec::new();
+        let mut all_defines = defines.clone();
+        let mut all_negates = negates.clone();
+        let mut all_mentions = mentions;
+        for prior in stack.iter().filter(|f| f.guard_group_id == group_id) {
+            // No `as_conjunct` here: `negate_text` already brackets whatever it
+            // negates, so pre-wrapping would double the parentheses.
+            conjuncts.push(negate_text(&prior.raw_condition));
+            let (d, n) = negated_terms(prior);
+            all_defines.extend(d);
+            all_negates.extend(n);
+            // Own terms only, for the same reason `negated_terms` reads them:
+            // `prior.mentions` is itself accumulated.
+            all_mentions.extend(prior.own_defines.iter().cloned());
+            all_mentions.extend(prior.own_negates.iter().cloned());
+            all_mentions.extend(prior.positive_terms.iter().cloned());
+        }
+        if !raw_condition.is_empty() {
+            conjuncts.push(as_conjunct(&raw_condition));
+        }
+        all_mentions.extend(all_defines.iter().cloned());
+        all_mentions.extend(all_negates.iter().cloned());
+        // A chain repeats identifiers across arms, and every list here is
+        // stored on the frame and copied onto every row inside the arm. Dedup
+        // keeps all three bounded by the chain's distinct identifiers rather
+        // than by its arm count.
+        for list in [&mut all_defines, &mut all_negates, &mut all_mentions] {
+            list.sort_unstable();
+            list.dedup();
+        }
+
+        let joined = conjuncts.join(" && ");
         GuardFrame {
-            guard_text,
+            needs_parens: has_top_level_or(&joined),
+            guard_text: joined,
+            raw_condition,
+            positive_terms,
+            own_defines: defines,
+            own_negates: negates,
             guard_group_id: group_id,
             guard_branch: branch,
             guard_kind: "preprocessor",
-            defines,
-            negates,
-            mentions,
+            defines: all_defines,
+            negates: all_negates,
+            mentions: all_mentions,
             guard_byte_range: region,
         }
     } else {
         // New guard group (preproc_ifdef, preproc_if, etc.)
         let group_id = next_group_id();
-        let (guard_text, defines, negates, mentions) = extract_block_guard(node, source, config);
+        let (guard_text, defines, negates, mentions, positive_terms) =
+            extract_block_guard(node, source, config);
         GuardFrame {
+            // A group opener has no earlier arms, so its own lists and its
+            // accumulated ones are the same thing.
+            needs_parens: has_top_level_or(&guard_text),
+            raw_condition: guard_text.clone(),
             guard_text,
+            positive_terms,
+            own_defines: defines.clone(),
+            own_negates: negates.clone(),
             guard_group_id: group_id,
             guard_branch: 0,
             guard_kind: "preprocessor",
@@ -399,7 +596,7 @@ fn extract_block_guard(
     node: tree_sitter::Node<'_>,
     source: &[u8],
     config: &LanguageConfig,
-) -> (String, Vec<String>, Vec<String>, Vec<String>) {
+) -> (String, Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
     let name_field = config.guard_name_field();
 
     if !name_field.is_empty()
@@ -420,54 +617,44 @@ fn extract_block_guard(
                     Vec::new(),
                     vec![ident.clone()],
                     vec![ident],
+                    Vec::new(),
                 )
             } else {
-                (ident.clone(), vec![ident.clone()], Vec::new(), vec![ident])
+                (
+                    ident.clone(),
+                    vec![ident.clone()],
+                    Vec::new(),
+                    vec![ident.clone()],
+                    vec![ident],
+                )
             };
         }
     }
 
     // Fallback: read `condition_field` (preproc_if and similar).
-    let cond = field_text(node, source, config.guard_condition_field());
-    let (defs, negs, ments) = parse_condition_text(cond);
-    (cond.to_string(), defs, negs, ments)
+    let cond = normalise_condition(field_text(node, source, config.guard_condition_field()));
+    let (defs, negs, ments, positives) = parse_condition_text(&cond);
+    (cond, defs, negs, ments, positives)
 }
 
-/// Produce the `else` complement of a parent frame.
-///
-/// Returns `(guard_text, defines, negates, mentions)`.
-fn negate_frame(parent: &GuardFrame) -> (String, Vec<String>, Vec<String>, Vec<String>) {
-    let guard_text = if parent.guard_text.is_empty() {
-        String::new()
-    } else if parent.guard_text.starts_with('!') && !parent.guard_text.starts_with("!(") {
-        // Simple `!X` → `X`
-        parent.guard_text[1..].to_string()
-    } else if parent.guard_text.contains(' ') {
-        format!("!({})", parent.guard_text)
-    } else {
-        format!("!{}", parent.guard_text)
-    };
-    // Defines become negates and vice-versa; mentions stay the same.
-    (
-        guard_text,
-        parent.negates.clone(),
-        parent.defines.clone(),
-        parent.mentions.clone(),
-    )
-}
-
-/// Parse a `#if`/`#elif` condition expression into `(defines, negates, mentions)`.
+/// Parse a `#if`/`#elif` condition into
+/// `(defines, negates, mentions, positive_terms)`.
 ///
 /// Conservative rules:
 /// - `defined(X)` → defines, mentions
 /// - `!defined(X)` → negates, mentions
 /// - `defined(A) && defined(B)` → defines = [A, B]
 /// - `defined(A) || defined(B)` → defines = [] (ambiguous), mentions = [A, B]
-fn parse_condition_text(cond: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
+fn parse_condition_text(cond: &str) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+    // Deliberately `contains`, not the top-level test: in `!(A || B)` the `||`
+    // sits inside parentheses, and calling that "no top-level or" would push A
+    // and B into `defines` — asserting they must be defined when the source says
+    // the opposite. Withholding whenever any `||` appears is the safe reading.
     let has_or = cond.contains("||");
     let mut defines = Vec::new();
     let mut negates = Vec::new();
     let mut mentions = Vec::new();
+    let mut positives = Vec::new();
     let mut pos = 0;
 
     while pos < cond.len() {
@@ -499,8 +686,11 @@ fn parse_condition_text(cond: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
             mentions.push(ident.clone());
             if is_negated {
                 negates.push(ident);
-            } else if !has_or {
-                defines.push(ident);
+            } else {
+                positives.push(ident.clone());
+                if !has_or {
+                    defines.push(ident);
+                }
             }
         }
 
@@ -509,7 +699,7 @@ fn parse_condition_text(cond: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
         pos = def_pos + 7 + lead_ws + 1 + close + 1;
     }
 
-    (defines, negates, mentions)
+    (defines, negates, mentions, positives)
 }
 
 // -----------------------------------------------------------------------
@@ -586,7 +776,14 @@ fn attribute_item_to_guard_frame(
 
     let (guard_text, defines, negates, mentions) = parse_cfg_condition(&args_text);
     Some(GuardFrame {
+        // An attribute guard has no sibling arms to accumulate across, so its
+        // own condition and its rendered text are the same string.
+        needs_parens: has_top_level_or(&guard_text),
+        raw_condition: guard_text.clone(),
         guard_text,
+        positive_terms: defines.clone(),
+        own_defines: defines.clone(),
+        own_negates: negates.clone(),
         guard_group_id: next_group_id(),
         guard_branch: 0,
         guard_kind: "attribute",
@@ -736,7 +933,14 @@ pub fn build_env_guard_frame(
         (vec![id.clone()], vec![id])
     };
     Some(GuardFrame {
+        // A heuristic env guard is inferred from one `if`, not from a directive
+        // chain, so it has no arms and its own condition is its rendered text.
+        needs_parens: has_top_level_or(&guard_text),
+        raw_condition: guard_text.clone(),
         guard_text,
+        positive_terms: defines.clone(),
+        own_defines: defines.clone(),
+        own_negates: Vec::new(),
         guard_group_id: next_group_id(),
         guard_branch: 0,
         guard_kind: "heuristic",
@@ -867,42 +1071,48 @@ mod tests {
 
     #[test]
     fn parse_condition_splits_defined_from_negated() {
-        let (defines, negates, mentions) = parse_condition_text("defined(A) && !defined(B)");
+        let (defines, negates, mentions, positives) =
+            parse_condition_text("defined(A) && !defined(B)");
         assert_eq!(defines, ["A"]);
         assert_eq!(negates, ["B"]);
         assert_eq!(mentions, ["A", "B"]);
+        assert_eq!(positives, ["A"]);
     }
 
     #[test]
     fn parse_condition_withholds_positives_under_a_top_level_or() {
         // Under a top-level `||` no single identifier is required, so positive
-        // terms are deliberately kept out of `defines`. `mentions` still lists
-        // them, which is why guard_mentions is the field to filter on when a
-        // condition is disjunctive.
-        let (defines, negates, mentions) = parse_condition_text("defined(A) || defined(B)");
+        // terms are kept out of `defines`. They are not lost: `positive_terms`
+        // keeps them, which is what lets a negation of this condition decompose
+        // by De Morgan.
+        let (defines, negates, mentions, positives) =
+            parse_condition_text("defined(A) || defined(B)");
         assert!(defines.is_empty());
         assert!(negates.is_empty());
         assert_eq!(mentions, ["A", "B"]);
+        assert_eq!(positives, ["A", "B"]);
     }
 
     #[test]
     fn parse_condition_ignores_defined_without_parentheses() {
-        let (defines, negates, mentions) = parse_condition_text("defined A && B");
+        let (defines, negates, mentions, positives) = parse_condition_text("defined A && B");
         assert!(defines.is_empty());
         assert!(negates.is_empty());
         assert!(mentions.is_empty());
+        assert!(positives.is_empty());
     }
 
     #[test]
     fn parse_condition_of_a_bare_macro_name_finds_nothing() {
         // `#ifdef X` never reaches this function: its identifier comes from the
         // directive's name field, not from condition parsing.
-        let (defines, _, mentions) = parse_condition_text("X");
+        let (defines, _, mentions, positives) = parse_condition_text("X");
         assert!(defines.is_empty());
         assert!(mentions.is_empty());
+        assert!(positives.is_empty());
     }
 
-    // -- negate_frame ------------------------------------------------------
+    // -- negation: negate_text + negated_terms ------------------------------
 
     fn strs(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| (*s).to_string()).collect()
@@ -910,7 +1120,12 @@ mod tests {
 
     fn test_frame(text: &str, defines: &[&str], negates: &[&str], mentions: &[&str]) -> GuardFrame {
         GuardFrame {
+            needs_parens: has_top_level_or(text),
             guard_text: text.to_string(),
+            raw_condition: text.to_string(),
+            positive_terms: strs(defines),
+            own_defines: strs(defines),
+            own_negates: strs(negates),
             guard_group_id: 1,
             guard_branch: 0,
             guard_kind: "preprocessor",
@@ -921,61 +1136,167 @@ mod tests {
         }
     }
 
+    /// A frame whose positive terms are withheld from `defines` by a top-level
+    /// `||`, which is the shape `negated_terms` has to decompose.
+    fn disjunction_frame(text: &str, positives: &[&str]) -> GuardFrame {
+        GuardFrame {
+            positive_terms: strs(positives),
+            mentions: strs(positives),
+            ..test_frame(text, &[], &[], positives)
+        }
+    }
+
+    /// Fold one more arm onto a chain the way `build_guard_frame` does, so the
+    /// growth of the stored lists can be measured without a parse tree.
+    fn fold_arm(stack: &[GuardFrame], own_condition: &str, own_define: &str) -> GuardFrame {
+        let group_id = 1;
+        let mut arm = test_frame(own_condition, &[own_define], &[], &[own_define]);
+        let mut all_defines = arm.own_defines.clone();
+        let mut all_negates = arm.own_negates.clone();
+        let mut all_mentions = arm.mentions.clone();
+        for prior in stack.iter().filter(|f| f.guard_group_id == group_id) {
+            let (d, n) = negated_terms(prior);
+            all_defines.extend(d);
+            all_negates.extend(n);
+            all_mentions.extend(prior.own_defines.iter().cloned());
+            all_mentions.extend(prior.own_negates.iter().cloned());
+            all_mentions.extend(prior.positive_terms.iter().cloned());
+        }
+        all_mentions.extend(all_defines.iter().cloned());
+        all_mentions.extend(all_negates.iter().cloned());
+        for list in [&mut all_defines, &mut all_negates, &mut all_mentions] {
+            list.sort_unstable();
+            list.dedup();
+        }
+        arm.guard_branch = u8::try_from(stack.len()).unwrap_or(u8::MAX);
+        arm.defines = all_defines;
+        arm.negates = all_negates;
+        arm.mentions = all_mentions;
+        arm
+    }
+
     #[test]
-    fn negate_of_a_bare_ifdef_is_not_parenthesised() {
+    fn a_long_chain_does_not_grow_its_term_lists_per_arm() {
+        // The lists an arm stores are bounded by the chain's distinct
+        // identifiers, not by its arm count. Folding each prior arm's
+        // *accumulated* lists instead of its own made arm k contain arm k-1's
+        // fold, which already contained k-2's — doubling per arm, undeduped,
+        // which exhausts memory partway through indexing a real corpus.
+        let mut stack = vec![test_frame("A0", &["A0"], &[], &["A0"])];
+        for i in 1..24 {
+            let cond = format!("A{i}");
+            let arm = fold_arm(&stack, &cond, &cond);
+            // Each arm requires its own identifier and forbids every earlier
+            // one: exactly i negates, one define, i+1 mentions.
+            assert_eq!(arm.negates.len(), i, "negates grew at arm {i}");
+            assert_eq!(arm.defines.len(), 1, "defines grew at arm {i}");
+            assert_eq!(arm.mentions.len(), i + 1, "mentions grew at arm {i}");
+            stack.push(arm);
+        }
+    }
+
+    #[test]
+    fn negation_of_a_bare_ifdef_is_not_parenthesised() {
         // `#ifdef X` / `#else` must read `!X`, never `!(X)`.
-        let (text, defines, negates, mentions) =
-            negate_frame(&test_frame("X", &["X"], &[], &["X"]));
-        assert_eq!(text, "!X");
-        assert!(defines.is_empty());
-        assert_eq!(negates, ["X"]);
-        assert_eq!(mentions, ["X"]);
+        let frame = test_frame("X", &["X"], &[], &["X"]);
+        assert_eq!(negate_text(&frame.raw_condition), "!X");
+        assert_eq!(negated_terms(&frame), (vec![], strs(&["X"])));
     }
 
     #[test]
-    fn negate_wraps_a_compound_condition_and_swaps_the_lists() {
-        let (text, defines, negates, _) = negate_frame(&test_frame(
-            "defined(A) && !defined(B)",
-            &["A"],
-            &["B"],
-            &["A", "B"],
-        ));
-        assert_eq!(text, "!(defined(A) && !defined(B))");
-        assert_eq!(defines, ["B"]);
-        assert_eq!(negates, ["A"]);
+    fn negation_of_an_ifndef_swaps_back() {
+        // `#ifndef X` / `#else` means X *is* defined, so nothing is required
+        // undefined and X is required defined.
+        let frame = test_frame("!X", &[], &["X"], &["X"]);
+        assert_eq!(negate_text(&frame.raw_condition), "X");
+        assert_eq!(negated_terms(&frame), (strs(&["X"]), vec![]));
     }
 
     #[test]
-    fn negate_of_an_already_negated_frame_keeps_its_parentheses() {
-        let (text, ..) = negate_frame(&test_frame("!(A || B)", &[], &[], &[]));
-        assert_eq!(text, "!(!(A || B))");
+    fn a_leading_bang_is_only_stripped_when_it_governs_the_whole_condition() {
+        // `!A && B` starts with `!`, but the `!` binds to `A` alone. Stripping it
+        // yields `A && B`, which asserts both operands — the opposite of the arm
+        // being false. Real chains open this way: several Zephyr groups have every
+        // arm beginning `!defined(X) && …`, so each later arm would have carried
+        // up to five inverted conjuncts.
+        assert_eq!(
+            negate_text("!defined(A) && defined(B)"),
+            "!(!defined(A) && defined(B))"
+        );
+        // A `!` that does govern the whole condition still strips.
+        assert_eq!(negate_text("!X"), "X");
+        assert_eq!(negate_text("!defined(A)"), "defined(A)");
+        // …and one that governs a bracketed whole does not double-negate wrongly.
+        assert_eq!(negate_text("!(A || B)"), "!(!(A || B))");
     }
 
     #[test]
-    fn negate_of_a_disjunction_does_not_decompose_today() {
-        // Characterisation, not endorsement: !(A || B) is equivalent to
-        // !A && !B, so both identifiers belong in the negated frame's
-        // `negates`. They are absent because a disjunction contributes no
-        // `defines` to swap. When that is restored this assertion flips, and
-        // the matching end-to-end case is promoted at the same time.
-        let (text, _, negates, mentions) = negate_frame(&test_frame(
-            "defined(A) || defined(B)",
-            &[],
-            &[],
-            &["A", "B"],
-        ));
-        assert_eq!(text, "!(defined(A) || defined(B))");
-        assert!(negates.is_empty());
-        assert_eq!(mentions, ["A", "B"]);
+    fn a_space_free_disjunction_is_still_bracketed() {
+        // The old proxy for "compound" was `contains(' ')`, which misses `A||B`.
+        assert_eq!(negate_text("A||B"), "!(A||B)");
+        assert_eq!(negate_text("A&&B"), "!(A&&B)");
+        assert_eq!(negate_text("X"), "!X");
     }
 
     #[test]
-    fn negate_of_an_empty_frame_stays_empty() {
-        let (text, defines, negates, mentions) = negate_frame(&test_frame("", &[], &[], &[]));
-        assert!(text.is_empty());
-        assert!(defines.is_empty());
-        assert!(negates.is_empty());
-        assert!(mentions.is_empty());
+    fn negation_of_a_conjunction_decomposes_to_nothing() {
+        // `!(A && !B)` holds when A is undefined *or* B is defined, so neither
+        // identifier is individually required either way. A plain
+        // defines/negates swap would claim both, which is simply false.
+        let frame = test_frame("defined(A) && !defined(B)", &["A"], &["B"], &["A", "B"]);
+        assert_eq!(
+            negate_text(&frame.raw_condition),
+            "!(defined(A) && !defined(B))"
+        );
+        assert_eq!(negated_terms(&frame), (vec![], vec![]));
+    }
+
+    #[test]
+    fn negation_of_a_disjunction_decomposes_by_de_morgan() {
+        // `!(A || B)` is `!A && !B`, so every positive term must be undefined.
+        // They come from `positive_terms`, which is why withholding them from
+        // `defines` under a top-level `||` does not lose them.
+        let frame = disjunction_frame("defined(A) || defined(B)", &["A", "B"]);
+        assert_eq!(
+            negate_text(&frame.raw_condition),
+            "!(defined(A) || defined(B))"
+        );
+        assert_eq!(negated_terms(&frame), (vec![], strs(&["A", "B"])));
+    }
+
+    #[test]
+    fn negation_of_an_empty_condition_stays_empty() {
+        let frame = test_frame("", &[], &[], &[]);
+        assert!(negate_text(&frame.raw_condition).is_empty());
+        assert_eq!(negated_terms(&frame), (vec![], vec![]));
+    }
+
+    // -- as_conjunct / has_top_level_or -------------------------------------
+
+    #[test]
+    fn a_top_level_or_is_wrapped_before_joining() {
+        assert!(has_top_level_or("defined(A) || defined(B)"));
+        assert_eq!(
+            as_conjunct("defined(A) || defined(B)"),
+            "(defined(A) || defined(B))"
+        );
+    }
+
+    #[test]
+    fn an_or_already_inside_parentheses_is_left_alone() {
+        // It cannot reassociate across an `&&` it is already bracketed away
+        // from, so wrapping again would add noise and split `GROUP BY guard`.
+        assert!(!has_top_level_or("!(A || B)"));
+        assert_eq!(as_conjunct("!(A || B)"), "!(A || B)");
+        assert_eq!(as_conjunct("defined(A)"), "defined(A)");
+    }
+
+    // -- normalise_condition ------------------------------------------------
+
+    #[test]
+    fn a_continued_directive_normalises_to_one_line() {
+        let text = "CONFIG_A > 0 ||                    \\\n\tCONFIG_B > 0";
+        assert_eq!(normalise_condition(text), "CONFIG_A > 0 || CONFIG_B > 0");
     }
 
     // -- inject_guard_fields -----------------------------------------------

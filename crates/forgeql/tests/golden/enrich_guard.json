@@ -20,7 +20,7 @@
       "assert": { "row_count": 7, "all_same": "path", "ordered": { "by": "line", "dir": "asc" } } },
 
     { "name": "arm_rows_share_one_guard_group", "use": "zephyr-andre.frozen",
-      "fql": "FIND symbols IN 'soc/nordic/common/gppi_init.c' WHERE guard = 'defined(CONFIG_SOC_NRF54H20_CPUAPP)' WHERE line > 15 ORDER BY line ASC LIMIT 100",
+      "fql": "FIND symbols IN 'soc/nordic/common/gppi_init.c' WHERE guard_defines LIKE '%CONFIG_SOC_NRF54H20_CPUAPP%' WHERE line > 15 ORDER BY line ASC LIMIT 100",
       "assert": { "row_count": 72, "all_same": "path", "ordered": { "by": "line", "dir": "asc" } } },
 
     { "name": "known_field_with_no_carriers_is_an_empty_set", "use": "zephyr-andre.frozen",
@@ -40,26 +40,18 @@
       ] },
 
     { "name": "elif_chain_negation", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "an #elif arm is reported as if it were a standalone #if: the fourth arm of the gppi chain drops the negations of the three arms before it, so guard_negates never mentions PPI_PRESENT",
       "fql": "FIND symbols IN 'soc/nordic/common/gppi_init.c' WHERE guard_defines LIKE '%CONFIG_SOC_NRF54H20_CPUAPP%' WHERE guard_negates LIKE '%PPI_PRESENT%' ORDER BY line ASC LIMIT 100",
       "assert": { "row_count": 72, "all_same": "path" } },
 
     { "name": "elif_parenthesis", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "a child condition containing a top-level || is spliced into its parent with && and no parentheses, so the emitted string parses as (A && B) || C — a weaker predicate than the source",
       "fql": "FIND symbols IN 'include/zephyr/irq_multilevel.h' WHERE guard = '!ZEPHYR_INCLUDE_IRQ_MULTILEVEL_H_ && !_ASMLANGUAGE && (defined(CONFIG_MULTI_LEVEL_INTERRUPTS) || defined(__DOXYGEN__))' LIMIT 200",
       "assert": { "row_count": 82, "all_same": "path" } },
 
     { "name": "else_demorgan", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "negating a disjunction does not decompose: !(A || B) is equivalent to !A && !B, so both symbols belong in guard_negates, but only guard_mentions lists them",
       "fql": "FIND symbols WHERE guard = '!(defined(CONFIG_NET_NATIVE) || defined(CONFIG_NET_OFFLOAD))' WHERE guard_negates LIKE '%CONFIG_NET_NATIVE%' WHERE guard_negates LIKE '%CONFIG_NET_OFFLOAD%' LIMIT 50",
       "assert": { "row_count": 27, "all_same": "path" } },
 
     { "name": "guard_whitespace_normalised", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "a multi-line #if keeps its backslash continuations, newlines and leading tabs verbatim, so GROUP BY guard splits identical conditions and the value cannot be written in a WHERE clause",
       "fql": "FIND symbols WHERE guard = 'CONFIG_BT_AUDIO_CODEC_CFG_MAX_METADATA_SIZE > 0 || CONFIG_BT_AUDIO_CODEC_CAP_MAX_METADATA_SIZE > 0' LIMIT 300",
       "assert": { "row_count": 225 } },
 

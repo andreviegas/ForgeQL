@@ -200,7 +200,26 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        not begin with an opening directive, so deriving its end let the first
 ///        balanced region inside the arm close it early; v36 segments can report
 ///        a group's positive condition on rows that belong to a negated arm.
-pub const ENRICH_VER: u32 = 37;
+///   38 — an arm carries the negations of the arms before it, a conjunct holding
+///        a top-level `||` is parenthesised before joining, negating a pure
+///        disjunction decomposes by De Morgan, and a condition's whitespace is
+///        normalised. Every guard string in a chain, and every `guard_negates`
+///        derived from one, differs from v37. **Do not trust a v38 generation:**
+///        the fold read each earlier arm's *accumulated* terms rather than its
+///        own, so a long `#elif` chain doubled its lists per arm — wrong values
+///        on chain-heavy files, and enough memory to be killed part-way through.
+///   39 — that fold reads each arm's own terms, and the accumulated lists are
+///        deduped. Sizes are bounded by a chain's distinct identifiers instead
+///        of by its arm count.
+///   40 — a conjunct is bracketed only where composition can reassociate it. v39
+///        double-bracketed a negated disjunction and bracketed a lone condition
+///        that no `&&` was joining, so its guard strings carry parentheses the
+///        source never had.
+///   41 — a leading `!` is stripped only when it governs the whole condition. In
+///        v40 an arm whose condition began `!defined(X) && …` negated to
+///        `defined(X) && …`, asserting both operands — the opposite of that arm
+///        being false — and every later arm in the chain inherited it.
+pub const ENRICH_VER: u32 = 41;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

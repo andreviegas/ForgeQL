@@ -6,6 +6,62 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.70] — 2026-07-30 — fix: guard text now says what the source says
+
+Four defects in how a guard condition is rendered and decomposed. They ship
+together because they are one mechanism: each needs a frame to remember its own
+condition separately from the accumulated one, and fixing any in isolation would
+rewrite the strings the next one produces.
+
+### Fixed — an arm carries the negations of the arms before it
+
+- An `#elif` arm was reported as though it were a standalone `#if`. Only the arm's
+  own condition appeared, so the `#else` of a three-arm chain claimed merely that
+  the last arm was false — a predicate the earlier arms also satisfy. Asking
+  "what is compiled only when this feature is absent" returned a set that
+  included builds where it is present.
+- An arm now renders as `!(c₀) && … && !(c_{k-1}) && cₖ`, and contributes each
+  earlier arm's identifiers to `guard_negates`. A two-arm `#ifdef X` / `#else`
+  still yields exactly `!X`.
+
+### Fixed — a conjunct holding a top-level `||` is parenthesised
+
+- `&&` binds tighter than `||`, so splicing a disjunctive child into its parent
+  bare produced `A && B || C`, which parses as `(A && B) || C` — satisfied by `C`
+  alone, and so a weaker predicate than the source. In one Zephyr header the
+  emitted guard was true outside the include guard it was written inside.
+- Parenthesising happens only where composition can reassociate: a lone condition
+  is left exactly as written, so grouping is unaffected.
+
+### Fixed — negating a disjunction decomposes
+
+- `!(A || B)` is `!A && !B`, so both identifiers must be undefined; only
+  `guard_mentions` listed them. The terms a top-level `||` withholds from
+  `guard_defines` are now retained for exactly this purpose.
+- The complementary correction: negating a condition that mixes `&&` yields a
+  disjunction, where no identifier is individually required either way. That case
+  previously swapped the two lists and asserted both — so the `#else` of
+  `#if defined(A) && !defined(B)` claimed A must be undefined, which is false
+  whenever B is defined. Such an arm now contributes nothing, and the raw text
+  remains the record.
+
+### Fixed — `guard` is whitespace-normalised
+
+- A directive continued across lines kept its backslashes, newlines and leading
+  tabs, so `GROUP BY guard` split identical conditions on whitespace alone and the
+  value could not be written into a `WHERE` clause at all.
+
+### Fixed — a long `#elif` chain no longer exhausts memory while indexing
+
+- Found while building the above: an arm folded each earlier arm's *accumulated*
+  identifier lists rather than its own, so arm *k* contained arm *k−1*'s fold,
+  which already contained *k−2*'s. The lists doubled per arm and were never
+  deduplicated. Indexing a corpus with long chains exhausted 32 GB in 46 seconds;
+  the same corpus now completes in about two minutes.
+- Arms fold each other's own terms, and the accumulated lists are deduplicated,
+  so their size is bounded by a chain's distinct identifiers rather than by its
+  arm count. A unit test folds 24 arms and asserts the exact size at every step.
+
 ## [0.139.69] — 2026-07-30 — fix: end a guard region at its own closing directive
 
 ### Fixed — `extern "C"` no longer leaks its condition into the rest of a header
