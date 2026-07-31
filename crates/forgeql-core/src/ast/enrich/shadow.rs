@@ -54,7 +54,14 @@ impl NodeEnricher for ShadowEnricher {
         };
 
         let mut shadowed: BTreeSet<String> = BTreeSet::new();
-        walk_scopes_iterative(body, source, config, params, &mut shadowed);
+        walk_scopes_iterative(
+            body,
+            source,
+            config,
+            params,
+            &mut shadowed,
+            ctx.guard_file_key,
+        );
 
         if !shadowed.is_empty() {
             drop(fields.insert("has_shadow".into(), "true".into()));
@@ -92,6 +99,7 @@ fn walk_scopes_iterative(
     config: &LanguageConfig,
     params: BTreeSet<String>,
     shadowed: &mut BTreeSet<String>,
+    guard_file_key: u64,
 ) {
     // Convert params to guard-aware map.  Params are always unconditional.
     let params_map: HashMap<String, Option<GuardInfo>> =
@@ -127,7 +135,7 @@ fn walk_scopes_iterative(
                 in_block_direct,
             } => {
                 let kind = node.kind();
-                update_guard_stack(node, source, config, &mut mini_guard_stack);
+                update_guard_stack(node, source, config, &mut mini_guard_stack, guard_file_key);
 
                 if config.is_scope_creating_kind(kind) {
                     tracker.open_scope(&mut work, node);

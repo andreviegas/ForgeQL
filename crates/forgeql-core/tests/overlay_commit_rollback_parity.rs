@@ -432,9 +432,13 @@ fn commit_promotes_segments_and_builds_new_overlay() {
     assert_eq!(storage.dirty().added.len(), 1, "must have 1 staged segment");
     let staged_hex = storage.dirty().added[0].reader.content_id_hex();
     let staging_dir = worktree.join(".forgeql-staging");
+    // Includes ENRICH_VER for the same reason a committed segment lives under a
+    // versioned directory: a staged segment holds index output, so a generation
+    // bump has to invalidate it rather than let COMMIT promote stale rows.
     let staged_name = format!(
-        "{}-{staged_hex}.fqsf",
-        forgeql_core::node_id::hex_prefix(&forgeql_core::node_id::sha256_of_path("file1.cpp"), 12)
+        "{}-{staged_hex}-v{}.fqsf",
+        forgeql_core::node_id::hex_prefix(&forgeql_core::node_id::sha256_of_path("file1.cpp"), 12),
+        forgeql_core::storage::columnar::ENRICH_VER
     );
     assert!(
         staging_dir.join(&staged_name).exists(),

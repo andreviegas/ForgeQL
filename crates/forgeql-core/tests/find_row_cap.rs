@@ -72,6 +72,7 @@ fn single_segment_cpp_storage() -> (TempDir, ColumnarStorage) {
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table,
+            workspace_root: None,
         };
         let _ = index_file(&mut parser, &mut ctx, None).expect("index_file");
     }

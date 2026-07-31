@@ -121,6 +121,7 @@ impl ColumnarStorage {
                         macro_table: None,
                         ordinal_remapper: Some(remapper),
                         table: &mut table,
+                        workspace_root: Some(&self.worktree_root),
                     };
                     let _ = index_file(&mut parser, &mut ctx, None);
                 }

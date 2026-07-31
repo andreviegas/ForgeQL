@@ -89,6 +89,13 @@ pub struct IndexContext<'a> {
     pub ordinal_remapper: Option<OrdinalRemapper>,
     /// The symbol table being populated.
     pub table: &'a mut SymbolTable,
+    /// Root that row paths are relative to, when the caller knows it.
+    ///
+    /// Only guard group IDs read it, and only to strip the prefix before
+    /// hashing: a group's stored ID must not change between two worktrees of
+    /// the same commit. `None` means "hash the path as given" — right for
+    /// tests and one-off indexing, wrong for anything whose rows are cached.
+    pub workspace_root: Option<&'a Path>,
 }
 
 /// Returns true when a row kind should receive a stable node `ordinal/node_id`.

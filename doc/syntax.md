@@ -1306,7 +1306,7 @@ balance, the parser's span is used unchanged.
 | `guard_defines` | all walked rows | Comma-separated symbols that **must be defined** for this branch |
 | `guard_negates` | all walked rows | Comma-separated symbols that **must be undefined** for this branch |
 | `guard_mentions` | all walked rows | All symbols mentioned in the condition (superset of defines + negates) |
-| `guard_group_id` | all walked rows | Unique u64 identifying the `#ifdef`/`#if` block; all arms share the same ID |
+| `guard_group_id` | all walked rows | Opaque u64 identifying the `#ifdef`/`#if` block; all arms of it share the same ID. Derived from the file path and the position of the opening directive, so the same content yields the same ID in any checkout and across restarts — the number itself carries no meaning and is not an ordinal |
 | `guard_branch` | all walked rows | Ordinal within the group: `0` = if, `1` = first elif/else, `2` = second, … |
 | `guard_kind` | all walked rows | `"preprocessor"` \| `"attribute"` \| `"build_tag"` \| `"comptime"` \| `"heuristic"` |
 
@@ -1366,6 +1366,11 @@ FIND symbols GROUP BY guard ORDER BY count DESC
 different `guard_branch` are definitively mutually exclusive — they are in
 opposite arms of the same `#ifdef` block.  The ShadowEnricher and
 DeclDistanceEnricher use this fact to eliminate false positives.
+
+The ID is stable across runs, restarts and checkouts, so it is safe to record
+one and come back to it. It is not stable across an *edit* to the file: the
+opening directive moves, and so does the ID. Compare IDs to group rows, never
+to identify a group over time.
 
 #### MacroExpandEnricher
 

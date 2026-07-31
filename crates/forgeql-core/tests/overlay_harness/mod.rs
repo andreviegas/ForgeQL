@@ -61,6 +61,7 @@ pub fn index_at_path(lang: &dyn LanguageSupport, path: &std::path::Path) -> Symb
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table,
+            workspace_root: None,
         };
         let _ = index_file(&mut parser, &mut ctx, None).expect("index_file should succeed");
     }
@@ -83,6 +84,7 @@ pub fn index_fixture(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable 
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table,
+            workspace_root: None,
         };
         let count = index_file(&mut parser, &mut ctx, None).expect("index_file should succeed");
         assert!(count > 0, "expected at least one row in {filename}");

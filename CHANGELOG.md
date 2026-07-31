@@ -6,6 +6,63 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.72] — 2026-07-31 — fix: a guard group keeps its identity across restarts
+
+### Fixed — `guard_group_id` is derived, not counted
+
+- The ID shared by the arms of one `#ifdef`/`#if` block came from a
+  process-global counter. Segments cache the rows that carry it, so after a
+  restart a cached file kept the previous run's numbering while every freshly
+  indexed file began again at 1. The same group then answered to two different
+  numbers depending on which files happened to be cached, and two unrelated
+  groups could answer to the same one.
+- The visible cost was in re-indexing. `guard_group_id` is part of the key that
+  matches a node to its previous ordinal, so once the numbering disagreed the
+  guard component of that key stopped matching anything. It is a soft filter, so
+  nothing broke loudly — node handles simply lost a disambiguator they were
+  supposed to have, silently and only after a restart.
+- The ID is now derived: a hash of the repo-relative path and the byte offset of
+  the opening directive. The same content therefore yields the same ID in every
+  run, every restart and every checkout. The path is taken relative to the
+  worktree root for the same reason segment keys are — an absolute path would
+  key one file differently in each worktree of a bare repo.
+- Two behaviours worth knowing. The value is opaque: it is not an ordinal, not a
+  count, and carries no meaning beyond equality. And it moves when the file is
+  edited, because the opening directive moves — group rows by it, do not use it
+  to follow a group across edits.
+- Rust `#[cfg]` attribute guards were the worst case and are fixed by the same
+  change: they took a fresh counter value for **every row**, so an item's stored
+  `guard_group_id` was per-row rather than per-group, and never reproducible.
+
+### Changed
+
+- `IndexContext` gains `workspace_root`. Only guard group IDs read it, and only
+  to strip the prefix before hashing. Callers that persist rows pass the real
+  root; tests and one-off indexing pass `None`, which hashes the path as given —
+  deterministic within a run, which is all an uncached index needs.
+- The staged-segment file name gains the enrichment version. A staged segment
+  holds index output, but its name carried only a path and a content hash, so a
+  version bump did not invalidate it: an uncommitted transaction staged before
+  an upgrade survived the restart, the re-index skipped the file because a
+  segment already existed, and COMMIT promoted the previous generation's rows
+  into the new store. Committed segments have always lived under a versioned
+  directory; the staging area now matches.
+
+### Also fixed in this change
+
+- The incremental re-index of a non-columnar source derived its guard IDs from
+  the absolute path while the full build used the relative one, so the two
+  disagreed on the very first edit — the same defect this change removes,
+  surviving on one path. That index is written to disk and restored on resume,
+  so it was not a test-only gap. The worktree root is now carried alongside the
+  table and threaded into the re-index.
+- One node can open two guard frames — a block guard and an environment guard —
+  and both derive their ID from that node's position. The guard kind is part of
+  the hash so the two do not collapse into one identity with the same branch
+  ordinal, which the exclusivity test would have read as opposite arms of a
+  single block. No shipped language configuration declares a kind as both, so
+  this was reachable by configuration rather than live.
+
 ## [0.139.71] — 2026-07-30 — fix: a guard reaches every row, not only declarations
 
 ### Fixed — control-flow and expression rows carry their guard

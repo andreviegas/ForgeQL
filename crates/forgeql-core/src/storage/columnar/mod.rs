@@ -228,7 +228,22 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        were hoisted out of the per-extra-row loop, so this generation exists
 ///        to make the corpus prove the hoist emits the same rows rather than
 ///        answering from segments the previous draft wrote.
-pub const ENRICH_VER: u32 = 43;
+///   44 — `guard_group_id` is derived, not counted. It was a process-global
+///        counter, so a cached segment kept the previous run's numbering while
+///        freshly indexed files restarted at 1: the same group answered to two
+///        numbers, and the re-index ordinal key that compares them stopped
+///        matching after any restart. It is now a hash of the repo-relative
+///        path and the opening directive's byte offset, so every generation of
+///        the same content agrees. Every stored value changes.
+///   45 — the guard kind joins the group-ID hash. One node can open both a
+///        block-guard frame and an env-guard frame — `update_guard_stack`
+///        pushes them in two independent branches — and both mint from that
+///        node's own byte offset. Under v44 the two frames shared an identity
+///        with `guard_branch` 0 on each, so the exclusivity test would have
+///        read two unrelated guards as opposite arms of one block. No shipped
+///        config declares a kind as both, so this is reachable by config
+///        rather than live today.
+pub const ENRICH_VER: u32 = 45;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

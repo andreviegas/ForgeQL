@@ -25,6 +25,7 @@ pub(super) fn index_snippet(code: &str) -> SymbolTable {
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table,
+            workspace_root: None,
         };
         index_file(&mut parser, &mut ctx, None).unwrap();
     }
@@ -49,6 +50,7 @@ pub(super) fn index_rust_snippet(src: &str) -> SymbolTable {
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table,
+            workspace_root: None,
         };
         index_file(&mut parser, &mut ctx, None).unwrap();
     }

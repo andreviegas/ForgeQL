@@ -60,6 +60,7 @@ pub(super) fn process_node_rows(
     source: &[u8],
     ts_language: &tree_sitter::Language,
     guard_stack: &[GuardFrame],
+    guard_file_key: u64,
     parent_kind: &'static str,
     parent_ordinal: u32,
     inside_string: bool,
@@ -80,6 +81,7 @@ pub(super) fn process_node_rows(
         language_config: config,
         language_support: ctx.language,
         guard_stack,
+        guard_file_key,
         macro_table: ctx.macro_table,
         parent_kind,
         inside_string,
@@ -227,8 +229,13 @@ fn build_row_fields(ctx: &EnrichContext<'_>, ts_language: &tree_sitter::Language
     let attr_guard_name = ctx.language_config.item_guard_attribute();
     if !attr_guard_name.is_empty() {
         let decorator_kind = ctx.language_config.decorator_kind().unwrap_or("");
-        let attr_frames =
-            collect_attribute_guard_frames(node, source, attr_guard_name, decorator_kind);
+        let attr_frames = collect_attribute_guard_frames(
+            node,
+            source,
+            attr_guard_name,
+            decorator_kind,
+            ctx.guard_file_key,
+        );
         if !attr_frames.is_empty() {
             inject_guard_fields(&attr_frames, &mut fields);
         }

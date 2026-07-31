@@ -45,19 +45,27 @@ pub struct StagedEntry {
     pub replaces_hex: String,
 }
 
-/// File name of a staged reindex segment: `{path_hex}-{content_hex}.fqsf`.
+/// File name of a staged reindex segment:
+/// `{path_hex}-{content_hex}-v{ENRICH_VER}.fqsf`.
 ///
 /// The path fingerprint is part of the key because node ordinals are
 /// file-history-dependent identity, not content-derived data: two files with
 /// identical bytes must not share a staged segment, or one file's reindex
 /// would silently adopt the other file's node ids (and skip the tombstoned
 /// ordinal remap that a removal requires).
+///
+/// `ENRICH_VER` is part of it for the same reason committed segments live under
+/// a versioned directory: a staged segment holds index output. Without it an
+/// uncommitted transaction staged before an upgrade survives the restart, the
+/// re-index skips the file because a segment already exists, and COMMIT
+/// promotes the previous generation's rows into the new store — silently, and
+/// with every gate green.
 pub(crate) fn staged_segment_file_name(source_path: &Path, hex_content_id: &str) -> String {
     let path_hex = crate::node_id::hex_prefix(
         &crate::node_id::sha256_of_path(&source_path.to_string_lossy()),
         12,
     );
-    format!("{path_hex}-{hex_content_id}.fqsf")
+    format!("{path_hex}-{hex_content_id}-v{}.fqsf", super::ENRICH_VER)
 }
 
 /// On-disk path of a staged segment.

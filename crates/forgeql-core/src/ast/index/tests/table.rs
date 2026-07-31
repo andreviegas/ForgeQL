@@ -198,6 +198,7 @@ fn reindex_files_refreshes_content() {
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table,
+            workspace_root: None,
         };
         index_file(&mut parser, &mut ctx, None).unwrap();
     }
@@ -205,7 +206,7 @@ fn reindex_files_refreshes_content() {
 
     std::fs::write(&file, "void beta() {}").unwrap();
     let registry = LanguageRegistry::new(vec![std::sync::Arc::new(CppLanguageInline)]);
-    table.reindex_files(&[file], &registry).unwrap();
+    table.reindex_files(&[file], &registry, None).unwrap();
 
     assert!(
         table.find_def("alpha").is_none(),

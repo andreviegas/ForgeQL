@@ -69,6 +69,7 @@ fn index_canonical(lang: &dyn LanguageSupport, filename: &str) -> SymbolTable {
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table,
+            workspace_root: None,
         };
         let count = index_file(&mut parser, &mut ctx, None).expect("index_file should succeed");
         assert!(count > 0, "expected at least one indexed row");

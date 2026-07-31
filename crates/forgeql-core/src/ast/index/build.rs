@@ -110,7 +110,13 @@ impl SymbolTable {
         if seg_ctx.is_some() {
             let t_fast = std::time::Instant::now();
             Self::indexing_pool().install(|| {
-                Self::build_columnar_segments(&paths, lang_registry, &macro_table, seg_ctx);
+                Self::build_columnar_segments(
+                    &paths,
+                    lang_registry,
+                    &macro_table,
+                    seg_ctx,
+                    workspace,
+                );
             });
             info!(
                 ms = t_fast.elapsed().as_millis(),
@@ -609,18 +615,21 @@ impl SymbolTable {
         &mut self,
         paths: &[PathBuf],
         lang_registry: &LanguageRegistry,
+        workspace_root: Option<&Path>,
     ) -> Result<()> {
         // Run the per-file parse+enrich on the big-stack indexing pool: `index_file`
         // walks the AST recursively and a single deeply-nested edited file would
         // otherwise overflow rayon's default ~2 MiB stack. The full build already
         // does this (see `indexing_pool`); the incremental path needs it too.
-        Self::indexing_pool().install(|| self.reindex_files_inner(paths, lang_registry))
+        Self::indexing_pool()
+            .install(|| self.reindex_files_inner(paths, lang_registry, workspace_root))
     }
 
     fn reindex_files_inner(
         &mut self,
         paths: &[PathBuf],
         lang_registry: &LanguageRegistry,
+        workspace_root: Option<&Path>,
     ) -> Result<()> {
         let mut parser = tree_sitter::Parser::new();
         let enrichers = default_enrichers();
@@ -664,6 +673,7 @@ impl SymbolTable {
                         macro_table: None,
                         ordinal_remapper: Some(remapper),
                         table: &mut *self,
+                        workspace_root,
                     };
                     match index_file(&mut parser, &mut ctx, None) {
                         Ok(count) => {
@@ -731,6 +741,7 @@ impl SymbolTable {
         lang_registry: &LanguageRegistry,
         macro_table: &MacroTable,
         seg_ctx: Option<&SegmentBuildCtx>,
+        workspace: &Workspace,
     ) {
         let Some(lang) = lang_registry.language_for_path(path) else {
             return;
@@ -767,6 +778,7 @@ impl SymbolTable {
             macro_table: Some(macro_table),
             ordinal_remapper: None,
             table: &mut file_table,
+            workspace_root: Some(workspace.root()),
         };
         match index_file_from_source(&mut parser, &mut ctx, seg_ctx, &source) {
             Ok(count) => {
@@ -836,6 +848,7 @@ impl SymbolTable {
         lang_registry: &LanguageRegistry,
         macro_table: &MacroTable,
         seg_ctx: Option<&SegmentBuildCtx>,
+        workspace: &Workspace,
     ) {
         let (big, small) = Self::partition_by_size(paths, Self::big_file_threshold_bytes());
         let slots = Self::big_file_slots().min(big.len());
@@ -859,6 +872,7 @@ impl SymbolTable {
                                     lang_registry,
                                     macro_table,
                                     seg_ctx,
+                                    workspace,
                                 );
                             }
                         });
@@ -867,7 +881,7 @@ impl SymbolTable {
             },
             || {
                 small.par_iter().for_each(|path| {
-                    Self::index_columnar_file(path, lang_registry, macro_table, seg_ctx);
+                    Self::index_columnar_file(path, lang_registry, macro_table, seg_ctx, workspace);
                 });
             },
         );
@@ -901,6 +915,7 @@ impl SymbolTable {
                         macro_table: Some(macro_table),
                         ordinal_remapper: None,
                         table: &mut file_table,
+                        workspace_root: Some(workspace.root()),
                     };
                     match index_file(&mut parser, &mut ctx, seg_ctx) {
                         Ok(count) => {

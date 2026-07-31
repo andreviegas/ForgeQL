@@ -5,21 +5,66 @@
 //! checks, and helpers for building and consuming guard frames.
 
 use regex::RegexSet;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ast::lang::LanguageConfig;
 
 // -----------------------------------------------------------------------
-// Group-ID counter
+// Group identity
 // -----------------------------------------------------------------------
 
-/// Global guard group-ID counter. Relaxed ordering suffices: only
-/// uniqueness across rayon threads is needed, not happens-before ordering.
-static NEXT_GUARD_GROUP_ID: AtomicU64 = AtomicU64::new(1);
+/// Per-file component of a guard group ID.
+///
+/// The first 8 bytes of the same path hash that gives a file its node-id
+/// prefix, so a group's identity is derived exactly like a segment's key.
+///
+/// `root` is the worktree root the row paths are relative to. Hashing the
+/// absolute path instead would key the same file differently in every
+/// worktree of a bare repo — the same failure `path_key` documents for
+/// segment names. When `root` is `None`, or the path does not sit under it,
+/// the path is hashed as given: deterministic within a run, but only stable
+/// across checkouts once a root is supplied.
+#[must_use]
+pub fn guard_file_key(path: &std::path::Path, root: Option<&std::path::Path>) -> u64 {
+    // Delegates rather than stripping inline: that helper warns and trips a
+    // debug assertion when the path is not under the root, which is the only
+    // signal that this key has quietly gone back to being per-worktree.
+    let rel = root.map_or(path, |r| {
+        crate::storage::columnar::segment_source_rel(path, r)
+    });
+    let hash = crate::node_id::sha256_of_path(&rel.to_string_lossy());
+    u64::from_be_bytes(hash[..8].try_into().unwrap_or([0; 8]))
+}
 
-fn next_group_id() -> u64 {
-    NEXT_GUARD_GROUP_ID.fetch_add(1, Ordering::Relaxed)
+/// Identify the guard group opened at `start_byte` of the file keyed by
+/// `file_key`.
+///
+/// A group's identity must be reproducible. It is stored in segment rows and
+/// compared when a re-index remaps node ordinals, so a process-global counter
+/// makes a cached row and a freshly indexed row disagree about what a group
+/// is: after a restart the counter begins again at 1 while cached segments
+/// keep the previous run's numbering, and the comparison stops matching
+/// anything at all.
+///
+/// The opening construct's position keys the group rather than a sequence
+/// number, because the attribute-guard path builds its frames from an
+/// immutable per-row context with no counter to carry, and a scheme that
+/// cannot cover every frame builder is not a scheme.
+fn guard_group_id(file_key: u64, kind: &str, start_byte: usize) -> u64 {
+    // `kind` is in the hash because a single node can open two frames: a
+    // language may declare a node kind as both a block guard and an env-guard
+    // pattern, and both mint from that node's own start byte. Without it the
+    // two frames share an identity and `guard_branch` is 0 on both, so the
+    // exclusivity test would read two unrelated guards as one arm.
+    let mut buf = [0u8; 16];
+    buf[..8].copy_from_slice(&file_key.to_be_bytes());
+    buf[8..].copy_from_slice(&u64::try_from(start_byte).unwrap_or(u64::MAX).to_be_bytes());
+    let mut hasher = Sha256::new();
+    hasher.update(buf);
+    hasher.update(kind.as_bytes());
+    let hash: [u8; 32] = hasher.finalize().into();
+    u64::from_be_bytes(hash[..8].try_into().unwrap_or([0; 8]))
 }
 
 // -----------------------------------------------------------------------
@@ -432,6 +477,7 @@ pub fn build_guard_frame(
     source: &[u8],
     config: &LanguageConfig,
     stack: &[GuardFrame],
+    file_key: u64,
 ) -> GuardFrame {
     let kind = node.kind();
     let is_arm = config.is_elif_kind(kind) || config.is_else_kind(kind);
@@ -450,7 +496,12 @@ pub fn build_guard_frame(
     if is_arm {
         // Sibling arm: inherit group from the top of the stack.
         let (group_id, prev_branch) = stack.last().map_or_else(
-            || (next_group_id(), 0),
+            || {
+                (
+                    guard_group_id(file_key, "preprocessor", node.start_byte()),
+                    0,
+                )
+            },
             |f| (f.guard_group_id, f.guard_branch),
         );
         let branch = prev_branch.saturating_add(1);
@@ -516,7 +567,7 @@ pub fn build_guard_frame(
         }
     } else {
         // New guard group (preproc_ifdef, preproc_if, etc.)
-        let group_id = next_group_id();
+        let group_id = guard_group_id(file_key, "preprocessor", node.start_byte());
         let (guard_text, defines, negates, mentions, positive_terms) =
             extract_block_guard(node, source, config);
         GuardFrame {
@@ -548,6 +599,7 @@ pub fn update_guard_stack(
     source: &[u8],
     config: &LanguageConfig,
     stack: &mut Vec<GuardFrame>,
+    file_key: u64,
 ) {
     if !config.has_guard_support() {
         return;
@@ -561,7 +613,7 @@ pub fn update_guard_stack(
         }
     }
     if config.is_block_guard_kind(kind) || config.is_elif_kind(kind) || config.is_else_kind(kind) {
-        let frame = build_guard_frame(node, source, config, stack);
+        let frame = build_guard_frame(node, source, config, stack, file_key);
         stack.push(frame);
     }
 }
@@ -718,6 +770,7 @@ pub fn collect_attribute_guard_frames(
     source: &[u8],
     attr_name: &str,
     decorator_kind: &str,
+    file_key: u64,
 ) -> Vec<GuardFrame> {
     let mut frames = Vec::new();
     if decorator_kind.is_empty() {
@@ -728,7 +781,7 @@ pub fn collect_attribute_guard_frames(
         if sib.kind() != decorator_kind {
             break;
         }
-        if let Some(frame) = attribute_item_to_guard_frame(sib, source, attr_name) {
+        if let Some(frame) = attribute_item_to_guard_frame(sib, source, attr_name, file_key) {
             frames.push(frame);
         }
         cursor = sib.prev_named_sibling();
@@ -754,6 +807,7 @@ fn attribute_item_to_guard_frame(
     attr_item: tree_sitter::Node<'_>,
     source: &[u8],
     attr_name: &str,
+    file_key: u64,
 ) -> Option<GuardFrame> {
     let attribute = attr_item
         .named_child(0)
@@ -784,7 +838,7 @@ fn attribute_item_to_guard_frame(
         positive_terms: defines.clone(),
         own_defines: defines.clone(),
         own_negates: negates.clone(),
-        guard_group_id: next_group_id(),
+        guard_group_id: guard_group_id(file_key, "attribute", attr_item.start_byte()),
         guard_branch: 0,
         guard_kind: "attribute",
         defines,
@@ -915,6 +969,7 @@ pub fn build_env_guard_frame(
     source: &[u8],
     config: &LanguageConfig,
     patterns: &RegexSet,
+    file_key: u64,
 ) -> Option<GuardFrame> {
     let cond_field = config.guard_condition_field();
     let cond_text = if cond_field.is_empty() {
@@ -941,7 +996,7 @@ pub fn build_env_guard_frame(
         positive_terms: defines.clone(),
         own_defines: defines.clone(),
         own_negates: Vec::new(),
-        guard_group_id: next_group_id(),
+        guard_group_id: guard_group_id(file_key, "heuristic", node.start_byte()),
         guard_branch: 0,
         guard_kind: "heuristic",
         defines,
@@ -954,6 +1009,79 @@ pub fn build_env_guard_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- guard group identity --------------------------------------------
+
+    #[test]
+    fn a_group_id_is_reproducible_and_worktree_independent() {
+        // The whole point of the derivation: the same file at the same
+        // repo-relative path yields the same ID no matter which worktree it
+        // was indexed in, so a cached segment and a fresh index agree.
+        let a = guard_file_key(
+            std::path::Path::new("/wt/one/src/net/ip.c"),
+            Some(std::path::Path::new("/wt/one")),
+        );
+        let b = guard_file_key(
+            std::path::Path::new("/somewhere/else/two/src/net/ip.c"),
+            Some(std::path::Path::new("/somewhere/else/two")),
+        );
+        assert_eq!(a, b, "the same relative path must key the same file");
+        assert_eq!(
+            guard_group_id(a, "preprocessor", 4096),
+            guard_group_id(b, "preprocessor", 4096)
+        );
+    }
+
+    #[test]
+    fn hashing_the_absolute_path_would_have_split_the_two() {
+        // Guards the caller contract rather than the hash: passing no root
+        // falls back to the absolute path, which is exactly the failure the
+        // root exists to avoid. If this ever stops differing, the strip is
+        // dead and every worktree agrees by accident.
+        let a = guard_file_key(std::path::Path::new("/wt/one/src/net/ip.c"), None);
+        let b = guard_file_key(std::path::Path::new("/wt/two/src/net/ip.c"), None);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn two_groups_in_one_file_never_share_an_id() {
+        // Arms inherit their opener's ID, so only openers mint; two openers
+        // cannot start at the same byte. Exclusivity compares group + branch,
+        // so a collision here would report unrelated regions as sibling arms.
+        let key = guard_file_key(std::path::Path::new("src/a.c"), None);
+        let first = guard_group_id(key, "preprocessor", 0);
+        let second = guard_group_id(key, "preprocessor", 1);
+        let far = guard_group_id(key, "preprocessor", 65_536);
+        assert_ne!(first, second);
+        assert_ne!(second, far);
+        assert_ne!(first, far);
+    }
+
+    #[test]
+    fn the_same_offset_in_two_files_is_two_groups() {
+        let a = guard_file_key(std::path::Path::new("src/a.c"), None);
+        let b = guard_file_key(std::path::Path::new("src/b.c"), None);
+        assert_ne!(
+            guard_group_id(a, "preprocessor", 128),
+            guard_group_id(b, "preprocessor", 128)
+        );
+    }
+
+    #[test]
+    fn two_frames_opened_by_one_node_are_two_groups() {
+        // `update_guard_stack` pushes the block-guard frame and the env-guard
+        // frame in two independent `if`s over the same node, so one node can
+        // open both. They mint from the same byte offset, and `guard_branch` is
+        // 0 on each, so sharing an ID would make the exclusivity test read two
+        // unrelated guards as opposite arms of one block. No shipped config
+        // declares a kind as both, which is why only the kind in the hash
+        // separates them.
+        let key = guard_file_key(std::path::Path::new("src/a.py"), None);
+        assert_ne!(
+            guard_group_id(key, "preprocessor", 512),
+            guard_group_id(key, "heuristic", 512)
+        );
+    }
 
     // -- strip_cfg_wrapper -----------------------------------------------
 

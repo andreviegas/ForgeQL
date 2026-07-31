@@ -60,6 +60,12 @@ pub struct EnrichContext<'a> {
     /// Guard stack at this node's position in the tree walk.
     /// Empty slice for unconditionally compiled code.
     pub guard_stack: &'a [guard_utils::GuardFrame],
+    /// Per-file component of a guard group ID, derived once for this file.
+    ///
+    /// Enrichers that rebuild their own mini guard stack pass it back to
+    /// `update_guard_stack` so their frames identify a group the same way the
+    /// indexing walk does.
+    pub guard_file_key: u64,
     /// Macro definition table from the first indexing pass.
     /// `None` for languages without macro-expansion support, or during
     /// the first pass itself.

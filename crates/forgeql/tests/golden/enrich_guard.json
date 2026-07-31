@@ -70,5 +70,15 @@
         { "fql": "FIND symbols IN 'subsys/bluetooth/controller/ticker/ticker.c' WHERE fql_kind = 'switch' WHERE guard_mentions LIKE '%CONFIG_BT_TICKER_JOB_IDLE_GET%' ORDER BY line ASC LIMIT 5",
           "assert": { "row_count": 1, "rows": [ { "line": 2989 } ] } }
       ] }
+,
+
+    { "name": "guard_group_ids_are_derived_not_counted", "use": "zephyr-andre.frozen",
+      "comment": "Pins the exact stored ID of six real groups. A counter's value depends on how many files were cached before this one, so any of these numbers moving means the ID stopped being a function of the content — and the two sets being disjoint is the cross-file claim, asserted from both sides. GROUP BY is how an enrichment field reaches an assertion at all: a plain FIND row carries name/path/line/node_id and never guard_group_id, so a row-field assertion on it would be silently true.",
+      "steps": [
+        { "fql": "FIND symbols IN 'soc/nordic/common/gppi_init.c' WHERE guard != '' GROUP BY guard_group_id ORDER BY count DESC LIMIT 10",
+          "assert": { "row_count": 3, "distinct": { "by": "group_key", "count": 3, "values": ["17347383461390774145", "2690505851199723604", "5622641545215928391"] } } },
+        { "fql": "FIND symbols IN 'subsys/net/ip/net_private.h' WHERE guard = 'defined(CONFIG_NET_IPV4_IGMP)' GROUP BY guard_group_id LIMIT 5",
+          "assert": { "row_count": 3, "distinct": { "by": "group_key", "count": 3, "values": ["2758046688805646159", "6199539135572748460", "9841603055027310"] } } }
+      ] }
   ]
 }

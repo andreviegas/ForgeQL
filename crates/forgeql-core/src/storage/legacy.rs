@@ -63,6 +63,12 @@ pub struct LegacyMemoryStorage {
     macro_table: Option<MacroTable>,
     /// Language support registry — used by `build` and `reindex_files`.
     lang_registry: Arc<LanguageRegistry>,
+    /// Worktree root the indexed paths sit under.
+    ///
+    /// Needed so an incremental re-index derives guard group IDs from the same
+    /// repo-relative path the full build used. Without it the two disagree and
+    /// the re-index ordinal key silently stops matching.
+    worktree_root: Option<PathBuf>,
 }
 
 impl LegacyMemoryStorage {
@@ -75,6 +81,7 @@ impl LegacyMemoryStorage {
             table: None,
             macro_table: None,
             lang_registry,
+            worktree_root: None,
         }
     }
 
@@ -99,6 +106,7 @@ impl LegacyMemoryStorage {
         workspace: &Workspace,
         seg_ctx: Option<&SegmentBuildCtx>,
     ) -> Result<()> {
+        self.worktree_root = Some(workspace.root().to_path_buf());
         let (table, macro_table) = SymbolTable::build(workspace, &self.lang_registry, seg_ctx)?;
         debug!(
             symbols = table.rows.len(),
@@ -322,11 +330,13 @@ impl StorageEngine for LegacyMemoryStorage {
     }
 
     fn reindex_files(&mut self, paths: &[PathBuf]) -> Result<()> {
+        let lang_registry = Arc::clone(&self.lang_registry);
+        let root = self.worktree_root.clone();
         let table = self
             .table
             .as_mut()
             .ok_or_else(|| anyhow!("cannot reindex: no index built yet"))?;
-        table.reindex_files(paths, &self.lang_registry)
+        table.reindex_files(paths, &lang_registry, root.as_deref())
     }
 
     fn purge_file(&mut self, path: &Path) -> Result<()> {
@@ -365,6 +375,7 @@ impl StorageEngine for LegacyMemoryStorage {
         head_oid: &str,
         source_name: &str,
     ) -> Result<bool> {
+        self.worktree_root = Some(worktree_path.to_path_buf());
         let cache_path = worktree_path.join(".forgeql-index");
         match CachedIndex::load(&cache_path) {
             Ok(cached)

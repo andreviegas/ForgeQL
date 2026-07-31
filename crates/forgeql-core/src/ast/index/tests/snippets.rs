@@ -75,6 +75,7 @@ fn leading_attribute_folds_into_node_span() {
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table,
+            workspace_root: None,
         };
         index_file(&mut parser, &mut ctx, None).unwrap();
     }
@@ -117,6 +118,7 @@ fn control_flow_node_parents_its_body() {
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table,
+            workspace_root: None,
         };
         index_file(&mut parser, &mut ctx, None).unwrap();
     }
@@ -366,6 +368,7 @@ fn control_flow_body_preserves_sibling_node_ids_across_unrelated_edit() {
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table_a,
+            workspace_root: None,
         };
         index_file(&mut parser, &mut ctx, None).unwrap();
     }
@@ -410,6 +413,7 @@ fn control_flow_body_preserves_sibling_node_ids_across_unrelated_edit() {
             macro_table: None,
             ordinal_remapper: Some(OrdinalRemapper::from_previous(hints)),
             table: &mut table_b,
+            workspace_root: None,
         };
         index_file(&mut parser, &mut ctx, None).unwrap();
     }
@@ -447,6 +451,7 @@ fn mod_and_type_alias_declarations_are_addressable() {
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table,
+            workspace_root: None,
         };
         index_file(&mut parser, &mut ctx, None).unwrap();
     }
@@ -495,6 +500,7 @@ fn block_node_ids_survive_deletion_of_a_sibling_block() {
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table_a,
+            workspace_root: None,
         };
         index_file(&mut parser, &mut ctx, None).unwrap();
     }
@@ -540,6 +546,7 @@ fn block_node_ids_survive_deletion_of_a_sibling_block() {
             macro_table: None,
             ordinal_remapper: Some(OrdinalRemapper::from_previous(hints)),
             table: &mut table_b,
+            workspace_root: None,
         };
         index_file(&mut parser, &mut ctx, None).unwrap();
     }
@@ -581,6 +588,7 @@ fn block_node_id_survives_editing_its_own_member() {
             macro_table: None,
             ordinal_remapper: None,
             table: &mut table_a,
+            workspace_root: None,
         };
         index_file(&mut parser, &mut ctx, None).unwrap();
     }
@@ -627,6 +635,7 @@ fn block_node_id_survives_editing_its_own_member() {
             macro_table: None,
             ordinal_remapper: Some(OrdinalRemapper::from_previous(hints)),
             table: &mut table_b,
+            workspace_root: None,
         };
         index_file(&mut parser, &mut ctx, None).unwrap();
     }

@@ -161,7 +161,13 @@ where
             let node = cursor.node();
             let kind = node.kind();
 
-            update_guard_stack(node, source, config, &mut mini_guard_stack);
+            update_guard_stack(
+                node,
+                source,
+                config,
+                &mut mini_guard_stack,
+                ctx.guard_file_key,
+            );
             tracker.scan_macro_expansion(ctx, node, &local_names);
             tracker.record_identifier(ctx, node, branch_depth, &mini_guard_stack, &local_names);
 

@@ -11,7 +11,9 @@
 //! can match to a prior hint keep an existing ordinal — so changing the order
 //! of this walk renumbers every handle it has not seen before.
 
-use crate::ast::enrich::guard_utils::{GuardFrame, build_env_guard_frame, build_guard_frame};
+use crate::ast::enrich::guard_utils::{
+    GuardFrame, build_env_guard_frame, build_guard_frame, guard_file_key,
+};
 use crate::ast::index::node_text;
 use crate::ast::lang::{LanguageConfig, LanguageSupport};
 
@@ -49,6 +51,9 @@ pub(super) fn collect_nodes(
     // set, member nodes inside its span are tagged with the block address.
     let mut active_block: Option<ActiveBlock> = None;
     let mut guard_stack: Vec<GuardFrame> = Vec::new();
+    // Per-file component of every guard group ID minted below. Derived once:
+    // it is a path hash, and the walk visits every node in the file.
+    let file_key = guard_file_key(ctx.path, ctx.workspace_root);
     // Tracks the kind of the parent node at each level of the DFS, updated
     // O(1) by the cursor navigation below.  Avoids calling node.parent()
     // inside enrichers (which is O(sibling_count) in tree-sitter 0.25).
@@ -92,6 +97,7 @@ pub(super) fn collect_nodes(
             env_guard_regex.as_ref(),
             ctx.language,
             &mut guard_stack,
+            file_key,
         );
 
         // Skip alternate conditional-compilation branches entirely.
@@ -186,6 +192,7 @@ pub(super) fn collect_nodes(
                 source,
                 ts_language,
                 &guard_stack,
+                file_key,
                 parent_kind_stack.last().copied().unwrap_or(""),
                 parent_ordinal,
                 string_depth > 0,
@@ -245,6 +252,7 @@ fn update_guard_stack(
     env_guard_regex: Option<&regex::RegexSet>,
     language: &dyn LanguageSupport,
     guard_stack: &mut Vec<GuardFrame>,
+    file_key: u64,
 ) {
     // Pop frames whose byte scope we've left.
     while let Some(frame) = guard_stack.last() {
@@ -260,14 +268,14 @@ fn update_guard_stack(
             || config.is_elif_kind(node.kind())
             || config.is_else_kind(node.kind()))
     {
-        let frame = build_guard_frame(node, source, config, &*guard_stack);
+        let frame = build_guard_frame(node, source, config, &*guard_stack, file_key);
         guard_stack.push(frame);
     }
     // Push a heuristic guard frame for env-guarded `if` nodes
     // (e.g. Python `if TYPE_CHECKING:` or `if sys.platform == "linux":`).
     if let Some(regex_set) = env_guard_regex
         && language.map_kind(node.kind()) == Some("if")
-        && let Some(frame) = build_env_guard_frame(node, source, config, regex_set)
+        && let Some(frame) = build_env_guard_frame(node, source, config, regex_set, file_key)
     {
         guard_stack.push(frame);
     }
