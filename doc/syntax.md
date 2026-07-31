@@ -1308,7 +1308,7 @@ balance, the parser's span is used unchanged.
 | `guard_mentions` | all walked rows | All symbols mentioned in the condition (superset of defines + negates) |
 | `guard_group_id` | all walked rows | Opaque u64 identifying the `#ifdef`/`#if` block; all arms of it share the same ID. Derived from the file path and the position of the opening directive, so the same content yields the same ID in any checkout and across restarts — the number itself carries no meaning and is not an ordinal |
 | `guard_branch` | all walked rows | Ordinal within the group: `0` = if, `1` = first elif/else, `2` = second, … |
-| `guard_kind` | all walked rows | `"preprocessor"` \| `"attribute"` \| `"build_tag"` \| `"comptime"` \| `"heuristic"` |
+| `guard_kind` | all walked rows | `"preprocessor"` (C/C++ `#if` family) \| `"attribute"` (Rust `#[cfg]`) \| `"heuristic"` (a pattern-matched `if`, e.g. Python `if TYPE_CHECKING:`) |
 
 "All walked rows" excludes the two synthetic kinds named above: a `comment_block`
 or `array_block` row spans its members rather than being walked as a node, and

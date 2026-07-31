@@ -147,8 +147,6 @@ impl LanguageConfig {
     pub const fn has_guard_support(&self) -> bool {
         !self.block_guard_kinds.is_empty()
             || !self.item_guard_attribute.is_empty()
-            || !self.file_guard_pattern.is_empty()
-            || !self.comptime_guard_kinds.is_empty()
             || !self.env_guard_patterns.is_empty()
     }
 
@@ -174,28 +172,10 @@ impl LanguageConfig {
         &self.region_closer
     }
 
-    /// Regex for OS/arch extraction from file suffix.
-    #[must_use]
-    pub fn file_guard_suffix_pattern(&self) -> &str {
-        &self.file_guard_suffix_pattern
-    }
-
-    /// Regex patterns for compile-time guard detection in `if` conditions.
-    #[must_use]
-    pub fn builtin_guard_patterns(&self) -> &[String] {
-        &self.builtin_guard_patterns
-    }
-
     /// Regex patterns for heuristic environment guard detection in `if` conditions.
     #[must_use]
     pub fn env_guard_patterns(&self) -> &[String] {
         &self.env_guard_patterns
-    }
-
-    /// Regex for directory-based source set extraction.
-    #[must_use]
-    pub fn source_set_pattern(&self) -> &str {
-        &self.source_set_pattern
     }
 
     // -- macro config accessors ----------------------------------------

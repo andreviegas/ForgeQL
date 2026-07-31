@@ -544,29 +544,9 @@ pub struct GuardsSection {
     #[serde(default)]
     pub item_guard_attribute: String,
 
-    /// Regex for file-level guard comments (e.g. Go build tags).
-    #[serde(default)]
-    pub file_guard_pattern: String,
-
-    /// Regex for OS/arch extraction from file suffix.
-    #[serde(default)]
-    pub file_guard_suffix_pattern: String,
-
-    /// Node kinds for comptime conditional blocks (e.g. Zig).
-    #[serde(default)]
-    pub comptime_guard_kinds: Vec<String>,
-
-    /// Regex patterns for compile-time guard detection in `if` conditions.
-    #[serde(default)]
-    pub builtin_guard_patterns: Vec<String>,
-
     /// Regex patterns for heuristic environment guards.
     #[serde(default)]
     pub env_guard_patterns: Vec<String>,
-
-    /// Regex for directory-based source set extraction (Kotlin).
-    #[serde(default)]
-    pub source_set_pattern: String,
 }
 
 // -----------------------------------------------------------------------
@@ -732,12 +712,7 @@ impl LanguageConfigJson {
             region_openers: self.guards.region_openers,
             region_closer: self.guards.region_closer,
             item_guard_attribute: self.guards.item_guard_attribute,
-            file_guard_pattern: self.guards.file_guard_pattern,
-            file_guard_suffix_pattern: self.guards.file_guard_suffix_pattern,
-            comptime_guard_kinds: self.guards.comptime_guard_kinds,
-            builtin_guard_patterns: self.guards.builtin_guard_patterns,
             env_guard_patterns: self.guards.env_guard_patterns,
-            source_set_pattern: self.guards.source_set_pattern,
             macro_def_markers: self.macros.def_markers,
             macro_def_kinds: self.macros.def_kinds,
             macro_invocation_kind: self.macros.invocation_kind,

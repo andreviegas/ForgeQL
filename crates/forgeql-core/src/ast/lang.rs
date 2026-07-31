@@ -426,18 +426,8 @@ pub struct LanguageConfig {
     pub(crate) region_closer: String,
     /// Attribute name for item-level guards (e.g. `"cfg"` for Rust).
     pub(crate) item_guard_attribute: String,
-    /// Regex for file-level guard comments (e.g. Go build tags).
-    pub(crate) file_guard_pattern: String,
-    /// Regex for OS/arch extraction from file suffix.
-    pub(crate) file_guard_suffix_pattern: String,
-    /// Node kinds for comptime conditional blocks (e.g. Zig).
-    pub(crate) comptime_guard_kinds: Vec<String>,
-    /// Regex patterns for compile-time guard detection in `if` conditions.
-    pub(crate) builtin_guard_patterns: Vec<String>,
     /// Regex patterns for heuristic environment guards.
     pub(crate) env_guard_patterns: Vec<String>,
-    /// Regex for directory-based source set extraction (Kotlin).
-    pub(crate) source_set_pattern: String,
 
     // -- macros --
     /// Token texts that prefix macro definitions (e.g. `["#define"]` for C/C++).

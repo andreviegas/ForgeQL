@@ -6,6 +6,38 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.73] — 2026-07-31 — docs: the guard surface is what the engine can answer
+
+### Removed — documented guard configuration with nothing behind it
+
+- Five language-configuration fields — `file_guard_pattern`,
+  `file_guard_suffix_pattern`, `comptime_guard_kinds`, `builtin_guard_patterns`
+  and `source_set_pattern` — were declared on the schema, mapped through, and
+  given accessors that nothing called. No shipped language configuration set any
+  of them either, so they were not an unfinished feature so much as a shape where
+  one had been intended. Two of them appeared in `has_guard_support`'s
+  disjunction, where being permanently empty made them contribute nothing.
+  Removing them changes no behaviour: the schema does not reject unknown fields,
+  so a configuration that names one is ignored now exactly as it was before.
+- `guard_kind` no longer lists `"build_tag"` or `"comptime"`. Nothing produced
+  them: the three frame builders write `"preprocessor"`, `"attribute"` and
+  `"heuristic"`, and that is the whole set. The two extra values survived only a
+  round-trip through the field reader, which handed back whatever had been
+  written. A query filtering on them could only ever return nothing.
+
+- `guard_info_from_fields`, which rebuilt a guard identity by parsing a row's
+  field map, had no callers: everything reads the guard stack directly, where
+  the kind is already a static string and nothing needs re-parsing. It went with
+  its only helper. This is what kept the two dead `guard_kind` values alive —
+  they were reachable solely as strings that function might have read back, from
+  a map nothing wrote them into.
+### Documentation
+
+- The `guard_kind` row in both tables now says which construct produces each
+  value rather than listing bare strings, and the agent-contract table gains
+  `"heuristic"`, which it had been missing while carrying two values that did not
+  exist.
+
 ## [0.139.72] — 2026-07-31 — fix: a guard group keeps its identity across restarts
 
 ### Fixed — `guard_group_id` is derived, not counted

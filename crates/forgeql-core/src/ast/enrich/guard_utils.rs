@@ -109,8 +109,7 @@ pub struct GuardFrame {
     pub guard_group_id: u64,
     /// Ordinal within the group: 0 = if, 1 = first elif/else, 2 = second, …
     pub guard_branch: u8,
-    /// Guard mechanism: `"preprocessor"` | `"attribute"` | `"build_tag"` |
-    /// `"comptime"` | `"heuristic"`.
+    /// Guard mechanism: `"preprocessor"` | `"attribute"` | `"heuristic"`.
     pub guard_kind: &'static str,
     /// Identifiers that **must be defined** for this branch.
     pub defines: Vec<String>,
@@ -145,25 +144,6 @@ pub fn are_guards_exclusive(a: &GuardInfo, b: &GuardInfo) -> bool {
         && a.guard_branch != b.guard_branch
 }
 
-/// Extract `GuardInfo` from a row's pre-computed fields map.
-#[must_use]
-pub fn guard_info_from_fields<S: std::hash::BuildHasher>(
-    fields: &HashMap<String, String, S>,
-) -> Option<GuardInfo> {
-    let group_id: u64 = fields.get("guard_group_id")?.parse().ok()?;
-    let branch: u8 = fields.get("guard_branch")?.parse().ok()?;
-    let kind = static_guard_kind(
-        fields
-            .get("guard_kind")
-            .map_or("preprocessor", String::as_str),
-    );
-    Some(GuardInfo {
-        guard_group_id: group_id,
-        guard_branch: branch,
-        guard_kind: kind,
-    })
-}
-
 /// Extract `GuardInfo` from the current guard stack.
 ///
 /// Returns the innermost frame's identity, which matches what
@@ -176,16 +156,6 @@ pub fn guard_info_from_stack(stack: &[GuardFrame]) -> Option<GuardInfo> {
         guard_branch: frame.guard_branch,
         guard_kind: frame.guard_kind,
     })
-}
-
-fn static_guard_kind(s: &str) -> &'static str {
-    match s {
-        "attribute" => "attribute",
-        "build_tag" => "build_tag",
-        "comptime" => "comptime",
-        "heuristic" => "heuristic",
-        _ => "preprocessor",
-    }
 }
 
 // -----------------------------------------------------------------------

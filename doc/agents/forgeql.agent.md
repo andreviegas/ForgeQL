@@ -653,7 +653,7 @@ and `GROUP BY`.
 | `guard_mentions` | all walked rows | All mentioned symbols (superset of defines + negates) |
 | `guard_group_id` | all walked rows | Opaque ID for the block; all arms share it. Stable across runs and checkouts, not across an edit to the file |
 | `guard_branch` | all walked rows | `0` = if, `1` = first elif/else, `2` = second, … |
-| `guard_kind` | all walked rows | `"preprocessor"` for C/C++; `"attribute"` for Rust `#[cfg]` |
+| `guard_kind` | all walked rows | `"preprocessor"` for C/C++; `"attribute"` for Rust `#[cfg]`; `"heuristic"` for a pattern-matched `if` (e.g. Python `if TYPE_CHECKING:`) |
 
 An **attribute** guard scopes only the item it annotates, so expression rows
 inside that item carry none; a `comment_block` / `array_block` row spans its
