@@ -562,6 +562,17 @@ pub trait StorageEngine: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Drain the source paths whose staged delta state was dropped by the last
+    /// delta load (previous-generation delta after an `ENRICH_VER` upgrade, or
+    /// a missing staging segment). The caller must re-index these files or
+    /// their pre-edit base rows stay visible.
+    ///
+    /// The default empty list is correct for the legacy backend, which has no
+    /// delta file.
+    fn take_pending_reindex_paths(&mut self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     /// Promote staging segments and build a new overlay for `new_commit_oid`.
     ///
     /// Called by `exec_commit` after the git commit succeeds.  The default

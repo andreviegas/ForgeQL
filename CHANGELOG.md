@@ -6,6 +6,53 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.74] — 2026-07-31 — fix: a re-USE after the base moves rebuilds the session instead of resuming the old snapshot
+
+### Fixed — stale session resume after `REFRESH SOURCE`
+
+Re-issuing `USE <source>.<base> AS '<alias>'` after the base moved (typically
+`REFRESH SOURCE` syncing the bare repo) silently resumed the in-memory
+session at the pre-move commit — while the response's `base_commit` reported
+a fresh resolution of the requested base, i.e. the NEW head. An agent was
+told it stood on the refreshed commit while every read served the old one.
+
+Three defects fixed together:
+
+- The resume staleness check compared the bare branch head against a commit
+  the session never recorded on the columnar path (`None` compared as "not
+  stale"), and could not evaluate commit-hex bases at all (a hex is not a
+  branch). Sessions now record the commit the requested base resolved to at
+  creation, and a re-`USE` compares a fresh resolution against it — failing
+  CLOSED: if either side is unknown, the session is evicted and rebuilt.
+  Same-hex re-`USE` still resumes (a hex is immutable).
+- `USE` responses could report a base the checkout did not match. Resumed
+  sessions now report the commit their index was actually built from, and a
+  reused worktree or session branch reports its real tip — never a fresh
+  re-resolution of the requested base.
+- A reused clean worktree (or session branch with no checkout) sitting behind
+  the requested base is fast-forwarded to it, so the rebuilt session actually
+  serves the new content. Local modifications and session commits are never
+  touched — those sessions keep their state and say so via `base_commit`.
+
+### Fixed — uncommitted index state silently dropped across an engine upgrade
+
+`.forgeql-columnar-delta` (the per-session dirty-overlay state) recorded no
+index-output generation. After an `ENRICH_VER` upgrade, each staged entry
+failed its version-suffixed file lookup one by one — a warning per entry —
+and the dropped entries also dropped their path shadowing, leaving the
+pre-edit base rows visible for files whose edits lived in the delta.
+
+The delta file now records the generation it was written under (format
+version 3; older formats are refused loudly, as before). A delta from a
+previous generation keeps its version-independent deletions, discards the
+staged segments in one explicit decision, and hands the affected source
+paths back to the engine, which re-indexes them from the worktree on both
+reconnect and `ROLLBACK`. A missing staging segment file queues its path the
+same way instead of being skipped silently.
+
+`doc/syntax.md` documents the strengthened `base_commit` guarantee. Nothing
+stored in index segments changes — no `ENRICH_VER` bump.
+
 ## [0.139.73] — 2026-07-31 — docs: the guard surface is what the engine can answer
 
 ### Removed — documented guard configuration with nothing behind it

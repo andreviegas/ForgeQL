@@ -384,6 +384,22 @@ impl ForgeQLEngine {
         {
             warn!(error = %e, "rollback: columnar delta reload failed (non-fatal)");
         }
+        // Any staged entries the loader dropped (e.g. the restored delta was
+        // written by a previous index generation) leave their files' pre-edit
+        // base rows visible; re-index those files from the restored worktree.
+        let dropped = session.columnar_storage_mut().map_or_else(
+            Vec::new,
+            crate::storage::StorageEngine::take_pending_reindex_paths,
+        );
+        if !dropped.is_empty() {
+            warn!(
+                count = dropped.len(),
+                "rollback: delta entries were dropped — reindexing affected file(s)"
+            );
+            if let Err(e) = session.reindex_files(&dropped) {
+                warn!(error = %e, "rollback: reindex of dropped delta files failed (non-fatal)");
+            }
+        }
         // FT6: save the popped in-memory stack to disk, overwriting whatever git
         // reset --hard restored (the pre-push state from the checkpoint commit
         // tree — one entry behind in-memory after the pop), restoring the

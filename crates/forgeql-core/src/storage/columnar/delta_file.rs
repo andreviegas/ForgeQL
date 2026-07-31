@@ -20,6 +20,8 @@
 //! | `ROLLBACK`          | `git reset --hard` restores delta; re-load + GC|
 //! | Session reconnect   | `load` → restore `DirtyOverlay` in RAM         |
 
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -91,8 +93,11 @@ pub(crate) fn staged_segment_path(
 /// Current [`DeltaFile`] format version.
 ///
 /// Bumped when the meaning or layout of the persisted fields changes. Version 2
-/// replaced the content-hash removal set with source paths.
-const DELTA_FORMAT_VERSION: u32 = 2;
+/// replaced the content-hash removal set with source paths. Version 3 added
+/// the `enrich_ver` stamp so a delta written by a previous index-output
+/// generation is detected as a whole and its files re-indexed, instead of
+/// each staged entry silently failing its (version-suffixed) file-name lookup.
+const DELTA_FORMAT_VERSION: u32 = 3;
 
 /// `bincode`-serialized snapshot of a [`DirtyOverlay`].
 ///
@@ -110,6 +115,16 @@ pub struct DeltaFile {
     /// encodes `PathBuf` exactly like `String`, so an unversioned older file
     /// decodes cleanly with hashes misread as paths.
     pub version: u32,
+    /// The `ENRICH_VER` this delta's staged segments were produced under.
+    ///
+    /// Staged segments hold index output, so a delta from an earlier
+    /// generation must not be reassembled after an upgrade. The per-segment
+    /// file names already embed the version (a stale entry simply fails its
+    /// lookup), but that failure is per-entry and silent — recording the
+    /// generation here lets the loader recognise the situation as a whole,
+    /// keep the version-independent parts (`removed_paths`), and hand the
+    /// affected source paths back to the caller for a fresh re-index.
+    pub enrich_ver: u32,
     /// One entry per dirty segment held in `DirtyOverlay::added`.
     /// Also the authoritative list of valid staging directories.
     pub staged: Vec<StagedEntry>,
@@ -128,6 +143,7 @@ impl DeltaFile {
     pub fn save(dirty: &DirtyOverlay, path: &Path) -> Result<()> {
         let file = Self {
             version: DELTA_FORMAT_VERSION,
+            enrich_ver: super::ENRICH_VER,
             staged: dirty
                 .added
                 .iter()
@@ -151,12 +167,24 @@ impl DeltaFile {
     ///
     /// For each staged entry, opens the matching `SegmentReader` from
     /// `staging_dir` (file name derived via [`staged_segment_file_name`]).
-    /// Entries whose segment file is missing or unreadable are silently
-    /// skipped (non-fatal).
+    ///
+    /// The second return value lists source paths whose staged index state
+    /// could NOT be restored and must be re-indexed from the worktree:
+    /// - every staged path, when the delta was written under a different
+    ///   `ENRICH_VER` (its segments are a previous generation's index output —
+    ///   the version-suffixed file names would each miss anyway, but the file
+    ///   stamp makes it one loud decision instead of N silent skips);
+    /// - any entry whose staging segment file is missing or unreadable.
+    ///
+    /// A dropped staged entry also drops the shadowing it re-derived
+    /// (`replaces_hex` → `removed_paths`), which would resurface the base
+    /// segment's pre-edit rows for that path — reindexing the returned paths
+    /// is what restores correctness, so callers must not ignore them.
+    /// `removed_paths` (deleted files) are version-independent and always kept.
     ///
     /// # Errors
     /// Returns `Err` if the file cannot be read or bincode decoding fails.
-    pub fn load(path: &Path, staging_dir: &Path) -> Result<DirtyOverlay> {
+    pub fn load(path: &Path, staging_dir: &Path) -> Result<(DirtyOverlay, Vec<PathBuf>)> {
         use super::dirty_overlay::DirtySegment;
 
         let bytes = std::fs::read(path)?;
@@ -175,11 +203,24 @@ impl DeltaFile {
         }
 
         let mut dirty = DirtyOverlay::new();
+        let mut needs_reindex: Vec<PathBuf> = Vec::new();
         // Shadowed paths come from two places. The recorded set is authoritative
         // for deleted files, which have no staged replacement to infer from; the
         // staged entries re-derive the changed-file half, since a staged segment
         // that replaces a base segment always shadows its own path.
         dirty.removed_paths = file.removed_paths.into_iter().collect();
+
+        if file.enrich_ver != super::ENRICH_VER {
+            tracing::info!(
+                delta_ver = file.enrich_ver,
+                current_ver = super::ENRICH_VER,
+                staged = file.staged.len(),
+                "columnar delta from a previous index generation — staged \
+                 segments discarded, files queued for re-index"
+            );
+            needs_reindex.extend(file.staged.iter().map(|e| e.source_path.clone()));
+            return Ok((dirty, needs_reindex));
+        }
 
         for entry in &file.staged {
             let seg_path =
@@ -198,13 +239,16 @@ impl DeltaFile {
                 Err(e) => {
                     tracing::warn!(
                         hex = %entry.hex_content_id,
-                        "columnar delta: staging segment missing/unreadable (skipping): {e}"
+                        path = %entry.source_path.display(),
+                        "columnar delta: staging segment missing/unreadable — \
+                         file queued for re-index: {e}"
                     );
+                    needs_reindex.push(entry.source_path.clone());
                 }
             }
         }
 
-        Ok(dirty)
+        Ok((dirty, needs_reindex))
     }
 
     // ── GC helpers ───────────────────────────────────────────────────────────
@@ -220,7 +264,7 @@ impl DeltaFile {
         };
         bincode::deserialize::<Self>(&bytes)
             .ok()
-            .filter(|f| f.version == DELTA_FORMAT_VERSION)
+            .filter(|f| f.version == DELTA_FORMAT_VERSION && f.enrich_ver == super::ENRICH_VER)
             .map(|f| {
                 f.staged
                     .into_iter()
@@ -246,5 +290,110 @@ impl DeltaFile {
             }
             let _ = std::fs::remove_file(entry.path());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn write_delta(dir: &Path, file: &DeltaFile) -> PathBuf {
+        let path = dir.join(".forgeql-columnar-delta");
+        std::fs::write(&path, bincode::serialize(file).unwrap()).unwrap();
+        path
+    }
+
+    fn entry(path: &str, hex: &str, replaces: &str) -> StagedEntry {
+        StagedEntry {
+            hex_content_id: hex.to_string(),
+            source_path: PathBuf::from(path),
+            replaces_hex: replaces.to_string(),
+        }
+    }
+
+    /// A delta stamped with a previous `ENRICH_VER` keeps its (version-
+    /// independent) deletions but drops every staged entry, reporting all of
+    /// their source paths for re-index.
+    #[test]
+    fn previous_generation_delta_queues_all_staged_paths_for_reindex() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = DeltaFile {
+            version: DELTA_FORMAT_VERSION,
+            enrich_ver: super::super::ENRICH_VER - 1,
+            staged: vec![
+                entry("src/a.rs", "aaaa", "beef"),
+                entry("src/b.rs", "bbbb", ""),
+            ],
+            removed_paths: vec![PathBuf::from("src/deleted.rs")],
+        };
+        let path = write_delta(tmp.path(), &file);
+
+        let (dirty, needs) = DeltaFile::load(&path, tmp.path()).unwrap();
+        assert!(
+            dirty.added.is_empty(),
+            "no previous-generation segment may load"
+        );
+        assert!(
+            dirty
+                .removed_paths
+                .contains(&PathBuf::from("src/deleted.rs")),
+            "deletions are version-independent and must survive"
+        );
+        assert_eq!(
+            needs,
+            vec![PathBuf::from("src/a.rs"), PathBuf::from("src/b.rs")],
+            "every staged path must be queued for re-index"
+        );
+    }
+
+    /// A current-generation delta whose staging segment file is missing skips
+    /// the entry AND reports its path — a silent skip would leave the file's
+    /// pre-edit base rows visible.
+    #[test]
+    fn missing_staging_segment_queues_its_path_for_reindex() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = DeltaFile {
+            version: DELTA_FORMAT_VERSION,
+            enrich_ver: super::super::ENRICH_VER,
+            staged: vec![entry("src/gone.rs", "cccc", "beef")],
+            removed_paths: vec![],
+        };
+        let path = write_delta(tmp.path(), &file);
+
+        let (dirty, needs) = DeltaFile::load(&path, tmp.path()).unwrap();
+        assert!(dirty.added.is_empty());
+        assert_eq!(needs, vec![PathBuf::from("src/gone.rs")]);
+    }
+
+    /// A pre-stamp (format v2) delta is refused outright — bincode would
+    /// misalign the fields.
+    #[test]
+    fn older_format_version_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = DeltaFile {
+            version: DELTA_FORMAT_VERSION - 1,
+            enrich_ver: super::super::ENRICH_VER,
+            staged: vec![],
+            removed_paths: vec![],
+        };
+        let path = write_delta(tmp.path(), &file);
+        assert!(DeltaFile::load(&path, tmp.path()).is_err());
+    }
+
+    /// `read_valid_segment_names` treats a previous-generation delta as
+    /// having no valid names, so its staging files are GC'd rather than kept.
+    #[test]
+    fn previous_generation_delta_has_no_valid_segment_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = DeltaFile {
+            version: DELTA_FORMAT_VERSION,
+            enrich_ver: super::super::ENRICH_VER - 1,
+            staged: vec![entry("src/a.rs", "aaaa", "")],
+            removed_paths: vec![],
+        };
+        let path = write_delta(tmp.path(), &file);
+        assert!(DeltaFile::read_valid_segment_names(&path).is_empty());
     }
 }

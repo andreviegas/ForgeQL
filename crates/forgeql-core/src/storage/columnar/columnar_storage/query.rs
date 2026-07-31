@@ -260,6 +260,10 @@ impl StorageEngine for ColumnarStorage {
         self.reload_delta_after_rollback()
     }
 
+    fn take_pending_reindex_paths(&mut self) -> Vec<std::path::PathBuf> {
+        std::mem::take(&mut self.pending_reindex)
+    }
+
     fn commit_dirty(
         &mut self,
         new_commit_oid: &str,

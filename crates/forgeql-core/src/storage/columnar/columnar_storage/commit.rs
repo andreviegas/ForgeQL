@@ -270,10 +270,18 @@ impl ColumnarStorage {
     ///
     /// No-op when `.forgeql-columnar-delta` does not exist (empty session).
     /// Called from `warm_or_open` (reconnect) and `reload_delta_after_rollback`.
+    ///
+    /// Staged entries the loader could not restore (previous-generation delta,
+    /// or a missing staging segment) are queued in `pending_reindex`; the
+    /// session layer MUST drain them via [`Self::take_pending_reindex_paths`]
+    /// and re-index those files, or their pre-edit base rows stay visible.
     pub fn load_delta(&mut self) -> Result<()> {
         if self.delta_path.exists() {
             match DeltaFile::load(&self.delta_path, &self.staging_dir) {
-                Ok(dirty) => self.dirty = dirty,
+                Ok((dirty, needs_reindex)) => {
+                    self.dirty = dirty;
+                    self.pending_reindex = needs_reindex;
+                }
                 Err(e) => {
                     tracing::warn!(
                         path = %self.delta_path.display(),

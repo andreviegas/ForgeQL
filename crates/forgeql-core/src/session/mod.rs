@@ -236,6 +236,14 @@ pub struct Session {
     backends: BackendSet,
     /// The commit hash the current `index` was built from.
     cached_commit: Option<String>,
+    /// The commit the requested USE base resolved to when this session was
+    /// (re)created. The resume path compares it against a fresh resolution of
+    /// the same base: a difference means the base moved (REFRESH) while this
+    /// session kept serving the old snapshot, so the session must be evicted
+    /// and rebuilt rather than resumed. Distinct from `cached_commit`, which
+    /// tracks the worktree's own HEAD and legitimately diverges as the
+    /// session commits work.
+    pub upstream_observed: Option<String>,
     /// `true` when in-memory `index` has diverged from the on-disk
     /// `.forgeql-index` cache (i.e. since the last `save_index`).
     ///
@@ -359,6 +367,7 @@ impl Session {
             worktree_name,
             backends: BackendSet::new(LegacyMemoryStorage::new(Arc::clone(lang_registry))),
             cached_commit: None,
+            upstream_observed: None,
             index_dirty: false,
             last_active: std::time::Instant::now(),
             ttl_secs: std::env::var("FORGEQL_SESSION_TTL_SECS")

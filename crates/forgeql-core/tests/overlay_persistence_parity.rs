@@ -250,8 +250,12 @@ fn delta_file_roundtrip() {
     );
 
     // Full roundtrip: load back and compare removed_paths.
-    let loaded = DeltaFile::load(&delta_path, &staging_dir).expect("load delta");
+    let (loaded, needs_reindex) = DeltaFile::load(&delta_path, &staging_dir).expect("load delta");
     assert_eq!(loaded.added.len(), 0, "no staged entries expected");
+    assert!(
+        needs_reindex.is_empty(),
+        "same-generation delta must queue nothing"
+    );
     let mut orig_removed: Vec<_> = dirty.removed_paths.iter().cloned().collect();
     let mut loaded_removed: Vec<_> = loaded.removed_paths.iter().cloned().collect();
     orig_removed.sort_unstable();
@@ -349,7 +353,12 @@ fn reindex_writes_delta_file() {
 
     // Full load: verify source_path and removed_paths.
     let staging_dir = worktree.join(".forgeql-staging");
-    let loaded_dirty = DeltaFile::load(&delta_path, &staging_dir).expect("load delta");
+    let (loaded_dirty, needs_reindex) =
+        DeltaFile::load(&delta_path, &staging_dir).expect("load delta");
+    assert!(
+        needs_reindex.is_empty(),
+        "same-generation delta must queue nothing"
+    );
     assert_eq!(
         loaded_dirty.added.len(),
         1,

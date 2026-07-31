@@ -77,8 +77,15 @@ SHOW VERSION
 `USE` bases a session on a branch head or, with a 7-40 character hex token in the
 branch position, directly on a commit: a local branch of that name is used if one
 exists, otherwise the token is resolved as a commit. Every `USE` response reports
-the `base_commit` it resolved to (the full hash), so a session can be handed to
+the `base_commit` the session is ACTUALLY based on (the full hash) — for a fresh
+session that is what the base resolved to; for a resumed session or a reused
+worktree it is the real checkout, which can differ from the requested base when
+the session carries its own commits. Check it: a session can be handed to
 another agent by hex and that agent can confirm the exact commit it based on.
+If the requested base has moved (e.g. after `REFRESH SOURCE`), a re-`USE` of the
+same alias rebuilds the session at the new base instead of resuming the old
+snapshot; a clean session worktree fast-forwards, one with local work is
+preserved and its `base_commit` tells you where it really stands.
 
 `source_name` is an unquoted identifier that may contain hyphens (e.g. `pisco-code`).
 `branch` is an unquoted identifier that may contain hyphens (e.g. `main`, `v1_3_0`, `line-budget`).

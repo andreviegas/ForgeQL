@@ -65,6 +65,11 @@ pub struct ColumnarStorage {
     /// Populated at construction from `overlay.row_count()` so that
     /// columnar sessions appear in `SHOW SOURCES` without a full scan.
     stats: IndexStats,
+    /// Source paths whose staged index state was dropped by the last
+    /// `load_delta` (previous-generation delta or missing staging segment).
+    /// The session layer drains this via `take_pending_reindex_paths` and
+    /// re-indexes the files from the worktree.
+    pub(crate) pending_reindex: Vec<PathBuf>,
 }
 
 impl ColumnarStorage {
@@ -93,6 +98,7 @@ impl ColumnarStorage {
             lang_registry,
             delta_path,
             stats,
+            pending_reindex: Vec::new(),
         }
     }
 }

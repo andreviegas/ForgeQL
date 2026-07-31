@@ -101,21 +101,28 @@ impl Session {
         // `warm_or_open` completes, so writing it to `.forgeql-index` wastes
         // I/O and produces a file that is never read on future sessions
         // (the warm path skips `resume_index()` when an overlay exists).
+        // Record the commit this index was built from on BOTH paths.
+        // `cached_commit` is what the USE resume path compares against the
+        // bare repo's branch head to decide whether an in-memory session is
+        // stale after a REFRESH; leaving it unset on the columnar path made
+        // that check silently pass (`None` compares as "not stale") and a
+        // re-USE handed back a session based on the pre-REFRESH commit.
+        let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
         if self.columnar_build.is_none() {
-            let commit_hash = Self::get_head_oid(&self.worktree_path).unwrap_or_default();
             legacy.persist_to_cache(&self.worktree_path, &commit_hash, &self.source_name)?;
             debug!(
                 session = %self.id,
                 commit = %commit_hash,
                 "index built and saved"
             );
-            self.cached_commit = Some(commit_hash);
         } else {
             debug!(
                 session = %self.id,
+                commit = %commit_hash,
                 "index built in-memory (columnar configured — skipping .forgeql-index write)"
             );
         }
+        self.cached_commit = Some(commit_hash);
 
         self.index_dirty = false;
         Ok(())
@@ -189,6 +196,17 @@ impl Session {
     #[must_use]
     pub fn cached_commit(&self) -> Option<&str> {
         self.cached_commit.as_deref()
+    }
+
+    /// Record which commit the active index snapshot corresponds to.
+    ///
+    /// The build and cache-resume paths record this themselves; the columnar
+    /// WARM path installs an overlay read straight from disk without touching
+    /// either, so the engine calls this after a successful install. The value
+    /// feeds the USE resume staleness check and the resumed-USE `base_commit`
+    /// echo.
+    pub(crate) fn note_index_commit(&mut self, commit: String) {
+        self.cached_commit = Some(commit);
     }
 
     /// Return a reference to the default (legacy) storage engine.

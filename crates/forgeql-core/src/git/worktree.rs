@@ -29,8 +29,19 @@ pub struct WorktreeInfo {
     pub branch: Option<String>,
     /// Whether the worktree has been locked via `git worktree lock`.
     pub is_locked: bool,
-    /// Full hash of the commit the session branch was born at (USE base).
+    /// Full hash of the commit actually checked out in the worktree.
+    ///
+    /// For a fresh worktree this is the resolved USE base. For a REUSED
+    /// worktree or session branch it is that branch's real tip — which may
+    /// differ from the requested base (session commits, or a base that moved
+    /// under REFRESH). Callers must report THIS value, never re-resolve the
+    /// requested base: reporting a resolution the checkout does not match is
+    /// how an agent ends up told "base = new head" while reading old files.
     pub base_commit: Option<String>,
+    /// Full hash the requested base (`branch` param) resolved to at creation
+    /// time. Recorded so the session can later detect that the base moved
+    /// (e.g. after `REFRESH SOURCE`) and refuse to silently resume.
+    pub upstream_head: Option<String>,
 }
 
 // -----------------------------------------------------------------------
@@ -114,15 +125,41 @@ pub fn create(
                 repo_path.display(),
             );
         }
+        let checkout_oid = resume_checkout_oid(worktree_path, name, branch, origin_commit.id())?;
         info!(name, branch, session_branch = %session_branch_name,
               path = %worktree_path.display(), "worktree already on disk — resuming");
         return Ok(WorktreeInfo {
             name: name.to_string(),
             path: worktree_path.to_path_buf(),
             branch: Some(branch.to_string()),
-            base_commit: Some(origin_commit.id().to_string()),
+            base_commit: Some(checkout_oid.to_string()),
+            upstream_head: Some(origin_commit.id().to_string()),
             is_locked: false,
         });
+    }
+
+    // No worktree on disk, so there is no local state to preserve — but a
+    // reused session branch may sit at an older commit than the freshly
+    // resolved base (typical when the base moved under REFRESH after the
+    // branch was left behind). Fast-forward the ref when its tip is a strict
+    // ancestor of the base so the new checkout starts where the caller asked;
+    // a tip with its own session commits is not an ancestor and is kept —
+    // resuming committed work at its real tip is correct, and `base_commit`
+    // reports that tip rather than pretending the requested base was used.
+    let mut reference = reference;
+    let mut checkout_oid = reference.peel_to_commit()?.id();
+    if checkout_oid != origin_commit.id()
+        && repo
+            .merge_base(checkout_oid, origin_commit.id())
+            .is_ok_and(|mb| mb == checkout_oid)
+    {
+        info!(branch = %session_branch_name, from = %checkout_oid, to = %origin_commit.id(),
+              "fast-forwarding stale session branch to the requested base");
+        reference = reference.set_target(
+            origin_commit.id(),
+            "forgeql: fast-forward stale session branch to requested base",
+        )?;
+        checkout_oid = origin_commit.id();
     }
 
     let mut opts = git2::WorktreeAddOptions::new();
@@ -152,9 +189,54 @@ pub fn create(
         name: name.to_string(),
         path: worktree_path.to_path_buf(),
         branch: Some(branch.to_string()), // conceptual branch (what the user requested)
-        base_commit: Some(origin_commit.id().to_string()),
+        base_commit: Some(checkout_oid.to_string()),
+        upstream_head: Some(origin_commit.id().to_string()),
         is_locked: false,
     })
+}
+
+/// Decide what commit a RESUMED worktree checkout stands on, healing the one
+/// unambiguous stale case.
+///
+/// The existing checkout's HEAD is the truth about what the session will
+/// read — it may sit behind a base that moved (REFRESH while the session
+/// idled) or ahead of it (session commits). A CLEAN checkout whose HEAD is a
+/// strict ancestor of the requested base fast-forwards to it, so a re-USE
+/// after REFRESH actually picks up the new base instead of silently resuming
+/// the old one. Anything else (local modifications, or a tip with its own
+/// commits) is preserved as-is and reported truthfully via the returned oid.
+/// Untracked files survive a hard reset, so only tracked modifications block
+/// the heal.
+fn resume_checkout_oid(
+    worktree_path: &Path,
+    name: &str,
+    branch: &str,
+    requested: git2::Oid,
+) -> Result<git2::Oid> {
+    let wt_repo = Repository::open(worktree_path)?;
+    let head_oid = wt_repo.head()?.peel_to_commit()?.id();
+    if head_oid == requested {
+        return Ok(head_oid);
+    }
+    let is_ancestor = wt_repo
+        .merge_base(head_oid, requested)
+        .is_ok_and(|mb| mb == head_oid);
+    let mut status_opts = git2::StatusOptions::new();
+    let _ = status_opts.include_untracked(false).include_ignored(false);
+    let clean = wt_repo
+        .statuses(Some(&mut status_opts))
+        .is_ok_and(|s| s.is_empty());
+    if is_ancestor && clean {
+        let target = wt_repo.find_commit(requested)?;
+        wt_repo.reset(target.as_object(), git2::ResetType::Hard, None)?;
+        info!(name, branch, from = %head_oid, to = %requested,
+              "worktree resumed clean behind the requested base — fast-forwarded");
+        Ok(requested)
+    } else {
+        info!(name, branch, head = %head_oid, %requested,
+              "worktree resumed at its own tip — differs from the requested base");
+        Ok(head_oid)
+    }
 }
 
 /// Resolve a USE base token to a commit.
@@ -207,6 +289,7 @@ pub fn list(repo_path: &Path) -> Result<Vec<WorktreeInfo>> {
             branch,
             is_locked,
             base_commit: None,
+            upstream_head: None,
         });
     }
 

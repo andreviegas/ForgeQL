@@ -402,9 +402,13 @@ impl ForgeQLEngine {
         }
 
         let wt_existed = wt_path.exists();
-        let base_commit =
-            worktree::create(&repo_path, &wt_name, branch, &wt_path, Some(&git_branch))?
-                .base_commit;
+        let wt_info = worktree::create(&repo_path, &wt_name, branch, &wt_path, Some(&git_branch))?;
+        // `base_commit` is the commit actually checked out (truthful even when
+        // an existing worktree or session branch was reused); `upstream_head`
+        // is what the requested base resolved to right now — recorded on the
+        // session so a later re-USE can detect the base moving under REFRESH.
+        let base_commit = wt_info.base_commit;
+        let upstream_head = wt_info.upstream_head;
         // Host tooling built against the pre-user-segment layout resolves
         // worktrees/{dir}; keep a compatibility symlink there so container
         // runners and mount scripts keep working (see ensure_legacy_link).
@@ -415,6 +419,7 @@ impl ForgeQLEngine {
         let mut session = Session::from_coords(&coords, wt_path, &Arc::clone(&self.lang_registry));
         session.custom_branch = Some(git_branch);
         session.worktree_name = wt_name;
+        session.upstream_observed = upstream_head;
 
         // Load config once — before resume_index so shadow-write is configured
         // before the first build.  The same config is then used to freeze the
@@ -498,17 +503,32 @@ impl ForgeQLEngine {
         // disk but not captured in a checkpoint commit.  Non-fatal — if the git
         // diff fails (e.g. detached HEAD), log a warning and continue with the
         // cached index (graceful degradation to pre-FT7 behaviour).
+        //
+        // The list is joined with any paths whose staged delta state the
+        // columnar loader had to drop (previous-generation delta after an
+        // upgrade, or a missing staging segment): those files are NOT dirty in
+        // git terms — their edits may sit in checkpoint commits — but their
+        // index rows were lost with the delta and only a re-index restores
+        // them.
         if wt_existed {
-            match git::diff_head_to_worktree(&session.worktree_path) {
-                Ok(paths) if paths.is_empty() => {}
-                Ok(paths) => {
-                    tracing::info!(count = paths.len(), "reconnect: reindexing dirty file(s)",);
-                    if let Err(e) = session.reindex_files(&paths) {
-                        tracing::warn!("reconnect: reindex_files failed (non-fatal): {e}",);
-                    }
-                }
+            let mut paths = match git::diff_head_to_worktree(&session.worktree_path) {
+                Ok(paths) => paths,
                 Err(e) => {
                     tracing::warn!("reconnect: git diff HEAD failed (non-fatal): {e}");
+                    Vec::new()
+                }
+            };
+            if let Some(columnar) = session.columnar_storage_mut() {
+                for p in columnar.take_pending_reindex_paths() {
+                    if !paths.contains(&p) {
+                        paths.push(p);
+                    }
+                }
+            }
+            if !paths.is_empty() {
+                tracing::info!(count = paths.len(), "reconnect: reindexing dirty file(s)",);
+                if let Err(e) = session.reindex_files(&paths) {
+                    tracing::warn!("reconnect: reindex_files failed (non-fatal): {e}",);
                 }
             }
         }
@@ -580,7 +600,10 @@ impl ForgeQLEngine {
     ) -> Result<Option<ForgeQLResult>> {
         // Decide before mutating self.sessions to avoid holding a shared borrow
         // across a mutable one. The alias is the session key, so this is O(1).
-        let resume_outcome: Option<(String, Option<usize>)> = {
+        // (session_id, Some((symbols_indexed, actual_base_commit))) to resume,
+        // (session_id, None) to evict the stale entry and rebuild.
+        type ResumeOutcome = Option<(String, Option<(usize, Option<String>)>)>;
+        let resume_outcome: ResumeOutcome = {
             if let Some((existing_id, existing_session)) =
                 self.sessions.get_key_value(&coords.map_key())
             {
@@ -594,19 +617,33 @@ impl ForgeQLEngine {
                     ))
                     .into());
                 }
-                let is_stale = self
-                    .registry
-                    .get(source_name)
-                    .and_then(|src| git::branch_head(src.path(), branch))
-                    .is_some_and(|head| {
-                        existing_session.cached_commit().is_some_and(|c| c != head)
-                    });
+                // Fail CLOSED: resume only when we can positively prove the
+                // requested base still resolves to the same commit this
+                // session observed at creation. `resolve_base_commit` covers
+                // branch names AND commit-hex bases (a hex is not a branch, so
+                // the old `branch_head` check returned `None` there and the
+                // eviction never fired — the incident shape: REFRESH moved the
+                // base, re-USE resumed the pre-REFRESH session). If either
+                // side is unknown, evict and rebuild rather than risk silently
+                // serving old content. The comparison target is the observed
+                // upstream, NOT `cached_commit`: the worktree HEAD moves with
+                // every session commit and would evict healthy work sessions.
+                let is_stale = {
+                    let live_base = self
+                        .registry
+                        .get(source_name)
+                        .and_then(|src| crate::git::resolve_base_commit(src.path(), branch));
+                    match (live_base, existing_session.upstream_observed.as_deref()) {
+                        (Some(head), Some(observed)) => observed != head,
+                        _ => true,
+                    }
+                };
                 if is_stale {
                     info!(
                         session_id = %existing_id,
                         %source_name,
                         %branch,
-                        "branch HEAD moved after REFRESH — evicting stale session"
+                        "requested base moved (or could not be verified) — evicting stale session"
                     );
                     Some((existing_id.clone(), None))
                 } else {
@@ -620,18 +657,19 @@ impl ForgeQLEngine {
                         %branch,
                         "session resume — reusing existing in-memory session"
                     );
-                    Some((existing_id.clone(), Some(symbols_indexed)))
+                    // Report the commit the session's index was actually built
+                    // from — never a fresh resolution of the requested base.
+                    // (A fresh resolution told an agent "base = new head"
+                    // while the resumed session was still serving old files.)
+                    let actual_base = existing_session.cached_commit().map(str::to_string);
+                    Some((existing_id.clone(), Some((symbols_indexed, actual_base))))
                 }
             } else {
                 None
             }
         };
-        let base_commit = self
-            .registry
-            .get(source_name)
-            .and_then(|src| crate::git::resolve_base_commit(src.path(), branch));
         match resume_outcome {
-            Some((id, Some(symbols_indexed))) => {
+            Some((id, Some((symbols_indexed, actual_base)))) => {
                 Ok(Some(ForgeQLResult::SourceOp(SourceOpResult {
                     op: "use_source".to_string(),
                     source_name: Some(source_name.to_string()),
@@ -639,7 +677,7 @@ impl ForgeQLEngine {
                     branches: Vec::new(),
                     symbols_indexed: Some(symbols_indexed),
                     resumed: true,
-                    base_commit,
+                    base_commit: actual_base,
                     message: Some(format!(
                         "resumed in-memory session for {}",
                         coords.git_branch()
@@ -700,6 +738,11 @@ impl ForgeQLEngine {
             Ok(storage) => {
                 session.install_columnar(Box::new(storage));
                 session.drop_legacy_index();
+                // The warm path skips `resume_index`/`build_index` entirely, so
+                // record here which commit this index snapshot serves — the
+                // resume staleness check and the resumed-USE `base_commit`
+                // echo both read it.
+                session.note_index_commit(commit.clone());
             }
             Err(e) => {
                 tracing::warn!(%commit, "columnar warm_or_open failed (non-fatal): {e}");
