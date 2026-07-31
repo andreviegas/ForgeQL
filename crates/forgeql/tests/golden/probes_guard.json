@@ -14,14 +14,10 @@
       ] },
 
     { "name": "guarded_switch_ships_only_with_config", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "the MISRA-shaped question \"does this switch ship?\" cannot be asked: switch rows carry no guard fields at all, so pairing has_catch_all with a guard predicate matches nothing even though the switch on line 2989 is compiled only for three ticker configs",
       "fql": "FIND symbols IN 'subsys/bluetooth/**' EXCLUDE 'subsys/bluetooth/host/**' WHERE fql_kind = 'switch' WHERE has_catch_all = 'true' WHERE guard_mentions LIKE '%CONFIG_BT_TICKER_JOB_IDLE_GET%' ORDER BY line ASC LIMIT 5",
       "assert": { "row_count": 1, "rows": [ { "path": "subsys/bluetooth/controller/ticker/ticker.c", "line": 2989 } ] } },
 
     { "name": "guarded_expression_row_under_elif_arm", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "needs both open defects at once: expression rows carry no guard fields, and an #elif arm drops the negations of the arms before it, so the literal 32 on line 24 is reachable by neither guard_defines nor guard_negates",
       "fql": "FIND symbols IN 'soc/nordic/common/**' EXCLUDE 'soc/nordic/common/vpr/**' WHERE fql_kind = 'number' WHERE guard_negates LIKE '%PPI_PRESENT%' ORDER BY line ASC LIMIT 10",
       "assert": { "row_count": 1, "rows": [ { "name": "32", "path": "soc/nordic/common/gppi_init.c", "line": 24 } ] } }
   ]

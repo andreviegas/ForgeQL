@@ -6,6 +6,49 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.71] — 2026-07-30 — fix: a guard reaches every row, not only declarations
+
+### Fixed — control-flow and expression rows carry their guard
+
+- Guard fields were injected only into declaration-like rows. An `if`, `switch`,
+  `for`, numeric literal, cast or call inside a conditional region carried none,
+  so any query pairing a guard with a field that lives on those kinds matched
+  nothing — silently, with no error and no hint that the question was
+  unanswerable. `WHERE fql_kind='number' WHERE is_magic='true' WHERE guard_defines
+  LIKE '%CONFIG_X%'`, and the MISRA-shaped "is this `switch` without a `default`
+  actually compiled in this build", were both permanently empty.
+- A row is inside whatever conditional region the walk is inside, whatever kind
+  of row it is, so the guard is now injected for all of them. The injection
+  happens before the ordinal key is built, so the key gains its guard component
+  too rather than the fields being populated while the key stays blank.
+- The docs said these fields applied to "all symbols", which was never true and
+  is still not: a `comment_block` / `array_block` row spans its members rather
+  than being walked, so it carries no guard, and an attribute guard scopes only
+  the item it annotates. Both tables (the reference and the agent contract) now
+  say "all walked rows" and name the exceptions underneath.
+
+### Tests
+
+- The four golden cases that pinned this defect pass and are promoted to hard.
+  With them the guard suites carry no expected failures at all: every case
+  asserts behaviour the engine now produces, and the suites become a permanent
+  hard gate rather than a defect inventory.
+- Four hard cases needed their pins re-derived, since a guarded region now yields
+  more guarded rows than before — measured on two of them at +37% and +38%, which
+  moves any count over such a region. One had lost its premise outright: it asked
+  for a kind that carried no guard, and there is no longer such a kind, so it now
+  exercises the same mechanism through a field that is genuinely kind-scoped.
+  Those moved counts are also the positive proof that the corpus actually
+  reindexed rather than serving cached segments.
+
+- Promoting the cases also exposed a golden assertion that had never worked. A
+  `distinct` check named its column `fql_kind`, which is what the CSV rendering
+  calls it; a JSON result row names it `kind`. Every row therefore derived to
+  null, the distinct set collapsed to one value, and the check held for any query
+  returning at least one row of any shape. While the case was marked a known
+  failure this was invisible — a wrong assertion and a real defect look the same
+  from outside. Only asking a case to pass asks its assertions to be true.
+
 ## [0.139.70] — 2026-07-30 — fix: guard text now says what the source says
 
 Four defects in how a guard condition is rendered and decomposed. They ship

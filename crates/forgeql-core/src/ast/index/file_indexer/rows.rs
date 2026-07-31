@@ -366,8 +366,28 @@ fn emit_extra_rows(
     let source = ctx.source;
     let enrichers = sink.enrichers;
     let mut self_ordinal: Option<u32> = None;
+
+    // The guard stack is fixed for this node, so the fields it produces are
+    // built once here and copied onto each extra row. One node inside a guarded
+    // region can emit many expression rows, and this path runs over every row in
+    // the corpus. Outside a guarded region the map stays empty and the copy is a
+    // no-op.
+    let mut guard_fields: HashMap<String, String> = HashMap::new();
+    inject_guard_fields(ctx.guard_stack, &mut guard_fields);
     for enricher in enrichers {
-        for extra in enricher.extra_rows(ctx) {
+        for mut extra in enricher.extra_rows(ctx) {
+            // A row sits inside whatever conditional region the walk is inside,
+            // whatever kind of row it is. Copying the guard fields onto these
+            // rows too, rather than only onto declaration-like ones, is what
+            // lets a guard be paired with `is_magic`, `has_catch_all` or a
+            // control-flow field at all.
+            //
+            // Before the `guard_group_id` read below, not after: those two feed
+            // the ordinal key, so copying later would populate the fields but
+            // leave the key blank.
+            extra
+                .fields
+                .extend(guard_fields.iter().map(|(k, v)| (k.clone(), v.clone())));
             let guard_group_id = extra.fields.get("guard_group_id").map(String::as_str);
             let guard_branch = extra.fields.get("guard_branch").map(String::as_str);
             let content_hash = node_content_hash(node, source);

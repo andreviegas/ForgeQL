@@ -1276,11 +1276,21 @@ FIND symbols WHERE fql_kind = 'error' GROUP BY error_scope ORDER BY count DESC
 
 #### GuardEnricher
 
-Tags every symbol inside a C/C++ `#ifdef`/`#if`/`#elif`/`#else` block with
-the guard condition that controls its compilation.  Guard fields are injected
-into **every** indexed symbol row by `collect_nodes()` — no separate enricher
-call is needed.  All seven fields are queryable via `WHERE`, `ORDER BY`, and
-`GROUP BY`.
+Tags every symbol inside a C/C++ `#ifdef`/`#if`/`#elif`/`#else` block with the
+guard condition that controls its compilation. Preprocessor guards are injected
+into every indexed row by `collect_nodes()` — declarations, comments, control
+flow and expressions alike, since a row is inside whatever conditional region the
+walk is inside. That is what lets a guard be paired with `is_magic`,
+`has_catch_all` or a control-flow field: asking which magic numbers ship, or
+which `switch`-without-`default` is compiled only under a config, is a single
+query. All seven fields are queryable via `WHERE`, `ORDER BY`, and `GROUP BY`.
+
+Two kinds of row are outside that. An **attribute** guard (`guard_kind =
+"attribute"`, e.g. Rust `#[cfg]`) attaches only to the item it annotates, because
+that is its scope — it does not govern a region, so expression rows inside the
+item carry no attribute guard. And a **block** row (`comment_block`,
+`array_block`) is a synthetic span rather than a walked node, and carries no
+guard.
 
 A region ends at its own closing directive, located by scanning the directives
 themselves rather than by trusting where the parser ended the guard node. The
@@ -1292,13 +1302,17 @@ balance, the parser's span is used unchanged.
 
 | Field | Applies to | Description |
 |---|---|---|
-| `guard` | all symbols | The condition controlling compilation, whitespace-normalised. On an `#elif`/`#else` arm it is the accumulated `!(c₀) && … && cₖ`, not the arm's own condition (e.g. `"defined(CONFIG_SMP)"`, `"!X"`, `"Y && X"`) |
-| `guard_defines` | all symbols | Comma-separated symbols that **must be defined** for this branch |
-| `guard_negates` | all symbols | Comma-separated symbols that **must be undefined** for this branch |
-| `guard_mentions` | all symbols | All symbols mentioned in the condition (superset of defines + negates) |
-| `guard_group_id` | all symbols | Unique u64 identifying the `#ifdef`/`#if` block; all arms share the same ID |
-| `guard_branch` | all symbols | Ordinal within the group: `0` = if, `1` = first elif/else, `2` = second, … |
-| `guard_kind` | all symbols | `"preprocessor"` \| `"attribute"` \| `"build_tag"` \| `"comptime"` \| `"heuristic"` |
+| `guard` | all walked rows | The condition controlling compilation, whitespace-normalised. On an `#elif`/`#else` arm it is the accumulated `!(c₀) && … && cₖ`, not the arm's own condition (e.g. `"defined(CONFIG_SMP)"`, `"!X"`, `"Y && X"`) |
+| `guard_defines` | all walked rows | Comma-separated symbols that **must be defined** for this branch |
+| `guard_negates` | all walked rows | Comma-separated symbols that **must be undefined** for this branch |
+| `guard_mentions` | all walked rows | All symbols mentioned in the condition (superset of defines + negates) |
+| `guard_group_id` | all walked rows | Unique u64 identifying the `#ifdef`/`#if` block; all arms share the same ID |
+| `guard_branch` | all walked rows | Ordinal within the group: `0` = if, `1` = first elif/else, `2` = second, … |
+| `guard_kind` | all walked rows | `"preprocessor"` \| `"attribute"` \| `"build_tag"` \| `"comptime"` \| `"heuristic"` |
+
+"All walked rows" excludes the two synthetic kinds named above: a `comment_block`
+or `array_block` row spans its members rather than being walked as a node, and
+carries no guard field at all.
 
 **Guard field decomposition rules:**
 

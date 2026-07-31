@@ -647,13 +647,17 @@ and `GROUP BY`.
 
 | Field | Applies to | Values / Notes |
 |---|---|---|
-| `guard` | all symbols | Raw condition text: `"CONFIG_X"`, `"!X"`, `"defined(A) && defined(B)"` |
-| `guard_defines` | all symbols | Comma-separated symbols that must be **defined** |
-| `guard_negates` | all symbols | Comma-separated symbols that must be **undefined** |
-| `guard_mentions` | all symbols | All mentioned symbols (superset of defines + negates) |
-| `guard_group_id` | all symbols | Unique ID for the block; all arms share it |
-| `guard_branch` | all symbols | `0` = if, `1` = first elif/else, `2` = second, … |
-| `guard_kind` | all symbols | `"preprocessor"` for C/C++; `"attribute"` for Rust `#[cfg]` |
+| `guard` | all walked rows | The condition controlling compilation, whitespace-normalised. On an `#elif`/`#else` arm it is the accumulated `!(c₀) && … && cₖ`, not the arm's own condition |
+| `guard_defines` | all walked rows | Comma-separated symbols that must be **defined** |
+| `guard_negates` | all walked rows | Comma-separated symbols that must be **undefined** |
+| `guard_mentions` | all walked rows | All mentioned symbols (superset of defines + negates) |
+| `guard_group_id` | all walked rows | Unique ID for the block; all arms share it |
+| `guard_branch` | all walked rows | `0` = if, `1` = first elif/else, `2` = second, … |
+| `guard_kind` | all walked rows | `"preprocessor"` for C/C++; `"attribute"` for Rust `#[cfg]` |
+
+An **attribute** guard scopes only the item it annotates, so expression rows
+inside that item carry none; a `comment_block` / `array_block` row spans its
+members rather than being walked, and carries none either.
 
 ```sql
 -- All code that REQUIRES CONFIG_NET

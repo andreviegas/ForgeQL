@@ -219,7 +219,16 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        v40 an arm whose condition began `!defined(X) && …` negated to
 ///        `defined(X) && …`, asserting both operands — the opposite of that arm
 ///        being false — and every later arm in the chain inherited it.
-pub const ENRICH_VER: u32 = 41;
+///   42 — a preprocessor guard reaches every row inside its region, not only the
+///        declaration-like ones. Expression and control-flow rows previously
+///        carried none, so pairing a guard with `is_magic`, `has_catch_all` or a
+///        control-flow field matched nothing; v41 segments hold no guard columns
+///        for those kinds, and their ordinal keys carry no guard component.
+///   43 — no change to what a row holds. v42 was cut before the guard fields
+///        were hoisted out of the per-extra-row loop, so this generation exists
+///        to make the corpus prove the hoist emits the same rows rather than
+///        answering from segments the previous draft wrote.
+pub const ENRICH_VER: u32 = 43;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

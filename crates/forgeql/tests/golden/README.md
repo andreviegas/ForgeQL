@@ -119,6 +119,13 @@ stable across reindexing (ordinals do not):
 
 `ordered` rejects `by: "_ordinal"` — use `line` for source order.
 
+`all_same`, `ordered` and `distinct` name a field on the **JSON** result row, not
+the CSV column header. The row's kind column is `kind` there — `fql_kind` is the
+CSV spelling and reads back as null, which silently collapses `distinct` to a
+single value and makes the assertion hold for anything. Any `by`/`all_same` name
+that is not a derived `_` key should be checked against a real JSON row
+(`format=JSON`) before it is trusted.
+
 ## Adding a case
 
 The suite file is indexed, so edit it by node handle:
