@@ -26,6 +26,137 @@ fn make_symbol_with_sig(name: &str, sig: &str, usages: usize) -> SymbolMatch {
     sym
 }
 
+/// One usage site: a path and a line, the shape `FIND usages` returns.
+fn make_site(file: &str, line: usize) -> SymbolMatch {
+    SymbolMatch {
+        name: "target".to_string(),
+        node_kind: None,
+        fql_kind: None,
+        language: None,
+        path: Some(PathBuf::from(file)),
+        line: Some(line),
+        usages_count: None,
+        fields: HashMap::new(),
+        count: None,
+        node_id: None,
+        rev: None,
+    }
+}
+
+/// `n` sites in one file, lines 1..=n.
+fn sites_in(file: &str, n: usize) -> Vec<SymbolMatch> {
+    (1..=n).map(|line| make_site(file, line)).collect()
+}
+
+fn rendered(groups: &FileGroups<SymbolMatch>) -> Vec<(String, usize)> {
+    groups
+        .rows
+        .iter()
+        .map(|r| {
+            (
+                r.path
+                    .as_ref()
+                    .expect("path")
+                    .to_string_lossy()
+                    .into_owned(),
+                r.line.expect("line"),
+            )
+        })
+        .collect()
+}
+
+/// The ceiling stops at the first file that does not fit and drops the rest —
+/// it never skips ahead to a smaller file, because that would reorder the
+/// listing, and it never renders part of a file.
+#[test]
+fn site_ceiling_drops_whole_files_from_the_tail() {
+    let mut rows = sites_in("a.cpp", 3);
+    rows.extend(sites_in("b.cpp", 3));
+    rows.extend(sites_in("c.cpp", 1)); // would fit, but comes after b
+    rows.extend(sites_in("d.cpp", 3));
+
+    // Ceiling 5: a (3) fits, b (3) would make 6 → stop.
+    let got = take_file_groups(rows, 0, 10, 5);
+    assert_eq!(
+        rendered(&got),
+        vec![
+            ("a.cpp".to_string(), 1),
+            ("a.cpp".to_string(), 2),
+            ("a.cpp".to_string(), 3)
+        ]
+    );
+    assert_eq!(got.withheld, Some(Withheld::Ceiling));
+}
+
+/// The first selected file is rendered whole however far past the ceiling it
+/// runs: a listing that shows no file at all answers nothing.
+#[test]
+fn site_ceiling_always_yields_the_first_file_complete() {
+    let mut rows = sites_in("huge.cpp", 50);
+    rows.extend(sites_in("next.cpp", 1));
+
+    let got = take_file_groups(rows, 0, 10, 5);
+    assert_eq!(got.rows.len(), 50, "the first file keeps every site");
+    assert!(
+        got.rows.iter().all(|r| r
+            .path
+            .as_ref()
+            .is_some_and(|p| p.to_string_lossy() == "huge.cpp")),
+        "only the first file is rendered"
+    );
+    assert_eq!(got.withheld, Some(Withheld::Ceiling));
+}
+
+/// A selection that fits reports nothing withheld — the hint must not fire on
+/// a complete listing.
+#[test]
+fn a_complete_selection_withholds_nothing() {
+    let mut rows = sites_in("a.cpp", 2);
+    rows.extend(sites_in("b.cpp", 2));
+
+    let got = take_file_groups(rows, 0, 10, 100);
+    assert_eq!(got.rows.len(), 4);
+    assert_eq!(got.withheld, None);
+}
+
+/// Files dropped by `LIMIT` are reported separately from files dropped by the
+/// ceiling: only the first is fixed by asking for more files.
+#[test]
+fn limit_and_ceiling_are_distinguished() {
+    let mut rows = sites_in("a.cpp", 1);
+    rows.extend(sites_in("b.cpp", 1));
+    rows.extend(sites_in("c.cpp", 1));
+
+    let by_limit = take_file_groups(rows.clone(), 0, 2, 100);
+    assert_eq!(by_limit.rows.len(), 2);
+    assert_eq!(by_limit.withheld, Some(Withheld::Limit));
+
+    // OFFSET consumes whole files too, so the tail fits and nothing is withheld.
+    let paged = take_file_groups(rows, 1, 2, 100);
+    assert_eq!(paged.rows.len(), 2);
+    assert_eq!(paged.withheld, None);
+}
+
+/// Paging past the end reports nothing withheld — an `OFFSET` beyond the
+/// matched files must not fire a "there is more" hint when there is not.
+#[test]
+fn paging_past_the_last_file_withholds_nothing() {
+    let mut rows = sites_in("a.cpp", 1);
+    rows.extend(sites_in("b.cpp", 1));
+
+    let past_end = take_file_groups(rows, 5, 10, 100);
+    assert!(past_end.rows.is_empty());
+    assert_eq!(past_end.withheld, None);
+}
+
+/// No matches at all: no rows, nothing withheld, no hint.
+#[test]
+fn an_empty_result_withholds_nothing() {
+    let got = take_file_groups(Vec::<SymbolMatch>::new(), 0, 10, 100);
+    assert!(got.rows.is_empty());
+    assert_eq!(got.withheld, None);
+}
+
 #[test]
 fn apply_clauses_filter_by_kind_eq() {
     let mut items = vec![

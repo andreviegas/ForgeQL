@@ -112,7 +112,7 @@ stable across reindexing (ordinals do not):
 
 | Field | From | Meaning |
 |---|---|---|
-| `_file` | `<sha>` | the file; falls back to `path` when a row has no node_id (e.g. number rows) |
+| `_file` | `<sha>` | the file; falls back to `path` only on rows with no node_id — see the caveat below |
 | `_ordinal` | between `.` and `(` | stable identity slot — **not** source order |
 | `_offset` | inside `(…)` | line offset within the node |
 | `_block` | id minus `(offset)` | block handle (used by `same_block`) |
@@ -125,6 +125,16 @@ CSV spelling and reads back as null, which silently collapses `distinct` to a
 single value and makes the assertion hold for anything. Any `by`/`all_same` name
 that is not a derived `_` key should be checked against a real JSON row
 (`format=JSON`) before it is trusted.
+
+**`_file` derives the node hex on any row that carries a `node_id`, and only
+falls back to `path` on rows that do not.** Which side of that fallback a row
+lands on is a property of the engine, not of the assertion, and it moves: a
+`FIND usages` row carried no handle until it gained its file's, and now takes
+the hex branch. A golden written as `distinct: { by: "_file", values: [...] }`
+with path strings therefore passes vacuously one release and fails the next for
+a reason unrelated to what it tests. **Assert `path` directly** — it is always
+present and always means the file. Reserve `_file` for cases whose subject is
+node identity itself.
 
 ## Adding a case
 

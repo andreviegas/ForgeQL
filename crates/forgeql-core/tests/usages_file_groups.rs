@@ -11,6 +11,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
+use std::fmt::Write as _;
 
 use forgeql_core::result::{ForgeQLResult, QueryResult};
 
@@ -258,4 +259,85 @@ fn found_members_stay_line_scoped_when_rows_carry_a_handle() {
         );
         assert!(member.line.is_some_and(|l| l >= 1), "{member:?}");
     }
+}
+
+/// The ceiling constant is actually wired into `find_usages`, and it drops
+/// **whole files, from the tail** — file order never changes, and no file is
+/// ever rendered partially.
+#[test]
+fn site_ceiling_is_wired_in_and_drops_whole_files() {
+    // Three files of 900 sites each: the first two fit under the ceiling, the
+    // third would carry the response past it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    for f in 0..3 {
+        let mut body = String::new();
+        for i in 0..900 {
+            let _ = writeln!(body, "void f{f}_{i:03}() {{ {MARKER}(); }}");
+        }
+        std::fs::write(dir.path().join(format!("bulk_{f}.cpp")), body).expect("write");
+    }
+    let mut t = common::columnar_session_in(dir);
+
+    let q = query(&mut t, &format!("FIND usages OF '{MARKER}'"));
+    let shown = files_in_order(&q);
+    assert!(
+        shown.len() < 3,
+        "the ceiling must withhold at least one file, showed {shown:?}"
+    );
+    assert!(!shown.is_empty(), "at least one file is always shown");
+
+    // Whole files only: every shown file carries all of its sites.
+    for file in &shown {
+        let got = sites(&q).into_iter().filter(|(p, _)| p == file).count();
+        let alone = query(&mut t, &format!("FIND usages OF '{MARKER}' IN '{file}'"));
+        assert_eq!(got, alone.results.len(), "{file} rendered whole");
+    }
+
+    assert!(q.total > q.results.len(), "total still counts every site");
+    let hint = q.hint.expect("withheld files must be announced");
+    assert!(
+        hint.contains("withheld"),
+        "the ceiling hint must say files were withheld: {hint}"
+    );
+}
+
+/// However large the first file is, it is always rendered complete: a listing
+/// that shows no file at all answers nothing.
+#[test]
+fn the_first_file_is_always_rendered_whole() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut huge = String::new();
+    for i in 0..300 {
+        let _ = writeln!(huge, "void huge_{i:03}() {{ {MARKER}(); }}");
+    }
+    std::fs::write(dir.path().join("only.cpp"), huge).expect("write");
+    let mut t = common::columnar_session_in(dir);
+
+    let q = query(&mut t, &format!("FIND usages OF '{MARKER}'"));
+    assert_eq!(files_in_order(&q), vec!["only.cpp"]);
+    assert_eq!(
+        q.results.len(),
+        q.total,
+        "the one selected file keeps every site"
+    );
+    assert!(q.results.len() >= 300, "got {} sites", q.results.len());
+}
+
+/// When files are withheld the response says so, and says which lever helps:
+/// past the ceiling a bigger LIMIT changes nothing.
+#[test]
+fn withholding_files_is_announced_in_a_hint() {
+    let mut t = three_file_workspace();
+
+    let complete = query(&mut t, &format!("FIND usages OF '{MARKER}'"));
+    assert!(
+        complete.hint.is_none(),
+        "a complete listing needs no hint: {:?}",
+        complete.hint
+    );
+
+    let capped = query(&mut t, &format!("FIND usages OF '{MARKER}' LIMIT 1"));
+    let hint = capped.hint.expect("a file-capped listing must say so");
+    assert!(hint.contains("LIMIT"), "{hint}");
+    assert!(hint.contains("total"), "{hint}");
 }

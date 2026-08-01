@@ -6,6 +6,39 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.77] — 2026-08-01 — change: a `FIND usages` listing has a size, not just a file count
+
+### Changed — the listing withholds whole files once it is large enough
+
+Selecting whole files bounds how many files a `FIND usages` answer covers, but
+not how big it is: a hot identifier holds hundreds of sites in each of twenty
+files, and nothing capped the total. Measured on real trees, a rename campaign
+returns around 130 sites across its twenty files and the largest single file
+anywhere holds about 700 — but a query on a common local name runs to several
+thousand.
+
+The listing now stops once it has rendered enough sites, and stops the way the
+file cap already did: **whole files, from the tail**. File order never changes,
+no file is ever shown partially, and the first selected file is always shown
+complete however large it is — a listing that shows no file at all answers
+nothing.
+
+When files are withheld the response says so in a `hint`, and names the lever
+that helps. The two cases differ: files beyond the `LIMIT` come back if you
+raise it, files beyond the size ceiling do not — there, narrow with `IN` /
+`WHERE`, or use `GROUP BY file` for per-file counts without the line lists.
+
+`total` is unchanged: still every site in the worktree, so the gap between it
+and the rows you can see is still how you tell the listing is partial.
+
+### Documentation
+
+The golden-suite guide now warns that its derived `_file` field yields the node
+hex for any row carrying a handle and falls back to the path only for rows
+without one. Which side a row lands on is an engine property that moves — usage
+rows recently gained a handle — so a case that means "the file" should assert
+`path` directly.
+
 ## [0.139.76] — 2026-08-01 — feat: a `FIND usages` row is editable where you read it
 
 ### Added — usage rows carry their file's handle and rev

@@ -119,16 +119,20 @@ impl ForgeQLEngine {
         // number a rename campaign measures its progress against.  FIND symbols
         // still reports a LIMIT-capped total; the divergence is deliberate.
         let total = results.len();
+        let mut withheld = None;
         if grouped {
             if clauses.limit.is_none() {
                 results.truncate(find_limit);
             }
         } else {
-            results = crate::filter::take_file_groups(
+            let selected = crate::filter::take_file_groups(
                 results,
                 clauses.offset.unwrap_or(0),
                 clauses.limit.unwrap_or(find_limit),
+                crate::filter::USAGE_SITE_CEILING,
             );
+            results = selected.rows;
+            withheld = selected.withheld;
         }
         let found_rev = self.record_found_set(sid, "find_usages", &results, total, clauses);
 
@@ -154,9 +158,34 @@ impl ForgeQLEngine {
             total,
             metric_hint: None,
             group_by_field: None,
-            hint: None,
+            hint: Self::withheld_hint(withheld),
             found_rev,
         }))
+    }
+
+    /// One line telling the agent that files it did not see hold sites too.
+    ///
+    /// The two causes need different advice, and only one of them is fixed by
+    /// asking for more files: past the site ceiling a bigger `LIMIT` changes
+    /// nothing, because the cap is on sites rendered, not files requested.
+    fn withheld_hint(withheld: Option<crate::filter::Withheld>) -> Option<String> {
+        use crate::filter::Withheld;
+        match withheld? {
+            Withheld::Limit => Some(
+                "more files hold sites than this listing shows — raise the \
+                 LIMIT, or narrow with IN / WHERE. `total` is the true site \
+                 count across all of them"
+                    .to_string(),
+            ),
+            Withheld::Ceiling => Some(
+                "files withheld to bound the response: the files shown already \
+                 hold as many sites as one listing renders. Page the rest with \
+                 OFFSET past the files shown — a larger LIMIT will not add \
+                 files here — or narrow with IN / WHERE, or use GROUP BY file \
+                 for per-file counts without the line lists"
+                    .to_string(),
+            ),
+        }
     }
 
     /// Give every usage row the handle and rev of the file it sits in.

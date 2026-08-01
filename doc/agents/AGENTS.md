@@ -58,7 +58,7 @@ alias.
 | Function signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
-| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, **`LIMIT` counts files** and every site of a selected file is returned; `total` is the true site count. Each row carries its **file's** `node_id` and `rev`, so a site is editable where you read it |
+| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, **`LIMIT` counts files** (at most: a size ceiling can withhold further whole files from the tail and says so in a `hint` — then page with `OFFSET`, or narrow with `IN`/`WHERE`, not a larger `LIMIT`) and every site of a selected file is returned; `total` is the true site count. Each row carries its **file's** `node_id` and `rev`, so a site is editable where you read it |
 | File structure | `SHOW outline OF 'file'` |
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |

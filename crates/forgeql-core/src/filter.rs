@@ -369,6 +369,36 @@ pub fn apply_clauses_keep_order<T: ClauseTarget>(results: &mut Vec<T>, clauses: 
     apply_clauses_inner(results, clauses, false);
 }
 
+/// How many site rows one `FIND usages` response renders before it starts
+/// withholding whole files.
+///
+/// Selecting whole files bounds the *file* count but not the response: a hot
+/// identifier can hold hundreds of sites in each of twenty files. Measured on
+/// the frozen corpora, a realistic rename campaign returns ~130 sites across
+/// its twenty files and the largest single file anywhere holds ~700, while a
+/// query on a hot local name reaches several thousand — the shape this bounds.
+/// Set well clear of honest use so it only ever trims the runaway case.
+pub(crate) const USAGE_SITE_CEILING: usize = 2_000;
+
+/// The outcome of [`take_file_groups`]: the rows to render, and whether files
+/// were left out.
+pub(crate) struct FileGroups<T> {
+    /// Every site of every selected file, in file order.
+    pub rows: Vec<T>,
+    /// Files that matched but were not rendered, and why. `None` when the
+    /// selection is complete.
+    pub withheld: Option<Withheld>,
+}
+
+/// Why a file that matched did not make it into the response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Withheld {
+    /// More files matched than `LIMIT` (or the default cap) allows.
+    Limit,
+    /// The selected files together hold more sites than the response renders.
+    Ceiling,
+}
+
 /// Limit a row list by *file group* rather than by row count.
 ///
 /// A `FIND usages` row is one line of one file, and the question behind the
@@ -380,11 +410,24 @@ pub fn apply_clauses_keep_order<T: ClauseTarget>(results: &mut Vec<T>, clauses: 
 /// Groups keep the order in which their first row appears, which under the
 /// default `(name, line, path)` ordering is lowest line first, and `OFFSET`
 /// skips whole groups so paging never splits one file across two pages.
+///
+/// `ceiling` then bounds the total sites rendered, still dropping only whole
+/// files and only from the tail, so file order never changes. The first
+/// selected file is always rendered complete however large it is: a listing
+/// that shows nothing at all would be worse than a long one, and the caller
+/// learns the set was trimmed from [`FileGroups::withheld`].
+///
+/// It is a stop condition, not a fill target. A small first file followed by a
+/// very large second one renders just the small file and stops, well short of
+/// `ceiling` — skipping ahead to a file that fits is what "whole files, from
+/// the tail" rules out, because it would silently perforate the order the
+/// caller was promised.
 pub(crate) fn take_file_groups<T: ClauseTarget>(
     results: Vec<T>,
     offset: usize,
     limit: usize,
-) -> Vec<T> {
+    ceiling: usize,
+) -> FileGroups<T> {
     let mut slot_of: HashMap<Option<PathBuf>, usize> = HashMap::new();
     let mut groups: Vec<Vec<T>> = Vec::new();
     for item in results {
@@ -396,12 +439,30 @@ pub(crate) fn take_file_groups<T: ClauseTarget>(
         });
         groups[slot].push(item);
     }
-    groups
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .flatten()
-        .collect()
+
+    let matched = groups.len();
+    let candidates: Vec<Vec<T>> = groups.into_iter().skip(offset).take(limit).collect();
+    let over_limit = matched.saturating_sub(offset) > candidates.len();
+
+    let mut rows: Vec<T> = Vec::new();
+    for (taken, group) in candidates.into_iter().enumerate() {
+        // The first file is always rendered whole — a response that shows no
+        // file at all answers nothing. After that, a file is taken only if it
+        // fits, and the first that does not ends the listing: dropping from the
+        // tail is what keeps file order intact.
+        if taken > 0 && rows.len() + group.len() > ceiling {
+            return FileGroups {
+                rows,
+                withheld: Some(Withheld::Ceiling),
+            };
+        }
+        rows.extend(group);
+    }
+
+    FileGroups {
+        rows,
+        withheld: over_limit.then_some(Withheld::Limit),
+    }
 }
 
 fn apply_clauses_inner<T: ClauseTarget>(

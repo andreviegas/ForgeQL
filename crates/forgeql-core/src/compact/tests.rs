@@ -694,6 +694,50 @@ fn find_usages_renders_every_site_of_a_selected_file() {
     assert_eq!(lines.len(), 4, "one row per selected file, nothing else");
 }
 
+/// A file holding hundreds of sites still renders as ONE row with one handle
+/// and one rev — the line list grows, the row count does not. This is the
+/// shape the site ceiling bounds, and the reason the handle rides on the group
+/// rather than on every site.
+#[test]
+fn find_usages_renders_a_large_line_list_as_one_row() {
+    let sites: Vec<SymbolMatch> = (1..=400)
+        .map(|line| SymbolMatch {
+            name: "encenderMotor".into(),
+            node_kind: Some("identifier".into()),
+            fql_kind: None,
+            language: None,
+            path: Some(PathBuf::from("src/hot.cpp")),
+            line: Some(line),
+            usages_count: None,
+            fields: HashMap::new(),
+            count: None,
+            node_id: Some("ncccccccccccc".into()),
+            rev: Some("h3333333333333333".into()),
+        })
+        .collect();
+    let result = ForgeQLResult::Query(QueryResult {
+        op: "find_usages".into(),
+        total: 900,
+        metric_hint: None,
+        group_by_field: None,
+        found_rev: None,
+        hint: None,
+        results: sites,
+    });
+
+    let csv = to_compact(&result);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines.len(), 3, "header, column row, one file row");
+    assert_eq!(lines[0], r#""find_usages","encenderMotor",900"#);
+    assert_eq!(lines[1], r#""file","node_id","rev","[lines]""#);
+    assert!(
+        lines[2].starts_with(r#""src/hot.cpp","ncccccccccccc","h3333333333333333","1,2,3,"#),
+        "{}",
+        lines[2]
+    );
+    assert!(lines[2].ends_with(r#",399,400""#), "{}", lines[2]);
+}
+
 #[test]
 fn find_usages_grouped_by_file_shows_count() {
     // GROUP BY file: the engine has already collapsed the sites to one row per

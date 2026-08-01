@@ -164,8 +164,9 @@ FIND files [clauses]
 > **`FIND usages` caps by file, not by row.** A usage site is one line of one
 > file, so a cap counted in rows would cut the list mid-file — reporting a file
 > as partly used and dropping the rest of it with no marker. The cap therefore
-> selects whole **files**: `LIMIT 5` means "the first five files, every site in
-> each", the default cap means the first 20 files, and `OFFSET` skips whole
+> selects whole **files**: `LIMIT 5` means "at most the first five files, every
+> site in each" — at most, because the size ceiling below can stop it short —
+> the default cap means the first 20 files, and `OFFSET` skips whole
 > files so paging never splits one across two pages. Files come back ordered by
 > their first site; sites within a file ascend by line.
 >
@@ -175,6 +176,14 @@ FIND files [clauses]
 > out. (`FIND symbols` still reports a `LIMIT`-capped total; the difference is
 > deliberate.) A result with files left out arms no `found_rev`, so every
 > `FOUND` verb refuses.
+>
+> A second cap bounds the response itself: a hot name can hold hundreds of
+> sites in each of twenty files. Past that ceiling the listing **withholds
+> whole files from the tail** — file order never changes and no file is ever
+> shown partially — and says so in a `hint`. The first selected file is always
+> shown complete, however large. When the hint fires, narrow with `IN` /
+> `WHERE`, or use `GROUP BY file` for per-file counts without the line lists; a
+> larger `LIMIT` does not add files past the ceiling.
 >
 > `GROUP BY` is exempt: its rows are aggregates, already one per group, and its
 > `LIMIT` counts those groups.
