@@ -6,6 +6,55 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.80] — 2026-08-01 — feat: a name written in a string is an occurrence too
+
+### Added — `role = 'string'`
+
+Some names live only in strings. A plugin registers itself by a literal, a
+dispatch table keys on one, an op is labelled with one — and none of it is an
+identifier the grammar resolves, so `FIND usages` reported none of it. Renaming
+such a name compiled cleanly and broke at runtime.
+
+String literals now contribute occurrences under `role = 'string'`, alongside
+the `code` and `comment` roles:
+
+```csv
+"file","role","node_id","rev","[lines]"
+"crates/forgeql-core/src/engine/exec_find.rs","code","n17a6f22550","hafdce2f8b…","50,50"
+"crates/forgeql-core/src/engine/exec_find.rs","string","n17a6f22550","hafdce2f8b…","72"
+```
+
+Same rules as the other roles: token-exact, so a literal spelling
+`CONFIG_X_ASYNC` is not a hit for `CONFIG_X`; and each occurrence reports its
+own line, so a name inside a multi-line raw string comes back where it is
+written. `char` literals are deliberately excluded — a single character cannot
+hold a name, and a multi-character constant is not prose.
+
+Which node kinds carry strings is declared per language, so the core still
+never names a construct. C, C++, Rust and Python declare theirs today;
+languages that do not simply emit no `string` occurrences.
+
+As with comments, string occurrences are enumerated, not judged: whether a
+literal means your symbol is the caller's call.
+
+### Changed — an unfiltered rename sweep now rewrites string literals
+
+`FIND usages` arms every occurrence it returns, so a `CHANGE NODES FOUND`
+sweep driven by an unfiltered query renames the log message and the doc
+comment along with the code. This is usually what a rename wants — a function
+whose own log line still prints the old name is not renamed — but it is a real
+change from when strings were invisible to the query.
+
+The narrowing is one clause: `FIND usages OF 'x' WHERE role = 'code'` arms only
+what the compiler resolves, restoring the previous reach exactly. Both halves
+are pinned by tests so the difference cannot drift.
+
+### Changed — indexes rebuild on first use
+
+Every file holding a string gains a posting blob, so the enrichment-logic
+version moves and cached indexes rebuild on the first `USE` of each source.
+Nothing existing changes — no row, no ordinal, no other blob — so `FIND
+symbols` and every node handle answer exactly as before.
 ## [0.139.79] — 2026-08-01 — feat: comments are part of a name's blast radius
 
 ### Added — `FIND usages` returns typed occurrences, not just resolved references

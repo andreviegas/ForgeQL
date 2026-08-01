@@ -1,6 +1,6 @@
 {
   "suite": "enrich_occurrence",
-  "description": "Occurrence-layer coverage. Hard cases pin today's correct usage/site behaviour; expect_fail cases assert the target behaviour of the occurrence plan and flip to hard as each layer lands: complete default rendering for FIND usages, addressable directive rows (fql_kind 'guard'), role-typed occurrence rows (role = code|comment|string|config|doc) fed by the index-time mention/trigram layer, usage rows born addressable (file handle + file rev), substring occurrences for non-identifier strings, and Kconfig grammar rows. Ground truth captured live on the frozen corpora. NOTE: the comment role slice deliberately re-pinned the unfiltered-usages cases (usages_lines_exact_small_file 2 to 4 sites, usages_covers_if_defined_and_elif 4 to 11, usages_default_limit_files_complete total 98 to 112, usage_rows_born_addressable 2 to 4) because FIND usages now returns comment occurrences alongside code ones; every added line was re-derived from the corpus, not adjusted to fit. The remaining role cases still fail because their container kinds are not scanned yet.",
+  "description": "Occurrence-layer coverage. Hard cases pin today's correct usage/site behaviour; expect_fail cases assert the target behaviour of the occurrence plan and flip to hard as each layer lands: complete default rendering for FIND usages, addressable directive rows (fql_kind 'guard'), role-typed occurrence rows (role = code|comment|string|config|doc) fed by the index-time mention/trigram layer, usage rows born addressable (file handle + file rev), substring occurrences for non-identifier strings, and Kconfig grammar rows. Ground truth captured live on the frozen corpora. NOTE: the comment role slice deliberately re-pinned the unfiltered-usages cases (usages_lines_exact_small_file 2 to 4 sites, usages_covers_if_defined_and_elif 4 to 11, usages_default_limit_files_complete total 98 to 112, usage_rows_born_addressable 2 to 4) because FIND usages now returns comment occurrences alongside code ones; the string role then moved that same total 112 to 116, the four BUILD_ASSERT message strings in drivers/input. Every added line was re-derived from the corpus, not adjusted to fit. The remaining role cases still fail because their container kinds are not scanned yet.",
   "cases": [
 
     { "name": "usages_lines_exact_small_file", "use": "zephyr-andre.frozen",
@@ -48,7 +48,7 @@
 
     { "name": "usages_default_limit_files_complete", "use": "zephyr-andre.frozen",
       "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME'",
-      "assert": { "total": 112, "distinct": { "by": "path", "count": 20 } } },
+      "assert": { "total": 116, "distinct": { "by": "path", "count": 20 } } },
 
     { "name": "if_defined_directives_have_symbol_rows", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols WHERE fql_kind = 'guard' WHERE name LIKE '%CONFIG_PM_DEVICE_RUNTIME%' IN 'include/zephyr/pm/device.h' ORDER BY line ASC",
@@ -82,8 +82,6 @@
         "rows": [ { "path": "doc/services/pm/device_runtime.rst", "line": 12 } ] } },
 
     { "name": "role_string_op_labels", "use": "forgeql-pub.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "string literal contents produce no usage sites",
       "fql": "FIND usages OF 'find_usages' IN 'crates/forgeql-core/src/engine/exec_find.rs' WHERE role = 'string'",
       "assert": { "row_count": 1,
         "distinct": { "by": "path", "count": 1, "values": ["crates/forgeql-core/src/engine/exec_find.rs"] } } },

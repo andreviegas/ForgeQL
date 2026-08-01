@@ -256,7 +256,16 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        changes, but a segment written before this generation holds no
 ///        mention postings at all, so `FIND usages` would silently under-report
 ///        comment sites when read from one.
-pub const ENRICH_VER: u32 = 47;
+///   48 — string literals join the mention layer. The C/C++/Rust/Python
+///        configs add their string kinds to `mention_text_kinds` under role
+///        `string`, so every file holding a string emits a new
+///        `mentions_string_*` blob pair. Purely additive — no existing blob,
+///        row or ordinal changes — but a v47 segment carries no string
+///        postings, so reading one would under-report `role = 'string'`.
+///   49 — C++ raw string literals join the string role. `cpp.json` modelled
+///        only `string_literal`, so `R"(...)"` contents emitted nothing while
+///        the role was advertised for C++. Adds postings, changes nothing else.
+pub const ENRICH_VER: u32 = 49;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

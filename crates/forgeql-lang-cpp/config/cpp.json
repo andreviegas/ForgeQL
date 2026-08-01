@@ -18,7 +18,10 @@
     "comment": "comment",
     "skip_node_kinds": [],
     "usage_node_kinds": ["identifier", "field_identifier", "type_identifier"],
-    "mention_text_kinds": { "comment": "comment" },
+    "mention_text_kinds": {
+      "comment": "comment",
+      "string_literal": "string", "raw_string_literal": "string"
+    },
     "statement_boundary_kinds": [
       "expression_statement",
       "if_statement",

@@ -440,10 +440,13 @@ fn change_file_with_nothing_deletes_indexed_file() {
     );
 }
 
-/// The mechanical rename sweep: FIND aims at the usage sites, CHANGE NODES
-/// LAST sweeps the replacement across exactly those lines. Occurrences in
-/// string literals and comments are NOT usage sites, so they survive — the
-/// fixture's classic sed-trap lines prove the precision.
+/// The mechanical rename sweep: FIND aims at the occurrence sites, CHANGE
+/// NODES FOUND sweeps the replacement across exactly those lines. Which sites
+/// are armed is now the caller's choice: unfiltered arms every role, so the
+/// log string naming the function is renamed with the code, while
+/// `WHERE role = 'code'` arms only what the compiler resolves and leaves prose
+/// untouched. Both halves are pinned below, because the difference between
+/// them is the whole point of typing an occurrence.
 #[test]
 fn rename_sweep_via_find_then_change_nodes_found() {
     let (mut engine, sid, dir) = engine_with_session();
@@ -474,9 +477,54 @@ fn rename_sweep_via_find_then_change_nodes_found() {
 
     let cpp = fs::read_to_string(dir.path().join("motor_control.cpp")).expect("read cpp");
     assert!(cpp.contains("startMotor"), "rename applied");
+    // An unfiltered FIND arms every occurrence, so the log message naming the
+    // function is swept along with the code. The fixture's "no renombrar"
+    // trap comments predate the occurrence layer, when `FIND usages` meant
+    // resolved references only; a rename that leaves its own log strings
+    // stale is not finished. What used to be implicit safety is now the
+    // explicit clause pinned by the sibling test below.
+    assert!(
+        cpp.contains("startMotor: velocidad"),
+        "the string occurrence is armed too and carries the new name"
+    );
+}
+
+#[test]
+fn rename_sweep_scoped_to_code_leaves_prose_alone() {
+    // The escape hatch for the sweep above, and the reason non-code roles are
+    // a review queue rather than a surprise: one clause narrows the armed set
+    // to the references a compiler resolves, so strings and comments keep the
+    // old name until someone has read them.
+    let (mut engine, sid, dir) = engine_with_session();
+
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        "FIND usages OF 'encenderMotor' WHERE role = 'code'",
+    );
+    let ForgeQLResult::Query(qr) = r else {
+        panic!("expected Query result");
+    };
+    assert!(!qr.results.is_empty(), "code usage sites expected");
+    let rev = qr.found_rev.expect("a complete FIND issues a master rev");
+
+    let r = execute_fql(
+        &mut engine,
+        &sid,
+        &format!(
+            "CHANGE NODES FOUND IF REV '{rev}' MATCHING WORD 'encenderMotor' WITH 'startMotor'"
+        ),
+    );
+    let ForgeQLResult::Mutation(mr) = r else {
+        panic!("expected Mutation result");
+    };
+    assert!(mr.applied);
+
+    let cpp = fs::read_to_string(dir.path().join("motor_control.cpp")).expect("read cpp");
+    assert!(cpp.contains("startMotor"), "rename applied to code");
     assert!(
         cpp.contains("encenderMotor: velocidad"),
-        "string-literal occurrence must survive (not a usage site)"
+        "the log string is outside the armed set and keeps the old name"
     );
 }
 
