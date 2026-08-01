@@ -1,0 +1,27 @@
+{
+  "suite": "probes_occurrence",
+  "description": "Compound probes for the occurrence layer over frozen corpora. Each case stacks the occurrence surface (role typing, directive nodes, grouped campaign counts) with clause filtering and node addressing in one query, so a regression anywhere in that chain moves a pin. expect_fail cases assert the correct answers to campaign queries that return nothing today; they flip to hard as the occurrence plan lands.",
+  "cases": [
+
+    { "name": "flag_blast_radius_grouped_by_role", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "GROUP BY role is impossible while usage rows carry no role field; scoped to include/zephyr/pm the flag occurs as code and comment only",
+      "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'include/zephyr/pm/**' GROUP BY role ORDER BY count DESC",
+      "assert": { "distinct": { "by": "group_key", "count": 2, "values": ["code", "comment"] } } },
+
+    { "name": "directive_node_readable_span", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "directive rows are not addressable, so the guarded region cannot be located by kind or read by handle",
+      "steps": [
+        { "fql": "FIND symbols WHERE fql_kind = 'guard' WHERE name = 'CONFIG_PM_DEVICE_RUNTIME_ASYNC' IN 'include/zephyr/pm/device.h'",
+          "assert": { "row_count": 1 },
+          "capture": { "G": "results.0.node_id" } },
+        { "fql": "SHOW NODE '${G}' WHERE text LIKE '%CONFIG_PM_DEVICE_RUNTIME_ASYNC%'",
+          "assert": { "row_count": 1 } }
+      ] },
+
+    { "name": "campaign_progress_counts", "use": "zephyr-andre.frozen",
+      "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' GROUP BY file ORDER BY count DESC LIMIT 5",
+      "assert": { "row_count": 5, "ordered": { "by": "count", "dir": "desc" } } }
+  ]
+}

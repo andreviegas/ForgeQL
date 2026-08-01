@@ -1,0 +1,134 @@
+{
+  "suite": "enrich_occurrence",
+  "description": "Occurrence-layer coverage. Hard cases pin today's correct usage/site behaviour; expect_fail cases assert the target behaviour of the occurrence plan and flip to hard as each layer lands: complete default rendering for FIND usages, addressable directive rows (fql_kind 'guard'), role-typed occurrence rows (role = code|comment|string|config|doc) fed by the index-time mention/trigram layer, usage rows born addressable (file handle + file rev), substring occurrences for non-identifier strings, and Kconfig grammar rows. Ground truth captured live on the frozen corpora. NOTE: hard cases usages_lines_exact_small_file, usages_covers_if_defined_and_elif and campaign-style pins assert the PRE-role result shape; the role slice re-pins them deliberately when unfiltered usages grows new typed rows.",
+  "cases": [
+
+    { "name": "usages_lines_exact_small_file", "use": "zephyr-andre.frozen",
+      "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'subsys/pm/pm_shell.c'",
+      "assert": { "row_count": 2, "total": 2,
+        "rows": [ { "path": "subsys/pm/pm_shell.c", "line": 81 },
+                  { "path": "subsys/pm/pm_shell.c", "line": 166 } ] } },
+
+    { "name": "usages_covers_if_defined_and_elif", "use": "zephyr-andre.frozen",
+      "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'include/zephyr/pm/device.h'",
+      "assert": { "row_count": 4, "total": 4,
+        "rows": [ { "line": 211 }, { "line": 231 }, { "line": 255 }, { "line": 271 } ] } },
+
+    { "name": "import_rows_carry_include_path", "use": "zephyr-andre.frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'import' WHERE name = 'zephyr/pm/device_runtime.h'",
+      "assert": { "total": 161 } },
+
+    { "name": "path_segment_files_query", "use": "zephyr-andre.frozen",
+      "fql": "FIND files WHERE path MATCHES '(^|/)core(/|$)' IN 'arch/**'",
+      "assert": { "pointer": { "/content/total": 401 } } },
+
+    { "name": "comment_nodes_name_searchable", "use": "zephyr-andre.frozen",
+      "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE name LIKE '%CONFIG_PM_DEVICE_RUNTIME%' IN 'include/zephyr/pm/**' ORDER BY line ASC",
+      "assert": { "row_count": 5,
+        "rows": [ { "line": 214 }, { "line": 241 }, { "line": 242 }, { "line": 276 }, { "line": 692 } ] } },
+
+    { "name": "matching_scoped_to_line_range", "use": "forgeql-pub.frozen", "mode": "rw",
+      "steps": [
+        { "fql": "FIND files WHERE name = 'c.json'",
+          "assert": { "row_count": 1 },
+          "capture": { "F": "content.files.0.node_id", "R": "content.files.0.rev" } },
+        { "fql": "CHANGE NODE '${F}(9-10)' IF REV '${R}' MATCHING 'kinds' WITH 'kindz'",
+          "assert": { "applied": true, "diff_contains": "function_kindz" } },
+        { "fql": "UNDO",
+          "assert": { "applied": true } }
+      ] },
+
+    { "name": "usages_default_limit_is_rendered_rows", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "the default find limit truncates the site list to 20 before rendering, so a 61-site file reports only 20 lines with no marker",
+      "fql": "FIND usages OF '__ASSERT_NO_MSG' IN 'drivers/i3c/i3c_ccc.c'",
+      "assert": { "row_count": 61, "total": 61 } },
+
+    { "name": "usages_default_limit_files_complete", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "the default limit cuts the site list mid-file (20 sites spanning 14 files today) instead of returning complete rows for the first 20 files",
+      "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME'",
+      "assert": { "total": 98, "distinct": { "by": "path", "count": 20 } } },
+
+    { "name": "if_defined_directives_have_symbol_rows", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "#if/#elif condition mentions emit no symbol rows and #ifdef rows carry an empty kind; expected 6 directive rows in this file (3x if-defined base flag, 1x if-defined ASYNC, 1x ifdef ASYNC, 1x elif base flag)",
+      "fql": "FIND symbols WHERE fql_kind = 'guard' WHERE name LIKE '%CONFIG_PM_DEVICE_RUNTIME%' IN 'include/zephyr/pm/device.h' ORDER BY line ASC",
+      "assert": { "row_count": 6 } },
+
+    { "name": "ifdef_row_gains_kind_and_line", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "the #ifdef name row exists but carries kind empty-string, so a fql_kind filter can never select it",
+      "fql": "FIND symbols WHERE fql_kind = 'guard' WHERE name = 'CONFIG_PM_DEVICE_RUNTIME_ASYNC' IN 'include/zephyr/pm/device.h'",
+      "assert": { "row_count": 1, "rows": [ { "line": 267 } ] } },
+
+    { "name": "ifdef_rows_all_gain_kind", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "all six #ifdef/#ifndef rows in this file have empty kind today",
+      "fql": "FIND symbols WHERE fql_kind = 'guard' WHERE name = 'CONFIG_PM_DEVICE_RUNTIME' IN 'drivers/serial/uart_smartbond.c'",
+      "assert": { "row_count": 6 } },
+
+    { "name": "role_comment_occurrences", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "usage rows carry no role field and comment text produces no usage sites; expected 7 token occurrences (3 endif trailers + 4 doxygen mentions, line 702 holds two)",
+      "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'include/zephyr/pm/device.h' WHERE role = 'comment'",
+      "assert": { "row_count": 7,
+        "rows": [ { "line": 214 }, { "line": 242 }, { "line": 276 },
+                  { "line": 702 }, { "line": 702 }, { "line": 704 }, { "line": 705 } ] } },
+
+    { "name": "role_config_cmake_flag", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "argument text inside build-file call statements is invisible to the usage index",
+      "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'subsys/pm/CMakeLists.txt' WHERE role = 'config'",
+      "assert": { "row_count": 1, "rows": [ { "line": 11 } ] } },
+
+    { "name": "role_doc_rst_exact_token", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "doc prose produces no usage sites; token-exact matching must exclude the _ASYNC and _DEFAULT_ENABLE variants",
+      "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'doc/services/pm/**' WHERE role = 'doc'",
+      "assert": { "row_count": 1,
+        "rows": [ { "path": "doc/services/pm/device_runtime.rst", "line": 12 } ] } },
+
+    { "name": "role_string_op_labels", "use": "forgeql-pub.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "string literal contents produce no usage sites",
+      "fql": "FIND usages OF 'find_usages' IN 'crates/forgeql-core/src/engine/exec_find.rs' WHERE role = 'string'",
+      "assert": { "row_count": 1,
+        "distinct": { "by": "path", "count": 1, "values": ["crates/forgeql-core/src/engine/exec_find.rs"] } } },
+
+    { "name": "role_code_retrofits_existing_sites", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "role does not exist yet, so filtering by role = 'code' matches nothing",
+      "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'include/zephyr/pm/device.h' WHERE role = 'code'",
+      "assert": { "row_count": 4,
+        "rows": [ { "line": 211 }, { "line": 231 }, { "line": 255 }, { "line": 271 } ] } },
+
+    { "name": "usage_rows_born_addressable", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "usage sites carry no handle and no rev today; each row must carry its file node handle and the file rev",
+      "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'subsys/pm/pm_shell.c'",
+      "assert": { "row_count": 2,
+        "rows": [ { "line": 81, "rev": "h22186319d1fe6da5" },
+                  { "line": 166, "rev": "h22186319d1fe6da5" } ] } },
+
+    { "name": "substring_path_occurrences", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "a non-identifier string cannot be queried at all; substring occurrences need the mention index",
+      "fql": "FIND usages OF 'zephyr/pm/device_runtime.h' IN 'subsys/pm/**'",
+      "assert": { "row_count": 2,
+        "rows": [ { "path": "subsys/pm/device.c", "line": 9 },
+                  { "path": "subsys/pm/device_system_managed.c", "line": 9 } ] } },
+
+    { "name": "kconfig_definition_row", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "Kconfig files produce no symbol rows at all; the definition site of a flag is unaddressable",
+      "fql": "FIND symbols WHERE name = 'PM_DEVICE_RUNTIME' IN 'subsys/pm/Kconfig'",
+      "assert": { "row_count": 1, "rows": [ { "line": 144 } ] } },
+
+    { "name": "kconfig_outline_config_entry", "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "Kconfig has no grammar, so its outline is empty",
+      "fql": "SHOW outline OF 'subsys/pm/Kconfig' WHERE name = 'PM_DEVICE_RUNTIME'",
+      "assert": { "row_count": 1 } }
+  ]
+}

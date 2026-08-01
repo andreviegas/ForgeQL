@@ -244,6 +244,9 @@ the surviving raw-text forms are collected in
 CHANGE NODE '<node_id>' IF REV '<rev>' WITH 'new_content'
 CHANGE NODE '<node_id>(n-m)' IF REV '<rev>' WITH 'new_content'
 CHANGE NODE '<node_id>' IF REV '<rev>' MATCHING [WORD] 'old' WITH 'new'
+-- MATCHING composes with a line-range-narrowed handle: the sweep touches only
+-- occurrences inside lines n-m of the node's current span.
+CHANGE NODE '<node_id>(n-m)' IF REV '<rev>' MATCHING [WORD] 'old' WITH 'new'
 
 INSERT (BEFORE | AFTER) NODE '<node_id>' IF REV '<rev>' WITH 'new_content'
 
@@ -300,7 +303,7 @@ rev, line range, and source — enough to re-target without another read.
 |---|---|---|
 | `CHANGE NODE … WITH …` | Replace the node's entire source span | `IF REV` |
 | `CHANGE NODE '<id>(n-m)' WITH …` | Replace only lines n–m within the node (node-relative offset) | `IF REV` |
-| `CHANGE NODE … MATCHING …` | Replace pattern occurrences inside the node's span only | `IF REV` |
+| `CHANGE NODE … MATCHING …` | Replace pattern occurrences inside the node's span only — a range-narrowed handle `'<id>(n-m)'` scopes the sweep to those lines | `IF REV` |
 | `INSERT BEFORE\|AFTER NODE … WITH …` | Insert new lines around the node | `IF REV` |
 | `DELETE NODE …` | Delete the node's source span (or lines n–m within it) | `IF REV` |
 | `MOVE NODE '<src>' (BEFORE\|AFTER) NODE '<dst>'` | Relocate the node's bytes to the anchor — one atomic plan, no read round-trip | `IF REV` |
