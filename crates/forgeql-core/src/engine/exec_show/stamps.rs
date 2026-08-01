@@ -79,10 +79,7 @@ pub(super) fn stamp_path_handles(workspace: &Workspace, results: &mut [serde_jso
             continue;
         }
         let abs = root.join(rel);
-        let node_id = format!(
-            "n{}",
-            crate::node_id::hex_prefix(&crate::node_id::sha256_of_path(rel), 12)
-        );
+        let node_id = crate::node_id::path_handle(rel);
         let rev = if path.ends_with('/') || abs.is_dir() {
             let files = worktree.get_or_insert_with(|| {
                 workspace
@@ -100,9 +97,7 @@ pub(super) fn stamp_path_handles(workspace: &Workspace, results: &mut [serde_jso
                 });
             crate::node_id::format_rev_exact(xor)
         } else {
-            std::fs::read(&abs)
-                .map(|bytes| crate::node_id::format_rev(crate::node_id::rev_of_bytes(&bytes)))
-                .unwrap_or_default()
+            crate::node_id::file_rev(&abs)
         };
         if let Some(obj) = row.as_object_mut() {
             let _ = obj.insert("node_id".to_owned(), serde_json::Value::String(node_id));

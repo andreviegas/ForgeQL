@@ -845,12 +845,18 @@ fn compact_find_usages(query: &QueryResult) -> String {
         return out;
     }
     // No GROUP BY: collapse the raw usage sites per file into a line list.
-    row(&mut out, &[&q("file"), &q("[lines]")]);
+    // The file's handle and rev ride on the row so a site can be edited from
+    // the listing — `CHANGE NODE '<node_id>(<line>)' IF REV '<rev>' …` — with
+    // no second lookup through `FIND files`.
+    row(
+        &mut out,
+        &[&q("file"), &q("node_id"), &q("rev"), &q("[lines]")],
+    );
     let groups = group_usages_by_file(query);
-    for (file, lines) in &groups {
-        let lines_str: Vec<String> = lines.iter().map(ToString::to_string).collect();
+    for g in &groups {
+        let lines_str: Vec<String> = g.lines.iter().map(ToString::to_string).collect();
         let val = q(&lines_str.join(","));
-        row(&mut out, &[&q(file), &val]);
+        row(&mut out, &[&q(&g.file), &q(&g.node_id), &q(&g.rev), &val]);
     }
     chomp(&mut out);
     out
@@ -1025,19 +1031,38 @@ fn group_callgraph(entries: &[crate::result::CallGraphEntry]) -> Vec<(String, Ve
     groups
 }
 
-/// Group usage rows by file → Vec<(file, Vec<line>)>.
-fn group_usages_by_file(query: &QueryResult) -> Vec<(String, Vec<usize>)> {
-    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+/// One rendered `FIND usages` file row: the file, the handle and rev an agent
+/// edits it by, and every site line it holds.
+///
+/// The handle and rev sit on the group, not on each site, because they are the
+/// file's: one pair per file is both the true shape and the cheap one.
+struct UsageFileGroup {
+    file: String,
+    node_id: String,
+    rev: String,
+    lines: Vec<usize>,
+}
+
+/// Group usage rows by file, preserving first-appearance order.
+fn group_usages_by_file(query: &QueryResult) -> Vec<UsageFileGroup> {
+    let mut groups: Vec<UsageFileGroup> = Vec::new();
     for r in &query.results {
         let file = r
             .path
             .as_ref()
             .map_or(String::new(), |p| p.to_string_lossy().into_owned());
         let line = r.line.unwrap_or(0);
-        if let Some(g) = groups.iter_mut().find(|(k, _)| k == &file) {
-            g.1.push(line);
+        if let Some(g) = groups.iter_mut().find(|g| g.file == file) {
+            g.lines.push(line);
         } else {
-            groups.push((file, vec![line]));
+            groups.push(UsageFileGroup {
+                file,
+                // Every site of a file carries that file's handle and rev, so
+                // the first one speaks for the group.
+                node_id: r.node_id.clone().unwrap_or_default(),
+                rev: r.rev.clone().unwrap_or_default(),
+                lines: vec![line],
+            });
         }
     }
     groups

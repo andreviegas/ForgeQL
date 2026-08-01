@@ -100,12 +100,23 @@
         "rows": [ { "line": 211 }, { "line": 231 }, { "line": 255 }, { "line": 271 } ] } },
 
     { "name": "usage_rows_born_addressable", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "usage sites carry no handle and no rev today; each row must carry its file node handle and the file rev",
       "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'subsys/pm/pm_shell.c'",
       "assert": { "row_count": 2,
         "rows": [ { "line": 81, "rev": "h22186319d1fe6da5" },
                   { "line": 166, "rev": "h22186319d1fe6da5" } ] } },
+
+    { "name": "found_sweep_from_usages_edits_only_the_site_lines", "use": "forgeql-pub.frozen", "mode": "rw",
+      "steps": [
+        { "fql": "FIND usages OF 'dot_brace_min_len'",
+          "assert": { "row_count": 2, "total": 2 },
+          "capture": { "FR": "found_rev" } },
+        { "fql": "CHANGE NODES FOUND IF REV '${FR}' MATCHING 'dot_brace_min_len' WITH 'dot_brace_min_lenX'",
+          "assert": { "applied": true,
+                      "diff_contains": "fn dot_brace_min_lenX(pattern:",
+                      "pointer": { "/edit_count": 2, "/lines_written": 2, "/lines_removed": 2 } } },
+        { "fql": "UNDO",
+          "assert": { "applied": true } }
+      ] },
 
     { "name": "substring_path_occurrences", "use": "zephyr-andre.frozen",
       "enforcement": "expect_fail",

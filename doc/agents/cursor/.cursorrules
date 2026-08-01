@@ -26,7 +26,7 @@ The right way to find and read code:
 - Function signature (+ metadata): `SHOW body OF 'name' DEPTH 0`
 - Qualified symbol: `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'`
 - Control flow: `SHOW body OF 'name' DEPTH 1`
-- Blast radius: `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, `LIMIT` counts files and every site of a selected file is returned; `total` is the true site count
+- Blast radius: `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, `LIMIT` counts files and every site of a selected file is returned; `total` is the true site count. Each row carries its file's `node_id` and `rev`, so a site is editable where you read it
 - Hotspots: `FIND symbols ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count
 - File structure: `SHOW outline OF 'file'`
 - Class members: `SHOW members OF 'type'`
@@ -47,7 +47,7 @@ The right way to find and read code:
 - Rename/move/copy a file: `MOVE NODE '<hex>' IF REV '<rev>' TO 'path/new.rs'` (or `TO '<dir_hex>'`) · `COPY NODE '<hex>' TO 'api/v2/'` — MOVE is gated, COPY is not; the destination is never clobbered
 - Reverse a bad edit: `UNDO` (most recent) · `UNDO LAST-n`
 - Act on a whole FIND result — `FOUND` is the set the previous FIND returned, and its response carries a **master rev** (`found_rev`) that gates the mutation. Every member is edited in ONE atomic plan:
-  - Sweep: `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a `FIND usages` row its one line
+  - Sweep: `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a `FIND usages` row its one line (it displays its file's handle so you can edit the site directly, but still contributes only its line here)
   - Delete: `DELETE NODES FOUND IF REV '<master>'` — `IF REV` mandatory
   - Relocate: `MOVE NODES FOUND IF REV '<master>' TO 'dir/'` · `COPY NODES FOUND TO 'dir/'` (ungated)
   - A truncated FIND issues no master rev and every FOUND verb refuses — widen the `LIMIT` and look again. Any FIND replaces FOUND; any mutation clears it.

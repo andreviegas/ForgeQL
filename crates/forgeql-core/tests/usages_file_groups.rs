@@ -216,3 +216,46 @@ fn found_set_arms_only_when_no_file_was_dropped() {
         "a set with files dropped must not arm FOUND"
     );
 }
+
+/// Every site row carries the handle and rev of the file it sits in — the two
+/// values `CHANGE NODE '<file>(<line>)' IF REV '<rev>'` needs — and they are
+/// the same values `FIND files` reports for that file.
+#[test]
+fn usage_rows_carry_their_file_handle_and_rev() {
+    let mut t = three_file_workspace();
+    let q = query(&mut t, &format!("FIND usages OF '{MARKER}' IN 'zulu.cpp'"));
+    assert!(!q.results.is_empty());
+
+    let (handle, rev) = t.file_handle("zulu.cpp");
+    for row in &q.results {
+        assert_eq!(row.node_id.as_deref(), Some(handle.as_str()));
+        assert_eq!(row.rev.as_deref(), Some(rev.as_str()));
+    }
+}
+
+/// The handle rides on the *rendered row*, never on the `FOUND` member.
+///
+/// A FOUND member is routed by its handle when it has one, and a file handle
+/// resolves to the file's whole span — so a stamped member would turn a
+/// `CHANGE NODES FOUND` sweep into a whole-file rewrite. The member stays what
+/// it has always been: a path and one line.
+#[test]
+fn found_members_stay_line_scoped_when_rows_carry_a_handle() {
+    let mut t = three_file_workspace();
+    let q = query(&mut t, &format!("FIND usages OF '{MARKER}'"));
+    assert!(
+        q.results.iter().all(|r| r.node_id.is_some()),
+        "the rendered rows do carry handles"
+    );
+
+    let set = forgeql_core::session::found_set::try_restore(t.workspace())
+        .expect("a complete usages result arms FOUND");
+    assert!(!set.members.is_empty());
+    for member in &set.members {
+        assert!(
+            member.node_id.is_none(),
+            "a usage site is a line, not a node: {member:?}"
+        );
+        assert!(member.line.is_some_and(|l| l >= 1), "{member:?}");
+    }
+}

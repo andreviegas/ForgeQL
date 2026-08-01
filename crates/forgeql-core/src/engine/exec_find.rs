@@ -132,6 +132,22 @@ impl ForgeQLEngine {
         }
         let found_rev = self.record_found_set(sid, "find_usages", &results, total, clauses);
 
+        // A site row gains the handle and rev of the file it sits in, so an
+        // agent can write `CHANGE NODE '<file>(<line>)' IF REV …` straight off
+        // the row.  Two constraints on where this may happen:
+        //
+        // A FOUND member is routed by its handle when it has one, and a file
+        // handle resolves to the file's WHOLE span — a stamped member would
+        // turn `CHANGE NODES FOUND` into a whole-file sweep.  `record_found_set`
+        // refuses a handle for this origin, and stamping runs after it anyway.
+        //
+        // Aggregate rows are skipped: `apply_group_by` keeps one arbitrary
+        // member per group, so stamping a `GROUP BY` row would hand back the
+        // handle of one file for a count spanning many — addressability the row
+        // does not have.
+        if !grouped {
+            Self::stamp_file_handles(&root, &mut results);
+        }
         Ok(ForgeQLResult::Query(QueryResult {
             op: "find_usages".to_string(),
             results,
@@ -141,6 +157,41 @@ impl ForgeQLEngine {
             hint: None,
             found_rev,
         }))
+    }
+
+    /// Give every usage row the handle and rev of the file it sits in.
+    ///
+    /// A site is a line, not a node, so it has no handle of its own — but the
+    /// file it lives in does, and that is enough to act on it:
+    /// `CHANGE NODE '<file_hex>(<line>)' IF REV '<file rev>' MATCHING WORD …`
+    /// edits exactly that line, rev-gated. The rev is the file's, so it is
+    /// coarse on purpose: any edit anywhere in the file invalidates it, which
+    /// is the honest gate for a target addressed by line number.
+    ///
+    /// One read per file, not per row: a campaign query returns many sites in
+    /// the same file, and after file-group capping the file count is bounded
+    /// by the limit.
+    fn stamp_file_handles(root: &std::path::Path, results: &mut [crate::result::SymbolMatch]) {
+        let mut seen: std::collections::HashMap<std::path::PathBuf, (String, String)> =
+            std::collections::HashMap::new();
+        for row in results.iter_mut() {
+            let Some(path) = row.path.clone() else {
+                continue;
+            };
+            // Backends may hand back worktree-absolute paths; the handle is
+            // minted from the relative one, exactly as `FIND files` does.
+            let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            let (handle, rev) = seen.entry(rel.clone()).or_insert_with(|| {
+                (
+                    crate::node_id::path_handle(&rel.to_string_lossy()),
+                    crate::node_id::file_rev(&root.join(&rel)),
+                )
+            });
+            row.node_id = Some(handle.clone());
+            if !rev.is_empty() {
+                row.rev = Some(rev.clone());
+            }
+        }
     }
 
     /// Arm `FOUND` from a symbol/usage FIND result.
@@ -182,7 +233,15 @@ impl ForgeQLEngine {
                         // worktree-relative so the sweep can resolve them safely.
                         let rel = path.strip_prefix(&root).unwrap_or(path);
                         Some(FoundMember {
-                            node_id: r.node_id.clone(),
+                            // A usage site is a line, not a node. Its row does
+                            // display the handle of the file it sits in, so the
+                            // site can be edited where it is read — but a member
+                            // is routed by its handle when it has one, and a
+                            // file handle spans the WHOLE file, so taking it
+                            // here would turn a sweep into a whole-file rewrite.
+                            node_id: (origin != "find_usages")
+                                .then(|| r.node_id.clone())
+                                .flatten(),
                             path: rel.to_string_lossy().into_owned(),
                             line: r.line.filter(|l| *l >= 1),
                         })

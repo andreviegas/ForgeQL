@@ -58,7 +58,7 @@ alias.
 | Function signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
-| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, **`LIMIT` counts files** and every site of a selected file is returned; `total` is the true site count |
+| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, **`LIMIT` counts files** and every site of a selected file is returned; `total` is the true site count. Each row carries its **file's** `node_id` and `rev`, so a site is editable where you read it |
 | File structure | `SHOW outline OF 'file'` |
 | Class members | `SHOW members OF 'type'` |
 | Call graph | `SHOW callees OF 'name'` |
@@ -115,7 +115,7 @@ Edit indexed code by stable `node_id` **only**: `CHANGE NODE` replaces a node, `
 | `INSERT NODE FOR '<path>'` | Create an empty file — or a directory, with a trailing slash — and get its handle back. Then write into it with `INSERT AFTER NODE '<hex>' WITH …`. |
 | `<mutation> IF REV '<rev>'` | Guard a mutation on the node's content rev |
 | `UNDO` / `UNDO LAST-n` | Reverse recent mutations from the per-session undo ring |
-| `CHANGE NODES FOUND IF REV '<master>' MATCHING 'a' WITH 'b'` | Sweep the replacement across **every member of the previous FIND** — a handle contributes its whole span, a usage row its one line |
+| `CHANGE NODES FOUND IF REV '<master>' MATCHING 'a' WITH 'b'` | Sweep the replacement across **every member of the previous FIND** — a handle contributes its whole span, a usage row its one line (a usage row displays its file's handle so you can edit the site directly, but still contributes only its line here) |
 | `DELETE NODES FOUND IF REV '<master>'` | Delete every member. `IF REV` **mandatory** |
 | `MOVE NODES FOUND IF REV '<master>' TO 'dir/'` · `COPY NODES FOUND TO 'dir/'` | Relocate every member into a directory, each keeping its basename. MOVE is gated, COPY is not |
 | Raw-text `CHANGE FILE` / copy / move | Non-indexed files only — see the syntax reference |

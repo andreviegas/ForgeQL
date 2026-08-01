@@ -54,7 +54,7 @@ You are a code exploration and transformation agent. All source code is accessed
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
-| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, **`LIMIT` counts files** and every site of a selected file is returned; `total` is the true site count |
+| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, **`LIMIT` counts files** and every site of a selected file is returned; `total` is the true site count. Each row carries its **file's** `node_id` and `rev`, so a site is editable where you read it |
 | Hotspots | `FIND symbols ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count |
 | File structure | `SHOW outline OF 'file' [WHERE fql_kind = '...']` |
 | Class members | `SHOW members OF 'type'` |
@@ -74,7 +74,7 @@ You are a code exploration and transformation agent. All source code is accessed
 | Delete a node | `DELETE NODE '<id>' IF REV '<rev>'` — `'<id>(n-m)'` deletes lines within it |
 | Byte-identical twins | Two identical same-parent siblings share a rev. Deleting one kills the deleted handle (`node_not_found`) — it never re-points at the survivor. Identical revs under one parent = twins: re-`FIND` after deleting one |
 | Relocate a node | `MOVE NODE '<src>' BEFORE/AFTER NODE '<dst>'` — verbatim payload, atomic, cross-file; source removal absorbs trailing blanks |
-| Sweep a whole FIND result | `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a usage row its one line |
+| Sweep a whole FIND result | `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'` — a handle contributes its whole span, a usage row its one line (a usage row displays its file's handle so you can edit the site directly, but still contributes only its line here) |
 | Delete a whole FIND result | `DELETE NODES FOUND IF REV '<master>'` — `IF REV` mandatory |
 | Relocate a whole FIND result | `MOVE NODES FOUND IF REV '<master>' TO 'dir/'` · `COPY NODES FOUND TO 'dir/'` (ungated) — each member keeps its basename |
 | Reverse a bad edit | `UNDO` (most recent) · `UNDO LAST-n` |

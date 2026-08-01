@@ -6,6 +6,32 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.76] — 2026-08-01 — feat: a `FIND usages` row is editable where you read it
+
+### Added — usage rows carry their file's handle and rev
+
+A usage site is a line, not a node, so it had no handle of its own — and the
+row carried nothing else either. Finding a site and changing it meant a second
+round trip through `FIND files` to learn the handle and rev of the file it sat
+in.
+
+Every site row now carries the `node_id` and `rev` of its file — the same two
+values `FIND files` reports for that file — so the edit is written straight
+off the row:
+
+```sql
+FIND usages OF 'oldName' IN 'src/**'
+CHANGE NODE '<node_id>(<line>)' IF REV '<rev>' MATCHING WORD 'oldName' WITH 'newName'
+```
+
+The rev is the file's, so it is deliberately coarse: any edit anywhere in that
+file invalidates it. That is the honest gate for a target addressed by line
+number, because line numbers move.
+
+What a usages row contributes to `FOUND` is unchanged: one line, not the file.
+A `CHANGE NODES FOUND` sweep armed from a usages query still rewrites only the
+site lines, never the rest of the file.
+
 ## [0.139.75] — 2026-08-01 — change: `FIND usages` caps by file, so a listed file shows every one of its sites
 
 ### Changed — `LIMIT` on `FIND usages` counts files, not rows

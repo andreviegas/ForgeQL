@@ -39,7 +39,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
-| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, **`LIMIT` counts files** and every site of a selected file is returned; `total` is the true site count |
+| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, **`LIMIT` counts files** and every site of a selected file is returned; `total` is the true site count. Each row carries its **file's** `node_id` and `rev`, so a site is editable where you read it |
 | Hotspots | `FIND symbols ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count |
 | File structure (tree) | `SHOW outline OF 'file'` — structural decls only, `depth` per row; add `ALL` for every node, or `WHERE fql_kind = '...'` |
 | Subtree outline | `SHOW outline OF '<node_id>'` |
@@ -224,7 +224,10 @@ CHANGE NODES FOUND IF REV 'h9c…' MATCHING 'oldName' WITH 'newName'
   step, never half-applied.
 - **A handle contributes its whole span**, so a symbol row sweeps the entire
   function body, not just its declaration line. A `FIND usages` row is a call
-  site: it contributes that one line.
+  site: it contributes that one line. Such a row *displays* the handle and rev
+  of the file it sits in — so you can edit the site directly with
+  `CHANGE NODE '<node_id>(<line>)' IF REV '<rev>' …` — but it still contributes
+  only its line to `FOUND`; a sweep never touches the rest of the file.
 - **You can only act on what you saw.** A FIND truncated by the default limit
   issues **no** master rev, and every FOUND verb then refuses — widen the `LIMIT`
   (or the filters) and look again.

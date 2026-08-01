@@ -157,7 +157,7 @@ FIND files [clauses]
 |---|---|
 | `FIND symbols` | All indexed AST nodes. Use `WHERE fql_kind = '...'` to narrow. Every row carries a stable `node_id` and a real workspace-total `usages` count — `ORDER BY usages DESC` and `WHERE usages > N` work. |
 | `FIND globals` | Shorthand for `WHERE fql_kind = 'variable'` — file-scope variables, constants, and statics across all supported languages. |
-| `FIND usages OF` | One row per usage **site** of the named symbol (name + path + line), read from usage postings collected at index time. Includes occurrences without call parentheses — function-pointer assignments, references, type positions. **`LIMIT` counts files, not rows** — see below. `GROUP BY file` gives real per-file counts; combine with `IN`/`EXCLUDE`/`WHERE`/`ORDER BY`/`LIMIT`. |
+| `FIND usages OF` | One row per usage **site** of the named symbol (name + path + line), read from usage postings collected at index time. Includes occurrences without call parentheses — function-pointer assignments, references, type positions. Every row carries its **file's** `node_id` and `rev`, so a site is editable where you read it: `CHANGE NODE '<node_id>(<line>)' IF REV '<rev>' MATCHING WORD 'old' WITH 'new'`. **`LIMIT` counts files, not rows** — see below. `GROUP BY file` gives real per-file counts; combine with `IN`/`EXCLUDE`/`WHERE`/`ORDER BY`/`LIMIT`. |
 | `FIND callees OF` | Symbols called from inside the named function body. Alias for `SHOW callees OF`. |
 | `FIND files` | Files in the worktree. Supports `WHERE name = '…'` / `name LIKE`, `DEPTH`, `ORDER BY size`, etc. ForgeQL runtime artifacts are hidden from the listing. |
 
@@ -364,7 +364,7 @@ Every member is mutated in **one plan**: one boundary diff, one `UNDO` step, nev
 
 | Rule | Why |
 |---|---|
-| A **handle contributes its whole span**; a `FIND usages` row contributes its one line | A symbol row means the function; a usage row means the call site |
+| A **handle contributes its whole span**; a `FIND usages` row contributes its one line | A symbol row means the function; a usage row means the call site. A usages row *displays* its file's handle so you can edit the site directly, but it contributes only that line to `FOUND` — a sweep over it never touches the rest of the file |
 | A **truncated FIND issues no master rev**, and every FOUND verb then refuses | `FIND usages` showing 20 files of 500, swept, would rename 20 files' worth and report success. Widen the `LIMIT` and look again |
 | **Any FIND replaces `FOUND`; any mutation clears it** | A mutation shifts line numbers, so the set no longer points at what you saw |
 | A **`GROUP BY` result clears it** | An aggregate row is a count with a filename on it — it addresses nothing |
@@ -1859,12 +1859,12 @@ column shows that field's value instead of `usages`:
 "struct","[MpptState,src/SolarCharger.h,57,11]"
 ```
 
-**FIND usages** — raw sites collapsed per file (`file,[lines]`):
+**FIND usages** — raw sites collapsed per file, with the file's handle and rev so a site is editable from the listing (`file,node_id,rev,[lines]`):
 ```csv
 "find_usages","encenderMotor",3
-"file","[lines]"
-"src/motor_control.cpp","45,89"
-"include/motor_control.hpp","34"
+"file","node_id","rev","[lines]"
+"src/motor_control.cpp","n3f2a91c4e05b","h9c1d4e77a2b30f81","45,89"
+"include/motor_control.hpp","n8b70d2ae61ff","h4e6620bb17ac9d35","34"
 ```
 
 **FIND usages OF … GROUP BY file** — per-file counts (`file,count`, the same aggregate the JSON `count` field carries):

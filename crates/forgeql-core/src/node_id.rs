@@ -10,6 +10,8 @@
 //! [`crate::storage::columnar::overlay::SegmentMeta`].  Query paths call only
 //! string formatting — no SHA-256, no lock, no global state.
 
+use std::path::Path;
+
 use sha2::{Digest, Sha256};
 
 const DEFAULT_SEGMENT_PREFIX_HEX: u8 = 12;
@@ -169,6 +171,28 @@ pub fn format_rev_exact(rev: u64) -> String {
 pub fn rev_of_bytes(bytes: &[u8]) -> u64 {
     let digest = Sha256::digest(bytes);
     u64::from_le_bytes(digest[..8].try_into().unwrap_or([0u8; 8]))
+}
+
+/// The handle a file answers to: `n` + 12 hex of the SHA-256 of its
+/// **workspace-relative** path.
+///
+/// One rule, one place. A `FIND files` row and a `FIND usages` row name the
+/// same file, so they must mint the same handle; computing it twice invites a
+/// silent divergence that only shows up as a `node_not_found` much later.
+#[must_use]
+pub fn path_handle(rel: &str) -> String {
+    format!("n{}", hex_prefix(&sha256_of_path(rel), 12))
+}
+
+/// The rev of a file on disk: [`rev_of_bytes`] over its current contents,
+/// empty when the file cannot be read.
+///
+/// A directory's rev is a membership XOR instead — see [`fold_path_rev`].
+#[must_use]
+pub fn file_rev(abs: &Path) -> String {
+    std::fs::read(abs)
+        .map(|bytes| format_rev(rev_of_bytes(&bytes)))
+        .unwrap_or_default()
 }
 
 /// XOR-fold a path fingerprint into a directory membership rev.

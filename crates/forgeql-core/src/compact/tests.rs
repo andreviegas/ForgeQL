@@ -627,18 +627,19 @@ fn find_usages_groups_by_file() {
     let csv = to_compact(&result);
     let lines: Vec<&str> = csv.lines().collect();
     assert_eq!(lines[0], r#""find_usages","encenderMotor",3"#);
-    assert_eq!(lines[1], r#""file","[lines]""#);
-    assert_eq!(lines[2], r#""src/motor_control.cpp","45,89""#);
-    assert_eq!(lines[3], r#""include/motor_control.hpp","34""#);
+    assert_eq!(lines[1], r#""file","node_id","rev","[lines]""#);
+    assert_eq!(lines[2], r#""src/motor_control.cpp","","","45,89""#);
+    assert_eq!(lines[3], r#""include/motor_control.hpp","","","34""#);
 }
 
 /// After the file-group cap, a rendered file carries *every* one of its sites,
 /// while the header total stays the true site count — together those are how an
 /// agent reads "this campaign listing is complete for these files, and there
-/// are more files behind it".
+/// are more files behind it". The file's handle and rev ride on the same row,
+/// once per file, so the edit needs no second lookup.
 #[test]
 fn find_usages_renders_every_site_of_a_selected_file() {
-    let site = |path: &str, line: usize| SymbolMatch {
+    let site = |path: &str, handle: &str, rev: &str, line: usize| SymbolMatch {
         name: "encenderMotor".into(),
         node_kind: Some("identifier".into()),
         fql_kind: None,
@@ -648,9 +649,19 @@ fn find_usages_renders_every_site_of_a_selected_file() {
         usages_count: None,
         fields: HashMap::new(),
         count: None,
-        node_id: None,
-        rev: None,
+        node_id: Some(handle.into()),
+        rev: Some(rev.into()),
     };
+    let cpp = (
+        "src/motor_control.cpp",
+        "naaaaaaaaaaaa",
+        "h1111111111111111",
+    );
+    let hpp = (
+        "include/motor_control.hpp",
+        "nbbbbbbbbbbbb",
+        "h2222222222222222",
+    );
     let result = ForgeQLResult::Query(QueryResult {
         op: "find_usages".into(),
         // Two files selected out of a set that holds seven sites in all.
@@ -660,20 +671,26 @@ fn find_usages_renders_every_site_of_a_selected_file() {
         found_rev: None,
         hint: None,
         results: vec![
-            site("src/motor_control.cpp", 12),
-            site("src/motor_control.cpp", 45),
-            site("src/motor_control.cpp", 89),
-            site("include/motor_control.hpp", 34),
-            site("include/motor_control.hpp", 51),
+            site(cpp.0, cpp.1, cpp.2, 12),
+            site(cpp.0, cpp.1, cpp.2, 45),
+            site(cpp.0, cpp.1, cpp.2, 89),
+            site(hpp.0, hpp.1, hpp.2, 34),
+            site(hpp.0, hpp.1, hpp.2, 51),
         ],
     });
 
     let csv = to_compact(&result);
     let lines: Vec<&str> = csv.lines().collect();
     assert_eq!(lines[0], r#""find_usages","encenderMotor",7"#);
-    assert_eq!(lines[1], r#""file","[lines]""#);
-    assert_eq!(lines[2], r#""src/motor_control.cpp","12,45,89""#);
-    assert_eq!(lines[3], r#""include/motor_control.hpp","34,51""#);
+    assert_eq!(lines[1], r#""file","node_id","rev","[lines]""#);
+    assert_eq!(
+        lines[2],
+        r#""src/motor_control.cpp","naaaaaaaaaaaa","h1111111111111111","12,45,89""#
+    );
+    assert_eq!(
+        lines[3],
+        r#""include/motor_control.hpp","nbbbbbbbbbbbb","h2222222222222222","34,51""#
+    );
     assert_eq!(lines.len(), 4, "one row per selected file, nothing else");
 }
 
