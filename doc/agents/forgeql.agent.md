@@ -54,7 +54,7 @@ You are a code exploration and transformation agent. All source code is accessed
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
-| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references |
+| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, **`LIMIT` counts files** and every site of a selected file is returned; `total` is the true site count |
 | Hotspots | `FIND symbols ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count |
 | File structure | `SHOW outline OF 'file' [WHERE fql_kind = '...']` |
 | Class members | `SHOW members OF 'type'` |

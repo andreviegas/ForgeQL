@@ -157,9 +157,27 @@ FIND files [clauses]
 |---|---|
 | `FIND symbols` | All indexed AST nodes. Use `WHERE fql_kind = '...'` to narrow. Every row carries a stable `node_id` and a real workspace-total `usages` count — `ORDER BY usages DESC` and `WHERE usages > N` work. |
 | `FIND globals` | Shorthand for `WHERE fql_kind = 'variable'` — file-scope variables, constants, and statics across all supported languages. |
-| `FIND usages OF` | One row per usage **site** of the named symbol (name + path + line), read from usage postings collected at index time. Includes occurrences without call parentheses — function-pointer assignments, references, type positions. `GROUP BY file` gives real per-file counts; combine with `IN`/`EXCLUDE`/`WHERE`/`ORDER BY`/`LIMIT`. |
+| `FIND usages OF` | One row per usage **site** of the named symbol (name + path + line), read from usage postings collected at index time. Includes occurrences without call parentheses — function-pointer assignments, references, type positions. **`LIMIT` counts files, not rows** — see below. `GROUP BY file` gives real per-file counts; combine with `IN`/`EXCLUDE`/`WHERE`/`ORDER BY`/`LIMIT`. |
 | `FIND callees OF` | Symbols called from inside the named function body. Alias for `SHOW callees OF`. |
 | `FIND files` | Files in the worktree. Supports `WHERE name = '…'` / `name LIKE`, `DEPTH`, `ORDER BY size`, etc. ForgeQL runtime artifacts are hidden from the listing. |
+
+> **`FIND usages` caps by file, not by row.** A usage site is one line of one
+> file, so a cap counted in rows would cut the list mid-file — reporting a file
+> as partly used and dropping the rest of it with no marker. The cap therefore
+> selects whole **files**: `LIMIT 5` means "the first five files, every site in
+> each", the default cap means the first 20 files, and `OFFSET` skips whole
+> files so paging never splits one across two pages. Files come back ordered by
+> their first site; sites within a file ascend by line.
+>
+> `total` is the true site count across the whole worktree **even under an
+> explicit `LIMIT`** — it is what a rename campaign measures progress against,
+> and `total` greater than the row count is how you see that files were left
+> out. (`FIND symbols` still reports a `LIMIT`-capped total; the difference is
+> deliberate.) A result with files left out arms no `found_rev`, so every
+> `FOUND` verb refuses.
+>
+> `GROUP BY` is exempt: its rows are aggregates, already one per group, and its
+> `LIMIT` counts those groups.
 
 > **Use `fql_kind` for all filtering.** It is language-agnostic and portable across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific and **deprecated**.
 
@@ -347,7 +365,7 @@ Every member is mutated in **one plan**: one boundary diff, one `UNDO` step, nev
 | Rule | Why |
 |---|---|
 | A **handle contributes its whole span**; a `FIND usages` row contributes its one line | A symbol row means the function; a usage row means the call site |
-| A **truncated FIND issues no master rev**, and every FOUND verb then refuses | `FIND usages` capped at 20 of 500, swept, would rename 20 and report success. Widen the `LIMIT` and look again |
+| A **truncated FIND issues no master rev**, and every FOUND verb then refuses | `FIND usages` showing 20 files of 500, swept, would rename 20 files' worth and report success. Widen the `LIMIT` and look again |
 | **Any FIND replaces `FOUND`; any mutation clears it** | A mutation shifts line numbers, so the set no longer points at what you saw |
 | A **`GROUP BY` result clears it** | An aggregate row is a count with a filename on it — it addresses nothing |
 | A **rev mismatch hands back no new rev** | The set moved; the only safe recovery is to re-run the FIND and see what it looks like now |
@@ -884,8 +902,8 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 | `EXCLUDE` | Remove files matching glob pattern. Repeatable — every `EXCLUDE` clause applies; a row is dropped when **any** pattern matches its path. |
 | `ORDER BY` | Sort results. Default `ASC`. Any filterable field including enrichment fields (numeric values like `shadow_count`, `escape_count` sort numerically). |
 | `GROUP BY` | Aggregate by field. Adds `count` to each group. |
-| `LIMIT` | Maximum rows returned. Implicit cap of 20 when omitted on `FIND`. |
-| `OFFSET` | Skip N rows (pagination). |
+| `LIMIT` | Maximum rows returned. Implicit cap of 20 when omitted on `FIND`. On `FIND usages` without `GROUP BY` the unit is **files**, not rows: the cap selects whole files and every site of a selected file is returned. |
+| `OFFSET` | Skip N rows (pagination). On `FIND usages` without `GROUP BY` it skips whole **files**, so a page never splits one file. |
 | `DEPTH` | For `SHOW body`: collapse depth. For `FIND files`: directory tree depth. |
 
 ---

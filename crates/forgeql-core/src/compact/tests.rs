@@ -632,6 +632,51 @@ fn find_usages_groups_by_file() {
     assert_eq!(lines[3], r#""include/motor_control.hpp","34""#);
 }
 
+/// After the file-group cap, a rendered file carries *every* one of its sites,
+/// while the header total stays the true site count — together those are how an
+/// agent reads "this campaign listing is complete for these files, and there
+/// are more files behind it".
+#[test]
+fn find_usages_renders_every_site_of_a_selected_file() {
+    let site = |path: &str, line: usize| SymbolMatch {
+        name: "encenderMotor".into(),
+        node_kind: Some("identifier".into()),
+        fql_kind: None,
+        language: None,
+        path: Some(PathBuf::from(path)),
+        line: Some(line),
+        usages_count: None,
+        fields: HashMap::new(),
+        count: None,
+        node_id: None,
+        rev: None,
+    };
+    let result = ForgeQLResult::Query(QueryResult {
+        op: "find_usages".into(),
+        // Two files selected out of a set that holds seven sites in all.
+        total: 7,
+        metric_hint: None,
+        group_by_field: None,
+        found_rev: None,
+        hint: None,
+        results: vec![
+            site("src/motor_control.cpp", 12),
+            site("src/motor_control.cpp", 45),
+            site("src/motor_control.cpp", 89),
+            site("include/motor_control.hpp", 34),
+            site("include/motor_control.hpp", 51),
+        ],
+    });
+
+    let csv = to_compact(&result);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[0], r#""find_usages","encenderMotor",7"#);
+    assert_eq!(lines[1], r#""file","[lines]""#);
+    assert_eq!(lines[2], r#""src/motor_control.cpp","12,45,89""#);
+    assert_eq!(lines[3], r#""include/motor_control.hpp","34,51""#);
+    assert_eq!(lines.len(), 4, "one row per selected file, nothing else");
+}
+
 #[test]
 fn find_usages_grouped_by_file_shows_count() {
     // GROUP BY file: the engine has already collapsed the sites to one row per

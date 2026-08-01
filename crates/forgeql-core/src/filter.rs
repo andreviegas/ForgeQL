@@ -4,7 +4,8 @@
 /// which applies path inclusion/exclusion, WHERE predicates, GROUP BY,
 /// HAVING predicates, ORDER BY, OFFSET, and LIMIT — in that fixed order.
 use std::cmp::Ordering;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use crate::ir::{Clauses, CompareOp, GroupBy, PredicateValue, SortDirection};
 use regex::Regex;
@@ -366,6 +367,41 @@ pub fn apply_clauses<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
 /// flatten the structural tree into an alphabetical list.
 pub fn apply_clauses_keep_order<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
     apply_clauses_inner(results, clauses, false);
+}
+
+/// Limit a row list by *file group* rather than by row count.
+///
+/// A `FIND usages` row is one line of one file, and the question behind the
+/// query is "which files hold this name?".  A cap counted in rows answers a
+/// different question: it cuts the list mid-file, so a file reports part of its
+/// sites and hides the rest with nothing to say it did.  The cap therefore
+/// selects whole files — every site of a selected file is returned.
+///
+/// Groups keep the order in which their first row appears, which under the
+/// default `(name, line, path)` ordering is lowest line first, and `OFFSET`
+/// skips whole groups so paging never splits one file across two pages.
+pub(crate) fn take_file_groups<T: ClauseTarget>(
+    results: Vec<T>,
+    offset: usize,
+    limit: usize,
+) -> Vec<T> {
+    let mut slot_of: HashMap<Option<PathBuf>, usize> = HashMap::new();
+    let mut groups: Vec<Vec<T>> = Vec::new();
+    for item in results {
+        let key = item.path().map(Path::to_path_buf);
+        let slot = *slot_of.entry(key).or_insert_with(|| {
+            let next = groups.len();
+            groups.push(Vec::new());
+            next
+        });
+        groups[slot].push(item);
+    }
+    groups
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .flatten()
+        .collect()
 }
 
 fn apply_clauses_inner<T: ClauseTarget>(

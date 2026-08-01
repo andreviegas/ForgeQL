@@ -92,14 +92,43 @@ impl ForgeQLEngine {
         let sid = require_session_id(session_id)?;
         let session = self.require_session(sid)?;
         let root = session.worktree_path.clone();
+        let find_limit = session.output_config().find_limit;
+
+        // A usage site is one line of one file, and the question behind the
+        // query is "which files hold this name?".  So the cap counts files, not
+        // rows: the backend is asked for every site — LIMIT and OFFSET are
+        // withheld from it — and whole file groups are selected below.  Cutting
+        // the site list at a row count instead would report a file as partly
+        // used and drop the rest of it with no marker.
+        //
+        // GROUP BY is exempt.  Its rows are aggregates, already one per group,
+        // and its own LIMIT counts those groups; re-grouping them by path would
+        // collapse a `GROUP BY` on any other field into a single bucket.
+        let grouped = clauses.group_by.is_some();
+        let mut engine_clauses = clauses.clone();
+        if !grouped {
+            engine_clauses.limit = None;
+            engine_clauses.offset = None;
+        }
 
         let mut results = session
             .engine_for(backend)?
-            .find_usages(of, clauses, &root)?;
+            .find_usages(of, &engine_clauses, &root)?;
 
+        // `total` is the true site count even under an explicit LIMIT — the
+        // number a rename campaign measures its progress against.  FIND symbols
+        // still reports a LIMIT-capped total; the divergence is deliberate.
         let total = results.len();
-        if clauses.limit.is_none() {
-            results.truncate(session.output_config().find_limit);
+        if grouped {
+            if clauses.limit.is_none() {
+                results.truncate(find_limit);
+            }
+        } else {
+            results = crate::filter::take_file_groups(
+                results,
+                clauses.offset.unwrap_or(0),
+                clauses.limit.unwrap_or(find_limit),
+            );
         }
         let found_rev = self.record_found_set(sid, "find_usages", &results, total, clauses);
 

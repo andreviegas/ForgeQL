@@ -26,7 +26,7 @@ The right way to find and read code:
 - Function signature (+ metadata): `SHOW body OF 'name' DEPTH 0`
 - Qualified symbol: `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'`
 - Control flow: `SHOW body OF 'name' DEPTH 1`
-- Blast radius: `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references
+- Blast radius: `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, `LIMIT` counts files and every site of a selected file is returned; `total` is the true site count
 - Hotspots: `FIND symbols ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count
 - File structure: `SHOW outline OF 'file'`
 - Class members: `SHOW members OF 'type'`

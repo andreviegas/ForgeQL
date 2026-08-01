@@ -39,14 +39,10 @@
       ] },
 
     { "name": "usages_default_limit_is_rendered_rows", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "the default find limit truncates the site list to 20 before rendering, so a 61-site file reports only 20 lines with no marker",
       "fql": "FIND usages OF '__ASSERT_NO_MSG' IN 'drivers/i3c/i3c_ccc.c'",
       "assert": { "row_count": 61, "total": 61 } },
 
     { "name": "usages_default_limit_files_complete", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "the default limit cuts the site list mid-file (20 sites spanning 14 files today) instead of returning complete rows for the first 20 files",
       "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME'",
       "assert": { "total": 98, "distinct": { "by": "path", "count": 20 } } },
 

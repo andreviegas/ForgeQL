@@ -668,14 +668,54 @@ fn find_usages_in_glob() {
     }
 }
 
+/// `LIMIT` on `FIND usages` counts files, not rows: at most two files come
+/// back, and each selected file carries every one of its sites — so the row
+/// count may legitimately exceed the limit.
 #[test]
 fn find_usages_with_limit() {
     let (mut e, sid, _d) = engine_with_session();
     let r = exec(&mut e, &sid, "FIND usages OF 'encenderMotor' LIMIT 2");
     let qr = common::as_query(&r);
-    assert!(qr.results.len() <= 2);
+
+    let path_of = |row: &forgeql_core::result::SymbolMatch| {
+        row.path
+            .as_ref()
+            .expect("path")
+            .to_string_lossy()
+            .into_owned()
+    };
+    let mut files: Vec<String> = qr.results.iter().map(path_of).collect();
+    files.sort();
+    files.dedup();
+    assert!(
+        files.len() <= 2,
+        "LIMIT 2 selects at most two files, got {files:?}"
+    );
+
+    let per_file: Vec<(String, usize)> = files
+        .iter()
+        .map(|f| {
+            let got = qr.results.iter().filter(|row| path_of(row) == *f).count();
+            (f.clone(), got)
+        })
+        .collect();
+    for (file, got) in per_file {
+        let scoped = exec(
+            &mut e,
+            &sid,
+            &format!("FIND usages OF 'encenderMotor' IN '{file}'"),
+        );
+        let all = common::as_query(&scoped);
+        assert_eq!(
+            got,
+            all.results.len(),
+            "{file}: a selected file must carry every one of its sites"
+        );
+    }
 }
 
+/// `ORDER BY line ASC` orders the sites; the rows then come back clustered per
+/// file, so lines ascend *within* a file and files follow their first site.
 #[test]
 fn find_usages_order_by_line() {
     let (mut e, sid, _d) = engine_with_session();
@@ -685,13 +725,41 @@ fn find_usages_order_by_line() {
         "FIND usages OF 'encenderMotor' ORDER BY line ASC LIMIT 100",
     );
     let qr = common::as_query(&r);
-    let lines: Vec<usize> = qr.results.iter().map(|r| r.line.unwrap_or(0)).collect();
-    for w in lines.windows(2) {
+
+    let mut first_seen: Vec<(String, usize)> = Vec::new();
+    let mut last: Option<(String, usize)> = None;
+    for row in &qr.results {
+        let path = row
+            .path
+            .as_ref()
+            .expect("path")
+            .to_string_lossy()
+            .into_owned();
+        let line = row.line.unwrap_or(0);
+        match &last {
+            Some((prev_path, prev_line)) if *prev_path == path => assert!(
+                *prev_line <= line,
+                "ORDER BY line ASC broken inside {path}: {prev_line} > {line}"
+            ),
+            _ => {
+                assert!(
+                    !first_seen.iter().any(|(p, _)| *p == path),
+                    "a file's sites must be contiguous, {path} appears twice"
+                );
+                first_seen.push((path.clone(), line));
+            }
+        }
+        last = Some((path, line));
+    }
+
+    for w in first_seen.windows(2) {
         assert!(
-            w[0] <= w[1],
-            "ORDER BY line ASC broken: {} > {}",
-            w[0],
-            w[1]
+            w[0].1 <= w[1].1,
+            "files follow their first site: {} ({}) before {} ({})",
+            w[0].0,
+            w[0].1,
+            w[1].0,
+            w[1].1
         );
     }
 }

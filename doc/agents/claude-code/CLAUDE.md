@@ -39,7 +39,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 | Symbol signature | `SHOW body OF 'name' DEPTH 0` — also returns enrichment metadata |
 | Qualified symbol | `SHOW body OF 'Class::method'` or `SHOW body OF 'Obj.method'` |
 | Control flow overview | `SHOW body OF 'name' DEPTH 1` |
-| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references |
+| Blast radius | `FIND usages OF 'name' GROUP BY file ORDER BY count DESC` — one row per usage site, includes non-call references. Unfiltered, **`LIMIT` counts files** and every site of a selected file is returned; `total` is the true site count |
 | Hotspots | `FIND symbols ORDER BY usages DESC LIMIT 10` — `usages` is a real workspace-total count |
 | File structure (tree) | `SHOW outline OF 'file'` — structural decls only, `depth` per row; add `ALL` for every node, or `WHERE fql_kind = '...'` |
 | Subtree outline | `SHOW outline OF '<node_id>'` |

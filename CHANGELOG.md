@@ -6,6 +6,35 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.75] — 2026-08-01 — change: `FIND usages` caps by file, so a listed file shows every one of its sites
+
+### Changed — `LIMIT` on `FIND usages` counts files, not rows
+
+A usage site is one line of one file, and the question behind `FIND usages` is
+"which files hold this name?". The row cap answered a different one: it cut the
+site list mid-file, so a file came back with part of its sites and nothing said
+the rest had been dropped. A file with 61 sites reported 20 lines and looked
+complete.
+
+The cap now selects whole files. `LIMIT 5` means "the first five files, every
+site in each"; the default cap means the first 20 files; `OFFSET` skips whole
+files, so paging never splits one file across two pages. Files come back
+ordered by their first site, and sites within a file ascend by line — the same
+file order the compact output showed before, now with complete line lists.
+
+`total` is the true site count across the worktree **even under an explicit
+`LIMIT`**: it is what a rename campaign measures progress against, and a
+`total` larger than the row count is how you see that files were left out.
+This diverges from `FIND symbols`, whose `total` is still capped by `LIMIT`;
+the difference is deliberate.
+
+A result with files left out still arms no `found_rev`, so every `FOUND` verb
+refuses over it — but a listing that now fits, such as one large file's whole
+site set, arms cleanly where it used to be refused.
+
+`GROUP BY` is unaffected: its rows are aggregates, already one per group, and
+its `LIMIT` counts those groups.
+
 ## [0.139.74] — 2026-07-31 — fix: a re-USE after the base moves rebuilds the session instead of resuming the old snapshot
 
 ### Fixed — stale session resume after `REFRESH SOURCE`
