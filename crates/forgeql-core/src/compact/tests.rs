@@ -4,6 +4,13 @@ use std::path::PathBuf;
 use super::*;
 use crate::result::*;
 
+/// The `fields` map an occurrence row carries: every `FIND usages` row is
+/// tagged with the role it was found in, so a fixture without one would pin a
+/// shape no real query produces.
+fn role(role: &str) -> HashMap<String, String> {
+    HashMap::from([("role".to_owned(), role.to_owned())])
+}
+
 // -- SHOW outline --------------------------------------------------
 
 #[test]
@@ -591,7 +598,7 @@ fn find_usages_groups_by_file() {
                 path: Some(PathBuf::from("src/motor_control.cpp")),
                 line: Some(45),
                 usages_count: None,
-                fields: HashMap::new(),
+                fields: role("code"),
                 count: None,
                 node_id: None,
                 rev: None,
@@ -604,7 +611,7 @@ fn find_usages_groups_by_file() {
                 path: Some(PathBuf::from("src/motor_control.cpp")),
                 line: Some(89),
                 usages_count: None,
-                fields: HashMap::new(),
+                fields: role("code"),
                 count: None,
                 node_id: None,
                 rev: None,
@@ -617,7 +624,7 @@ fn find_usages_groups_by_file() {
                 path: Some(PathBuf::from("include/motor_control.hpp")),
                 line: Some(34),
                 usages_count: None,
-                fields: HashMap::new(),
+                fields: role("code"),
                 count: None,
                 node_id: None,
                 rev: None,
@@ -627,9 +634,9 @@ fn find_usages_groups_by_file() {
     let csv = to_compact(&result);
     let lines: Vec<&str> = csv.lines().collect();
     assert_eq!(lines[0], r#""find_usages","encenderMotor",3"#);
-    assert_eq!(lines[1], r#""file","node_id","rev","[lines]""#);
-    assert_eq!(lines[2], r#""src/motor_control.cpp","","","45,89""#);
-    assert_eq!(lines[3], r#""include/motor_control.hpp","","","34""#);
+    assert_eq!(lines[1], r#""file","role","node_id","rev","[lines]""#);
+    assert_eq!(lines[2], r#""src/motor_control.cpp","code","","","45,89""#);
+    assert_eq!(lines[3], r#""include/motor_control.hpp","code","","","34""#);
 }
 
 /// After the file-group cap, a rendered file carries *every* one of its sites,
@@ -647,7 +654,7 @@ fn find_usages_renders_every_site_of_a_selected_file() {
         path: Some(PathBuf::from(path)),
         line: Some(line),
         usages_count: None,
-        fields: HashMap::new(),
+        fields: role("code"),
         count: None,
         node_id: Some(handle.into()),
         rev: Some(rev.into()),
@@ -682,14 +689,14 @@ fn find_usages_renders_every_site_of_a_selected_file() {
     let csv = to_compact(&result);
     let lines: Vec<&str> = csv.lines().collect();
     assert_eq!(lines[0], r#""find_usages","encenderMotor",7"#);
-    assert_eq!(lines[1], r#""file","node_id","rev","[lines]""#);
+    assert_eq!(lines[1], r#""file","role","node_id","rev","[lines]""#);
     assert_eq!(
         lines[2],
-        r#""src/motor_control.cpp","naaaaaaaaaaaa","h1111111111111111","12,45,89""#
+        r#""src/motor_control.cpp","code","naaaaaaaaaaaa","h1111111111111111","12,45,89""#
     );
     assert_eq!(
         lines[3],
-        r#""include/motor_control.hpp","nbbbbbbbbbbbb","h2222222222222222","34,51""#
+        r#""include/motor_control.hpp","code","nbbbbbbbbbbbb","h2222222222222222","34,51""#
     );
     assert_eq!(lines.len(), 4, "one row per selected file, nothing else");
 }
@@ -709,7 +716,7 @@ fn find_usages_renders_a_large_line_list_as_one_row() {
             path: Some(PathBuf::from("src/hot.cpp")),
             line: Some(line),
             usages_count: None,
-            fields: HashMap::new(),
+            fields: role("code"),
             count: None,
             node_id: Some("ncccccccccccc".into()),
             rev: Some("h3333333333333333".into()),
@@ -729,13 +736,97 @@ fn find_usages_renders_a_large_line_list_as_one_row() {
     let lines: Vec<&str> = csv.lines().collect();
     assert_eq!(lines.len(), 3, "header, column row, one file row");
     assert_eq!(lines[0], r#""find_usages","encenderMotor",900"#);
-    assert_eq!(lines[1], r#""file","node_id","rev","[lines]""#);
+    assert_eq!(lines[1], r#""file","role","node_id","rev","[lines]""#);
     assert!(
-        lines[2].starts_with(r#""src/hot.cpp","ncccccccccccc","h3333333333333333","1,2,3,"#),
+        lines[2].starts_with(r#""src/hot.cpp","code","ncccccccccccc","h3333333333333333","1,2,3,"#),
         "{}",
         lines[2]
     );
     assert!(lines[2].ends_with(r#",399,400""#), "{}", lines[2]);
+}
+
+#[test]
+fn find_usages_splits_one_file_by_role() {
+    // The shape L4 exists to produce: a file whose occurrences are part code
+    // and part comment must not blur the two into one line list, or an agent
+    // sweeping the listing cannot tell a reference from a mention.
+    let site = |line: usize, r: &str| SymbolMatch {
+        name: "CONFIG_X".into(),
+        node_kind: None,
+        fql_kind: None,
+        language: None,
+        path: Some(PathBuf::from("include/device.h")),
+        line: Some(line),
+        usages_count: None,
+        fields: role(r),
+        count: None,
+        node_id: Some("naaaaaaaaaaaa".into()),
+        rev: Some("h1111111111111111".into()),
+    };
+    let result = ForgeQLResult::Query(QueryResult {
+        op: "find_usages".into(),
+        total: 4,
+        metric_hint: None,
+        group_by_field: None,
+        found_rev: None,
+        hint: None,
+        // Document order: the roles interleave, as they do in a real file.
+        results: vec![
+            site(211, "code"),
+            site(214, "comment"),
+            site(231, "code"),
+            site(242, "comment"),
+        ],
+    });
+    let csv = to_compact(&result);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[1], r#""file","role","node_id","rev","[lines]""#);
+    assert_eq!(
+        lines[2],
+        r#""include/device.h","code","naaaaaaaaaaaa","h1111111111111111","211,231""#
+    );
+    assert_eq!(
+        lines[3],
+        r#""include/device.h","comment","naaaaaaaaaaaa","h1111111111111111","214,242""#
+    );
+    assert_eq!(
+        lines.len(),
+        4,
+        "one row per (file, role) pair, both keeping the file's handle"
+    );
+}
+
+#[test]
+fn find_usages_grouped_by_role_labels_the_key_column() {
+    // The key column names the field grouped on. Printing `file` over role
+    // values would read as a path list.
+    let group = |role_name: &str, count: usize| SymbolMatch {
+        name: "CONFIG_X".into(),
+        node_kind: None,
+        fql_kind: None,
+        language: None,
+        path: Some(PathBuf::from("include/device.h")),
+        line: Some(211),
+        usages_count: None,
+        fields: role(role_name),
+        count: Some(count),
+        node_id: None,
+        rev: None,
+    };
+    let result = ForgeQLResult::Query(QueryResult {
+        op: "find_usages".into(),
+        total: 11,
+        metric_hint: None,
+        group_by_field: Some("role".into()),
+        found_rev: None,
+        hint: None,
+        results: vec![group("code", 4), group("comment", 7)],
+    });
+    let csv = to_compact(&result);
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[1], r#""role","count""#);
+    assert_eq!(lines[2], r#""code",4"#);
+    assert_eq!(lines[3], r#""comment",7"#);
 }
 
 #[test]

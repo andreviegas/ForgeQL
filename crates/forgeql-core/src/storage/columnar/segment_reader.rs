@@ -22,7 +22,7 @@
     clippy::unused_self,               // u32_of dispatches on col+row, not self; retained as method for symmetry
 )]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -237,6 +237,10 @@ pub struct SegmentReader {
     /// Usage postings FST (BUG-006): identifier text → 1-based source lines.
     /// `None` when the file produced no usage sites (blob omitted at flush).
     pub(crate) usages_fst: Option<FstMap<MmapSlice>>,
+    /// Mention postings FSTs, one per occurrence role, keyed by role name and
+    /// sorted so lookups return roles in a stable order. Empty when the file
+    /// produced no mentions (the blob pairs are omitted at flush).
+    pub(crate) mention_fsts: BTreeMap<String, FstMap<MmapSlice>>,
 }
 
 impl SegmentReader {
@@ -299,6 +303,29 @@ impl SegmentReader {
             _ => None,
         };
 
+        // Mention postings: one FST per role, discovered from the TOC so the
+        // reader never needs a list of roles compiled into it. A segment
+        // written before a role existed simply has no blob for it.
+        let mut mention_fsts: BTreeMap<String, FstMap<MmapSlice>> = BTreeMap::new();
+        for (blob_name, &(start, end)) in &blobs {
+            let Some(role) = blob_name
+                .strip_prefix("mentions_")
+                .and_then(|rest| rest.strip_suffix("_fst"))
+            else {
+                continue;
+            };
+            if end <= start {
+                continue;
+            }
+            let fst = FstMap::new(MmapSlice {
+                mmap: Arc::clone(&mmap),
+                start,
+                end,
+            })
+            .with_context(|| format!("parsing {blob_name} blob"))?;
+            let _ = mention_fsts.insert(role.to_owned(), fst);
+        }
+
         Ok(Self {
             mmap,
             blobs,
@@ -314,6 +341,7 @@ impl SegmentReader {
             name_prefix,
             name_fst,
             usages_fst,
+            mention_fsts,
         })
     }
 
@@ -490,6 +518,26 @@ impl SegmentReader {
             return Vec::new();
         };
         decode_name_postings(encoded, self.blob_bytes("usages_postings"))
+    }
+
+    /// Every mention of `name` in this file, as `(role, 1-based line)` pairs.
+    ///
+    /// Roles come back in sorted order and a line repeats once per occurrence
+    /// on it. Returns empty when the file mentions the name nowhere.
+    pub fn lookup_mention_sites(&self, name: &str) -> Vec<(&str, u32)> {
+        let mut sites = Vec::new();
+        for (role, fst) in &self.mention_fsts {
+            let Some(encoded) = fst.get(name.as_bytes()) else {
+                continue;
+            };
+            let postings = self.blob_bytes(&format!("mentions_{role}_postings"));
+            sites.extend(
+                decode_name_postings(encoded, postings)
+                    .into_iter()
+                    .map(|line| (role.as_str(), line)),
+            );
+        }
+        sites
     }
 
     /// Return the raw bytes of the `name_postings` blob (used by overlay builder).

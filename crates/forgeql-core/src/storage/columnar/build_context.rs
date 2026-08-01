@@ -327,6 +327,17 @@ impl ColumnarBuildContext {
                     builder.add_usage(name, u32::try_from(site.line).unwrap_or(u32::MAX));
                 }
             }
+            for (role, by_name) in &table.mentions {
+                for (name, sites) in by_name {
+                    for site in sites.iter().filter(|s| s.path_id == path_id) {
+                        builder.add_mention(
+                            role,
+                            name,
+                            u32::try_from(site.line).unwrap_or(u32::MAX),
+                        );
+                    }
+                }
+            }
         }
 
         (local_cols, ordinal_row)

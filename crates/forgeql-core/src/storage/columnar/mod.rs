@@ -249,7 +249,14 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        `#if` / `#elif` emitted no row at all and now emit one named by the
 ///        normalised condition. Both change stored rows and shift sibling
 ///        ordinals in every C/C++ file holding a directive.
-pub const ENRICH_VER: u32 = 46;
+///   47 — comments contribute occurrence sites. Every identifier token written
+///        inside a node kind listed in a language's `mention_text_kinds` is
+///        stored in a new `mentions_<role>_fst` / `_postings` blob pair, keyed
+///        by the role that kind carries. No existing blob moves and no row
+///        changes, but a segment written before this generation holds no
+///        mention postings at all, so `FIND usages` would silently under-report
+///        comment sites when read from one.
+pub const ENRICH_VER: u32 = 47;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

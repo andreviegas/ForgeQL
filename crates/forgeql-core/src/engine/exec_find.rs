@@ -210,7 +210,10 @@ impl ForgeQLEngine {
             results,
             total,
             metric_hint: None,
-            group_by_field: None,
+            group_by_field: match &clauses.group_by {
+                Some(GroupBy::Field(f)) if f != "fql_kind" => Some(f.clone()),
+                _ => None,
+            },
             hint: Self::withheld_hint(withheld),
             found_rev,
         }))

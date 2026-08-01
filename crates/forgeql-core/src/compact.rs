@@ -833,13 +833,14 @@ fn compact_find_usages(query: &QueryResult) -> String {
     // renderer and the JSON output, which both show `count`, so every format
     // reports the same aggregate.
     if query.results.iter().any(|r| r.count.is_some()) {
-        row(&mut out, &[&q("file"), &q("count")]);
-        for r in &query.results {
-            let file = r
-                .path
-                .as_ref()
-                .map_or(String::new(), |p| p.to_string_lossy().into_owned());
-            row(&mut out, &[&q(&file), &r.count.unwrap_or(0).to_string()]);
+        // Label the key column with the field actually grouped on. `GROUP BY
+        // file` is the common case and still reads `file`, because that field's
+        // group key is the path; `GROUP BY role` must not claim otherwise.
+        let label = query.group_by_field.as_deref().unwrap_or("file");
+        row(&mut out, &[&q(label), &q("count")]);
+        for r in query.projected_rows() {
+            let key = r.group_key.unwrap_or(r.path);
+            row(&mut out, &[&q(&key), &r.count.unwrap_or(0).to_string()]);
         }
         chomp(&mut out);
         return out;
@@ -850,13 +851,22 @@ fn compact_find_usages(query: &QueryResult) -> String {
     // no second lookup through `FIND files`.
     row(
         &mut out,
-        &[&q("file"), &q("node_id"), &q("rev"), &q("[lines]")],
+        &[
+            &q("file"),
+            &q("role"),
+            &q("node_id"),
+            &q("rev"),
+            &q("[lines]"),
+        ],
     );
     let groups = group_usages_by_file(query);
     for g in &groups {
         let lines_str: Vec<String> = g.lines.iter().map(ToString::to_string).collect();
         let val = q(&lines_str.join(","));
-        row(&mut out, &[&q(&g.file), &q(&g.node_id), &q(&g.rev), &val]);
+        row(
+            &mut out,
+            &[&q(&g.file), &q(&g.role), &q(&g.node_id), &q(&g.rev), &val],
+        );
     }
     chomp(&mut out);
     out
@@ -1031,37 +1041,40 @@ fn group_callgraph(entries: &[crate::result::CallGraphEntry]) -> Vec<(String, Ve
     groups
 }
 
-/// One rendered `FIND usages` file row: the file, the handle and rev an agent
-/// edits it by, and every site line it holds.
+/// One rendered `FIND usages` row: a file, the role its sites were found in,
+/// the handle and rev an agent edits the file by, and every site line.
 ///
 /// The handle and rev sit on the group, not on each site, because they are the
 /// file's: one pair per file is both the true shape and the cheap one.
+///
+/// A file whose occurrences span more than one role renders one row per role,
+/// so `code` and `comment` sites stay separable at a glance. The `LIMIT` still
+/// counts files, not rows: a selected file always renders all of its roles.
 struct UsageFileGroup {
     file: String,
+    role: String,
     node_id: String,
     rev: String,
     lines: Vec<usize>,
 }
 
-/// Group usage rows by file, preserving first-appearance order.
+/// Group usage rows by file and role, preserving first-appearance order.
 fn group_usages_by_file(query: &QueryResult) -> Vec<UsageFileGroup> {
     let mut groups: Vec<UsageFileGroup> = Vec::new();
-    for r in &query.results {
-        let file = r
-            .path
-            .as_ref()
-            .map_or(String::new(), |p| p.to_string_lossy().into_owned());
-        let line = r.line.unwrap_or(0);
-        if let Some(g) = groups.iter_mut().find(|g| g.file == file) {
-            g.lines.push(line);
+    for r in query.projected_rows() {
+        let file = r.path;
+        let role = r.role.unwrap_or_default();
+        if let Some(g) = groups.iter_mut().find(|g| g.file == file && g.role == role) {
+            g.lines.push(r.line);
         } else {
             groups.push(UsageFileGroup {
                 file,
+                role,
                 // Every site of a file carries that file's handle and rev, so
                 // the first one speaks for the group.
-                node_id: r.node_id.clone().unwrap_or_default(),
-                rev: r.rev.clone().unwrap_or_default(),
-                lines: vec![line],
+                node_id: r.node_id.unwrap_or_default(),
+                rev: r.rev.unwrap_or_default(),
+                lines: vec![r.line],
             });
         }
     }

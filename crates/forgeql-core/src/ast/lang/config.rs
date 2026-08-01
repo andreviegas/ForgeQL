@@ -222,6 +222,13 @@ impl LanguageConfig {
         self.usage_node_kinds.iter().any(|s| s == kind)
     }
 
+    /// The occurrence role for text found inside a node of this kind, or
+    /// `None` when the kind carries no prose worth scanning.
+    #[must_use]
+    pub fn mention_role(&self, kind: &str) -> Option<&str> {
+        self.mention_text_kinds.get(kind).map(String::as_str)
+    }
+
     /// Is this a statement / expression boundary kind?
     ///
     /// Used to stop upward tree traversal in data-flow analysis and to

@@ -202,6 +202,15 @@ pub struct LanguageConfig {
     /// Identifier node kinds that produce usage sites.
     pub(crate) usage_node_kinds: Vec<String>,
 
+    /// Text-bearing node kinds scanned for identifier mentions, keyed by raw
+    /// grammar kind and valued by the occurrence role every token found inside
+    /// that kind carries.
+    ///
+    /// Core never names a construct: it asks whether a kind is in this map and
+    /// stores the role it maps to. Which kinds carry prose, and what to call
+    /// the prose, are both the language plugin's answer.
+    pub(crate) mention_text_kinds: HashMap<String, String>,
+
     /// Node kinds that act as statement / expression boundaries.
     pub(crate) statement_boundary_kinds: Vec<String>,
 
@@ -642,6 +651,60 @@ pub fn normalise_condition(text: &str) -> String {
         .join(" ")
 }
 
+/// Split arbitrary text into identifier tokens, each paired with the 1-based
+/// source line it sits on and its byte offset within `text`.
+///
+/// `start_line` is the line of the text's first byte, so a token's line is
+/// `start_line` plus the number of newlines preceding it *inside* `text`. The
+/// node's own start line is not enough: a token in the middle of a twelve-line
+/// comment belongs to the line it is written on, not to the line the comment
+/// opened on.
+///
+/// The token rule is the one the usage recorder already applies to identifier
+/// nodes — `[A-Za-z_][A-Za-z0-9_]*`, longer than one character — so a name
+/// written in prose and the same name written in code share one key. Bytes
+/// outside that alphabet, including every UTF-8 continuation byte, separate
+/// tokens rather than joining them.
+///
+/// The alphabet is the query surface's, not any source language's: it is the
+/// DSL's own `identifier` rule (`parser/forgeql.pest`) minus `:`, which must
+/// not glue `A::B` into one token inside prose. That is why it lives in core
+/// and takes no per-language configuration — there is no grammar inside a
+/// comment to ask, and every language whose names are ASCII identifiers gives
+/// the same answer.
+///
+/// A language whose names are NOT ASCII identifiers — a Kconfig or YAML key
+/// holding `-`, `.` or `/` — is not served by this and must not be opted in
+/// through `mention_text_kinds` expecting whole-name tokens: it would be split
+/// silently at each punctuation mark. Those names are the substring tier's job
+/// (the DSL already spells their shape as `bare_value`); if a language ever
+/// needs a different alphabet here, the rule moves to the language config at
+/// that point, when there is a second answer to justify the knob.
+#[must_use]
+pub fn identifier_tokens(text: &str, start_line: usize) -> Vec<(String, usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut tokens = Vec::new();
+    let mut line = start_line;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\n' {
+            line += 1;
+            i += 1;
+        } else if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            if i - start > 1 {
+                tokens.push((text[start..i].to_owned(), line, start));
+            }
+        } else {
+            i += 1;
+        }
+    }
+    tokens
+}
+
 // -----------------------------------------------------------------------
 // LanguageRegistry — maps file extensions to language implementations
 // -----------------------------------------------------------------------
@@ -733,6 +796,48 @@ pub use inline::{CppLanguageInline, RustLanguageInline, cpp_config, rust_config}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identifier_tokens_report_their_own_line_not_the_nodes() {
+        // The shape that motivates the whole helper: a doc comment opening on
+        // one line whose interesting tokens are ten lines further down, twice
+        // on the same line.
+        let text = "/**\n * see FLAG_ONE\n *\n * FLAG_TWO and FLAG_TWO again\n */";
+        let tokens = identifier_tokens(text, 692);
+        let named: Vec<(&str, usize)> = tokens
+            .iter()
+            .filter(|(t, _, _)| t.starts_with("FLAG_"))
+            .map(|(t, line, _)| (t.as_str(), *line))
+            .collect();
+        assert_eq!(
+            named,
+            vec![("FLAG_ONE", 693), ("FLAG_TWO", 695), ("FLAG_TWO", 695),],
+            "each token belongs to the line it is written on, and a line \
+             holding a name twice yields it twice"
+        );
+    }
+
+    #[test]
+    fn identifier_tokens_apply_the_usage_recorder_rule() {
+        let tokens = identifier_tokens("a bc _d e9 9f x-y CONFIG_A=n", 1);
+        let names: Vec<&str> = tokens.iter().map(|(t, _, _)| t.as_str()).collect();
+        // Single characters are dropped exactly as `add_usage` drops them; a
+        // leading digit cannot open a token, so `9f` contributes only `f`,
+        // which is then too short to keep.
+        assert_eq!(names, vec!["bc", "_d", "e9", "CONFIG_A"]);
+    }
+
+    #[test]
+    fn identifier_tokens_carry_byte_offsets_and_survive_non_ascii() {
+        let text = "// café CONFIG_X";
+        let tokens = identifier_tokens(text, 4);
+        let (name, line, offset) = tokens
+            .iter()
+            .find(|(t, _, _)| t == "CONFIG_X")
+            .expect("the ASCII token is found past the multi-byte one");
+        assert_eq!((name.as_str(), *line), ("CONFIG_X", 4));
+        assert_eq!(&text[*offset..*offset + name.len()], "CONFIG_X");
+    }
     #[test]
     fn cpp_config_is_consistent() {
         let config = CppLanguageInline.config();

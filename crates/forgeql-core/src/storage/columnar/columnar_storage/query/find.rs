@@ -174,7 +174,14 @@ impl ColumnarStorage {
         // the definitions name-FST, which only ever yielded definition rows.
         // Row shape matches the legacy backend's find_usages: name + path +
         // line, everything else empty — the agent interprets the sites.
-        let usage_row = |path: &Path, line: u32| SymbolMatch {
+        //
+        // Beside them come the mention postings (`mentions_<role>_*`): the same
+        // name written as prose rather than resolved as code. Every row carries
+        // a `role` so the two are told apart and filtered separately. A usage
+        // site is `code`, tagged here rather than stored, because a posting in
+        // the usages blob can be nothing else.
+        const ROLE_CODE: &str = "code";
+        let occurrence_row = |path: &Path, line: u32, role: &str| SymbolMatch {
             name: name.to_string(),
             node_kind: None,
             fql_kind: None,
@@ -182,7 +189,7 @@ impl ColumnarStorage {
             path: Some(path.to_path_buf()),
             line: Some(usize::try_from(line).unwrap_or(usize::MAX)),
             usages_count: None,
-            fields: HashMap::new(),
+            fields: HashMap::from([("role".to_owned(), role.to_owned())]),
             count: None,
             node_id: None,
             // A usage site is a line, not a node: no handle, so no rev.
@@ -200,13 +207,19 @@ impl ColumnarStorage {
                 continue;
             };
             for line in seg.lookup_usage_lines(name) {
-                results.push(usage_row(&meta.source_path, line));
+                results.push(occurrence_row(&meta.source_path, line, ROLE_CODE));
+            }
+            for (role, line) in seg.lookup_mention_sites(name) {
+                results.push(occurrence_row(&meta.source_path, line, role));
             }
         }
         // Dirty overlay: freshly (re)indexed segments not yet promoted.
         for ds in &self.dirty.added {
             for line in ds.reader.lookup_usage_lines(name) {
-                results.push(usage_row(&ds.source_path, line));
+                results.push(occurrence_row(&ds.source_path, line, ROLE_CODE));
+            }
+            for (role, line) in ds.reader.lookup_mention_sites(name) {
+                results.push(occurrence_row(&ds.source_path, line, role));
             }
         }
 

@@ -226,6 +226,13 @@ fn populate_builder(builder: &mut SegmentBuilder, table: &SymbolTable) {
             builder.add_usage(name, u32::try_from(site.line).unwrap_or(u32::MAX));
         }
     }
+    for (role, by_name) in &table.mentions {
+        for (name, sites) in by_name {
+            for site in sites {
+                builder.add_mention(role, name, u32::try_from(site.line).unwrap_or(u32::MAX));
+            }
+        }
+    }
 
     let mut by_parent: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
     let mut ord_to_row: HashMap<u32, u32> = HashMap::new();

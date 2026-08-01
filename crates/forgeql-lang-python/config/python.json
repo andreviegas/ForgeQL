@@ -18,6 +18,7 @@
     "skip_node_kinds": [],
     "scope_creating_kinds": ["function_definition", "lambda"],
     "usage_node_kinds": ["identifier"],
+    "mention_text_kinds": { "comment": "comment" },
     "statement_boundary_kinds": [
       "expression_statement", "return_statement",
       "if_statement", "while_statement", "for_statement",

@@ -155,9 +155,9 @@ FIND files [clauses]
 
 | Command | Returns |
 |---|---|
-| `FIND symbols` | All indexed AST nodes. Use `WHERE fql_kind = '...'` to narrow. Every row carries a stable `node_id` and a real workspace-total `usages` count — `ORDER BY usages DESC` and `WHERE usages > N` work. An exact-name query that finds nothing but whose name *is* used somewhere returns a `hint` saying how many usage sites exist, so "not declared here" and "not here at all" are distinguishable. |
+| `FIND symbols` | All indexed AST nodes. Use `WHERE fql_kind = '...'` to narrow. Every row carries a stable `node_id` and a real workspace-total `usages` count of `role = 'code'` sites — `ORDER BY usages DESC` and `WHERE usages > N` work. An exact-name query that finds nothing but whose name *is* used somewhere returns a `hint` saying how many code usage sites exist, so "not declared here" and "not here at all" are distinguishable. |
 | `FIND globals` | Shorthand for `WHERE fql_kind = 'variable'` — file-scope variables, constants, and statics across all supported languages. |
-| `FIND usages OF` | One row per usage **site** of the named symbol (name + path + line), read from usage postings collected at index time. Includes occurrences without call parentheses — function-pointer assignments, references, type positions. Every row carries its **file's** `node_id` and `rev`, so a site is editable where you read it: `CHANGE NODE '<node_id>(<line>)' IF REV '<rev>' MATCHING WORD 'old' WITH 'new'`. **`LIMIT` counts files, not rows** — see below. `GROUP BY file` gives real per-file counts; combine with `IN`/`EXCLUDE`/`WHERE`/`ORDER BY`/`LIMIT`. |
+| `FIND usages OF` | One row per occurrence **site** of the named symbol (name + path + line + `role`), read from occurrence postings collected at index time. Covers both identifier references — including ones without call parentheses, such as function-pointer assignments and type positions — and the name written in comment text, told apart by `role` (see below). Every row carries its **file's** `node_id` and `rev`, so a site is editable where you read it: `CHANGE NODE '<node_id>(<line>)' IF REV '<rev>' MATCHING WORD 'old' WITH 'new'`. **`LIMIT` counts files, not rows** — see below. `GROUP BY file` gives real per-file counts, `GROUP BY role` sizes the campaign by kind; combine with `IN`/`EXCLUDE`/`WHERE`/`ORDER BY`/`LIMIT`. |
 | `FIND callees OF` | Symbols called from inside the named function body. Alias for `SHOW callees OF`. |
 | `FIND files` | Files in the worktree. Supports `WHERE name = '…'` / `name LIKE`, `DEPTH`, `ORDER BY size`, etc. ForgeQL runtime artifacts are hidden from the listing. |
 
@@ -187,6 +187,42 @@ FIND files [clauses]
 >
 > `GROUP BY` is exempt: its rows are aggregates, already one per group, and its
 > `LIMIT` counts those groups.
+
+> **Every occurrence carries a `role`.** A name is written in more places than
+> the compiler resolves it, and a rename campaign has to see all of them. `FIND
+> usages` therefore returns two kinds of site under one query, told apart by a
+> `role` field:
+>
+> | `role` | The name was written in | Emitted today |
+> |---|---|---|
+> | `code` | an identifier the grammar resolved — a call, a reference, a type position | every indexed language |
+> | `comment` | comment text | C, C++, Rust, Python |
+> | `string` | a string literal | not yet — no rows carry it |
+> | `config` | a build- or config-file value | not yet — no rows carry it |
+> | `doc` | prose in a documentation file | not yet — no rows carry it |
+>
+> The last three are reserved: the field accepts them, but nothing emits them
+> yet, so `WHERE role = 'string'` returns nothing because the container is not
+> scanned — not because the name is absent from every string. `comment` is
+> likewise scoped to the languages above; a YAML or Markdown file contributes
+> no comment occurrences today.
+> `role` filters and groups like any other field: `WHERE role = 'code'` narrows
+> to references the compiler sees, `GROUP BY role` sizes the campaign by kind.
+> Only the roles a language's grammar can prove are ever emitted — the engine
+> classifies the *container*, never the meaning, so it never guesses whether a
+> mention refers to your symbol or merely spells it the same way.
+>
+> Matching is **token-exact** for identifier queries: `FIND usages OF 'CONFIG_X'`
+> does not match `CONFIG_X_ASYNC`, in prose any more than in code. Tokens are
+> `[A-Za-z_][A-Za-z0-9_]*` runs longer than one character, and each reports the
+> line it is written on — a name buried in a twelve-line comment comes back at
+> its own line, not the line the comment opened on.
+>
+> **Non-code roles are a review queue, not an edit list.** Comment and doc
+> occurrences are the agent's judgment call: a `CHANGE NODES FOUND` sweep over
+> them is often right and sometimes wrong, so read them before applying. The
+> engine enumerates and types the occurrences; deciding which ones mean your
+> symbol stays the caller's job.
 
 > **Use `fql_kind` for all filtering.** It is language-agnostic and portable across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific and **deprecated**.
 
@@ -957,7 +993,8 @@ Applies to: `FIND symbols`, `FIND usages OF`, `FIND callees OF`
 | `language` | string | Language name: `cpp`, `rust`, `python`, etc. |
 | `path` | string | Relative file path (also used by `IN`/`EXCLUDE` globs) |
 | `line` | integer | 1-based start line |
-| `usages` | integer | Workspace-total usage-site count, aggregated from the reference index at index time. `ORDER BY usages DESC` and `WHERE usages > N` are real queries, not heuristics. |
+| `usages` | integer | Workspace-total count of **`role = 'code'` sites only**, aggregated from the reference index at index time. `ORDER BY usages DESC` and `WHERE usages > N` are real queries, not heuristics. It deliberately excludes comment occurrences, so it is smaller than the `total` of `FIND usages OF` for the same name: this column ranks symbols by how much code depends on them, not by how often the name is written. |
+| `role` | string | On `FIND usages` rows only: what the name was written in — `code` and `comment` today, with `string`, `config` and `doc` reserved (see the role table above). `WHERE role = 'code'` narrows to references the compiler resolves; `GROUP BY role` sizes a rename by kind. |
 
 **Filtered-field projection:** when a `WHERE` clause targets a non-core field —
 numeric, string, or boolean (e.g. `WHERE has_assignment_in_condition = 'true'`,
@@ -1762,9 +1799,10 @@ to proceed.
 -- 1. Checkpoint
 BEGIN TRANSACTION 'rename-process'
 
--- 2. Blast radius — one row per usage SITE (includes non-call references)
+-- 2. Blast radius — one row per occurrence SITE (includes non-call references)
+FIND usages OF 'PiscoCode::process' GROUP BY role ORDER BY count DESC
 FIND usages OF 'PiscoCode::process' GROUP BY file ORDER BY count DESC
-FIND usages OF 'PiscoCode::process' LIMIT 50
+FIND usages OF 'PiscoCode::process' WHERE role = 'code' LIMIT 50
 
 -- 3. For each site: read the enclosing node, splice the reference by handle
 SHOW NODE '<node_id>' WHERE text LIKE '%process%'
@@ -1868,12 +1906,13 @@ column shows that field's value instead of `usages`:
 "struct","[MpptState,src/SolarCharger.h,57,11]"
 ```
 
-**FIND usages** — raw sites collapsed per file, with the file's handle and rev so a site is editable from the listing (`file,node_id,rev,[lines]`):
+**FIND usages** — raw sites collapsed per file and role, with the file's handle and rev so a site is editable from the listing (`file,role,node_id,rev,[lines]`). A file whose occurrences span more than one role renders one row per role; the `LIMIT` still counts files, and a selected file always renders all of its roles:
 ```csv
-"find_usages","encenderMotor",3
-"file","node_id","rev","[lines]"
-"src/motor_control.cpp","n3f2a91c4e05b","h9c1d4e77a2b30f81","45,89"
-"include/motor_control.hpp","n8b70d2ae61ff","h4e6620bb17ac9d35","34"
+"find_usages","encenderMotor",4
+"file","role","node_id","rev","[lines]"
+"src/motor_control.cpp","code","n3f2a91c4e05b","h9c1d4e77a2b30f81","45,89"
+"src/motor_control.cpp","comment","n3f2a91c4e05b","h9c1d4e77a2b30f81","44"
+"include/motor_control.hpp","code","n8b70d2ae61ff","h4e6620bb17ac9d35","34"
 ```
 
 **FIND usages OF … GROUP BY file** — per-file counts (`file,count`, the same aggregate the JSON `count` field carries):

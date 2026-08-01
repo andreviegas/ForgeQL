@@ -1,18 +1,22 @@
 {
   "suite": "enrich_occurrence",
-  "description": "Occurrence-layer coverage. Hard cases pin today's correct usage/site behaviour; expect_fail cases assert the target behaviour of the occurrence plan and flip to hard as each layer lands: complete default rendering for FIND usages, addressable directive rows (fql_kind 'guard'), role-typed occurrence rows (role = code|comment|string|config|doc) fed by the index-time mention/trigram layer, usage rows born addressable (file handle + file rev), substring occurrences for non-identifier strings, and Kconfig grammar rows. Ground truth captured live on the frozen corpora. NOTE: hard cases usages_lines_exact_small_file, usages_covers_if_defined_and_elif and campaign-style pins assert the PRE-role result shape; the role slice re-pins them deliberately when unfiltered usages grows new typed rows.",
+  "description": "Occurrence-layer coverage. Hard cases pin today's correct usage/site behaviour; expect_fail cases assert the target behaviour of the occurrence plan and flip to hard as each layer lands: complete default rendering for FIND usages, addressable directive rows (fql_kind 'guard'), role-typed occurrence rows (role = code|comment|string|config|doc) fed by the index-time mention/trigram layer, usage rows born addressable (file handle + file rev), substring occurrences for non-identifier strings, and Kconfig grammar rows. Ground truth captured live on the frozen corpora. NOTE: the comment role slice deliberately re-pinned the unfiltered-usages cases (usages_lines_exact_small_file 2 to 4 sites, usages_covers_if_defined_and_elif 4 to 11, usages_default_limit_files_complete total 98 to 112, usage_rows_born_addressable 2 to 4) because FIND usages now returns comment occurrences alongside code ones; every added line was re-derived from the corpus, not adjusted to fit. The remaining role cases still fail because their container kinds are not scanned yet.",
   "cases": [
 
     { "name": "usages_lines_exact_small_file", "use": "zephyr-andre.frozen",
       "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'subsys/pm/pm_shell.c'",
-      "assert": { "row_count": 2, "total": 2,
+      "assert": { "row_count": 4, "total": 4,
         "rows": [ { "path": "subsys/pm/pm_shell.c", "line": 81 },
-                  { "path": "subsys/pm/pm_shell.c", "line": 166 } ] } },
+                  { "path": "subsys/pm/pm_shell.c", "line": 156 },
+                  { "path": "subsys/pm/pm_shell.c", "line": 166 },
+                  { "path": "subsys/pm/pm_shell.c", "line": 176 } ] } },
 
     { "name": "usages_covers_if_defined_and_elif", "use": "zephyr-andre.frozen",
       "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'include/zephyr/pm/device.h'",
-      "assert": { "row_count": 4, "total": 4,
-        "rows": [ { "line": 211 }, { "line": 231 }, { "line": 255 }, { "line": 271 } ] } },
+      "assert": { "row_count": 11, "total": 11,
+        "rows": [ { "line": 211 }, { "line": 214 }, { "line": 231 }, { "line": 242 },
+                  { "line": 255 }, { "line": 271 }, { "line": 276 },
+                  { "line": 702 }, { "line": 702 }, { "line": 704 }, { "line": 705 } ] } },
 
     { "name": "import_rows_carry_include_path", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols WHERE fql_kind = 'import' WHERE name = 'zephyr/pm/device_runtime.h'",
@@ -44,7 +48,7 @@
 
     { "name": "usages_default_limit_files_complete", "use": "zephyr-andre.frozen",
       "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME'",
-      "assert": { "total": 98, "distinct": { "by": "path", "count": 20 } } },
+      "assert": { "total": 112, "distinct": { "by": "path", "count": 20 } } },
 
     { "name": "if_defined_directives_have_symbol_rows", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols WHERE fql_kind = 'guard' WHERE name LIKE '%CONFIG_PM_DEVICE_RUNTIME%' IN 'include/zephyr/pm/device.h' ORDER BY line ASC",
@@ -59,8 +63,6 @@
       "assert": { "row_count": 6 } },
 
     { "name": "role_comment_occurrences", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "usage rows carry no role field and comment text produces no usage sites; expected 7 token occurrences (3 endif trailers + 4 doxygen mentions, line 702 holds two)",
       "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'include/zephyr/pm/device.h' WHERE role = 'comment'",
       "assert": { "row_count": 7,
         "rows": [ { "line": 214 }, { "line": 242 }, { "line": 276 },
@@ -87,17 +89,17 @@
         "distinct": { "by": "path", "count": 1, "values": ["crates/forgeql-core/src/engine/exec_find.rs"] } } },
 
     { "name": "role_code_retrofits_existing_sites", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "role does not exist yet, so filtering by role = 'code' matches nothing",
       "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'include/zephyr/pm/device.h' WHERE role = 'code'",
       "assert": { "row_count": 4,
         "rows": [ { "line": 211 }, { "line": 231 }, { "line": 255 }, { "line": 271 } ] } },
 
     { "name": "usage_rows_born_addressable", "use": "zephyr-andre.frozen",
       "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'subsys/pm/pm_shell.c'",
-      "assert": { "row_count": 2,
+      "assert": { "row_count": 4,
         "rows": [ { "line": 81, "rev": "h22186319d1fe6da5" },
-                  { "line": 166, "rev": "h22186319d1fe6da5" } ] } },
+                  { "line": 156, "rev": "h22186319d1fe6da5" },
+                  { "line": 166, "rev": "h22186319d1fe6da5" },
+                  { "line": 176, "rev": "h22186319d1fe6da5" } ] } },
 
     { "name": "found_sweep_from_usages_edits_only_the_site_lines", "use": "forgeql-pub.frozen", "mode": "rw",
       "steps": [

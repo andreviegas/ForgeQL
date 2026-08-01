@@ -178,6 +178,13 @@ pub struct SyntaxSection {
     #[serde(default)]
     pub usage_node_kinds: Vec<String>,
 
+    /// Text-bearing node kinds whose contents are scanned for identifier
+    /// mentions, keyed by raw grammar kind and valued by the occurrence role
+    /// every token found inside that kind carries (e.g. `"comment"` →
+    /// `"comment"`).
+    #[serde(default)]
+    pub mention_text_kinds: std::collections::HashMap<String, String>,
+
     /// Node kinds that act as statement / expression boundaries.
     #[serde(default)]
     pub statement_boundary_kinds: Vec<String>,
@@ -660,6 +667,7 @@ impl LanguageConfigJson {
             decorator_raw_kind: self.types.decorator,
             skip_node_kinds: self.syntax.skip_node_kinds,
             usage_node_kinds: self.syntax.usage_node_kinds,
+            mention_text_kinds: self.syntax.mention_text_kinds,
             statement_boundary_kinds: self.syntax.statement_boundary_kinds,
             declarator_field_name: self.syntax.declarator_field,
             function_declarator_kind: self.syntax.function_declarator,

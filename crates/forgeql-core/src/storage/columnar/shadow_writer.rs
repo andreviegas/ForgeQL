@@ -156,9 +156,9 @@ impl<'a> ShadowWriter<'a> {
             worktree_root: self.worktree_root,
         };
 
-        // Usage postings (BUG-006): group the merged table's usage sites by
-        // path_id ONCE up front — scanning the whole usages map per file
-        // inside the parallel loop would be quadratic at repo scale.
+        // Occurrence postings: group the merged table's sites by path_id ONCE
+        // up front — scanning the whole maps per file inside the parallel loop
+        // would be quadratic at repo scale.
         let mut usages_by_path: HashMap<u32, Vec<(&str, u32)>> = HashMap::new();
         for (name, sites) in &table.usages {
             for site in sites {
@@ -168,7 +168,24 @@ impl<'a> ShadowWriter<'a> {
                     .push((name.as_str(), u32::try_from(site.line).unwrap_or(u32::MAX)));
             }
         }
-        let usages_by_path = &usages_by_path;
+
+        // Mention postings, grouped the same way and for the same reason.
+        let mut mentions_by_path: HashMap<u32, Vec<(&str, &str, u32)>> = HashMap::new();
+        for (role, by_name) in &table.mentions {
+            for (name, sites) in by_name {
+                for site in sites {
+                    mentions_by_path.entry(site.path_id).or_default().push((
+                        role.as_str(),
+                        name.as_str(),
+                        u32::try_from(site.line).unwrap_or(u32::MAX),
+                    ));
+                }
+            }
+        }
+        let occurrences = &OccurrencePostings {
+            usages: &usages_by_path,
+            mentions: &mentions_by_path,
+        };
 
         let results: Vec<WorkResult> = by_path
             .values()
@@ -181,7 +198,7 @@ impl<'a> ShadowWriter<'a> {
                     provider_id,
                     hash_content,
                     pre_computed,
-                    usages_by_path,
+                    occurrences,
                     &dest,
                 )
             })
@@ -232,6 +249,17 @@ impl<'a> ShadowWriter<'a> {
 /// set of enrichment columns written (`Some` only when a new segment was built).
 type WorkResult = (PathBuf, Vec<u8>, Option<BTreeSet<String>>);
 
+/// Every occurrence posting the merged table holds, pre-grouped by `path_id`.
+///
+/// Grouped once before the parallel loop because scanning the whole occurrence
+/// maps per file inside it would be quadratic at repo scale. The two maps
+/// travel together because a worker always writes both or neither.
+struct OccurrencePostings<'a> {
+    /// `path_id` → `(name, line)` for identifier usage sites.
+    usages: &'a HashMap<u32, Vec<(&'a str, u32)>>,
+    /// `path_id` → `(role, name, line)` for mention sites.
+    mentions: &'a HashMap<u32, Vec<(&'a str, &'a str, u32)>>,
+}
 /// Where a file's segment is written, and the root its path is keyed against.
 ///
 /// A segment is keyed by (path, content), so writing one needs both the provider
@@ -252,7 +280,7 @@ fn build_file_segment(
     provider_id: &str,
     hash_content: &(dyn Fn(&[u8]) -> Vec<u8> + Send + Sync),
     pre_computed: &HashMap<PathBuf, Vec<u8>>,
-    usages_by_path: &HashMap<u32, Vec<(&str, u32)>>,
+    occurrences: &OccurrencePostings<'_>,
     dest: &SegmentDest<'_>,
 ) -> Option<WorkResult> {
     // row_indices is non-empty by construction.
@@ -326,10 +354,15 @@ fn build_file_segment(
 
     fill_navigation(&mut builder, &ordinal_row);
 
-    // Usage postings (BUG-006): pre-grouped by path_id in ShadowWriter::run.
-    if let Some(sites) = usages_by_path.get(&first_row.path_id) {
+    // Occurrence postings: pre-grouped by path_id in ShadowWriter::run.
+    if let Some(sites) = occurrences.usages.get(&first_row.path_id) {
         for &(name, line) in sites {
             builder.add_usage(name, line);
+        }
+    }
+    if let Some(sites) = occurrences.mentions.get(&first_row.path_id) {
+        for &(role, name, line) in sites {
+            builder.add_mention(role, name, line);
         }
     }
 

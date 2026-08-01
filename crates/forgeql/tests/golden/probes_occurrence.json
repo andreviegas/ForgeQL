@@ -4,8 +4,6 @@
   "cases": [
 
     { "name": "flag_blast_radius_grouped_by_role", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "GROUP BY role is impossible while usage rows carry no role field; scoped to include/zephyr/pm the flag occurs as code and comment only",
       "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'include/zephyr/pm/**' GROUP BY role ORDER BY count DESC",
       "assert": { "distinct": { "by": "group_key", "count": 2, "values": ["code", "comment"] } } },
 

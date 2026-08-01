@@ -199,6 +199,12 @@ pub(crate) struct SymbolRow {
     /// Value of the custom GROUP BY field (e.g. `guard_kind = "preprocessor"`).
     /// Used as the row label/group key when GROUP BY targets an enrichment field.
     pub group_key: Option<String>,
+    /// Occurrence role of a `FIND usages` site: `code` when the name was
+    /// resolved as an identifier, otherwise the role of the text it was
+    /// written in (`comment`, and later `string`, `config`, `doc`).
+    ///
+    /// `None` on every other row type — only occurrence rows carry one.
+    pub role: Option<String>,
     /// Stable node handle computed from the file path and per-file DFS ordinal.
     /// Format: `n{12-hex segment_id}.{ordinal:04}`.
     /// `None` for rows from legacy segments that have not been reindexed.
@@ -239,6 +245,7 @@ impl SymbolRow {
                 "file" | "path" => row.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
                 _ => row.fields.get(field).cloned(),
             }),
+            role: row.fields.get("role").cloned(),
             node_id: surface_block_alias(row),
             rev: row.rev.clone(),
         }

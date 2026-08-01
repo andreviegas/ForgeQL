@@ -6,6 +6,81 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.79] — 2026-08-01 — feat: comments are part of a name's blast radius
+
+### Added — `FIND usages` returns typed occurrences, not just resolved references
+
+A rename is not finished when the code compiles. The same name is written in
+comment text — trailing `#endif` markers, doc blocks explaining a flag, notes
+naming a function — and none of it was reachable. `FIND usages` reported only
+what the grammar resolved as an identifier, so an agent renaming a symbol had
+no way to enumerate the prose that still spelled the old one, and no way to
+know how much of it there was.
+
+`FIND usages` now returns those occurrences too, and every row carries a `role`
+saying what the name was written in:
+
+| `role` | The name appears in |
+|---|---|
+| `code` | an identifier the grammar resolved |
+| `comment` | comment text |
+
+`role` filters and groups like any other field. `WHERE role = 'code'` narrows to
+the references a compiler sees — the previous behaviour, still one clause away.
+`GROUP BY role` sizes a campaign by kind before touching anything. The compact
+output collapses sites per file *and* role, so the two never blur together:
+
+```csv
+"file","role","node_id","rev","[lines]"
+"include/zephyr/pm/device.h","code","n8b70d2ae61ff","h4e6620bb17ac9d35","211,231,255,271"
+"include/zephyr/pm/device.h","comment","n8b70d2ae61ff","h4e6620bb17ac9d35","214,242,276,702,702,704,705"
+```
+
+Two properties matter for using this safely:
+
+**Matching is token-exact.** `FIND usages OF 'CONFIG_X'` does not match
+`CONFIG_X_ASYNC`, in prose any more than in code. A comment naming a
+neighbouring flag is not a hit.
+
+**Each occurrence reports its own line.** A name buried in a twelve-line doc
+block comes back at the line it is written on, not the line the comment opened
+on, and a line holding the name twice yields it twice — the line lists above are
+real coordinates you can splice at, not an approximation pointing at the top of
+a block.
+
+The engine classifies the *container*, never the meaning. Whether a comment
+occurrence refers to your symbol or merely spells it the same way is a judgment
+call, so comment sites are a review queue: read them before sweeping them.
+Grouping them under one query is what makes that review possible at all.
+
+Occurrences are collected at index time into per-role posting blobs, so queries
+stay lookups — no text scanning at query time. Comment kinds are declared per
+language, so the core never names a construct. Every occurrence flows through
+the existing machinery unchanged: file grouping, the response size ceiling,
+per-file handles and revs, and `FOUND` set arming, where a comment line
+contributes exactly its own line to a sweep.
+
+### Changed
+
+- `FIND usages … GROUP BY <field>` now labels the key column with the field
+  actually grouped on. It previously always printed `file`, which was true for
+  the only grouping that existed and wrong for any other.
+- `MemEstimate`'s usage figures now cover mention sites as well as identifier
+  usages; the field names and the session stats that read them are unchanged.
+
+### Changed — indexes rebuild on first use
+
+Occurrence data is stored, so the enrichment-logic version moves and every
+cached index is invalidated. The first `USE` of each source after upgrading
+re-indexes that worktree; subsequent sessions are served from cache as before.
+Existing segments are not readable for the new data: they were written before
+mention postings existed, so a stale one would silently under-report comment
+occurrences rather than fail.
+
+Note that `FIND symbols`' `usages` column deliberately does **not** grow. It
+counts `role = 'code'` sites only, so it keeps ranking symbols by how much code
+depends on them; `FIND usages OF`'s `total` is the one that now counts every
+occurrence. The two differing for the same name is expected.
 ## [0.139.78] — 2026-08-01 — feat: `#ifdef` / `#if` / `#elif` are addressable nodes
 
 ### Added — a conditional directive is a construct you can find and read

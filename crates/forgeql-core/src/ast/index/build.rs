@@ -240,6 +240,22 @@ impl SymbolTable {
                 .collect();
             self.usages.entry(name).or_default().extend(remapped);
         }
+
+        // Mention sites, remapped the same way and kept in their role bucket.
+        for (role, by_name) in other.mentions {
+            let target = self.mentions.entry(role).or_default();
+            for (name, sites) in by_name {
+                let remapped: Vec<UsageSite> = sites
+                    .into_iter()
+                    .map(|s| {
+                        let path = other.strings.paths.get(s.path_id);
+                        let path_id = self.strings.paths.intern(path);
+                        UsageSite { path_id, ..s }
+                    })
+                    .collect();
+                target.entry(name).or_default().extend(remapped);
+            }
+        }
     }
 
     /// Append a row and update the secondary indexes.
@@ -374,6 +390,32 @@ impl SymbolTable {
             byte_range,
             line,
         });
+    }
+
+    /// Record one mention: `name` was written as a bare identifier token inside
+    /// a text-bearing node whose kind maps to `role`.
+    ///
+    /// `line` is the token's own line, not the enclosing node's — a name in the
+    /// middle of a long comment belongs to the line it is written on.
+    pub fn add_mention(
+        &mut self,
+        role: &str,
+        name: String,
+        path: &Path,
+        byte_range: Range<usize>,
+        line: usize,
+    ) {
+        let path_id = self.strings.paths.intern(path);
+        self.mentions
+            .entry(role.to_owned())
+            .or_default()
+            .entry(name)
+            .or_default()
+            .push(UsageSite {
+                path_id,
+                byte_range,
+                line,
+            });
     }
 
     /// Look up all usage sites for a symbol name.
@@ -518,6 +560,32 @@ impl SymbolTable {
             .sum::<usize>()
             + self.usages.capacity() * 56;
 
+        // --- mentions: HashMap<role, HashMap<String, Vec<UsageSite>>> ---
+        // Folded into the usage figures below rather than reported separately:
+        // a mention is an occurrence site of the same shape, and `FIND usages`
+        // returns both.
+        let mentions_bytes: usize = self
+            .mentions
+            .iter()
+            .map(|(role, by_name)| {
+                role.capacity()
+                    + by_name
+                        .iter()
+                        .map(|(k, v)| k.capacity() + v.capacity() * usage_site_fixed + 56)
+                        .sum::<usize>()
+                    + by_name.capacity() * 56
+                    + 56
+            })
+            .sum::<usize>()
+            + self.mentions.capacity() * 56;
+        let mention_names: usize = self.mentions.values().map(HashMap::len).sum();
+        let mention_sites: usize = self
+            .mentions
+            .values()
+            .flat_map(HashMap::values)
+            .map(Vec::len)
+            .sum();
+
         // --- name_index: HashMap<u32, Vec<u32>> ---
         let name_index_bytes: usize = self
             .name_index
@@ -574,9 +642,9 @@ impl SymbolTable {
         MemEstimate {
             rows_bytes,
             rows_count: self.rows.len(),
-            usages_bytes,
-            usages_symbols: self.usages.len(),
-            usages_sites: self.usages.values().map(Vec::len).sum(),
+            usages_bytes: usages_bytes + mentions_bytes,
+            usages_symbols: self.usages.len() + mention_names,
+            usages_sites: self.usages.values().map(Vec::len).sum::<usize>() + mention_sites,
             name_index_bytes,
             kind_index_bytes,
             fql_kind_index_bytes,
@@ -606,8 +674,15 @@ impl SymbolTable {
             for sites in self.usages.values_mut() {
                 sites.retain(|usage| usage.path_id != pid);
             }
+            for by_name in self.mentions.values_mut() {
+                for sites in by_name.values_mut() {
+                    sites.retain(|mention| mention.path_id != pid);
+                }
+                by_name.retain(|_, sites| !sites.is_empty());
+            }
         }
         self.usages.retain(|_, sites| !sites.is_empty());
+        self.mentions.retain(|_, by_name| !by_name.is_empty());
     }
     /// # Errors
     /// Returns an error if parsing fails for any of the provided paths.

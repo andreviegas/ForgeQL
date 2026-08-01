@@ -210,11 +210,11 @@ pub struct MemEstimate {
     pub rows_bytes: usize,
     /// Total number of indexed rows.
     pub rows_count: usize,
-    /// Heap bytes used by `usages: HashMap<String, Vec<UsageSite>>`.
+    /// Heap bytes used by the occurrence maps: `usages` plus `mentions`.
     pub usages_bytes: usize,
-    /// Number of distinct symbol names with usage sites.
+    /// Number of distinct symbol names with usage or mention sites.
     pub usages_symbols: usize,
-    /// Total number of individual usage-site entries.
+    /// Total number of individual usage and mention site entries.
     pub usages_sites: usize,
     /// Heap bytes used by `name_index: HashMap<u32, Vec<u32>>`.
     pub name_index_bytes: usize,
@@ -267,6 +267,15 @@ pub struct SymbolTable {
     pub rows: Vec<IndexRow>,
     /// Symbol name → all sites where the identifier text appears.
     pub usages: HashMap<String, Vec<UsageSite>>,
+    /// Occurrence role → symbol name → sites where the name appears as a bare
+    /// identifier token inside a text-bearing node (a comment, and later a
+    /// string or a document).
+    ///
+    /// Kept beside `usages` rather than inside it because the segment format
+    /// stores one blob pair per role, and because a mention is a weaker claim
+    /// than a usage: the name was written there, not resolved there.
+    #[serde(default)]
+    pub mentions: HashMap<String, HashMap<String, Vec<UsageSite>>>,
     /// Name ID → row indices lookup for O(1) access.
     name_index: HashMap<u32, Vec<u32>>,
     /// Node kind ID → row indices for fast kind filtering.

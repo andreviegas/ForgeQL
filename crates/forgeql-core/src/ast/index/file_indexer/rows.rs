@@ -18,7 +18,7 @@ use crate::ast::enrich::guard_utils::{
 };
 use crate::ast::enrich::{EnrichContext, NodeEnricher};
 use crate::ast::index::{IndexRow, SymbolTable, node_text};
-use crate::ast::lang::FQL_ERROR;
+use crate::ast::lang::{FQL_ERROR, identifier_tokens};
 
 use super::blocks::{BlockTag, attr_extended_start};
 use super::hash::{first_body_statement_fingerprint, node_content_hash};
@@ -187,7 +187,21 @@ pub(super) fn process_node_rows(
         current_node_ordinal = extra_self;
     }
 
-    // All identifier tokens become usage sites.
+    record_occurrences(ctx, node, source);
+    current_node_ordinal
+}
+
+/// Record every occurrence of a name this node contributes.
+///
+/// Two kinds, deliberately kept together because they answer the same question
+/// — where is this name written? An identifier node *is* the token, so it
+/// records one site at its own position. A text-bearing node (a comment, and
+/// later a string or a document) *contains* tokens, so its text is scanned and
+/// each token records the line it sits on, which is not the line the node
+/// opened on.
+fn record_occurrences(ctx: &mut IndexContext<'_>, node: tree_sitter::Node<'_>, source: &[u8]) {
+    let config = ctx.language.config();
+
     if config.is_usage_node_kind(node.kind()) {
         let name = node_text(source, node);
         if name.len() > 1 {
@@ -196,7 +210,17 @@ pub(super) fn process_node_rows(
         }
     }
 
-    current_node_ordinal
+    if let Some(role) = config.mention_role(node.kind()) {
+        let text = node_text(source, node);
+        let start_line = node.start_position().row + 1;
+        let start_byte = node.start_byte();
+        for (token, line, offset) in identifier_tokens(&text, start_line) {
+            let start = start_byte + offset;
+            let end = start + token.len();
+            ctx.table
+                .add_mention(role, token, ctx.path, start..end, line);
+        }
+    }
 }
 
 /// Fields and identity metadata prepared for a single index row, shared by the

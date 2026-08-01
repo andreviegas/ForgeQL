@@ -255,6 +255,12 @@ pub struct SegmentBuilder {
     /// source lines where it occurs in this file. Same FST wire format as
     /// `name_to_rows`, but postings hold LINES, not row ids.
     usage_to_lines: BTreeMap<String, Vec<u32>>,
+    /// Mention postings, one map per occurrence role: role → identifier text →
+    /// 1-based source lines where the name is written inside a text-bearing
+    /// node of that role. Each role flushes its own `mentions_<role>_fst` /
+    /// `mentions_<role>_postings` blob pair, so a new role is purely additive
+    /// and never reorders an existing blob.
+    mention_to_lines: BTreeMap<String, BTreeMap<String, Vec<u32>>>,
     /// Optional enrichment columns, keyed by field name.
     /// Each column is a parallel array with one slot per row.
     extra_cols: HashMap<String, ColumnDraft>,
@@ -300,6 +306,7 @@ impl SegmentBuilder {
             kind_postings: HashMap::new(),
             name_to_rows: BTreeMap::new(),
             usage_to_lines: BTreeMap::new(),
+            mention_to_lines: BTreeMap::new(),
             extra_cols: HashMap::new(),
         }
     }
@@ -373,6 +380,22 @@ impl SegmentBuilder {
     /// insertion order; callers emit them in document order.
     pub fn add_usage(&mut self, name: &str, line: u32) {
         self.usage_to_lines
+            .entry(name.to_owned())
+            .or_default()
+            .push(line);
+    }
+
+    /// Record one mention site: `name` is written at 1-based source `line`
+    /// inside a text-bearing node whose kind carries `role`.
+    ///
+    /// Postings are written to the `mentions_<role>_fst` /
+    /// `mentions_<role>_postings` blob pair at flush time. A line repeats when
+    /// the name is written twice on it, and the encoder stores the vector
+    /// verbatim, so both occurrences survive.
+    pub fn add_mention(&mut self, role: &str, name: &str, line: u32) {
+        self.mention_to_lines
+            .entry(role.to_owned())
+            .or_default()
             .entry(name.to_owned())
             .or_default()
             .push(line);
@@ -491,6 +514,17 @@ impl SegmentBuilder {
         } else {
             Some(encode_name_fst(&self.usage_to_lines)?)
         };
+        // Mention postings: the same wire format again, one pair per role.
+        // Roles are iterated in sorted order so the blob sequence is a function
+        // of the file's content alone.
+        let mut mention_blobs: Vec<(String, Vec<u8>, Vec<u8>)> = Vec::new();
+        for (role, by_name) in &self.mention_to_lines {
+            if by_name.is_empty() {
+                continue;
+            }
+            let (fst, postings) = encode_name_fst(by_name)?;
+            mention_blobs.push((role.clone(), fst, postings));
+        }
 
         let mut blobs = self.core_column_blobs();
         blobs.extend([
@@ -504,6 +538,10 @@ impl SegmentBuilder {
         if let Some((usages_fst_bytes, usages_post_bytes)) = usage_blobs {
             blobs.push(("usages_fst".to_owned(), usages_fst_bytes));
             blobs.push(("usages_postings".to_owned(), usages_post_bytes));
+        }
+        for (role, fst_bytes, post_bytes) in mention_blobs {
+            blobs.push((format!("mentions_{role}_fst"), fst_bytes));
+            blobs.push((format!("mentions_{role}_postings"), post_bytes));
         }
 
         // Extra enrichment columns.
