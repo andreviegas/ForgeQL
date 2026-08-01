@@ -5,7 +5,7 @@
   "cases": [
     { "name": "simple_forms_if_arm", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols IN 'subsys/net/ip/net_private.h' WHERE guard = 'defined(CONFIG_NET_IPV4_IGMP)' WHERE guard_defines LIKE '%CONFIG_NET_IPV4_IGMP%' ORDER BY line ASC LIMIT 20",
-      "assert": { "row_count": 7, "all_same": "path", "ordered": { "by": "line", "dir": "asc" } } },
+      "assert": { "row_count": 10, "all_same": "path", "ordered": { "by": "line", "dir": "asc" } } },
 
     { "name": "simple_forms_else_arm", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols IN 'subsys/net/ip/net_private.h' WHERE guard = '!defined(CONFIG_NET_IPV4_IGMP)' WHERE guard_negates LIKE '%CONFIG_NET_IPV4_IGMP%' ORDER BY line ASC LIMIT 20",
@@ -17,11 +17,11 @@
 
     { "name": "branch_ordinals_first_arm", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols IN 'soc/nordic/common/gppi_init.c' WHERE guard_branch = '0' ORDER BY line ASC LIMIT 50",
-      "assert": { "row_count": 7, "all_same": "path", "ordered": { "by": "line", "dir": "asc" } } },
+      "assert": { "row_count": 10, "all_same": "path", "ordered": { "by": "line", "dir": "asc" } } },
 
     { "name": "arm_rows_share_one_guard_group", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols IN 'soc/nordic/common/gppi_init.c' WHERE guard_defines LIKE '%CONFIG_SOC_NRF54H20_CPUAPP%' WHERE line > 15 ORDER BY line ASC LIMIT 100",
-      "assert": { "row_count": 72, "all_same": "path", "ordered": { "by": "line", "dir": "asc" } } },
+      "assert": { "row_count": 73, "all_same": "path", "ordered": { "by": "line", "dir": "asc" } } },
 
     { "name": "known_field_with_no_carriers_is_an_empty_set", "use": "zephyr-andre.frozen",
       "steps": [
@@ -45,11 +45,11 @@
 
     { "name": "elif_chain_negation", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols IN 'soc/nordic/common/gppi_init.c' WHERE guard_defines LIKE '%CONFIG_SOC_NRF54H20_CPUAPP%' WHERE guard_negates LIKE '%PPI_PRESENT%' ORDER BY line ASC LIMIT 100",
-      "assert": { "row_count": 72, "all_same": "path" } },
+      "assert": { "row_count": 73, "all_same": "path" } },
 
     { "name": "elif_parenthesis", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols IN 'include/zephyr/irq_multilevel.h' WHERE guard = '!ZEPHYR_INCLUDE_IRQ_MULTILEVEL_H_ && !_ASMLANGUAGE && (defined(CONFIG_MULTI_LEVEL_INTERRUPTS) || defined(__DOXYGEN__))' LIMIT 200",
-      "assert": { "row_count": 112, "all_same": "path" } },
+      "assert": { "row_count": 113, "all_same": "path" } },
 
     { "name": "else_demorgan", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols WHERE guard = '!(defined(CONFIG_NET_NATIVE) || defined(CONFIG_NET_OFFLOAD))' WHERE guard_negates LIKE '%CONFIG_NET_NATIVE%' WHERE guard_negates LIKE '%CONFIG_NET_OFFLOAD%' LIMIT 50",
@@ -57,7 +57,7 @@
 
     { "name": "guard_whitespace_normalised", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols WHERE guard = 'CONFIG_BT_AUDIO_CODEC_CFG_MAX_METADATA_SIZE > 0 || CONFIG_BT_AUDIO_CODEC_CAP_MAX_METADATA_SIZE > 0' LIMIT 2000",
-      "assert": { "row_count": 311 } },
+      "assert": { "row_count": 312 } },
 
     { "name": "guard_on_expression_rows", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols IN 'soc/nordic/common/gppi_init.c' WHERE fql_kind = 'number' WHERE guard_defines LIKE '%DPPIC_PRESENT%' ORDER BY line ASC LIMIT 5",
@@ -66,7 +66,7 @@
     { "name": "guard_reaches_a_control_flow_row", "use": "zephyr-andre.frozen",
       "steps": [
         { "fql": "FIND symbols IN 'subsys/bluetooth/controller/ticker/ticker.c' WHERE guard_mentions LIKE '%CONFIG_BT_TICKER_JOB_IDLE_GET%' WHERE line >= 2975 WHERE line <= 3010 ORDER BY line ASC LIMIT 100",
-          "assert": { "row_count": 9, "all_same": "path", "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "kind", "count": 4, "values": ["comment", "function", "switch", "variable"] } } },
+          "assert": { "row_count": 11, "all_same": "path", "ordered": { "by": "line", "dir": "asc" }, "distinct": { "by": "kind", "count": 5, "values": ["comment", "function", "guard", "switch", "variable"] } } },
         { "fql": "FIND symbols IN 'subsys/bluetooth/controller/ticker/ticker.c' WHERE fql_kind = 'switch' WHERE guard_mentions LIKE '%CONFIG_BT_TICKER_JOB_IDLE_GET%' ORDER BY line ASC LIMIT 5",
           "assert": { "row_count": 1, "rows": [ { "line": 2989 } ] } }
       ] }

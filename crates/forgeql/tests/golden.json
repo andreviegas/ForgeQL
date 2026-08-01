@@ -1,7 +1,7 @@
 [
  {
   "alias": "golden",
-  "expect_symbols_indexed": 2948962,
+  "expect_symbols_indexed": 2976016,
   "use": "zephyr-andre.frozen"
  },
  {
@@ -231,7 +231,7 @@
   "name": "G11_group_by_kind_top3"
  },
  {
-  "expect_row_count": 9,
+  "expect_row_count": 10,
   "expect_rows": [
    {
     "count": 810,
@@ -288,23 +288,23 @@
   "expect_row_count": 5,
   "expect_rows": [
    {
-    "count": 840,
+    "count": 846,
     "path": "kernel/mmu.c"
    },
    {
-    "count": 778,
+    "count": 787,
     "path": "kernel/sched.c"
    },
    {
-    "count": 755,
+    "count": 763,
     "path": "kernel/thread.c"
    },
    {
-    "count": 542,
+    "count": 547,
     "path": "kernel/userspace.c"
    },
    {
-    "count": 519,
+    "count": 524,
     "path": "kernel/work.c"
    }
   ],
@@ -315,7 +315,7 @@
   "expect_row_count": 5,
   "expect_rows": [
    {
-    "count": 67589,
+    "count": 67593,
     "path": "samples/modules/tflite-micro/tflm_ethosu/src/models/keyword_spotting_cnn_small_int8/model.h"
    },
    {
@@ -369,23 +369,23 @@
   "expect_row_count": 5,
   "expect_rows": [
    {
-    "count": 840,
+    "count": 846,
     "path": "kernel/mmu.c"
    },
    {
-    "count": 778,
+    "count": 787,
     "path": "kernel/sched.c"
    },
    {
-    "count": 755,
+    "count": 763,
     "path": "kernel/thread.c"
    },
    {
-    "count": 542,
+    "count": 547,
     "path": "kernel/userspace.c"
    },
    {
-    "count": 519,
+    "count": 524,
     "path": "kernel/work.c"
    }
   ],
@@ -556,7 +556,7 @@
   "name": "G24_group_by_kind_drivers_top5"
  },
  {
-  "expect_row_count": 11,
+  "expect_row_count": 12,
   "expect_rows": [
    {
     "count": 2541,
@@ -581,6 +581,10 @@
    {
     "count": 761,
     "kind": "if"
+   },
+   {
+    "count": 646,
+    "kind": "guard"
    },
    {
     "count": 558,
@@ -4051,7 +4055,7 @@
  },
  {
   "alias": "golden-python",
-  "expect_symbols_indexed": 3138061,
+  "expect_symbols_indexed": 3140880,
   "use": "pytorch-andre.pytorch-frozen"
  },
  {

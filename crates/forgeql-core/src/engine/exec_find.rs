@@ -38,7 +38,17 @@ impl ForgeQLEngine {
             Some(GroupBy::Field(f)) if f != "fql_kind" => Some(f.clone()),
             _ => None,
         };
-        let hint = Self::unknown_where_field_hint(clauses, &results);
+        // A misspelled field and a name that only exists as a usage are
+        // different problems; the field one comes first because it explains
+        // an empty set that has nothing to do with the code.
+        let hint = Self::unknown_where_field_hint(clauses, &results).or_else(|| {
+            Self::zero_symbols_with_usages_hint(
+                session.engine_for(backend).ok()?,
+                clauses,
+                &results,
+                &root,
+            )
+        });
         let found_rev = self.record_found_set(sid, "find_symbols", &results, total, clauses);
 
         Ok(ForgeQLResult::Query(QueryResult {
@@ -78,6 +88,49 @@ impl ForgeQLEngine {
             }
         }
         None
+    }
+
+    /// When a name query finds nothing but the index knows the name as a
+    /// usage, say where to look instead of leaving "not here" as the answer.
+    ///
+    /// Empty is a real answer for a typo and a misleading one for a name the
+    /// worktree only ever *references* — a macro defined in a header outside
+    /// it, a symbol reached through an include that is not indexed. Both look
+    /// identical in a `FIND symbols` response, and an agent that reads the
+    /// empty set as "absent" abandons a rename that had work to do.
+    ///
+    /// Only runs on an empty result, so the extra postings lookup costs
+    /// nothing on the path that found something.
+    fn zero_symbols_with_usages_hint(
+        engine: &dyn crate::storage::StorageEngine,
+        clauses: &Clauses,
+        results: &[crate::result::SymbolMatch],
+        root: &std::path::Path,
+    ) -> Option<String> {
+        use crate::ir::{CompareOp, PredicateValue};
+        if !results.is_empty() {
+            return None;
+        }
+        // Only an exact name asks a question `FIND usages OF` can answer; a
+        // LIKE pattern is not a name.
+        let name = clauses.where_predicates.iter().find_map(|p| {
+            match (p.field.as_str(), &p.op, &p.value) {
+                ("name", CompareOp::Eq, PredicateValue::String(s)) => Some(s.clone()),
+                _ => None,
+            }
+        })?;
+        let sites = engine
+            .find_usages(&name, &Clauses::default(), root)
+            .ok()?
+            .len();
+        if sites == 0 {
+            return None;
+        }
+        Some(format!(
+            "0 symbols, but {sites} usage site(s) carry that name — it is \
+             referenced here without being declared here. \
+             FIND usages OF '{name}'"
+        ))
     }
 
     /// `FIND usages OF 'symbol' ...`

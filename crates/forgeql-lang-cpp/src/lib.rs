@@ -25,6 +25,7 @@ use std::sync::{Arc, OnceLock};
 
 use forgeql_core::ast::lang::{
     LanguageConfig, LanguageRegistry, LanguageSupport, MacroExpander, node_text,
+    normalise_condition,
 };
 use forgeql_core::ast::lang_json::LanguageConfigJson;
 
@@ -100,6 +101,16 @@ impl LanguageSupport for CppLanguage {
                 .child_by_field_name("declarator")
                 .and_then(find_function_name)
                 .map(|n| node_text(source, n))
+                .filter(|s| !s.is_empty()),
+
+            // A conditional directive is named by its condition, collapsed to
+            // one line — `#if defined(A) || defined(B)` and the same condition
+            // written across continuations answer to the same name. `#ifdef`
+            // is not here: it carries a grammar `name` field and was already
+            // named by the macro above.
+            "preproc_if" | "preproc_elif" => node
+                .child_by_field_name("condition")
+                .map(|n| normalise_condition(&node_text(source, n)))
                 .filter(|s| !s.is_empty()),
 
             "preproc_include" => node

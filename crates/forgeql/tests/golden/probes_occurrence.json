@@ -10,8 +10,6 @@
       "assert": { "distinct": { "by": "group_key", "count": 2, "values": ["code", "comment"] } } },
 
     { "name": "directive_node_readable_span", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "directive rows are not addressable, so the guarded region cannot be located by kind or read by handle",
       "steps": [
         { "fql": "FIND symbols WHERE fql_kind = 'guard' WHERE name = 'CONFIG_PM_DEVICE_RUNTIME_ASYNC' IN 'include/zephyr/pm/device.h'",
           "assert": { "row_count": 1 },

@@ -47,20 +47,14 @@
       "assert": { "total": 98, "distinct": { "by": "path", "count": 20 } } },
 
     { "name": "if_defined_directives_have_symbol_rows", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "#if/#elif condition mentions emit no symbol rows and #ifdef rows carry an empty kind; expected 6 directive rows in this file (3x if-defined base flag, 1x if-defined ASYNC, 1x ifdef ASYNC, 1x elif base flag)",
       "fql": "FIND symbols WHERE fql_kind = 'guard' WHERE name LIKE '%CONFIG_PM_DEVICE_RUNTIME%' IN 'include/zephyr/pm/device.h' ORDER BY line ASC",
       "assert": { "row_count": 6 } },
 
     { "name": "ifdef_row_gains_kind_and_line", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "the #ifdef name row exists but carries kind empty-string, so a fql_kind filter can never select it",
       "fql": "FIND symbols WHERE fql_kind = 'guard' WHERE name = 'CONFIG_PM_DEVICE_RUNTIME_ASYNC' IN 'include/zephyr/pm/device.h'",
       "assert": { "row_count": 1, "rows": [ { "line": 267 } ] } },
 
     { "name": "ifdef_rows_all_gain_kind", "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "all six #ifdef/#ifndef rows in this file have empty kind today",
       "fql": "FIND symbols WHERE fql_kind = 'guard' WHERE name = 'CONFIG_PM_DEVICE_RUNTIME' IN 'drivers/serial/uart_smartbond.c'",
       "assert": { "row_count": 6 } },
 

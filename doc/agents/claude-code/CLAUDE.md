@@ -277,6 +277,7 @@ Source line filtering runs **before** the 40-line cap.
 | `comment` | Comments |
 | `import` | Import / include directives |
 | `macro` | Preprocessor macro definitions |
+| `guard` | A conditional directive — `#ifdef` / `#ifndef` (named by the macro) and `#if` / `#elif` (named by the condition, whitespace-collapsed to one line). The node spans the whole guarded region through its `#endif`. **Not the same as the `guard` enrichment field**: `WHERE fql_kind = 'guard'` selects the directive itself, `WHERE guard = '…'` selects rows sitting *inside* a region that directive opened |
 | `type_alias` | Type alias / typedef declarations |
 | `namespace` | Namespace definitions |
 | `number` | Numeric literals |
@@ -468,6 +469,8 @@ FIND symbols WHERE fql_kind = 'function' WHERE usages = 0 EXCLUDE 'tests/**' ORD
 ### Rename / Refactor (the mechanical sweep)
 ```sql
 -- 1. Definition + blast radius: one row per usage SITE (includes non-call references)
+--    0 symbols with a non-zero `usages` hint means the name is referenced here
+--    but declared elsewhere — the rename still has sites to fix.
 FIND symbols WHERE name = 'oldFunction'
 FIND usages OF 'oldFunction' GROUP BY file ORDER BY count DESC
 FIND usages OF 'oldFunction' LIMIT 50

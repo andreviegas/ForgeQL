@@ -142,9 +142,12 @@ fn is_addressable_fql_kind(fql_kind: &str) -> bool {
             | "pair"
             | "object"
             | "array"
-            | "preprocessor_region"
-            | "preprocessor_directive"
             | "macro_call"
+            // `#ifdef` / `#if` / `#elif`. Addressable so a config flag's guard
+            // sites answer to `fql_kind = 'guard'` and can be read and edited
+            // by handle, the same as any other construct. Note `guard` is also
+            // an enrichment FIELD name — see the doc table.
+            | "guard"
             // A region the parser could not parse.  Addressable ON PURPOSE:
             // mapping the damage was only half the contract — an agent must be
             // able to `SHOW NODE` it and `CHANGE NODE` it to repair it.  The

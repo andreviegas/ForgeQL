@@ -6,6 +6,60 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.78] — 2026-08-01 — feat: `#ifdef` / `#if` / `#elif` are addressable nodes
+
+### Added — a conditional directive is a construct you can find and read
+
+A config flag's guard sites were the one place the index would not take you.
+`#ifdef CONFIG_X` did produce a row, but with no kind, so no `fql_kind` filter
+could ever select it; `#if defined(CONFIG_X)` and `#elif` produced no row at
+all, because the grammar gives them a condition rather than a name. On a real
+tree that meant `FIND symbols WHERE name = 'CONFIG_PM_DEVICE_RUNTIME'` reported
+21 files while the flag was actually referenced in 44 — and the missing ones
+were exactly the conditional compilation the rename had to get right.
+
+All three now emit `fql_kind = 'guard'` rows, addressable like any other
+construct:
+
+```sql
+FIND symbols WHERE fql_kind = 'guard' WHERE name LIKE '%CONFIG_X%'
+SHOW NODE '<node_id>'          -- reads the guarded region
+```
+
+`#ifdef` / `#ifndef` keep the macro name they always carried. `#if` / `#elif`
+are named by their condition, collapsed to one line of single-spaced tokens —
+the same normalisation the guard fields use, from the same function, so a row's
+name and its `guard` value agree character for character. A guard node spans
+its whole region through the matching `#endif`, so reading one by handle shows
+every branch.
+
+`guard` is now both an `fql_kind` value and an enrichment field name. They
+select opposite things and the docs say so: `WHERE fql_kind = 'guard'` finds
+the directive, `WHERE guard = '…'` finds the rows *inside* the region it opens.
+
+### Added — an empty `FIND symbols` says when the name exists as a usage
+
+A name the worktree only references — declared in a header outside it, reached
+through an include that is not indexed — returned the same empty set as a typo.
+An exact-name query that finds nothing now reports how many usage sites carry
+the name and points at `FIND usages OF`, so "absent" and "not declared here"
+stop looking alike.
+
+### Changed — indexes rebuild on first use
+
+Directive rows are new stored rows and consume identity slots, so `node_id`
+ordinals shift in every C/C++ file holding a directive. Cached indexes are
+rebuilt automatically on the next `USE`; handles captured from an earlier
+session should be re-read rather than reused.
+
+One classification moves with them. `error_scope` distinguishes an unparseable
+region that no named construct owns (`"file"`) from one sitting inside a
+construct the language could name (`"nested"`). A directive is now such a
+construct, so a parse error inside `#if … #endif` — the shape macro-heavy C
+produces constantly — is reported as `nested` where it used to be `file`. The
+errors themselves are unchanged in number and position; only the answer to
+"does anything own this?" improved.
+
 ## [0.139.77] — 2026-08-01 — change: a `FIND usages` listing has a size, not just a file count
 
 ### Changed — the listing withholds whole files once it is large enough

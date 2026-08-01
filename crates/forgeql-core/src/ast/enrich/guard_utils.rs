@@ -8,7 +8,7 @@ use regex::RegexSet;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
 
-use crate::ast::lang::LanguageConfig;
+use crate::ast::lang::{LanguageConfig, normalise_condition};
 
 // -----------------------------------------------------------------------
 // Group identity
@@ -291,18 +291,6 @@ fn top_level_operators(text: &str) -> (bool, bool) {
     }
     (has_or, has_and)
 }
-
-/// Collapse a directive's line continuations and whitespace runs to single
-/// spaces, so a condition written across several lines groups with the same
-/// condition written on one.
-fn normalise_condition(text: &str) -> String {
-    text.split_whitespace()
-        .map(|t| t.trim_end_matches('\\'))
-        .filter(|t| !t.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// Render `cond` as a conjunct of an `&&` chain.
 ///
 /// A conjunct holding a top-level `||` has to be wrapped, because `&&` binds

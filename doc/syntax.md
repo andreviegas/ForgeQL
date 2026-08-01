@@ -155,7 +155,7 @@ FIND files [clauses]
 
 | Command | Returns |
 |---|---|
-| `FIND symbols` | All indexed AST nodes. Use `WHERE fql_kind = '...'` to narrow. Every row carries a stable `node_id` and a real workspace-total `usages` count — `ORDER BY usages DESC` and `WHERE usages > N` work. |
+| `FIND symbols` | All indexed AST nodes. Use `WHERE fql_kind = '...'` to narrow. Every row carries a stable `node_id` and a real workspace-total `usages` count — `ORDER BY usages DESC` and `WHERE usages > N` work. An exact-name query that finds nothing but whose name *is* used somewhere returns a `hint` saying how many usage sites exist, so "not declared here" and "not here at all" are distinguishable. |
 | `FIND globals` | Shorthand for `WHERE fql_kind = 'variable'` — file-scope variables, constants, and statics across all supported languages. |
 | `FIND usages OF` | One row per usage **site** of the named symbol (name + path + line), read from usage postings collected at index time. Includes occurrences without call parentheses — function-pointer assignments, references, type positions. Every row carries its **file's** `node_id` and `rev`, so a site is editable where you read it: `CHANGE NODE '<node_id>(<line>)' IF REV '<rev>' MATCHING WORD 'old' WITH 'new'`. **`LIMIT` counts files, not rows** — see below. `GROUP BY file` gives real per-file counts; combine with `IN`/`EXCLUDE`/`WHERE`/`ORDER BY`/`LIMIT`. |
 | `FIND callees OF` | Symbols called from inside the named function body. Alias for `SHOW callees OF`. |
@@ -1339,7 +1339,7 @@ balance, the parser's span is used unchanged.
 
 | Field | Applies to | Description |
 |---|---|---|
-| `guard` | all walked rows | The condition controlling compilation, whitespace-normalised. On an `#elif`/`#else` arm it is the accumulated `!(c₀) && … && cₖ`, not the arm's own condition (e.g. `"defined(CONFIG_SMP)"`, `"!X"`, `"Y && X"`) |
+| `guard` | all walked rows | The condition controlling compilation, whitespace-normalised. On an `#elif`/`#else` arm it is the accumulated `!(c₀) && … && cₖ`, not the arm's own condition (e.g. `"defined(CONFIG_SMP)"`, `"!X"`, `"Y && X"`). **The field is not the kind**: `WHERE guard = '…'` selects rows *inside* a guarded region, while `WHERE fql_kind = 'guard'` selects the `#ifdef`/`#if`/`#elif` directive itself |
 | `guard_defines` | all walked rows | Comma-separated symbols that **must be defined** for this branch |
 | `guard_negates` | all walked rows | Comma-separated symbols that **must be undefined** for this branch |
 | `guard_mentions` | all walked rows | All symbols mentioned in the condition (superset of defines + negates) |

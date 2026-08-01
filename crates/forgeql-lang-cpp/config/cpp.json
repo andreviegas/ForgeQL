@@ -257,6 +257,9 @@
     "for_range_loop": "for",
     "switch_statement": "switch",
     "do_statement": "do",
-    "macro_invocation": "macro_call"
+    "macro_invocation": "macro_call",
+    "preproc_ifdef": "guard",
+    "preproc_if": "guard",
+    "preproc_elif": "guard"
   }
 }

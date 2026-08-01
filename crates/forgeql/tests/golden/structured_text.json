@@ -36,7 +36,7 @@
 
     { "name": "nested_errors_are_the_common_noise", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols WHERE fql_kind = 'error' WHERE error_scope = 'nested'",
-      "assert": { "total": 16436 } },
+      "assert": { "total": 16809 } },
 
     { "name": "macro_heavy_c_is_nested_noise_not_damage", "use": "zephyr-andre.frozen",
       "fql": "FIND symbols WHERE fql_kind = 'error' WHERE error_scope = 'nested' IN 'kernel/sched.c'",

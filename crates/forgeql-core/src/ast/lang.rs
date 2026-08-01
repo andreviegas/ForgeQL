@@ -622,6 +622,26 @@ pub fn node_text(source: &[u8], node: tree_sitter::Node<'_>) -> String {
         .to_string()
 }
 
+/// Collapse a backslash-continued, multi-line condition to one line of
+/// single-spaced tokens.
+///
+/// The rule is purely textual: drop trailing line-continuation backslashes,
+/// split on whitespace, rejoin with single spaces. Nothing here knows what a
+/// condition means or which language wrote it.
+///
+/// It exists once because two callers must agree exactly: the guard enricher
+/// names frames with it, and a language plugin may name a conditional row with
+/// it, so the row's name and its guard field match character for character. A
+/// C `#if A && \` continued onto the next line is the case that motivates it.
+#[must_use]
+pub fn normalise_condition(text: &str) -> String {
+    text.split_whitespace()
+        .map(|t| t.trim_end_matches('\\'))
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 // -----------------------------------------------------------------------
 // LanguageRegistry — maps file extensions to language implementations
 // -----------------------------------------------------------------------

@@ -243,7 +243,13 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        read two unrelated guards as opposite arms of one block. No shipped
 ///        config declares a kind as both, so this is reachable by config
 ///        rather than live today.
-pub const ENRICH_VER: u32 = 45;
+///   46 — `#ifdef` / `#if` / `#elif` become addressable `guard` rows. The
+///        `#ifdef` rows already existed with an empty kind; they now carry
+///        `fql_kind = "guard"` and, being addressable, consume an ordinal.
+///        `#if` / `#elif` emitted no row at all and now emit one named by the
+///        normalised condition. Both change stored rows and shift sibling
+///        ordinals in every C/C++ file holding a directive.
+pub const ENRICH_VER: u32 = 46;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";
