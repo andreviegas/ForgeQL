@@ -265,7 +265,16 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///   49 — C++ raw string literals join the string role. `cpp.json` modelled
 ///        only `string_literal`, so `R"(...)"` contents emitted nothing while
 ///        the role was advertised for C++. Adds postings, changes nothing else.
-pub const ENRICH_VER: u32 = 49;
+///   50 — probe generation: CMake `mention_text_kinds` carried throwaway roles
+///        while the grammar's argument node kinds were identified live. No
+///        release ever served it.
+///   51 — CMake call arguments become `role = 'config'`. `cmake.json` maps the
+///        `argument` wrapper, which covers unquoted, quoted and bracket forms
+///        in one entry and structurally excludes `line_comment` — a comment is
+///        a sibling inside `argument_list`, never a child of `argument`, so
+///        mapping the list instead would have mis-tagged comments as config.
+///        Every CMake file gains a `mentions_config_*` blob pair.
+pub const ENRICH_VER: u32 = 51;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

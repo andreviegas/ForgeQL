@@ -7,7 +7,8 @@
 
   "syntax": {
     "root_node": "source_file",
-    "skip_node_kinds": []
+    "skip_node_kinds": [],
+    "mention_text_kinds": { "argument": "config" }
   },
 
   "definitions": {

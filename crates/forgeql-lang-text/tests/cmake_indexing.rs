@@ -115,3 +115,26 @@ fn control_flow_rows_are_named_by_first_line() {
         "the foreach block should be named by its first line"
     );
 }
+
+/// A `#` comment written inside the parentheses of a call is a sibling of the
+/// arguments, not part of one. Mapping CMake `argument_list` would sweep that
+/// comment text into the config role; mapping `argument` cannot reach it.
+/// Nothing else in the suite fails if the mapping is widened back to the list,
+/// so this test is what holds the choice.
+#[test]
+fn comment_enclosed_by_a_call_is_not_a_config_mention() {
+    let table = index_fixture("argument_comment.cmake");
+    let config = table
+        .mentions
+        .get("config")
+        .expect("cmake arguments produce config mentions");
+
+    assert!(
+        config.contains_key("CONFIG_ENCLOSED_FLAG"),
+        "the argument itself must be a config occurrence"
+    );
+    assert!(
+        !config.contains_key("ONLYINCOMMENT"),
+        "comment text inside the parentheses must not become a config occurrence"
+    );
+}

@@ -6,6 +6,31 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.81] — 2026-08-01 — feat: a config flag named in a build file is an occurrence
+
+### Added — `role = 'config'` for CMake call arguments
+
+A build system decides which sources compile, and it names the flags that
+decide it. `zephyr_sources_ifdef(CONFIG_PM_DEVICE_RUNTIME device_runtime.c)`
+is where a config flag actually takes effect, and it was invisible: build
+files are not code, so the flag's name in them resolved to nothing. Renaming a
+flag and missing the build file silently drops a source from the build.
+
+CMake call arguments now contribute occurrences under `role = 'config'`.
+
+Which node kind carries an argument was settled by driving the grammar rather
+than reading it, and the answer matters. CMake's `argument_list` is the whole
+parenthesised list — including any `#` comment written inside it — so mapping
+the list would have tagged comments as config. The `argument` node is the
+wrapper around exactly one unquoted, quoted or bracket argument and can never
+contain a comment, so that is what the config declares. A golden pins the
+contract that comment text yields no `config` row.
+
+### Changed — indexes rebuild on first use
+
+Every CMake file gains a posting blob, so the enrichment-logic version moves
+and cached indexes rebuild on the first `USE` of each source. No row, ordinal
+or existing blob changes.
 ## [0.139.80] — 2026-08-01 — feat: a name written in a string is an occurrence too
 
 ### Added — `role = 'string'`

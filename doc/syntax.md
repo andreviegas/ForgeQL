@@ -157,7 +157,7 @@ FIND files [clauses]
 |---|---|
 | `FIND symbols` | All indexed AST nodes. Use `WHERE fql_kind = '...'` to narrow. Every row carries a stable `node_id` and a real workspace-total `usages` count of `role = 'code'` sites — `ORDER BY usages DESC` and `WHERE usages > N` work. An exact-name query that finds nothing but whose name *is* used somewhere returns a `hint` saying how many code usage sites exist, so "not declared here" and "not here at all" are distinguishable. |
 | `FIND globals` | Shorthand for `WHERE fql_kind = 'variable'` — file-scope variables, constants, and statics across all supported languages. |
-| `FIND usages OF` | One row per occurrence **site** of the named symbol (name + path + line + `role`), read from occurrence postings collected at index time. Covers both identifier references — including ones without call parentheses, such as function-pointer assignments and type positions — and the name written in comment text or a string literal, told apart by `role` (see below). Every row carries its **file's** `node_id` and `rev`, so a site is editable where you read it: `CHANGE NODE '<node_id>(<line>)' IF REV '<rev>' MATCHING WORD 'old' WITH 'new'`. **`LIMIT` counts files, not rows** — see below. `GROUP BY file` gives real per-file counts, `GROUP BY role` sizes the campaign by kind; combine with `IN`/`EXCLUDE`/`WHERE`/`ORDER BY`/`LIMIT`. |
+| `FIND usages OF` | One row per occurrence **site** of the named symbol (name + path + line + `role`), read from occurrence postings collected at index time. Covers both identifier references — including ones without call parentheses, such as function-pointer assignments and type positions — and the name written in comment text, a string literal, or a build-file argument, told apart by `role` (see below). Every row carries its **file's** `node_id` and `rev`, so a site is editable where you read it: `CHANGE NODE '<node_id>(<line>)' IF REV '<rev>' MATCHING WORD 'old' WITH 'new'`. **`LIMIT` counts files, not rows** — see below. `GROUP BY file` gives real per-file counts, `GROUP BY role` sizes the campaign by kind; combine with `IN`/`EXCLUDE`/`WHERE`/`ORDER BY`/`LIMIT`. |
 | `FIND callees OF` | Symbols called from inside the named function body. Alias for `SHOW callees OF`. |
 | `FIND files` | Files in the worktree. Supports `WHERE name = '…'` / `name LIKE`, `DEPTH`, `ORDER BY size`, etc. ForgeQL runtime artifacts are hidden from the listing. |
 
@@ -198,14 +198,15 @@ FIND files [clauses]
 > | `code` | an identifier the grammar resolved — a call, a reference, a type position | every indexed language |
 > | `comment` | comment text | C, C++, Rust, Python |
 > | `string` | a string literal | C, C++, Rust, Python |
-> | `config` | a build- or config-file value | not yet — no rows carry it |
+> | `config` | a build- or config-file value | CMake |
 > | `doc` | prose in a documentation file | not yet — no rows carry it |
 >
-> The last two are reserved: the field accepts them, but nothing emits them
-> yet, so `WHERE role = 'config'` returns nothing because the container is not
-> scanned — not because the name is absent from every build file. `comment` and
-> `string` are likewise scoped to the languages above; a YAML or Markdown file
-> contributes no occurrences of either today.
+> `doc` is reserved: the field accepts it, but nothing emits it yet, so
+> `WHERE role = 'doc'` returns nothing because the container is not scanned —
+> not because the name is absent from every document. The emitting roles are
+> likewise scoped to the languages above; a YAML or TOML file contributes no
+> occurrences of any role today. In a CMake file, `config` covers call
+> arguments only: a `#` comment there is not a config occurrence.
 > `role` filters and groups like any other field: `WHERE role = 'code'` narrows
 > to references the compiler sees, `GROUP BY role` sizes the campaign by kind.
 > Only the roles a language's grammar can prove are ever emitted — the engine
@@ -218,10 +219,11 @@ FIND files [clauses]
 > line it is written on — a name buried in a twelve-line comment comes back at
 > its own line, not the line the comment opened on.
 >
-> **Non-code roles are a review queue, not an edit list.** Comment and string
-> occurrences are the agent's judgment call, and an unfiltered `FIND usages`
-> arms them: a `CHANGE NODES FOUND` sweep will rewrite the log message and the
-> doc comment along with the code. That is often exactly right — a rename that
+> **Non-code roles are a review queue, not an edit list.** Comment, string and
+> build-file-argument occurrences are a judgment call, and an unfiltered
+> `FIND usages` arms them: a `CHANGE NODES FOUND` sweep will rewrite the log
+> message, the doc comment and the build flag along with the code. That is
+> often exactly right — a rename that
 > leaves its own log strings stale is not finished — and sometimes wrong, so
 > read them before applying, or narrow the armed set with `WHERE role = 'code'`
 > first. The engine enumerates and types the occurrences; deciding which ones
@@ -996,8 +998,8 @@ Applies to: `FIND symbols`, `FIND usages OF`, `FIND callees OF`
 | `language` | string | Language name: `cpp`, `rust`, `python`, etc. |
 | `path` | string | Relative file path (also used by `IN`/`EXCLUDE` globs) |
 | `line` | integer | 1-based start line |
-| `usages` | integer | Workspace-total count of **`role = 'code'` sites only**, aggregated from the reference index at index time. `ORDER BY usages DESC` and `WHERE usages > N` are real queries, not heuristics. It deliberately excludes every non-`code` occurrence — comment and string sites today — so it is smaller than the `total` of `FIND usages OF` for the same name: this column ranks symbols by how much code depends on them, not by how often the name is written. |
-| `role` | string | On `FIND usages` rows only: what the name was written in — `code`, `comment` and `string` today, with `config` and `doc` reserved (see the role table above). `WHERE role = 'code'` narrows to references the compiler resolves; `GROUP BY role` sizes a rename by kind. |
+| `usages` | integer | Workspace-total count of **`role = 'code'` sites only**, aggregated from the reference index at index time. `ORDER BY usages DESC` and `WHERE usages > N` are real queries, not heuristics. It deliberately excludes every non-`code` occurrence — comment, string and build-file-argument sites today — so it is smaller than the `total` of `FIND usages OF` for the same name: this column ranks symbols by how much code depends on them, not by how often the name is written. |
+| `role` | string | On `FIND usages` rows only: what the name was written in — `code`, `comment`, `string` and `config` today, with `doc` reserved (see the role table above). `WHERE role = 'code'` narrows to references the compiler resolves; `GROUP BY role` sizes a rename by kind. |
 
 **Filtered-field projection:** when a `WHERE` clause targets a non-core field —
 numeric, string, or boolean (e.g. `WHERE has_assignment_in_condition = 'true'`,
