@@ -50,9 +50,7 @@
       "continue_statement",
       "goto_statement",
       "declaration"
-    ],
-    "loop_kinds": ["for_statement", "while_statement", "do_statement"],
-    "exception_handler_kinds": []
+    ]
   },
 
   "control_flow": {

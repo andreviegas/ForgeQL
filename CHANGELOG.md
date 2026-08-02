@@ -6,6 +6,36 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.83] — 2026-08-02 — fix: an unrecognised key in a language config is now an error
+
+### Fixed — language configs are deserialized strictly
+
+Each language's grammar mapping lives in a JSON file (`config/<lang>.json`) that
+is compiled into its crate and parsed the first time that language is used. The
+parser accepted any key it did not recognise and dropped it. A key that was
+spelled correctly but written at the wrong nesting level was therefore not a
+failure of any kind: the config loaded, the language worked, and the one feature
+that key was meant to switch on simply never ran. Nothing reported it — not the
+build, not the tests, not the query that came back empty.
+
+Unknown keys are now refused, and the error names the offending key alongside
+the keys that were expected in its place.
+
+Turning this on found one straight away. The C config carried `loop_kinds` and
+`exception_handler_kinds` inside its `syntax` block, which does not define
+either; both were already present, with identical values, in the `control_flow`
+block that does. The dead copies are removed. Nothing about how C is indexed
+changes, because nothing ever read them.
+
+Two tests hold the rule itself as a pair: a config with a key one level too high
+must be refused, and the same key in its proper place must still parse. A test
+that checked only the refusal would pass just as happily if the config were
+being rejected for some unrelated reason.
+
+Checking the shipped configs belongs to the crates that ship them. Each language
+crate now parses its own config in its own test suite, and the crate that ships
+several scans its config directory instead of listing the files, so a format
+added later is covered without anyone remembering to add it.
 ## [0.139.82] — 2026-08-02 — feat: a symbol named in documentation prose is an occurrence
 
 ### Added — `role = 'doc'` for Markdown and reStructuredText prose

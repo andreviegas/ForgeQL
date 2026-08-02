@@ -363,4 +363,17 @@ mod tests {
             root.to_sexp()
         );
     }
+
+    /// The bundled config must survive strict deserialization: a key the schema
+    /// does not declare is an error, so this fails loudly if the file and the
+    /// schema ever drift apart. The crate owns its config, so it owns the check.
+    #[test]
+    fn bundled_config_deserializes_strictly() {
+        let parsed = LanguageConfigJson::from_json_bytes(include_bytes!("../config/rust.json"));
+        assert!(
+            parsed.is_ok(),
+            "rust.json must deserialize strictly: {:?}",
+            parsed.err()
+        );
+    }
 }

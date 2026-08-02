@@ -24,6 +24,10 @@
 ///   "kind_map": { "raw_kind": "fql_kind", ... }
 /// }
 /// ```
+///
+/// Deserialization is **strict**: a key the structs do not declare is an error
+/// naming that key, so a correctly spelled key at the wrong nesting level fails
+/// loudly instead of being dropped in silence.
 use std::collections::HashMap;
 
 use serde::Deserialize;
@@ -36,6 +40,7 @@ use super::lang::{BlockGroupSpec, LanguageConfig};
 
 /// Root structure of a language JSON config file.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LanguageConfigJson {
     /// Language metadata (name, extensions, grammar).
     pub language: LanguageSection,
@@ -119,6 +124,7 @@ pub struct LanguageConfigJson {
 
 /// Language identity metadata.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LanguageSection {
     /// Short identifier (e.g. `"cpp"`, `"rust"`).
     pub name: String,
@@ -133,6 +139,7 @@ pub struct LanguageSection {
 
 /// Syntax / structural node kinds.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct SyntaxSection {
     /// Root node kind (e.g. `"translation_unit"`, `"source_file"`).
     #[serde(default)]
@@ -196,6 +203,7 @@ pub struct SyntaxSection {
 
 /// Definition node kinds.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct DefinitionsSection {
     /// Function/method definition kinds.
     #[serde(default)]
@@ -253,6 +261,7 @@ pub struct DefinitionsSection {
 
 /// Control-flow node kinds.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ControlFlowSection {
     /// All control-flow statement/expression kinds.
     #[serde(default)]
@@ -285,6 +294,7 @@ pub struct ControlFlowSection {
 
 /// Statement node kinds.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct StatementsSection {
     /// Return statement kind.
     #[serde(default, rename = "return")]
@@ -317,6 +327,7 @@ pub struct StatementsSection {
 
 /// Expression node kinds.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ExpressionsSection {
     /// Call expression kind.
     #[serde(default)]
@@ -369,6 +380,7 @@ pub struct ExpressionsSection {
 
 /// Type-related node kinds.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TypesSection {
     /// Type descriptor kind.
     #[serde(default)]
@@ -401,6 +413,7 @@ pub struct TypesSection {
 
 /// Literal node kinds and values.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct LiteralsSection {
     /// Number literal kinds.
     #[serde(default)]
@@ -440,6 +453,7 @@ pub struct LiteralsSection {
 
 /// Modifier detection configuration.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ModifiersSection {
     /// `[keyword, field_name]` pairs for modifier detection.
     #[serde(default)]
@@ -456,6 +470,7 @@ pub struct ModifiersSection {
 
 /// Visibility / access control configuration.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct VisibilitySection {
     /// `[keyword, visibility]` pairs.
     #[serde(default)]
@@ -470,6 +485,7 @@ pub struct VisibilitySection {
 /// One entry in the `block_groups` list — maps to
 /// [`crate::ast::lang::BlockGroupSpec`].
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct BlockGroupJson {
     /// FQL kind of the members to group (e.g. `comment`).
     pub member_fql_kind: String,
@@ -484,6 +500,7 @@ pub struct BlockGroupJson {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct CommentsSection {
     /// `[prefix, style]` pairs, checked in order.
     #[serde(default)]
@@ -492,6 +509,7 @@ pub struct CommentsSection {
 
 /// Language capability flags.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct CapabilitiesSection {
     /// Has `goto` statements.
@@ -513,6 +531,7 @@ pub struct CapabilitiesSection {
 
 /// Preprocessor / compiler guard configuration.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct GuardsSection {
     /// Node kinds that open a guarded block (e.g. `preproc_ifdef`, `preproc_if`).
     #[serde(default)]
@@ -565,6 +584,7 @@ pub struct GuardsSection {
 /// All fields default to empty/blank so languages without macro support
 /// can omit the entire `"macros"` section from their JSON config.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct MacrosSection {
     /// Token texts that prefix macro definitions (e.g. `["#define"]` for C/C++).
     #[serde(default)]
@@ -808,5 +828,46 @@ mod tests {
         assert_eq!(parsed.expressions.parenthesized, "parenthesized_expression");
         assert!(!parsed.capabilities.has_goto);
         assert!(parsed.casts.is_empty());
+    }
+
+    /// The failure this strictness exists to catch: a key spelled correctly but
+    /// nested one level too high. Serde used to drop it in silence, so the
+    /// feature it configured simply never ran.
+    #[test]
+    fn a_key_at_the_wrong_nesting_level_is_refused() {
+        let misplaced = r#"{
+            "language": { "name": "toy", "extensions": ["toy"] },
+            "syntax": { "root_node": "document" },
+            "mention_text_kinds": { "paragraph": "doc" }
+        }"#;
+
+        let Err(err) = LanguageConfigJson::from_json_bytes(misplaced.as_bytes()) else {
+            panic!("a key at the wrong nesting level must be refused");
+        };
+        assert!(
+            err.to_string().contains("mention_text_kinds"),
+            "the error must name the offending key, got: {err}"
+        );
+    }
+
+    /// The other half of that pair: the same key in its proper place still
+    /// parses. Without this, the test above would pass just as happily if the
+    /// config were being refused for some unrelated reason.
+    #[test]
+    fn the_same_key_in_its_proper_place_is_accepted() {
+        let correct = r#"{
+            "language": { "name": "toy", "extensions": ["toy"] },
+            "syntax": {
+                "root_node": "document",
+                "mention_text_kinds": { "paragraph": "doc" }
+            }
+        }"#;
+
+        let parsed = LanguageConfigJson::from_json_bytes(correct.as_bytes())
+            .expect("a well-placed key must still parse");
+        assert_eq!(
+            parsed.syntax.mention_text_kinds.get("paragraph"),
+            Some(&"doc".to_owned())
+        );
     }
 }

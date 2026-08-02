@@ -284,4 +284,17 @@ mod tests {
         let name = lang.extract_name(assign_node, source);
         assert_eq!(name.as_deref(), Some("x"));
     }
+
+    /// The bundled config must survive strict deserialization: a key the schema
+    /// does not declare is an error, so this fails loudly if the file and the
+    /// schema ever drift apart. The crate owns its config, so it owns the check.
+    #[test]
+    fn bundled_config_deserializes_strictly() {
+        let parsed = LanguageConfigJson::from_json_bytes(include_bytes!("../config/python.json"));
+        assert!(
+            parsed.is_ok(),
+            "python.json must deserialize strictly: {:?}",
+            parsed.err()
+        );
+    }
 }

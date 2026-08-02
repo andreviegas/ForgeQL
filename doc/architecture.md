@@ -453,6 +453,12 @@ forgeql (binary)
 
 For a structured-text format, add a module + `config/<lang>.json` kind map inside `forgeql-lang-text` — no new crate needed. For a full programming language, add a single new crate with no changes to `forgeql-core`:
 
+The JSON is deserialized strictly: a key the loader does not recognise is a hard
+error that names the offending key, not a silently ignored line. A correctly
+spelled key at the wrong nesting level therefore fails the first time the
+language is used, instead of leaving the feature it configures quietly switched
+off.
+
 1. **Create `crates/forgeql-lang-<name>/`** with `Cargo.toml` depending on `forgeql-core` + `tree-sitter-<name>`.
 
 2. **Implement `LanguageSupport`** — define the static `LanguageConfig`, `extract_name()` for the grammar's naming conventions, and `map_kind()` for the FQL kind taxonomy.

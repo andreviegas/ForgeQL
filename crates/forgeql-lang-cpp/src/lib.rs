@@ -380,4 +380,17 @@ mod tests {
             Some("counter_event_t")
         );
     }
+
+    /// The bundled config must survive strict deserialization: a key the schema
+    /// does not declare is an error, so this fails loudly if the file and the
+    /// schema ever drift apart. The crate owns its config, so it owns the check.
+    #[test]
+    fn bundled_config_deserializes_strictly() {
+        let parsed = LanguageConfigJson::from_json_bytes(include_bytes!("../config/cpp.json"));
+        assert!(
+            parsed.is_ok(),
+            "cpp.json must deserialize strictly: {:?}",
+            parsed.err()
+        );
+    }
 }

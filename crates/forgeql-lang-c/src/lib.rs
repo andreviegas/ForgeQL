@@ -331,4 +331,17 @@ mod tests {
         assert_eq!(td.kind(), "type_definition");
         assert_eq!(lang.extract_name(td, source).as_deref(), Some("paddr_t"));
     }
+
+    /// The bundled config must survive strict deserialization: a key the schema
+    /// does not declare is an error, so this fails loudly if the file and the
+    /// schema ever drift apart. The crate owns its config, so it owns the check.
+    #[test]
+    fn bundled_config_deserializes_strictly() {
+        let parsed = LanguageConfigJson::from_json_bytes(include_bytes!("../config/c.json"));
+        assert!(
+            parsed.is_ok(),
+            "c.json must deserialize strictly: {:?}",
+            parsed.err()
+        );
+    }
 }
