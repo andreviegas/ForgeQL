@@ -1,0 +1,25 @@
+{
+  "language": {
+    "name": "kconfig",
+    "extensions": ["kconfig"],
+    "tree_sitter_grammar": "tree-sitter-kconfig"
+  },
+
+  "syntax": {
+    "root_node": "configuration",
+    "skip_node_kinds": [],
+    "usage_node_kinds": ["symbol"]
+  },
+
+  "capabilities": {
+    "has_goto": false,
+    "has_increment_decrement": false,
+    "has_implicit_truthiness": false,
+    "params_share_body_scope": false
+  },
+
+  "kind_map": {
+    "config": "variable",
+    "menuconfig": "variable"
+  }
+}

@@ -385,7 +385,7 @@ ForgeQL/
 │   │       ├── lib.rs            # RustLanguage, RUST_CONFIG, rust_registry()
 │   │       └── macro_expand.rs   # RustMacroExpander — macro_rules! extraction + expansion
 │   └── forgeql-lang-text/        # ALL structured-text formats, one module each:
-│       ├── config/               #   xml, dbc, toml, json, yaml, ini, just, make,
+│       ├── config/               #   xml, dbc, toml, json, yaml, ini, kconfig, just, make,
 │       └── src/                  #   cmake, markdown, rst — plus config/<lang>.json
 ├── doc/
 │   ├── syntax.md                 # Command and clause reference
@@ -442,7 +442,7 @@ forgeql (binary)
 ├── forgeql-lang-python   tree-sitter-python + PythonLanguage
 ├── forgeql-lang-rust     tree-sitter-rust + RustLanguage + RustMacroExpander
 └── forgeql-lang-text     all structured-text grammars (XML, DBC, TOML, JSON,
-                          YAML, INI, justfile, Make, CMake, Markdown, reST)
+                          YAML, INI, Kconfig, justfile, Make, CMake, Markdown, reST)
 ```
 
 `forgeql-core` depends on `tree-sitter` (the library) but NOT on any grammar crate. Grammar dependencies live exclusively in language crates. The `forgeql` and `forgeql-server` registries splice every text format in with one `text_languages()` call, so a new text format is picked up by both binaries automatically.

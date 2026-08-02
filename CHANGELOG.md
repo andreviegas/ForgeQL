@@ -6,6 +6,48 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.140.0] — 2026-08-02 — feat: a build flag's definition site is addressable
+
+### Added — Kconfig files are indexed
+
+A config flag is defined in `Kconfig` and referenced from C, CMake, YAML and
+every other file in the tree. ForgeQL could find every reference and not the
+definition: `Kconfig` had no grammar, so those files produced no rows at all.
+Renaming a flag meant reading the definition by hand and hoping.
+
+`Kconfig` is now a supported format. `config X` and `menuconfig X` index as
+`variable` rows named `X`, so the definition site has a stable handle and turns
+up in `FIND symbols` like any other declaration:
+
+```sql
+FIND symbols WHERE name = 'PM_DEVICE_RUNTIME' IN 'subsys/pm/Kconfig'
+FIND usages OF 'PM_DEVICE_RUNTIME' IN 'subsys/pm/**'
+```
+
+Every flag reference in a Kconfig file is a usage site, so `depends on X`,
+`select X` and `if X` all answer `FIND usages OF 'X'`. That falls out of the
+grammar rather than being enumerated: each of those spells its operand as the
+same `symbol` node, so one declaration covers all three.
+
+The file name carries no extension, which the registry's existing file-name
+fallback already handles — a plugin declaring `kconfig` claims a file called
+`Kconfig`.
+
+`if` is deliberately not an addressable row. Its condition is a bare symbol, so
+naming the guard after it would report a flag's own name twice in the file that
+defines it — once for the definition, once for the guard — and `if` nests the
+entries it guards, so mapping it would also re-parent them.
+
+Not yet: a config entry does not appear in a default `SHOW outline`. It is
+indexed and `FIND symbols` finds it, but `variable` is excluded from the
+outline's structural filter so that C locals do not flood every outline.
+Making it structural is a decision about which kind a build flag should be,
+not a matter of more indexing, and is left for a follow-up.
+
+Known residue: files with vendor suffixes (`Kconfig.stm32`, `Kconfig.defconfig`)
+are not claimed. The suffix is open-ended, so there is no list to match, and
+guessing at one would claim files no grammar was written for.
+
 ## [0.139.85] — 2026-08-02 — feat: an include path is a name you can search for
 
 ### Added — substring matching for names that are not identifiers

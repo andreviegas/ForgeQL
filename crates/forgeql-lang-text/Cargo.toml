@@ -14,6 +14,7 @@ forgeql-core     = { workspace = true }
 tree-sitter      = { workspace = true }
 tree-sitter-dbc  = { workspace = true }
 tree-sitter-ini  = { workspace = true }
+tree-sitter-kconfig = { workspace = true }
 tree-sitter-json = { workspace = true }
 tree-sitter-just = { workspace = true }
 tree-sitter-cmake = { workspace = true }

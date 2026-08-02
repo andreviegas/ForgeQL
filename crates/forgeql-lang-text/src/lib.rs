@@ -17,6 +17,7 @@
 //! | [`xml`]    | `xml`, `arxml`, `xdm`, `epc`, `epd`, `ecuc`, `odx`|
 //! | [`dbc`]    | `dbc` (Vector CAN database)                       |
 //! | [`ini`]    | `ini`, `cfg`, `.editorconfig`, `.gitconfig`       |
+//! | [`kconfig`] | `kconfig` / `Kconfig` (Linux + Zephyr build flags)|
 //! | [`just`]   | `just`, `justfile` / `.justfile` / `Justfile`     |
 //! | [`make`]   | `mk`, `Makefile` / `makefile` / `GNUmakefile`     |
 //! | [`cmake`]  | `cmake`, `CMakeLists.txt`                         |
@@ -34,6 +35,7 @@ pub mod dbc;
 pub mod ini;
 pub mod json;
 pub mod just;
+pub mod kconfig;
 pub mod make;
 pub mod markdown;
 pub mod rst;
@@ -51,6 +53,7 @@ pub use dbc::DbcLanguage;
 pub use ini::IniLanguage;
 pub use json::JsonLanguage;
 pub use just::JustLanguage;
+pub use kconfig::KconfigLanguage;
 pub use make::MakeLanguage;
 pub use markdown::MarkdownLanguage;
 pub use rst::RstLanguage;
@@ -66,6 +69,7 @@ pub fn text_languages() -> Vec<Arc<dyn LanguageSupport>> {
         Arc::new(CmakeLanguage),
         Arc::new(DbcLanguage),
         Arc::new(IniLanguage),
+        Arc::new(KconfigLanguage),
         Arc::new(JsonLanguage),
         Arc::new(JustLanguage),
         Arc::new(MakeLanguage),

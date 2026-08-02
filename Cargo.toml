@@ -30,7 +30,7 @@ default-members = [
 ]
 
 [workspace.package]
-version   = "0.139.85"
+version   = "0.140.0"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"
@@ -101,6 +101,7 @@ tree-sitter-xml  = "0.7"
 tree-sitter-dbc  = "0.1"
 # INI-style config (.ini/.cfg, .editorconfig, .gitconfig).
 tree-sitter-ini  = "1.4"
+tree-sitter-kconfig = "1.1"
 # just command-runner files (justfile).
 tree-sitter-just = "0.2"
 # GNU Make (Makefile, GNUmakefile, *.mk).

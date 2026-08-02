@@ -314,7 +314,17 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        of none of them. Only the angle-bracket form is claimed: the quoted
 ///        form's node kind is `string_literal`, shared with every other string
 ///        in the language, and one kind carries one rule.
-pub const ENRICH_VER: u32 = 57;
+///   58 — Kconfig files are indexed. `config X` / `menuconfig X` become
+///        `variable` rows named `X` — the definition site of a build flag,
+///        which had no addressable row at all before — and every `symbol` is a
+///        usage site, so `depends on X`, `select X` and `if X` all answer
+///        `FIND usages OF 'X'`. Only those two kinds are given a name-child
+///        rule, and a row is emitted only for a named node, so nothing else in
+///        a Kconfig file becomes a row. `if` is deliberately left out: naming
+///        the guard after its bare `symbol` condition would report a flag's own
+///        name twice in the file that defines it, and `if` nests the entries it
+///        guards, so it would re-parent them.
+pub const ENRICH_VER: u32 = 58;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

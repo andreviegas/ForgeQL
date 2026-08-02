@@ -25,8 +25,8 @@ Think of it as **SQL for source code**: a small, expressive query language backe
 Three ideas define it:
 
 - **Edit by node handle.** Every indexed symbol carries a stable `node_id` (e.g. `nb1be37eea3f0.0124`) that survives line drift, unrelated edits, and re-parse. You locate a node once with `FIND`, then read it (`SHOW NODE`) and rewrite it (`CHANGE NODE`) by handle — no line numbers to recompute, ever.
-- **Real reference queries.** Usage sites are collected at index time, so `FIND usages OF 'name'` returns every reference — including ones without call parentheses — and `ORDER BY usages DESC` ranks symbols by real workspace-wide counts.
-- **Not just code.** Structured-text formats index like code: AUTOSAR `.arxml`, EB tresos `.xdm`, Vector CAN `.dbc`, `Cargo.toml`/`Cargo.lock`, `CMakeLists.txt`, Makefiles, justfiles, INI, JSON, YAML, XML, Markdown, reStructuredText. Config that normally requires GUI tools becomes findable by name and editable by node handle.
+- **Real reference queries.** Usage sites are collected at index time, so `FIND usages OF 'name'` returns every reference — including ones without call parentheses — and `ORDER BY usages DESC` ranks symbols by real workspace-wide counts. Every occurrence carries a `role` — `code`, `comment`, `string`, `config` or `doc` — so the comment that explains a flag, the string that logs it, the build file that switches on it and the manual that documents it are all part of a rename's blast radius (`WHERE role = 'code'` narrows back to code alone). A query holding a path, like `FIND usages OF 'zephyr/pm/device_runtime.h'`, finds the files that include it.
+- **Not just code.** Structured-text formats index like code: AUTOSAR `.arxml`, EB tresos `.xdm`, Vector CAN `.dbc`, `Cargo.toml`/`Cargo.lock`, `CMakeLists.txt`, Kconfig, Makefiles, justfiles, INI, JSON, YAML, XML, Markdown, reStructuredText. Config that normally requires GUI tools becomes findable by name and editable by node handle.
 
 It works in two modes:
 - **MCP server** — connects directly to AI coding agents (GitHub Copilot, Claude, etc.) inside VS Code or any MCP-capable editor.
