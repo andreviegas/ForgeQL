@@ -7,7 +7,8 @@
 
   "syntax": {
     "root_node": "document",
-    "skip_node_kinds": []
+    "skip_node_kinds": [],
+    "mention_text_kinds": { "paragraph": "doc", "atx_heading": "doc" }
   },
 
   "capabilities": {

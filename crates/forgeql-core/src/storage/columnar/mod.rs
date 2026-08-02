@@ -274,7 +274,27 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        a sibling inside `argument_list`, never a child of `argument`, so
 ///        mapping the list instead would have mis-tagged comments as config.
 ///        Every CMake file gains a `mentions_config_*` blob pair.
-pub const ENRICH_VER: u32 = 51;
+///   52 — probe generation: Markdown and reStructuredText prose kinds carried
+///        throwaway roles while the block containers were identified. Never
+///        served: the key was written at the wrong nesting level and the
+///        deserializer ignored it, so the generation emitted nothing.
+///   53 — probe generation: same mapping, still mis-placed. Retired once
+///        `mention_text_kinds` was moved inside the `syntax` block, where the
+///        other languages declare it.
+///   54 — superseded: the same mapping also declared `setext_heading`, which
+///        holds its text in a child `paragraph` and therefore double-counted
+///        every token in a setext heading. Never released.
+///   55 — Markdown and reStructuredText prose becomes `role = 'doc'`.
+///        `md.json` maps `paragraph` and `atx_heading`; `setext_heading` is
+///        excluded because it holds its text in a child `paragraph`, while an
+///        atx heading holds an `inline` node and cannot overlap one.
+///        `rst.json` maps `paragraph` and `title`. Container kinds that
+///        *contain* paragraphs — list items, block quotes, directives, fields,
+///        sections — are deliberately unmapped: their prose is already covered
+///        by the paragraph inside them, and mapping both would emit each token
+///        twice. Every Markdown and reStructuredText file gains a
+///        `mentions_doc_*` blob pair.
+pub const ENRICH_VER: u32 = 55;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

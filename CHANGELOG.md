@@ -6,6 +6,37 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.82] — 2026-08-02 — feat: a symbol named in documentation prose is an occurrence
+
+### Added — `role = 'doc'` for Markdown and reStructuredText prose
+
+Documentation is where a symbol is explained, and it goes stale the same way a
+log message does. Rename a flag in the code, leave the manual alone, and the
+manual is quietly wrong. Prose was invisible to `FIND usages`: a documentation
+file is not code, so a name written in one resolved to nothing.
+
+Markdown and reStructuredText prose now contributes occurrences under
+`role = 'doc'`. Markdown maps paragraphs and atx headings;
+reStructuredText maps paragraphs and titles.
+
+Containers that enclose paragraphs — list items, block quotes, directives,
+fields and sections — are deliberately not mapped. The prose of a list item is
+already the paragraph inside it, so mapping both would report every token twice.
+A setext heading is not safe: it keeps its text in a child paragraph, so mapping
+it too would report every token in it twice. An atx heading keeps its text in an
+inline node instead, so it cannot overlap a paragraph and is mapped. A
+golden pins one reStructuredText site by exact line and a test pins one token
+per Markdown container, which is what enforces the property: a nesting mistake
+surfaces as two occurrences of one token rather than as a subtly wrong count.
+
+Occurrence lines are per token, not per node. The pinned site sits on the line
+where the name is written, not on the line where its paragraph begins.
+
+### Changed — indexes rebuild on first use
+
+The cache version moved, so the first query against a source after upgrading
+re-indexes it. Large trees take a few minutes; later queries are served from the
+rebuilt cache.
 ## [0.139.81] — 2026-08-01 — feat: a config flag named in a build file is an occurrence
 
 ### Added — `role = 'config'` for CMake call arguments
