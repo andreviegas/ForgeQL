@@ -7,7 +7,9 @@
 
   "syntax": {
     "root_node": "document",
-    "skip_node_kinds": []
+    "skip_node_kinds": [],
+    "mention_token_extra_chars": "-",
+    "mention_text_kinds": { "string": "config" }
   },
 
   "capabilities": {

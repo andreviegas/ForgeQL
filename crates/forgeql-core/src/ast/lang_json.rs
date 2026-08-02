@@ -32,7 +32,7 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use super::lang::{BlockGroupSpec, LanguageConfig};
+use super::lang::{BlockGroupSpec, LanguageConfig, MentionRule};
 
 // -----------------------------------------------------------------------
 // Top-level JSON config
@@ -137,6 +137,37 @@ pub struct LanguageSection {
     pub tree_sitter_grammar: String,
 }
 
+/// How a text-bearing node kind contributes mentions.
+///
+/// The bare form — `"comment": "comment"` — tags every token in the node. The
+/// object form — `"string": { "role": "config", "when_field": "value" }` —
+/// tags tokens only where the walk reached the node through that grammar
+/// field. The *nearest* labelled edge decides, so a key nested inside a value
+/// is excluded again rather than inheriting the value's role.
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum MentionKindJson {
+    /// Every token in the node carries this role.
+    Role(String),
+    /// The role applies only under the named grammar field.
+    ///
+    /// A named struct, not an inline variant: an untagged enum variant does not
+    /// inherit the enclosing section's `deny_unknown_fields`, so an unrecognised
+    /// key here would be dropped in silence — the exact failure the strict
+    /// deserialization is there to prevent.
+    Positioned(PositionedMention),
+}
+
+/// The object form of a mention rule.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PositionedMention {
+    /// Occurrence role for tokens inside the node.
+    pub role: String,
+
+    /// Grammar field label that must be the nearest labelled edge.
+    pub when_field: String,
+}
 /// Syntax / structural node kinds.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -190,7 +221,14 @@ pub struct SyntaxSection {
     /// every token found inside that kind carries (e.g. `"comment"` →
     /// `"comment"`).
     #[serde(default)]
-    pub mention_text_kinds: std::collections::HashMap<String, String>,
+    pub mention_text_kinds: std::collections::HashMap<String, MentionKindJson>,
+
+    /// Characters that continue a mention token in this language beyond
+    /// `[A-Za-z0-9_]`. A token may contain them but may neither start nor end
+    /// with one, so `ubuntu-latest` is one token and a trailing dash is not
+    /// part of it.
+    #[serde(default)]
+    pub mention_token_extra_chars: String,
 
     /// Node kinds that act as statement / expression boundaries.
     #[serde(default)]
@@ -687,7 +725,25 @@ impl LanguageConfigJson {
             decorator_raw_kind: self.types.decorator,
             skip_node_kinds: self.syntax.skip_node_kinds,
             usage_node_kinds: self.syntax.usage_node_kinds,
-            mention_text_kinds: self.syntax.mention_text_kinds,
+            mention_text_kinds: self
+                .syntax
+                .mention_text_kinds
+                .into_iter()
+                .map(|(kind, spec)| {
+                    let rule = match spec {
+                        MentionKindJson::Role(role) => MentionRule {
+                            role,
+                            when_field: None,
+                        },
+                        MentionKindJson::Positioned(positioned) => MentionRule {
+                            role: positioned.role,
+                            when_field: Some(positioned.when_field),
+                        },
+                    };
+                    (kind, rule)
+                })
+                .collect(),
+            mention_token_extra_chars: self.syntax.mention_token_extra_chars,
             statement_boundary_kinds: self.syntax.statement_boundary_kinds,
             declarator_field_name: self.syntax.declarator_field,
             function_declarator_kind: self.syntax.function_declarator,
@@ -865,9 +921,14 @@ mod tests {
 
         let parsed = LanguageConfigJson::from_json_bytes(correct.as_bytes())
             .expect("a well-placed key must still parse");
-        assert_eq!(
-            parsed.syntax.mention_text_kinds.get("paragraph"),
-            Some(&"doc".to_owned())
+        let placed = parsed
+            .syntax
+            .mention_text_kinds
+            .get("paragraph")
+            .expect("the well-placed key must reach the syntax section");
+        assert!(
+            matches!(placed, MentionKindJson::Role(role) if role == "doc"),
+            "the bare string form must parse as a plain role"
         );
     }
 }

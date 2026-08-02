@@ -6,6 +6,61 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.84] — 2026-08-02 — feat: a name written in a config value is an occurrence
+
+### Added — `role = 'config'` for YAML, TOML and JSON values
+
+A build is configured in YAML, TOML and JSON as much as in CMake, and the names
+that appear there — a container image, a toolchain action, a package, a path —
+are the same names that appear in code. They were invisible to `FIND usages`:
+asking where a name was written skipped every config file in the repository, so
+a rename looked complete while the pipeline still referred to the old name.
+
+Scalar values in those three formats now contribute occurrences under
+`role = 'config'`. Keys deliberately do not. A key is already the pair's own
+name on the symbols side, so tagging it here would answer "where is this name
+written?" twice for one byte range; the division is keys → `FIND symbols`,
+values → `FIND usages ... WHERE role = 'config'`.
+
+Keeping that line straight is the whole difficulty, because a value can contain
+keys:
+
+```yaml
+outer:
+  inner: deep
+```
+
+`inner` sits inside `outer`'s value and is still a key. YAML and JSON label the
+two sides with tree-sitter fields, so a rule may name the field it applies
+under, and the *nearest* label on the path wins — crossing into a value arms
+the rule, crossing into a key disarms it again, however deep. Sequence entries
+and block scalars carry no label of their own and so inherit, which is what
+makes list values count. TOML labels nothing at all, but there its keys and its
+values are different node kinds, so a plain kind rule is enough.
+
+Only leaf scalars are mapped. A YAML value passes through two wrapper nodes and
+a JSON string wraps its own content; mapping a wrapper as well would report
+every token in it twice.
+
+The object form of a rule is a named struct rather than an inline enum variant.
+An untagged variant does not inherit the enclosing section's rejection of
+unknown keys, so a typo inside one would have been dropped in silence — the
+very failure the previous release closed.
+
+### Added — `mention_token_extra_chars`
+
+Config values are full of hyphenated names — `ubuntu-latest`,
+`tree-sitter-yaml` — and the token alphabet stopped at `-`, so each arrived as
+two unrelated tokens and neither whole name could be found. A language may now
+widen the alphabet for the characters that continue a token. The start of a
+token is not widened and a token never ends on a widened character, so the
+extra characters can only join a name, never invent one. YAML, TOML and JSON
+add `-`; every other language is unchanged.
+
+### Note — indexes rebuild on first use
+
+The cache version moved, so the first query against a source after upgrading
+re-indexes it.
 ## [0.139.83] — 2026-08-02 — fix: an unrecognised key in a language config is now an error
 
 ### Fixed — language configs are deserialized strictly

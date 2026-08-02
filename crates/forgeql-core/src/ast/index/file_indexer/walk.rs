@@ -71,6 +71,14 @@ pub(super) fn collect_nodes(
     //   → ctx.inside_error
     let mut string_depth: usize = 0;
     let mut error_depth: usize = 0;
+    // Nearest-labelled-edge tracking for positioned mention rules: the grammar
+    // field label closest to this node on the path from the root, which each
+    // rule compares against its own `when_field`. Carrying the label rather
+    // than a boolean is what lets two rules key on different fields, and what
+    // stops a rule keyed on one field firing inside another. A stack, not a
+    // counter, because a field label belongs to the edge and cannot be
+    // re-derived from the popped node's kind on ascent the way string_depth is.
+    let mut nearest_field_stack: Vec<Option<&'static str>> = Vec::new();
     // Pre-compile env_guard_patterns once per file.
     let env_guard_regex: Option<regex::RegexSet> = if config.env_guard_patterns().is_empty() {
         None
@@ -186,6 +194,12 @@ pub(super) fn collect_nodes(
                     None
                 }
             });
+            // The node's own labelled edge wins; an unlabelled edge inherits.
+            // A `key` edge nested inside a `value` therefore replaces the label,
+            // which is what keeps a config format's keys out of its values.
+            let nearest_field = cursor
+                .field_name()
+                .or_else(|| nearest_field_stack.last().copied().flatten());
             let current_node_ordinal = process_node_rows(
                 ctx,
                 node,
@@ -197,6 +211,7 @@ pub(super) fn collect_nodes(
                 parent_ordinal,
                 string_depth > 0,
                 error_depth > 0,
+                nearest_field,
                 &mut row_ordinal_counter,
                 block_tag.as_ref(),
             );
@@ -219,6 +234,7 @@ pub(super) fn collect_nodes(
                     .unwrap_or_else(|| parent_ordinal_stack.last().copied().unwrap_or(u32::MAX));
                 parent_ordinal_stack.push(parent_ord);
                 parent_kind_stack.push(node.kind());
+                nearest_field_stack.push(nearest_field);
                 continue;
             }
         }
@@ -234,6 +250,7 @@ pub(super) fn collect_nodes(
             config,
             &mut parent_ordinal_stack,
             &mut parent_kind_stack,
+            &mut nearest_field_stack,
             &mut string_depth,
             &mut error_depth,
         ) {
@@ -290,11 +307,13 @@ fn ascend_to_next_sibling(
     config: &LanguageConfig,
     parent_ordinal_stack: &mut Vec<u32>,
     parent_kind_stack: &mut Vec<&'static str>,
+    nearest_field_stack: &mut Vec<Option<&'static str>>,
     string_depth: &mut usize,
     error_depth: &mut usize,
 ) -> bool {
     while cursor.goto_parent() {
         let _ = parent_ordinal_stack.pop();
+        let _ = nearest_field_stack.pop();
         if let Some(popped) = parent_kind_stack.pop() {
             if config.is_opaque_string_kind(popped) || config.is_comment_kind(popped) {
                 *string_depth = string_depth.saturating_sub(1);

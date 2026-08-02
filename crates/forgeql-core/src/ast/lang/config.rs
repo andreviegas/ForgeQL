@@ -1,5 +1,5 @@
 //! Query methods for [`super::LanguageConfig`].
-use super::{BlockGroupSpec, LanguageConfig};
+use super::{BlockGroupSpec, LanguageConfig, MentionRule};
 impl LanguageConfig {
     // -- kind membership tests (slice fields) --------------------------
 
@@ -222,11 +222,17 @@ impl LanguageConfig {
         self.usage_node_kinds.iter().any(|s| s == kind)
     }
 
-    /// The occurrence role for text found inside a node of this kind, or
-    /// `None` when the kind carries no prose worth scanning.
+    /// How text inside a node of this kind contributes mentions, or `None`
+    /// when the kind carries no prose worth scanning.
     #[must_use]
-    pub fn mention_role(&self, kind: &str) -> Option<&str> {
-        self.mention_text_kinds.get(kind).map(String::as_str)
+    pub fn mention_rule(&self, kind: &str) -> Option<&MentionRule> {
+        self.mention_text_kinds.get(kind)
+    }
+
+    /// Characters that continue a mention token beyond `[A-Za-z0-9_]`.
+    #[must_use]
+    pub fn mention_token_extra_chars(&self) -> &str {
+        &self.mention_token_extra_chars
     }
 
     /// Is this a statement / expression boundary kind?

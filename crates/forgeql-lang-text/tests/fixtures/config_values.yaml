@@ -1,0 +1,6 @@
+# A key names the pair; only the values below are config occurrences.
+outerkey: HYPHEN-VALUE
+listkey:
+  - SEQITEM
+nestedkey:
+  innerkey: NESTEDVALUE

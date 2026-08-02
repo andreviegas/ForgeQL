@@ -294,7 +294,19 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        by the paragraph inside them, and mapping both would emit each token
 ///        twice. Every Markdown and reStructuredText file gains a
 ///        `mentions_doc_*` blob pair.
-pub const ENRICH_VER: u32 = 55;
+///   56 — YAML, TOML and JSON scalar *values* become `role = 'config'`.
+///        The keys are deliberately excluded: they are already the pair rows'
+///        names on the symbols side, so tagging them too would answer "where
+///        is this name written?" twice for the same byte range. YAML and JSON
+///        distinguish key from value by tree-sitter *field label*, so their
+///        rules carry `when_field: "value"` and the walk tracks the nearest
+///        labelled edge — a key nested inside a value resets it. TOML labels
+///        nothing, but its keys are `bare_key`/`quoted_key`/`dotted_key` while
+///        its values are `string`/`integer`/…, so a plain kind rule suffices.
+///        Only leaf scalars are mapped; mapping a wrapper as well would emit
+///        each token twice. All three also set `mention_token_extra_chars` to
+///        `-`, so `ubuntu-latest` stays one token instead of two.
+pub const ENRICH_VER: u32 = 56;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

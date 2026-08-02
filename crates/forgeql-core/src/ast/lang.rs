@@ -78,6 +78,20 @@ pub struct BlockGroupSpec {
     /// line runs form separate blocks); `None` groups every adjacent member.
     pub split_on_attr: Option<String>,
 }
+/// What a text-bearing node kind contributes to the mention stream.
+///
+/// `when_field` is `None` for kinds whose every token carries the role. When
+/// it is set, the role applies only where that grammar field is the nearest
+/// labelled edge on the path to the node — which is how a config format tags
+/// values without tagging the keys nested inside them.
+#[derive(Clone, Debug)]
+pub struct MentionRule {
+    /// Occurrence role for tokens found inside the node.
+    pub role: String,
+
+    /// Grammar field label that must be the nearest labelled edge, if any.
+    pub when_field: Option<String>,
+}
 #[expect(
     clippy::struct_excessive_bools,
     reason = "LanguageConfig describes language properties; each bool is semantically distinct"
@@ -209,7 +223,12 @@ pub struct LanguageConfig {
     /// Core never names a construct: it asks whether a kind is in this map and
     /// stores the role it maps to. Which kinds carry prose, and what to call
     /// the prose, are both the language plugin's answer.
-    pub(crate) mention_text_kinds: HashMap<String, String>,
+    pub(crate) mention_text_kinds: HashMap<String, MentionRule>,
+
+    /// Characters that continue a mention token in this language beyond
+    /// `[A-Za-z0-9_]`. Empty for most languages; config formats set it so a
+    /// hyphenated value stays one token.
+    pub(crate) mention_token_extra_chars: String,
 
     /// Node kinds that act as statement / expression boundaries.
     pub(crate) statement_boundary_kinds: Vec<String>,
@@ -666,23 +685,37 @@ pub fn normalise_condition(text: &str) -> String {
 /// outside that alphabet, including every UTF-8 continuation byte, separate
 /// tokens rather than joining them.
 ///
-/// The alphabet is the query surface's, not any source language's: it is the
-/// DSL's own `identifier` rule (`parser/forgeql.pest`) minus `:`, which must
-/// not glue `A::B` into one token inside prose. That is why it lives in core
-/// and takes no per-language configuration — there is no grammar inside a
-/// comment to ask, and every language whose names are ASCII identifiers gives
+/// The default alphabet is the query surface's, not any source language's: it
+/// is the DSL's own `identifier` rule (`parser/forgeql.pest`) minus `:`, which
+/// must not glue `A::B` into one token inside prose. There is no grammar inside
+/// a comment to ask, and every language whose names are ASCII identifiers gives
 /// the same answer.
 ///
-/// A language whose names are NOT ASCII identifiers — a Kconfig or YAML key
-/// holding `-`, `.` or `/` — is not served by this and must not be opted in
-/// through `mention_text_kinds` expecting whole-name tokens: it would be split
-/// silently at each punctuation mark. Those names are the substring tier's job
-/// (the DSL already spells their shape as `bare_value`); if a language ever
-/// needs a different alphabet here, the rule moves to the language config at
-/// that point, when there is a second answer to justify the knob.
+/// Config formats are the second answer that justified a knob. A name holding
+/// `-` — `ubuntu-latest`, `tree-sitter-yaml` — would otherwise be split
+/// silently at each punctuation mark, so a language may widen the *continuation*
+/// alphabet through `mention_token_extra_chars` and reach
+/// [`identifier_tokens_with`]. The start of a token is never widened, and a
+/// token never ends on a widened character, so the extra characters can only
+/// join a name, never invent one. Names built from `/` remain the substring
+/// tier's job.
 #[must_use]
 pub fn identifier_tokens(text: &str, start_line: usize) -> Vec<(String, usize, usize)> {
+    identifier_tokens_with(text, start_line, "")
+}
+
+/// As [`identifier_tokens`], but `extra` characters also continue a token.
+///
+/// A token may contain them but may neither start nor end with one, so a
+/// hyphenated value stays whole while a trailing dash is left out.
+#[must_use]
+pub fn identifier_tokens_with(
+    text: &str,
+    start_line: usize,
+    extra: &str,
+) -> Vec<(String, usize, usize)> {
     let bytes = text.as_bytes();
+    let extra = extra.as_bytes();
     let mut tokens = Vec::new();
     let mut line = start_line;
     let mut i = 0;
@@ -692,11 +725,19 @@ pub fn identifier_tokens(text: &str, start_line: usize) -> Vec<(String, usize, u
             i += 1;
         } else if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
             let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+            let mut end = i;
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric()
+                    || bytes[i] == b'_'
+                    || extra.contains(&bytes[i]))
+            {
+                if bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' {
+                    end = i + 1;
+                }
                 i += 1;
             }
-            if i - start > 1 {
-                tokens.push((text[start..i].to_owned(), line, start));
+            if end - start > 1 {
+                tokens.push((text[start..end].to_owned(), line, start));
             }
         } else {
             i += 1;

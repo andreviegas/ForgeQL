@@ -198,15 +198,19 @@ FIND files [clauses]
 > | `code` | an identifier the grammar resolved — a call, a reference, a type position | every indexed language |
 > | `comment` | comment text | C, C++, Rust, Python |
 > | `string` | a string literal | C, C++, Rust, Python |
-> | `config` | a build- or config-file value | CMake |
+> | `config` | a build- or config-file value | CMake, YAML, TOML, JSON |
 > | `doc` | prose in a documentation file | Markdown, reStructuredText |
 >
-> Every role above is emitted today, but each is scoped to the languages listed:
-> a YAML or TOML file contributes no occurrences of any role yet, so an empty
-> result there means the container is not scanned, not that the name is absent.
-> In a CMake file, `config` covers call arguments only: a `#` comment there is
-> not a config occurrence. In Markdown and reStructuredText, `doc` covers
-> paragraph and heading prose — the text of a fenced code block is not doc.
+> Every role above is emitted today, but each is scoped to the languages listed,
+> so an empty result may mean the container is not scanned rather than that the
+> name is absent. In a CMake file, `config` covers call arguments only: a `#`
+> comment there is not a config occurrence. In YAML, TOML and JSON it covers
+> scalar **values** only — a key is not a config occurrence, because a key is
+> already the pair's own name on the symbols side (`FIND symbols`), and tagging
+> it here would answer "where is this name written?" twice for one byte range.
+> A key nested inside a value is still a key. In Markdown and reStructuredText,
+> `doc` covers paragraph and heading prose — the text of a fenced code block is
+> not doc.
 > `role` filters and groups like any other field: `WHERE role = 'code'` narrows
 > to references the compiler sees, `GROUP BY role` sizes the campaign by kind.
 > Only the roles a language's grammar can prove are ever emitted — the engine
@@ -217,7 +221,15 @@ FIND files [clauses]
 > does not match `CONFIG_X_ASYNC`, in prose any more than in code. Tokens are
 > `[A-Za-z_][A-Za-z0-9_]*` runs longer than one character, and each reports the
 > line it is written on — a name buried in a twelve-line comment comes back at
-> its own line, not the line the comment opened on.
+> its own line, not the line the comment opened on. A language may widen the
+> *continuation* alphabet: YAML, TOML and JSON add `-`, so `ubuntu-latest` is
+> one token and is searched whole. A token may contain a widened character but
+> never starts or ends with one, and the start of a token is never widened, so
+> the extra characters can only join a name — they never invent one.
+>
+> A value that no key introduces is still a value: a top-level YAML sequence or
+> JSON array has no `value` edge above it, so it contributes no `config`
+> occurrences. Config occurrences come from values reached through a key.
 >
 > **Non-code roles are a review queue, not an edit list.** Comment, string,
 > build-file-argument and documentation-prose occurrences are a judgment call,

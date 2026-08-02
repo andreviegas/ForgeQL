@@ -7,7 +7,14 @@
 
   "syntax": {
     "root_node": "stream",
-    "skip_node_kinds": []
+    "skip_node_kinds": [],
+    "mention_token_extra_chars": "-",
+    "mention_text_kinds": {
+      "plain_scalar":        { "role": "config", "when_field": "value" },
+      "double_quote_scalar": { "role": "config", "when_field": "value" },
+      "single_quote_scalar": { "role": "config", "when_field": "value" },
+      "block_scalar":        { "role": "config", "when_field": "value" }
+    }
   },
 
   "capabilities": {

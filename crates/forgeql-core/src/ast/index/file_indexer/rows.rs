@@ -18,7 +18,7 @@ use crate::ast::enrich::guard_utils::{
 };
 use crate::ast::enrich::{EnrichContext, NodeEnricher};
 use crate::ast::index::{IndexRow, SymbolTable, node_text};
-use crate::ast::lang::{FQL_ERROR, identifier_tokens};
+use crate::ast::lang::{FQL_ERROR, identifier_tokens_with};
 
 use super::blocks::{BlockTag, attr_extended_start};
 use super::hash::{first_body_statement_fingerprint, node_content_hash};
@@ -65,6 +65,7 @@ pub(super) fn process_node_rows(
     parent_ordinal: u32,
     inside_string: bool,
     inside_error: bool,
+    nearest_field: Option<&str>,
     row_ordinal_counter: &mut u32,
     block_tag: Option<&BlockTag>,
 ) -> Option<u32> {
@@ -187,7 +188,7 @@ pub(super) fn process_node_rows(
         current_node_ordinal = extra_self;
     }
 
-    record_occurrences(ctx, node, source);
+    record_occurrences(ctx, node, source, nearest_field);
     current_node_ordinal
 }
 
@@ -198,8 +199,14 @@ pub(super) fn process_node_rows(
 /// records one site at its own position. A text-bearing node (a comment, and
 /// later a string or a document) *contains* tokens, so its text is scanned and
 /// each token records the line it sits on, which is not the line the node
-/// opened on.
-fn record_occurrences(ctx: &mut IndexContext<'_>, node: tree_sitter::Node<'_>, source: &[u8]) {
+/// opened on. A kind whose rule names a grammar field contributes only where
+/// that field is the nearest labelled edge the walk crossed to reach it.
+fn record_occurrences(
+    ctx: &mut IndexContext<'_>,
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    nearest_field: Option<&str>,
+) {
     let config = ctx.language.config();
 
     if config.is_usage_node_kind(node.kind()) {
@@ -210,15 +217,21 @@ fn record_occurrences(ctx: &mut IndexContext<'_>, node: tree_sitter::Node<'_>, s
         }
     }
 
-    if let Some(role) = config.mention_role(node.kind()) {
+    if let Some(rule) = config.mention_rule(node.kind())
+        && rule
+            .when_field
+            .as_deref()
+            .is_none_or(|want| nearest_field == Some(want))
+    {
         let text = node_text(source, node);
         let start_line = node.start_position().row + 1;
         let start_byte = node.start_byte();
-        for (token, line, offset) in identifier_tokens(&text, start_line) {
+        let extra = config.mention_token_extra_chars();
+        for (token, line, offset) in identifier_tokens_with(&text, start_line, extra) {
             let start = start_byte + offset;
             let end = start + token.len();
             ctx.table
-                .add_mention(role, token, ctx.path, start..end, line);
+                .add_mention(&rule.role, token, ctx.path, start..end, line);
         }
     }
 }
