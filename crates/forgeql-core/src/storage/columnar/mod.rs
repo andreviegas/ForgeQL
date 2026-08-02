@@ -324,7 +324,14 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        the guard after its bare `symbol` condition would report a flag's own
 ///        name twice in the file that defines it, and `if` nests the entries it
 ///        guards, so it would re-parent them.
-pub const ENRICH_VER: u32 = 58;
+///   59 — a Kconfig `config` entry is a `macro`, not a `variable`. A flag
+///        becomes a preprocessor macro in the generated header, so `macro` is
+///        what it is; `variable` also made flags masquerade as C variables in
+///        every kind-filtered query, and left them out of a default
+///        `SHOW outline`, which lists `macro` but excludes `variable` so that C
+///        locals do not flood it. Same rows, different bucket: the corpus total
+///        is unchanged and the counts move from one kind to the other.
+pub const ENRICH_VER: u32 = 59;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

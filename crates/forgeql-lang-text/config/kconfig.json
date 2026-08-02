@@ -19,7 +19,7 @@
   },
 
   "kind_map": {
-    "config": "variable",
-    "menuconfig": "variable"
+    "config": "macro",
+    "menuconfig": "macro"
   }
 }

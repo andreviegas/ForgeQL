@@ -215,7 +215,7 @@
   "expect_row_count": 3,
   "expect_rows": [
    {
-    "count": 877,
+    "count": 810,
     "kind": "variable"
    },
    {
@@ -234,7 +234,7 @@
   "expect_row_count": 10,
   "expect_rows": [
    {
-    "count": 877,
+    "count": 810,
     "kind": "variable"
    },
    {
@@ -501,7 +501,7 @@
     "kind": "number"
    },
    {
-    "count": 455001,
+    "count": 445100,
     "kind": "variable"
    },
    {
@@ -513,7 +513,7 @@
     "kind": "comment"
    },
    {
-    "count": 254241,
+    "count": 264142,
     "kind": "macro"
    },
    {
@@ -532,7 +532,7 @@
   "expect_row_count": 5,
   "expect_rows": [
    {
-    "count": 170796,
+    "count": 168599,
     "kind": "variable"
    },
    {
@@ -559,7 +559,7 @@
   "expect_row_count": 12,
   "expect_rows": [
    {
-    "count": 2652,
+    "count": 2541,
     "kind": "variable"
    },
    {
@@ -652,29 +652,29 @@
   "expect_row_count": 5,
   "expect_rows": [
    {
-    "line": 177,
-    "name": "AARCH32_ARMV8_R",
-    "path": "arch/arm/core/cortex_a_r/Kconfig"
+    "line": 22,
+    "name": "CONTROL",
+    "path": "arch/arm/core/cortex_m/fpu.c"
    },
    {
-    "line": 9,
-    "name": "ARCH",
-    "path": "arch/arm/Kconfig"
-   },
-   {
-    "line": 234,
-    "name": "ARCH_HAS_STACKWALK",
-    "path": "arch/arm/core/Kconfig"
-   },
-   {
-    "line": 193,
-    "name": "ARMV6_M_ARMV8_M_BASELINE",
-    "path": "arch/arm/core/cortex_m/Kconfig"
+    "line": 381,
+    "name": "SCB_CFSR_LSPERR_Msk",
+    "path": "arch/arm/core/cortex_m/fault.c"
    },
    {
     "line": 36,
-    "name": "ARMV7_A",
-    "path": "arch/arm/core/cortex_a_r/Kconfig"
+    "name": "__exidx_end",
+    "path": "arch/arm/core/stacktrace.c"
+   },
+   {
+    "line": 35,
+    "name": "__exidx_start",
+    "path": "arch/arm/core/stacktrace.c"
+   },
+   {
+    "line": 15,
+    "name": "__packed",
+    "path": "arch/arm/core/cortex_m/coredump.c"
    }
   ],
   "fql": "FIND symbols WHERE fql_kind = 'variable' IN 'arch/arm/**' ORDER BY name ASC LIMIT 5",

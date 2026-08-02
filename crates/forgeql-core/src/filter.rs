@@ -378,7 +378,12 @@ pub fn apply_clauses_keep_order<T: ClauseTarget>(results: &mut Vec<T>, clauses: 
 /// its twenty files and the largest single file anywhere holds ~700, while a
 /// query on a hot local name reaches several thousand — the shape this bounds.
 /// Set well clear of honest use so it only ever trims the runaway case.
-pub(crate) const USAGE_SITE_CEILING: usize = 2_000;
+///
+/// Public so a test can size a fixture from it rather than from a literal: a
+/// test that hardcodes the number stops testing this constant the moment it is
+/// retuned, and one that never reads it cannot notice a call site wired to a
+/// different value.
+pub const USAGE_SITE_CEILING: usize = 2_000;
 
 /// The outcome of [`take_file_groups`]: the rows to render, and whether files
 /// were left out.

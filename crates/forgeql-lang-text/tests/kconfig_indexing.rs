@@ -34,8 +34,8 @@ fn a_config_entry_is_named_by_its_name_child() {
         KconfigLanguage.extract_name(entry, source).as_deref(),
         Some("PM_DEVICE_RUNTIME")
     );
-    assert_eq!(KconfigLanguage.map_kind("config"), Some("variable"));
-    assert_eq!(KconfigLanguage.map_kind("menuconfig"), Some("variable"));
+    assert_eq!(KconfigLanguage.map_kind("config"), Some("macro"));
+    assert_eq!(KconfigLanguage.map_kind("menuconfig"), Some("macro"));
 }
 
 /// Every flag reference is a `symbol`, whatever keyword introduces it — which

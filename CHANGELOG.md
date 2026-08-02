@@ -6,6 +6,37 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.140.1] — 2026-08-02 — fix: a Kconfig flag is a macro, not a variable
+
+### Changed — `config X` indexes as `macro`
+
+A Kconfig entry shipped as `fql_kind = 'variable'` in the previous release.
+That was the wrong bucket in two visible ways.
+
+It made build flags masquerade as C variables. On a Zephyr tree,
+`FIND symbols WHERE fql_kind = 'variable' IN 'arch/arm/**' ORDER BY name ASC`
+returned Kconfig flags ahead of every C variable, because flag names sort early
+— so the query stopped answering the question it was asked.
+
+And it left the flag out of a default `SHOW outline`. The outline lists
+structural declarations and deliberately excludes `variable`, so that C locals
+do not flood it; a Kconfig file's outline was therefore empty even though every
+entry in it was indexed and findable.
+
+`macro` is what a flag actually is: `config PM_DEVICE_RUNTIME` is the
+definition site of `CONFIG_PM_DEVICE_RUNTIME`, a preprocessor macro in the
+generated header. It is already a structural kind, so:
+
+```sql
+SHOW outline OF 'subsys/pm/Kconfig'
+```
+
+now lists the flags a file defines, and `variable` queries mean C variables
+again.
+
+Same rows in the same places — only the kind they are filed under changes. The
+corpus total is unchanged; the counts move from one bucket to the other.
+
 ## [0.140.0] — 2026-08-02 — feat: a build flag's definition site is addressable
 
 ### Added — Kconfig files are indexed

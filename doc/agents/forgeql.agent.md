@@ -448,7 +448,7 @@ changes.
 | `field` | Class/struct member declarations |
 | `comment` | Comments |
 | `import` | Import / include directives |
-| `macro` | Preprocessor macro definitions |
+| `macro` | Preprocessor macro definitions — also a Kconfig `config`/`menuconfig` entry, which defines a build flag that becomes a macro in the generated header |
 | `guard` | A conditional directive — `#ifdef` / `#ifndef` (named by the macro) and `#if` / `#elif` (named by the condition, whitespace-collapsed to one line). The node spans the whole guarded region through its `#endif`. **Not the same as the `guard` enrichment field**: `WHERE fql_kind = 'guard'` selects the directive itself, `WHERE guard = '…'` selects rows sitting *inside* a region that directive opened |
 | `type_alias` | Type alias / typedef declarations |
 | `namespace` | Namespace definitions |
