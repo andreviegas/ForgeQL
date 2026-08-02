@@ -11,6 +11,14 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
+/// Window size the index is keyed on.
+///
+/// A query shorter than this has no trigram, so the index cannot narrow it and
+/// [`TrigramIndex::candidates`] answers `None`. Callers deciding whether to
+/// build an index at all should test against this rather than repeat the
+/// number, or the two can drift apart in silence.
+pub const TRIGRAM_WIDTH: usize = 3;
+
 // -----------------------------------------------------------------------
 // TrigramIndex
 // -----------------------------------------------------------------------
@@ -72,7 +80,7 @@ impl TrigramIndex {
     #[must_use]
     pub fn candidates(&self, substr: &str) -> Option<Vec<usize>> {
         let bytes = substr.as_bytes();
-        if bytes.len() < 3 {
+        if bytes.len() < TRIGRAM_WIDTH {
             return None;
         }
 

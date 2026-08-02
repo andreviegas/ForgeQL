@@ -643,6 +643,35 @@ impl Overlay {
             .unwrap_or(0)
     }
 
+    /// Every distinct usage token in the workspace for which `keep` holds, in
+    /// the FST's byte-lexicographic order.
+    ///
+    /// This is the dictionary a substring `FIND usages` searches. It is one
+    /// mmapped FST covering the whole corpus, so discovering which stored
+    /// tokens contain a query costs a single pass — not a pass per segment.
+    ///
+    /// `keep` is applied during the walk rather than afterwards: the caller
+    /// wants a small subset, and a corpus this size would otherwise allocate
+    /// every identifier in it only to drop them.
+    #[must_use]
+    pub fn usage_tokens_where(&self, keep: impl Fn(&str) -> bool) -> Vec<String> {
+        use fst::Streamer;
+
+        let Some(fst) = self.usages_count_fst.as_ref() else {
+            return Vec::new();
+        };
+        let mut tokens = Vec::new();
+        let mut stream = fst.stream();
+        while let Some((key, _count)) = stream.next() {
+            if let Ok(text) = std::str::from_utf8(key)
+                && keep(text)
+            {
+                tokens.push(text.to_owned());
+            }
+        }
+        tokens
+    }
+
     /// Trigram-based candidate prefilter for substring search over names.
     ///
     /// Binary-searches the sorted `trigram_index` blob for each distinct

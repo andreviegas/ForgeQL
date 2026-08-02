@@ -227,6 +227,29 @@ FIND files [clauses]
 > never starts or ends with one, and the start of a token is never widened, so
 > the extra characters can only join a name — they never invent one.
 >
+> A query holding a character outside `[A-Za-z0-9_]` — a `/`, a `.`, a space —
+> is matched as a **substring** of the stored tokens as well as exactly, so
+> `FIND usages OF 'net/core/'` reaches every include path under that directory
+> and `FIND usages OF 'pm/device_runtime.h'` reaches the sites that spell the
+> path in full. This is what makes an include path queryable: a C or C++
+> `#include <…>` path is recorded as **one** token holding the whole path, not
+> split at each `/`, so the path a query names is a substring of the token a
+> file wrote. Substring matching is **case-sensitive**, like the exact lookup
+> it extends.
+>
+> The test cuts both ways, which is what keeps it complete: only tokens that
+> themselves hold a character outside `[A-Za-z0-9_]` are searched, and a token
+> containing your query must hold every character your query does — so nothing
+> reachable is skipped. A name written only in that alphabet is matched exactly,
+> so `FIND usages OF '256'` still means the token `256` and never widens into
+> `sha256`.
+>
+> Two further limits. Candidates are drawn from `code` occurrences, so a name
+> written in a comment, string or config value is matched exact-only, never as a
+> fragment. And a query under three characters is matched exactly: it is shorter
+> than the index can narrow on, and widening on it would select most of the
+> dictionary.
+>
 > A value that no key introduces is still a value: a top-level YAML sequence or
 > JSON array has no `value` edge above it, so it contributes no `config`
 > occurrences. Config occurrences come from values reached through a key.

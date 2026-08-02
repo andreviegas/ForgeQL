@@ -18,7 +18,7 @@ use crate::ast::enrich::guard_utils::{
 };
 use crate::ast::enrich::{EnrichContext, NodeEnricher};
 use crate::ast::index::{IndexRow, SymbolTable, node_text};
-use crate::ast::lang::{FQL_ERROR, identifier_tokens_with};
+use crate::ast::lang::{FQL_ERROR, identifier_tokens_with, whole_token};
 
 use super::blocks::{BlockTag, attr_extended_start};
 use super::hash::{first_body_statement_fingerprint, node_content_hash};
@@ -215,6 +215,21 @@ fn record_occurrences(
             let line = node.start_position().row + 1;
             ctx.table.add_usage(name, ctx.path, node.byte_range(), line);
         }
+    }
+
+    // An include path is one reference, not a stream of identifiers: record it
+    // whole so `FIND usages OF 'zephyr/pm/device_runtime.h'` has a token to
+    // match. The delimiters are trimmed rather than declared, because the core
+    // is not told which pair a language uses.
+    if config.is_whole_token_usage_kind(node.kind())
+        && let Some((token, offset)) = whole_token(&node_text(source, node))
+        && token.len() > 1
+    {
+        let start = node.start_byte() + offset;
+        let end = start + token.len();
+        let line = node.start_position().row + 1;
+        ctx.table
+            .add_usage(token.to_owned(), ctx.path, start..end, line);
     }
 
     if let Some(rule) = config.mention_rule(node.kind())

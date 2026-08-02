@@ -352,6 +352,10 @@ impl ColumnarStorage {
             .with_context(|| format!("open new overlay at {}", new_overlay_path.display()))?;
         let new_segments = Self::open_segments_from_overlay(ctx, &new_overlay);
         self.overlay = new_overlay;
+        // The substring dictionary was built from the overlay being replaced,
+        // and the committed tokens have just left `dirty` too — without this a
+        // partial substring query would silently under-report them.
+        self.substring_index = std::sync::OnceLock::new();
         self.segments = new_segments;
         self.stats.rows = self.overlay.row_count() as usize;
 

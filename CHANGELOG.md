@@ -6,6 +6,60 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.139.85] — 2026-08-02 — feat: an include path is a name you can search for
+
+### Added — substring matching for names that are not identifiers
+
+`FIND usages OF '<name>'` has always matched whole tokens, which is right for
+an identifier and useless for a path. `#include <zephyr/pm/device_runtime.h>`
+names a file the same way a call names a function, but asking where that file
+was included returned nothing: the path is not an identifier, and nothing in
+the index held it as a searchable name.
+
+Two changes make it searchable.
+
+A C or C++ angle-bracket include path is now recorded as an occurrence under
+its own name. It is stored as **one** token holding the whole path, not split
+at each `/` and `.`, because a query naming the path has to match something a
+file actually wrote. The angle brackets are trimmed rather than declared: the
+recorded token is the node's text with the leading and trailing characters
+outside `[A-Za-z0-9_]` removed, so no language has to tell the engine which
+delimiters it uses.
+
+And a query holding a character outside `[A-Za-z0-9_]` — a `/`, a `.`, a space —
+is now matched as a **substring** of the stored tokens as well as exactly:
+
+```sql
+FIND usages OF 'zephyr/pm/device_runtime.h'   -- every file that includes it
+FIND usages OF 'net/core/'                    -- every include under a directory
+```
+
+An identifier query is unchanged and still matches whole tokens only, so
+`FIND usages OF 'CONFIG_X'` still does not match `CONFIG_X_ASYNC`. Substring
+matching is case-sensitive, like the exact lookup it extends.
+
+Behind it is a trigram index over the workspace's token dictionary, built on the
+first substring query and reused until a `COMMIT` replaces the overlay it was
+read from. The trigram tier is a prefilter, not an answer: it proposes a
+superset of candidate tokens and each one is confirmed with a real substring
+test before it is searched for. Sessions that only ever name identifiers never
+build it.
+
+The test cuts both ways, which is what keeps it complete. Only tokens that
+themselves hold a character outside `[A-Za-z0-9_]` are searched, and a token
+containing your query must hold every character your query does — so nothing
+reachable is skipped. A name written only in that alphabet is matched exactly:
+`FIND usages OF '256'` still means the token `256`, and never widens into
+`sha256`.
+
+Two further limits. Candidates come from code occurrences, so a name written in
+a comment, string or config value is matched exact-only. And a query under three
+characters is matched exactly, being shorter than the index can narrow on.
+
+The quoted include form (`#include "local.h"`) is not claimed: its node kind is
+`string_literal`, shared with every other string in the language, and one kind
+carries one rule.
+
 ## [0.139.84] — 2026-08-02 — feat: a name written in a config value is an occurrence
 
 ### Added — `role = 'config'` for YAML, TOML and JSON values

@@ -70,6 +70,31 @@ pub struct ColumnarStorage {
     /// The session layer drains this via `take_pending_reindex_paths` and
     /// re-indexes the files from the worktree.
     pub(crate) pending_reindex: Vec<PathBuf>,
+
+    /// Token dictionary + trigram postings backing substring `FIND usages`.
+    ///
+    /// Built on the first substring query rather than at open: the build cost
+    /// is the same either way, and a session that only ever names identifiers
+    /// should not pay it. Covers the persistent overlay only — the dirty
+    /// overlay is scanned per query, because it changes as files are edited
+    /// and a cached copy of it would go stale.
+    substring_index: std::sync::OnceLock<SubstringIndex>,
+}
+
+/// The dictionary a substring `FIND usages` searches, with its trigram tier.
+///
+/// `tokens` holds the usage tokens carrying a character outside
+/// `[A-Za-z0-9_]` — the whole-text ones, such as include paths — because those
+/// are the only tokens a substring query can reach; `trigrams` maps a trigram
+/// to the indices of the tokens containing it. The tier is a *prefilter*: its
+/// answer is a superset that the caller verifies with a real `contains` before
+/// searching for the token.
+struct SubstringIndex {
+    /// Distinct non-identifier usage tokens, sorted and deduplicated.
+    tokens: Vec<String>,
+
+    /// Trigram postings over `tokens`, keyed by index into it.
+    trigrams: crate::ast::trigram::TrigramIndex,
 }
 
 impl ColumnarStorage {
@@ -99,6 +124,7 @@ impl ColumnarStorage {
             delta_path,
             stats,
             pending_reindex: Vec::new(),
+            substring_index: std::sync::OnceLock::new(),
         }
     }
 }

@@ -222,6 +222,12 @@ impl LanguageConfig {
         self.usage_node_kinds.iter().any(|s| s == kind)
     }
 
+    /// Is this a kind whose whole text is one usage token?
+    #[must_use]
+    pub fn is_whole_token_usage_kind(&self, kind: &str) -> bool {
+        self.whole_token_usage_kinds.iter().any(|s| s == kind)
+    }
+
     /// How text inside a node of this kind contributes mentions, or `None`
     /// when the kind carries no prose worth scanning.
     #[must_use]

@@ -37,6 +37,7 @@
     "comment": "comment",
     "skip_node_kinds": [],
     "usage_node_kinds": ["identifier", "field_identifier", "type_identifier"],
+    "whole_token_usage_kinds": ["system_lib_string"],
     "mention_text_kinds": { "comment": "comment", "string_literal": "string" },
     "statement_boundary_kinds": [
       "expression_statement",

@@ -4,15 +4,16 @@ use std::path::Path;
 
 use roaring::RoaringBitmap;
 
+use crate::ast::trigram::TRIGRAM_WIDTH;
 use crate::filter::apply_clauses;
 use crate::ir::{Clauses, CompareOp, PredicateValue};
 use crate::result::SymbolMatch;
-use crate::storage::columnar::columnar_storage::ColumnarStorage;
 use crate::storage::columnar::columnar_storage::fast_paths::{
     glob_to_path_prefix, group_by_file_fast_path_eligible, group_by_kind_fast_path_eligible,
     has_any_indexed_predicate, order_by_name_desc_fast_path, order_by_name_fast_path,
     order_by_name_kind_desc_fast_path, order_by_name_kind_fast_path, passes_resolve_glob,
 };
+use crate::storage::columnar::columnar_storage::{ColumnarStorage, SubstringIndex};
 use crate::storage::columnar::segment_builder::ZONEMAP_NUMERIC_FIELDS;
 
 impl ColumnarStorage {
@@ -196,6 +197,19 @@ impl ColumnarStorage {
             rev: None,
         };
 
+        // A name written only in the identifier alphabet is matched token-exact.
+        // A name carrying anything else — a path, a dotted name, a fragment — is
+        // *also* matched as a substring of the stored tokens, so
+        // `OF 'zephyr/pm/device.h'` reaches the include sites that wrote it and
+        // `OF 'net/core/'` reaches all of them. The queried name is always among
+        // the candidates, so the exact behaviour of every role is preserved and
+        // substring reach is added on top.
+        let names = if is_core_alphabet(name) {
+            vec![name.to_owned()]
+        } else {
+            self.substring_names(name)
+        };
+
         let mut results: Vec<SymbolMatch> = Vec::new();
         // Persistent overlay segments, skipping any shadowed by the dirty
         // overlay (their replacement is scanned below).
@@ -206,25 +220,98 @@ impl ColumnarStorage {
             let Some(seg) = self.segments.get(idx) else {
                 continue;
             };
-            for line in seg.lookup_usage_lines(name) {
-                results.push(occurrence_row(&meta.source_path, line, ROLE_CODE));
-            }
-            for (role, line) in seg.lookup_mention_sites(name) {
-                results.push(occurrence_row(&meta.source_path, line, role));
+            for token in &names {
+                for line in seg.lookup_usage_lines(token) {
+                    results.push(occurrence_row(&meta.source_path, line, ROLE_CODE));
+                }
+                for (role, line) in seg.lookup_mention_sites(token) {
+                    results.push(occurrence_row(&meta.source_path, line, role));
+                }
             }
         }
         // Dirty overlay: freshly (re)indexed segments not yet promoted.
         for ds in &self.dirty.added {
-            for line in ds.reader.lookup_usage_lines(name) {
-                results.push(occurrence_row(&ds.source_path, line, ROLE_CODE));
-            }
-            for (role, line) in ds.reader.lookup_mention_sites(name) {
-                results.push(occurrence_row(&ds.source_path, line, role));
+            for token in &names {
+                for line in ds.reader.lookup_usage_lines(token) {
+                    results.push(occurrence_row(&ds.source_path, line, ROLE_CODE));
+                }
+                for (role, line) in ds.reader.lookup_mention_sites(token) {
+                    results.push(occurrence_row(&ds.source_path, line, role));
+                }
             }
         }
 
         apply_clauses(&mut results, clauses);
         results
+    }
+
+    /// Every stored usage token containing `needle`, plus `needle` itself.
+    ///
+    /// Only reached when `needle` carries a character outside `[A-Za-z0-9_]`,
+    /// and the dictionary holds only tokens that do — in practice the
+    /// whole-text tokens, such as include paths. The two halves are the same
+    /// test on purpose: a token containing `needle` must contain every
+    /// character `needle` does, so restricting the dictionary that way loses
+    /// nothing reachable while keeping it to a few thousand paths instead of
+    /// every identifier in the workspace.
+    ///
+    /// Superset-then-verify: the trigram tier proposes candidates and each is
+    /// confirmed with a real `contains` before it is searched for.
+    /// `Some(empty)` means "definitively no match".
+    ///
+    /// The tier is ASCII case-insensitive, the verify is not: substring
+    /// matching is case-sensitive, like the exact lookup it extends.
+    fn substring_names(&self, needle: &str) -> Vec<String> {
+        let mut names = vec![needle.to_owned()];
+
+        // Below the trigram width the tier cannot narrow anything, and every
+        // token trivially contains a shorter-than-3 needle (an empty one most
+        // of all). Bail before building the dictionary rather than after: the
+        // answer would be this same one line, and the build is the whole cost.
+        if needle.len() < TRIGRAM_WIDTH {
+            return names;
+        }
+
+        let index = self.substring_index.get_or_init(|| {
+            let mut tokens = self
+                .overlay
+                .usage_tokens_where(|token| !is_core_alphabet(token));
+            tokens.sort_unstable();
+            tokens.dedup();
+            let mut trigrams = crate::ast::trigram::TrigramIndex::default();
+            for (row, token) in tokens.iter().enumerate() {
+                trigrams.insert(row, token);
+            }
+            SubstringIndex { tokens, trigrams }
+        });
+
+        let Some(rows) = index.trigrams.candidates(needle) else {
+            return names;
+        };
+
+        let mut keep = |token: &str| {
+            if token != needle && token.contains(needle) {
+                names.push(token.to_owned());
+            }
+        };
+        for row in rows {
+            if let Some(token) = index.tokens.get(row) {
+                keep(token);
+            }
+        }
+
+        // The dirty overlay is not in the cached dictionary — it changes as
+        // files are edited — and holds only the handful of segments reindexed
+        // this session, so scan it directly.
+        for ds in &self.dirty.added {
+            for token in ds.reader.usage_tokens_where(|t| !is_core_alphabet(t)) {
+                keep(&token);
+            }
+        }
+
+        names.sort_unstable();
+        names.dedup();
+        names
     }
 
     pub(super) fn indexed_files_impl(&self) -> Vec<crate::result::FileEntry> {
@@ -457,6 +544,29 @@ fn fast_path_need(clauses: &Clauses) -> usize {
         .unwrap_or(0)
         .saturating_add(clauses.offset.unwrap_or(0))
         .max(1)
+}
+
+/// Is every byte of `text` inside `[A-Za-z0-9_]`?
+///
+/// One predicate decides both halves of the matching rule for
+/// `FIND usages OF '<name>'`, which is what makes the rule symmetric: a name
+/// written only in this alphabet is matched token-exact, and the substring
+/// dictionary holds only tokens that are *not*.
+///
+/// That pairing is what makes the search complete. A token containing the query
+/// must contain every character the query does, so once the query carries a
+/// character from outside this alphabet, every token that could match carries
+/// one too — and the dictionary stays the whole-text tokens (the include paths)
+/// instead of every identifier in the workspace.
+///
+/// The alphabet is deliberately the *core* one, not a language's widened token
+/// alphabet (`mention_token_extra_chars`). A name a plugin has widened into one
+/// token — `ubuntu-latest`, say — therefore takes the substring path, where the
+/// exact lookup still finds it and the widening adds nothing. Deriving the test
+/// per language would make the routing depend on which languages happen to be
+/// registered.
+fn is_core_alphabet(text: &str) -> bool {
+    text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 /// Deduplicate symbol results on `(name, fql_kind, path, line)`.

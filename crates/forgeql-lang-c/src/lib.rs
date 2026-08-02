@@ -344,4 +344,41 @@ mod tests {
             parsed.err()
         );
     }
+
+    /// The angle-bracket include path is one `system_lib_string` node, and
+    /// `c.json` names that kind as a whole usage token.
+    ///
+    /// Both halves are pinned here because neither fails loudly on its own: a
+    /// renamed grammar kind or a mistyped config entry would simply stop
+    /// producing occurrences, and an occurrence that is never recorded looks
+    /// exactly like a path that is never included.
+    #[test]
+    fn angle_include_path_is_one_whole_usage_token() {
+        let lang = CLanguage;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&lang.tree_sitter_language())
+            .expect("set language");
+
+        let source = b"#include <zephyr/pm/device_runtime.h>\n";
+        let tree = parser.parse(source, None).expect("parse");
+        let include = tree.root_node().child(0).expect("preproc_include");
+        assert_eq!(include.kind(), "preproc_include");
+
+        let path = (0..include.child_count())
+            .filter_map(|i| include.child(i))
+            .find(|c| c.kind() == "system_lib_string")
+            .expect("the angle-bracket path must be a system_lib_string node");
+        assert!(
+            lang.config().is_whole_token_usage_kind(path.kind()),
+            "c.json must claim the include path kind as a whole usage token"
+        );
+
+        let text = std::str::from_utf8(&source[path.byte_range()]).expect("utf8");
+        assert_eq!(
+            forgeql_core::ast::lang::whole_token(text).map(|(token, _)| token),
+            Some("zephyr/pm/device_runtime.h"),
+            "the angle brackets must be trimmed, leaving the path as one token"
+        );
+    }
 }

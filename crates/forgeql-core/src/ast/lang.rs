@@ -216,6 +216,16 @@ pub struct LanguageConfig {
     /// Identifier node kinds that produce usage sites.
     pub(crate) usage_node_kinds: Vec<String>,
 
+    /// Node kinds whose **entire text** is one usage token, not a stream of
+    /// identifiers.
+    ///
+    /// An include directive's path (`<zephyr/pm/device_runtime.h>`) is a single
+    /// reference, and `identifier_tokens` would shred it into `zephyr`, `pm`,
+    /// `device_runtime`, `h` — none of which the queried path is a substring
+    /// of. The text is trimmed of leading and trailing characters outside the
+    /// token alphabet, which is what strips the `<`/`>` or the quotes.
+    pub(crate) whole_token_usage_kinds: Vec<String>,
+
     /// Text-bearing node kinds scanned for identifier mentions, keyed by raw
     /// grammar kind and valued by the occurrence role every token found inside
     /// that kind carries.
@@ -744,6 +754,25 @@ pub fn identifier_tokens_with(
         }
     }
     tokens
+}
+
+/// The whole of `text` as a single token, trimmed of leading and trailing
+/// characters outside `[A-Za-z0-9_]`, with the byte offset where it starts.
+///
+/// This is the counterpart to [`identifier_tokens`] for kinds whose text is one
+/// reference rather than a stream of them — an include path. The trim is what
+/// removes a delimiter pair (`<zephyr/pm/device.h>`, `"local.h"`) without the
+/// core having to know which delimiters a language uses: a path never begins or
+/// ends with punctuation, so trimming both ends is enough.
+///
+/// Returns `None` when nothing survives the trim.
+#[must_use]
+pub fn whole_token(text: &str) -> Option<(&str, usize)> {
+    let bytes = text.as_bytes();
+    let is_core = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let start = bytes.iter().position(|&b| is_core(b))?;
+    let end = bytes.iter().rposition(|&b| is_core(b))? + 1;
+    Some((&text[start..end], start))
 }
 
 // -----------------------------------------------------------------------

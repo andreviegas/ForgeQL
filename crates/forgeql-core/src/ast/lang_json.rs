@@ -216,6 +216,19 @@ pub struct SyntaxSection {
     #[serde(default)]
     pub usage_node_kinds: Vec<String>,
 
+    /// Node kinds recorded as one usage token holding the node's whole text,
+    /// trimmed of leading and trailing characters outside `[A-Za-z0-9_]`.
+    ///
+    /// For include paths, whose text is a single reference that the identifier
+    /// tokenizer would otherwise split at every `/` and `.`.
+    ///
+    /// List the kind that spans the reference itself, never one that spans it
+    /// *and* its surroundings: a kind and its own ancestor would both record a
+    /// token on the same line, and a query contained in both would then report
+    /// one occurrence twice.
+    #[serde(default)]
+    pub whole_token_usage_kinds: Vec<String>,
+
     /// Text-bearing node kinds whose contents are scanned for identifier
     /// mentions, keyed by raw grammar kind and valued by the occurrence role
     /// every token found inside that kind carries (e.g. `"comment"` →
@@ -725,6 +738,7 @@ impl LanguageConfigJson {
             decorator_raw_kind: self.types.decorator,
             skip_node_kinds: self.syntax.skip_node_kinds,
             usage_node_kinds: self.syntax.usage_node_kinds,
+            whole_token_usage_kinds: self.syntax.whole_token_usage_kinds,
             mention_text_kinds: self
                 .syntax
                 .mention_text_kinds

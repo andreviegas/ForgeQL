@@ -520,6 +520,29 @@ impl SegmentReader {
         decode_name_postings(encoded, self.blob_bytes("usages_postings"))
     }
 
+    /// Every distinct usage token in this segment.
+    ///
+    /// Only the dirty overlay needs this: its freshly indexed segments are not
+    /// yet folded into the workspace-wide usage dictionary, so a substring
+    /// search would miss tokens that exist only in an edited file.
+    pub fn usage_tokens_where(&self, keep: impl Fn(&str) -> bool) -> Vec<String> {
+        use fst::Streamer;
+
+        let Some(fst) = &self.usages_fst else {
+            return Vec::new();
+        };
+        let mut tokens = Vec::new();
+        let mut stream = fst.stream();
+        while let Some((key, _postings)) = stream.next() {
+            if let Ok(text) = std::str::from_utf8(key)
+                && keep(text)
+            {
+                tokens.push(text.to_owned());
+            }
+        }
+        tokens
+    }
+
     /// Every mention of `name` in this file, as `(role, 1-based line)` pairs.
     ///
     /// Roles come back in sorted order and a line repeats once per occurrence

@@ -306,7 +306,15 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        Only leaf scalars are mapped; mapping a wrapper as well would emit
 ///        each token twice. All three also set `mention_token_extra_chars` to
 ///        `-`, so `ubuntu-latest` stays one token instead of two.
-pub const ENRICH_VER: u32 = 56;
+///   57 — a C/C++ include path becomes a usage site under its own name. The
+///        path is recorded as ONE token holding the whole text, trimmed of
+///        the characters outside `[A-Za-z0-9_]` that delimit it, because
+///        `identifier_tokens` would otherwise shred `zephyr/pm/device.h` into
+///        `zephyr`, `pm`, `device`, `h` — and the queried path is a substring
+///        of none of them. Only the angle-bracket form is claimed: the quoted
+///        form's node kind is `string_literal`, shared with every other string
+///        in the language, and one kind carries one rule.
+pub const ENRICH_VER: u32 = 57;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";
