@@ -6,6 +6,40 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.143.0] — 2026-08-03 — feat: filter a config row by its key path
+
+### Added — `key_path`
+
+A key in a config file could only be found by its own name, which is often not
+enough to identify it. A Zephyr west manifest contains twelve `pair` rows all
+named `remote`; eleven are per-project overrides and one is the manifest
+default, and nothing in a query could tell them apart.
+
+Rows in a format that maps a `pair` kind now carry `key_path`: the dotted chain
+of enclosing keys, with the row's own key appended when the row is itself a
+pair. The default is `manifest.defaults.remote` and the overrides are
+`manifest.projects.remote`, so one filter separates them.
+
+```sql
+FIND symbols WHERE key_path = 'manifest.defaults.remote' IN 'west.yml'
+FIND symbols WHERE key_path LIKE 'jobs.%.container.image' IN '.github/workflows/**'
+```
+
+Sequence position is deliberately never encoded. A path that named a slot would
+follow the slot rather than the node, so reordering two list entries would make
+each answer to the other's path — the same hazard the naming rules avoid, one
+field over. It also makes the aggregate query the useful one:
+`jobs.clang-build.steps.uses` covers every step rather than one.
+
+The chain is built by the indexing walk, alongside the parent-kind tracking
+already maintained there, rather than by walking ancestors when a row is
+written: an ancestor walk costs one step per preceding sibling, which is
+quadratic across the wide arrays config files are full of. Rows outside a key
+hierarchy — every row in every code language — carry no column at all.
+
+Cached segments are rebuilt on first use. No row moves and no handle changes;
+this adds a column, not a node.
+
 ## [0.142.0] — 2026-08-03 — feat: a run of YAML comments is one addressable block
 
 ### Added — `comment_block` for YAML

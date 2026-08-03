@@ -81,10 +81,13 @@
       "use": "zephyr-andre.frozen",
       "steps": [
         {
-          "fql": "FIND symbols WHERE fql_kind = 'comment_block' IN 'west.yml'",
+          "fql": "FIND symbols WHERE fql_kind = 'comment_block' IN 'west.yml' ORDER BY line ASC",
           "assert": {
             "total": 2,
-            "row_count": 2
+            "row_count": 2,
+            "rows": [
+              { "path": "west.yml", "line": 1 }
+            ]
           }
         }
       ]
@@ -92,8 +95,6 @@
     {
       "name": "key_path_disambiguates_west_remote",
       "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "DESIGN PIN, error-shaped: key_path is not a field yet, so this errors rather than returning rows. west.yml holds 12 pair rows all named 'remote'; only the one at line 19 sits under manifest.defaults. Sequence indices are deliberately absent from the path.",
       "steps": [
         {
           "fql": "FIND symbols WHERE key_path = 'manifest.defaults.remote' IN 'west.yml'",
@@ -125,8 +126,6 @@
     {
       "name": "key_path_finds_container_image_reference",
       "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "DESIGN PIN, error-shaped: key_path is not a field yet. This is the 'every container image reference' recipe from the docs, exercising LIKE against a nested path.",
       "steps": [
         {
           "fql": "FIND symbols WHERE key_path LIKE 'jobs.%.container.image' IN '.github/workflows/clang.yaml'",
@@ -151,6 +150,75 @@
             "row_count": 1,
             "rows": [
               { "name": "image", "path": ".github/workflows/clang.yaml", "line": 21 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "blocked_comment_member_still_resolves_on_its_own",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'comment_block' IN 'west.yml' ORDER BY line ASC",
+          "assert": { "row_count": 2 },
+          "capture": { "BLOCK": "results.0.node_id" }
+        },
+        {
+          "fql": "SHOW NODE '${BLOCK}'",
+          "assert": { "row_count": 15 }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE name LIKE '%west manifest file%' IN 'west.yml'",
+          "assert": { "row_count": 1 },
+          "capture": { "MEMBER": "results.0.node_id" }
+        },
+        {
+          "fql": "SHOW NODE '${MEMBER}'",
+          "assert": { "row_count": 1 }
+        },
+        {
+          "fql": "SHOW NODE '${BLOCK}(1)'",
+          "assert": { "row_count": 1 }
+        },
+        {
+          "fql": "SHOW NODE '${BLOCK}(1-15)'",
+          "assert": { "row_count": 15 }
+        }
+      ]
+    },
+    {
+      "name": "control_json_blocks_arrays_not_comments",
+      "use": "forgeql-pub.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'array_block' IN 'crates/forgeql/tests/corpus.json'",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "path": "crates/forgeql/tests/corpus.json", "line": 2 }
+            ]
+          }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'comment_block' IN 'crates/forgeql/tests/corpus.json'",
+          "assert": { "total": 0, "row_count": 0 }
+        }
+      ]
+    },
+    {
+      "name": "control_zephyr_kind_composition_is_stable",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols GROUP BY fql_kind ORDER BY count DESC",
+          "assert": {
+            "row_count": 20,
+            "rows": [
+              { "kind": "number", "count": 534177 },
+              { "kind": "variable", "count": 445100 },
+              { "kind": "comment", "count": 295326 }
             ]
           }
         }

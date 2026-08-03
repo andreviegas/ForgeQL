@@ -68,6 +68,7 @@ pub(super) fn process_node_rows(
     nearest_field: Option<&str>,
     row_ordinal_counter: &mut u32,
     block_tag: Option<&BlockTag>,
+    key_path: Option<&str>,
 ) -> Option<u32> {
     let config = ctx.language.config();
     let lang_name = ctx.language.name();
@@ -124,6 +125,7 @@ pub(super) fn process_node_rows(
             FQL_ERROR,
             parent_ordinal,
             block_tag,
+            key_path,
         );
     }
     // Every named node becomes a row.
@@ -143,6 +145,7 @@ pub(super) fn process_node_rows(
             fql_kind_val,
             parent_ordinal,
             block_tag,
+            key_path,
         );
     } else if let Some(mtable) = ctx.macro_table {
         // Re-tag: tree-sitter-cpp parses C macro calls as call_expression,
@@ -170,6 +173,7 @@ pub(super) fn process_node_rows(
                     "macro_call",
                     parent_ordinal,
                     None,
+                    key_path,
                 );
             }
         }
@@ -339,6 +343,7 @@ struct RowSink<'a> {
 /// the re-tagged macro-call path (`fql_kind` = `"macro_call"`); the two differ
 /// only in those two strings. Returns the assigned ordinal (or `None` when the
 /// kind is not addressable) so the caller can propagate it to descendants.
+#[allow(clippy::too_many_arguments)]
 fn emit_addressable_row(
     sink: &mut RowSink<'_>,
     ctx: &EnrichContext<'_>,
@@ -347,6 +352,7 @@ fn emit_addressable_row(
     fql_kind: &str,
     parent_ordinal: u32,
     block_tag: Option<&BlockTag>,
+    key_path: Option<&str>,
 ) -> Option<u32> {
     let node = ctx.node;
     let source = ctx.source;
@@ -363,6 +369,28 @@ fn emit_addressable_row(
     if let Some(tag) = block_tag {
         drop(fields.insert("block_ord".to_string(), tag.ord.clone()));
         drop(fields.insert("block_off".to_string(), tag.off.clone()));
+    }
+
+    // The dotted key chain locating this row in a config file's hierarchy. The
+    // walk supplies the ancestor keys; a pair contributes its own key too, so
+    // `manifest.defaults.remote` names the pair rather than merely its parent.
+    // Sequence position is deliberately absent — a name that encodes a slot
+    // follows the slot rather than the node (see the naming ladder in
+    // forgeql-lang-text), and the same hazard applies one field over. Emitted
+    // only when non-empty, so no code-language row carries the column.
+    if let Some(chain) = key_path {
+        let full = if fql_kind == "pair" {
+            if chain.is_empty() {
+                name.to_string()
+            } else {
+                format!("{chain}.{name}")
+            }
+        } else {
+            chain.to_string()
+        };
+        if !full.is_empty() {
+            drop(fields.insert("key_path".to_string(), full));
+        }
     }
 
     let (name_id, node_kind_id, fql_kind_id, language_id, path_id) =

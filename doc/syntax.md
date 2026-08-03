@@ -1294,6 +1294,27 @@ Computed at index time. Queryable with `WHERE` like any other field.
 | `member_kind` | `field` | `"method"` or `"field"` |
 | `owner_kind` | `field` | `fql_kind` of enclosing type (e.g. `class`, `struct`) |
 
+#### Key path (structured text)
+
+Produced by the indexing walk rather than an enricher, because it needs the
+ancestor chain and an ancestor walk per node would be quadratic on the wide
+arrays config files contain.
+
+| Field | Applies to | Description |
+|---|---|---|
+| `key_path` | rows in a format that nests `pair` inside `pair` — **JSON and YAML** | Dotted chain of enclosing `pair` keys, with the row's own key appended when the row is itself a `pair` — e.g. `manifest.defaults.remote`. Sequence position is never encoded: `jobs.clang-build.steps.uses` covers every step. Absent on rows with no `pair` ancestor, so code-language rows never carry it. **TOML and INI carry only the row's own key**, because their hierarchy level is an `object` (a `[table]`, a `[section]`) rather than a nested pair — two `opt-level` keys under different `[profile.*]` tables are not yet told apart |
+
+`key_path` is what tells otherwise identical keys apart. A Zephyr west manifest
+holds twelve `pair` rows all named `remote`; only one of them is the default.
+
+```sql
+-- The manifest default, not the eleven per-project overrides
+FIND symbols WHERE key_path = 'manifest.defaults.remote' IN 'west.yml'
+
+-- Every container image reference in a workflow, at any job
+FIND symbols WHERE key_path LIKE 'jobs.%.container.image' IN '.github/workflows/**'
+```
+
 #### DeclDistanceEnricher
 
 Data-flow enricher that measures how far local variable declarations are from their first use. Excludes parameters, globals, and member variables.

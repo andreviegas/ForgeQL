@@ -460,8 +460,8 @@ changes.
 | `for` | for loops (traditional and range-based) |
 | `switch` | switch statements |
 | `do` | do-while loops |
-| `comment_block` | A run of 2+ adjacent same-style comments, as one addressable node (`///` doc runs and `//` line runs form separate blocks) |
-| `array_block` | A run of 8+ adjacent JSON `array` siblings, as one addressable node — this is what makes a keyless JSON document (an array of arrays) addressable at all |
+| `comment_block` | A run of 2+ adjacent same-style comments, as one addressable node (`///` doc runs and `//` line runs form separate blocks). **Per-language:** declared by Rust and YAML only — C/C++ and the other text formats emit no block row |
+| `array_block` | A run of 8+ adjacent JSON `array` siblings, as one addressable node — this is what makes a keyless JSON document (an array of arrays) addressable at all. **Per-language:** declared by JSON only |
 | `error` | A tree-sitter `ERROR` region — a span the parser could not parse, emitted as one addressable node (outermost only; nested ERRORs are not repeated). **Its presence means the file is already broken before you touch it.** Check with `FIND symbols WHERE fql_kind = 'error' GROUP BY file` before mutating, then read and repair by handle — the engine never fixes it for you. |
 
 A **block** node is the *sibling* of its members, never their parent. Members keep
@@ -563,6 +563,12 @@ Computed at index time. Use in `WHERE` clauses like any other field.
 | `storage` | `variable` | `"static"`, `"extern"`, or absent |
 | `binding_kind` | `variable` | `"function"` or `"variable"` |
 | `is_exported` | `variable` | `"true"` for file-scope declarations without `static` |
+
+### Key path (structured text)
+
+| Field | Applies to | Values / Notes |
+|---|---|---|
+| `key_path` | rows in a format that nests `pair` inside `pair` — **JSON and YAML** | Dotted chain of enclosing `pair` keys, with the row's own key appended when the row is itself a `pair`: `manifest.defaults.remote`. This is what tells otherwise identical keys apart — a west manifest holds twelve `pair` rows named `remote` and only one is the default. Sequence position is never encoded, so `key_path LIKE 'jobs.%.container.image'` covers every job. Absent on rows with no `pair` ancestor, so code-language rows never carry it. TOML and INI carry only their own key — their hierarchy level is an `object`, not a nested pair |
 
 ### Members
 | Field | Applies to | Values / Notes |

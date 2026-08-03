@@ -58,6 +58,18 @@ pub(super) fn collect_nodes(
     // O(1) by the cursor navigation below.  Avoids calling node.parent()
     // inside enrichers (which is O(sibling_count) in tree-sitter 0.25).
     let mut parent_kind_stack: Vec<&'static str> = Vec::new();
+    // Parallel to parent_kind_stack: the key of each ancestor that is a `pair`,
+    // so a row can be filtered by where it sits in a config file's key
+    // hierarchy. Maintained here rather than by walking `node.parent()` in an
+    // enricher for the reason given above — an ancestor walk is
+    // O(sibling_count) per step, which is O(n²) across a wide array, and wide
+    // arrays are exactly what config files contain.
+    //
+    // `pair_key_depth` counts the Some entries so the common case (a language
+    // that maps nothing to `pair`, i.e. every code language) costs one integer
+    // comparison per node and never joins a string.
+    let mut key_path_stack: Vec<Option<String>> = Vec::new();
+    let mut pair_key_depth: usize = 0;
     // Two independent depth counters exposed to enrichers via EnrichContext.
     // Using usize (not bool) because a string_literal can appear inside an
     // ERROR subtree, so each counter must track its own nesting depth.
@@ -200,6 +212,23 @@ pub(super) fn collect_nodes(
             let nearest_field = cursor
                 .field_name()
                 .or_else(|| nearest_field_stack.last().copied().flatten());
+            // The dotted key chain for this node: every ancestor `pair` key in
+            // order. `emit_addressable_row` appends the node's own key when the
+            // node is itself a pair. Skipped entirely — no allocation, no join —
+            // when nothing in scope is a pair, which is every code language.
+            let node_is_pair = lang.map_kind(node.kind()).unwrap_or("") == "pair";
+            let key_path: Option<String> = if pair_key_depth == 0 && !node_is_pair {
+                None
+            } else {
+                Some(
+                    key_path_stack
+                        .iter()
+                        .flatten()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join("."),
+                )
+            };
             let current_node_ordinal = process_node_rows(
                 ctx,
                 node,
@@ -214,6 +243,7 @@ pub(super) fn collect_nodes(
                 nearest_field,
                 &mut row_ordinal_counter,
                 block_tag.as_ref(),
+                key_path.as_deref(),
             );
 
             // Descend into children.
@@ -235,6 +265,17 @@ pub(super) fn collect_nodes(
                 parent_ordinal_stack.push(parent_ord);
                 parent_kind_stack.push(node.kind());
                 nearest_field_stack.push(nearest_field);
+                // Mirror for the key chain: a pair contributes its key to every
+                // row beneath it. `node_is_pair` was computed above for this node.
+                let key_entry = if node_is_pair {
+                    lang.extract_name(node, source)
+                } else {
+                    None
+                };
+                if key_entry.is_some() {
+                    pair_key_depth += 1;
+                }
+                key_path_stack.push(key_entry);
                 continue;
             }
         }
@@ -252,6 +293,8 @@ pub(super) fn collect_nodes(
             &mut parent_kind_stack,
             &mut nearest_field_stack,
             &mut string_depth,
+            &mut key_path_stack,
+            &mut pair_key_depth,
             &mut error_depth,
         ) {
             break;
@@ -302,6 +345,7 @@ fn update_guard_stack(
 /// unwinding the parent/ordinal stacks and string/error depth counters on the
 /// way. Returns `true` if a next sibling was reached, `false` at end of tree.
 /// Extracted from the `collect_nodes` walk loop.
+#[allow(clippy::too_many_arguments)]
 fn ascend_to_next_sibling(
     cursor: &mut tree_sitter::TreeCursor<'_>,
     config: &LanguageConfig,
@@ -309,11 +353,16 @@ fn ascend_to_next_sibling(
     parent_kind_stack: &mut Vec<&'static str>,
     nearest_field_stack: &mut Vec<Option<&'static str>>,
     string_depth: &mut usize,
+    key_path_stack: &mut Vec<Option<String>>,
+    pair_key_depth: &mut usize,
     error_depth: &mut usize,
 ) -> bool {
     while cursor.goto_parent() {
         let _ = parent_ordinal_stack.pop();
         let _ = nearest_field_stack.pop();
+        if let Some(Some(_)) = key_path_stack.pop() {
+            *pair_key_depth = pair_key_depth.saturating_sub(1);
+        }
         if let Some(popped) = parent_kind_stack.pop() {
             if config.is_opaque_string_kind(popped) || config.is_comment_kind(popped) {
                 *string_depth = string_depth.saturating_sub(1);

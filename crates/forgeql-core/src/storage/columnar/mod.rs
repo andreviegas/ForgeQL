@@ -345,7 +345,13 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        following node in the file — the same class of change as v60, and a
 ///        v60 segment mis-keys handles for exactly that reason. Members keep
 ///        their own rows and gain a block address; nothing is hidden.
-pub const ENRICH_VER: u32 = 61;
+///   62 — rows in a config file carry `key_path`, the dotted chain of enclosing
+///        `pair` keys, with the row's own key appended when it is itself a
+///        pair. A new stored column, so a v61 segment cannot answer a
+///        `WHERE key_path` filter at all — the field resolves only when some
+///        indexed row carries it. No row moves and no ordinal shifts: this
+///        adds a column, not a node.
+pub const ENRICH_VER: u32 = 62;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";
