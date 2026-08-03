@@ -1,0 +1,171 @@
+{
+  "suite": "config_parity",
+  "description": "Config-format parity: comment rows, block groups and key_path for text formats. Cases carrying 'enforcement': 'expect_fail' pin behaviour that does not exist yet; the expect_fail count is this campaign's progress meter and the finish line is 0. Pins are of two kinds. OBSERVED: the current result was read live from the frozen corpus, so the case fails today for exactly the reason stated. DESIGN: block rows and key_path do not exist at all yet, so the expected shape is a commitment written into this file rather than a reading of anything. Every error-shaped expect_fail case (an unknown WHERE field is a hard error, not zero rows) has a hard twin running the same query minus the not-yet-existing clause, because expect_fail accepts ANY error and would otherwise pass just as happily on a typo.",
+  "cases": [
+    {
+      "name": "yaml_banner_comment_row_is_addressable",
+      "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "OBSERVED: yaml comments are mapped to a kind but never named, so no comment row is emitted; west.yml's 15-line banner owns no node at all. Flips when config comments become addressable rows.",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE name LIKE '%west manifest file%' IN 'west.yml'",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "name": "# The west manifest file for upstream Zephyr.", "path": "west.yml", "line": 1 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "yaml_nested_comment_owns_handle",
+      "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "OBSERVED: a comment nested inside a mapping merely rides its parent's span and owns no handle of its own. Flips when config comments become addressable rows.",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE name LIKE '%zephyr-keep-sorted-stop%' IN 'west.yml'",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "path": "west.yml", "line": 418 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "yaml_comment_role_mention_is_recorded",
+      "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "OBSERVED: 0 rows today. Comment-role mention recording hangs off visited comment nodes, so it cannot cover config formats until they emit rows AND yaml declares a comment entry in mention_text_kinds.",
+      "steps": [
+        {
+          "fql": "FIND usages OF 'alphabetical' WHERE role = 'comment' IN 'west.yml'",
+          "assert": {
+            "total": 1,
+            "row_count": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "control_cpp_comment_rows_must_not_move",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE name = '/* CONFIG_PM_DEVICE_RUNTIME_ASYNC */' IN 'subsys/pm/device_runtime.c' ORDER BY line ASC LIMIT 30",
+          "assert": {
+            "row_count": 8,
+            "all_same": "path",
+            "rows": [
+              { "path": "subsys/pm/device_runtime.c", "line": 29 },
+              { "path": "subsys/pm/device_runtime.c", "line": 97 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "control_c_file_still_has_no_comment_block",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'comment_block' IN 'subsys/pm/device_runtime.c'",
+          "assert": {
+            "total": 0,
+            "row_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "yaml_comment_run_becomes_one_block",
+      "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "DESIGN PIN: yaml declares no block_groups rule, so no block row exists for any comment run. Expected shape is two blocks in west.yml — the 15-line top-of-file banner and the 3-line run inside the manifest mapping; the lone keep-sorted-stop comment stays unblocked at min_run 2. Revisit this count if the run shapes are re-read rather than editing it quietly.",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'comment_block' IN 'west.yml'",
+          "assert": {
+            "total": 2,
+            "row_count": 2,
+            "all_same": "path"
+          }
+        }
+      ]
+    },
+    {
+      "name": "key_path_disambiguates_west_remote",
+      "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "DESIGN PIN, error-shaped: key_path is not a field yet, so this errors rather than returning rows. west.yml holds 12 pair rows all named 'remote'; only the one at line 19 sits under manifest.defaults. Sequence indices are deliberately absent from the path.",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE key_path = 'manifest.defaults.remote' IN 'west.yml'",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "name": "remote", "path": "west.yml", "line": 19 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "twin_west_remote_pairs_without_key_path",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE name = 'remote' WHERE fql_kind = 'pair' IN 'west.yml' ORDER BY line ASC LIMIT 60",
+          "assert": {
+            "row_count": 12,
+            "all_same": "path",
+            "rows": [
+              { "name": "remote", "path": "west.yml", "line": 19 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "key_path_finds_container_image_reference",
+      "use": "zephyr-andre.frozen",
+      "enforcement": "expect_fail",
+      "expect_fail_reason": "DESIGN PIN, error-shaped: key_path is not a field yet. This is the 'every container image reference' recipe from the docs, exercising LIKE against a nested path.",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE key_path LIKE 'jobs.%.container.image' IN '.github/workflows/clang.yaml'",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "name": "image", "path": ".github/workflows/clang.yaml", "line": 21 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "twin_clang_image_pair_without_key_path",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE name = 'image' IN '.github/workflows/clang.yaml'",
+          "assert": {
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "name": "image", "path": ".github/workflows/clang.yaml", "line": 21 }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
