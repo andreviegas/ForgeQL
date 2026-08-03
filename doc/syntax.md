@@ -196,7 +196,7 @@ FIND files [clauses]
 > | `role` | The name was written in | Emitted today |
 > |---|---|---|
 > | `code` | an identifier the grammar resolved — a call, a reference, a type position | every indexed language |
-> | `comment` | comment text | C, C++, Rust, Python |
+> | `comment` | comment text | C, C++, Rust, Python, YAML |
 > | `string` | a string literal | C, C++, Rust, Python |
 > | `config` | a build- or config-file value | CMake, YAML, TOML, JSON |
 > | `doc` | prose in a documentation file | Markdown, reStructuredText |
@@ -1522,7 +1522,7 @@ gets a stable `node_id` and the **same commands apply** — `FIND symbols`,
 | XML family | `.xml`, `.arxml` (AUTOSAR), `.xdm`/`.epc`/`.epd` (EB tresos), `.ecuc`, `.odx` | Every element is a nested node, named by the cascade below |
 | Vector CAN | `.dbc` | `BO_` messages as `object`; `SG_` signals nested as `field`; `VAL_TABLE_`/`VAL_` as `enum`; attributes as `pair`; `EV_` as `variable` |
 | TOML | `.toml` (`Cargo.toml`), `.lock` (`Cargo.lock`) | Each `pair` under its key; each `[table]`/`[[table-array]]` by its `name`/`id`/`key` member or header key |
-| JSON / YAML | `.json`, `.jsonc`, `.yaml`, `.yml` | `object`/`array`/`pair`. A `pair` is named by its key. A container is named by an identifier-like member (`name`/`id`/`key`/`title`/`alias`), else by its **key-set skeleton** — its sorted keys, comma-joined (`uses`, `name,run`) — so a mapping with no name is still addressable. An `array`/sequence is named after the key of its nearest ancestor pair (`steps`). Names never encode a position: a slot-based name would follow the slot rather than the node, and two siblings would trade `node_id`s when reordered. A run of 8+ adjacent `array` siblings collapses into one `array_block` (below). |
+| JSON / YAML | `.json`, `.jsonc`, `.yaml`, `.yml` | `object`/`array`/`pair`/`comment`. A `pair` is named by its key. A container is named by an identifier-like member (`name`/`id`/`key`/`title`/`alias`), else by its **key-set skeleton** — its sorted keys, comma-joined (`uses`, `name,run`) — so a mapping with no name is still addressable. An `array`/sequence is named after the key of its nearest ancestor pair (`steps`). A `comment` is named by its own raw text, so a note such as `# do not rename` is findable by name and owns a handle like any other node; in YAML a name written inside a comment is additionally recorded as a `role = 'comment'` occurrence, which JSON does not do. Names never encode a position: a slot-based name would follow the slot rather than the node, and two siblings would trade `node_id`s when reordered. A run of 8+ adjacent `array` siblings collapses into one `array_block` (below). |
 | INI | `.ini`, `.cfg`, `.editorconfig`, `.gitconfig` | `[section]` as `object`; `key = value` nested as `pair` |
 | Kconfig | `Kconfig` (any casing, no extension), `*.kconfig` | `config X` / `menuconfig X` as `macro` named `X` — the definition site of a build flag, which becomes a preprocessor macro in the generated header. Every flag reference is a usage site, so `depends on X`, `select X` and `if X` all answer `FIND usages OF 'X'`. `menu` and `if` carry no row, so an outline lists the flags a file defines and nothing else. Vendor-suffixed files (`Kconfig.stm32`) are not claimed — the suffix is open-ended. |
 | justfile | `justfile` (any casing, with or without dot) | Recipes as `function`; `:=` assignments and `alias` as `variable`; `set` as `pair`; `mod` as `namespace` |

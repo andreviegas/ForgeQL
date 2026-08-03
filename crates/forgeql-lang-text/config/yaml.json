@@ -13,7 +13,8 @@
       "plain_scalar":        { "role": "config", "when_field": "value" },
       "double_quote_scalar": { "role": "config", "when_field": "value" },
       "single_quote_scalar": { "role": "config", "when_field": "value" },
-      "block_scalar":        { "role": "config", "when_field": "value" }
+      "block_scalar":        { "role": "config", "when_field": "value" },
+      "comment":             "comment"
     }
   },
 

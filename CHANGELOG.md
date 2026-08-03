@@ -6,6 +6,35 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.141.0] — 2026-08-03 — feat: comments in YAML and JSON are addressable rows
+
+### Added — a comment in a config file is now a symbol row
+
+A comment in a YAML or JSON file was mapped to the `comment` kind but never
+produced a row. It could not be found by name, owned no handle, and carried no
+mention. A note written beside a value — `# do not rename` — was invisible to
+every query, while the same comment in a C or Rust file indexed normally.
+
+The cause was the naming ladder rather than the kind map. Row emission is gated
+on the language returning a name for a node, and the ladder shared by the
+structured-text formats named pairs, containers and sequences only, falling
+through to `None` for everything else. Comments are now named by their own raw
+text, the rule the code languages already use.
+
+Two things follow. `FIND symbols WHERE fql_kind = 'comment'` returns rows for
+these formats, each carrying a handle and a rev, so a comment can be read and
+edited like any other node. And because mention recording hangs off comment
+nodes the walk has visited, YAML now records comment-role mentions: a name
+written inside a comment answers to
+`FIND usages OF '<name>' WHERE role = 'comment'`.
+
+New comment rows shift the ordinals of nodes that follow them in the same file,
+so cached segments are rebuilt on first use after upgrading.
+
+The remaining structured-text formats are deliberately unchanged. TOML, INI and
+the others carry their own name-extraction rules, and each needs its own test
+coverage before its comments begin emitting rows.
+
 ## [0.140.1] — 2026-08-02 — fix: a Kconfig flag is a macro, not a variable
 
 ### Changed — `config X` indexes as `macro`

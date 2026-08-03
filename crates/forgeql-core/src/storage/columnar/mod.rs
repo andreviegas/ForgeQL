@@ -331,7 +331,15 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        `SHOW outline`, which lists `macro` but excludes `variable` so that C
 ///        locals do not flood it. Same rows, different bucket: the corpus total
 ///        is unchanged and the counts move from one kind to the other.
-pub const ENRICH_VER: u32 = 59;
+///   60 — YAML and JSON comments are named by their own raw text and therefore
+///        emit `comment` rows. They emitted none before: the kind map named the
+///        kind, but the shared structured-text naming ladder returned no name,
+///        and a row is emitted only for a named node. The new rows are purely
+///        additive — a comment is a leaf, so nothing re-parents — but they
+///        shift the ordinals of every node following them in the same file, so
+///        a v59 segment both misses rows and mis-keys handles. YAML also
+///        records comment-role mentions now, which a v59 segment cannot carry.
+pub const ENRICH_VER: u32 = 60;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

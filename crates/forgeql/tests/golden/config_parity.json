@@ -5,8 +5,6 @@
     {
       "name": "yaml_banner_comment_row_is_addressable",
       "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "OBSERVED: yaml comments are mapped to a kind but never named, so no comment row is emitted; west.yml's 15-line banner owns no node at all. Flips when config comments become addressable rows.",
       "steps": [
         {
           "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE name LIKE '%west manifest file%' IN 'west.yml'",
@@ -23,8 +21,6 @@
     {
       "name": "yaml_nested_comment_owns_handle",
       "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "OBSERVED: a comment nested inside a mapping merely rides its parent's span and owns no handle of its own. Flips when config comments become addressable rows.",
       "steps": [
         {
           "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE name LIKE '%zephyr-keep-sorted-stop%' IN 'west.yml'",
@@ -41,8 +37,6 @@
     {
       "name": "yaml_comment_role_mention_is_recorded",
       "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "OBSERVED: 0 rows today. Comment-role mention recording hangs off visited comment nodes, so it cannot cover config formats until they emit rows AND yaml declares a comment entry in mention_text_kinds.",
       "steps": [
         {
           "fql": "FIND usages OF 'alphabetical' WHERE role = 'comment' IN 'west.yml'",

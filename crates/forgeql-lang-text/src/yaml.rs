@@ -89,6 +89,7 @@ const YAML_SPEC: StructureSpec = StructureSpec {
     pair_kinds: PAIR_KINDS,
     container_kinds: MAPPING_KINDS,
     sequence_kinds: SEQUENCE_KINDS,
+    comment_kinds: &["comment"],
     identifier_keys: IDENTIFIER_KEYS,
     unquote,
 };

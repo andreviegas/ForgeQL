@@ -78,6 +78,7 @@ const JSON_SPEC: StructureSpec = StructureSpec {
     pair_kinds: &["pair"],
     container_kinds: &["object"],
     sequence_kinds: &["array"],
+    comment_kinds: &["comment"],
     identifier_keys: IDENTIFIER_KEYS,
     unquote,
 };

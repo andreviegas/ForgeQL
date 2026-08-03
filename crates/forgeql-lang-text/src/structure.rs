@@ -13,6 +13,7 @@
 //! | container without one | the key-set skeleton (`uses`, `name,run`) |
 //! | container with no members at all | the nearest ancestor pair's key |
 //! | sequence | the nearest ancestor pair's key (`steps`) |
+//! | comment | the comment's own raw text |
 //! | anything else | `None` — no row is emitted |
 //!
 //! # Why a name never encodes a position
@@ -37,6 +38,9 @@ pub struct StructureSpec {
     pub container_kinds: &'static [&'static str],
     /// Kinds that are ordered sequences (`array`, `block_sequence`, ...).
     pub sequence_kinds: &'static [&'static str],
+    /// Kinds that are comments. Named by their own text, so a note written
+    /// beside a value is findable by name the way a code comment is.
+    pub comment_kinds: &'static [&'static str],
     /// Member keys, in priority order, that name their enclosing container.
     pub identifier_keys: &'static [&'static str],
     /// Strip this format's quoting from a scalar's raw text.
@@ -159,6 +163,12 @@ pub fn structured_name(
             .or_else(|| breadcrumb_key(node, source, spec))
     } else if spec.sequence_kinds.contains(&kind) {
         breadcrumb_key(node, source, spec)
+    } else if spec.comment_kinds.contains(&kind) {
+        // Named by raw text, the same rule the code languages use. A comment
+        // that is named is a comment that owns a row, and only a node with a
+        // row can carry a handle or a comment-role mention.
+        let text = node_text(source, node);
+        if text.is_empty() { None } else { Some(text) }
     } else {
         None
     }

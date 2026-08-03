@@ -1,7 +1,7 @@
 [
  {
   "alias": "golden",
-  "expect_symbols_indexed": 2985917,
+  "expect_symbols_indexed": 2998525,
   "use": "zephyr-andre.frozen"
  },
  {
@@ -505,12 +505,12 @@
     "kind": "variable"
    },
    {
-    "count": 294914,
-    "kind": "macro_call"
+    "count": 295326,
+    "kind": "comment"
    },
    {
-    "count": 282718,
-    "kind": "comment"
+    "count": 294914,
+    "kind": "macro_call"
    },
    {
     "count": 264142,
@@ -4055,7 +4055,7 @@
  },
  {
   "alias": "golden-python",
-  "expect_symbols_indexed": 3140880,
+  "expect_symbols_indexed": 3143795,
   "use": "pytorch-andre.pytorch-frozen"
  },
  {
@@ -4944,7 +4944,7 @@
  },
  {
   "alias": "golden-rust",
-  "expect_symbols_indexed": 59504,
+  "expect_symbols_indexed": 59531,
   "use": "forgeql-pub.frozen"
  },
  {
