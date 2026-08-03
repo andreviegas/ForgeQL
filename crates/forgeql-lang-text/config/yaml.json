@@ -33,5 +33,13 @@
     "block_sequence":     "array",
     "flow_sequence":      "array",
     "comment":            "comment"
-  }
+  },
+
+  "block_groups": [
+    {
+      "member_fql_kind": "comment",
+      "block_fql_kind": "comment_block",
+      "min_run": 2
+    }
+  ]
 }

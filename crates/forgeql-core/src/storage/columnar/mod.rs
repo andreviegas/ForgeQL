@@ -339,7 +339,13 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        shift the ordinals of every node following them in the same file, so
 ///        a v59 segment both misses rows and mis-keys handles. YAML also
 ///        records comment-role mentions now, which a v59 segment cannot carry.
-pub const ENRICH_VER: u32 = 60;
+///   61 — YAML declares a block group, so a run of 2+ adjacent comments is
+///        surfaced as one addressable `comment_block` sibling. The block is a
+///        new addressable row, so it consumes an ordinal and shifts every
+///        following node in the file — the same class of change as v60, and a
+///        v60 segment mis-keys handles for exactly that reason. Members keep
+///        their own rows and gain a block address; nothing is hidden.
+pub const ENRICH_VER: u32 = 61;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

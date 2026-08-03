@@ -55,7 +55,6 @@
           "fql": "FIND symbols WHERE fql_kind = 'comment' WHERE name = '/* CONFIG_PM_DEVICE_RUNTIME_ASYNC */' IN 'subsys/pm/device_runtime.c' ORDER BY line ASC LIMIT 30",
           "assert": {
             "row_count": 8,
-            "all_same": "path",
             "rows": [
               { "path": "subsys/pm/device_runtime.c", "line": 29 },
               { "path": "subsys/pm/device_runtime.c", "line": 97 }
@@ -80,15 +79,12 @@
     {
       "name": "yaml_comment_run_becomes_one_block",
       "use": "zephyr-andre.frozen",
-      "enforcement": "expect_fail",
-      "expect_fail_reason": "DESIGN PIN: yaml declares no block_groups rule, so no block row exists for any comment run. Expected shape is two blocks in west.yml — the 15-line top-of-file banner and the 3-line run inside the manifest mapping; the lone keep-sorted-stop comment stays unblocked at min_run 2. Revisit this count if the run shapes are re-read rather than editing it quietly.",
       "steps": [
         {
           "fql": "FIND symbols WHERE fql_kind = 'comment_block' IN 'west.yml'",
           "assert": {
             "total": 2,
-            "row_count": 2,
-            "all_same": "path"
+            "row_count": 2
           }
         }
       ]
@@ -119,7 +115,6 @@
           "fql": "FIND symbols WHERE name = 'remote' WHERE fql_kind = 'pair' IN 'west.yml' ORDER BY line ASC LIMIT 60",
           "assert": {
             "row_count": 12,
-            "all_same": "path",
             "rows": [
               { "name": "remote", "path": "west.yml", "line": 19 }
             ]

@@ -6,6 +6,28 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.142.0] — 2026-08-03 — feat: a run of YAML comments is one addressable block
+
+### Added — `comment_block` for YAML
+
+A banner comment — the fifteen `#` lines at the top of a Zephyr west manifest, or
+any run of adjacent comments — was fifteen separate rows with no way to address
+the run as a whole. YAML now declares a block group, so a run of 2+ adjacent
+comments is surfaced as a single `comment_block` node, the same treatment Rust
+doc-comment runs already receive.
+
+The block is the *sibling* of its members, never their parent. Every comment
+keeps its own row and its own handle, and additionally gains the block's address,
+so a member can be reached either directly or through the block at
+`block_id(offset)`. Nothing is hidden and no row is replaced.
+
+Unlike Rust, YAML does not split a run by comment style: there is only one
+comment syntax, so adjacent comments always form one block.
+
+Block rows are addressable and therefore consume an ordinal, so they shift the
+handles of nodes that follow them in the same file. Cached segments are rebuilt
+on first use.
+
 ## [0.141.0] — 2026-08-03 — feat: comments in YAML and JSON are addressable rows
 
 ### Added — a comment in a config file is now a symbol row

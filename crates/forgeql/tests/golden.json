@@ -1,7 +1,7 @@
 [
  {
   "alias": "golden",
-  "expect_symbols_indexed": 2998525,
+  "expect_symbols_indexed": 3002859,
   "use": "zephyr-andre.frozen"
  },
  {
@@ -4055,7 +4055,7 @@
  },
  {
   "alias": "golden-python",
-  "expect_symbols_indexed": 3143795,
+  "expect_symbols_indexed": 3144100,
   "use": "pytorch-andre.pytorch-frozen"
  },
  {
@@ -4944,7 +4944,7 @@
  },
  {
   "alias": "golden-rust",
-  "expect_symbols_indexed": 59531,
+  "expect_symbols_indexed": 59539,
   "use": "forgeql-pub.frozen"
  },
  {
