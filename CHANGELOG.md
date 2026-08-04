@@ -6,6 +6,29 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.147.3] — 2026-08-04 — test: pin the FIND files filters and the heredoc regex form
+
+### Added
+
+`tests/golden/find_files_filters.json` — four cases. `clause_pipeline` covers
+`ORDER BY size DESC`; these cover the filters deciding which files get ordered
+at all, plus the heredoc regex form.
+
+- `WHERE size >` is a numeric comparison over every file, not only source.
+- `WHERE path =` resolves exactly one file.
+- `WHERE extension =` and an `IN` glob narrow together.
+- `MATCHES <<RE … RE` is asserted to return exactly what the inline
+  single-quoted regex returns, in one case, so the two forms cannot drift
+  apart silently.
+
+### Note
+
+A `FIND files` response carries no `total` field. The count the CSV renderer
+prints beside `find_files` is not present in the JSON, so an assertion on
+`total` reads 0 regardless of how many files matched. These cases assert
+`row_count` and the rows instead. Whether `total` should be populated there is
+left open rather than pinned either way.
+
 ## [0.147.2] — 2026-08-04 — test: pin the SHOW read verbs
 
 ### Added

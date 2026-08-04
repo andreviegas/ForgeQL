@@ -1,0 +1,69 @@
+{
+  "suite": "find_files_filters",
+  "description": "The FIND files predicate surface on the frozen Zephyr corpus: a numeric comparison on size, an exact path lookup, extension combined with an IN glob, and the heredoc form of a regex asserted equivalent to the inline form. clause_pipeline covers ORDER BY size DESC; these cover the filters that select which files are ordered at all. Note that a FIND files response carries no total field — the count the CSV renderer shows is not in the JSON — so these cases assert row_count and the rows themselves.",
+  "cases": [
+    {
+      "name": "size_comparison_selects_files_above_a_threshold",
+      "use": "zephyr-andre.frozen",
+      "fql": "FIND files WHERE size > 50000 ORDER BY size DESC LIMIT 5",
+      "assert": {
+        "row_count": 5,
+        "ordered": { "by": "size", "dir": "desc" },
+        "rows": [
+          { "path": "tests/lib/cmsis_dsp/transform/src/cf64.pat", "size": 1609359 },
+          { "path": "tests/lib/cmsis_dsp/transform/src/cq31.pat", "size": 1278339 },
+          { "path": "doc/connectivity/bluetooth/autopts/devices_2.png", "size": 1101077 }
+        ]
+      }
+    },
+    {
+      "name": "path_equals_resolves_exactly_one_file",
+      "use": "zephyr-andre.frozen",
+      "fql": "FIND files WHERE path = 'kernel/system_work_q.c'",
+      "assert": {
+        "row_count": 1,
+        "rows": [ { "path": "kernel/system_work_q.c", "size": 861 } ]
+      }
+    },
+    {
+      "name": "extension_and_in_glob_narrow_together",
+      "use": "zephyr-andre.frozen",
+      "fql": "FIND files WHERE extension = 'h' IN 'kernel/**' ORDER BY size DESC LIMIT 3",
+      "assert": {
+        "row_count": 3,
+        "ordered": { "by": "size", "dir": "desc" },
+        "rows": [
+          { "path": "kernel/include/kernel_arch_interface.h", "size": 25212 },
+          { "path": "kernel/include/mmu.h", "size": 13098 },
+          { "path": "kernel/include/ksched.h", "size": 12830 }
+        ]
+      }
+    },
+    {
+      "name": "heredoc_regex_is_the_same_filter_as_the_inline_form",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "SHOW LINES 51-75 OF 'kernel/sched.c' WHERE text MATCHES 'void \\*\\w+_runq'",
+          "assert": {
+            "row_count": 2,
+            "rows": [
+              { "line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)" },
+              { "line": 71, "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)" }
+            ]
+          }
+        },
+        {
+          "fql": "SHOW LINES 51-75 OF 'kernel/sched.c' WHERE text MATCHES <<RE\nvoid \\*\\w+_runq\nRE",
+          "assert": {
+            "row_count": 2,
+            "rows": [
+              { "line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)" },
+              { "line": 71, "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)" }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
