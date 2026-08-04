@@ -1,0 +1,65 @@
+{
+  "suite": "show_read_verbs",
+  "description": "The SHOW read verbs on the frozen Zephyr corpus: progressive disclosure via DEPTH, the signature-only form, the call graph, and outline narrowed by kind and name. node_addressing covers SHOW NODE by handle and structured_text covers outline over JSON and YAML; these cover the read verbs those two do not reach.",
+  "cases": [
+    {
+      "name": "show_body_depth_0_is_the_signature_and_depth_99_is_the_whole_span",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "SHOW body OF 'flag_clear' DEPTH 0",
+          "assert": {
+            "row_count": 2,
+            "rows": [
+              { "text": "static inline void flag_clear(uint32_t *flagp," },
+              { "text": "\t\t\t      uint32_t bit)" }
+            ]
+          }
+        },
+        {
+          "fql": "SHOW body OF 'flag_clear' DEPTH 99",
+          "assert": {
+            "row_count": 5,
+            "rows": [
+              { "text": "static inline void flag_clear(uint32_t *flagp," },
+              { "text": "\t\t\t      uint32_t bit)" },
+              { "text": "{" },
+              { "text": "\t*flagp &= ~BIT(bit);" },
+              { "text": "}" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "show_signature_returns_the_declaration_line_only",
+      "use": "zephyr-andre.frozen",
+      "fql": "SHOW signature OF 'k_sys_work_q_init'",
+      "assert": {
+        "pointer": { "/content/signature": "static int k_sys_work_q_init(void)" }
+      }
+    },
+    {
+      "name": "show_callees_lists_the_calls_a_function_makes",
+      "use": "zephyr-andre.frozen",
+      "fql": "SHOW callees OF 'k_sys_work_q_init'",
+      "assert": {
+        "row_count": 3,
+        "rows": [
+          { "name": "IS_ENABLED", "line": 26 },
+          { "name": "k_work_queue_start", "line": 31 },
+          { "name": "K_KERNEL_STACK_SIZEOF", "line": 33 }
+        ]
+      }
+    },
+    {
+      "name": "show_outline_narrows_by_kind_and_name",
+      "use": "zephyr-andre.frozen",
+      "fql": "SHOW outline OF 'kernel/priority_queues.c' WHERE fql_kind = 'function' WHERE name = 'z_priq_rb_lessthan'",
+      "assert": {
+        "row_count": 1,
+        "rows": [ { "name": "z_priq_rb_lessthan", "line": 12, "depth": 0 } ]
+      }
+    }
+  ]
+}

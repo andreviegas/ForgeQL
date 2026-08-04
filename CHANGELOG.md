@@ -6,6 +6,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.147.2] — 2026-08-04 — test: pin the SHOW read verbs
+
+### Added
+
+`tests/golden/show_read_verbs.json` — four cases covering the read verbs the
+existing suites do not reach. `node_addressing` covers `SHOW NODE` by handle
+and `structured_text` covers `SHOW outline` over JSON and YAML; nothing covered
+the rest.
+
+- `SHOW body … DEPTH 0` returns the signature only and `DEPTH 99` returns the
+  whole span, asserted against each other so the progressive-disclosure
+  contract is what fails if it regresses.
+- `SHOW signature` returns the declaration line alone.
+- `SHOW callees` lists the calls a function makes, with their lines.
+- `SHOW outline` narrows by `fql_kind` and `name` together.
+
 ## [0.147.1] — 2026-08-04 — test: pin the name and path predicate operators
 
 ### Added
