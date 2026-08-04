@@ -1,0 +1,110 @@
+{
+  "suite": "name_and_path_predicates",
+  "description": "The operator surface on the name and path fields, on the frozen Zephyr corpus: LIKE against MATCHES, whether a regex anchors, how name_length bounds behave, and WHERE path = as an exact single-file scope alongside the IN glob form. enrich_naming already pins the naming values and name_length equality; these cases pin the operators themselves. Note that enrichment fields used as predicates (name_length here) do not come back as row keys, so the cases assert the selection a bound produces rather than the field itself.",
+  "cases": [
+    {
+      "name": "name_like_is_a_case_insensitive_prefix_wildcard",
+      "use": "zephyr-andre.frozen",
+      "fql": "FIND symbols WHERE name LIKE 'k_sem_%' IN 'include/**' ORDER BY name ASC LIMIT 5",
+      "assert": {
+        "row_count": 5,
+        "all_same": "path",
+        "rows": [
+          { "name": "K_SEM_DEFINE", "path": "include/zephyr/kernel.h", "line": 3798 },
+          { "name": "K_SEM_MAX_LIMIT", "line": 3705 },
+          { "name": "k_sem_count_get", "line": 3777 },
+          { "name": "k_sem_give", "line": 3755 },
+          { "name": "k_sem_init", "line": 3722 }
+        ]
+      }
+    },
+    {
+      "name": "name_matches_is_a_regex_that_honours_a_caret_anchor",
+      "use": "zephyr-andre.frozen",
+      "fql": "FIND symbols WHERE name MATCHES '^z_impl_k_' ORDER BY name ASC LIMIT 5",
+      "assert": {
+        "row_count": 5,
+        "rows": [
+          { "name": "z_impl_k_busy_wait", "path": "kernel/busy_wait.c", "line": 29 },
+          { "name": "z_impl_k_condvar_broadcast", "path": "kernel/condvar.c", "line": 76 },
+          { "name": "z_impl_k_condvar_init", "line": 21 },
+          { "name": "z_impl_k_condvar_signal", "line": 44 },
+          { "name": "z_impl_k_condvar_wait", "line": 114 }
+        ]
+      }
+    },
+    {
+      "name": "name_length_bounds_select_the_extremes",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name_length >= 57 IN 'kernel/**' ORDER BY name_length DESC LIMIT 3",
+          "assert": {
+            "row_count": 3,
+            "all_same": "path",
+            "rows": [
+              {
+                "name": "z_impl_k_thread_runtime_stack_safety_unused_threshold_pct_set",
+                "path": "kernel/thread.c",
+                "line": 723
+              },
+              {
+                "name": "z_vrfy_k_thread_runtime_stack_safety_unused_threshold_pct_set",
+                "line": 757
+              },
+              {
+                "name": "z_impl_k_thread_runtime_stack_safety_unused_threshold_get",
+                "line": 751
+              }
+            ]
+          }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name_length <= 4 IN 'kernel/**' ORDER BY name ASC LIMIT 3",
+          "assert": {
+            "row_count": 3,
+            "rows": [
+              { "name": "idle", "path": "kernel/idle.c", "line": 22 },
+              { "name": "main", "path": "kernel/main_weak.c", "line": 24 },
+              { "name": "next", "path": "kernel/timeout.c", "line": 36 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "where_path_equals_is_an_exact_single_file_scope",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE path = 'kernel/sched.c' ORDER BY line ASC LIMIT 3",
+          "assert": {
+            "row_count": 3,
+            "ordered": { "by": "line", "dir": "asc" },
+            "all_same": "path",
+            "rows": [
+              { "name": "thread_runq", "line": 51 },
+              { "name": "curr_cpu_runq", "line": 71 },
+              { "name": "runq_add", "line": 80 }
+            ]
+          }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' IN 'kernel/sched.c' ORDER BY line ASC LIMIT 3",
+          "assert": {
+            "row_count": 3,
+            "rows": [
+              { "name": "thread_runq", "line": 51 },
+              { "name": "curr_cpu_runq", "line": 71 },
+              { "name": "runq_add", "line": 80 }
+            ]
+          }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'number' WHERE num_suffix = 'f' WHERE path = 'subsys/bluetooth/host/att.c'",
+          "assert": { "row_count": 0, "total": 0 }
+        }
+      ]
+    }
+  ]
+}

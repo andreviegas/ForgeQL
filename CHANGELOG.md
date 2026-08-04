@@ -6,6 +6,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.147.1] — 2026-08-04 — test: pin the name and path predicate operators
+
+### Added
+
+`tests/golden/name_and_path_predicates.json` — four cases covering the operator
+surface on `name` and `path`, which `enrich_naming` did not reach: it pins the
+`naming` values and `name_length` equality, not the operators.
+
+- `name LIKE` is a prefix wildcard and is **case-insensitive** — `'k_sem_%'`
+  returns `K_SEM_DEFINE` alongside `k_sem_init`. That behaviour was unpinned.
+- `name MATCHES` is a regex and honours a `^` anchor.
+- `name_length` upper and lower bounds select the expected extremes.
+- `WHERE path =` is an exact single-file scope, returning the same rows as the
+  equivalent `IN` form, and narrows to nothing when combined with a predicate
+  the file does not satisfy.
+
+An enrichment field used as a predicate does not come back as a row key, so
+these cases assert the selection a bound produces rather than the field value.
+Asserting the field directly derives `null` and the check passes without
+testing anything.
+
 ## [0.147.0] — 2026-08-04 — test: clause-pipeline semantics move into a data-driven golden suite
 
 ### Added
