@@ -6,6 +6,38 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.146.0] — 2026-08-04 — perf: the data-driven golden suite runs against a pool of engines
+
+### Changed
+
+The `golden_test` suite's 237 cases already ran on parallel threads, but every
+one of them locked a single shared harness for a whole request round-trip, so
+the suite was serialised behind one engine process and the extra threads bought
+nothing measurable (default threads 197.9s vs `--test-threads=1` 202.7s).
+
+The suite now runs against a small pool of independently spawned engines (4),
+with cases assigned round-robin. The per-request locking is unchanged; a case
+just locks its own pool member instead of the one everybody shares. A case
+stays on one member for its whole run, because a session id is only valid in
+the process that created it.
+
+Each member's aliases now carry its pool index. Without that, two members would
+invent the same alias for the same corpus, land on one worktree, and have two
+engine processes mutating a single checkout — which read-write cases would have
+reported as unexplained failures.
+
+Measured on the same machine, all 237 cases passing throughout. In the
+pre-commit gate, which builds optimized, the suite's phase went from **185s to
+95.3s**. A controlled run that changed nothing but the pool size, on warm
+caches and an unoptimized build, went from **489.4s with one engine to 308.1s
+with four**.
+
+Both are real, and both are sub-linear in the pool size, because each member
+independently checks out and indexes its own worktree per corpus: the setup
+work is multiplied by the pool size even though the query work is divided by
+it. That fixed cost is a larger share of an unoptimized run, which is why the
+unoptimized number improves least.
+
 ## [0.145.0] — 2026-08-04 — fix: a second engine process no longer deletes a worktree the first is still checking out
 
 ### Fixed

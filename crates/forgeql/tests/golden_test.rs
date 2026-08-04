@@ -6,9 +6,10 @@
 //!   cargo test --test golden_test enrich_is_magic  # one suite (group)
 //!   cargo test --test golden_test enrich_is_magic::rust   # one case
 //!
-//! Setup/teardown: ONE server per process; `USE` is memoized per source.branch
-//! (read-only — no BEGIN TRANSACTION), shared across every case. Parallel-safe
-//! across agents (unique per-pid aliases) and across trials (Mutex-guarded stdio).
+//! Setup/teardown: a small POOL of servers per process; `USE` is memoized per
+//! source.branch (read-only — no BEGIN TRANSACTION) within each pool member.
+//! Parallel-safe across agents (unique per-pid aliases), across pool members
+//! (the member index is in the alias) and across trials (Mutex-guarded stdio).
 //! Requires FORGEQL_DATA_DIR; skips cleanly when unset.
 
 // Test harness (harness = false): `main`-driven, so clippy's in-test relaxations
@@ -283,27 +284,43 @@ impl Drop for McpClient {
     }
 }
 
-// ───────────────────────── shared harness (setup/teardown) ─────────────────────────
+// ───────────────────────── harness pool (setup/teardown) ─────────────────────────
+
+/// Engine processes the suite runs against.
+///
+/// The ceiling on how parallel the suite can get: trials already run on
+/// parallel threads, so this is the number of them that can be in an engine at
+/// once. Each member is an independent `forgeql --mcp` child holding its own
+/// `USE` session per corpus, so N members mean N worktrees per corpus — which
+/// is what keeps this modest rather than "number of CPUs".
+const POOL_SIZE: usize = 4;
+
 struct Harness {
     client: McpClient,
     sessions: HashMap<String, String>,
     pid: u32,
+    /// Index of this harness within the pool. It goes into every alias this
+    /// harness invents: two members inventing the same alias for the same
+    /// corpus would land on ONE worktree, and two engine processes mutating one
+    /// checkout is how `rw` cases start failing for reasons no case explains.
+    id: usize,
 }
 
 impl Harness {
-    fn new(data_dir: &Path) -> Self {
+    fn new(data_dir: &Path, id: usize) -> Self {
         let client = McpClient::spawn(data_dir).expect("spawn MCP server");
         Self {
             client,
             sessions: HashMap::new(),
             pid: std::process::id(),
+            id,
         }
     }
     fn session_for(&mut self, use_str: &str) -> Result<String, String> {
         if let Some(s) = self.sessions.get(use_str) {
             return Ok(s.clone());
         }
-        let alias = format!("gt-{}-{}", self.pid, self.sessions.len());
+        let alias = format!("gt-{}-{}-{}", self.pid, self.id, self.sessions.len());
         let fql = format!("USE {use_str} AS '{alias}'");
         let res = self
             .client
@@ -324,7 +341,12 @@ impl Harness {
     /// the corpus branch, tracked for teardown. Used for mutation/transaction cases
     /// so each rw case is fully isolated and discarded when the run ends.
     fn rw_session(&mut self, use_str: &str) -> Result<String, String> {
-        let alias = format!("gt-{}-rw-{}", self.pid, self.client.created.len());
+        let alias = format!(
+            "gt-{}-{}-rw-{}",
+            self.pid,
+            self.id,
+            self.client.created.len()
+        );
         let fql = format!("USE {use_str} AS '{alias}'");
         let res = self
             .client
@@ -692,7 +714,13 @@ fn main() {
         }
     }
 
-    let harness = Arc::new(Mutex::new(Harness::new(&data_dir)));
+    // One engine process per pool member. libtest-mimic already ran trials on
+    // parallel threads, but every trial locked the SAME harness for a whole
+    // request round-trip, so the suite was serialised behind one engine and
+    // extra threads bought nothing. A trial now locks only its own member.
+    let pool: Vec<Arc<Mutex<Harness>>> = (0..POOL_SIZE)
+        .map(|id| Arc::new(Mutex::new(Harness::new(&data_dir, id))))
+        .collect();
     let mut trials = Vec::new();
     // Soft-enforced cases push their failure here instead of failing the gate.
     let soft_fails: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -703,13 +731,11 @@ fn main() {
         let sname = suite.suite;
         for case in suite.cases {
             let name = format!("{sname}::{}", case.name);
-            trials.push(build_trial(
-                Arc::clone(&harness),
-                name,
-                case,
-                &soft_fails,
-                &expected_fails,
-            ));
+            // Round-robin over the pool. A case must stay on ONE member for its
+            // whole run: a session id is only valid in the engine process that
+            // created it, and a multi-step case releases the lock between steps.
+            let h = Arc::clone(&pool[trials.len() % POOL_SIZE]);
+            trials.push(build_trial(h, name, case, &soft_fails, &expected_fails));
         }
     }
 
@@ -724,6 +750,8 @@ fn main() {
         "expect-fail",
         &expected_fails.lock().unwrap(),
     );
-    drop(harness);
+    // Every member, not just one: each holds its own sessions, and dropping an
+    // McpClient is what kills its server and tears its worktrees down.
+    drop(pool);
     conclusion.exit();
 }
