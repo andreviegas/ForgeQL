@@ -5,6 +5,47 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.145.0] — 2026-08-04 — fix: a second engine process no longer deletes a worktree the first is still checking out
+
+### Fixed
+
+Two engine processes sharing one data directory could destroy each other's
+work. Every process runs a reclaim pass at startup that deletes worktrees which
+look abandoned, and "looks abandoned" was decided from that process's own
+in-memory session maps — which cannot contain another process's sessions. A
+worktree a peer has just begun checking out is on disk, carries no session
+sentinel yet, and is unknown to the sweeper: on disk it is indistinguishable
+from an orphan left by a crash. The sweeper deleted it mid-checkout, and the
+peer's `USE` failed with a "No such file or directory" error raised from inside
+the checkout. The same race applied to git's own worktree metadata, which a
+peer registers before its checkout directory appears.
+
+Liveness is now recorded where every process can see it: an advisory lock on a
+claim file beside each worktree directory.
+
+- An owner takes a **shared** lock before `git worktree add` runs, and holds it
+  for the session's whole life. Shared, so two processes attached to the same
+  session both hold it without contending.
+- A reclaim sweep takes an **exclusive** lock and deletes only while holding
+  it. A live owner makes that fail and the sweep moves on; holding the lock
+  across the teardown stops an owner from starting up into a directory that is
+  being deleted.
+
+Owners block for their lock and so never fail on contention; sweeps never
+block. The OS releases both when the holding process dies, which is what a
+crash needs: no lease to expire, no stale record to clean up, and the dead
+owner's worktree reclaimable immediately.
+
+A worktree directory younger than five minutes that carries no session sentinel
+is also left alone, covering a peer running an older build that takes no claim.
+The cost is that a genuine orphan survives one extra startup.
+
+Claim files are never unlinked. Removing one while another process is about to
+open it would hand the two processes locks on different inodes for the same
+worktree — precisely the failure the claim exists to prevent. They are empty
+files and cost one directory entry each.
+
 ## [0.144.1] — 2026-08-04 — perf: pre-commit gate no longer link-time-optimises test binaries
 
 ### Changed

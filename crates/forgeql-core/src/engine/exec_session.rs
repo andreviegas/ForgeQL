@@ -8,7 +8,7 @@ use crate::{
     auth::{AuthContext, auth},
     git::worktree,
     ir::Backend,
-    session::{Session, SessionCoords, SessionSentinel, read_sentinel},
+    session::{Session, SessionCoords, SessionSentinel, liveness, read_sentinel},
     storage::StorageEngine,
     workspace::Workspace,
 };
@@ -252,11 +252,14 @@ impl ForgeQLEngine {
         let data_dir = self.data_dir.clone();
         match read_sentinel(wt_path) {
             None => {
-                // No readable sentinel — orphan from an older version or a
-                // partially created worktree.  Prune unconditionally.
-                info!(%wt_name, "startup: no sentinel, pruning");
-                self.prune_single_worktree(wt_path, wt_name);
-                *pruned += 1;
+                // No readable sentinel — an orphan from an older version, or a
+                // worktree a peer process is still checking out. Nothing else
+                // on disk tells those two apart, so the claim and the creation
+                // grace window have to.
+                if self.prune_single_worktree(wt_path, wt_name, liveness::CREATION_GRACE_SECS) {
+                    info!(%wt_name, "startup: no sentinel, pruned");
+                    *pruned += 1;
+                }
             }
             Some(ref sentinel)
                 if is_expired(
@@ -267,9 +270,10 @@ impl ForgeQLEngine {
                     || sentinel_carries_work(&data_dir, sentinel, wt_path),
                 ) =>
             {
-                info!(%wt_name, "startup: TTL expired, pruning");
-                self.prune_single_worktree(wt_path, wt_name);
-                *pruned += 1;
+                if self.prune_single_worktree(wt_path, wt_name, 0) {
+                    info!(%wt_name, "startup: TTL expired, pruned");
+                    *pruned += 1;
+                }
             }
             Some(SessionSentinel {
                 user,
@@ -311,7 +315,9 @@ impl ForgeQLEngine {
 
     /// Pass 2: sweep git worktree metadata entries whose checkout path is gone
     /// (handles a crash-interrupted prune from a previous run).  In-memory and
-    /// pending sessions are protected from pruning.
+    /// pending sessions of THIS process are protected by name; a worktree a
+    /// peer process is creating or using is protected by its liveness claim,
+    /// which is the only evidence of it this process can see.
     fn prune_stale_git_worktrees(&self) {
         let Ok(repo_entries) = std::fs::read_dir(&self.data_dir) else {
             return;
@@ -340,6 +346,21 @@ impl ForgeQLEngine {
                     continue;
                 }
                 if !wt.path.exists() {
+                    // A peer part-way through `git worktree add` has registered
+                    // metadata before its checkout directory appears, which on
+                    // disk is indistinguishable from the crash-interrupted
+                    // prune this pass exists to finish. The claim tells them
+                    // apart; holding it keeps the peer out until we are done.
+                    // The grace window has nothing to measure here — there is
+                    // no directory to date — so the claim decides alone.
+                    let _reclaim = match liveness::claim_for_reclaim(&wt.path, 0) {
+                        Ok(reclaim) => reclaim,
+                        Err(reason) => {
+                            info!(wt_name = %wt.name, ?reason,
+                                  "startup: worktree still live, leaving its metadata");
+                            continue;
+                        }
+                    };
                     info!(wt_name = %wt.name, "startup: pruning stale git worktree metadata");
                     // `wt.branch` carries the real branch name even though the
                     // checkout is gone, so a custom `fql/…` session branch is
@@ -357,9 +378,28 @@ impl ForgeQLEngine {
         }
     }
 
-    /// Remove a single worktree directory and its git metadata from all bare repos.
-    fn prune_single_worktree(&self, wt_path: &Path, wt_name: &str) {
-        crate::session::teardown_worktree(&self.data_dir, wt_path, wt_name);
+    /// Remove a single worktree directory and its git metadata from all bare
+    /// repos — unless a live process is still creating or using it.
+    ///
+    /// `grace_secs` goes straight to [`liveness::claim_for_reclaim`]: pass the
+    /// creation window when the worktree carries no sentinel of its own to date
+    /// it, and `0` when it does.
+    ///
+    /// Returns `true` when the worktree was actually reclaimed.
+    fn prune_single_worktree(&self, wt_path: &Path, wt_name: &str, grace_secs: u64) -> bool {
+        match liveness::claim_for_reclaim(wt_path, grace_secs) {
+            // Hold the reclaim lock for the whole teardown. An owner that
+            // starts up midway through would otherwise check out into a
+            // directory this call is in the middle of deleting.
+            Ok(_reclaim) => {
+                crate::session::teardown_worktree(&self.data_dir, wt_path, wt_name);
+                true
+            }
+            Err(reason) => {
+                info!(%wt_name, ?reason, "startup: worktree still live, leaving it alone");
+                false
+            }
+        }
     }
 
     // ===================================================================

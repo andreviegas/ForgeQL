@@ -203,6 +203,8 @@ Sessions start with `USE source.branch AS 'alias'` and are cleaned up automatica
 
 **Auto-reconnect:** if the server restarts and a client passes a `session_id` whose worktree still exists on disk, the engine transparently re-creates the in-memory session — no `USE` command required. The source name and branch are derived from the worktree directory name and git metadata.
 
+**Cross-process worktree liveness:** more than one engine process can share a data directory, and each runs a reclaim pass at startup that deletes worktrees which look abandoned. A process cannot see another's in-memory sessions, so liveness is recorded on disk instead: an advisory lock on a claim file beside each worktree directory (`session/liveness.rs`). An owner takes a shared lock before `git worktree add` runs and holds it for the session's life; a reclaim sweep takes an exclusive lock and deletes only while holding it, so a worktree a peer is still checking out is never mistaken for an orphan. The OS releases both locks when a process dies, which is what makes a crashed owner's worktree reclaimable with no lease to expire.
+
 `CREATE SOURCE`, `REFRESH SOURCE`, and `VACUUM` are intentionally blocked through stdio MCP — they must be run via the interpreter or CLI. On `forgeql-server` they additionally require an admin bearer token from the `--auth-file` token store; normal and anonymous principals can only `USE` existing sources.
 
 Structured self-healing rejections — `rev_mismatch`, `node_not_found`, and the

@@ -24,6 +24,8 @@
 //! - `found_set` — the `FOUND` set a `FIND` arms, and the rev that gates it
 //! - `indexing` — building, persisting and resuming the index, and the
 //!   storage backends that serve it
+//! - `liveness` — the cross-process claim that stops one engine process
+//!   reclaiming a worktree another is still creating or using
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -42,6 +44,7 @@ pub mod checkpoint_file;
 pub mod coords;
 pub mod found_set;
 mod indexing;
+pub mod liveness;
 
 pub use coords::SessionCoords;
 
@@ -227,6 +230,16 @@ pub struct Session {
     /// to identify the worktree in `worktree::remove`.  May differ from `id`
     /// when a custom branch name was supplied via `USE … AS`.
     pub worktree_name: String,
+
+    /// Cross-process liveness claim on this session's worktree.
+    ///
+    /// Held for the session's whole life so that another engine process's
+    /// startup reclaim sweep can see the worktree has a live owner and leave
+    /// it alone. Released when the session is dropped — including when the
+    /// process dies, which is what makes a crashed owner's worktree
+    /// reclaimable again. `None` only for sessions built outside `USE`
+    /// (tests, fixtures), which own no worktree to protect.
+    pub worktree_claim: Option<liveness::WorktreeClaim>,
     /// All storage backends for this session.
     ///
     /// Encapsulates the legacy (always-present) and the optional columnar
@@ -365,6 +378,7 @@ impl Session {
             branch: branch.into(),
             custom_branch: None,
             worktree_name,
+            worktree_claim: None,
             backends: BackendSet::new(LegacyMemoryStorage::new(Arc::clone(lang_registry))),
             cached_commit: None,
             upstream_observed: None,

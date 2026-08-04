@@ -8,7 +8,7 @@ use crate::storage::git_sha1_provider::git_blob_sha1;
 use crate::{
     git::{self as git, source::Source, worktree},
     result::{ForgeQLResult, QueryResult, SessionStats, ShowContent, SourceOpResult, SymbolMatch},
-    session::{Session, SessionCoords},
+    session::{Session, SessionCoords, liveness::WorktreeClaim},
 };
 
 use super::ForgeQLEngine;
@@ -402,6 +402,11 @@ impl ForgeQLEngine {
         }
 
         let wt_existed = wt_path.exists();
+        // Claim the worktree before git is allowed to touch it. A peer engine
+        // process sweeping for orphans at startup reads a half-populated
+        // directory exactly like an abandoned one; the claim is what tells them
+        // apart, and it only works if it is taken first.
+        let worktree_claim = WorktreeClaim::acquire(&wt_path)?;
         let wt_info = worktree::create(&repo_path, &wt_name, branch, &wt_path, Some(&git_branch))?;
         // `base_commit` is the commit actually checked out (truthful even when
         // an existing worktree or session branch was reused); `upstream_head`
@@ -420,6 +425,9 @@ impl ForgeQLEngine {
         session.custom_branch = Some(git_branch);
         session.worktree_name = wt_name;
         session.upstream_observed = upstream_head;
+        // The claim now lives as long as the session does; dropping the session
+        // — or losing the process — is what releases the worktree again.
+        session.worktree_claim = Some(worktree_claim);
 
         // Load config once — before resume_index so shadow-write is configured
         // before the first build.  The same config is then used to freeze the
