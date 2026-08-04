@@ -6,6 +6,25 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.147.5] — 2026-08-04 — test: pin directory depth, heredoc operands and ascending order
+
+### Added
+
+`tests/golden/depth_and_heredoc_forms.json` — four cases over DSL surfaces no
+other suite reached.
+
+- `FIND files DEPTH 1` lists **directories**, with the aggregate size of
+  everything beneath each one, not files. That shape was unpinned.
+- `WHERE depth =` is a predicate in its own right, composable with `extension`
+  and an `IN` glob.
+- `ORDER BY size ASC` selects the smallest files, mirroring the descending form
+  the other suites use.
+- A heredoc operand returns exactly what the quoted literal returns, asserted
+  for both a scalar (`WHERE name = <<SYM … SYM`) and a glob
+  (`IN <<GLOB … GLOB`), each paired with its quoted equivalent in the same
+  case. The glob case additionally places `LIMIT` before `IN`, pinning that
+  clause order is not positional.
+
 ## [0.147.4] — 2026-08-04 — test: pin that enrichment follows a mutation and an UNDO
 
 ### Added

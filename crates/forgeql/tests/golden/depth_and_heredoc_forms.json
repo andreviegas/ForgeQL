@@ -1,0 +1,95 @@
+{
+  "suite": "depth_and_heredoc_forms",
+  "description": "Three DSL surfaces on the frozen Zephyr corpus that no other suite reaches: directory depth in FIND files (both the DEPTH clause and depth as a predicate), the heredoc form of a scalar operand asserted equivalent to the quoted form, and ORDER BY size ASC as the mirror of DESC. The heredoc case also puts LIMIT before IN, so the suite pins that clause order is not positional.",
+  "cases": [
+    {
+      "name": "find_files_depth_1_lists_directories_with_aggregate_sizes",
+      "use": "zephyr-andre.frozen",
+      "fql": "FIND files DEPTH 1 ORDER BY size DESC LIMIT 5",
+      "assert": {
+        "row_count": 5,
+        "ordered": { "by": "size", "dir": "desc" },
+        "rows": [
+          { "path": "boards/", "size": 80026452 },
+          { "path": "drivers/", "size": 42654779 },
+          { "path": "tests/", "size": 40064694 },
+          { "path": "doc/", "size": 23791944 },
+          { "path": "subsys/", "size": 23303961 }
+        ]
+      }
+    },
+    {
+      "name": "depth_predicate_selects_files_one_level_below_the_root",
+      "use": "zephyr-andre.frozen",
+      "fql": "FIND files WHERE depth = 2 WHERE extension = 'c' IN 'kernel/**' ORDER BY path ASC LIMIT 5",
+      "assert": {
+        "row_count": 5,
+        "rows": [
+          { "path": "kernel/atomic_c.c", "size": 10299 },
+          { "path": "kernel/banner.c", "size": 1408 },
+          { "path": "kernel/boot_args.c", "size": 2144 },
+          { "path": "kernel/busy_wait.c", "size": 3662 },
+          { "path": "kernel/compiler_stack_protect.c", "size": 1803 }
+        ]
+      }
+    },
+    {
+      "name": "order_by_size_asc_is_the_mirror_of_desc",
+      "use": "zephyr-andre.frozen",
+      "fql": "FIND files WHERE extension = 'c' IN 'kernel/**' ORDER BY size ASC LIMIT 3",
+      "assert": {
+        "row_count": 3,
+        "ordered": { "by": "size", "dir": "asc" },
+        "rows": [
+          { "path": "kernel/dynamic_disabled.c", "size": 393 },
+          { "path": "kernel/version.c", "size": 476 },
+          { "path": "kernel/irq_offload.c", "size": 588 }
+        ]
+      }
+    },
+    {
+      "name": "heredoc_operands_match_their_quoted_equivalents",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE name = 'k_mutex_lock'",
+          "assert": {
+            "row_count": 1,
+            "rows": [ { "name": "k_mutex_lock", "path": "include/zephyr/kernel.h", "line": 3525 } ]
+          }
+        },
+        {
+          "fql": "FIND symbols WHERE name = <<SYM\nk_mutex_lock\nSYM",
+          "assert": {
+            "row_count": 1,
+            "rows": [ { "name": "k_mutex_lock", "path": "include/zephyr/kernel.h", "line": 3525 } ]
+          }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' IN 'kernel/sched.c' ORDER BY line ASC LIMIT 5",
+          "assert": {
+            "row_count": 5,
+            "ordered": { "by": "line", "dir": "asc" },
+            "rows": [
+              { "name": "thread_runq", "line": 51 },
+              { "name": "curr_cpu_runq", "line": 71 },
+              { "name": "runq_add", "line": 80 }
+            ]
+          }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY line ASC LIMIT 5 IN <<GLOB\nkernel/sched.c\nGLOB",
+          "assert": {
+            "row_count": 5,
+            "ordered": { "by": "line", "dir": "asc" },
+            "rows": [
+              { "name": "thread_runq", "line": 51 },
+              { "name": "curr_cpu_runq", "line": 71 },
+              { "name": "runq_add", "line": 80 }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
