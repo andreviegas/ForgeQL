@@ -1,0 +1,50 @@
+{
+  "suite": "enrichment_refresh",
+  "description": "Enrichment must follow the source through a mutation and back through an UNDO. Enrichment fields are not row keys, so each value is observed through the predicate that selects on it: the new value must match AND the old value must stop matching. Asserting only the new value would pass even if the mutated symbol were merely added alongside a stale one. Note that zero and false enrichment values are not indexed — param_count = 0 and has_todo = 'false' match nothing — so the baseline here is a function with a non-zero param_count, which is what makes the staleness check meaningful.",
+  "cases": [
+    {
+      "name": "enrichment_follows_a_node_mutation_and_is_restored_by_undo",
+      "use": "zephyr-andre.frozen",
+      "mode": "rw",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name = 'flag_clear' IN 'kernel/work.c' WHERE param_count = 2",
+          "assert": { "row_count": 1, "rows": [ { "name": "flag_clear", "line": 24 } ] },
+          "capture": { "T": "results.0.node_id", "RT": "results.0.rev" }
+        },
+        {
+          "fql": "CHANGE NODE '${T}' IF REV '${RT}' WITH <<C\nstatic inline void flag_clear(uint32_t *flagp,\n\t\t\t      uint32_t bit,\n\t\t\t      uint32_t extra)\n{\n\t/* TODO: enrichment refresh probe */\n\t*flagp &= ~BIT(bit);\n}\nC",
+          "assert": { "applied": true }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name = 'flag_clear' IN 'kernel/work.c' WHERE param_count = 3",
+          "assert": { "row_count": 1, "rows": [ { "name": "flag_clear" } ] }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name = 'flag_clear' IN 'kernel/work.c' WHERE has_todo = 'true'",
+          "assert": { "row_count": 1, "rows": [ { "name": "flag_clear" } ] }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name = 'flag_clear' IN 'kernel/work.c' WHERE param_count = 2",
+          "assert": { "row_count": 0 }
+        },
+        {
+          "fql": "UNDO",
+          "assert": {}
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name = 'flag_clear' IN 'kernel/work.c' WHERE param_count = 2",
+          "assert": { "row_count": 1, "rows": [ { "name": "flag_clear", "line": 24 } ] }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name = 'flag_clear' IN 'kernel/work.c' WHERE param_count = 3",
+          "assert": { "row_count": 0 }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name = 'flag_clear' IN 'kernel/work.c' WHERE has_todo = 'true'",
+          "assert": { "row_count": 0 }
+        }
+      ]
+    }
+  ]
+}

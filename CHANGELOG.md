@@ -6,6 +6,30 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.147.4] — 2026-08-04 — test: pin that enrichment follows a mutation and an UNDO
+
+### Added
+
+`tests/golden/enrichment_refresh.json` — one multi-step read-write case
+asserting that a symbol's enrichment tracks the source through a
+`CHANGE NODE` and back through an `UNDO`.
+
+Enrichment fields are not row keys, so each value is observed through the
+predicate that selects on it, and every step asserts both directions: after the
+edit the new `param_count` matches and `has_todo` is true, **and** the old
+`param_count` stops matching. Asserting only the new value would pass even if
+the mutated symbol had merely been added alongside a stale one, which is the
+failure this case exists to catch.
+
+### Note
+
+Zero and false enrichment values are not indexed: `param_count = 0` and
+`has_todo = 'false'` match nothing at all, rather than matching the functions
+that take no parameters or carry no marker. The first draft of this case used a
+zero-parameter function as its baseline and could not even capture a handle.
+The case now starts from a function with `param_count = 2`, so that the "old
+value stops matching" half of each assertion is meaningful.
+
 ## [0.147.3] — 2026-08-04 — test: pin the FIND files filters and the heredoc regex form
 
 ### Added
