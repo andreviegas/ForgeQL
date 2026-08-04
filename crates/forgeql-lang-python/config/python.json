@@ -130,6 +130,10 @@
       ["#", "line"]
     ]
   },
+  "block_groups": [
+    { "member_fql_kind": "comment", "block_fql_kind": "comment_block", "min_run": 2 },
+    { "member_fql_kind": "import", "block_fql_kind": "import_block", "min_run": 2 }
+  ],
 
   "capabilities": {
     "has_goto": false,

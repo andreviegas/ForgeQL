@@ -5,6 +5,41 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.144.0] — 2026-08-03 — feat: sibling runs of includes, defines and imports are addressable blocks
+
+### Added — block groups for C, C++, Python and Rust
+
+A file is organized in runs the grammar refuses to parent: the includes at the
+top, the table of `#define` flags under them, the banner comment above a
+section, the imports opening every Python module. Each member was addressable;
+the run as a whole was not. Moving an include section meant one mutation per
+line, and "insert after the includes" had no anchor to name.
+
+Runs of 2+ adjacent same-kind siblings now surface as one addressable block
+row, declared entirely in per-language config:
+
+- **C / C++** — comment runs (`comment_block`, split by `comment_style` so a
+  `/*` paragraph never merges with a `//` one), `#include` runs
+  (`include_block`) and `#define` runs (`macro_block`). C++ additionally
+  groups typedef/`using` runs (`type_alias_block`).
+- **Python** — comment runs and import runs (`import_block`); `import` and
+  `from` statements share a kind, so a mixed run is one block.
+- **Rust** — `use` runs (`import_block`) join the existing doc-comment group.
+
+The blocks behave like every block before them: the block is a sibling of its
+members, every member keeps its own row and handle, and a different-kind node
+between two runs splits them — so blocks follow the paragraphs the author
+already wrote. A run inside a preprocessor guard is scoped to its branch and
+never merges with the run outside it. `MOVE NODE` on a block relocates the
+whole run; `INSERT AFTER NODE` on one lands after its last member.
+
+Local variable declarations are deliberately not grouped: a declaration run is
+the most edit-churned span in any function, the hoist/sink refactor that
+matters is a single-node move already, and the row cost would be paid in every
+function of every corpus for a block nobody moves.
+
+Existing `variable`/`import`/`macro` queries are unchanged — blocks add rows,
+they never replace member rows.
 
 ## [0.143.0] — 2026-08-03 — feat: filter a config row by its key path
 

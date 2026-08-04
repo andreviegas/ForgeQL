@@ -150,7 +150,7 @@ pub fn python_registry() -> LanguageRegistry {
 // -----------------------------------------------------------------------
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, reason = "test code")]
+#[expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 mod tests {
     use super::*;
 
@@ -296,5 +296,18 @@ mod tests {
             "python.json must deserialize strictly: {:?}",
             parsed.err()
         );
+    }
+    /// The sibling-run block groups are declared by the shipped config. A typo
+    /// in a member kind would not be a parse error — the group would simply
+    /// never match — so the declared values are pinned.
+    #[test]
+    fn python_json_declares_the_sibling_run_block_groups() {
+        let groups = PythonLanguage.config().block_groups();
+        let find = |block: &str| groups.iter().find(|g| g.block_fql_kind == block);
+        let comments = find("comment_block").expect("python.json must declare comment_block");
+        assert_eq!(comments.member_fql_kind, "comment");
+        let imports = find("import_block").expect("python.json must declare import_block");
+        assert_eq!(imports.member_fql_kind, "import");
+        assert_eq!(imports.min_run, 2);
     }
 }

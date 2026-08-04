@@ -1424,9 +1424,10 @@ query. All seven fields are queryable via `WHERE`, `ORDER BY`, and `GROUP BY`.
 Two kinds of row are outside that. An **attribute** guard (`guard_kind =
 "attribute"`, e.g. Rust `#[cfg]`) attaches only to the item it annotates, because
 that is its scope — it does not govern a region, so expression rows inside the
-item carry no attribute guard. And a **block** row (`comment_block`,
-`array_block`) is a synthetic span rather than a walked node, and carries no
-guard.
+item carry no attribute guard. And a **block** row (any block-group kind:
+`comment_block`, `array_block`, `include_block`, `macro_block`, `import_block`,
+`type_alias_block`) is a synthetic span rather than a walked node, and carries
+no guard.
 
 A region ends at its own closing directive, located by scanning the directives
 themselves rather than by trusting where the parser ended the guard node. The
@@ -1446,9 +1447,10 @@ balance, the parser's span is used unchanged.
 | `guard_branch` | all walked rows | Ordinal within the group: `0` = if, `1` = first elif/else, `2` = second, … |
 | `guard_kind` | all walked rows | `"preprocessor"` (C/C++ `#if` family) \| `"attribute"` (Rust `#[cfg]`) \| `"heuristic"` (a pattern-matched `if`, e.g. Python `if TYPE_CHECKING:`) |
 
-"All walked rows" excludes the two synthetic kinds named above: a `comment_block`
-or `array_block` row spans its members rather than being walked as a node, and
-carries no guard field at all.
+"All walked rows" excludes the synthetic block kinds named above: a block row
+(`comment_block`, `array_block`, `include_block`, `macro_block`,
+`import_block`, `type_alias_block`) spans its members rather than being walked
+as a node, and carries no guard field at all.
 
 **Guard field decomposition rules:**
 
@@ -1588,6 +1590,13 @@ moved or deleted with one handle. Blank lines between members do not break a run
 | Language | Members | Block kind | Min run | Split by |
 |---|---|---|---|---|
 | Rust | `comment` | `comment_block` | 2 | comment style — a `///` doc run and a `//` line run form **separate** blocks |
+| Rust | `import` | `import_block` | 2 | — a run of `use` declarations |
+| C / C++ | `comment` | `comment_block` | 2 | comment style — a `/*` paragraph and a `//` run form separate blocks |
+| C / C++ | `import` | `include_block` | 2 | — a run of `#include` directives |
+| C / C++ | `macro` | `macro_block` | 2 | — a run of `#define`s (object-like and function-like share the kind) |
+| C++ | `type_alias` | `type_alias_block` | 2 | — a `typedef`/`using` run (both map to `type_alias`) |
+| Python | `comment` | `comment_block` | 2 | — (Python has a single comment style) |
+| Python | `import` | `import_block` | 2 | — `import` and `from` statements share a kind, so a mixed run is one block |
 | JSON | `array` | `array_block` | 8 | — |
 | YAML | `comment` | `comment_block` | 2 | — (YAML has a single comment style, so runs are not split) |
 

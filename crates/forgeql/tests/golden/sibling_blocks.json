@@ -1,0 +1,84 @@
+{
+  "suite": "sibling_blocks",
+  "description": "Sibling-run block groups for code languages: a run of 2+ adjacent same-kind siblings (comments, #includes, #defines, imports) is one addressable block row. Totals pin corpus-wide synthesis against the frozen corpora — a scanner regression that silently stops emitting blocks (the array_block failure mode) drops these counts to zero and fails loudly. Exact-row cases pin one block per kind at its real location so line placement and per-file behaviour cannot drift unnoticed.",
+  "cases": [
+    {
+      "name": "zephyr_include_runs_have_one_handle",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'include_block' GROUP BY fql_kind",
+          "assert": {
+            "row_count": 1,
+            "rows": [
+              { "count": 10881 }
+            ]
+          }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'include_block' IN 'kernel/sched.c' LIMIT 1",
+          "assert": {
+            "total": 1,
+            "rows": [
+              { "path": "kernel/sched.c", "line": 6 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "zephyr_define_tables_are_macro_blocks",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'macro_block' GROUP BY fql_kind",
+          "assert": {
+            "row_count": 1,
+            "rows": [
+              { "count": 17426 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "zephyr_comment_banners_group",
+      "use": "zephyr-andre.frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'comment_block' GROUP BY fql_kind",
+          "assert": {
+            "row_count": 1,
+            "rows": [
+              { "count": 18960 }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "pytorch_import_runs_group",
+      "use": "pytorch-andre.pytorch-frozen",
+      "steps": [
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'import_block' GROUP BY fql_kind",
+          "assert": {
+            "row_count": 1,
+            "rows": [
+              { "count": 5604 }
+            ]
+          }
+        },
+        {
+          "fql": "FIND symbols WHERE fql_kind = 'import_block' IN 'torch/nn/modules/module.py' LIMIT 1",
+          "assert": {
+            "total": 1,
+            "rows": [
+              { "path": "torch/nn/modules/module.py", "line": 3 }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

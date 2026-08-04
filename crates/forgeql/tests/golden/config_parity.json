@@ -64,14 +64,17 @@
       ]
     },
     {
-      "name": "control_c_file_still_has_no_comment_block",
+      "name": "control_c_file_comment_runs_now_group",
       "use": "zephyr-andre.frozen",
       "steps": [
         {
           "fql": "FIND symbols WHERE fql_kind = 'comment_block' IN 'subsys/pm/device_runtime.c'",
           "assert": {
-            "total": 0,
-            "row_count": 0
+            "total": 1,
+            "row_count": 1,
+            "rows": [
+              { "path": "subsys/pm/device_runtime.c", "line": 573 }
+            ]
           }
         }
       ]

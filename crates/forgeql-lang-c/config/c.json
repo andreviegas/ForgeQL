@@ -156,6 +156,16 @@
       ["//", "line"]
     ]
   },
+  "block_groups": [
+    {
+      "member_fql_kind": "comment",
+      "block_fql_kind": "comment_block",
+      "min_run": 2,
+      "split_on_attr": "comment_style"
+    },
+    { "member_fql_kind": "import", "block_fql_kind": "include_block", "min_run": 2 },
+    { "member_fql_kind": "macro", "block_fql_kind": "macro_block", "min_run": 2 }
+  ],
 
   "capabilities": {
     "has_goto": true,

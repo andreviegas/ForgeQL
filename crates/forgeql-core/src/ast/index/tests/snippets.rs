@@ -653,3 +653,66 @@ fn block_node_id_survives_editing_its_own_member() {
         "editing bbb's own content must not churn its node id"
     );
 }
+#[test]
+fn include_run_births_a_block_and_a_guarded_run_stays_separate() {
+    // Two adjacent #include directives group into one include_block. A second
+    // run inside a preprocessor guard is the guard node structure, not the
+    // translation unit structure, so it forms its own block rather than
+    // merging across the #ifdef boundary.
+    let src = "#include <a.h>\n#include <b.h>\n#ifdef X\n#include <c.h>\n#include <d.h>\n#endif\n";
+    let table = index_snippet(src);
+
+    let blocks: Vec<_> = table
+        .rows
+        .iter()
+        .filter(|r| table.fql_kind_of(r) == "include_block")
+        .collect();
+    assert_eq!(
+        blocks.len(),
+        2,
+        "one include_block outside the guard and one inside, never a merged one"
+    );
+    assert_ne!(
+        blocks[0].parent_ordinal, blocks[1].parent_ordinal,
+        "a guarded run keeps its own parent and never merges with the outer run"
+    );
+}
+
+#[test]
+fn define_run_births_a_macro_block_and_a_comment_splits_runs() {
+    // A table of #defines is one macro_block. A different-kind sibling — here
+    // a lone comment — ends the run, so blocks follow the paragraphs the
+    // author already wrote.
+    let src = "#define A 1\n#define B 2\n#define C 3\n// separator\n#define D 4\n#define E 5\n";
+    let table = index_snippet(src);
+
+    let blocks: Vec<_> = table
+        .rows
+        .iter()
+        .filter(|r| table.fql_kind_of(r) == "macro_block")
+        .collect();
+    assert_eq!(
+        blocks.len(),
+        2,
+        "the comment splits the defines into two runs"
+    );
+
+    let first_text = &src[blocks[0].byte_range.clone()];
+    assert!(
+        first_text.contains("#define A") && first_text.contains("#define C"),
+        "the first block spans its whole run"
+    );
+    assert!(
+        !first_text.contains("#define D"),
+        "the first block must stop at the separator comment"
+    );
+
+    // A lone comment is a run of one, below min_run: no comment_block is born.
+    assert!(
+        !table
+            .rows
+            .iter()
+            .any(|r| table.fql_kind_of(r) == "comment_block"),
+        "a single comment must not birth a comment_block"
+    );
+}

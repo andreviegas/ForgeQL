@@ -381,4 +381,21 @@ mod tests {
             "the angle brackets must be trimmed, leaving the path as one token"
         );
     }
+    /// The sibling-run block groups are declared by the shipped config, with
+    /// the kinds the engine actually emits rows for. A typo in a member kind
+    /// here would not be a parse error — the group would simply never match —
+    /// so the declared values are pinned.
+    #[test]
+    fn c_json_declares_the_sibling_run_block_groups() {
+        let groups = CLanguage.config().block_groups();
+        let find = |block: &str| groups.iter().find(|g| g.block_fql_kind == block);
+        let comments = find("comment_block").expect("c.json must declare comment_block");
+        assert_eq!(comments.member_fql_kind, "comment");
+        assert_eq!(comments.split_on_attr.as_deref(), Some("comment_style"));
+        let includes = find("include_block").expect("c.json must declare include_block");
+        assert_eq!(includes.member_fql_kind, "import");
+        assert_eq!(includes.min_run, 2);
+        let defines = find("macro_block").expect("c.json must declare macro_block");
+        assert_eq!(defines.member_fql_kind, "macro");
+    }
 }

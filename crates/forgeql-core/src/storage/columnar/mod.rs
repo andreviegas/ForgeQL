@@ -351,7 +351,17 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        `WHERE key_path` filter at all — the field resolves only when some
 ///        indexed row carries it. No row moves and no ordinal shifts: this
 ///        adds a column, not a node.
-pub const ENRICH_VER: u32 = 62;
+///   63 — C, C++, Python and Rust declare sibling-run block groups. C/C++: a
+///        run of 2+ adjacent comments (split by `comment_style`, so a `/*`
+///        paragraph never merges with a `//` one), `#include` runs
+///        (`include_block`), `#define` runs (`macro_block`), and for C++ a
+///        typedef/using run (`type_alias_block`). Python: comment runs and
+///        import runs (`import_block`). Rust: `use` runs join the existing
+///        comment group. Every block is a new addressable row, so it consumes
+///        an ordinal and shifts every following node in its file — a v62
+///        segment mis-keys handles wherever a run exists, which in C corpora
+///        is nearly every file.
+pub const ENRICH_VER: u32 = 63;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

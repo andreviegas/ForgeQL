@@ -460,7 +460,11 @@ changes.
 | `for` | for loops (traditional and range-based) |
 | `switch` | switch statements |
 | `do` | do-while loops |
-| `comment_block` | A run of 2+ adjacent same-style comments, as one addressable node (`///` doc runs and `//` line runs form separate blocks). **Per-language:** declared by Rust and YAML only — C/C++ and the other text formats emit no block row |
+| `comment_block` | A run of 2+ adjacent same-style comments, as one addressable node (`///` doc runs and `//` line runs form separate blocks; in C/C++ a `/*` paragraph and a `//` run split the same way). **Per-language:** Rust, C, C++, Python, YAML |
+| `include_block` | A run of 2+ adjacent `#include` directives, as one addressable node — move or insert after the include section with one handle. **Per-language:** C, C++ |
+| `macro_block` | A run of 2+ adjacent `#define`s (object-like and function-like), as one addressable node — a flag table moves as a unit. **Per-language:** C, C++ |
+| `import_block` | A run of 2+ adjacent import declarations (`use` in Rust; `import`/`from` in Python, which share a kind so a mixed run is one block). **Per-language:** Rust, Python |
+| `type_alias_block` | A run of 2+ adjacent `typedef`/`using` declarations, as one addressable node. **Per-language:** C++ |
 | `array_block` | A run of 8+ adjacent JSON `array` siblings, as one addressable node — this is what makes a keyless JSON document (an array of arrays) addressable at all. **Per-language:** declared by JSON only |
 | `error` | A tree-sitter `ERROR` region — a span the parser could not parse, emitted as one addressable node (outermost only; nested ERRORs are not repeated). **Its presence means the file is already broken before you touch it.** Check with `FIND symbols WHERE fql_kind = 'error' GROUP BY file` before mutating, then read and repair by handle — the engine never fixes it for you. |
 
@@ -665,7 +669,8 @@ and `GROUP BY`.
 | `guard_kind` | all walked rows | `"preprocessor"` for C/C++; `"attribute"` for Rust `#[cfg]`; `"heuristic"` for a pattern-matched `if` (e.g. Python `if TYPE_CHECKING:`) |
 
 An **attribute** guard scopes only the item it annotates, so expression rows
-inside that item carry none; a `comment_block` / `array_block` row spans its
+inside that item carry none; a block row (`comment_block`, `array_block`,
+`include_block`, `macro_block`, `import_block`, `type_alias_block`) spans its
 members rather than being walked, and carries none either.
 
 ```sql

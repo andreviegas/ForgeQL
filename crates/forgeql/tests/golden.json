@@ -1,7 +1,7 @@
 [
  {
   "alias": "golden",
-  "expect_symbols_indexed": 3002859,
+  "expect_symbols_indexed": 3046476,
   "use": "zephyr-andre.frozen"
  },
  {
@@ -288,23 +288,23 @@
   "expect_row_count": 5,
   "expect_rows": [
    {
-    "count": 846,
+    "count": 862,
     "path": "kernel/mmu.c"
    },
    {
-    "count": 787,
+    "count": 793,
     "path": "kernel/sched.c"
    },
    {
-    "count": 763,
+    "count": 769,
     "path": "kernel/thread.c"
    },
    {
-    "count": 547,
+    "count": 552,
     "path": "kernel/userspace.c"
    },
    {
-    "count": 524,
+    "count": 527,
     "path": "kernel/work.c"
    }
   ],
@@ -315,7 +315,7 @@
   "expect_row_count": 5,
   "expect_rows": [
    {
-    "count": 67593,
+    "count": 67595,
     "path": "samples/modules/tflite-micro/tflm_ethosu/src/models/keyword_spotting_cnn_small_int8/model.h"
    },
    {
@@ -323,16 +323,16 @@
     "path": "samples/boards/quicklogic/qomu/src/usb2serial_bit.c"
    },
    {
-    "count": 17329,
+    "count": 17330,
     "path": "samples/modules/tflite-micro/magic_wand/src/magic_wand_model_data.cpp"
    },
    {
-    "count": 16394,
+    "count": 16395,
     "path": "include/zephyr/sys/util_internal_is_eq.h"
    },
    {
-    "count": 9124,
-    "path": "subsys/fb/cfb_fonts.c"
+    "count": 9408,
+    "path": "tests/bluetooth/controller/ctrl_isoal/src/sub_sets/isoal_test_rx.c"
    }
   ],
   "fql": "FIND symbols GROUP BY file ORDER BY count DESC LIMIT 5",
@@ -369,23 +369,23 @@
   "expect_row_count": 5,
   "expect_rows": [
    {
-    "count": 846,
+    "count": 862,
     "path": "kernel/mmu.c"
    },
    {
-    "count": 787,
+    "count": 793,
     "path": "kernel/sched.c"
    },
    {
-    "count": 763,
+    "count": 769,
     "path": "kernel/thread.c"
    },
    {
-    "count": 547,
+    "count": 552,
     "path": "kernel/userspace.c"
    },
    {
-    "count": 524,
+    "count": 527,
     "path": "kernel/work.c"
    }
   ],
@@ -556,7 +556,7 @@
   "name": "G24_group_by_kind_drivers_top5"
  },
  {
-  "expect_row_count": 12,
+  "expect_row_count": 13,
   "expect_rows": [
    {
     "count": 2541,
@@ -4055,7 +4055,7 @@
  },
  {
   "alias": "golden-python",
-  "expect_symbols_indexed": 3144100,
+  "expect_symbols_indexed": 3202336,
   "use": "pytorch-andre.pytorch-frozen"
  },
  {
@@ -4944,7 +4944,7 @@
  },
  {
   "alias": "golden-rust",
-  "expect_symbols_indexed": 59539,
+  "expect_symbols_indexed": 59839,
   "use": "forgeql-pub.frozen"
  },
  {
@@ -4952,17 +4952,17 @@
   "expect_lines": [
    {
     "line": 14,
-    "node_id": "need66ca6e801.0006",
+    "node_id": "need66ca6e801.0007",
     "node_offset": 1
    },
    {
     "line": 15,
-    "node_id": "need66ca6e801.0006",
+    "node_id": "need66ca6e801.0007",
     "node_offset": 2
    },
    {
     "line": 16,
-    "node_id": "need66ca6e801.0006",
+    "node_id": "need66ca6e801.0007",
     "node_offset": 3
    }
   ],
@@ -5040,7 +5040,7 @@
     "line": 90
    }
   ],
-  "fql": "SHOW outline OF 'need66ca6e801.0031' ALL",
+  "fql": "SHOW outline OF 'need66ca6e801.0032' ALL",
   "name": "P4_outline_all_nests_in_source_order"
  },
  {
@@ -5052,7 +5052,7 @@
     "name": "/// Convert the inner content of a SHOW \u2026 (\u00d78)"
    }
   ],
-  "fql": "SHOW outline OF 'need66ca6e801.0031' ALL",
+  "fql": "SHOW outline OF 'need66ca6e801.0032' ALL",
   "name": "P5_comment_block_label"
  }
 ]

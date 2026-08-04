@@ -152,7 +152,8 @@
       "block_fql_kind": "comment_block",
       "min_run": 2,
       "split_on_attr": "comment_style"
-    }
+    },
+    { "member_fql_kind": "import", "block_fql_kind": "import_block", "min_run": 2 }
   ],
 
   "capabilities": {
