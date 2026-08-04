@@ -6,6 +6,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.147.0] — 2026-08-04 — test: clause-pipeline semantics move into a data-driven golden suite
+
+### Added
+
+`tests/golden/clause_pipeline.json` — nine cases covering how the clause
+pipeline composes on the frozen Zephyr corpus: repeated `WHERE` against its
+`AND` synonym, exact `name` matching, `ORDER BY` ascending and descending,
+`OFFSET` windowing, `IN` path globs, `GROUP BY` with `HAVING` and
+`ORDER BY count`, `FIND files ORDER BY size`, and `SHOW LINES` narrowed first
+by range, then `LIKE`, then a regex.
+
+These were previously covered only by the older non-data-driven golden runner,
+one query per case. Each case here stacks the clauses it is about and asserts
+the shape the clause guarantees — `ordered`, `all_same`, `row_count` — keeping
+exact row pins for the values that are contractual rather than incidental. The
+older runner is unchanged and still covers them; this suite does not replace it
+yet.
+
 ## [0.146.0] — 2026-08-04 — perf: the data-driven golden suite runs against a pool of engines
 
 ### Changed
