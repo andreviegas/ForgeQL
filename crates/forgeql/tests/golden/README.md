@@ -23,10 +23,16 @@ registered; without it the harness skips (exit 0).
 
 ## How it runs
 
-- One MCP server is spawned per test process; `USE` is **memoized per `source.branch`**,
-  so cases sharing a corpus pay the `USE` once. Read-only — no transactions.
-- Each case is one libtest-mimic trial, run in parallel; a mutex serialises the shared
-  server channel. Per-pid session aliases keep concurrent runs (multiple agents) isolated.
+- A **pool** of MCP servers is spawned per test process; `USE` is **memoized per
+  `source.branch` per pool member**, so cases sharing a corpus pay the `USE` once each.
+  Read-only — no transactions.
+- Pool engines are spawned with `FORGEQL_ALLOW_CHANGE_FILE_INDEXED` **removed**. The
+  pre-commit gate exports it for the legacy raw-text phase, and inheriting it would give
+  the suites a different `CHANGE FILE` contract under the gate than standalone.
+- Each case is one libtest-mimic trial, run in parallel; trials are assigned round-robin
+  across the pool and a per-member mutex serialises that member's channel. Session aliases
+  carry the pid and the pool index, so neither concurrent runs (multiple agents) nor two
+  pool members can collide on one worktree.
 - Teardown is automatic: the server is killed and per-run worktrees removed when the run ends.
 
 ## Suite schema
@@ -103,6 +109,11 @@ and the expected failures all "pass" as a missing corpus, not as progress.
 | `rows: [ {field:val, …}, … ]` | positional — row *i* matches these fields |
 | `same_block: true` | all rows share one block handle |
 
+`total` is read from the top level of the result and, failing that, from inside
+`content` — `FIND symbols` reports it in the first place, `FIND files` in the
+second. The two also differ in meaning: `FIND files` counts every match, so it
+exceeds `row_count` under `LIMIT`, while `FIND symbols` reports the capped count.
+
 `F` is a result field (`name`, `line`, `path`, …) or a derived node_id part (below).
 
 ## node_id parts (so tests never hard-code churnable ids)
@@ -178,6 +189,10 @@ the corpus (discarded on teardown — the frozen branch is never modified). Such
 - Result-step asserts: `applied`, `diff_contains`, `files_changed`, `field` (top-level
   equality, e.g. a rollback's `name`), `pointer` (JSON-pointer), and `error: true` (the
   step is expected to fail, e.g. `ROLLBACK` with no open transaction).
+- **`error: true` alone accepts *any* failure**, including a typo in the query — it says
+  the step failed, not why. Pair it with `error_contains: "<substring of the message>"`
+  whenever the case exists to pin one specific refusal, or the case passes for reasons
+  it was never written to cover.
 
 **Nested transactions** are just more steps: each `BEGIN` pushes a checkpoint stack, a
 bare `ROLLBACK` pops the innermost, and `ROLLBACK 'name'` pops to that level. See the

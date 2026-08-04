@@ -1,6 +1,6 @@
 {
   "suite": "find_files_filters",
-  "description": "The FIND files predicate surface on the frozen Zephyr corpus: a numeric comparison on size, an exact path lookup, extension combined with an IN glob, and the heredoc form of a regex asserted equivalent to the inline form. clause_pipeline covers ORDER BY size DESC; these cover the filters that select which files are ordered at all. Note that a FIND files response carries no total field — the count the CSV renderer shows is not in the JSON — so these cases assert row_count and the rows themselves.",
+  "description": "The FIND files predicate surface on the frozen Zephyr corpus: a numeric comparison on size, an exact path lookup, extension combined with an IN glob, and the heredoc form of a regex asserted equivalent to the inline form. clause_pipeline covers ORDER BY size DESC; these cover the filters that select which files are ordered at all. FIND files reports its total inside the response payload rather than at the top level, and that total counts every match rather than being capped by LIMIT — the glob case pins 3 rows out of 14 to hold that.",
   "cases": [
     {
       "name": "size_comparison_selects_files_above_a_threshold",
@@ -22,6 +22,7 @@
       "fql": "FIND files WHERE path = 'kernel/system_work_q.c'",
       "assert": {
         "row_count": 1,
+        "total": 1,
         "rows": [ { "path": "kernel/system_work_q.c", "size": 861 } ]
       }
     },
@@ -31,6 +32,7 @@
       "fql": "FIND files WHERE extension = 'h' IN 'kernel/**' ORDER BY size DESC LIMIT 3",
       "assert": {
         "row_count": 3,
+        "total": 14,
         "ordered": { "by": "size", "dir": "desc" },
         "rows": [
           { "path": "kernel/include/kernel_arch_interface.h", "size": 25212 },

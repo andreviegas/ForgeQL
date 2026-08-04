@@ -1,5 +1,13 @@
 //! Data-driven golden-value integration tests.
 //!
+//! **This runner is retired and `tests/golden.json` is an empty case list.** Its
+//! coverage now lives in the data-driven suites under `tests/golden/`, run by
+//! `golden_test.rs`, which assert shapes rather than exact values and so survive
+//! corpus drift. The raw-text `CHANGE FILE` chains that had no v2 equivalent moved
+//! to `forgeql-core/tests/raw_text_chains.rs`, which owns its own corpus. The file
+//! and this runner are kept only so the pre-commit gate's v1 phase still has a
+//! target to invoke; with no cases it passes without touching a corpus.
+//!
 //! Test cases are loaded from [`tests/golden.json`].  Each entry is either a
 //! `USE` step (opens or switches a session) or a query step (runs FQL and
 //! checks the response against declared expectations).

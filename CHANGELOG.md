@@ -6,6 +6,51 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.148.0] — 2026-08-04 — test: retire the legacy golden runner, and pin the CHANGE FILE contract
+
+### Added
+
+- **`CHANGE FILE` contract pinned in the golden suites.** A new
+  `change_file_contract` suite asserts both halves of the rule agents meet:
+  raw-text `CHANGE FILE` is refused on an indexed source file, naming the
+  refusal, and leaves the file byte-identical; and it still works on a
+  non-indexed file, which it can also create.
+- **`error_contains` assertion.** `error: true` alone accepts *any* failure,
+  including a typo in the query — it records that a step failed, not why. Steps
+  may now pair it with `error_contains: "<substring>"` to pin one specific
+  refusal. Without this, a case written to pin a refusal passes whenever the
+  query is merely malformed.
+- **`raw_text_chains` integration test.** The raw-text verbs are covered end to
+  end on a corpus the test builds itself: a multi-file sweep, a line-range
+  splice, `COPY LINES`, `MOVE LINES`, nested transactions where the inner
+  rollback keeps the outer's edit, and a rollback that removes a file the
+  transaction created. It opens with a control proving `CHANGE FILE` is refused
+  before the override is enabled, so the rest cannot pass for another reason.
+
+### Changed
+
+- **The legacy golden runner is retired**; `tests/golden.json` is now an empty
+  case list. Everything it covered lives in the data-driven suites under
+  `tests/golden/`, which assert shapes rather than exact values and so survive
+  corpus drift, or — for the raw-text chains that had no equivalent there — in
+  `raw_text_chains`. The runner and the file remain so the pre-commit gate's
+  legacy phase still has a target to invoke; with no cases it passes without
+  touching a corpus.
+- **Golden pool engines no longer inherit `FORGEQL_ALLOW_CHANGE_FILE_INDEXED`.**
+  The pre-commit gate exports it for the legacy phase, so the suites saw a
+  different `CHANGE FILE` contract under the gate than standalone, and could
+  never pin the refusal.
+
+### Fixed
+
+- **`total` assertions could never be satisfied for `FIND files`.** The runner
+  read `total` only from the top level of a result, where `FIND symbols` reports
+  it; `FIND files` reports it inside `content`, so the assertion silently
+  resolved to 0 rather than failing loudly. It now falls back to the nested
+  field. The two verbs also differ in meaning — `FIND files` counts every match,
+  `FIND symbols` reports the count capped by `LIMIT` — and both are now
+  documented and pinned.
+
 ## [0.147.5] — 2026-08-04 — test: pin directory depth, heredoc operands and ascending order
 
 ### Added

@@ -1,0 +1,61 @@
+{
+  "suite": "change_file_contract",
+  "description": "The CHANGE FILE contract agents actually see: raw-text editing is refused on indexed source files and stays available for everything else. The harness pool strips FORGEQL_ALLOW_CHANGE_FILE_INDEXED, so these cases pin identical behaviour under the pre-commit gate and standalone.",
+
+  "cases": [
+    {
+      "name": "change_file_refused_on_indexed_source",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+
+      "steps": [
+        {
+          "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1",
+          "assert": { "row_count": 1 }
+        },
+        {
+          "fql": "CHANGE FILE 'crates/forgeql-core/src/node_id.rs' MATCHING 'parse_offset' WITH 'parse_offset_renamed'",
+          "assert": {
+            "error": true,
+            "error_contains": "CHANGE FILE is disabled for indexed files"
+          }
+        },
+        {
+          "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE name='parse_offset_renamed'",
+          "assert": { "row_count": 0 }
+        },
+        {
+          "fql": "FIND symbols IN 'crates/forgeql-core/src/node_id.rs' WHERE fql_kind='function' WHERE name='parse_offset' LIMIT 1",
+          "assert": { "row_count": 1 }
+        }
+      ]
+    },
+    {
+      "name": "change_file_allowed_on_non_indexed_file",
+      "use": "forgeql-pub.frozen",
+      "mode": "rw",
+
+      "steps": [
+        {
+          "fql": "CHANGE FILE 'change_file_contract_probe.txt' WITH 'raw text probe line one'",
+          "assert": {
+            "applied": true,
+            "files_changed": ["change_file_contract_probe.txt"],
+            "diff_contains": "raw text probe line one"
+          }
+        },
+        {
+          "fql": "CHANGE FILE 'change_file_contract_probe.txt' MATCHING 'one' WITH 'two'",
+          "assert": {
+            "applied": true,
+            "diff_contains": "raw text probe line two"
+          }
+        },
+        {
+          "fql": "FIND symbols IN 'change_file_contract_probe.txt'",
+          "assert": { "row_count": 0 }
+        }
+      ]
+    }
+  ]
+}

@@ -116,6 +116,11 @@ struct Assert {
     /// Expect the step's query to ERROR (e.g. ROLLBACK with no open txn).
     #[serde(default)]
     error: Option<bool>,
+    /// Substring expected in the error text of a step asserting `error: true`.
+    /// Without it, `error: true` passes on ANY failure — including a typo in the
+    /// query — so a case pinning a specific refusal must say which one.
+    #[serde(default)]
+    error_contains: Option<String>,
     /// Expect `result.applied == <bool>` (mutation result).
     #[serde(default)]
     applied: Option<bool>,
@@ -163,6 +168,10 @@ struct McpClient {
 impl McpClient {
     fn spawn(data_dir: &Path) -> std::io::Result<Self> {
         let binary = env!("CARGO_BIN_EXE_forgeql");
+        // The pre-commit gate exports FORGEQL_ALLOW_CHANGE_FILE_INDEXED for the
+        // legacy raw-text phase. Strip it here so pool engines see the same
+        // CHANGE FILE contract agents do, whether the suite runs under the gate
+        // or standalone.
         let mut child = Command::new(binary)
             .arg("--mcp")
             .arg("--data-dir")
@@ -172,6 +181,7 @@ impl McpClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .env("FORGEQL_SESSION_TTL_SECS", "3600")
+            .env_remove("FORGEQL_ALLOW_CHANGE_FILE_INDEXED")
             .spawn()?;
         let stdin = child.stdin.take().expect("stdin piped");
         let stdout = BufReader::new(child.stdout.take().expect("stdout piped"));
@@ -426,7 +436,14 @@ fn check(a: &Assert, result: &Value) -> Vec<String> {
         }
     }
     if let Some(t) = a.total {
-        let got = result.get("total").and_then(Value::as_u64).unwrap_or(0);
+        // `find_symbols` reports `total` at the top level; verbs that wrap their
+        // payload (e.g. `find_files`) report it inside `content`. Without the
+        // fallback the assertion silently reads 0 and can never be satisfied.
+        let got = result
+            .get("total")
+            .or_else(|| result.get("content").and_then(|c| c.get("total")))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         if got != t {
             f.push(format!("total: expected {t}, got {got}"));
         }
@@ -596,10 +613,21 @@ fn run_case(h: &Arc<Mutex<Harness>>, case: &Case) -> Result<(), Failed> {
 
         // `error: true` — the step is expected to fail (e.g. ROLLBACK with no txn).
         if step.assert.error == Some(true) {
-            if outcome.is_ok() {
-                return Err(Failed::from(format!(
-                    "step[{i}]: expected an error, but the query succeeded"
-                )));
+            match &outcome {
+                Ok(_) => {
+                    return Err(Failed::from(format!(
+                        "step[{i}]: expected an error, but the query succeeded"
+                    )));
+                }
+                Err(e) => {
+                    if let Some(want) = step.assert.error_contains.as_deref()
+                        && !e.contains(want)
+                    {
+                        return Err(Failed::from(format!(
+                            "step[{i}]: expected error containing {want:?}, got: {e}"
+                        )));
+                    }
+                }
             }
             continue;
         }
