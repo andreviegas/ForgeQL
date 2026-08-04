@@ -30,7 +30,7 @@ default-members = [
 ]
 
 [workspace.package]
-version   = "0.144.0"
+version   = "0.144.1"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"
@@ -215,3 +215,10 @@ opt-level = 3
 inherits         = "release"
 debug-assertions = true
 overflow-checks  = true
+# The gate is the only consumer of this profile, and release's lto = "thin" +
+# codegen-units = 1 made every linked test binary re-optimise the whole
+# dependency graph (every tree-sitter grammar): 69s to relink one trivial
+# test binary, times ~50 integration-test binaries per gate run. Plain links
+# keep opt-level 3; shipped release builds are unaffected.
+lto              = "off"
+codegen-units    = 16

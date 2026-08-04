@@ -5,6 +5,20 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.144.1] — 2026-08-04 — perf: pre-commit gate no longer link-time-optimises test binaries
+
+### Changed
+
+- The `ci` build profile — used only by the pre-commit test gate — no longer
+  inherits `lto = "thin"` and `codegen-units = 1` from `release`. Those
+  settings re-optimised the entire dependency graph (every tree-sitter
+  grammar) once per linked binary, and with ~50 separate integration-test
+  binaries the gate spent minutes in pure link time while the tests
+  themselves finish in seconds (relinking one trivial test binary took 69s;
+  a plain link takes a few). `opt-level = 3`, debug assertions and overflow
+  checks are kept, so test coverage and golden-suite runtime are unchanged,
+  and shipped release builds are unaffected.
+
 ## [0.144.0] — 2026-08-03 — feat: sibling runs of includes, defines and imports are addressable blocks
 
 ### Added — block groups for C, C++, Python and Rust
