@@ -5,6 +5,37 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.15] — 2026-08-05 — refactor: lift the MCP handler tests out of `mcp.rs`
+
+### Changed
+
+`crates/forgeql/src/mcp.rs` was 1,004 lines, and 406 of them were an inline
+`#[cfg(test)] mod tests` block — eleven tests and four fixtures sitting under
+the handler they exercise. The file is the first thing a contributor reads to
+learn how a `tools/call` becomes an engine invocation, so the 40% of it that
+was test scaffolding was 40% of the wrong thing.
+
+- The block moves to `crates/forgeql/src/mcp/tests.rs` — eight `#[tokio::test]`
+  functions, three `#[test]` functions, and the `make_registry`, `fixtures_dir`,
+  `mcp_with_session` and `first_text` fixtures. The parent declares
+  `#[cfg(test)] mod tests;` and drops to 599 lines.
+- **The lint expectation rides along.** This block carried
+  `#[expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]`
+  between its `#[cfg(test)]` and its `mod tests {`. Attributes on an out-of-line
+  `mod tests;` declaration apply to the file it names, so the expectation moves
+  onto the declaration unchanged and stays fulfilled — no `#![expect(…)]` inner
+  attribute in the child, and no allowance widened. Both forms work; the other
+  out-of-line test module in the tree, `ast/index/tests.rs`, uses the inner one.
+- **No import rewiring**, for the same reason as the previous lift: an inline
+  `mod tests` and a `tests.rs` file are the same module path, so the block's
+  `use super::*;` and its three `std` imports all still resolve as they did.
+
+As before the moved code is unchanged apart from the four-column de-indent that
+un-nesting forces — 404 body lines out, 404 in — and the child opens with a
+three-line `//!` header that exists nowhere in the parent.
+
+No `ENRICH_VER` bump: nothing here changes index output.
+
 ## [0.148.14] — 2026-08-05 — refactor: lift the worktree tests out of `git/worktree.rs`
 
 ### Changed — first of a series of inline-test lifts
