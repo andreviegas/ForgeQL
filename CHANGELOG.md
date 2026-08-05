@@ -5,6 +5,47 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.19] — 2026-08-05 — refactor: lift the shadow-writer tests out of `shadow_writer.rs`
+
+### Changed
+
+`crates/forgeql-core/src/storage/columnar/shadow_writer.rs` was 710 lines, and
+277 of them were an inline `#[cfg(test)] mod tests` block.
+
+- The block moves to
+  `crates/forgeql-core/src/storage/columnar/shadow_writer/tests.rs` — five
+  `#[test]` functions plus the `make_table` and `identity_hash` fixtures,
+  covering that an empty table writes no segments, that one segment is written
+  per file, that enrichment fields land in the extra columns, that pre-computed
+  content skips the file read, and that the manifest is written once the run
+  completes. The parent declares `#[cfg(test)] mod tests;` and drops to 441
+  lines.
+- **The `#[allow(…)]` rides along.** This block carried a six-line
+  `#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic,
+  clippy::items_after_statements)]` between its `#[cfg(test)]` and its
+  `mod tests {`. It moves onto the `mod tests;` declaration verbatim, in the
+  same file and the same position, so it covers the same code and widens
+  nothing.
+- **No import rewiring**, for the same reason as the five lifts before it: an
+  inline `mod tests` and a `tests.rs` file are the same module path, so the
+  block's `use super::*;` and its two other imports still resolve as they did.
+
+The moved code is unchanged apart from the four-column de-indent that un-nesting
+forces — 268 body lines out, 268 in — and the child opens with a four-line `//!`
+header that exists nowhere in the parent.
+
+**No `ENRICH_VER` bump, and this is the first file in the series where that is
+worth spelling out.** This one does write index output: it is the shadow segment
+writer. But nothing in this diff changes *what* it writes — the production half
+is byte-identical and only `#[cfg(test)]` code moved.
+
+On evidence, precisely: the golden suites are the wrong instrument for this
+commit. Against a warm cache they read pre-change segments, because same content
+plus same version is exactly a cache hit. That is a property of the cache, not a
+claim that nothing exercises the writer — the five moved unit tests build their
+segments in a tempdir, which the cache never serves, so they run honestly
+against `ShadowWriter` wherever they live.
+
 ## [0.148.18] — 2026-08-05 — refactor: lift the CHANGE-transform tests out of `transforms/change.rs`
 
 ### Changed
