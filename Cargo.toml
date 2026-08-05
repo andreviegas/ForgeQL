@@ -30,7 +30,7 @@ default-members = [
 ]
 
 [workspace.package]
-version   = "0.148.0"
+version   = "0.148.1"
 edition   = "2024"
 authors   = ["Andre Viegas"]
 license   = "Apache-2.0"
@@ -176,7 +176,7 @@ criterion        = { version = "0.5", features = ["html_reports"] }
 # -----------------------------------------------------------------------
 # Build all ForgeQL packages with full optimisations in every profile.
 # This means `cargo test` spawns the same fast binary as `cargo build
-# --release`, so the zephyr_golden integration test runs in seconds.
+# --release`, so the golden_test suites run in seconds.
 # There is no separate "debug binary"; a single optimised build is used.
 # -----------------------------------------------------------------------
 [profile.dev.package.forgeql]

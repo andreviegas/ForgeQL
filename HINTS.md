@@ -56,6 +56,6 @@ Short, durable facts discovered while working in this codebase.
   free-form per language (e.g. markdown `heading`; json/yaml `pair`/`object`/
   `array`) — add new ones to that `matches!` list to make them editable.
 - JSON/YAML name objects/mappings after a `name`/`id`/`key`/`title`/`alias`
-  member so each entry of a data file (e.g. `golden.json` test cases) is
+  member so each entry of a data file (e.g. the `tests/golden/*.json` cases) is
   individually addressable; repeated keys stay distinct via parent_ordinal +
   content_hash in the ordinal key.

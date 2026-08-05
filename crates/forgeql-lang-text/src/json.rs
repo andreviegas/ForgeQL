@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn names_object_by_identifier_member() {
-        // Mirrors golden.json: an array of test-case objects keyed by "name".
+        // Mirrors the golden-suite shape: an array of case objects keyed by "name".
         let source = br#"[{"name": "G2_kernel_sched", "fql": "FIND symbols"}]"#;
         let tree = parse(source);
         let names = collect_names(&JsonLanguage, tree.root_node(), source);

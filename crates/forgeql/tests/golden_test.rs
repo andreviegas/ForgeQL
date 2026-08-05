@@ -1,4 +1,4 @@
-//! Data-driven golden harness (v2), isolated from `zephyr_golden.rs`.
+//! Data-driven golden harness: suites are JSON files under `tests/golden/`.
 //!
 //! Each `tests/golden/*.json` suite becomes one libtest-mimic trial per case,
 //! named `<suite>::<case>`, so:

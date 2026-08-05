@@ -5,6 +5,18 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.1] — 2026-08-04 — chore: delete the retired legacy golden runner
+
+### Removed
+
+- `crates/forgeql/tests/zephyr_golden.rs` and its emptied
+  `crates/forgeql/tests/golden.json` are deleted. The runner had been retired
+  in the previous release — every case now lives in the data-driven suites
+  under `crates/forgeql/tests/golden/` or in the raw-text engine test that
+  owns its own corpus — and the runner was kept only so the pre-commit gate's
+  legacy phase still had a target. That gate phase is gone, so the runner
+  goes with it. Comments that pointed at the old runner now point at the
+  surviving suites.
 
 ## [0.148.0] — 2026-08-04 — test: retire the legacy golden runner, and pin the CHANGE FILE contract
 
