@@ -5,6 +5,39 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.14] — 2026-08-05 — refactor: lift the worktree tests out of `git/worktree.rs`
+
+### Changed — first of a series of inline-test lifts
+
+`crates/forgeql-core/src/git/worktree.rs` was 1,048 lines, and 516 of them — 49%
+of the file — were an inline `#[cfg(test)] mod tests` block. Someone opening the
+file to learn how a session's worktree is created and torn down had to scroll
+past eighteen tests and two fixture helpers to reach the thirteen functions that
+implement it.
+
+- The block moves to `crates/forgeql-core/src/git/worktree/tests.rs` — eighteen
+  `#[test]` functions plus the `make_bare_repo` and `default_branch` fixtures.
+  The parent declares `#[cfg(test)] mod tests;` and drops to 531 lines, all of
+  them worktree logic.
+- **No import rewiring at all.** An inline `mod tests` and a `tests.rs` file are
+  the same module path — `crate::git::worktree::tests` either way — so the
+  `use super::*;` the block already carried still resolves to the same scope,
+  and so do its two other imports.
+- The `// Tests` banner rule stays in the parent above the declaration, which is
+  still exactly what it heads.
+
+**Not byte-identical, but the difference is only whitespace.** Un-nesting a
+`mod tests` de-indents every line of the block by four columns; that de-indent,
+and any re-wrapping rustfmt derives from the freed width, are the only edits to
+the moved code. No assertion, name, literal or call differs. The child does open
+with something the parent never held — a two-line `//!` module-doc header, and
+the blank line under it — and that is the whole of the addition: 516 body lines
+left the parent and 516 arrived in the child.
+
+Thirteen further source files carry inline test blocks of 200 lines or more,
+several of them a larger share of the file than this one. They follow one at a
+time.
+
 ## [0.148.13] — 2026-07-27 — refactor: lift `Overlay`'s unit tests out of `overlay.rs`
 
 ### Changed — first of four cuts on `storage/columnar/overlay.rs`
