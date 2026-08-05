@@ -5,6 +5,37 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.21] — 2026-08-05 — refactor: lift the transform-plumbing tests out of `transforms/mod.rs`
+
+### Changed
+
+`crates/forgeql-core/src/transforms/mod.rs` was 683 lines, and 266 of them were
+an inline `#[cfg(test)] mod tests` block. This is the module every transform
+routes through, so it is a natural first stop for a contributor, and 39% of it
+was the tests.
+
+- The block moves to `crates/forgeql-core/src/transforms/tests.rs` — fifteen
+  `#[test]` functions and no fixtures, covering applying an edit set to a
+  buffer, reverse-sorting edits so earlier offsets stay valid while later ones
+  are rewritten, merging edits by file and detecting overlaps, and the
+  `lines_written` / `lines_removed` counts a mutation reports back. The parent
+  declares `#[cfg(test)] mod tests;` and drops to 419 lines.
+- **No import rewiring**, for the same reason as the seven lifts before it — but
+  the file layout genuinely differs here. The parent is a `mod.rs`, and Rust
+  resolves `mod tests;` against the directory *containing* it, so the child is
+  the sibling `transforms/tests.rs` rather than a new subdirectory. The module
+  path is `crate::transforms::tests` either way, which is what makes
+  `use super::*;` resolve unchanged. `parser/tests.rs` is the existing example
+  of this exact shape; `transforms/diff/tests.rs` is not — its parent is the
+  plain file `transforms/diff.rs`, so it follows the other pattern.
+- The `// Tests` banner rule stays in the parent above the declaration.
+
+The moved code is unchanged apart from the four-column de-indent that un-nesting
+forces — 263 body lines out, 263 in — and the child opens with a four-line `//!`
+header that exists nowhere in the parent.
+
+No `ENRICH_VER` bump: nothing here changes index output.
+
 ## [0.148.20] — 2026-08-05 — refactor: lift the session-file tests out of `session.rs`
 
 ### Changed
