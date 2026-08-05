@@ -340,7 +340,7 @@ pub struct Session {
     /// automatically after `CHANGE FILE` commands. Capacity: 32 entries.
     pub(crate) parse_cache: Mutex<ParseCache>,
     /// Inline columnar segment map produced by `build_index`'s inline-emit fast-path.
-    /// Read by `exec_source::load_session_index` / `warm::warm_snapshot` and handed to
+    /// Read by `exec_source::attach::load_session_index` / `warm::warm_snapshot` and handed to
     /// `ColumnarStorage::warm_or_open` via `BuildInput` (skips the `ShadowWriter` pass).
     /// Lives here rather than on the legacy backend so columnar build output is not
     /// stashed on the legacy storage type.

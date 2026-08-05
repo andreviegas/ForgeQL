@@ -6,6 +6,50 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.148.3] — 2026-08-05 — refactor: split the `USE` pipeline out of `exec_source.rs`
+
+### Changed — second of three cuts on `engine/exec_source.rs`
+
+- `use_source` and its five private steps — `configure_columnar_build`,
+  `restore_session_on_reconnect`, `finalize_use_source`, `try_resume_session`
+  and `load_session_index` — moved into `engine/exec_source/attach.rs`, 440
+  lines. `exec_source.rs` drops from 774 to 358, and its module header now
+  says what is left: the source admin verbs.
+- **Only one signature changed.** `use_source` was the cluster's sole
+  `pub(super)` method and becomes `pub(in crate::engine)` for the same reason
+  as the previous cut. The other five carry no visibility keyword at all: each
+  has exactly two references in the file — its definition and a single call
+  site inside `use_source` — so the whole cluster is self-contained and moves
+  with the private helpers still private, now to `exec_source::attach` instead
+  of `exec_source`.
+- Imports again named by the compiler rather than guessed. The parent loses
+  `git_blob_sha1`, `self as git`, `worktree` and the entire
+  `session::{Session, SessionCoords, liveness::WorktreeClaim}` group — every
+  one of them belonged to the `USE` path. The child drops `source::Source`,
+  `QueryResult` and `SymbolMatch`, which belong to the admin verbs and the
+  readouts.
+
+One thing that looks like a break and is not: the golden probe
+`rust_documented_fns_that_still_have_unused_params` in `probes_rust.json` pins
+`try_resume_session` at `crates/forgeql-core/src/engine/exec_source.rs`, line
+352 — a path this commit invalidates. The probe runs against
+`forgeql-pub.frozen`, a snapshot branch, so it reads the pre-split tree and is
+unaffected. It will need repinning whenever that snapshot is next refreshed.
+
+Every method body is byte-identical. Beyond the moved bytes the change is one
+visibility keyword, the two import blocks, the parent's module header, the new
+eight-line header on `attach.rs`, and one `mod attach;`. No signature crossed
+`max_width` this time — `use_source`'s was already in the multi-line form.
+
+No `ENRICH_VER` bump — but not because "nothing here writes a segment", which
+would be false of this cluster in particular: `configure_columnar_build`
+installs the `ShadowWriter` context that writes segments, and
+`load_session_index` calls `ColumnarStorage::warm_or_open`, which builds and
+writes the overlay. The reason is narrower and is the one that matters: nothing
+in this diff changes index *output*. No enricher, kind map, ordinal assignment
+or emit path is touched, so a segment written after this commit is
+byte-identical to one written before it.
+
 ## [0.148.2] — 2026-08-05 — refactor: split the session readouts out of `exec_source.rs`
 
 ### Changed — first of three cuts on `engine/exec_source.rs`
