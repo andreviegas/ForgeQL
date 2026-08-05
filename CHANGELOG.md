@@ -5,6 +5,33 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.16] — 2026-08-05 — refactor: lift the query-execution tests out of `ast/query.rs`
+
+### Changed
+
+`crates/forgeql-core/src/ast/query.rs` was 681 lines, and 353 of them were an
+inline `#[cfg(test)] mod tests` block. The file holds read-only query execution
+against the symbol table — the code path behind every `FIND` — and more than
+half of it was the tests for that path rather than the path itself.
+
+- The block moves to `crates/forgeql-core/src/ast/query/tests.rs` —
+  twenty-five `#[test]` functions plus the `table_with_symbols` and `file_entry`
+  fixtures, covering `LIKE` and glob pattern matching, the `FIND symbols` and
+  `FIND usages` lookups, and the file-grouping helpers behind directory-depth
+  collapsing. The parent declares `#[cfg(test)] mod tests;` and drops to 330
+  lines.
+- **No import rewiring**, for the same reason as the previous two lifts: an
+  inline `mod tests` and a `tests.rs` file are the same module path, so the
+  block's `use super::*;` and its two `std` imports all still resolve as they
+  did.
+- The `// Tests` banner rule stays in the parent above the declaration.
+
+The moved code is unchanged apart from the four-column de-indent that un-nesting
+forces — 350 body lines out, 350 in — and the child opens with a three-line
+`//!` header that exists nowhere in the parent.
+
+No `ENRICH_VER` bump: nothing here changes index output.
+
 ## [0.148.15] — 2026-08-05 — refactor: lift the MCP handler tests out of `mcp.rs`
 
 ### Changed
