@@ -5,6 +5,30 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.17] — 2026-08-05 — refactor: lift the line-budget tests out of `budget.rs`
+
+### Changed
+
+`crates/forgeql-core/src/budget.rs` was 706 lines, and 323 of them were an
+inline `#[cfg(test)] mod tests` block.
+
+- The block moves to `crates/forgeql-core/src/budget/tests.rs` — twenty-two
+  `#[test]` functions plus the `test_config` fixture, covering construction and
+  the snapshot it exposes, deduction and recovery, the warning and critical
+  thresholds and the status line they drive, mutation rewards, and the on-disk
+  round-trip with its sweep of expired budget files. The parent declares
+  `#[cfg(test)] mod tests;` and drops to 385 lines.
+- **No import rewiring**, for the same reason as the three lifts before it: an
+  inline `mod tests` and a `tests.rs` file are the same module path, so the
+  block's lone `use super::*;` still resolves as it did.
+- The `// Tests` banner rule stays in the parent above the declaration.
+
+The moved code is unchanged apart from the four-column de-indent that un-nesting
+forces — 320 body lines out, 320 in — and the child opens with a four-line
+`//!` header that exists nowhere in the parent.
+
+No `ENRICH_VER` bump: nothing here changes index output.
+
 ## [0.148.16] — 2026-08-05 — refactor: lift the query-execution tests out of `ast/query.rs`
 
 ### Changed
