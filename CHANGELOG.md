@@ -6,6 +6,46 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.148.4] — 2026-08-05 — refactor: `exec_source.rs` becomes a table of contents
+
+### Changed — third and last cut on `engine/exec_source.rs`
+
+- `create_source`, `refresh_source`, `vacuum_report` and `vacuum` moved into
+  `engine/exec_source/admin.rs`, 359 lines. `exec_source.rs` is now **15
+  lines**: a module header and three `mod` declarations. It holds no code, no
+  imports and no `impl` block.
+- `create_source`, `refresh_source` and `vacuum` take
+  `pub(in crate::engine)`. `vacuum_report` keeps plain `pub` — it is `VACUUM`'s
+  shared implementation and the CLI calls it directly, and it needs no
+  re-export to stay reachable: an inherent `pub fn` resolves through the type
+  even from inside a private module.
+- `create_source`'s signature had to be rewrapped. At 91 columns it fitted;
+  `pub(in crate::engine)` is eleven characters longer than `pub(super)`, which
+  pushed it to 102 against `max_width = 100`. `clippy` does not check width, so
+  this is invisible until `fmt check`.
+
+**Five moved lines are not byte-identical, and the reason is worth recording.**
+`create_source` and `refresh_source` reached the warm-up machinery as
+`super::warm::…`. In `exec_source.rs` `super` was `engine`, so that resolved;
+in `exec_source/admin.rs` `super` is `exec_source`, which has no `warm`, and
+the crate stops compiling. The five sites now say `warm::…` against a new
+`use crate::engine::{…, warm}`. A bare `super::`-relative path is load-bearing
+on the file it sits in — importing the item instead makes the call site
+independent of how deep the file is nested, which is why the other two cuts
+needed no such repair.
+
+### Fixed
+
+- The 0.148.3 entry, as published, said `exec_source.rs` dropped to 358 lines;
+  it was 357. The count was written before a stray blank line was removed from
+  that same commit. The entry above is corrected in this one.
+
+With all three cuts landed, the 969-line original is four files: `admin.rs`
+359, `attach.rs` 440, `readouts.rs` 226, and a 15-line parent naming them.
+
+No `ENRICH_VER` bump: nothing in this diff changes index output — no enricher,
+kind map, ordinal assignment or emit path is touched.
+
 ## [0.148.3] — 2026-08-05 — refactor: split the `USE` pipeline out of `exec_source.rs`
 
 ### Changed — second of three cuts on `engine/exec_source.rs`
@@ -13,7 +53,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `use_source` and its five private steps — `configure_columnar_build`,
   `restore_session_on_reconnect`, `finalize_use_source`, `try_resume_session`
   and `load_session_index` — moved into `engine/exec_source/attach.rs`, 440
-  lines. `exec_source.rs` drops from 774 to 358, and its module header now
+  lines. `exec_source.rs` drops from 774 to 357, and its module header now
   says what is left: the source admin verbs.
 - **Only one signature changed.** `use_source` was the cluster's sole
   `pub(super)` method and becomes `pub(in crate::engine)` for the same reason
