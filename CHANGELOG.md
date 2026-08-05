@@ -5,6 +5,49 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.148.2] — 2026-08-05 — refactor: split the session readouts out of `exec_source.rs`
+
+### Changed — first of three cuts on `engine/exec_source.rs`
+
+`crates/forgeql-core/src/engine/exec_source.rs` was 969 lines, all of it a
+single `impl ForgeQLEngine` block holding three unrelated concerns: the source
+admin verbs, the `USE` attach pipeline, and the session readouts. They are
+contiguous and do not interleave, so each comes out as one range.
+
+- `show_sources`, `show_branches`, `exec_show_commits`, `show_version` and
+  `show_stats` moved into `engine/exec_source/readouts.rs`, which is 226 lines.
+  `exec_source.rs` goes 969 → 774: 767 after the move, plus a seven-line
+  module header it had never had — the file used to open directly on
+  `use std::sync::Arc;`.
+- **Every moved signature changed `pub(super)` to `pub(in crate::engine)`.**
+  Forced, not cosmetic: in `exec_source.rs` `pub(super)` expands to *visible in
+  `crate::engine`*, which is where the dispatcher calls these from. One level
+  deeper the same keyword means *visible in `crate::engine::exec_source`*, and
+  every call site stops compiling. `pub(in crate::engine)` is the literal old
+  expansion — not `pub(crate)`, which would widen the reach and trip
+  `clippy::redundant_pub_crate` inside a private child module.
+- No re-exports are needed. Inherent methods resolve through the type rather
+  than the module path, so `ForgeQLEngine`'s methods stay reachable from
+  `engine` wherever they sit — the same reason the neighbouring
+  `exec_change.rs` is nothing but `mod` declarations. The child reaches back up
+  the way that module already does, `use crate::engine::{…}` rather than
+  `super::super::{…}`: an absolute path does not depend on how deep the file
+  happens to sit.
+- Imports were moved by letting the compiler name them, not by guessing: the
+  parent loses `SessionStats`, `ShowContent` and `require_session_id`; the child
+  takes only `Result`, the six `crate::result` types, `ForgeQLEngine` and
+  `require_session_id`. Both prunings are forced by `-D unused_imports`.
+
+Every method *body* is byte-identical. The changed lines are the five
+visibility keywords — one of which pushes `show_branches`'s signature past
+`max_width = 100`, so it is rewrapped into the four-line form rustfmt would
+produce anyway — the two import blocks, the two new module headers, and one
+`mod readouts;`. Nothing else in the 204 moved lines differs.
+
+No `ENRICH_VER` bump: this is the engine's execution layer, and nothing here
+writes a segment.
+
 ## [0.148.1] — 2026-08-04 — chore: delete the retired legacy golden runner
 
 ### Removed
