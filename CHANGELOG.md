@@ -5,6 +5,31 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.18] — 2026-08-05 — refactor: lift the CHANGE-transform tests out of `transforms/change.rs`
+
+### Changed
+
+`crates/forgeql-core/src/transforms/change.rs` was 699 lines, and 313 of them
+were an inline `#[cfg(test)] mod tests` block.
+
+- The block moves to `crates/forgeql-core/src/transforms/change/tests.rs` —
+  twenty-nine `#[test]` functions and no fixtures, covering line-to-byte-range
+  conversion including CRLF and mixed endings, trailing-blank absorption, the
+  multi-file validation rules, `MATCHING` resolution with and without word
+  boundaries, line splices and their trailing newline, glob detection, and
+  `DELETE`. The parent declares `#[cfg(test)] mod tests;` and drops to 388
+  lines.
+- **No import rewiring**, for the same reason as the four lifts before it: an
+  inline `mod tests` and a `tests.rs` file are the same module path, so the
+  block's lone `use super::*;` still resolves as it did.
+- The `// Tests` banner rule stays in the parent above the declaration.
+
+The moved code is unchanged apart from the four-column de-indent that un-nesting
+forces — 310 body lines out, 310 in — and the child opens with a four-line `//!`
+header that exists nowhere in the parent.
+
+No `ENRICH_VER` bump: nothing here changes index output.
+
 ## [0.148.17] — 2026-08-05 — refactor: lift the line-budget tests out of `budget.rs`
 
 ### Changed
