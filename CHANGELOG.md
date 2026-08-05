@@ -5,6 +5,42 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.20] — 2026-08-05 — refactor: lift the session-file tests out of `session.rs`
+
+### Changed
+
+`crates/forgeql/src/session.rs` was 436 lines, of which 268 — **61% of the
+file** — were an inline `#[cfg(test)] mod tests` block. That is the most
+lopsided ratio of any file in this series: someone opening it to learn how a
+session is persisted and resumed met roughly two lines of test for every line
+of the thing being tested.
+
+- The block moves to `crates/forgeql/src/session/tests.rs` — eighteen `#[test]`
+  functions plus the `os` and `make_test_engine` fixtures, covering
+  config-directory resolution from `XDG_CONFIG_HOME` or `HOME`, the session file
+  path, loading a file that is missing, empty, invalid, partial or complete,
+  saving and its round-trip, and resume, which no-ops without a session id and
+  clears one that has gone stale. The parent declares `#[cfg(test)] mod tests;`
+  and drops to 171 lines.
+- **The lint expectation rides along**, as in the MCP-handler lift: the
+  `#[expect(clippy::unwrap_used, clippy::expect_used, reason = "test code")]`
+  between `#[cfg(test)]` and `mod tests {` moves onto the `mod tests;`
+  declaration unchanged.
+- **No import rewiring**, for the same reason as the six lifts before it: an
+  inline `mod tests` and a `tests.rs` file are the same module path, so the
+  block's `use super::*;` and its two other imports still resolve as they did.
+
+This file is session state that outlives the process, so it is worth naming what
+stays pinned: the production half is byte-identical, the `#[cfg(test)]` gating is
+unchanged, and the module path is unchanged, so every load, save and resume test
+still runs under the same name.
+
+The moved code is unchanged apart from the four-column de-indent that un-nesting
+forces — 264 body lines out, 264 in — and the child opens with a four-line `//!`
+header that exists nowhere in the parent.
+
+No `ENRICH_VER` bump: nothing here changes index output.
+
 ## [0.148.19] — 2026-08-05 — refactor: lift the shadow-writer tests out of `shadow_writer.rs`
 
 ### Changed
