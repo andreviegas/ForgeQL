@@ -5,6 +5,53 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.23] — 2026-08-06 — refactor: lift the COPY/MOVE tests out of `transforms/copy_move.rs`
+
+### Changed
+
+`crates/forgeql-core/src/transforms/copy_move.rs` was 468 lines, and 226 of them
+were an inline `#[cfg(test)] mod tests` block.
+
+- The block moves to `crates/forgeql-core/src/transforms/copy_move/tests.rs` —
+  thirteen `#[test]` functions plus the `apply_plan_to_bytes` and `make_file`
+  fixtures, covering appending, inserting before a target line, and copying to a
+  destination that does not yet exist; moving across files and within one file
+  in both directions, including a wider delete-end that absorbs the source's
+  trailing blanks; the errors for a destination inside the source range and for
+  a delete-end before the end; and how an insertion line resolves to a byte
+  offset. The parent declares `#[cfg(test)] mod tests;` and drops to 244 lines.
+- **No import rewiring**, for the same reason as the nine lifts before it: an
+  inline `mod tests` and a `tests.rs` file are the same module path, so the
+  block's `use super::*;` and its two other module-scope imports still resolve
+  as they did — as does the function-local `use std::fmt::Write;` inside
+  `make_file`.
+- The `// Tests` banner rule stays in the parent above the declaration.
+
+The moved code is unchanged apart from the four-column de-indent that un-nesting
+forces — 223 body lines out, 223 in — and the child opens with a six-line `//!`
+header that exists nowhere in the parent.
+
+No `ENRICH_VER` bump: nothing here changes index output.
+
+### This completes the inline-test lift series
+
+Ten source files carried `#[cfg(test)] mod tests` blocks large enough to bury
+the code they tested. Across 0.148.14–0.148.23 those blocks became sibling
+`tests.rs` files: **3,153 body lines, 165 tests and 15 fixtures moved**, and the
+ten parents went from 7,058 lines to 3,895.
+
+Nothing was rewritten. An inline `mod tests` and a `tests.rs` file are the same
+module path, so no import and no visibility needed adjusting in any of the ten,
+and the three blocks that carried a lint attribute — two `#[expect(…)]` and one
+`#[allow(…)]` — moved theirs onto the `mod tests;` declaration verbatim, in the
+same file and position, widening nothing. The only change to the moved code in
+every case was the four-column de-indent that un-nesting forces, plus a `//!`
+header naming what each child covers.
+
+Files with blocks of 200 lines or more still remain, most of them smaller than
+these. `ast/enrich/guard_utils.rs` has the largest in the tree at 613 lines and
+is deliberately untouched while other work is rewriting that file.
+
 ## [0.148.22] — 2026-08-05 — refactor: lift the git-diff tests out of `git/diff.rs`
 
 ### Changed
