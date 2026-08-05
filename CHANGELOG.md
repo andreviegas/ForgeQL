@@ -5,6 +5,34 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.22] — 2026-08-05 — refactor: lift the git-diff tests out of `git/diff.rs`
+
+### Changed
+
+`crates/forgeql-core/src/git/diff.rs` was 623 lines, and 238 of them were an
+inline `#[cfg(test)] mod tests` block.
+
+- The block moves to `crates/forgeql-core/src/git/diff/tests.rs` — nine
+  `#[test]` functions and no fixtures, covering the HEAD-to-worktree diff and
+  what it leaves out, the worktree diff that does include untracked files, the
+  runtime and control files both exclude, and the source-changes classification
+  that tells research apart from work. The parent declares
+  `#[cfg(test)] mod tests;` and drops to 387 lines.
+- **No import rewiring**, for the same reason as the eight lifts before it: an
+  inline `mod tests` and a `tests.rs` file are the same module path, so the
+  block's `use super::*;` still resolves to `crate::git::diff`. Its three other
+  imports are unaffected for the same reason — including
+  `crate::git::testutil::make_normal_repo`, which is `crate::`-absolute and so
+  never depended on the file's depth at all.
+- Unlike the earlier lifts in this series there is no `// Tests` banner comment
+  to leave behind — this file never had one, and none was added.
+
+The moved code is unchanged apart from the four-column de-indent that un-nesting
+forces — 235 body lines out, 235 in — and the child opens with a four-line `//!`
+header that exists nowhere in the parent.
+
+No `ENRICH_VER` bump: nothing here changes index output.
+
 ## [0.148.21] — 2026-08-05 — refactor: lift the transform-plumbing tests out of `transforms/mod.rs`
 
 ### Changed
