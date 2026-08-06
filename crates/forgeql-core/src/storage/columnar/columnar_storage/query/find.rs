@@ -168,8 +168,8 @@ impl ColumnarStorage {
         &self,
         name: &str,
         clauses: &Clauses,
-        _root: &Path,
-    ) -> Vec<SymbolMatch> {
+        root: &Path,
+    ) -> (Vec<SymbolMatch>, Option<String>) {
         // BUG-006 U2: read the per-segment usage postings written at index
         // time (`usages_fst` / `usages_postings`, ENRICH_VER 23) instead of
         // the definitions name-FST, which only ever yielded definition rows.
@@ -181,7 +181,6 @@ impl ColumnarStorage {
         // a `role` so the two are told apart and filtered separately. A usage
         // site is `code`, tagged here rather than stored, because a posting in
         // the usages blob can be nothing else.
-        const ROLE_CODE: &str = "code";
         let occurrence_row = |path: &Path, line: u32, role: &str| SymbolMatch {
             name: name.to_string(),
             node_kind: None,
@@ -210,39 +209,38 @@ impl ColumnarStorage {
             self.substring_names(name)
         };
 
-        let mut results: Vec<SymbolMatch> = Vec::new();
-        // Persistent overlay segments, skipping any shadowed by the dirty
-        // overlay (their replacement is scanned below).
-        for (idx, meta) in self.overlay.segments().iter().enumerate() {
-            if self.dirty.shadows(&meta.source_path) {
-                continue;
-            }
-            let Some(seg) = self.segments.get(idx) else {
-                continue;
-            };
-            for token in &names {
-                for line in seg.lookup_usage_lines(token) {
-                    results.push(occurrence_row(&meta.source_path, line, ROLE_CODE));
-                }
-                for (role, line) in seg.lookup_mention_sites(token) {
-                    results.push(occurrence_row(&meta.source_path, line, role));
-                }
-            }
-        }
-        // Dirty overlay: freshly (re)indexed segments not yet promoted.
-        for ds in &self.dirty.added {
-            for token in &names {
-                for line in ds.reader.lookup_usage_lines(token) {
-                    results.push(occurrence_row(&ds.source_path, line, ROLE_CODE));
-                }
-                for (role, line) in ds.reader.lookup_mention_sites(token) {
-                    results.push(occurrence_row(&ds.source_path, line, role));
-                }
-            }
+        let mut sites: Vec<(std::path::PathBuf, u32, String)> = Vec::new();
+        for token in &names {
+            sites.extend(self.sites_of(token));
         }
 
+        // Both tiers above can only answer with a stored token, and a name
+        // spanning a separator no language continues a token over was never
+        // stored whole — so it answers zero however many files hold it, which
+        // reads as "there are none". Its pieces were stored, so they propose
+        // candidate lines and the source line decides.
+        //
+        // Only when the tiers above found nothing. If they found the name it IS
+        // a stored token and they are authoritative for it, so running this as
+        // well would buy nothing and cost a piece enumeration on every working
+        // query — `zephyr/pm/device.h` answers 383 sites from the whole-token
+        // tier, and its pieces are each far too common to be worth counting.
+        // The gap that leaves is a name stored whole by one language and split
+        // by another in the same corpus: the split sites stay unreachable.
+        let hint = if is_core_alphabet(name) || !sites.is_empty() {
+            None
+        } else {
+            let (verified, why) = self.verify_by_pieces(name, root);
+            sites.extend(verified);
+            why
+        };
+
+        let mut results: Vec<SymbolMatch> = sites
+            .iter()
+            .map(|(path, line, role)| occurrence_row(path, *line, role))
+            .collect();
         apply_clauses(&mut results, clauses);
-        results
+        (results, hint)
     }
 
     /// Every stored usage token containing `needle`, plus `needle` itself.
@@ -312,6 +310,167 @@ impl ColumnarStorage {
         names.sort_unstable();
         names.dedup();
         names
+    }
+
+    /// Every site of `token` across the workspace, each tagged with its role.
+    ///
+    /// `code` for a posting in the usages blob — a posting there can be nothing
+    /// else — and its stored role for a mention.
+    fn sites_of(&self, token: &str) -> Vec<(std::path::PathBuf, u32, String)> {
+        const ROLE_CODE: &str = "code";
+
+        let mut sites = Vec::new();
+        for (idx, meta) in self.overlay.segments().iter().enumerate() {
+            if self.dirty.shadows(&meta.source_path) {
+                continue;
+            }
+            let Some(seg) = self.segments.get(idx) else {
+                continue;
+            };
+            for line in seg.lookup_usage_lines(token) {
+                sites.push((meta.source_path.clone(), line, ROLE_CODE.to_owned()));
+            }
+            for (role, line) in seg.lookup_mention_sites(token) {
+                sites.push((meta.source_path.clone(), line, role.to_owned()));
+            }
+        }
+        for ds in &self.dirty.added {
+            for line in ds.reader.lookup_usage_lines(token) {
+                sites.push((ds.source_path.clone(), line, ROLE_CODE.to_owned()));
+            }
+            for (role, line) in ds.reader.lookup_mention_sites(token) {
+                sites.push((ds.source_path.clone(), line, role.to_owned()));
+            }
+        }
+        sites
+    }
+
+    /// How many sites `token` has, without keeping any of them.
+    ///
+    /// The ceiling has to be decided before anything is materialised, so the
+    /// pieces are counted first and collected only if the total clears it.
+    fn site_count_of(&self, token: &str) -> usize {
+        let mut count = 0;
+        for (idx, meta) in self.overlay.segments().iter().enumerate() {
+            if self.dirty.shadows(&meta.source_path) {
+                continue;
+            }
+            if let Some(seg) = self.segments.get(idx) {
+                count +=
+                    seg.lookup_usage_lines(token).len() + seg.lookup_mention_sites(token).len();
+            }
+        }
+        for ds in &self.dirty.added {
+            count += ds.reader.lookup_usage_lines(token).len()
+                + ds.reader.lookup_mention_sites(token).len();
+        }
+        count
+    }
+
+    /// Sites where `needle` occurs literally, proposed by its identifier pieces
+    /// and confirmed against the source line itself.
+    ///
+    /// Every tier above answers with a *stored token*: exact for a name in the
+    /// identifier alphabet, substring for one carrying anything else. Both miss
+    /// whenever no recorder stored the needle whole — the ordinary case for a
+    /// dotted or slashed name outside C, because a mention recorder continues a
+    /// token only over the characters its language declares. A name like
+    /// `foo-bar.frozen` is stored as `foo-bar` and `frozen`, so both tiers
+    /// answer zero on a corpus holding it in dozens of files, and that zero
+    /// reads exactly like "there are none".
+    ///
+    /// What the recorders did store is the needle's own pieces, so they propose
+    /// the candidate lines and the line's text decides. Superset then verify,
+    /// the same shape the trigram tier uses — and because the arbiter is the raw
+    /// line, no proposal however loose can yield a false positive.
+    ///
+    /// All the pieces propose, not the cheapest one. Which piece a given site
+    /// stored depends on the extra characters its language continues a token
+    /// over, so the cheapest piece is routinely not the one that reaches the
+    /// sites: for `foo-bar.frozen`, `bar` is stored nowhere the name appears
+    /// while `frozen` is stored everywhere it does, and `bar` is the cheaper of
+    /// the two. Together the pieces are still bounded, and when they are not —
+    /// over `VERIFY_CANDIDATE_CAP` — the tier declines to run and says why,
+    /// because a truncated site list would read as a complete one.
+    ///
+    /// Reads nothing stored in a new way, so no cache version moves.
+    fn verify_by_pieces(
+        &self,
+        needle: &str,
+        root: &Path,
+    ) -> (Vec<(std::path::PathBuf, u32, String)>, Option<String>) {
+        let pieces = needle_pieces(needle);
+        if pieces.is_empty() {
+            return (
+                Vec::new(),
+                Some(format!(
+                    "'{needle}' holds no run of {MIN_PIECE_LEN} or more identifier characters \
+                     opening on a letter, so nothing in the token index can propose a candidate \
+                     line for it"
+                )),
+            );
+        }
+
+        // Every piece, not the cheapest one. Which piece a site stored depends
+        // on the extra characters that site's language continues a token over,
+        // and that varies per language and per file: `foo-bar.frozen` is stored
+        // as `foo-bar` + `frozen` where `-` continues a token and as `foo` +
+        // `bar` + `frozen` where it does not. Proposing from one piece would
+        // silently skip every site that stored a different one — the same false
+        // absence this tier exists to remove, only narrower.
+        let count: usize = pieces.iter().map(|piece| self.site_count_of(piece)).sum();
+        if count > VERIFY_CANDIDATE_CAP {
+            return (
+                Vec::new(),
+                Some(format!(
+                    "the parts of '{needle}' are too common to search by: together they propose \
+                     {count} candidate lines, over the {VERIFY_CANDIDATE_CAP} ceiling, so the \
+                     sites of '{needle}' itself were not searched for"
+                )),
+            );
+        }
+
+        let mut candidates: Vec<(std::path::PathBuf, u32, String)> = Vec::new();
+        for piece in &pieces {
+            candidates.extend(self.sites_of(piece));
+        }
+
+        // Two pieces on one line propose it twice; verify it once.
+        let mut seen = HashSet::new();
+        candidates.retain(|site| seen.insert(site.clone()));
+
+        // One read per file, not one per site.
+        let mut by_file: HashMap<&std::path::PathBuf, Vec<usize>> = HashMap::new();
+        for (i, (path, _, _)) in candidates.iter().enumerate() {
+            by_file.entry(path).or_default().push(i);
+        }
+
+        let mut verified = Vec::new();
+        let mut unread = 0usize;
+        for (path, rows) in by_file {
+            let Ok(text) = std::fs::read_to_string(root.join(path)) else {
+                // Every candidate in this file goes unchecked. Staying silent
+                // about it would reintroduce, per file, exactly what the
+                // ceiling exists to prevent: a short answer that reads as a
+                // complete one.
+                unread += 1;
+                continue;
+            };
+            let lines: Vec<&str> = text.lines().collect();
+            for i in rows {
+                if line_holds(&lines, candidates[i].1, needle) {
+                    verified.push(candidates[i].clone());
+                }
+            }
+        }
+
+        let hint = (unread > 0).then(|| {
+            format!(
+                "{unread} candidate file(s) for '{needle}' could not be read, so any site they \
+                 hold is missing from this answer"
+            )
+        });
+        (verified, hint)
     }
 
     pub(super) fn indexed_files_impl(&self) -> Vec<crate::result::FileEntry> {
@@ -569,6 +728,55 @@ fn is_core_alphabet(text: &str) -> bool {
     text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
+/// Shortest identifier run worth proposing a candidate line from.
+///
+/// A recorder drops a one-character token, so anything shorter is never in the
+/// index and could only ever propose nothing.
+const MIN_PIECE_LEN: usize = 2;
+
+/// Most candidate lines the verify tier will read before declining to run.
+///
+/// The tier is all-or-nothing on purpose: a truncated site list is
+/// indistinguishable from a complete one, which is the very failure being fixed
+/// here.
+const VERIFY_CANDIDATE_CAP: usize = 5_000;
+
+/// The identifier runs inside `needle` that a recorder could have stored.
+///
+/// A token opens on a letter or `_` and continues over `[A-Za-z0-9_]` plus the
+/// extra characters its language declares, so every stored token is built out
+/// of runs like these. A needle spanning a separator that no language continues
+/// over is therefore never a token itself while its runs are — which is exactly
+/// what makes them usable as a proposal. Runs that cannot open a token (a
+/// leading digit) are dropped: they are not stored, so they would propose an
+/// empty candidate set and make a real match look like an absence.
+fn needle_pieces(needle: &str) -> Vec<&str> {
+    needle
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|piece| {
+            piece.len() >= MIN_PIECE_LEN
+                && piece
+                    .as_bytes()
+                    .first()
+                    .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
+        })
+        .collect()
+}
+
+/// Does 1-based `line` of `lines` hold `needle` verbatim?
+///
+/// The arbiter of the verify tier, and the reason a loose proposal is safe. A
+/// candidate line is proposed by ONE piece of the needle, so a line carrying
+/// every piece scattered — `"foo-bar" and "frozen"` against `foo-bar.frozen` —
+/// must not count. Only the needle's exact form, separators and all, does.
+fn line_holds(lines: &[&str], line: u32, needle: &str) -> bool {
+    usize::try_from(line)
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|n| lines.get(n))
+        .is_some_and(|text| text.contains(needle))
+}
+
 /// Deduplicate symbol results on `(name, fql_kind, path, line)`.
 ///
 /// Mirrors the legacy backend, which deduplicates on
@@ -601,8 +809,55 @@ fn dedupe_file_entries(entries: &mut Vec<crate::result::FileEntry>) {
 
 #[cfg(test)]
 mod tests {
-    use super::dedupe_file_entries;
+    use super::{dedupe_file_entries, line_holds, needle_pieces};
     use crate::result::FileEntry;
+
+    #[test]
+    fn needle_pieces_splits_at_every_non_identifier_character() {
+        assert_eq!(
+            needle_pieces("foo-bar.frozen"),
+            vec!["foo", "bar", "frozen"]
+        );
+        assert_eq!(
+            needle_pieces("zephyr/pm/device.h"),
+            vec!["zephyr", "pm", "device"]
+        );
+        assert_eq!(needle_pieces("golden.json"), vec!["golden", "json"]);
+    }
+
+    #[test]
+    fn needle_pieces_drops_runs_no_recorder_could_have_stored() {
+        // One character is below the recorder's own floor, and a run opening on
+        // a digit cannot start a token — both would propose an empty candidate
+        // set, which is exactly the false absence this tier exists to prevent.
+        assert!(needle_pieces("a.b").is_empty());
+        assert_eq!(needle_pieces("9f.frozen"), vec!["frozen"]);
+        assert_eq!(needle_pieces("_x9.2b"), vec!["_x9"]);
+        assert!(needle_pieces("...").is_empty());
+    }
+
+    #[test]
+    fn line_holds_demands_the_needle_verbatim_not_its_pieces() {
+        // The proposal only knows that ONE piece is on the line. A line holding
+        // every piece, separately, is the case that must still be rejected.
+        let lines = vec![
+            r#"  "use": "foo-bar.frozen","#,
+            r#"  "foo-bar" and "frozen" both appear, apart"#,
+        ];
+        assert!(line_holds(&lines, 1, "foo-bar.frozen"));
+        assert!(!line_holds(&lines, 2, "foo-bar.frozen"));
+    }
+
+    #[test]
+    fn line_holds_is_1_based_and_survives_a_line_number_past_the_end() {
+        let lines = vec!["first", "second"];
+        assert!(line_holds(&lines, 2, "second"));
+        assert!(!line_holds(&lines, 1, "second"));
+        // A posting naming a line the file no longer has must answer false, not
+        // panic and not wrap around to the last line.
+        assert!(!line_holds(&lines, 0, "first"));
+        assert!(!line_holds(&lines, 99, "first"));
+    }
 
     fn entry(path: &str, size: u64) -> FileEntry {
         FileEntry {

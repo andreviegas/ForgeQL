@@ -314,7 +314,7 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
         .find_usages("SymbolA", &clauses, &root)
         .expect("usages_a");
     assert!(
-        usages_a.is_empty(),
+        usages_a.0.is_empty(),
         "SymbolA must be shadowed after dirty overlay; got: {usages_a:?}"
     );
 
@@ -323,7 +323,7 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
         .find_usages("SymbolB", &clauses, &root)
         .expect("usages_b");
     assert_eq!(
-        usages_b.len(),
+        usages_b.0.len(),
         1,
         "SymbolB must appear in dirty segment; got: {usages_b:?}"
     );

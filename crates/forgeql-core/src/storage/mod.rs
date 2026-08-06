@@ -341,7 +341,17 @@ pub trait StorageEngine: Send + Sync + 'static {
     ///
     /// Applies glob filtering and the remaining clause pipeline internally.
     /// Returns the full result set (no truncation).
-    fn find_usages(&self, name: &str, clauses: &Clauses, root: &Path) -> Result<Vec<SymbolMatch>>;
+    ///
+    /// The `Option<String>` beside the rows is a reason the answer may be short
+    /// of what the corpus holds — the substring verify tier declining to run on
+    /// a name whose every part is too common to search by. `None` means the
+    /// sites are everything the index can reach.
+    fn find_usages(
+        &self,
+        name: &str,
+        clauses: &Clauses,
+        root: &Path,
+    ) -> Result<(Vec<SymbolMatch>, Option<String>)>;
 
     /// Execute a FIND NODE id query.
     ///
@@ -669,7 +679,7 @@ mod tests {
         let results = s
             .find_usages("foo", &clauses, root)
             .expect("should not error");
-        assert!(results.is_empty());
+        assert!(results.0.is_empty());
     }
 
     #[test]

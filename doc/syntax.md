@@ -237,18 +237,35 @@ FIND files [clauses]
 > file wrote. Substring matching is **case-sensitive**, like the exact lookup
 > it extends.
 >
-> The test cuts both ways, which is what keeps it complete: only tokens that
-> themselves hold a character outside `[A-Za-z0-9_]` are searched, and a token
-> containing your query must hold every character your query does — so nothing
-> reachable is skipped. A name written only in that alphabet is matched exactly,
-> so `FIND usages OF '256'` still means the token `256` and never widens into
-> `sha256`.
+> The test cuts both ways, which is what keeps this tier complete *for tokens*:
+> only tokens that themselves hold a character outside `[A-Za-z0-9_]` are
+> searched, and a token containing your query must hold every character your
+> query does — so no reachable **token** is skipped. A name written only in that
+> alphabet is matched exactly, so `FIND usages OF '256'` still means the token
+> `256` and never widens into `sha256`.
 >
-> Two further limits. Candidates are drawn from `code` occurrences, so a name
-> written in a comment, string or config value is matched exact-only, never as a
-> fragment. And a query under three characters is matched exactly: it is shorter
-> than the index can narrow on, and widening on it would select most of the
-> dictionary.
+> Two further limits on *that* tier. Candidates are drawn from `code`
+> occurrences, so a name written in a comment, string or config value is matched
+> exact-only, never as a fragment. And a query under three characters is matched
+> exactly: it is shorter than the index can narrow on, and widening on it would
+> select most of the dictionary.
+>
+> Neither tier can reach a name no recorder stored as a token at all. Where a
+> language does not widen its alphabet, `foo-bar.frozen` is stored as `foo-bar`
+> and `frozen`, so both answer zero however many files hold the whole name — and
+> zero reads exactly like "there are none". So when both find nothing and the
+> name carries a character outside `[A-Za-z0-9_]`, a third tier splits it at
+> those characters, proposes every line on which **any** of its parts is a stored
+> token, and keeps only the lines whose own text holds the name verbatim. Every
+> part proposes, not the cheapest: which part a site stored depends on that
+> language's alphabet, so the cheapest is routinely stored nowhere the name
+> appears. The line is the arbiter, so however loose the proposal it cannot yield
+> a false positive, and a line carrying the parts in some other arrangement is
+> rejected. When the parts together propose more than 5000 candidate lines the
+> tier declines rather than truncating, and says so in a `hint` — a truncated
+> site list would read as a complete one. A name with no run of two or more
+> identifier characters opening on a letter has nothing to propose from and also
+> answers with a reason rather than a bare zero.
 >
 > A value that no key introduces is still a value: a top-level YAML sequence or
 > JSON array has no `value` edge above it, so it contributes no `config`

@@ -44,8 +44,8 @@ impl StorageEngine for StubColumnarStorage {
         _name: &str,
         _clauses: &Clauses,
         _root: &Path,
-    ) -> Result<Vec<SymbolMatch>> {
-        Ok(vec![])
+    ) -> Result<(Vec<SymbolMatch>, Option<String>)> {
+        Ok((vec![], None))
     }
 
     fn resolve_symbol(

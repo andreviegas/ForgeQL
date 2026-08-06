@@ -5,6 +5,75 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.149.0] — 2026-08-06 — fix: `FIND usages` answered zero for a name the index stored only in pieces
+
+### Fixed
+
+`FIND usages OF 'forgeql-pub.frozen'` returned nothing on a corpus holding that
+string on forty-odd lines across eight files, while `FIND usages OF 'forgeql-pub'`
+returned rows from those same files. Same for `zephyr-andre.frozen`,
+`golden.json`, `tests/golden` and `Cargo.toml`: a silent zero, indistinguishable
+from "this name is not used here", on the query agents run to size a rename.
+
+Both existing tiers can only answer with a **stored token** — exact lookup for a
+name written in `[A-Za-z0-9_]`, substring-of-a-stored-token for one carrying
+anything else. What gets stored is what the recorders produce, and a recorder
+continues a token only over the extra characters its language declares: `/` and
+`.` for a C include path, so `zephyr/pm/device.h` is one token and has always
+been findable, but nothing of the sort for a JSON string, where
+`forgeql-pub.frozen` is stored as `forgeql-pub` and `frozen`. Neither tier can
+reach a name that was never stored whole, however many files hold it.
+
+A third tier now runs when those two find nothing and the name carries a
+non-identifier character. The name's own pieces *were* stored, so they propose
+candidate lines and the source line itself confirms them:
+
+- **Every piece proposes, not the cheapest one.** Which piece a given site
+  stored depends on the extra characters that site's language continues a token
+  over, so the cheapest piece is routinely not the one that reaches the sites.
+  For `forgeql-pub.frozen` the piece `pub` is the cheapest by a wide margin and
+  is stored on none of the lines that hold the name, while `frozen` is stored on
+  every one of them. Proposing from the cheapest piece would have replaced the
+  silent zero with a silent undercount.
+- **The line is the arbiter**, so no proposal however loose can produce a false
+  positive. A line carrying every piece in some other arrangement —
+  `frozen.forgeql-pub` against a file full of `forgeql-pub.frozen` — is rejected.
+- **One read per file**, not one per candidate site.
+- **All or nothing.** When the pieces together propose more than 5,000 candidate
+  lines the tier declines to run and says why, because a truncated site list
+  reads exactly like a complete one — the failure being fixed here. A name with
+  no run of two or more identifier characters opening on a letter (`a.b`) has
+  nothing to propose from, and also answers with a reason rather than a bare zero.
+
+The tier is skipped entirely when the tiers above found the name, because then it
+IS a stored token and they are authoritative for it. An include path such as
+`zephyr/pm/device.h` still answers every one of its sites from the whole-token
+tier without paying for a piece enumeration, so no query that worked before does
+any new work.
+
+Nothing stored changes: no enrichment version bump, no reindex, no rewarm.
+
+### Changed
+
+`Storage::find_usages` returns `(Vec<SymbolMatch>, Option<String>)`. The second
+value is a reason the answer may be short of what the corpus holds, and reaches
+the caller as the query's `hint`; `None` means the sites are everything the index
+can reach.
+
+Within the new tier, two of a name's parts landing on one line propose it twice
+and it is verified once, so a line is reported once however many parts reached
+it. Rows from the tiers above are untouched.
+
+### Known gap
+
+Two cases stay narrower than they could be. A name that is only ever a *fragment*
+of a stored token — `orgeql-pub` against a stored `forgeql-pub` — is reached only
+where some other piece of it happens to be a stored token on the same line, or
+through the whole-token dictionary, which holds usage tokens and not mention
+tokens. And a name stored whole by one language while another language in the
+same corpus splits it keeps only its whole-token sites, because the new tier does
+not run once the tiers above have answered.
+
 ## [0.148.24] — 2026-08-06 — fix: the golden harness reissued a failed attach's alias and never cleaned it up
 
 ### Fixed

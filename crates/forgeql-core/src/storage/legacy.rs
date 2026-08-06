@@ -233,7 +233,12 @@ impl StorageEngine for LegacyMemoryStorage {
         Ok(results)
     }
 
-    fn find_usages(&self, name: &str, clauses: &Clauses, root: &Path) -> Result<Vec<SymbolMatch>> {
+    fn find_usages(
+        &self,
+        name: &str,
+        clauses: &Clauses,
+        root: &Path,
+    ) -> Result<(Vec<SymbolMatch>, Option<String>)> {
         let index = self
             .table
             .as_ref()
@@ -270,7 +275,7 @@ impl StorageEngine for LegacyMemoryStorage {
 
         prefilter::validate_order_by_field(&remaining, &results, &configs)?;
         crate::filter::apply_clauses(&mut results, &remaining);
-        Ok(results)
+        Ok((results, None))
     }
 
     // ---- symbol resolution (used by SHOW paths) ------------------------

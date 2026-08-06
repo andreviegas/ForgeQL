@@ -122,6 +122,7 @@ impl ForgeQLEngine {
         let sites = engine
             .find_usages(&name, &Clauses::default(), root)
             .ok()?
+            .0
             .len();
         if sites == 0 {
             return None;
@@ -164,9 +165,10 @@ impl ForgeQLEngine {
             engine_clauses.offset = None;
         }
 
-        let mut results = session
-            .engine_for(backend)?
-            .find_usages(of, &engine_clauses, &root)?;
+        let (mut results, verify_hint) =
+            session
+                .engine_for(backend)?
+                .find_usages(of, &engine_clauses, &root)?;
 
         // `total` is the true site count even under an explicit LIMIT — the
         // number a rename campaign measures its progress against.  FIND symbols
@@ -214,7 +216,10 @@ impl ForgeQLEngine {
                 Some(GroupBy::Field(f)) if f != "fql_kind" => Some(f.clone()),
                 _ => None,
             },
-            hint: Self::withheld_hint(withheld),
+            hint: Self::withheld_hint(withheld)
+                .into_iter()
+                .chain(verify_hint)
+                .reduce(|a, b| format!("{a} {b}")),
             found_rev,
         }))
     }
