@@ -5,6 +5,63 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.149.1] — 2026-08-06 — fix: `FIND usages` stopped searching once one tier had answered, and stopped early when the work looked large
+
+### Fixed
+
+The tier that reaches a name the index stored only in pieces ran **only when the
+tiers above it came back empty**. So a name one language stores whole and
+another stores split answered from whichever tier spoke first and silently
+dropped every site the other one held. On a three-million-symbol embedded tree,
+`FIND usages OF 'pm/device_runtime'` answered 161 C include sites and never
+mentioned the Python file that spells the same path inside a string a few
+directories away — a complete-looking answer that was missing sites, which is
+the failure the tier was added to remove.
+
+All three tiers now answer every query and their sites are merged into one list
+with one honest `total`. A site two tiers both reach is listed once.
+
+The 5,000-candidate ceiling is gone. It abandoned the whole search when a name's
+parts together proposed more lines than that, and said so in a `hint` — but a
+hint explains a paged *delivery*; it cannot turn an unfinished *search* into an
+answer. ForgeQL answers like a database: `find` walks the whole filesystem
+however long that takes, and `LIMIT`/`OFFSET` page a result computed in full.
+Every candidate a name's parts propose is now read, however many there are.
+
+**What that costs, measured rather than assumed.** An A/B run against a
+three-million-symbol embedded corpus, both sides built with the same profile,
+puts the substring-needle class below the measurement harness's noise floor on
+the branch exactly as on the baseline — under 200 ms per query either way, a
+difference this harness cannot resolve. Two things that run does not cover, said
+plainly: a name whose every part is a common word — `zephyr/pm/device.h`, whose
+parts are between them posted on some seventy thousand lines of that tree — now
+reads every file holding a candidate before it answers, and a name with no
+usable part reads the files in scope directly. Neither is measured. Either may
+be slow on a large corpus until those lookups are served from an index; that is
+the accepted trade, and the answer is complete meanwhile.
+
+`IN` and `EXCLUDE` now bound the reading as well as the delivery. A candidate
+outside the query's own globs would be dropped by the clause pipeline anyway, so
+it is no longer read at all — identical rows, less work, and the lever to reach
+for when a blast-radius query on a large tree is slower than you want. It asks
+the pipeline's own matcher rather than keeping a second copy of the rule, on
+purpose: a look-alike that failed to expand a bare directory into `dir/**` would
+discard every candidate before reading it and answer a confident zero, which is
+the failure this whole change exists to remove.
+
+### Added
+
+A name no part of which could ever have been a token — `a.b`, `->`, `1.2` —
+leaves the token index with nothing to propose from at all. Those queries used
+to answer zero with a reason; they now read the indexed files and return the
+lines that hold the name. Such a site carries the new `role` value `text`: the
+bytes say the line holds the name, nothing says what kind of occurrence it is,
+and nothing pretends to.
+
+The only `hint` `FIND usages` still emits for reasons of its own names a
+candidate file that could not be read — an answer short by something specific,
+never short because the work looked large.
+
 ## [0.149.0] — 2026-08-06 — fix: `FIND usages` answered zero for a name the index stored only in pieces
 
 ### Fixed

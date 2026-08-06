@@ -342,10 +342,18 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// Applies glob filtering and the remaining clause pipeline internally.
     /// Returns the full result set (no truncation).
     ///
-    /// The `Option<String>` beside the rows is a reason the answer may be short
-    /// of what the corpus holds — the substring verify tier declining to run on
-    /// a name whose every part is too common to search by. `None` means the
-    /// sites are everything the index can reach.
+    /// Complete for what the occurrence postings recorded: every site of `name`
+    /// they reach is in the rows, and none is left out for being expensive to
+    /// find. That is the whole answer wherever the postings cover the file, and
+    /// they do not cover every line — a line no recorder posted a token for is
+    /// invisible to each tier that reads them alike — so an empty result means
+    /// nothing *recorded* holds the name, which is a narrower claim than that
+    /// nothing does.
+    ///
+    /// The `Option<String>` beside the rows is not a budget or a ceiling: it
+    /// names a specific thing that went wrong, a candidate file that could not
+    /// be read, so the sites it holds are known to be absent instead of
+    /// silently so.
     fn find_usages(
         &self,
         name: &str,

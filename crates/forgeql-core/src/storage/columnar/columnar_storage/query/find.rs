@@ -209,7 +209,7 @@ impl ColumnarStorage {
             self.substring_names(name)
         };
 
-        let mut sites: Vec<(std::path::PathBuf, u32, String)> = Vec::new();
+        let mut sites: Vec<Site> = Vec::new();
         for token in &names {
             sites.extend(self.sites_of(token));
         }
@@ -220,18 +220,24 @@ impl ColumnarStorage {
         // reads as "there are none". Its pieces were stored, so they propose
         // candidate lines and the source line decides.
         //
-        // Only when the tiers above found nothing. If they found the name it IS
-        // a stored token and they are authoritative for it, so running this as
-        // well would buy nothing and cost a piece enumeration on every working
-        // query — `zephyr/pm/device.h` answers 383 sites from the whole-token
-        // tier, and its pieces are each far too common to be worth counting.
-        // The gap that leaves is a name stored whole by one language and split
-        // by another in the same corpus: the split sites stay unreachable.
-        let hint = if is_core_alphabet(name) || !sites.is_empty() {
+        // Merged with what the tiers above found, not a fallback for when they
+        // found nothing. One corpus stores the same name both ways: C records
+        // `pm/device_runtime` inside a whole include-path token while a Python
+        // string a few directories away records it as `pm` and
+        // `device_runtime`, so each tier reaches sites the other cannot and
+        // only their union is the answer. A site both reach is listed once.
+        let hint = if is_core_alphabet(name) {
             None
         } else {
-            let (verified, why) = self.verify_by_pieces(name, root);
-            sites.extend(verified);
+            let (verified, why) = self.literal_sites(name, clauses, root);
+            let fresh: Vec<Site> = {
+                let seen: HashSet<&Site> = sites.iter().collect();
+                verified
+                    .into_iter()
+                    .filter(|site| !seen.contains(site))
+                    .collect()
+            };
+            sites.extend(fresh);
             why
         };
 
@@ -316,7 +322,7 @@ impl ColumnarStorage {
     ///
     /// `code` for a posting in the usages blob — a posting there can be nothing
     /// else — and its stored role for a mention.
-    fn sites_of(&self, token: &str) -> Vec<(std::path::PathBuf, u32, String)> {
+    fn sites_of(&self, token: &str) -> Vec<Site> {
         const ROLE_CODE: &str = "code";
 
         let mut sites = Vec::new();
@@ -345,30 +351,8 @@ impl ColumnarStorage {
         sites
     }
 
-    /// How many sites `token` has, without keeping any of them.
-    ///
-    /// The ceiling has to be decided before anything is materialised, so the
-    /// pieces are counted first and collected only if the total clears it.
-    fn site_count_of(&self, token: &str) -> usize {
-        let mut count = 0;
-        for (idx, meta) in self.overlay.segments().iter().enumerate() {
-            if self.dirty.shadows(&meta.source_path) {
-                continue;
-            }
-            if let Some(seg) = self.segments.get(idx) {
-                count +=
-                    seg.lookup_usage_lines(token).len() + seg.lookup_mention_sites(token).len();
-            }
-        }
-        for ds in &self.dirty.added {
-            count += ds.reader.lookup_usage_lines(token).len()
-                + ds.reader.lookup_mention_sites(token).len();
-        }
-        count
-    }
-
-    /// Sites where `needle` occurs literally, proposed by its identifier pieces
-    /// and confirmed against the source line itself.
+    /// Every site where `needle` occurs literally, confirmed against the source
+    /// line itself.
     ///
     /// Every tier above answers with a *stored token*: exact for a name in the
     /// identifier alphabet, substring for one carrying anything else. Both miss
@@ -389,26 +373,34 @@ impl ColumnarStorage {
     /// over, so the cheapest piece is routinely not the one that reaches the
     /// sites: for `foo-bar.frozen`, `bar` is stored nowhere the name appears
     /// while `frozen` is stored everywhere it does, and `bar` is the cheaper of
-    /// the two. Together the pieces are still bounded, and when they are not —
-    /// over `VERIFY_CANDIDATE_CAP` — the tier declines to run and says why,
-    /// because a truncated site list would read as a complete one.
+    /// the two. Every candidate the pieces propose is then read, however many
+    /// there are: a search that stops early because the work looked large
+    /// returns a short list that reads exactly like a complete one, and that is
+    /// the failure this tier exists to remove, not one to reintroduce with a
+    /// ceiling. Slow is an acceptable answer; incomplete is not.
+    ///
+    /// A needle no piece of which could ever have been stored — `a.b`, `->`,
+    /// `1.2` — leaves the token index with nothing to propose from, so the
+    /// files are read directly instead. That is the slowest path here and the
+    /// rarest; it is still the answer.
+    ///
+    /// A verified site keeps the role of the posting that proposed it. The two
+    /// sit on the same line but not necessarily inside the same construct — a
+    /// piece can be posted from a trailing comment while the needle itself is
+    /// in the code beside it — so the role is the best evidence the line
+    /// carries, not a proof. The site is exact either way; only its label is
+    /// inferred, and inferring it from the line would be the engine guessing.
     ///
     /// Reads nothing stored in a new way, so no cache version moves.
-    fn verify_by_pieces(
+    fn literal_sites(
         &self,
         needle: &str,
+        clauses: &Clauses,
         root: &Path,
-    ) -> (Vec<(std::path::PathBuf, u32, String)>, Option<String>) {
+    ) -> (Vec<Site>, Option<String>) {
         let pieces = needle_pieces(needle);
         if pieces.is_empty() {
-            return (
-                Vec::new(),
-                Some(format!(
-                    "'{needle}' holds no run of {MIN_PIECE_LEN} or more identifier characters \
-                     opening on a letter, so nothing in the token index can propose a candidate \
-                     line for it"
-                )),
-            );
+            return self.scan_sites(needle, clauses, root);
         }
 
         // Every piece, not the cheapest one. Which piece a site stored depends
@@ -418,24 +410,16 @@ impl ColumnarStorage {
         // `bar` + `frozen` where it does not. Proposing from one piece would
         // silently skip every site that stored a different one — the same false
         // absence this tier exists to remove, only narrower.
-        let count: usize = pieces.iter().map(|piece| self.site_count_of(piece)).sum();
-        if count > VERIFY_CANDIDATE_CAP {
-            return (
-                Vec::new(),
-                Some(format!(
-                    "the parts of '{needle}' are too common to search by: together they propose \
-                     {count} candidate lines, over the {VERIFY_CANDIDATE_CAP} ceiling, so the \
-                     sites of '{needle}' itself were not searched for"
-                )),
-            );
-        }
-
-        let mut candidates: Vec<(std::path::PathBuf, u32, String)> = Vec::new();
+        let mut candidates: Vec<Site> = Vec::new();
         for piece in &pieces {
             candidates.extend(self.sites_of(piece));
         }
 
-        // Two pieces on one line propose it twice; verify it once.
+        // Two pieces on one line propose it twice; verify it once. A candidate
+        // outside the query's own `IN`/`EXCLUDE` scope is a file read for a row
+        // the clause pipeline will drop, so drop it here instead — same
+        // predicate, same rows, less work.
+        candidates.retain(|(path, _, _)| in_scope(path, clauses));
         let mut seen = HashSet::new();
         candidates.retain(|site| seen.insert(site.clone()));
 
@@ -449,13 +433,14 @@ impl ColumnarStorage {
         let mut unread = 0usize;
         for (path, rows) in by_file {
             let Ok(text) = std::fs::read_to_string(root.join(path)) else {
-                // Every candidate in this file goes unchecked. Staying silent
-                // about it would reintroduce, per file, exactly what the
-                // ceiling exists to prevent: a short answer that reads as a
-                // complete one.
+                // Every candidate in this file goes unchecked, and staying
+                // silent would leave a short answer reading as a complete one.
                 unread += 1;
                 continue;
             };
+            if !text.contains(needle) {
+                continue;
+            }
             let lines: Vec<&str> = text.lines().collect();
             for i in rows {
                 if line_holds(&lines, candidates[i].1, needle) {
@@ -464,13 +449,60 @@ impl ColumnarStorage {
             }
         }
 
-        let hint = (unread > 0).then(|| {
-            format!(
-                "{unread} candidate file(s) for '{needle}' could not be read, so any site they \
-                 hold is missing from this answer"
-            )
-        });
-        (verified, hint)
+        // `by_file` iterates in hash order; the answer must not.
+        verified.sort_unstable();
+        (verified, unread_hint(unread, needle))
+    }
+
+    /// Every line of every indexed file that holds `needle`, read directly.
+    ///
+    /// The complete path for a needle the token index cannot address at all:
+    /// nothing in it opens a token, so no piece can propose a candidate and
+    /// there is no cheaper way left to find out where it occurs. Declining
+    /// would answer "none" for a name the corpus may hold in a hundred places.
+    ///
+    /// A scanned site carries the role `text`: the bytes say the line holds the
+    /// needle, nothing says what kind of occurrence it is, and deciding that
+    /// from the line would be the engine guessing.
+    fn scan_sites(
+        &self,
+        needle: &str,
+        clauses: &Clauses,
+        root: &Path,
+    ) -> (Vec<Site>, Option<String>) {
+        const ROLE_TEXT: &str = "text";
+
+        let mut paths: Vec<std::path::PathBuf> = self
+            .overlay
+            .segments()
+            .iter()
+            .filter(|meta| !self.dirty.shadows(&meta.source_path))
+            .map(|meta| meta.source_path.clone())
+            .chain(self.dirty.added.iter().map(|ds| ds.source_path.clone()))
+            .filter(|path| in_scope(path, clauses))
+            .collect();
+        paths.sort_unstable();
+        paths.dedup();
+
+        let mut sites = Vec::new();
+        let mut unread = 0usize;
+        for path in &paths {
+            let Ok(text) = std::fs::read_to_string(root.join(path)) else {
+                unread += 1;
+                continue;
+            };
+            if !text.contains(needle) {
+                continue;
+            }
+            for (i, line) in text.lines().enumerate() {
+                if line.contains(needle) {
+                    let line_no = u32::try_from(i + 1).unwrap_or(u32::MAX);
+                    sites.push((path.clone(), line_no, ROLE_TEXT.to_owned()));
+                }
+            }
+        }
+
+        (sites, unread_hint(unread, needle))
     }
 
     pub(super) fn indexed_files_impl(&self) -> Vec<crate::result::FileEntry> {
@@ -734,12 +766,11 @@ fn is_core_alphabet(text: &str) -> bool {
 /// index and could only ever propose nothing.
 const MIN_PIECE_LEN: usize = 2;
 
-/// Most candidate lines the verify tier will read before declining to run.
-///
-/// The tier is all-or-nothing on purpose: a truncated site list is
-/// indistinguishable from a complete one, which is the very failure being fixed
-/// here.
-const VERIFY_CANDIDATE_CAP: usize = 5_000;
+/// A single occurrence: the file it sits in, its 1-based line, and the role it
+/// was recorded under — `code` for a resolved identifier, the stored mention
+/// role (`comment`, `string`, `config`, `doc`) for a written one, and `text`
+/// for a site found by reading the file rather than by a posting.
+type Site = (std::path::PathBuf, u32, String);
 
 /// The identifier runs inside `needle` that a recorder could have stored.
 ///
@@ -777,6 +808,42 @@ fn line_holds(lines: &[&str], line: u32, needle: &str) -> bool {
         .is_some_and(|text| text.contains(needle))
 }
 
+/// What to say when a candidate file could not be read.
+///
+/// Whatever sites it holds are missing from the answer, and nothing else in the
+/// response would show that — so the count is stated rather than swallowed.
+fn unread_hint(unread: usize, needle: &str) -> Option<String> {
+    (unread > 0).then(|| {
+        format!(
+            "{unread} candidate file(s) for '{needle}' could not be read, so any site they \
+             hold is missing from this answer"
+        )
+    })
+}
+
+/// Is `path` inside what the query's own `IN` / `EXCLUDE` globs select?
+///
+/// The clause pipeline drops everything outside them anyway, so a candidate
+/// outside is a file read to produce a row that will not be returned. Pruning
+/// here is free in rows and saves the read.
+///
+/// It must stay `ast::query::glob_matches` — the very function the pipeline
+/// applies later, whose `normalize_glob` expands a bare directory into
+/// `dir/**`. A look-alike predicate that skips that expansion filters out
+/// candidates the pipeline would have kept, and the query answers a confident
+/// zero: the exact failure this tier exists to remove, reintroduced in the
+/// name of speed.
+fn in_scope(path: &Path, clauses: &Clauses) -> bool {
+    clauses
+        .in_glob
+        .as_ref()
+        .is_none_or(|glob| crate::ast::query::glob_matches(path, glob))
+        && !clauses
+            .exclude_globs
+            .iter()
+            .any(|glob| crate::ast::query::glob_matches(path, glob))
+}
+
 /// Deduplicate symbol results on `(name, fql_kind, path, line)`.
 ///
 /// Mirrors the legacy backend, which deduplicates on
@@ -809,7 +876,9 @@ fn dedupe_file_entries(entries: &mut Vec<crate::result::FileEntry>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dedupe_file_entries, line_holds, needle_pieces};
+    use std::path::Path;
+
+    use super::{Clauses, dedupe_file_entries, in_scope, line_holds, needle_pieces};
     use crate::result::FileEntry;
 
     #[test]
@@ -857,6 +926,57 @@ mod tests {
         // panic and not wrap around to the last line.
         assert!(!line_holds(&lines, 0, "first"));
         assert!(!line_holds(&lines, 99, "first"));
+    }
+
+    /// The prune must expand a bare directory the way the clause pipeline does.
+    ///
+    /// This is the shape that already shipped a silent zero once: a predicate
+    /// that treats `IN 'crates/forgeql-core'` as a literal path matches no file
+    /// at all, so every candidate is discarded before it is read and the query
+    /// reports a confident absence.
+    #[test]
+    fn in_scope_expands_a_bare_directory_into_its_subtree() {
+        let clauses = Clauses {
+            in_glob: Some("crates/forgeql-core".to_owned()),
+            ..Clauses::default()
+        };
+
+        assert!(
+            in_scope(Path::new("crates/forgeql-core/src/lib.rs"), &clauses),
+            "a bare directory selects its subtree, exactly as `dir/**` would"
+        );
+        assert!(
+            !in_scope(Path::new("crates/forgeql/src/main.rs"), &clauses),
+            "and still excludes what is outside it"
+        );
+    }
+
+    /// `EXCLUDE` removes a candidate the `IN` glob selected, same as downstream.
+    #[test]
+    fn in_scope_honours_exclude_over_include() {
+        let clauses = Clauses {
+            in_glob: Some("crates/**".to_owned()),
+            exclude_globs: vec!["crates/forgeql-core/tests/**".to_owned()],
+            ..Clauses::default()
+        };
+
+        assert!(in_scope(
+            Path::new("crates/forgeql-core/src/lib.rs"),
+            &clauses
+        ));
+        assert!(!in_scope(
+            Path::new("crates/forgeql-core/tests/common/mod.rs"),
+            &clauses
+        ));
+    }
+
+    /// No scope clause means every file stays a candidate.
+    #[test]
+    fn in_scope_keeps_everything_when_the_query_named_no_scope() {
+        assert!(in_scope(
+            Path::new("anywhere/at/all.rs"),
+            &Clauses::default()
+        ));
     }
 
     fn entry(path: &str, size: u64) -> FileEntry {

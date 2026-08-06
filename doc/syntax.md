@@ -200,6 +200,7 @@ FIND files [clauses]
 > | `string` | a string literal | C, C++, Rust, Python |
 > | `config` | a build- or config-file value | CMake, YAML, TOML, JSON |
 > | `doc` | prose in a documentation file | Markdown, reStructuredText |
+> | `text` | the file's own bytes — a site found by reading the line, not by a posting, so what kind of occurrence it is was never recorded | any file, only for a name no part of which can be a token (`a.b`) |
 >
 > Every role above is emitted today, but each is scoped to the languages listed,
 > so an empty result may mean the container is not scanned rather than that the
@@ -213,9 +214,15 @@ FIND files [clauses]
 > not doc.
 > `role` filters and groups like any other field: `WHERE role = 'code'` narrows
 > to references the compiler sees, `GROUP BY role` sizes the campaign by kind.
-> Only the roles a language's grammar can prove are ever emitted — the engine
-> classifies the *container*, never the meaning, so it never guesses whether a
-> mention refers to your symbol or merely spells it the same way.
+> A role is a *recorded* fact about a container, never a judgement about
+> meaning: the engine says what the name was written in, and never guesses
+> whether a mention refers to your symbol or merely spells it the same way. Two
+> qualifications, both on sites the third tier below contributes. Such a site
+> keeps the role of the posting that proposed its line — the two sit on that
+> line together, not necessarily inside the same construct — so the role is the
+> strongest evidence the line carries about the name rather than proof about it.
+> And `text` is backed by no grammar at all, claiming correspondingly less: the
+> line holds the name, and nothing about what the line is.
 >
 > Matching is **token-exact** for identifier queries: `FIND usages OF 'CONFIG_X'`
 > does not match `CONFIG_X_ASYNC`, in prose any more than in code. Tokens are
@@ -253,19 +260,37 @@ FIND files [clauses]
 > Neither tier can reach a name no recorder stored as a token at all. Where a
 > language does not widen its alphabet, `foo-bar.frozen` is stored as `foo-bar`
 > and `frozen`, so both answer zero however many files hold the whole name — and
-> zero reads exactly like "there are none". So when both find nothing and the
-> name carries a character outside `[A-Za-z0-9_]`, a third tier splits it at
-> those characters, proposes every line on which **any** of its parts is a stored
+> zero reads exactly like "there are none". So a third tier runs for every name
+> carrying a character outside `[A-Za-z0-9_]`: it splits the name at those
+> characters, proposes every line on which **any** of its parts is a stored
 > token, and keeps only the lines whose own text holds the name verbatim. Every
 > part proposes, not the cheapest: which part a site stored depends on that
 > language's alphabet, so the cheapest is routinely stored nowhere the name
 > appears. The line is the arbiter, so however loose the proposal it cannot yield
 > a false positive, and a line carrying the parts in some other arrangement is
-> rejected. When the parts together propose more than 5000 candidate lines the
-> tier declines rather than truncating, and says so in a `hint` — a truncated
-> site list would read as a complete one. A name with no run of two or more
-> identifier characters opening on a letter has nothing to propose from and also
-> answers with a reason rather than a bare zero.
+> rejected.
+>
+> Its sites are **merged** with the two tiers above, not used only when they come
+> back empty. One corpus stores the same name both ways — C keeps
+> `pm/device_runtime` inside a whole include-path token while a Python string a
+> few directories away records it as `pm` and `device_runtime` — so each tier
+> reaches sites the other cannot, and only the union is the answer. A site both
+> reach is listed once.
+>
+> Nothing caps how many candidates get verified. A name whose every part is
+> common on a large corpus makes for a slow query — every proposing file is read
+> — and that is the trade: the search is complete, and `LIMIT` / `OFFSET` page
+> the delivery. `IN` and `EXCLUDE` are the lever that does cut the work: a
+> candidate outside their globs would be dropped by the clause pipeline anyway,
+> so it is never read. The rows are identical either way; only the reading is
+> narrower, which is why scoping a blast-radius query to the subtree you are
+> about to edit is worth doing on a big tree. A name no part of which could ever
+> have been a token (`a.b`, `->`) leaves nothing to propose from, so the indexed
+> files in scope are read directly instead; those sites carry the role `text`,
+> because the bytes say the line holds the name and nothing says what kind of
+> occurrence it is. The only `hint` this tier emits names a candidate file it
+> could not read — an answer short by something specific, never short because
+> the work looked large.
 >
 > A value that no key introduces is still a value: a top-level YAML sequence or
 > JSON array has no `value` edge above it, so it contributes no `config`
@@ -275,12 +300,13 @@ FIND files [clauses]
 > build-file-argument and documentation-prose occurrences are a judgment call,
 > and an unfiltered `FIND usages` arms them: a `CHANGE NODES FOUND` sweep will
 > rewrite the log message, the doc comment, the build flag and the manual page
-> along with the code. That is
-> often exactly right — a rename that
-> leaves its own log strings stale is not finished — and sometimes wrong, so
-> read them before applying, or narrow the armed set with `WHERE role = 'code'`
-> first. The engine enumerates and types the occurrences; deciding which ones
-> mean your symbol stays the caller's job.
+> along with the code. That is often exactly right — a rename that leaves its
+> own log strings stale is not finished — and sometimes wrong, so read them
+> before applying, or narrow the armed set with `WHERE role = 'code'` first.
+> `text` needs that reading most of all: it is a raw byte match on a line, with
+> no construct behind it and nothing but the line to say what it belongs to.
+> The engine enumerates and types the occurrences; deciding which ones mean your
+> symbol stays the caller's job.
 
 > **Use `fql_kind` for all filtering.** It is language-agnostic and portable across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific and **deprecated**.
 
@@ -1052,7 +1078,7 @@ Applies to: `FIND symbols`, `FIND usages OF`, `FIND callees OF`
 | `path` | string | Relative file path (also used by `IN`/`EXCLUDE` globs) |
 | `line` | integer | 1-based start line |
 | `usages` | integer | Workspace-total count of **`role = 'code'` sites only**, aggregated from the reference index at index time. `ORDER BY usages DESC` and `WHERE usages > N` are real queries, not heuristics. It deliberately excludes every non-`code` occurrence — comment, string, build-file-argument and documentation-prose sites today — so it is smaller than the `total` of `FIND usages OF` for the same name: this column ranks symbols by how much code depends on them, not by how often the name is written. |
-| `role` | string | On `FIND usages` rows only: what the name was written in — `code`, `comment`, `string`, `config` and `doc` (see the role table above). `WHERE role = 'code'` narrows to references the compiler resolves; `GROUP BY role` sizes a rename by kind. |
+| `role` | string | On `FIND usages` rows only: what the name was written in — `code`, `comment`, `string`, `config`, `doc` and `text` (see the role table above). `WHERE role = 'code'` narrows to references the compiler resolves; `GROUP BY role` sizes a rename by kind. |
 
 **Filtered-field projection:** when a `WHERE` clause targets a non-core field —
 numeric, string, or boolean (e.g. `WHERE has_assignment_in_condition = 'true'`,

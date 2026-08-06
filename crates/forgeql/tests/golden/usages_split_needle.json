@@ -1,6 +1,6 @@
 {
   "suite": "usages_split_needle",
-  "description": "FIND usages OF a name no recorder stored whole. A mention recorder continues a token only over the extra characters its language declares, so a dotted name like 'Cargo.toml' is stored as 'Cargo' and 'toml' and both the exact and the substring tier answer zero on a corpus that writes it in several files. The name's own parts propose candidate lines and the source line itself confirms them. These cases pin the three halves that matter: the split name is now found, a name whose parts are all present but whose exact form is not still answers zero, and the whole-token tier that already worked is untouched.",
+  "description": "FIND usages OF a name no recorder stored whole. A mention recorder continues a token only over the extra characters its language declares, so a dotted name like 'Cargo.toml' is stored as 'Cargo' and 'toml' and both the exact and the substring tier answer zero on a corpus that writes it in several files. The name's own parts propose candidate lines and the source line itself confirms them, and those sites are merged with whatever the tiers above found rather than replacing them. These cases pin the halves that matter: the split name is found, a name whose parts are all present but whose exact form is not still answers zero, a name absent from the corpus answers zero, the whole-token tier that already worked is untouched, and a name one language stored whole while another split it comes back from both at once.",
   "cases": [
     {
       "name": "dotted_name_stored_only_in_parts_reaches_its_sites",
@@ -32,6 +32,35 @@
       "fql": "FIND usages OF 'zephyr/pm/device.h' GROUP BY file ORDER BY count DESC LIMIT 5",
       "assert": {
         "row_count": 5
+      }
+    },
+    {
+      "name": "a_name_one_language_stored_whole_and_another_split_answers_from_both",
+      "use": "zephyr-andre.frozen",
+      "why": "'pm/device_runtime' sits inside the whole include-path token C files store, and a Python string a few directories away spells it in parts. The whole-token tier answers 161 code sites and never sees that string, so a split tier that only ran when the tiers above came back empty would never run here at all. Only merging the two reaches this line — this case fails for exactly the gate that was removed.",
+      "fql": "FIND usages OF 'pm/device_runtime' IN 'doc/_scripts/**'",
+      "assert": {
+        "row_count": 1,
+        "rows": [ { "path": "doc/_scripts/redirects.py", "line": 141 } ]
+      }
+    },
+    {
+      "name": "the_whole_token_sites_are_still_all_there_beside_them",
+      "use": "zephyr-andre.frozen",
+      "why": "the other half of the merge: adding the split sites must not disturb the include sites the substring tier already reached.",
+      "fql": "FIND usages OF 'pm/device_runtime' IN 'subsys/pm/**' GROUP BY file ORDER BY count DESC LIMIT 5",
+      "assert": {
+        "row_count": 5
+      }
+    },
+    {
+      "name": "a_bare_directory_scope_still_selects_its_whole_subtree",
+      "use": "zephyr-andre.frozen",
+      "why": "the tier drops candidate files outside the query's own IN glob before reading them, which is only safe while it uses the clause pipeline's own matcher — one that expands a bare directory into 'dir/**'. A look-alike predicate without that expansion matches no file, discards every candidate before it is read, and answers a confident zero. This case is the same query as the one above it with the wildcard removed, so it must return the same row.",
+      "fql": "FIND usages OF 'pm/device_runtime' IN 'doc/_scripts'",
+      "assert": {
+        "row_count": 1,
+        "rows": [ { "path": "doc/_scripts/redirects.py", "line": 141 } ]
       }
     }
   ]
