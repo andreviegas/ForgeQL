@@ -9,7 +9,9 @@
 //! Setup/teardown: a small POOL of servers per process; `USE` is memoized per
 //! source.branch (read-only — no BEGIN TRANSACTION) within each pool member.
 //! Parallel-safe across agents (unique per-pid aliases), across pool members
-//! (the member index is in the alias) and across trials (Mutex-guarded stdio).
+//! (the member index is in the alias), across attempts (the alias index counts
+//! attempts, not successes, so a failed `USE`'s name is never reissued) and
+//! across trials (Mutex-guarded stdio).
 //! Requires FORGEQL_DATA_DIR; skips cleanly when unset.
 
 // Test harness (harness = false): `main`-driven, so clippy's in-test relaxations
@@ -314,6 +316,14 @@ struct Harness {
     /// corpus would land on ONE worktree, and two engine processes mutating one
     /// checkout is how `rw` cases start failing for reasons no case explains.
     id: usize,
+    /// Monotonic alias counter, consumed by EVERY alias this harness mints —
+    /// including one whose `USE` then fails. Numbering by successes instead (an
+    /// earlier scheme used `sessions.len()`) reissues a failed attempt's name:
+    /// a `USE` that fails *after* the engine created the branch ref leaves
+    /// debris called exactly what the next attach computes, and the member then
+    /// collides with its own dead first attempt — "reference ... is already
+    /// checked out", reported against a case that did nothing wrong.
+    alias_seq: usize,
 }
 
 impl Harness {
@@ -324,21 +334,37 @@ impl Harness {
             sessions: HashMap::new(),
             pid: std::process::id(),
             id,
+            alias_seq: 0,
         }
+    }
+    /// Next alias index for this harness. Consumed whether or not the `USE` it
+    /// names goes on to succeed, so a failed attempt's name is never reissued.
+    const fn next_alias_index(&mut self) -> usize {
+        let n = self.alias_seq;
+        self.alias_seq += 1;
+        n
     }
     fn session_for(&mut self, use_str: &str) -> Result<String, String> {
         if let Some(s) = self.sessions.get(use_str) {
             return Ok(s.clone());
         }
-        let alias = format!("gt-{}-{}-{}", self.pid, self.id, self.sessions.len());
+        let seq = self.next_alias_index();
+        let alias = format!("gt-{}-{}-{}", self.pid, self.id, seq);
         let fql = format!("USE {use_str} AS '{alias}'");
+        // Recorded BEFORE the USE is issued, not after it returns: a USE that
+        // fails partway can still have created the branch and the worktree, and
+        // this list is the only thing `Drop` tears down. Recording an alias
+        // whose session never existed is harmless — teardown resolves a name
+        // derived from these coords alone, so it can only ever remove this
+        // session's own worktree and branch; finding neither warns once per
+        // repository in the data dir and changes nothing.
+        self.client
+            .created
+            .push((use_str.to_string(), alias.clone()));
         let res = self
             .client
             .run_fql(None, &fql)
             .map_err(|e| format!("{fql}: {e}"))?;
-        self.client
-            .created
-            .push((use_str.to_string(), alias.clone()));
         let sid = res
             .get("session_id")
             .and_then(Value::as_str)
@@ -351,20 +377,17 @@ impl Harness {
     /// the corpus branch, tracked for teardown. Used for mutation/transaction cases
     /// so each rw case is fully isolated and discarded when the run ends.
     fn rw_session(&mut self, use_str: &str) -> Result<String, String> {
-        let alias = format!(
-            "gt-{}-{}-rw-{}",
-            self.pid,
-            self.id,
-            self.client.created.len()
-        );
+        let seq = self.next_alias_index();
+        let alias = format!("gt-{}-{}-rw-{}", self.pid, self.id, seq);
         let fql = format!("USE {use_str} AS '{alias}'");
+        // Recorded before the USE for the reason spelled out in `session_for`.
+        self.client
+            .created
+            .push((use_str.to_string(), alias.clone()));
         let res = self
             .client
             .run_fql(None, &fql)
             .map_err(|e| format!("{fql}: {e}"))?;
-        self.client
-            .created
-            .push((use_str.to_string(), alias.clone()));
         Ok(res
             .get("session_id")
             .and_then(Value::as_str)
@@ -378,6 +401,77 @@ impl Harness {
             .run_fql(Some(sid), fql)
             .map_err(|e| e.to_string())
     }
+}
+
+// ───────────────────────── harness self-tests ─────────────────────────
+
+/// A source name no data dir has registered, so `USE` on it always fails at the
+/// engine — cleanly, and without creating a branch, a worktree or a session.
+const MISSING_SOURCE: &str = "gt-selftest-no-such-source.main";
+
+/// Pull the alias back out of a `session_for` / `rw_session` error, which is
+/// formatted as `USE <source>.<branch> AS '<alias>': <cause>`.
+fn alias_of(err: &str) -> Option<&str> {
+    let rest = err.split_once("AS '")?.1;
+    rest.split_once('\'').map(|(alias, _)| alias)
+}
+
+/// A `USE` that fails must still consume its alias index. Numbering aliases by
+/// successes reissues a failed attempt's name, and a `USE` can fail *after* the
+/// engine created the branch — so the reissue collides with the debris and the
+/// member reports "reference ... is already checked out" from then on.
+fn selftest_alias_index(h: &Arc<Mutex<Harness>>, live_use: &str) -> Result<(), Failed> {
+    let mut hg = h.lock().unwrap();
+    let first = hg
+        .session_for(MISSING_SOURCE)
+        .expect_err("USE of a missing source must fail");
+    let second = hg
+        .session_for(MISSING_SOURCE)
+        .expect_err("USE of a missing source must fail");
+    // And the member stays usable afterwards — the half the collision used to
+    // destroy, one failed attach poisoning every later one on that member. This
+    // one is a real attach, so it can also fail for whatever makes a first
+    // attach fail under load; the message below keeps those two apart.
+    let attached = hg.session_for(live_use);
+    drop(hg);
+    let a = alias_of(&first).ok_or_else(|| Failed::from(format!("no alias in: {first}")))?;
+    let b = alias_of(&second).ok_or_else(|| Failed::from(format!("no alias in: {second}")))?;
+    if a == b {
+        return Err(Failed::from(format!(
+            "a failed USE did not consume its alias index: both attempts minted '{a}'"
+        )));
+    }
+    if let Err(e) = attached {
+        return Err(Failed::from(format!(
+            "the alias index advanced, but the attach after two failed attempts still \
+             failed — that is the underlying USE failure, not the counter: {e}"
+        )));
+    }
+    Ok(())
+}
+
+/// A `USE` that fails must already be in the teardown list. The engine can have
+/// created the branch and the worktree before the failure, and `Drop` cleans up
+/// nothing it was not told about — so every failure would leak a ref that stays
+/// in the bare repo forever and fails whoever computes that name next.
+fn selftest_teardown_record(h: &Arc<Mutex<Harness>>) -> Result<(), Failed> {
+    let mut hg = h.lock().unwrap();
+    let before = hg.client.created.len();
+    let err = hg
+        .session_for(MISSING_SOURCE)
+        .expect_err("USE of a missing source must fail");
+    let appended: Vec<(String, String)> = hg.client.created.iter().skip(before).cloned().collect();
+    drop(hg);
+    let alias = alias_of(&err).ok_or_else(|| Failed::from(format!("no alias in: {err}")))?;
+    if !appended
+        .iter()
+        .any(|(u, a)| u == MISSING_SOURCE && a == alias)
+    {
+        return Err(Failed::from(format!(
+            "the failed attach's alias '{alias}' is not in the teardown list: {appended:?}"
+        )));
+    }
+    Ok(())
 }
 
 // ───────────────────────── node_id-aware derived fields ─────────────────────────
@@ -742,6 +836,15 @@ fn main() {
         }
     }
 
+    // The self-tests below need one source that really is registered. Any will
+    // do, so take the lexicographically first the suites mention: deterministic,
+    // and it stays in step with the suites instead of hardcoding a corpus name.
+    let live_use: Option<String> = suites
+        .iter()
+        .flat_map(|s| s.cases.iter())
+        .map(|c| c.use_str.clone())
+        .min();
+
     // One engine process per pool member. libtest-mimic already ran trials on
     // parallel threads, but every trial locked the SAME harness for a whole
     // request round-trip, so the suite was serialised behind one engine and
@@ -765,6 +868,24 @@ fn main() {
             let h = Arc::clone(&pool[trials.len() % POOL_SIZE]);
             trials.push(build_trial(h, name, case, &soft_fails, &expected_fails));
         }
+    }
+
+    // Harness self-tests. They assert the alias and teardown invariants the
+    // pool relies on, so a regression there fails by name instead of surfacing
+    // as golden cases dying at USE for reasons no case explains. Own engine and
+    // own member index, and appended after the loop, so the round-robin
+    // assignment above is untouched.
+    if let Some(live_use) = live_use {
+        let selftest = Arc::new(Mutex::new(Harness::new(&data_dir, POOL_SIZE)));
+        let h = Arc::clone(&selftest);
+        trials.push(Trial::test(
+            "harness_selftest::failed_use_consumes_its_alias_index",
+            move || selftest_alias_index(&h, &live_use),
+        ));
+        trials.push(Trial::test(
+            "harness_selftest::failed_use_is_recorded_for_teardown",
+            move || selftest_teardown_record(&selftest),
+        ));
     }
 
     let conclusion = libtest_mimic::run(&args, trials);

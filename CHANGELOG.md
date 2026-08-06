@@ -5,6 +5,75 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.148.24] — 2026-08-06 — fix: the golden harness reissued a failed attach's alias and never cleaned it up
+
+### Fixed
+
+The golden suite failed intermittently — four of seven runs over two unrelated
+change sets — with cases dying at `USE` rather than at an assertion:
+
+```
+USE zephyr-andre.frozen AS 'gt-2623291-3-0': tools/call error:
+{"code":-32603,"message":"reference refs/heads/fql/anonymous/zephyr-andre/frozen/gt-2623291-3-0 is already checked out; class=Worktree (32)"}
+```
+
+Two defects in the harness (`crates/forgeql/tests/golden_test.rs`), either of
+which alone leaves the suite flaky.
+
+**A failed attach's alias was reissued.** `session_for` numbered its aliases
+`gt-<pid>-<member>-<sessions.len()>`, and `sessions` only grows when a `USE`
+returns cleanly. A `USE` that failed *after* the engine had already created the
+branch ref therefore left debris named exactly what that pool member's next
+attach would compute, and the member collided with its own dead first attempt —
+every alias in every observed failure was a member's first, `-0`. The index now
+comes from a counter bumped on every alias the harness mints, successful or not,
+so a failed attempt's name is never reachable again. `rw_session` numbered its
+own aliases the same only-advances-on-success way, from `created.len()`, and now
+draws from the same counter.
+
+**A failed attach was never recorded for teardown.** Both methods pushed the
+alias onto the client's cleanup list *after* the `USE` returned, so an attach
+that failed partway left behind the branch it had already created — permanently,
+one landmine per failed run, in a bare repository shared between sessions. Any
+later run that computed that name failed on contact through no fault of its own.
+The alias is now recorded before the `USE` is issued. Tearing down a session that
+never existed is harmless: teardown resolves a branch name derived from that
+session's own coordinates, so it can only ever remove that session's own worktree
+and branch; finding neither warns once per repository in the data dir and changes
+nothing.
+
+This makes cleanup possible, not certain. Teardown deletes the real session
+branch by reading it from the live worktree, and falls back to a legacy name that
+matches nothing when that worktree cannot be opened — so a `USE` that created the
+ref but no usable checkout still leaks it. The failures actually observed report
+`is already checked out`, which means a worktree registration did exist, so they
+are covered; the ref-only case is not, and closing it means changing how teardown
+resolves the branch, which is engine code and not part of this change.
+
+### Added
+
+Two harness self-tests, registered as trials beside the suites — 265 golden
+cases, 267 trials:
+
+- `harness_selftest::failed_use_consumes_its_alias_index` — two `USE`s of a
+  source that cannot exist must mint two different aliases, and a real attach on
+  the same member afterwards must still succeed.
+- `harness_selftest::failed_use_is_recorded_for_teardown` — a failed `USE` must
+  already appear, under its own alias, in the list the client tears down on drop.
+
+They run on their own engine process under their own member index, and are
+appended after the round-robin loop, so which pool member handles which golden
+case is unchanged.
+
+### Note
+
+What makes that first attach fail is a separate question and is not addressed
+here. The collision is now unreachable either way — the second attempt no longer
+asks for the first one's name — but a seed failure would still surface as one
+failing case. It was only ever seen on the largest corpus, and always on a pool
+member's first attach, which points at contention between the four members
+opening sessions on one bare repository at once.
+
 ## [0.148.23] — 2026-08-06 — refactor: lift the COPY/MOVE tests out of `transforms/copy_move.rs`
 
 ### Changed
