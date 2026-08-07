@@ -353,12 +353,15 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// symbols, those known by path and size alone, those reindexed this
     /// session, and those this session created whose extension no plugin claims
     /// — so a name living only in a `.gitignore` is found too. Two files are
-    /// outside that set for good: one excluded by `.gitignore`, `.ignore` or
-    /// `.forgeql-ignore`, which nothing here ever enumerates, and one that
-    /// reaches the worktree without passing through ForgeQL — written by a
-    /// build step, say — which is in none of them until it is indexed.
-    /// `FIND files` excludes exactly the same two: the pair answer over one
-    /// universe. No site is dropped for being expensive to reach.
+    /// outside that set: one excluded by `.gitignore`, `.ignore` or
+    /// `.forgeql-ignore`, which nothing here enumerates and indexing never
+    /// adds — unless this session created or mutated it, since a mutation
+    /// records the path directly, so it is listed and searched until the next
+    /// commit and not after — and one that reaches the worktree without
+    /// passing through ForgeQL at all, written by a build step say, which is
+    /// in none of them until it is indexed. `FIND files` excludes exactly the
+    /// same two, on the same terms: the pair answer over one universe. No site
+    /// is dropped for being expensive to reach.
     ///
     /// Two boundaries, both declared rather than silent. Binary is not
     /// searched: a NUL byte near the start means these bytes are not text, and
@@ -375,11 +378,14 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// boundary there is not a byte boundary, so splicing UTF-8 into it by
     /// offset would shift every byte after the edit; the mutation is refused
     /// with an error naming the encoding, never attempted. That covers
-    /// replacing the file whole, because a whole-file `CHANGE NODE` is lowered
-    /// to a line range like any other — converting one means deleting it and
-    /// writing it again, or editing it outside ForgeQL. Reading such a line
-    /// back is bounded too: `SHOW` renders the file's raw bytes, so the
-    /// decoding here reaches the site list and not the display.
+    /// replacing the file whole through a node handle, because a whole-file
+    /// `CHANGE NODE` is lowered to a line range like any other. Replacing every
+    /// byte at once is safe and is not refused: `CHANGE FILE '<path>' WITH ...`
+    /// does it on a non-indexed file, which is what these mostly are; an
+    /// indexed one has to be deleted and written again, or converted outside
+    /// ForgeQL. Reading such a line back is bounded too: `SHOW` renders the
+    /// file's raw bytes, so the decoding here reaches the site list and not the
+    /// display.
     ///
     /// An identifier is matched on token boundaries and anything carrying a
     /// character outside that alphabet is matched literally, so reading the

@@ -283,11 +283,14 @@ FIND files [clauses]
 > created inside this session, which no committed structure knows about yet, is
 > read from the path the session recorded for it. The set read is exactly what
 > `FIND files` lists, minus ForgeQL's own runtime artifacts, and two things are
-> outside it for good: a file excluded by `.gitignore`, `.ignore` or
-> `.forgeql-ignore`, which nothing here ever enumerates, and one that reaches
-> the worktree without passing through ForgeQL — a build step's output, say —
-> which is in neither list until it is indexed. That pair is the boundary of
-> "knows about", and it is the same pair for both commands. Binary files — a
+> outside it: a file excluded by `.gitignore`, `.ignore` or `.forgeql-ignore`,
+> which nothing here enumerates and indexing never adds — unless this session
+> created or mutated it, since a mutation records the path directly, so it is
+> listed and searched until the next commit and not after — and one that
+> reaches the worktree without passing through ForgeQL at all, a build step's
+> output say, which is in neither list until it is indexed. That pair is the
+> boundary of "knows about", and it is the same pair on the same terms for both
+> commands. Binary files — a
 > NUL byte near the start, the line `grep` draws — are not searched: an object
 > file or an index blob embeds symbol names, and a site there is bytes no sweep
 > should rewrite. A byte-order mark is believed before that check, so UTF-16
@@ -308,12 +311,15 @@ FIND files [clauses]
 > or line range in such a file is **refused with an error naming the encoding**,
 > never attempted, and so is a `COPY LINES` or `MOVE LINES` whose destination is
 > one — the payload it splices in is UTF-8. That covers replacing the file
-> whole: a whole-file `CHANGE NODE '<file_hex>' WITH ...` is lowered to a line
-> range like any other, and a line range over UTF-16 does not even reach the
-> last byte, so it is refused too. **There is no in-place conversion.** To
-> convert one, delete the file and write it again — `DELETE NODE`, then
-> `INSERT NODE FOR`, then `INSERT AFTER NODE` — or edit it outside ForgeQL and
-> let the reindex pick it up. Reading such a line back is bounded the same way:
+> whole through a node handle: a whole-file `CHANGE NODE '<file_hex>' WITH ...`
+> is lowered to a line range like any other, and a line range over UTF-16 does
+> not even reach the last byte, so it is refused too. **Replacing every byte at
+> once is safe and is not refused** — `CHANGE FILE '<path>' WITH ...` does it,
+> and is available on non-indexed files, which is what a UTF-16 file in a
+> source tree usually is. For an indexed one, delete the file and write it
+> again — `DELETE NODE`, then `INSERT NODE FOR`, then `INSERT AFTER NODE` — or
+> convert it outside ForgeQL and let the reindex pick it up.
+> Reading such a line back is bounded the same way:
 > `SHOW` renders the raw bytes, so the decode reaches the site list and not the
 > display.
 >

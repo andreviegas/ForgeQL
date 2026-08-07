@@ -63,11 +63,13 @@ a file is now refused with an error naming the encoding, and so is a
 `COPY LINES` or `MOVE LINES` whose destination is one — those reach a
 destination through a separate offset calculation, and they are the edit verbs
 for exactly the non-indexed files this release added to the search universe.
-Replacing the file whole is refused with them: a whole-file `CHANGE NODE` is
-lowered to a line range like any other, and a line range over UTF-16 does not
-even reach the last byte, so there is **no in-place conversion** — converting
-one means deleting it and writing it again, or editing it outside ForgeQL and
-letting the reindex pick it up. Reading such a line back is bounded the same
+Replacing the file whole *through a node handle* is refused with them: a
+whole-file `CHANGE NODE` is lowered to a line range like any other, and a line
+range over UTF-16 does not even reach the last byte. Replacing every byte at
+once is safe and is not refused — `CHANGE FILE '<path>' WITH ...` does it, and
+is available on non-indexed files, which is what a UTF-16 file in a source tree
+usually is; an indexed one has to be deleted and written again, or converted
+outside ForgeQL. Reading such a line back is bounded the same
 way: `SHOW` renders the raw bytes, so the decode reaches the site list and not
 the display.
 
@@ -84,8 +86,10 @@ the answer over it is complete rather than short.
 The universe now has one stated edge rather than an unstated one: a file that
 reaches the worktree without passing through ForgeQL — written by a build step,
 say — is in no segment, no file list and no session record until it is indexed,
-and a file excluded by `.gitignore`, `.ignore` or `.forgeql-ignore` is never in
-any of them at all. `FIND files` excludes exactly the same two, so it does not
+and a file excluded by `.gitignore`, `.ignore` or `.forgeql-ignore` is in none
+of them at all — unless this session created or mutated it, since a mutation
+records the path directly, so it is listed and searched until the next commit
+and not after. `FIND files` excludes exactly the same two, so it does not
 list what the read pass does not open. The two
 answer over one set, and that set is what "every file the workspace knows
 about" means everywhere the phrase appears.

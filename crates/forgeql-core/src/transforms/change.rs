@@ -342,11 +342,12 @@ pub(crate) fn wide_encoding_refusal(encoding: &str) -> String {
         "refusing to edit: this file is {encoding}, where a line boundary is not a byte \
          boundary — splicing UTF-8 text into it by byte offset would shift every byte after \
          the edit and destroy the file. `FIND usages` reads {encoding} text, so a site in one \
-         can be found but not rewritten in place. That includes replacing the file whole: a \
-         whole-file `CHANGE NODE` is lowered to a line range like any other, and a line range \
-         over {encoding} does not even reach the last byte. To convert it, delete the file and \
-         write it again — DELETE NODE, then INSERT NODE FOR, then INSERT AFTER NODE — or edit \
-         it outside ForgeQL and re-index."
+         can be found but not rewritten in place. That includes replacing the file whole \
+         through a node handle: a whole-file `CHANGE NODE` is lowered to a line range like \
+         any other, and a line range over {encoding} does not even reach the last byte. \
+         Replacing every byte at once is safe and is not refused — use `CHANGE FILE '<path>' \
+         WITH ...`, which is available on non-indexed files; for an indexed one, delete it \
+         and write it again, or convert it outside ForgeQL and re-index."
     )
 }
 /// Convert 1-based inclusive line range to byte offsets.

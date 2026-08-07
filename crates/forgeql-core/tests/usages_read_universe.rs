@@ -306,6 +306,36 @@ fn replacing_a_utf16_file_whole_is_refused_as_well() {
     );
 }
 
+/// The route that does work in place, and the reason it is safe: it replaces
+/// every byte, so no half of the file is left in the other encoding. It is
+/// `CHANGE FILE`, which is refused on indexed files and therefore available on
+/// exactly the non-indexed ones the read pass reaches — and if the guard ever
+/// spread to it, converting a UTF-16 file through the DSL at all would stop
+/// being possible. That is what this pins.
+#[test]
+fn a_utf16_file_can_be_converted_by_replacing_every_byte() {
+    let mut t = read_universe_workspace();
+
+    mutate(
+        &mut t,
+        "CHANGE FILE 'wide.txt' WITH 'idle path uses k_sleep_forever'",
+    );
+
+    let after = std::fs::read(t.workspace().join("wide.txt")).expect("fixture");
+    assert!(
+        !after.starts_with(&[0xFF, 0xFE]),
+        "the byte-order mark is gone: {after:?}"
+    );
+    assert!(
+        !after.contains(&0x00),
+        "and so are the NUL bytes that made it unreadable as text: {after:?}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&after).trim_end(),
+        "idle path uses k_sleep_forever"
+    );
+}
+
 /// A directory is not a file the read pass can open. Recording one would make
 /// every later query report an unreadable file that is not missing anything,
 /// and list the directory without the trailing slash that marks it.
