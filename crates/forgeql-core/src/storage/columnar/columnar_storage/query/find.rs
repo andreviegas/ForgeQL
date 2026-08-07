@@ -17,6 +17,26 @@ use crate::storage::columnar::columnar_storage::fast_paths::{
 use crate::storage::columnar::columnar_storage::{ColumnarStorage, SubstringIndex};
 use crate::storage::columnar::segment_builder::ZONEMAP_NUMERIC_FIELDS;
 
+/// The one field name a `FIND` on this backend accepts and cannot answer.
+///
+/// It is the raw tree-sitter kind, computed while parsing to drive kind
+/// mapping. The legacy backend keeps it on every row; the columnar row layout
+/// has no column for it, so every materialised row reports it absent and a
+/// predicate would match nothing while its negation matched everything. It
+/// stays in `CORE_WHERE_FIELDS` because that list is shared with the backend
+/// that does store it.
+const NODE_KIND: &str = "node_kind";
+
+/// Why a `node_kind` predicate is refused, and what to write instead.
+fn node_kind_refusal(clause: &str) -> String {
+    format!(
+        "{clause} node_kind is not answerable: node_kind is the raw tree-sitter \
+         kind and no indexed row stores it, so the query could only report \
+         absence. Use fql_kind, the universal kind, which is stored — \
+         fql_kind = 'function' rather than node_kind = 'function_definition'."
+    )
+}
+
 impl ColumnarStorage {
     pub(super) fn find_symbols_impl(
         &self,
@@ -79,9 +99,17 @@ impl ColumnarStorage {
     /// one segment (persistent or dirty) of this index.  Anything else — a
     /// typo or an invented field — is rejected with guidance instead of
     /// silently matching nothing after a full-index scan.
+    ///
+    /// [`NODE_KIND`] is checked first because it is the one name that passes
+    /// the core-field test and still cannot match: it is in
+    /// `CORE_WHERE_FIELDS` for the legacy backend, which does store it per
+    /// row, while nothing in this index does.
     fn reject_unknown_where_fields(&self, clauses: &Clauses) -> anyhow::Result<()> {
         for pred in &clauses.where_predicates {
             let field = pred.field.as_str();
+            if field == NODE_KIND {
+                anyhow::bail!("{}", node_kind_refusal("WHERE"));
+            }
             if crate::filter::CORE_WHERE_FIELDS.contains(&field) {
                 continue;
             }
@@ -125,6 +153,9 @@ impl ColumnarStorage {
             return Ok(());
         };
         let field = order.field.as_str();
+        if field == NODE_KIND {
+            anyhow::bail!("{}", node_kind_refusal("ORDER BY"));
+        }
         if crate::filter::SORTABLE_SYMBOL_FIELDS.contains(&field) {
             return Ok(());
         }

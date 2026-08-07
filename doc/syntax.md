@@ -370,7 +370,7 @@ FIND files [clauses]
 > The engine enumerates and types the occurrences; deciding which ones mean your
 > symbol stays the caller's job.
 
-> **Use `fql_kind` for all filtering.** It is language-agnostic and portable across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific and **deprecated**.
+> **Use `fql_kind` for all filtering.** It is language-agnostic and portable across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific and are **refused**: `node_kind` is computed while parsing and stored on no indexed row, so a `WHERE` or `ORDER BY` on it could only ever report absence. The query errors and points at `fql_kind` rather than answering a confident zero.
 
 Every `FIND` also **arms `FOUND`** — the set its rows describe — and a complete result carries a
 `found_rev` row: the master rev that gates a bulk mutation over that set. See

@@ -6,6 +6,40 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.155.0] — 2026-08-07 — `node_kind` is refused instead of silently matching nothing
+
+### Changed
+
+- `WHERE node_kind = …` and `ORDER BY node_kind` now return an error naming
+  `fql_kind` instead of an answer. `node_kind` is the raw tree-sitter kind: it
+  is computed while parsing to drive kind mapping and is stored on no row of
+  the index a session queries, so every materialised row reported it absent
+  and a predicate on it matched nothing while the negated form matched
+  everything. A query that cannot be answered now says so. Serving it would
+  mean storing it, which is an index-output change and is not part of this
+  release.
+
+### Added
+
+- A declaration, one row per queryable field, of where its value is stored,
+  which structure serves each operator class, whether that structure decides
+  the answer or only proposes candidates, what it cannot see and which
+  mechanism covers that, the budgets bounding it, and the measured cost or the
+  benchmark class that would produce one. It is a parallel declaration —
+  nothing reads it while answering a query, and the lists the builder and
+  query path actually consult are unchanged — paired with a test suite that
+  checks every claim it makes against those lists, against the builder's own
+  budget functions, and against what a query returns on a real workspace. A
+  field whose declared queryability and actual serving path disagree now fails
+  the test suite rather than answering wrongly, which is how each of the last
+  four releases' defects reached a corpus in the first place.
+
+### Fixed
+
+- Documentation described `node_kind` as merely "deprecated" for query use in
+  the syntax reference, the architecture notes and both agent guides, which
+  read as a style preference rather than as a query that cannot work.
+
 ## [0.154.0] — 2026-08-07 — `FIND usages` finds a name written on a line nothing in the index recorded
 
 ### Fixed

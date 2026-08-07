@@ -28,6 +28,7 @@ pub mod config;
 pub mod debug_log;
 pub mod engine;
 pub mod error;
+pub mod field_tiers;
 pub mod filter;
 pub mod git;
 pub mod ir;

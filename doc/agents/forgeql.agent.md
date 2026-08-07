@@ -436,7 +436,7 @@ changes.
 
 ## fql_kind Values
 
-`fql_kind` is the language-agnostic kind field. Raw `node_kind` values (tree-sitter grammar names) are language-specific and **deprecated**.
+`fql_kind` is the language-agnostic kind field. Raw `node_kind` values (tree-sitter grammar names) are language-specific and are **refused** in `WHERE` and `ORDER BY`: nothing stores `node_kind` per row, so a predicate on it could only report absence. Use `fql_kind`.
 
 | `fql_kind` | Matches |
 |---|---|

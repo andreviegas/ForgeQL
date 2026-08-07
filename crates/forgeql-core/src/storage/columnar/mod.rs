@@ -53,7 +53,8 @@ pub use dirty_overlay::DirtyOverlay;
 pub use manifest::Manifest;
 pub use overlay_builder::OverlayBuilder;
 pub use segment_builder::{
-    POSTING_ENRICHMENT_FIELDS, SegmentBuilder, SymbolRow, overlay_budget, posting_budget,
+    POSTING_ENRICHMENT_FIELDS, SegmentBuilder, SymbolRow, ZONEMAP_NUMERIC_FIELDS, overlay_budget,
+    posting_budget,
 };
 pub use segment_reader::SegmentReader;
 pub use shadow_writer::ShadowWriter;

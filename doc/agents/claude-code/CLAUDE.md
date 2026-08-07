@@ -264,7 +264,7 @@ Source line filtering runs **before** the 40-line cap.
 
 ## fql_kind Values
 
-**Always use `fql_kind` in WHERE clauses.** `fql_kind` is language-agnostic and works identically across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific and **deprecated**.
+**Always use `fql_kind` in WHERE clauses.** `fql_kind` is language-agnostic and works identically across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific and are **refused** in `WHERE` and `ORDER BY`: nothing stores `node_kind` per row, so a predicate on it could only report absence.
 
 | `fql_kind` | Matches |
 |---|---|

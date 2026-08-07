@@ -254,7 +254,10 @@ fn find_globals_with_conflicting_node_kind_returns_empty() {
 
     // FIND globals adds fql_kind='variable' + scope='file' implicitly.
     // Adding WHERE node_kind = 'enum_specifier' must further filter,
-    // not be silently dropped.
+    // not be silently dropped. This session is on the legacy backend,
+    // which does store node_kind per row — the columnar backend does not,
+    // and refuses the predicate rather than answering from a field it has
+    // no column for.
     let op =
         crate::parser::parse("FIND globals WHERE node_kind = 'enum_specifier' LIMIT 200").unwrap();
     let result = engine
@@ -265,6 +268,7 @@ fn find_globals_with_conflicting_node_kind_returns_empty() {
         )
         .result
         .unwrap();
+
     let results = match result {
         ForgeQLResult::Query(qr) => qr.results,
         other => panic!("expected Query, got: {other:?}"),
