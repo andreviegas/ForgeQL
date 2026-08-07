@@ -200,11 +200,11 @@ impl ColumnarStorage {
                 (field, CompareOp::Eq, PredicateValue::String(val))
                     if field != "fql_kind" && field != "name" =>
                 {
-                    self.overlay.prefilter_enrichment_eq(field, val.as_str())
+                    self.enrichment_eq_bitmap(field, val.as_str())
                 }
                 (field, CompareOp::Eq, PredicateValue::Bool(b)) => {
                     let val_str = if *b { "true" } else { "false" };
-                    self.overlay.prefilter_enrichment_eq(field, val_str)
+                    self.enrichment_eq_bitmap(field, val_str)
                 }
                 (field, CompareOp::Gte, PredicateValue::Number(v)) => {
                     self.overlay.prefilter_enrichment_ge(field, *v)
@@ -229,6 +229,74 @@ impl ColumnarStorage {
         }
 
         result.unwrap_or_else(|| (0..self.overlay.row_count()).collect())
+    }
+
+    /// Global candidate bitmap for an `Eq` predicate on an enrichment field.
+    ///
+    /// A hit returns the value's stored row bitmap. A MISS is the interesting
+    /// case: the overlay holds no bitmap for `field=value`. Returning `None`
+    /// there makes the caller skip the prefilter entirely and materialise
+    /// every row in the corpus, so asking for a value that simply does not
+    /// exist costs a full scan — `guard_kind = 'ifdef'` measured 7.48 s on a
+    /// 3M-symbol corpus to produce an answer that is always empty, because
+    /// `guard_kind` is only ever `preprocessor`, `attribute` or `heuristic`.
+    ///
+    /// So a miss returns an EMPTY bitmap instead — but only once the segments
+    /// have confirmed the value really is absent, since an empty bitmap
+    /// asserts "no such row exists" and a wrong assertion there is a silent
+    /// false negative rather than a slow query. The same reasoning already
+    /// governs the `fql_kind` arm above.
+    fn enrichment_eq_bitmap(&self, field: &str, value: &str) -> Option<RoaringBitmap> {
+        if let Some(bm) = self.overlay.prefilter_enrichment_eq(field, value) {
+            return Some(bm);
+        }
+        // The arm routing here matches ANY field name, including core row
+        // metadata the enrichment index never stores (`language`, `path`,
+        // `node_kind`). For one of those, "no segment stores a column for it"
+        // is not evidence of absence — it is the field being served somewhere
+        // else entirely — and reading it as absence returned zero rows
+        // corpus-wide for `WHERE language = '<lang>'`. Core fields are refused
+        // by name first: the two universes are disjoint today, but only this
+        // check keeps that true the day an enricher writes a field named like
+        // a core one.
+        if crate::filter::CORE_WHERE_FIELDS.contains(&field) || !self.is_enrichment_field(field) {
+            return None;
+        }
+        self.no_segment_carries_enrichment_value(field, value)
+            .then(RoaringBitmap::new)
+    }
+
+    /// `true` when `field` is served by the enrichment tier at all: the overlay
+    /// holds a key for it, or some segment stores a column for it.
+    ///
+    /// A core row field is served by neither, and the segments' silence about
+    /// it must never be read as absence.
+    fn is_enrichment_field(&self, field: &str) -> bool {
+        self.overlay.has_enrichment_field(field)
+            || self.segments.iter().any(|seg| seg.has_extra_col(field))
+    }
+
+    /// Whether no persistent row anywhere carries `field = value`.
+    ///
+    /// Asked of the segments rather than of the overlay's key set, because the
+    /// overlay is not in a position to answer it. Its keys are built from
+    /// `local_bm & canonical_bm`, so a value carried only by rows that lost the
+    /// per-segment `(name, fql_kind, line)` dedup — or that sit in a shadowed
+    /// duplicate path — is keyed nowhere, even though the rows exist and the
+    /// scan would return them. A missing key also cannot be told apart from a
+    /// key whose bitmap failed to read. Per-segment postings have neither
+    /// problem: they are keyed by raw row id and read per segment.
+    ///
+    /// A segment holding the column with no postings blob for it (the builder
+    /// skips the blob past its per-segment cardinality cap) cannot prove
+    /// anything, and one such segment is enough to keep the complete scan.
+    ///
+    /// Runs only on the miss path, whose current cost is a full-corpus scan,
+    /// and short-circuits on the first segment that carries the value.
+    fn no_segment_carries_enrichment_value(&self, field: &str, value: &str) -> bool {
+        self.segments
+            .iter()
+            .all(|seg| seg.proves_enrichment_value_absent(field, value))
     }
 
     /// Compute a trigram-based candidate bitmap from a SQL `LIKE` pattern.

@@ -823,6 +823,31 @@ impl SegmentReader {
         result.unwrap_or_else(|| (0..self.row_count).collect())
     }
 
+    /// `true` when this segment can PROVE that no row of its own carries
+    /// `field = value`.
+    ///
+    /// Answered from the per-segment postings, which are keyed by raw row id
+    /// and so cover every row the segment holds — including rows the workspace
+    /// overlay never keys, either because they lost the per-segment
+    /// `(name, fql_kind, line)` dedup or because their whole path is shadowed
+    /// by another segment. That is what makes this, rather than the overlay's
+    /// key set, the honest place to ask the question.
+    ///
+    /// Returns `false` — "cannot prove it" — when the segment holds the column
+    /// but no postings blob for it, which is what the builder does when the
+    /// field's per-segment cardinality exceeds its cap. Those rows are
+    /// invisible here, so the caller must keep the complete scan.
+    pub(crate) fn proves_enrichment_value_absent(&self, field: &str, value: &str) -> bool {
+        let Some(by_value) = self.field_postings.get(field) else {
+            return !self.has_extra_col(field);
+        };
+        let Some(&value_id) = self.strings.reverse.get(value) else {
+            // The value is not even in this segment's string pool.
+            return true;
+        };
+        by_value.get(&value_id).is_none_or(RoaringBitmap::is_empty)
+    }
+
     /// Narrow `local_rows` using per-segment enrichment posting bitmaps.
     ///
     /// For each `WHERE <field> = '<value>'` predicate where `<field>` has a

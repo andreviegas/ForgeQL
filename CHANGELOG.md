@@ -5,6 +5,56 @@ All notable changes to ForgeQL will be documented in this file.
 ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.149.2] — 2026-08-07 — asking for an enrichment value that does not exist no longer scans the corpus
+
+### Fixed
+
+**`WHERE <enrichment field> = '<value>'` cost a full-corpus scan whenever the
+value did not exist.** The workspace overlay stores one row bitmap per
+`field=value` pair. When a query named a value the corpus never stores, that
+lookup missed, the prefilter reported "no opinion", and the engine fell back to
+materialising every row in the index so the residual filter could reject them
+one at a time. The answer was correct — always empty — but it was paid for by
+reading the entire corpus.
+
+On a 3,046,476-symbol corpus, `FIND symbols WHERE guard_kind = 'ifdef'` took
+**7.48 s to return nothing**. It could never return anything: `guard_kind` only
+ever holds `preprocessor`, `attribute` or `heuristic`, so `ifdef` matches no row
+by construction. A missed lookup now yields an empty candidate set directly,
+and the same query answers in **under 200 ms** — the floor this bench can
+resolve. Queries naming a value that *does* exist are unchanged, whether the
+value is common or rare (both measured at the same floor before and after), so
+this is strictly the absent-value path.
+
+The identical mistake was fixed for `fql_kind` some time ago, where an unknown
+kind used to cost about eight seconds for the same reason; enrichment fields
+were simply never given the same treatment.
+
+An empty candidate set is an assertion — "no such row exists" — so the answer
+is not taken from the overlay, which is not in a position to make it. The
+overlay's keys are built only from rows that survive a per-segment
+`(name, fql_kind, line)` dedup and the shadowing of duplicate source paths, so
+a value carried solely by a losing twin is keyed nowhere even though the row
+exists and the scan would return it; a missing key also cannot be told apart
+from a key whose bitmap failed to read. The question is instead put to the
+per-segment postings, which are keyed by raw row id and so cover every row a
+segment holds.
+
+The shortcut is confined to fields the enrichment index actually serves. Core
+row metadata such as `language` is stored elsewhere entirely, so that index
+having nothing to say about it is not evidence about which rows exist, and
+those queries keep their existing path untouched.
+
+A segment that holds the field but no postings for it — which is what the
+builder does when the field's per-segment cardinality exceeds its cap — can
+prove nothing, and a single such segment is enough to keep the complete scan.
+A ten-arm `#if`/`#elif` chain does exactly this to `guard_branch` in one file,
+and that case is pinned by a regression test.
+
+Rows from uncommitted in-session edits were never at risk: they are
+materialised in a later stage, downstream of the candidate set, which is also
+pinned by a test.
 ## [0.149.1] — 2026-08-06 — fix: `FIND usages` stopped searching once one tier had answered, and stopped early when the work looked large
 
 ### Fixed
