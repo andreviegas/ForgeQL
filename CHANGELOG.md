@@ -34,10 +34,14 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `FIND files`, which groups file rows through its own path and is unchanged
   apart from `node_kind`. `FIND usages` groups occurrence rows, where `role`
   and `file` are the useful keys.
-- `ORDER BY kind` on `FIND symbols` is refused rather than silently sorted by
-  name. `kind` is a `SHOW outline` / `SHOW members` column, not an alias of
-  `fql_kind` on a symbol row: it resolved on no row, so every symbol tied and
-  the result came back in alphabetical order under a "top N by kind" label.
+- `kind` now resolves everywhere it is printed. It was accepted by validation
+  on `FIND symbols`, `SHOW outline` and `SHOW members`, resolved on none of
+  them, and so answered a confident zero — while being the very key a symbol
+  row is printed under in JSON output, so copying the field name out of an
+  answer produced a query that matched nothing. It is an alias of `fql_kind`
+  on all three, in `WHERE`, `ORDER BY` and `GROUP BY`, and on `FIND symbols`
+  it reaches the same kind bitmap `fql_kind` does rather than falling to a
+  scan.
 - `text` and `content` are refused in `ORDER BY` and `GROUP BY` as well as in
   `WHERE`. They were already rejected in `WHERE` on FIND queries for the same
   reason — no row of a FIND result carries source text — but the other two
@@ -59,12 +63,6 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   four releases' defects reached a corpus in the first place.
 
 ### Fixed
-
-- `SHOW outline … WHERE kind = …` and `SHOW members … WHERE kind = …` matched
-  nothing. The syntax reference documents `kind` as a column on both row types
-  and neither resolved it, so the documented predicate reported a confident
-  absence while `fql_kind` on the same rows worked. Both now resolve it,
-  alongside the `type` alias `SHOW members` already accepted.
 
 - Documentation described `node_kind` as merely "deprecated" for query use in
   the syntax reference, the architecture notes and both agent guides, which

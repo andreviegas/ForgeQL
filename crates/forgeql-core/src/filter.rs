@@ -71,17 +71,19 @@ pub const CORE_WHERE_FIELDS: &[&str] = &[
 ///
 /// Each resolves on every `SymbolMatch` via `field_str` / `field_num`, and
 /// that is the entry condition: a name that resolves on no row ties every
-/// symbol and hands back name order under a "top N by <field>" label, which
-/// is why `kind` is absent — it is an outline/members column, not an alias
-/// of `fql_kind` on a symbol row. File- and outline-only fields (`size`,
-/// `depth`, `extension`) are absent for the same reason. `node_kind` stays
-/// listed because the legacy backend does resolve it; the columnar backend
-/// refuses it separately. The columnar backend rejects an ORDER BY field
+/// symbol and hands back name order under a "top N by <field>" label. File-
+/// and outline-only fields (`size`, `depth`, `extension`) are absent for that
+/// reason. `kind` is present because it is an alias of `fql_kind` — it is
+/// also the key a symbol row is printed under in JSON output, so a query
+/// naming it has to work. `node_kind` stays listed because the legacy backend
+/// does resolve it; the columnar backend refuses it separately. The columnar
+/// backend rejects an ORDER BY field
 /// that is neither listed here, a known enrichment field, nor a materialised
 /// extra column, rather than silently falling back to name order.
 pub const SORTABLE_SYMBOL_FIELDS: &[&str] = &[
     "name",
     "fql_kind",
+    "kind",
     "node_kind",
     "node_id",
     "path",
@@ -101,13 +103,14 @@ pub const SORTABLE_SYMBOL_FIELDS: &[&str] = &[
 /// cannot resolve does not return nothing — it returns exactly one group,
 /// named by the empty string, holding every row. That reads like an answer.
 /// The entry condition is therefore literal: the name must be one
-/// `SymbolMatch::field_str` resolves. `line`, `usages` and `count` resolve
-/// only through `field_num` and so are absent; enrichment fields and stored
+/// `SymbolMatch::field_str` resolves, aliases included. `line`, `usages` and
+/// `count` resolve only through `field_num` and so are absent; enrichment
 /// extra columns are accepted separately, by the backend that knows it has
 /// them.
 pub const GROUPABLE_SYMBOL_FIELDS: &[&str] = &[
     "name",
     "fql_kind",
+    "kind",
     "node_kind",
     "node_id",
     "path",

@@ -217,7 +217,7 @@ Applied in order: `IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY
 | `IN 'glob/**'` | Limit to matching paths |
 | `EXCLUDE 'glob/**'` | Skip matching paths |
 | `WHERE field op value` | Filter (repeatable, AND) |
-| `GROUP BY file\|kind` | Aggregate |
+| `GROUP BY file\|fql_kind` | Aggregate. On `FIND symbols` the key must be a field a symbol row resolves as a string — `name`, `fql_kind`/`kind`, `path`/`file`, `language`/`lang`, `node_id`, or any enrichment field. `line`, `usages` and `count` are numeric and are refused, as is any name no row carries |
 | `HAVING field op value` | Filter on aggregates |
 | `ORDER BY field [ASC\|DESC]` | Sort |
 | `OFFSET N` / `LIMIT N` | Pagination |

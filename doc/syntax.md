@@ -1154,7 +1154,7 @@ Applies to: `SHOW outline OF`
 | Field | Type | Description |
 |---|---|---|
 | `name` | string | Symbol name |
-| `kind` | string | Universal kind (`fql_kind` value, e.g. `function`, `class`). Falls back to raw tree-sitter name for unmapped nodes. |
+| `fql_kind` / `kind` | string | Universal kind (e.g. `function`, `class`). Falls back to raw tree-sitter name for unmapped nodes. Rows are printed under `fql_kind`; `kind` filters and sorts the same column. |
 | `path` / `file` | string | Relative file path |
 | `line` | integer | 1-based start line |
 | `depth` | integer | Nesting depth in the structural tree (0 = top-level). Filterable and sortable. |
@@ -1166,7 +1166,7 @@ Applies to: `SHOW members OF`
 
 | Field | Type | Description |
 |---|---|---|
-| `kind` / `type` | string | Member kind (`field`, `method`, `enumerator`) |
+| `fql_kind` / `kind` / `type` | string | Member kind (`field`, `method`, `enumerator`). Rows are printed under `fql_kind`; the other two filter and sort the same column. |
 | `text` / `declaration` / `name` | string | Declaration text |
 | `line` | integer | 1-based line number |
 

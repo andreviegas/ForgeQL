@@ -575,7 +575,7 @@ pub const FIELD_TIERS: &[FieldTier] = &[
     },
     FieldTier {
         field: "fql_kind",
-        aliases: &[],
+        aliases: &["kind"],
         column: None,
         source: Source::CoreColumn,
         serving: FQL_KIND_SERVING,
@@ -736,17 +736,6 @@ pub const FIELD_TIERS: &[FieldTier] = &[
     // same name now errors rather than fabricating one empty-named group, and
     // both halves are pinned, so the day either is fixed this table must be
     // updated with it.
-    FieldTier {
-        // A `SHOW outline` / `SHOW members` row column, not an alias of
-        // `fql_kind` — the syntax reference documents it on those rows only.
-        field: "kind",
-        aliases: &[],
-        column: None,
-        source: Source::OtherRowType,
-        serving: UNSERVED_ALL,
-        gaps: &[],
-        budget: None,
-    },
     FieldTier {
         field: "count",
         aliases: &[],

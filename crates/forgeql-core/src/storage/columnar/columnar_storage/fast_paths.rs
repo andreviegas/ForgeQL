@@ -168,7 +168,7 @@ impl ColumnarStorage {
 
         for pred in &clauses.where_predicates {
             let Some(kind_bm) = (match (pred.field.as_str(), &pred.op, &pred.value) {
-                ("fql_kind", CompareOp::Eq, PredicateValue::String(val)) => {
+                ("fql_kind" | "kind", CompareOp::Eq, PredicateValue::String(val)) => {
                     // When the kind is absent in every segment, return an empty
                     // bitmap immediately rather than None.  None would fall
                     // through to the full-table scan, causing ~8 s regressions
@@ -206,7 +206,7 @@ impl ColumnarStorage {
                 // Phase 5: enrichment bitmap prefilter (FQOV v7).
                 // Look up global bitmaps for enrichment predicates.
                 (field, CompareOp::Eq, PredicateValue::String(val))
-                    if field != "fql_kind" && field != "name" =>
+                    if field != "fql_kind" && field != "kind" && field != "name" =>
                 {
                     self.enrichment_eq_bitmap(field, val.as_str())
                 }

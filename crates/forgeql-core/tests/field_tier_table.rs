@@ -406,6 +406,13 @@ fn query(t: &mut common::TestSession, fql: &str) -> QueryResult {
     }
 }
 
+/// Result row names, sorted — the comparable shape of an answer.
+fn names(q: &QueryResult) -> Vec<String> {
+    let mut v: Vec<String> = q.results.iter().map(|r| r.name.clone()).collect();
+    v.sort_unstable();
+    v
+}
+
 /// One file whose conditional chain carries `branches` distinct
 /// `guard_branch` values — the cheapest way to put a real field over a real
 /// budget, since the value is the branch's position.
@@ -672,4 +679,59 @@ fn the_source_of_a_declared_field_is_consistent_with_its_tier() {
             );
         }
     }
+}
+
+/// `kind` is an alias of `fql_kind` on every row type that prints a kind, and
+/// an alias that resolves to nothing is the defect this slice exists to
+/// remove.
+///
+/// It is worth pinning because `kind` is the key a `FIND symbols` row is
+/// printed under in JSON output: an agent that copies the field name out of
+/// the answer it was just given must get rows back, not a confident zero.
+#[test]
+fn kind_answers_exactly_as_fql_kind_does() {
+    let mut t = guarded_workspace(3);
+
+    let by_alias = query(&mut t, "FIND symbols WHERE kind = 'function' LIMIT 100");
+    let by_canonical = query(&mut t, "FIND symbols WHERE fql_kind = 'function' LIMIT 100");
+    assert!(
+        !by_canonical.results.is_empty(),
+        "fixture indexed no functions, so this proves nothing"
+    );
+    assert_eq!(
+        names(&by_alias),
+        names(&by_canonical),
+        "`kind` must answer as `fql_kind` on symbol rows"
+    );
+
+    // The same on the two row types that print the column under that name.
+    //
+    // Compared on the entries the predicate selected, not on the whole
+    // response: `SHOW outline` derives each row's `depth` differently
+    // depending on whether the filter ran during the tree walk or after it,
+    // so `WHERE kind` reports 0 where `WHERE fql_kind` reports the structural
+    // depth. That split predates this alias — it is there for every predicate
+    // that is not `fql_kind` — and it is a separate defect, not this claim.
+    let alias = "SHOW outline OF 'guards.cpp' WHERE kind = 'function'";
+    let canonical = "SHOW outline OF 'guards.cpp' WHERE fql_kind = 'function'";
+    let mut selected = |fql: &str| {
+        let rendered = format!("{:?}", t.try_fql(fql).expect("query"));
+        let mut found: Vec<String> = rendered
+            .split("name: \"")
+            .skip(1)
+            .filter_map(|s| s.split('"').next().map(str::to_owned))
+            .collect();
+        found.sort_unstable();
+        found
+    };
+    let from_alias = selected(alias);
+    let from_canonical = selected(canonical);
+    assert!(
+        !from_alias.is_empty(),
+        "the outline fixture selected nothing, so this proves nothing"
+    );
+    assert_eq!(
+        from_alias, from_canonical,
+        "`{alias}` and `{canonical}` must select the same entries"
+    );
 }

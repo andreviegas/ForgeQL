@@ -12,7 +12,10 @@ impl ClauseTarget for crate::result::SymbolMatch {
         match field {
             "name" => Some(&self.name),
             "node_kind" => self.node_kind.as_deref(),
-            "fql_kind" => self.fql_kind.as_deref(),
+            // `kind` is the key this row is PRINTED under in JSON output, so
+            // an agent filtering on the name it was just shown must get rows
+            // rather than a confident zero.
+            "fql_kind" | "kind" => self.fql_kind.as_deref(),
             "language" | "lang" => self.language.as_deref(),
             "path" | "file" => self.path.as_deref().and_then(|p| p.to_str()),
             "node_id" => self.node_id.as_deref(),
@@ -45,7 +48,7 @@ impl ClauseTarget for RowRef<'_> {
         match field {
             "name" => Some(self.table.name_of(self.row)),
             "node_kind" => Some(self.table.node_kind_of(self.row)),
-            "fql_kind" => {
+            "fql_kind" | "kind" => {
                 let s = self.table.fql_kind_of(self.row);
                 if s.is_empty() { None } else { Some(s) }
             }
