@@ -100,6 +100,16 @@ pub(crate) fn staged_segment_path(
 /// Version 4 added `added_paths`, the non-indexed files this session created.
 const DELTA_FORMAT_VERSION: u32 = 4;
 
+/// The head of a [`DeltaFile`], decodable on its own.
+///
+/// bincode writes fields in declaration order, so the leading `version` can be
+/// read without the rest — which is what lets a delta from an older layout be
+/// reported as an old format rather than as a decode failure.
+#[derive(Debug, Deserialize)]
+struct DeltaHeader {
+    version: u32,
+}
+
 /// `bincode`-serialized snapshot of a [`DirtyOverlay`].
 ///
 /// `DirtyOverlay` is not serialized directly — its in-memory indexes are
@@ -196,19 +206,28 @@ impl DeltaFile {
         use super::dirty_overlay::DirtySegment;
 
         let bytes = std::fs::read(path)?;
-        let file: Self = bincode::deserialize(&bytes)?;
-        // A delta written before the removal set became path-keyed decodes
-        // cleanly — bincode encodes `PathBuf` exactly like `String` — with
-        // content hashes misread as paths, which shadows nothing and silently
-        // resurrects a deleted file's symbols. Refuse it instead.
-        if file.version != DELTA_FORMAT_VERSION {
+        // Two reasons the version has to be checked, and one reason it is read
+        // on its own. A delta written before the removal set became path-keyed
+        // decodes cleanly — bincode encodes `PathBuf` exactly like `String` —
+        // with content hashes misread as paths, which shadows nothing and
+        // silently resurrects a deleted file's symbols. And a delta written
+        // before a field was added fails with a bincode end-of-input, an error
+        // indistinguishable from a corrupt file, so the caller would reset the
+        // overlay rather than report a format this build no longer reads.
+        // Decoding the whole struct first would turn the second case into the
+        // wrong error; `version` leads the struct precisely so it need not be.
+        let header: DeltaHeader = bincode::deserialize_from(&bytes[..]).map_err(|e| {
+            anyhow::anyhow!("columnar delta at {} is unreadable: {e}", path.display())
+        })?;
+        if header.version != DELTA_FORMAT_VERSION {
             anyhow::bail!(
                 "columnar delta at {} has format version {} (expected {})",
                 path.display(),
-                file.version,
+                header.version,
                 DELTA_FORMAT_VERSION
             );
         }
+        let file: Self = bincode::deserialize(&bytes)?;
 
         let mut dirty = DirtyOverlay::new();
         let mut needs_reindex: Vec<PathBuf> = Vec::new();
@@ -398,6 +417,44 @@ mod tests {
         };
         let path = write_delta(tmp.path(), &file);
         assert!(DeltaFile::load(&path, tmp.path()).is_err());
+    }
+
+    /// The test above writes a current-shaped body with an old version number,
+    /// which the version check catches on its own. A *genuinely* older delta
+    /// has a shorter body too, and decoding the struct before the version
+    /// would fail on end-of-input instead — an error the caller cannot tell
+    /// from a corrupt file, so it resets the overlay rather than reporting an
+    /// unreadable format. Adding one field is enough to cause that, so this
+    /// pins the version being read from the head of the payload.
+    #[test]
+    fn a_delta_from_the_previous_layout_is_refused_by_version_not_by_eof() {
+        /// The v3 shape: no `added_paths`.
+        #[derive(serde::Serialize)]
+        struct DeltaV3 {
+            version: u32,
+            enrich_ver: u32,
+            staged: Vec<StagedEntry>,
+            removed_paths: Vec<PathBuf>,
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(".forgeql-columnar-delta");
+        let old = DeltaV3 {
+            version: DELTA_FORMAT_VERSION - 1,
+            enrich_ver: super::super::ENRICH_VER,
+            staged: vec![entry("src/a.rs", "aaaa", "")],
+            removed_paths: vec![PathBuf::from("src/deleted.rs")],
+        };
+        std::fs::write(&path, bincode::serialize(&old).unwrap()).unwrap();
+
+        let Err(err) = DeltaFile::load(&path, tmp.path()) else {
+            panic!("a previous layout must not load");
+        };
+        let err = err.to_string();
+        assert!(
+            err.contains("format version"),
+            "the refusal must name the format, not surface a decode error: {err}"
+        );
     }
 
     /// `read_valid_segment_names` treats a previous-generation delta as

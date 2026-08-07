@@ -322,7 +322,7 @@ fn resolve_delete(rel_path: &str, abs_path: &Path) -> Result<FileEdit> {
 /// Only a byte-order mark counts. Guessing from NUL density would misread a
 /// compiled object, and a wrong answer here either refuses a legitimate edit
 /// or performs a destructive one.
-fn wide_encoding(source: &[u8]) -> Option<&'static str> {
+pub(crate) fn wide_encoding(source: &[u8]) -> Option<&'static str> {
     match source {
         [0xFF, 0xFE, 0x00, 0x00, ..] => Some("UTF-32LE"),
         [0x00, 0x00, 0xFE, 0xFF, ..] => Some("UTF-32BE"),
@@ -337,7 +337,7 @@ fn wide_encoding(source: &[u8]) -> Option<&'static str> {
 /// Stated in full because the agent reaching this has just been shown a site
 /// in the file by `FIND usages`: without the reason, a refusal on a line the
 /// query quoted back reads as a defect rather than as the boundary it is.
-fn wide_encoding_refusal(encoding: &str) -> String {
+pub(crate) fn wide_encoding_refusal(encoding: &str) -> String {
     format!(
         "refusing to edit: this file is {encoding}, where a line boundary is not a byte \
          boundary — splicing UTF-8 text into it by byte offset would shift every byte after \

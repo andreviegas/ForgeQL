@@ -229,3 +229,47 @@ fn an_edit_at_a_site_in_a_utf16_file_is_refused_and_writes_nothing() {
         "a refused write must leave the file exactly as it was"
     );
 }
+
+/// `COPY LINES` and `MOVE LINES` are the edit verbs for non-indexed files —
+/// exactly the class the read pass now searches — and they reach a destination
+/// through a different byte-offset calculation than the node verbs do. A guard
+/// on one and not the other leaves the file corruptible by the other.
+#[test]
+fn copying_lines_into_a_utf16_destination_is_refused_and_writes_nothing() {
+    let mut t = read_universe_workspace();
+    let before = std::fs::read(t.workspace().join("wide.txt")).expect("fixture");
+
+    let err = t.err("COPY LINES 1-1 OF 'notes.txt' TO 'wide.txt'");
+
+    assert!(
+        err.contains("UTF-16LE"),
+        "the destination is UTF-16 and the payload is UTF-8: {err}"
+    );
+    assert_eq!(
+        std::fs::read(t.workspace().join("wide.txt")).expect("fixture"),
+        before,
+        "a refused copy must leave the destination exactly as it was"
+    );
+}
+
+/// A directory is not a file the read pass can open. Recording one would make
+/// every later query report an unreadable file that is not missing anything,
+/// and list the directory without the trailing slash that marks it.
+#[test]
+fn creating_a_directory_does_not_add_it_to_the_files_that_are_read() {
+    let mut t = read_universe_workspace();
+
+    mutate(&mut t, "INSERT NODE FOR 'generated/'");
+
+    let q = query(&mut t, &format!("FIND usages OF '{NEEDLE}'"));
+    assert!(
+        !files(&q).contains(&"generated".to_owned()),
+        "a directory holds no lines: {:?}",
+        files(&q)
+    );
+    assert!(
+        q.hint.as_deref().unwrap_or_default().is_empty(),
+        "nothing was unreadable, so nothing may claim it was: {:?}",
+        q.hint
+    );
+}

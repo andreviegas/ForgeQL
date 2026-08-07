@@ -92,7 +92,16 @@ impl ColumnarStorage {
             // until the next commit — record its path so the file list and the
             // `FIND usages` read pass can still see it.
             let Some(lang) = self.lang_registry.language_for_path(path) else {
-                self.dirty.add_path(rel_path);
+                // Directories arrive here too — `INSERT NODE FOR 'docs/'`
+                // reindexes the path it created — and a directory is not a
+                // file the read pass can open. Recording one would make
+                // `std::fs::read` fail with `IsADirectory`, which is neither
+                // `NotFound` nor a real shortfall, so it would raise the
+                // unread hint on every query and list the directory in
+                // `FIND files` without its trailing slash.
+                if path.is_file() {
+                    self.dirty.add_path(rel_path);
+                }
                 continue;
             };
 

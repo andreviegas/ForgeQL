@@ -8,7 +8,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-use crate::transforms::change::lines_to_byte_range;
+use crate::transforms::change::{lines_to_byte_range, wide_encoding, wide_encoding_refusal};
 use crate::transforms::{ByteRangeEdit, FileEdit, TransformPlan};
 use crate::workspace::file_io::read_bytes;
 
@@ -47,7 +47,7 @@ pub fn plan_copy_lines(
         Vec::new()
     };
 
-    Ok(insertion_plan(dst_abs, &dst_bytes, None, payload))
+    insertion_plan(dst_abs, &dst_bytes, None, payload)
 }
 
 /// Plan `COPY LINES start-end OF src TO dst AT LINE at`.
@@ -80,7 +80,7 @@ pub fn plan_copy_lines_at(
         Vec::new()
     };
 
-    Ok(insertion_plan(dst_abs, &dst_bytes, Some(at), payload))
+    insertion_plan(dst_abs, &dst_bytes, Some(at), payload)
 }
 
 /// Plan `MOVE LINES start-end OF src TO dst [AT LINE at]` — and the
@@ -132,6 +132,12 @@ pub fn plan_move_lines(
         insertion_byte_offset(&src_bytes, at)
     } else if dst_abs.exists() {
         let dst_bytes = read_bytes(dst_abs)?;
+        // A cross-file move writes the UTF-8 payload into `dst`; the same-file
+        // branch above is already refused by `lines_to_byte_range` on
+        // `src_bytes`, and this is the other destination it can reach.
+        if let Some(encoding) = wide_encoding(&dst_bytes) {
+            bail!("{}: {}", dst_abs.display(), wide_encoding_refusal(encoding));
+        }
         insertion_byte_offset(&dst_bytes, at)
     } else {
         insertion_byte_offset(&[], at)
@@ -197,16 +203,27 @@ fn insertion_plan(
     dst_bytes: &[u8],
     at: Option<usize>,
     payload: String,
-) -> TransformPlan {
+) -> Result<TransformPlan> {
+    // The payload was lifted from a UTF-8 source and is about to be spliced in
+    // at a byte offset found by scanning for `0x0A`. In a UTF-16 destination
+    // that offset is inside a code unit, so the write would shift every byte
+    // after it — and appending at EOF is no safer, since the appended bytes
+    // would be UTF-8 in a UTF-16 file. The source side is already refused by
+    // `lines_to_byte_range`; this is the other end of the same move, and
+    // `COPY`/`MOVE LINES` are the edit verbs for exactly the non-indexed files
+    // the read pass now searches.
+    if let Some(encoding) = wide_encoding(dst_bytes) {
+        bail!("{}: {}", dst.display(), wide_encoding_refusal(encoding));
+    }
     let ins_byte = insertion_byte_offset(dst_bytes, at);
-    TransformPlan {
+    Ok(TransformPlan {
         file_edits: vec![FileEdit {
             path: dst.to_path_buf(),
             edits: vec![ByteRangeEdit::new(ins_byte..ins_byte, payload)],
             delete: false,
         }],
         suggestions: Vec::new(),
-    }
+    })
 }
 
 /// Return the byte offset at which to insert in `bytes` for a given target line.

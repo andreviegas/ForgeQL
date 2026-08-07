@@ -58,7 +58,11 @@ boundary there is two bytes, not one, so splicing UTF-8 text into it by byte
 offset would shift every byte after the edit and destroy the file — and nothing
 previously stopped that, because the line-to-byte conversion scans for `0x0A`
 and finds one. Any node- or line-scoped `CHANGE`, `INSERT` or `DELETE` on such
-a file is now refused with an error naming the encoding. Overwriting the whole
+a file is now refused with an error naming the encoding, and so is a
+`COPY LINES` or `MOVE LINES` whose destination is one — those reach a
+destination through a separate offset calculation, and they are the edit verbs
+for exactly the non-indexed files this release added to the search universe.
+Overwriting the whole
 file leaves no mixed encoding behind and is still allowed, which is how to
 convert one. Reading such a line back is bounded the same way: `SHOW` renders
 the raw bytes, so the decode reaches the site list and not the display.
@@ -72,6 +76,13 @@ those paths, and both `FIND files` and the read pass include them. A path the
 index lists but the worktree no longer holds — a file deleted in the session —
 is skipped without comment instead of counted as unreadable: it has no bytes, so
 the answer over it is complete rather than short.
+
+The universe now has one stated edge rather than an unstated one: a file that
+reaches the worktree without passing through ForgeQL — written by a build step,
+say — is in no segment, no file list and no session record until it is indexed,
+so `FIND files` does not list it and the read pass does not open it. The two
+answer over one set, and that set is what "every file the workspace knows
+about" means everywhere the phrase appears.
 
 **Reading files does not widen a query into a substring search.** An identifier
 is matched on token boundaries — a letter, digit or underscore in any script

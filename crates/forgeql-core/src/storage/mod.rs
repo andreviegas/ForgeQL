@@ -342,16 +342,21 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// Applies glob filtering and the remaining clause pipeline internally.
     /// Returns the full result set (no truncation).
     ///
-    /// **Complete.** Every line of every in-scope file that holds `name` is a
-    /// row, so an empty result means the corpus does not hold it. The authority
-    /// is the file's own bytes, not the index: the postings serve the fast
-    /// tiers and label what they find, but a site exists wherever the text says
-    /// it does, including on lines no recorder ever tokenised. The files read
-    /// are every file the workspace tracks — those that produced symbols,
-    /// those known by path and size alone, those reindexed this session, and
-    /// those this session created whose extension no plugin claims — so a name
-    /// living only in a `.gitignore` is found too. No site is dropped for being
-    /// expensive to reach.
+    /// **Complete over the files the workspace tracks**, which is what the
+    /// columnar backend below implements; the legacy in-memory backend answers
+    /// from its index alone and makes no such claim. Every line of every
+    /// in-scope tracked file that holds `name` is a row, so an empty result
+    /// means those files do not hold it. The authority is the file's own bytes,
+    /// not the index: the postings serve the fast tiers and label what they
+    /// find, but a site exists wherever the text says it does, including on
+    /// lines no recorder ever tokenised. The files read are those that produced
+    /// symbols, those known by path and size alone, those reindexed this
+    /// session, and those this session created whose extension no plugin claims
+    /// — so a name living only in a `.gitignore` is found too. A file that
+    /// reaches the worktree without passing through ForgeQL, written by a build
+    /// step say, is in none of those until it is indexed, and `FIND files` does
+    /// not list it either: the two answer over one universe. No site is dropped
+    /// for being expensive to reach.
     ///
     /// Two boundaries, both declared rather than silent. Binary is not
     /// searched: a NUL byte near the start means these bytes are not text, and

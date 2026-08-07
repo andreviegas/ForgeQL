@@ -282,7 +282,10 @@ FIND files [clauses]
 > is tracked by path and size alone and holds text like anything else — and one
 > created inside this session, which no committed structure knows about yet, is
 > read from the path the session recorded for it. The set read is exactly what
-> `FIND files` lists, minus ForgeQL's own runtime artifacts. Binary files — a
+> `FIND files` lists, minus ForgeQL's own runtime artifacts — so a file that
+> reaches the worktree without passing through ForgeQL, one a build step wrote,
+> is read by neither until it is indexed; the two answer over one universe, and
+> that is the boundary of "knows about". Binary files — a
 > NUL byte near the start, the line `grep` draws — are not searched: an object
 > file or an index blob embeds symbol names, and a site there is bytes no sweep
 > should rewrite. A byte-order mark is believed before that check, so UTF-16
@@ -297,9 +300,11 @@ FIND files [clauses]
 >
 > A UTF-16 site is found and cannot be rewritten in place. A line boundary
 > there is not a byte boundary, so splicing UTF-8 into it by offset would shift
-> every byte after the edit; any `CHANGE`, `INSERT` or `DELETE` targeting a node
+> every byte after the edit. Any `CHANGE`, `INSERT` or `DELETE` targeting a node
 > or line range in such a file is **refused with an error naming the encoding**,
-> never attempted. Overwriting the whole file with
+> never attempted, and so is a `COPY LINES` or `MOVE LINES` whose destination is
+> one — the payload it splices in is UTF-8.
+> Overwriting the whole file with
 > `CHANGE NODE '<file_hex>' WITH ...` leaves no mixed encoding behind and is
 > allowed — that is the way to convert one. Reading such a line back is bounded
 > the same way: `SHOW` renders the raw bytes, so the decode reaches the site
