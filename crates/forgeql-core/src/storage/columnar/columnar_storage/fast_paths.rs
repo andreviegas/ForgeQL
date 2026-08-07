@@ -224,18 +224,30 @@ impl ColumnarStorage {
                     | CompareOp::NotMatches,
                     PredicateValue::String(val),
                 ) => self.enrichment_pattern_bitmap(field, pred.op, val.as_str()),
-                (field, CompareOp::Gte, PredicateValue::Number(v)) => {
-                    self.overlay.prefilter_enrichment_ge(field, *v)
-                }
-                (field, CompareOp::Gt, PredicateValue::Number(v)) => {
-                    self.overlay.prefilter_enrichment_ge(field, v + 1)
-                }
-                (field, CompareOp::Lte, PredicateValue::Number(v)) => {
-                    self.overlay.prefilter_enrichment_le(field, *v)
-                }
-                (field, CompareOp::Lt, PredicateValue::Number(v)) => {
-                    self.overlay.prefilter_enrichment_le(field, v - 1)
-                }
+                // The numeric arms need the same over-budget compensation the
+                // Eq and pattern arms apply. `guard_group_id` is decimal, so
+                // `guard_group_id > N` reaches here — and it is keyed from
+                // postings now rather than from the row walk, which means a
+                // file over its budget contributes no keys and its rows would
+                // be intersected away. `rows_missing_field_postings` is empty
+                // for every field that is not posted, so this costs nothing
+                // there.
+                (field, CompareOp::Gte, PredicateValue::Number(v)) => self
+                    .overlay
+                    .prefilter_enrichment_ge(field, *v)
+                    .map(|bm| bm | self.rows_missing_field_postings(field)),
+                (field, CompareOp::Gt, PredicateValue::Number(v)) => self
+                    .overlay
+                    .prefilter_enrichment_ge(field, v + 1)
+                    .map(|bm| bm | self.rows_missing_field_postings(field)),
+                (field, CompareOp::Lte, PredicateValue::Number(v)) => self
+                    .overlay
+                    .prefilter_enrichment_le(field, *v)
+                    .map(|bm| bm | self.rows_missing_field_postings(field)),
+                (field, CompareOp::Lt, PredicateValue::Number(v)) => self
+                    .overlay
+                    .prefilter_enrichment_le(field, v - 1)
+                    .map(|bm| bm | self.rows_missing_field_postings(field)),
                 _ => None,
             }) else {
                 continue;

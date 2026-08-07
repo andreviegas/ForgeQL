@@ -42,7 +42,8 @@ cache version moves and every source is re-indexed on first use.
 
 A file whose distinct-value count for one of these fields exceeds the per-file
 budget writes no index for it — never a partial one — and every row of such a
-file stays a candidate, so the answer is complete whichever files the budget
+file stays a candidate on every operator, including the numeric comparisons
+`guard_group_id` accepts, so the answer is complete whichever files the budget
 covered. The whole-workspace budget is all-or-nothing in the same way: the
 merged index holds every value of a field or none of it.
 ## [0.151.0] — 2026-08-07 — `WHERE language = '<lang>'` reads the language column instead of every row

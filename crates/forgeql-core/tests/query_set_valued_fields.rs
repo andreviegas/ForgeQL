@@ -291,6 +291,23 @@ fn a_file_over_its_field_budget_still_answers_completely() {
         ),
         expected
     );
+
+    // The NUMERIC arms need the same compensation, and do now get it — but
+    // this suite cannot demonstrate it through a query, for a reason worth
+    // writing down. `guard_group_id` is the only posted field parsed as a
+    // number, and its values are u64 hashes that routinely exceed i64::MAX.
+    // `PredicateValue::Number` and `ClauseTarget::field_num` are both i64, so
+    // the row's own value fails to parse and no numeric comparison on
+    // `guard_group_id` can match it — a pre-existing limit of the numeric
+    // predicate, not of this index. Attempting the assertion here panics with
+    // PosOverflow on the fixture's real ids.
+    //
+    // The compensation is applied anyway (`prefilter_global`'s four
+    // `PredicateValue::Number` arms union `rows_missing_field_postings`, as
+    // the string arms do) because it costs nothing — that helper returns an
+    // empty bitmap for every field that is not posted — and because leaving
+    // one arm of three uncompensated is how the gap this whole slice is about
+    // gets reintroduced.
 }
 
 #[test]

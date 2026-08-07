@@ -19,15 +19,20 @@ use roaring::RoaringBitmap;
 /// Magic bytes at the start of every `header.bin` (inner FQSG blob inside .fqsf).
 pub const MAGIC: [u8; 4] = *b"FQSG";
 
-/// Low-cardinality enrichment fields for which `SegmentBuilder` writes
-/// per-segment Roaring-bitmap posting files (`postings_<field>.bin`).
+/// Enrichment fields for which `SegmentBuilder` writes per-segment
+/// Roaring-bitmap posting files (`postings_<field>.bin`).
 ///
-/// Criterion: boolean flags and low-cardinality string enums with
-/// ≤ `MAX_CARDINALITY` (= 8) distinct values per segment.  The builder
-/// silently skips any field whose actual cardinality exceeds that cap at
-/// flush time, so adding fields here is additive and safe.
+/// Criterion: the field's distinct-value count in one file stays within its
+/// `posting_budget`. That budget is **per field**, not one number — 8 for the
+/// boolean flags and handful-of-values string enums that make up most of this
+/// list, and 4096 for the five `WIDE_POSTING_FIELDS` below, whose values run
+/// to tens of thousands corpus-wide. The builder silently skips any field
+/// whose actual cardinality exceeds its own budget at flush time — writing no
+/// blob rather than a partial one — so adding fields here is additive, and
+/// safe because the query path adds an over-budget file's rows back to the
+/// candidate set rather than dropping them.
 ///
-/// `SegmentReader` discovers the blobs by checking this list so readers
+/// `SegmentReader` discovers the blobs by checking this list, so readers
 /// always know which fields to attempt to load.
 pub const POSTING_ENRICHMENT_FIELDS: &[&str] = &[
     // ── Boolean flags (present only when true) ───────────────────────────
