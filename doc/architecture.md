@@ -439,10 +439,10 @@ pub trait LanguageSupport: Send + Sync {
 ### Dual Kind System
 
 Every `IndexRow` carries two kind fields:
-- `node_kind` — the raw tree-sitter node kind (e.g. `function_definition` in C, `function_item` in Rust). Language-specific, computed while parsing to drive kind mapping, and stored on no row of the columnar index: a `WHERE`, `ORDER BY` or `GROUP BY` on it is **refused** there on every `FIND` verb, because a predicate on a field no row carries can only report absence. The legacy in-memory index does keep it per row and still filters on it, which is why the name remains in `CORE_WHERE_FIELDS` — the refusal lives in the columnar backend's own validation, next to the knowledge of what that backend stores.
+- `node_kind` — the raw tree-sitter node kind (e.g. `function_definition` in C, `function_item` in Rust). Language-specific, computed while parsing to drive kind mapping, and stored on no row of the columnar index: a `WHERE`, `ORDER BY` or `GROUP BY` on it is **refused** there on `FIND symbols`, `FIND globals`, `FIND usages` and `FIND files`, because a predicate on a field no row carries can only report absence. `FIND callees OF` is an alias for `SHOW callees OF`, and it — like `SHOW outline` and `SHOW members` — answers with a value rather than an error, so it still accepts the field and matches nothing. The legacy in-memory index does keep it per row and still filters on it, which is why the name remains in `CORE_WHERE_FIELDS` — the refusal lives in the columnar backend's own validation, next to the knowledge of what that backend stores.
 - `fql_kind` — a universal kind (e.g. `function`, `class`, `struct`). Language-agnostic, defined by `map_kind()`.
 
-Always use `WHERE fql_kind = 'function'`. Every session serves queries from the columnar index, so a `FIND` naming `node_kind` errors with a pointer to `fql_kind` rather than answering a confident zero. Serving it there would mean storing it, which is an index-output change; until something does, the refusal is the honest answer.
+Always use `WHERE fql_kind = 'function'`. Every session serves queries from the columnar index, so a `FIND symbols`, `FIND globals`, `FIND usages` or `FIND files` naming `node_kind` errors with a pointer to `fql_kind` rather than answering a confident zero. Serving it there would mean storing it, which is an index-output change; until something does, the refusal is the honest answer.
 
 ### Crate Dependencies
 

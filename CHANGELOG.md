@@ -22,11 +22,14 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SHOW members` and `SHOW callees` answer with a value rather than an error
   and still accept the field, matching nothing. Serving it would mean storing
   it, which is an index-output change and is not part of this release.
-- `GROUP BY` on a field no indexed row carries is refused rather than answered.
-  It previously reported exactly one group, named by the empty string, holding
-  every row — a shape indistinguishable from a real result. The accepted set is
-  the same one `WHERE` and `ORDER BY` already used: a core field, an enrichment
-  field of any registered language, or an extra column some segment stores.
+- `FIND symbols` and `FIND globals` refuse a `GROUP BY` on a field no indexed
+  row carries, rather than answering it. Grouping previously reported exactly
+  one group, named by the empty string, holding every row — a shape
+  indistinguishable from a real result. The accepted set is the same one
+  `WHERE` and `ORDER BY` already used: a core field, an enrichment field of any
+  registered language, or an extra column some segment stores. `FIND files`
+  groups file rows and is unchanged apart from `node_kind`; `FIND usages`
+  groups occurrence rows, where `role` and `file` are the useful keys.
 - `text` and `content` are refused in `ORDER BY` and `GROUP BY` as well as in
   `WHERE`. They were already rejected in `WHERE` on FIND queries for the same
   reason — no row of a FIND result carries source text — but the other two

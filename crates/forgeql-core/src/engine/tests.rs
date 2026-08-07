@@ -123,8 +123,8 @@ fn convert_suggestions_from_empty_plan() {
     assert!(suggestions.is_empty());
 }
 
-/// `FIND globals` now maps to `FIND symbols WHERE node_kind = 'declaration'`
-/// and correctly returns variable declarations from the index.
+/// `FIND globals` maps to `FIND symbols WHERE fql_kind = 'variable' WHERE
+/// scope = 'file'` and correctly returns variable declarations from the index.
 ///
 /// `motor_control.cpp` declares several `static` variables at file scope
 /// (`motorPrincipal`, `motorSecundario`, `gCallbackEncendido`, `kMotorLabel`).

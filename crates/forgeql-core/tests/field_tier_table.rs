@@ -524,13 +524,17 @@ fn refused_fields_error_rather_than_answering_nothing() {
 }
 
 /// The refusal has to hold on every verb that reaches this backend, not only
-/// on the one it was written for.
+/// on the one it was written for — and the verbs it does NOT reach have to be
+/// named, not left to be discovered.
 ///
 /// `FIND usages` builds occurrence rows that carry no kind at all, and `FIND
 /// files` builds file rows that carry none either; both used to run the
-/// clause filter over those rows and return a confident empty answer.
+/// clause filter over those rows and return a confident empty answer. `FIND
+/// callees OF` is an alias for `SHOW callees OF` and answers with a value
+/// rather than a Result, so it still accepts the field and matches nothing —
+/// asserted here so the boundary moves only deliberately.
 #[test]
-fn node_kind_is_refused_on_every_find_verb() {
+fn node_kind_is_refused_on_the_four_find_verbs_that_can_refuse() {
     let mut t = guarded_workspace(2);
     for fql in [
         "FIND symbols WHERE node_kind = 'x'",
@@ -552,6 +556,16 @@ fn node_kind_is_refused_on_every_find_verb() {
             "`{fql}` was refused without saying what to write instead: {msg}"
         );
     }
+
+    // The stated boundary, asserted rather than assumed: this verb routes to
+    // SHOW callees, which answers with a value and has nowhere to put an
+    // error, so it accepts the field and matches nothing. If that ever starts
+    // erroring, the docs claiming otherwise have to move with it.
+    assert!(
+        t.try_fql("FIND callees OF 'sym_0' WHERE node_kind = 'x'")
+            .is_ok(),
+        "FIND callees now refuses node_kind — the documented boundary moved"
+    );
 }
 
 #[test]
