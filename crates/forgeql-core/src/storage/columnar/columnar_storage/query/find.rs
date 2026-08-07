@@ -227,7 +227,7 @@ impl ColumnarStorage {
         // site; a posting only ever adds a role to a site the bytes already
         // proved. That is what lets the contract say `complete` with no
         // qualifier after it.
-        let (scanned, read, hint) = self.literal_sites(name, clauses, root);
+        let (scanned, settled, hint) = self.literal_sites(name, clauses, root);
 
         // A posting is a claim about the bytes as they were when the file was
         // indexed, and a file can change without ForgeQL: a build step writes
@@ -245,7 +245,7 @@ impl ColumnarStorage {
                 .map(|(path, line, _)| (path, *line))
                 .collect();
             sites.retain(|(path, line, _)| {
-                !read.contains(path) || confirmed.contains(&(path, *line))
+                !settled.contains(path) || confirmed.contains(&(path, *line))
             });
         }
 
@@ -412,11 +412,14 @@ impl ColumnarStorage {
     /// Cost is one read per in-scope file per query, bounded by `IN`/`EXCLUDE`.
     /// Reads nothing stored in a new way, so no cache version moves.
     /// Read the in-scope files and return every site their bytes hold, the set
-    /// of paths whose bytes were actually examined as text, and a hint naming
-    /// what could not be read.
+    /// of paths whose site set is now settled, and a hint counting what could
+    /// not be read.
     ///
-    /// The second value is what lets the caller tell "these bytes do not hold
-    /// the name" from "these bytes were never looked at".
+    /// A path is settled when its bytes were decoded — every site they hold is
+    /// in the first value — or when the file is not there, which settles it at
+    /// none. The second value is what lets the caller tell "these bytes do not
+    /// hold the name" from "these bytes were never looked at", and so which
+    /// postings it may drop.
     fn literal_sites(
         &self,
         needle: &str,
@@ -495,16 +498,28 @@ impl ColumnarStorage {
 
         let mut sites = Vec::new();
         let mut unread = 0usize;
-        let mut read: HashSet<std::path::PathBuf> = HashSet::new();
+        // Paths whose site set is now known: the bytes were decoded and every
+        // site they hold is in `sites`, or the file is not there at all and
+        // holds none. Both settle the question, and both let the caller drop a
+        // posting the bytes do not back. A file that could not be opened for
+        // any other reason, or could not be decoded as text, settles nothing.
+        let mut settled: HashSet<std::path::PathBuf> = HashSet::new();
         for path in &paths {
             let bytes = match std::fs::read(root.join(path)) {
                 Ok(bytes) => bytes,
-                // A path the index still lists but the worktree no longer has —
-                // a file deleted in this session, whose entry no dirty-overlay
-                // shadow covers because it never had a segment to shadow. There
-                // are no bytes, so there are no sites, and the answer over it is
-                // complete rather than short.
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                // A path the index still lists but the worktree no longer has:
+                // deleted in this session, or removed behind ForgeQL's back by
+                // a build step or a checkout. There are no bytes, so there are
+                // no sites, and the answer over it is complete rather than
+                // short — which is exactly why it is marked settled below
+                // rather than skipped. A committed segment for it may still
+                // hold postings, and leaving them unsettled would let a file
+                // that is not there report `code` sites with its handle on
+                // them.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    let _ = settled.insert(path.clone());
+                    continue;
+                }
                 // Anything else — a permission, an I/O fault — leaves the sites
                 // this file holds absent from the answer, and nothing else in
                 // the response would show that.
@@ -521,7 +536,7 @@ impl ColumnarStorage {
             // Recorded only once the bytes have actually been decoded as text.
             // A file that was opened and then skipped as binary proves nothing
             // about what it holds, so it must not be counted as examined.
-            let _ = read.insert(path.clone());
+            let _ = settled.insert(path.clone());
 
             // Cheap reject before splitting into lines: a whole-token match is
             // a substring match too.
@@ -541,7 +556,7 @@ impl ColumnarStorage {
             }
         }
 
-        (sites, read, unread_hint(unread, needle))
+        (sites, settled, unread_hint(unread, needle))
     }
 
     pub(super) fn indexed_files_impl(&self) -> Vec<crate::result::FileEntry> {

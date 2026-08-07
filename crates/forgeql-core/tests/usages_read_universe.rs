@@ -394,13 +394,13 @@ fn an_ignored_file_is_outside_the_universe_until_this_session_touches_it() {
 fn a_recorded_path_the_worktree_no_longer_holds_is_skipped_in_silence() {
     let mut t = read_universe_workspace();
 
-    mutate(
-        &mut t,
-        &format!("CHANGE FILE 'vanished.conf' WITH 'CONFIG_IDLE={NEEDLE}'"),
-    );
-    // Removed behind ForgeQL's back, the way a build step or a checkout would:
-    // the session still has the path recorded, the bytes are simply gone.
-    std::fs::remove_file(t.workspace().join("vanished.conf")).expect("fixture");
+    // `legacy.rs` is indexed, so it has postings of its own — which is what
+    // makes this test about the postings and not only about the bytes. A
+    // non-indexed file has none, so removing one would prove nothing: the
+    // absence would follow from there being nothing to report in the first
+    // place. Removed behind ForgeQL's back, the way a build step or a checkout
+    // would: the index still lists the path, the bytes are simply gone.
+    std::fs::remove_file(t.workspace().join("legacy.rs")).expect("fixture");
 
     let q = query(&mut t, &format!("FIND usages OF '{NEEDLE}'"));
 
@@ -415,8 +415,9 @@ fn a_recorded_path_the_worktree_no_longer_holds_is_skipped_in_silence() {
         files(&q)
     );
     assert!(
-        !files(&q).contains(&"vanished.conf".to_owned()),
-        "its own sites are gone with its bytes: {:?}",
+        !files(&q).contains(&"legacy.rs".to_owned()),
+        "its sites are gone with its bytes, postings included — a segment is a \
+         claim about bytes that are no longer there: {:?}",
         files(&q)
     );
 }

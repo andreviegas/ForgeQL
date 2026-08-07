@@ -261,6 +261,13 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
     }
 
     let root = tmp.path().to_path_buf();
+    // The file the segments describe, as it stands after the dirty edit:
+    // `SymbolB` on line 1, no `SymbolA` anywhere. `find_usages` reads the
+    // workspace and lets the bytes arbitrate what the postings claim, so a
+    // segment whose source file is not on disk describes bytes that are gone
+    // and reports nothing — a real session cannot reach that state, and
+    // leaving the fixture there would have been testing an impossible one.
+    std::fs::write(root.join("file1.cpp"), "void SymbolB() {}\n").expect("worktree file");
     let mut segment_map: HashMap<std::path::PathBuf, Vec<u8>> = HashMap::new();
     let _ = segment_map.insert(root.join("file1.cpp"), file1_cid);
 
