@@ -342,18 +342,20 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// Applies glob filtering and the remaining clause pipeline internally.
     /// Returns the full result set (no truncation).
     ///
-    /// Complete for what the occurrence postings recorded: every site of `name`
-    /// they reach is in the rows, and none is left out for being expensive to
-    /// find. That is the whole answer wherever the postings cover the file, and
-    /// they do not cover every line — a line no recorder posted a token for is
-    /// invisible to each tier that reads them alike — so an empty result means
-    /// nothing *recorded* holds the name, which is a narrower claim than that
-    /// nothing does.
+    /// **Complete.** Every line of every in-scope indexed file that holds
+    /// `name` is a row, so an empty result means the corpus does not hold it.
+    /// The authority is the file's own bytes, not the index: the postings
+    /// serve the fast tiers and label what they find, but a site exists
+    /// wherever the text says it does, including on lines no recorder ever
+    /// tokenised. No site is dropped for being expensive to reach.
+    ///
+    /// An identifier is matched on token boundaries and anything carrying a
+    /// character outside that alphabet is matched literally, so reading the
+    /// files widens no name into a substring search.
     ///
     /// The `Option<String>` beside the rows is not a budget or a ceiling: it
-    /// names a specific thing that went wrong, a candidate file that could not
-    /// be read, so the sites it holds are known to be absent instead of
-    /// silently so.
+    /// names a specific thing that went wrong, a file that could not be read,
+    /// so the sites it holds are known to be absent instead of silently so.
     fn find_usages(
         &self,
         name: &str,

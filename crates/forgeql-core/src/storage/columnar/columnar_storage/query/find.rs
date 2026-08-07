@@ -214,32 +214,33 @@ impl ColumnarStorage {
             sites.extend(self.sites_of(token));
         }
 
-        // Both tiers above can only answer with a stored token, and a name
-        // spanning a separator no language continues a token over was never
-        // stored whole — so it answers zero however many files hold it, which
-        // reads as "there are none". Its pieces were stored, so they propose
-        // candidate lines and the source line decides.
+        // Every tier above answers out of a posting, and a posting exists only
+        // where some recorder tokenised the line. Lines exist that no recorder
+        // tokenised at all — the body of an `.rst` literal block posts nothing,
+        // so a name written inside one was invisible to all of them — and no
+        // arrangement of posting-fed tiers can see a line none of them
+        // recorded. Only the file itself can.
         //
-        // Merged with what the tiers above found, not a fallback for when they
-        // found nothing. One corpus stores the same name both ways: C records
-        // `pm/device_runtime` inside a whole include-path token while a Python
-        // string a few directories away records it as `pm` and
-        // `device_runtime`, so each tier reaches sites the other cannot and
-        // only their union is the answer. A site both reach is listed once.
-        let hint = if is_core_alphabet(name) {
-            None
-        } else {
-            let (verified, why) = self.literal_sites(name, clauses, root);
-            let fresh: Vec<Site> = {
-                let seen: HashSet<&Site> = sites.iter().collect();
-                verified
-                    .into_iter()
-                    .filter(|site| !seen.contains(site))
-                    .collect()
-            };
-            sites.extend(fresh);
-            why
+        // So the files answer too, for every name rather than only for the ones
+        // the token index cannot address. The line's own text decides what is a
+        // site; a posting only ever adds a role to a site the bytes already
+        // proved. That is what lets the contract say `complete` with no
+        // qualifier after it.
+        let (scanned, hint) = self.literal_sites(name, clauses, root);
+
+        // A site a posting already reported keeps that posting's role, which
+        // says more than `text` does. Matched on `(path, line)` and not on the
+        // whole tuple: the same occurrence under two names for what it is would
+        // be two rows for one site.
+        let fresh: Vec<Site> = {
+            let posted: HashSet<(&std::path::PathBuf, u32)> =
+                sites.iter().map(|(path, line, _)| (path, *line)).collect();
+            scanned
+                .into_iter()
+                .filter(|(path, line, _)| !posted.contains(&(path, *line)))
+                .collect()
         };
+        sites.extend(fresh);
 
         let mut results: Vec<SymbolMatch> = sites
             .iter()
@@ -351,46 +352,31 @@ impl ColumnarStorage {
         sites
     }
 
-    /// Every site where `needle` occurs literally, confirmed against the source
-    /// line itself.
+    /// Every site of `needle`, read out of the files themselves.
     ///
-    /// Every tier above answers with a *stored token*: exact for a name in the
-    /// identifier alphabet, substring for one carrying anything else. Both miss
-    /// whenever no recorder stored the needle whole — the ordinary case for a
-    /// dotted or slashed name outside C, because a mention recorder continues a
-    /// token only over the characters its language declares. A name like
-    /// `foo-bar.frozen` is stored as `foo-bar` and `frozen`, so both tiers
-    /// answer zero on a corpus holding it in dozens of files, and that zero
-    /// reads exactly like "there are none".
+    /// The authoritative tier, and the reason `FIND usages` can promise a
+    /// complete answer. Every other tier answers out of a posting, and a
+    /// posting exists only where some recorder tokenised the line — so each of
+    /// them is bounded by what the index happens to hold, in two ways that
+    /// compound:
     ///
-    /// What the recorders did store is the needle's own pieces, so they propose
-    /// the candidate lines and the line's text decides. Superset then verify,
-    /// the same shape the trigram tier uses — and because the arbiter is the raw
-    /// line, no proposal however loose can yield a false positive.
+    /// - a name no recorder stored *whole* is unreachable by name, which is the
+    ///   ordinary case for a dotted or slashed one outside C: a mention
+    ///   recorder continues a token only over the characters its language
+    ///   declares, so `foo-bar.frozen` is stored as `foo-bar` and `frozen`;
+    /// - and a *line* no recorder tokenised at all is unreachable by anything.
+    ///   The body of an `.rst` literal block posts nothing, so a name written
+    ///   inside one answered zero however plainly the file contained it.
     ///
-    /// All the pieces propose, not the cheapest one. Which piece a given site
-    /// stored depends on the extra characters its language continues a token
-    /// over, so the cheapest piece is routinely not the one that reaches the
-    /// sites: for `foo-bar.frozen`, `bar` is stored nowhere the name appears
-    /// while `frozen` is stored everywhere it does, and `bar` is the cheaper of
-    /// the two. Every candidate the pieces propose is then read, however many
-    /// there are: a search that stops early because the work looked large
-    /// returns a short list that reads exactly like a complete one, and that is
-    /// the failure this tier exists to remove, not one to reintroduce with a
-    /// ceiling. Slow is an acceptable answer; incomplete is not.
+    /// Neither can be fixed by another posting-fed tier, and both vanish if the
+    /// files are simply read. The line's text is the authority; the postings
+    /// are consulted only to *label* what the bytes already found, so that a
+    /// site a recorder did see keeps the role it recorded rather than being
+    /// flattened to `text`. Every piece of the name contributes to that map,
+    /// not the cheapest one: which piece a site stored varies by language, so
+    /// the cheapest is routinely stored nowhere the name appears.
     ///
-    /// A needle no piece of which could ever have been stored — `a.b`, `->`,
-    /// `1.2` — leaves the token index with nothing to propose from, so the
-    /// files are read directly instead. That is the slowest path here and the
-    /// rarest; it is still the answer.
-    ///
-    /// A verified site keeps the role of the posting that proposed it. The two
-    /// sit on the same line but not necessarily inside the same construct — a
-    /// piece can be posted from a trailing comment while the needle itself is
-    /// in the code beside it — so the role is the best evidence the line
-    /// carries, not a proof. The site is exact either way; only its label is
-    /// inferred, and inferring it from the line would be the engine guessing.
-    ///
+    /// Cost is one read per in-scope file per query, bounded by `IN`/`EXCLUDE`.
     /// Reads nothing stored in a new way, so no cache version moves.
     fn literal_sites(
         &self,
@@ -398,80 +384,33 @@ impl ColumnarStorage {
         clauses: &Clauses,
         root: &Path,
     ) -> (Vec<Site>, Option<String>) {
-        let pieces = needle_pieces(needle);
-        if pieces.is_empty() {
-            return self.scan_sites(needle, clauses, root);
-        }
+        const ROLE_TEXT: &str = "text";
 
-        // Every piece, not the cheapest one. Which piece a site stored depends
-        // on the extra characters that site's language continues a token over,
-        // and that varies per language and per file: `foo-bar.frozen` is stored
-        // as `foo-bar` + `frozen` where `-` continues a token and as `foo` +
-        // `bar` + `frozen` where it does not. Proposing from one piece would
-        // silently skip every site that stored a different one — the same false
-        // absence this tier exists to remove, only narrower.
-        let mut candidates: Vec<Site> = Vec::new();
-        for piece in &pieces {
-            candidates.extend(self.sites_of(piece));
-        }
-
-        // Two pieces on one line propose it twice; verify it once. A candidate
-        // outside the query's own `IN`/`EXCLUDE` scope is a file read for a row
-        // the clause pipeline will drop, so drop it here instead — same
-        // predicate, same rows, less work.
-        candidates.retain(|(path, _, _)| in_scope(path, clauses));
-        let mut seen = HashSet::new();
-        candidates.retain(|site| seen.insert(site.clone()));
-
-        // One read per file, not one per site.
-        let mut by_file: HashMap<&std::path::PathBuf, Vec<usize>> = HashMap::new();
-        for (i, (path, _, _)) in candidates.iter().enumerate() {
-            by_file.entry(path).or_default().push(i);
-        }
-
-        let mut verified = Vec::new();
-        let mut unread = 0usize;
-        for (path, rows) in by_file {
-            let Ok(text) = std::fs::read_to_string(root.join(path)) else {
-                // Every candidate in this file goes unchecked, and staying
-                // silent would leave a short answer reading as a complete one.
-                unread += 1;
-                continue;
-            };
-            if !text.contains(needle) {
-                continue;
-            }
-            let lines: Vec<&str> = text.lines().collect();
-            for i in rows {
-                if line_holds(&lines, candidates[i].1, needle) {
-                    verified.push(candidates[i].clone());
+        // What the postings can say about the lines this is about to read:
+        // which of them a recorder tokenised, and as what. It is a lookup, not
+        // a proposal — a scanned line the map does not mention is still a site,
+        // it simply has no role beyond `text`.
+        //
+        // Every piece contributes, not the cheapest one. Which piece a site
+        // stored depends on the extra characters that site's language continues
+        // a token over, and that varies per language and per file:
+        // `foo-bar.frozen` is stored as `foo-bar` + `frozen` where `-`
+        // continues a token and as `foo` + `bar` + `frozen` where it does not.
+        //
+        // A name written only in the identifier alphabet needs no map at all:
+        // the exact tier above already reported every posted site of it, with
+        // the role the recorder gave it.
+        let mut roles: HashMap<(std::path::PathBuf, u32), String> = HashMap::new();
+        if !is_core_alphabet(needle) {
+            for piece in needle_pieces(needle) {
+                for (path, line, role) in self.sites_of(piece) {
+                    let _ = roles.entry((path, line)).or_insert(role);
                 }
             }
         }
 
-        // `by_file` iterates in hash order; the answer must not.
-        verified.sort_unstable();
-        (verified, unread_hint(unread, needle))
-    }
-
-    /// Every line of every indexed file that holds `needle`, read directly.
-    ///
-    /// The complete path for a needle the token index cannot address at all:
-    /// nothing in it opens a token, so no piece can propose a candidate and
-    /// there is no cheaper way left to find out where it occurs. Declining
-    /// would answer "none" for a name the corpus may hold in a hundred places.
-    ///
-    /// A scanned site carries the role `text`: the bytes say the line holds the
-    /// needle, nothing says what kind of occurrence it is, and deciding that
-    /// from the line would be the engine guessing.
-    fn scan_sites(
-        &self,
-        needle: &str,
-        clauses: &Clauses,
-        root: &Path,
-    ) -> (Vec<Site>, Option<String>) {
-        const ROLE_TEXT: &str = "text";
-
+        // A file outside the query's own `IN`/`EXCLUDE` scope can only produce
+        // rows the clause pipeline will drop, so it is never read.
         let mut paths: Vec<std::path::PathBuf> = self
             .overlay
             .segments()
@@ -484,21 +423,37 @@ impl ColumnarStorage {
         paths.sort_unstable();
         paths.dedup();
 
+        // An identifier is matched as a whole token, the way the exact tier
+        // matches it and the way `MATCHING WORD` rewrites it — `256` must not
+        // answer inside `sha256`. Anything carrying a character outside that
+        // alphabet is matched literally, which is what lets an include path or
+        // a dotted name be asked for at all.
+        let whole_token = is_core_alphabet(needle);
+
         let mut sites = Vec::new();
         let mut unread = 0usize;
         for path in &paths {
             let Ok(text) = std::fs::read_to_string(root.join(path)) else {
+                // The sites this file holds are absent from the answer and
+                // nothing else in the response would show that.
                 unread += 1;
                 continue;
             };
+            // Cheap reject before splitting into lines: a whole-token match is
+            // a substring match too.
             if !text.contains(needle) {
                 continue;
             }
             for (i, line) in text.lines().enumerate() {
-                if line.contains(needle) {
-                    let line_no = u32::try_from(i + 1).unwrap_or(u32::MAX);
-                    sites.push((path.clone(), line_no, ROLE_TEXT.to_owned()));
+                if !holds(line, needle, whole_token) {
+                    continue;
                 }
+                let line_no = u32::try_from(i + 1).unwrap_or(u32::MAX);
+                let role = roles
+                    .get(&(path.clone(), line_no))
+                    .cloned()
+                    .unwrap_or_else(|| ROLE_TEXT.to_owned());
+                sites.push((path.clone(), line_no, role));
             }
         }
 
@@ -794,18 +749,31 @@ fn needle_pieces(needle: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Does 1-based `line` of `lines` hold `needle` verbatim?
+/// Does `line` hold `needle` — as a whole token when `whole_token` is set?
 ///
-/// The arbiter of the verify tier, and the reason a loose proposal is safe. A
-/// candidate line is proposed by ONE piece of the needle, so a line carrying
-/// every piece scattered — `"foo-bar" and "frozen"` against `foo-bar.frozen` —
-/// must not count. Only the needle's exact form, separators and all, does.
-fn line_holds(lines: &[&str], line: u32, needle: &str) -> bool {
-    usize::try_from(line)
-        .ok()
-        .and_then(|n| n.checked_sub(1))
-        .and_then(|n| lines.get(n))
-        .is_some_and(|text| text.contains(needle))
+/// The arbiter of the whole search, and the reason reading the files can be
+/// trusted over anything the index says. Two modes, because the two shapes of
+/// name mean different things:
+///
+/// - **A name in the identifier alphabet is a token.** `FIND usages OF '256'`
+///   asks about the identifier `256`, not about the digits inside `sha256`, and
+///   the exact tier has always answered it that way. This is the same boundary
+///   `MATCHING WORD` rewrites on, so a `FIND` and the sweep it arms agree about
+///   what counts as an occurrence.
+/// - **A name carrying anything else is matched literally**, separators and
+///   all. That is what makes an include path or a dotted name askable, and it
+///   is why a line holding every piece of `foo-bar.frozen` scattered is not a
+///   site.
+fn holds(line: &str, needle: &str, whole_token: bool) -> bool {
+    if !whole_token {
+        return line.contains(needle);
+    }
+    let bytes = line.as_bytes();
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    line.match_indices(needle).any(|(start, _)| {
+        let end = start + needle.len();
+        (start == 0 || !is_word(bytes[start - 1])) && (end >= bytes.len() || !is_word(bytes[end]))
+    })
 }
 
 /// What to say when a candidate file could not be read.
@@ -878,7 +846,7 @@ fn dedupe_file_entries(entries: &mut Vec<crate::result::FileEntry>) {
 mod tests {
     use std::path::Path;
 
-    use super::{Clauses, dedupe_file_entries, in_scope, line_holds, needle_pieces};
+    use super::{Clauses, dedupe_file_entries, holds, in_scope, needle_pieces};
     use crate::result::FileEntry;
 
     #[test]
@@ -906,26 +874,43 @@ mod tests {
     }
 
     #[test]
-    fn line_holds_demands_the_needle_verbatim_not_its_pieces() {
-        // The proposal only knows that ONE piece is on the line. A line holding
-        // every piece, separately, is the case that must still be rejected.
-        let lines = vec![
+    fn a_literal_needle_demands_its_exact_form_not_its_pieces() {
+        // A line holding every piece of the name, separately, is the case that
+        // must still be rejected.
+        assert!(holds(
             r#"  "use": "foo-bar.frozen","#,
+            "foo-bar.frozen",
+            false
+        ));
+        assert!(!holds(
             r#"  "foo-bar" and "frozen" both appear, apart"#,
-        ];
-        assert!(line_holds(&lines, 1, "foo-bar.frozen"));
-        assert!(!line_holds(&lines, 2, "foo-bar.frozen"));
+            "foo-bar.frozen",
+            false
+        ));
     }
 
+    /// An identifier answers as a token, not as a run of characters.
+    ///
+    /// This is the half that keeps the universal scan from changing what
+    /// `FIND usages` means: reading every file would otherwise make `256`
+    /// answer inside `sha256`, turning a precise query into a substring search
+    /// over the corpus. The boundary is the one `MATCHING WORD` uses, so the
+    /// sweep a `FIND` arms rewrites exactly the sites the `FIND` listed.
     #[test]
-    fn line_holds_is_1_based_and_survives_a_line_number_past_the_end() {
-        let lines = vec!["first", "second"];
-        assert!(line_holds(&lines, 2, "second"));
-        assert!(!line_holds(&lines, 1, "second"));
-        // A posting naming a line the file no longer has must answer false, not
-        // panic and not wrap around to the last line.
-        assert!(!line_holds(&lines, 0, "first"));
-        assert!(!line_holds(&lines, 99, "first"));
+    fn an_identifier_needle_matches_only_on_token_boundaries() {
+        assert!(holds("    k_sleep(K_MSEC(10));", "k_sleep", true));
+        assert!(holds("#define TIMEOUT 256", "256", true));
+
+        assert!(!holds("    hash = sha256(buf);", "256", true));
+        assert!(!holds("    k_sleep_forever();", "k_sleep", true));
+        assert!(!holds("    my_k_sleep();", "k_sleep", true));
+
+        // Punctuation, quotes and line ends are all boundaries.
+        assert!(holds("k_sleep", "k_sleep", true));
+        assert!(holds(r#"log("k_sleep")"#, "k_sleep", true));
+
+        // The same haystack, asked literally, does not care about boundaries.
+        assert!(holds("    hash = sha256(buf);", "256", false));
     }
 
     /// The prune must expand a bare directory the way the clause pipeline does.

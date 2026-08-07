@@ -6,6 +6,58 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.154.0] — 2026-08-07 — `FIND usages` finds a name written on a line nothing in the index recorded
+
+### Fixed
+
+`FIND usages` could report zero for a name a file plainly contains. In a manual
+page, a `.. code-block:: c` block holds the line `#define DT_DRV_COMPAT
+dummy_device`; asking for `DT_DRV_COMPAT` in that directory answered nothing at
+all, while `gpio_callback` three lines below it answered normally. The
+difference is not the file and not the block: it is that a nested construct
+there gets a node of its own and the surrounding block's own text does not, so
+nothing recorded a token for those lines.
+
+Every tier of the matcher answered out of those recordings, so all of them were
+bounded by the same gap — a plain identifier as much as a dotted name — and no
+rearrangement of them could see a line none of them held. An agent reads zero
+as "this name is not used here" and deletes accordingly.
+
+**The files themselves are now read, on every query, and the line's own text
+decides what is a site.** A site exists wherever the bytes say it does, whether
+or not anything recorded it, so an empty answer now means the corpus does not
+hold the name. The recordings are still consulted, but only to *label* what the
+bytes found: a site something did record keeps its role — `code`, `comment`,
+`string`, `config`, `doc` — instead of flattening, and only a line nothing
+recorded arrives as `text`.
+
+**Reading files does not widen a query into a substring search.** An identifier
+is matched on token boundaries, so `FIND usages OF '256'` still means the token
+`256` and never the digits inside `sha256`. That is the same boundary
+`MATCHING WORD` rewrites on, so a sweep still touches exactly the sites the
+`FIND` listed. A name carrying anything outside `[A-Za-z0-9_]` is matched
+literally, separators and all, which is what makes an include path askable.
+
+### Changed
+
+`IN` and `EXCLUDE` now bound the reading as well as the rows: a file outside
+their globs can only produce rows the clause pipeline would drop, so it is never
+opened. Scoping a blast-radius query to the subtree you are about to edit does
+proportionally less work for an identical answer.
+
+Counts grow wherever the gap was real. On a three-million-symbol embedded tree
+the unfiltered site count for one widely-used configuration flag moves from 140
+to 145, and the five added sites are exactly the ones nothing had recorded.
+
+**Cost, measured.** An A/B run against that corpus, both sides built with the
+same profile, leaves the substring-needle and scan classes below the harness's
+noise floor on the branch exactly as on the baseline — under 200 ms per query
+either way, a difference the harness cannot resolve, with the branch reading
+every in-scope file on every query. Not covered by that run: an identifier-name
+query, for which the harness has no class. It shares the identical dominant
+cost — the same read of the same files — and does strictly less work besides,
+so it is bounded by the measured figure rather than measured directly.
+
 ## [0.153.0] — 2026-08-07 — the guard set fields and `key_path` are indexed
 
 Re-indexing is required: this release changes what a segment stores, so the

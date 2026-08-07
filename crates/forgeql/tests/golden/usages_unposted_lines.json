@@ -1,0 +1,34 @@
+{
+  "suite": "usages_unposted_lines",
+  "description": "FIND usages of a name written on a line no recorder tokenised. Every posting-fed tier — exact, substring, and the split-parts map — can only answer where some recorder produced a token, and the body of an .rst literal block produces none. A name written inside one therefore answered zero however plainly the file contained it, which reads exactly like 'this name is not used here'. The files themselves are now read for every query, so the line's own text decides. These cases pin the site that was invisible, the token boundary that keeps reading files from turning a precise query into a substring search, and a control that must stay empty.",
+  "cases": [
+    {
+      "name": "a_name_on_a_line_no_recorder_tokenised_is_found",
+      "use": "zephyr-andre.frozen",
+      "why": "line 228 of doc/services/pm/device.rst is '#define DT_DRV_COMPAT dummy_device', inside a '.. code-block:: c' literal block. Nothing posts a token for that block's own text — 'gpio_callback' three lines below IS posted, because the grammar gives it a nested node of its own — so no posting-fed tier could reach line 228. Verified answering zero on the deployed engine before this change.",
+      "fql": "FIND usages OF 'DT_DRV_COMPAT' IN 'doc/services/pm/device.rst'",
+      "assert": {
+        "row_count": 1,
+        "rows": [ { "path": "doc/services/pm/device.rst", "line": 228 } ]
+      }
+    },
+    {
+      "name": "an_identifier_still_answers_as_a_token_not_as_a_substring",
+      "use": "zephyr-andre.frozen",
+      "why": "the discriminating case for reading files at all: 'DT_DRV' occurs in that file only inside 'DT_DRV_COMPAT' on line 228. A scan that matched substrings would report it and quietly redefine what FIND usages means; the boundary is the one MATCHING WORD uses, so a sweep rewrites exactly the sites the find listed.",
+      "fql": "FIND usages OF 'DT_DRV' IN 'doc/services/pm/device.rst'",
+      "assert": {
+        "row_count": 0
+      }
+    },
+    {
+      "name": "a_name_absent_from_the_corpus_still_answers_zero",
+      "use": "zephyr-andre.frozen",
+      "why": "reading every file must not invent sites: completeness is only worth something if empty still means empty.",
+      "fql": "FIND usages OF 'no_such_symbol_anywhere_in_zephyr'",
+      "assert": {
+        "row_count": 0
+      }
+    }
+  ]
+}

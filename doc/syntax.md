@@ -200,29 +200,31 @@ FIND files [clauses]
 > | `string` | a string literal | C, C++, Rust, Python |
 > | `config` | a build- or config-file value | CMake, YAML, TOML, JSON |
 > | `doc` | prose in a documentation file | Markdown, reStructuredText |
-> | `text` | the file's own bytes — a site found by reading the line, not by a posting, so what kind of occurrence it is was never recorded | any file, only for a name no part of which can be a token (`a.b`) |
+> | `text` | the file's own bytes — the line holds the name, and nothing recorded says what kind of occurrence it is | any file; this is what a site looks like where no recorder tokenised the line at all, such as the body of an `.rst` literal block |
 >
-> Every role above is emitted today, but each is scoped to the languages listed,
-> so an empty result may mean the container is not scanned rather than that the
-> name is absent. In a CMake file, `config` covers call arguments only: a `#`
+> Each role is scoped to the languages listed, so a role-filtered query can come
+> back empty because that container is not classified in that language. The
+> **site** is found either way — the files are read, so an occurrence is never
+> missing for want of a recorder — it simply arrives as `text` rather than under
+> a named role. In a CMake file, `config` covers call arguments only: a `#`
 > comment there is not a config occurrence. In YAML, TOML and JSON it covers
 > scalar **values** only — a key is not a config occurrence, because a key is
 > already the pair's own name on the symbols side (`FIND symbols`), and tagging
 > it here would answer "where is this name written?" twice for one byte range.
 > A key nested inside a value is still a key. In Markdown and reStructuredText,
-> `doc` covers paragraph and heading prose — the text of a fenced code block is
-> not doc.
+> `doc` covers paragraph and heading prose; the text of a fenced or literal code
+> block is not `doc`, and a name written there is reported as `text`.
 > `role` filters and groups like any other field: `WHERE role = 'code'` narrows
 > to references the compiler sees, `GROUP BY role` sizes the campaign by kind.
 > A role is a *recorded* fact about a container, never a judgement about
 > meaning: the engine says what the name was written in, and never guesses
 > whether a mention refers to your symbol or merely spells it the same way. Two
-> qualifications, both on sites the third tier below contributes. Such a site
-> keeps the role of the posting that proposed its line — the two sit on that
-> line together, not necessarily inside the same construct — so the role is the
-> strongest evidence the line carries about the name rather than proof about it.
-> And `text` is backed by no grammar at all, claiming correspondingly less: the
-> line holds the name, and nothing about what the line is.
+> qualifications. Where a name is reached through its parts, the site keeps the
+> role of the posting that shares its line — the two sit on that line together,
+> not necessarily inside the same construct — so the role is the strongest
+> evidence the line carries about the name rather than proof about it. And
+> `text` is backed by no grammar at all, claiming correspondingly less: the line
+> holds the name, and nothing about what the line is.
 >
 > Matching is **token-exact** for identifier queries: `FIND usages OF 'CONFIG_X'`
 > does not match `CONFIG_X_ASYNC`, in prose any more than in code. Tokens are
@@ -257,40 +259,48 @@ FIND files [clauses]
 > exactly: it is shorter than the index can narrow on, and widening on it would
 > select most of the dictionary.
 >
-> Neither tier can reach a name no recorder stored as a token at all. Where a
-> language does not widen its alphabet, `foo-bar.frozen` is stored as `foo-bar`
-> and `frozen`, so both answer zero however many files hold the whole name — and
-> zero reads exactly like "there are none". So a third tier runs for every name
-> carrying a character outside `[A-Za-z0-9_]`: it splits the name at those
-> characters, proposes every line on which **any** of its parts is a stored
-> token, and keeps only the lines whose own text holds the name verbatim. Every
-> part proposes, not the cheapest: which part a site stored depends on that
-> language's alphabet, so the cheapest is routinely stored nowhere the name
-> appears. The line is the arbiter, so however loose the proposal it cannot yield
-> a false positive, and a line carrying the parts in some other arrangement is
-> rejected.
+> Both tiers answer out of a **posting**, and a posting exists only where some
+> recorder tokenised the line — so both are bounded by what the index happens to
+> hold, in two ways that compound. A name no recorder stored *whole* is
+> unreachable by name: where a language does not widen its alphabet,
+> `foo-bar.frozen` is stored as `foo-bar` and `frozen`. And a *line* no recorder
+> tokenised at all is unreachable by anything: the body of an `.rst` literal
+> block produces no tokens, so a name written inside one answered zero however
+> plainly the file contained it. Zero reads exactly like "there are none".
 >
-> Its sites are **merged** with the two tiers above, not used only when they come
-> back empty. One corpus stores the same name both ways — C keeps
-> `pm/device_runtime` inside a whole include-path token while a Python string a
-> few directories away records it as `pm` and `device_runtime` — so each tier
-> reaches sites the other cannot, and only the union is the answer. A site both
-> reach is listed once.
+> So the files themselves are read, on every query, and the line's own text
+> decides what is a site. This is the authoritative tier: a site exists wherever
+> the bytes say it does, whether or not anything recorded it, which is what lets
+> an empty answer mean the corpus does not hold the name. The postings are still
+> consulted, but only to **label** what the bytes found — a site some recorder
+> did see keeps the role it recorded rather than flattening to `text` — and for
+> a name split across separators every part contributes to that labelling, not
+> the cheapest one, since which part a site stored varies by language.
 >
-> Nothing caps how many candidates get verified. A name whose every part is
-> common on a large corpus makes for a slow query — every proposing file is read
-> — and that is the trade: the search is complete, and `LIMIT` / `OFFSET` page
-> the delivery. `IN` and `EXCLUDE` are the lever that does cut the work: a
-> candidate outside their globs would be dropped by the clause pipeline anyway,
-> so it is never read. The rows are identical either way; only the reading is
-> narrower, which is why scoping a blast-radius query to the subtree you are
-> about to edit is worth doing on a big tree. A name no part of which could ever
-> have been a token (`a.b`, `->`) leaves nothing to propose from, so the indexed
-> files in scope are read directly instead; those sites carry the role `text`,
-> because the bytes say the line holds the name and nothing says what kind of
-> occurrence it is. The only `hint` this tier emits names a candidate file it
-> could not read — an answer short by something specific, never short because
-> the work looked large.
+> Every tier's sites are **merged**, none is a fallback for another coming back
+> empty. One corpus stores the same name several ways at once — C keeps
+> `pm/device_runtime` inside a whole include-path token, a Python string a few
+> directories away records it as `pm` and `device_runtime`, and a literal block
+> in a manual records nothing at all — so each reaches sites the others cannot
+> and only the union is the answer. A site two of them reach is listed once,
+> under the most specific role anything recorded for it.
+>
+> Nothing caps the search. Reading the in-scope files is the cost of every
+> `FIND usages`, paid once per query and bounded by how much of the tree is in
+> scope: `IN` and `EXCLUDE` are the lever, because a file outside their globs
+> can only produce rows the clause pipeline would drop, so it is never opened.
+> The rows are identical either way — only the reading is narrower — which is
+> why scoping a blast-radius query to the subtree you are about to edit is worth
+> doing on a large tree. `LIMIT` and `OFFSET` page the delivery, never the
+> search. The only `hint` this emits names a file it could not read: an answer
+> short by something specific, never short because the work looked large.
+>
+> **Matching follows the shape of the name.** An identifier is matched on token
+> boundaries — the same boundary `MATCHING WORD` rewrites on, so a sweep touches
+> exactly the sites the `FIND` listed — and `FIND usages OF '256'` still means
+> the token `256`, never the digits inside `sha256`. A name carrying anything
+> outside `[A-Za-z0-9_]` is matched literally, separators and all, which is what
+> makes an include path or a dotted name askable at all.
 >
 > A value that no key introduces is still a value: a top-level YAML sequence or
 > JSON array has no `value` edge above it, so it contributes no `config`
