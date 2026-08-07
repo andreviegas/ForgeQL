@@ -395,10 +395,11 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// files widens no name into a substring search.
     ///
     /// The `Option<String>` beside the rows is not a budget or a ceiling: it
-    /// names a specific thing that went wrong, a file that exists and could not
-    /// be read, so the sites it holds are known to be absent instead of
-    /// silently so. A path the index lists but the worktree no longer holds is
-    /// not that case — it has no bytes, so the answer over it is complete.
+    /// reports a specific thing that went wrong, how many files exist and could
+    /// not be read, so the sites they hold are known to be absent instead of
+    /// silently so. It carries the count and not the paths. A path the index
+    /// lists but the worktree no longer holds is not that case at all — it has
+    /// no bytes, so the answer over it is complete.
     fn find_usages(
         &self,
         name: &str,

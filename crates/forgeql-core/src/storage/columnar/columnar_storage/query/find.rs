@@ -227,7 +227,27 @@ impl ColumnarStorage {
         // site; a posting only ever adds a role to a site the bytes already
         // proved. That is what lets the contract say `complete` with no
         // qualifier after it.
-        let (scanned, hint) = self.literal_sites(name, clauses, root);
+        let (scanned, read, hint) = self.literal_sites(name, clauses, root);
+
+        // A posting is a claim about the bytes as they were when the file was
+        // indexed, and a file can change without ForgeQL: a build step writes
+        // it, a checkout replaces it, an editor saves it. Where the read did
+        // examine the bytes, they are the authority and the scan already holds
+        // every site they carry — so a posted site the scan did not confirm is
+        // a segment that has drifted, and reporting it would hand back a line
+        // that no longer holds the name, with a file handle and a rev that both
+        // still resolve. Postings survive only for files the read could not
+        // open or could not decode as text, where they are the only evidence
+        // there is.
+        {
+            let confirmed: HashSet<(&std::path::PathBuf, u32)> = scanned
+                .iter()
+                .map(|(path, line, _)| (path, *line))
+                .collect();
+            sites.retain(|(path, line, _)| {
+                !read.contains(path) || confirmed.contains(&(path, *line))
+            });
+        }
 
         // A site a posting already reported keeps that posting's role, which
         // says more than `text` does. Matched on `(path, line)` and not on the
@@ -391,12 +411,18 @@ impl ColumnarStorage {
     ///
     /// Cost is one read per in-scope file per query, bounded by `IN`/`EXCLUDE`.
     /// Reads nothing stored in a new way, so no cache version moves.
+    /// Read the in-scope files and return every site their bytes hold, the set
+    /// of paths whose bytes were actually examined as text, and a hint naming
+    /// what could not be read.
+    ///
+    /// The second value is what lets the caller tell "these bytes do not hold
+    /// the name" from "these bytes were never looked at".
     fn literal_sites(
         &self,
         needle: &str,
         clauses: &Clauses,
         root: &Path,
-    ) -> (Vec<Site>, Option<String>) {
+    ) -> (Vec<Site>, HashSet<std::path::PathBuf>, Option<String>) {
         const ROLE_TEXT: &str = "text";
 
         // What the postings can say about the lines this is about to read:
@@ -469,6 +495,7 @@ impl ColumnarStorage {
 
         let mut sites = Vec::new();
         let mut unread = 0usize;
+        let mut read: HashSet<std::path::PathBuf> = HashSet::new();
         for path in &paths {
             let bytes = match std::fs::read(root.join(path)) {
                 Ok(bytes) => bytes,
@@ -491,6 +518,10 @@ impl ColumnarStorage {
             let Some(text) = decode_text(&bytes) else {
                 continue;
             };
+            // Recorded only once the bytes have actually been decoded as text.
+            // A file that was opened and then skipped as binary proves nothing
+            // about what it holds, so it must not be counted as examined.
+            let _ = read.insert(path.clone());
 
             // Cheap reject before splitting into lines: a whole-token match is
             // a substring match too.
@@ -510,7 +541,7 @@ impl ColumnarStorage {
             }
         }
 
-        (sites, unread_hint(unread, needle))
+        (sites, read, unread_hint(unread, needle))
     }
 
     pub(super) fn indexed_files_impl(&self) -> Vec<crate::result::FileEntry> {

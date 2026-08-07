@@ -302,9 +302,11 @@ FIND files [clauses]
 > are skipped as binary, which is a boundary and not a claim about what those
 > files hold. Everything else is decoded leniently, so a file that is text
 > apart from a stray byte in a legacy encoding still answers on every line that
-> holds the name; a file that exists and cannot be read is counted and named in
-> the `hint` rather than passed over in silence, while one the index lists and
-> the worktree no longer holds is simply skipped — it has no bytes, so nothing
+> holds the name; a file that exists and cannot be read is counted in
+> the `hint` rather than passed over in silence — as a count, not a list of
+> paths, so the `hint` says how much is missing and not which file — while one
+> the index lists and the worktree no longer holds is simply skipped — it has
+> no bytes, so nothing
 > about it is missing.
 >
 > A UTF-16 site is found and cannot be rewritten in place. A line boundary
@@ -340,7 +342,7 @@ FIND files [clauses]
 > The rows are identical either way — only the reading is narrower — which is
 > why scoping a blast-radius query to the subtree you are about to edit is worth
 > doing on a large tree. `LIMIT` and `OFFSET` page the delivery, never the
-> search. The only `hint` this emits names a file it could not read: an answer
+> search. The only `hint` this emits counts the files it could not read: an answer
 > short by something specific, never short because the work looked large.
 >
 > **Matching follows the shape of the name.** An identifier is matched on token

@@ -29,7 +29,13 @@ or not anything recorded it, so an empty answer now means the corpus does not
 hold the name. The recordings are still consulted, but only to *label* what the
 bytes found: a site something did record keeps its role — `code`, `comment`,
 `string`, `config`, `doc` — instead of flattening, and only a line nothing
-recorded arrives as `text`.
+recorded arrives as `text`. The authority runs the other way too: where the
+bytes were read, a recorded site the bytes no longer carry is dropped rather
+than reported, so a segment that has drifted from the worktree — a build step
+wrote the file, a checkout replaced it — can no longer hand back a line that
+does not hold the name, under a file handle and a rev that both still resolve.
+Recordings still stand on their own only for a file the read could not open or
+could not decode, where they are the only evidence there is.
 
 Every file the workspace knows about is read, not only the ones that produced
 symbols: a `.gitignore`, or any extension no plugin claims, is tracked by path
@@ -41,8 +47,8 @@ files — a NUL byte near the start, the line `grep` draws — are not searched,
 because an object file or an index blob embeds symbol names and a site there is
 bytes no sweep should rewrite. Everything else decodes leniently, so a file that
 is text apart from a stray byte in a legacy encoding still answers on every line
-that holds the name; a file that exists and cannot be read is still counted and
-named in the response's `hint`.
+that holds the name; a file that exists and cannot be read is still counted in
+the response's `hint` — a count, not a list of paths.
 
 A byte-order mark is believed before that binary check, so **UTF-16 text is
 searched** rather than mistaken for an object file: every ASCII character in
@@ -125,10 +131,22 @@ same profile, leaves all three query shapes below the harness's noise floor on
 the branch exactly as on the baseline — identifier names, names carrying a
 separator, and names no part of which can be a token all under 200 ms per query
 either way, a difference the harness cannot resolve, with the branch reading
-every in-scope file on every query. Reading the whole workspace per query is
-therefore not detectable at this corpus size; a tree large enough to make it so
-would be bounded by `IN` and `EXCLUDE`, which cut the reading and not just the
-rows.
+every in-scope file on every query. What "in-scope" was for those three classes
+is the harness's business and not stated here, so read the number as: the read
+pass did not move any of the shapes the harness measures. Reading the whole
+workspace per query is not detectable at this corpus size; a tree large enough
+to make it so would be bounded by `IN` and `EXCLUDE`, which cut the reading and
+not just the rows.
+
+**Upgrading with uncommitted work.** The session delta gained a field, so its
+format version moved and a delta written by an earlier build is refused by
+version rather than misread. Refusing it is the safe half; the unsafe half is
+what follows. A session that reconnects across the upgrade holding uncommitted
+edits has its dirty overlay reset and its staged segments collected, and
+nothing is queued for re-indexing — the files on disk keep every edit, but
+queries serve the pre-edit rows for them until those files are touched again.
+Commit or roll back before upgrading, or re-save the edited files afterwards to
+force a reindex.
 
 ## [0.153.0] — 2026-08-07 — the guard set fields and `key_path` are indexed
 

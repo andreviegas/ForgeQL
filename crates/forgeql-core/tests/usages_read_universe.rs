@@ -385,6 +385,42 @@ fn an_ignored_file_is_outside_the_universe_until_this_session_touches_it() {
     );
 }
 
+/// Two properties of a path the index lists that the worktree no longer holds,
+/// both of them documented at eight sites and neither pinned until now: it
+/// contributes no `hint`, because it has no bytes to be missing, and it takes
+/// nothing else down with it. Flipping the `NotFound` arm to count as unread
+/// would contradict every one of those sites with a fully green gate.
+#[test]
+fn a_recorded_path_the_worktree_no_longer_holds_is_skipped_in_silence() {
+    let mut t = read_universe_workspace();
+
+    mutate(
+        &mut t,
+        &format!("CHANGE FILE 'vanished.conf' WITH 'CONFIG_IDLE={NEEDLE}'"),
+    );
+    // Removed behind ForgeQL's back, the way a build step or a checkout would:
+    // the session still has the path recorded, the bytes are simply gone.
+    std::fs::remove_file(t.workspace().join("vanished.conf")).expect("fixture");
+
+    let q = query(&mut t, &format!("FIND usages OF '{NEEDLE}'"));
+
+    assert!(
+        q.hint.as_deref().unwrap_or_default().is_empty(),
+        "a file that is not there is not a file that could not be read: {:?}",
+        q.hint
+    );
+    assert!(
+        files(&q).contains(&"notes.txt".to_owned()),
+        "and the rest of the answer is unaffected: {:?}",
+        files(&q)
+    );
+    assert!(
+        !files(&q).contains(&"vanished.conf".to_owned()),
+        "its own sites are gone with its bytes: {:?}",
+        files(&q)
+    );
+}
+
 /// A directory is not a file the read pass can open. Recording one would make
 /// every later query report an unreadable file that is not missing anything,
 /// and list the directory without the trailing slash that marks it.
