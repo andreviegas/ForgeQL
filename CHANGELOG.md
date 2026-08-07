@@ -139,14 +139,14 @@ to make it so would be bounded by `IN` and `EXCLUDE`, which cut the reading and
 not just the rows.
 
 **Upgrading with uncommitted work.** The session delta gained a field, so its
-format version moved and a delta written by an earlier build is refused by
-version rather than misread. Refusing it is the safe half; the unsafe half is
-what follows. A session that reconnects across the upgrade holding uncommitted
-edits has its dirty overlay reset and its staged segments collected, and
-nothing is queued for re-indexing — the files on disk keep every edit, but
-queries serve the pre-edit rows for them until those files are touched again.
-Commit or roll back before upgrading, or re-save the edited files afterwards to
-force a reindex.
+format version moved and a delta written by an earlier build is no longer read
+as-is. It is not discarded either: each version so far has added a trailing
+field and the encoding is read as a prefix, so the previous layout still yields
+its staged paths and its removal set. A session reconnecting across the upgrade
+with uncommitted edits keeps its deletions shadowed and gets its edited files
+queued for a fresh index — the staged segments go, the knowledge of which files
+need rebuilding does not. A delta older than one layout back is refused
+outright, because there is no safe way to guess where its fields begin.
 
 ## [0.153.0] — 2026-08-07 — the guard set fields and `key_path` are indexed
 
