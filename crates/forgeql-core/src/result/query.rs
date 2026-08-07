@@ -220,10 +220,13 @@ impl SymbolRow {
     pub(crate) fn from_match_with_ctx(row: &SymbolMatch, ctx: &QueryContext<'_>) -> Self {
         Self {
             name: compact_name(&row.name).into_owned(),
-            // `node_kind` is deprecated and intentionally NOT used as a
-            // fallback — only `fql_kind` is exposed.  Backends that lack a
-            // mapped `fql_kind` for a given AST node return an empty string,
-            // matching the columnar backend's behaviour for parity.
+            // `node_kind` is intentionally NOT used as a fallback — only
+            // `fql_kind` is exposed. On the columnar backend a `node_kind`
+            // predicate is refused outright (no row stores it there);
+            // wherever a row does carry one, it still never stands in for a
+            // missing `fql_kind`. Backends that lack a mapped `fql_kind` for
+            // a given AST node return an empty string, matching the columnar
+            // backend's behaviour for parity.
             kind: row.fql_kind.clone().unwrap_or_default(),
             path: row
                 .path

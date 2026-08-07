@@ -73,6 +73,10 @@ impl StorageEngine for ColumnarStorage {
         clauses: &Clauses,
         root: &Path,
     ) -> Result<(Vec<SymbolMatch>, Option<String>)> {
+        // An occurrence row is a line, not a node: it carries no node_kind at
+        // all, so the same refusal `FIND symbols` gives has to be given here
+        // rather than letting the clause filter drop every row in silence.
+        super::query::find::reject_node_kind(clauses)?;
         Ok(self.find_usages_impl(name, clauses, root))
     }
 

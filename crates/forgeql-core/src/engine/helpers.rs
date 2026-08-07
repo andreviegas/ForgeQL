@@ -149,21 +149,29 @@ pub(crate) fn detect_metric_hint(clauses: &Clauses) -> Option<String> {
     None
 }
 
-/// Reject `WHERE text …` on FIND queries — `text` is only available on
-/// commands that return source lines (SHOW body, SHOW LINES, SHOW context).
+/// Reject `text`/`content` in `WHERE`, `ORDER BY` and `GROUP BY` on FIND
+/// queries — they are only available on commands that return source lines
+/// (SHOW body, SHOW LINES, SHOW context), and no FIND row carries either.
 pub(crate) fn reject_text_filter(clauses: &Clauses) -> Result<()> {
-    if clauses
-        .where_predicates
-        .iter()
-        .any(|p| p.field == "text" || p.field == "content")
-    {
-        bail!(
-            "WHERE text/content is not available on FIND queries — \
-             it only works on commands that return source lines \
-             (SHOW body, SHOW LINES, SHOW context)"
-        );
-    }
-    Ok(())
+    let names = |f: &str| f == "text" || f == "content";
+    // All three clauses, not just WHERE. A field no FIND row carries fails a
+    // different way in each — WHERE matches nothing, ORDER BY ties every row,
+    // GROUP BY keys them all to the empty string and reports one fabricated
+    // group — and all three are equally wrong.
+    let clause = if clauses.where_predicates.iter().any(|p| names(&p.field)) {
+        "WHERE"
+    } else if clauses.order_by.as_ref().is_some_and(|o| names(&o.field)) {
+        "ORDER BY"
+    } else if matches!(clauses.group_by, Some(crate::ir::GroupBy::Field(ref f)) if names(f)) {
+        "GROUP BY"
+    } else {
+        return Ok(());
+    };
+    bail!(
+        "{clause} text/content is not available on FIND queries — \
+         it only works on commands that return source lines \
+         (SHOW body, SHOW LINES, SHOW context)"
+    );
 }
 
 #[cfg(test)]

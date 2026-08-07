@@ -10,14 +10,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `WHERE node_kind = …` and `ORDER BY node_kind` now return an error naming
-  `fql_kind` instead of an answer. `node_kind` is the raw tree-sitter kind: it
+- `node_kind` in `WHERE`, `ORDER BY` or `GROUP BY` now returns an error naming
+  `fql_kind` instead of an answer, on `FIND symbols`, `FIND globals`, `FIND
+  usages` and `FIND files`. `node_kind` is the raw tree-sitter grammar kind: it
   is computed while parsing to drive kind mapping and is stored on no row of
-  the index a session queries, so every materialised row reported it absent
-  and a predicate on it matched nothing while the negated form matched
-  everything. A query that cannot be answered now says so. Serving it would
-  mean storing it, which is an index-output change and is not part of this
-  release.
+  the index a session queries, so every materialised row reported it absent.
+  Each clause failed a different way and all three read like answers — the
+  predicate matched nothing while its negation matched everything, the sort
+  tied every row and fell back to name order, and the grouping put every row
+  into one empty-named group whose count was the whole result. `SHOW outline`,
+  `SHOW members` and `SHOW callees` answer with a value rather than an error
+  and still accept the field, matching nothing. Serving it would mean storing
+  it, which is an index-output change and is not part of this release.
+- `GROUP BY` on a field no indexed row carries is refused rather than answered.
+  It previously reported exactly one group, named by the empty string, holding
+  every row — a shape indistinguishable from a real result. The accepted set is
+  the same one `WHERE` and `ORDER BY` already used: a core field, an enrichment
+  field of any registered language, or an extra column some segment stores.
+- `text` and `content` are refused in `ORDER BY` and `GROUP BY` as well as in
+  `WHERE`. They were already rejected in `WHERE` on FIND queries for the same
+  reason — no row of a FIND result carries source text — but the other two
+  clauses went through and produced the tie and the fabricated group above.
 
 ### Added
 

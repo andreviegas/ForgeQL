@@ -303,7 +303,13 @@ const GAP_COVERAGE: &[(Gap, &str)] = &[
     ),
     (
         Gap::EmptyValue,
-        "a_pattern_that_accepts_the_empty_string_answers_completely",
+        "NOT CONSTRUCTIBLE: the overlay skips a value that is the empty string \
+     when it writes keys, and no fixture reaches an enricher that stores one — \
+     a row either carries a non-empty value for a field or does not carry the \
+     field at all. Recorded as unreached rather than proven absent. The \
+     adjacent, constructible risk — a pattern answering from the keys instead \
+     of from the rows — is covered by \
+     a_pattern_answers_the_rows_the_filter_would_accept",
     ),
     (
         Gap::DirtySession,
@@ -327,19 +333,6 @@ const GAP_COVERAGE: &[(Gap, &str)] = &[
 ];
 
 #[test]
-fn every_declared_gap_names_a_fallback() {
-    for row in FIELD_TIERS {
-        for gap in row.gaps {
-            assert!(
-                !gap.fallback().is_empty(),
-                "{}: {gap:?} names no fallback",
-                row.field
-            );
-        }
-    }
-}
-
-#[test]
 fn every_declared_gap_is_covered() {
     let covered: BTreeSet<Gap> = GAP_COVERAGE.iter().map(|&(g, _)| g).collect();
     let declared: BTreeSet<Gap> = FIELD_TIERS
@@ -355,7 +348,18 @@ fn every_declared_gap_is_covered() {
         );
     }
     for (gap, note) in GAP_COVERAGE {
-        assert!(!note.is_empty(), "{gap:?} has an empty coverage note");
+        // A note either names a test or says NOT CONSTRUCTIBLE and why.
+        // "" and a vague hand-wave are the two ways this list stops meaning
+        // anything, so both are refused here.
+        assert!(
+            note.contains("NOT CONSTRUCTIBLE") || note.contains('_'),
+            "{gap:?}: the coverage note must name a test function or begin \
+             NOT CONSTRUCTIBLE with the reason, got: {note}"
+        );
+        assert!(
+            !gap.fallback().is_empty(),
+            "{gap:?} names no fallback mechanism"
+        );
     }
 }
 
@@ -376,6 +380,17 @@ fn query(t: &mut common::TestSession, fql: &str) -> QueryResult {
 /// `guard_branch` values — the cheapest way to put a real field over a real
 /// budget, since the value is the branch's position.
 fn guarded_workspace(branches: usize) -> common::TestSession {
+    build_workspace(branches, false)
+}
+
+/// The same, plus a second file whose one function sits inside no conditional
+/// at all — so the workspace holds rows that carry `guard_branch` and rows
+/// that do not.
+fn guarded_workspace_with_unguarded(branches: usize) -> common::TestSession {
+    build_workspace(branches, true)
+}
+
+fn build_workspace(branches: usize, plus_unguarded: bool) -> common::TestSession {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut src = String::new();
     for i in 0..branches {
@@ -387,6 +402,13 @@ fn guarded_workspace(branches: usize) -> common::TestSession {
     }
     src.push_str("#endif\n");
     std::fs::write(dir.path().join("guards.cpp"), src).expect("write fixture");
+    if plus_unguarded {
+        std::fs::write(
+            dir.path().join("plain.cpp"),
+            "int unguarded_sym(void) { return 0; }\n",
+        )
+        .expect("write fixture");
+    }
     common::columnar_session_in(dir)
 }
 
@@ -439,20 +461,42 @@ fn a_field_over_its_budgets_still_answers_completely() {
 }
 
 #[test]
-fn a_pattern_that_accepts_the_empty_string_answers_completely() {
-    // A row whose value is empty is keyed nowhere, so a pattern that would
-    // match it cannot be answered from the keys at all. The tier has to stand
-    // aside rather than return what the keys happen to hold.
-    let mut t = guarded_workspace(4);
+fn a_pattern_answers_the_rows_the_filter_would_accept() {
+    // Two things at once, because they fail the same way. The fixture is over
+    // its per-file budget, so the field has no keys here at all; and one file
+    // carries no `guard_branch` on any row. A pattern tier that answered from
+    // its keys would return nothing, and one that stopped narrowing
+    // altogether would return the unguarded row too. The answer has to be
+    // exactly the rows the row-level filter would accept — which is also why
+    // the tier must stand aside for a pattern that accepts the empty string:
+    // an empty value is keyed nowhere either.
+    let mut t = guarded_workspace_with_unguarded(9);
+
     let scan = query(&mut t, "FIND symbols WHERE fql_kind = 'function' LIMIT 500");
+    let mut expected: Vec<&str> = scan
+        .results
+        .iter()
+        .filter(|r| r.fields.contains_key("guard_branch"))
+        .map(|r| r.name.as_str())
+        .collect();
+    expected.sort_unstable();
+    assert!(
+        !expected.is_empty() && expected.len() < scan.results.len(),
+        "fixture must hold both guarded and unguarded rows, got {}/{}",
+        expected.len(),
+        scan.results.len()
+    );
+
     let patterned = query(
         &mut t,
         "FIND symbols WHERE fql_kind = 'function' WHERE guard_branch MATCHES '.*' LIMIT 500",
     );
+    let mut got: Vec<&str> = patterned.results.iter().map(|r| r.name.as_str()).collect();
+    got.sort_unstable();
     assert_eq!(
-        patterned.results.len(),
-        scan.results.len(),
-        "a pattern accepting the empty string must not narrow to the keyed rows"
+        got, expected,
+        "the pattern answer must be the rows the filter accepts, neither the \
+         keyed subset nor the whole scan"
     );
 }
 
@@ -464,13 +508,49 @@ fn refused_fields_error_rather_than_answering_nothing() {
             continue;
         }
         for name in std::iter::once(row.field).chain(row.aliases.iter().copied()) {
-            let fql = format!("FIND symbols WHERE {name} = 'x'");
-            let outcome = t.try_fql(&fql);
-            assert!(
-                outcome.is_err(),
-                "{name} is declared Refused but `{fql}` answered instead of erroring"
-            );
+            for fql in [
+                format!("FIND symbols WHERE {name} = 'x'"),
+                format!("FIND symbols ORDER BY {name} LIMIT 5"),
+                format!("FIND symbols GROUP BY {name}"),
+            ] {
+                assert!(
+                    t.try_fql(&fql).is_err(),
+                    "{name} is declared Refused but `{fql}` answered instead of \
+                     erroring"
+                );
+            }
         }
+    }
+}
+
+/// The refusal has to hold on every verb that reaches this backend, not only
+/// on the one it was written for.
+///
+/// `FIND usages` builds occurrence rows that carry no kind at all, and `FIND
+/// files` builds file rows that carry none either; both used to run the
+/// clause filter over those rows and return a confident empty answer.
+#[test]
+fn node_kind_is_refused_on_every_find_verb() {
+    let mut t = guarded_workspace(2);
+    for fql in [
+        "FIND symbols WHERE node_kind = 'x'",
+        "FIND symbols ORDER BY node_kind LIMIT 5",
+        "FIND symbols GROUP BY node_kind",
+        "FIND globals WHERE node_kind = 'x'",
+        "FIND usages OF 'sym_0' WHERE node_kind = 'x'",
+        "FIND usages OF 'sym_0' GROUP BY node_kind",
+        "FIND files WHERE node_kind = 'x'",
+        "FIND files ORDER BY node_kind LIMIT 5",
+    ] {
+        let err = t
+            .try_fql(fql)
+            .err()
+            .unwrap_or_else(|| panic!("`{fql}` answered instead of erroring"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("node_kind") && msg.contains("fql_kind") || msg.contains("no kind at all"),
+            "`{fql}` was refused without saying what to write instead: {msg}"
+        );
     }
 }
 

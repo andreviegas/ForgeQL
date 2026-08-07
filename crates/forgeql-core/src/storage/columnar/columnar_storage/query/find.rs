@@ -7,7 +7,7 @@ use roaring::RoaringBitmap;
 
 use crate::ast::trigram::TRIGRAM_WIDTH;
 use crate::filter::apply_clauses;
-use crate::ir::{Clauses, CompareOp, PredicateValue};
+use crate::ir::{Clauses, CompareOp, GroupBy, PredicateValue};
 use crate::result::SymbolMatch;
 use crate::storage::columnar::columnar_storage::fast_paths::{
     glob_to_path_prefix, group_by_file_fast_path_eligible, group_by_kind_fast_path_eligible,
@@ -27,13 +27,47 @@ use crate::storage::columnar::segment_builder::ZONEMAP_NUMERIC_FIELDS;
 /// that does store it.
 const NODE_KIND: &str = "node_kind";
 
+/// Refuse a `node_kind` predicate wherever one can reach this backend.
+///
+/// `WHERE`, `ORDER BY` and `GROUP BY` all have to be checked, and for the same
+/// reason: none of them can be answered from a field no row carries, and each
+/// fails a different way. `WHERE` matches nothing while its negation matches
+/// everything; `ORDER BY` ties every row and silently falls back to name
+/// order; `GROUP BY` keys every row to the empty string and reports one
+/// fabricated group whose count is the whole result set.
+pub(super) fn reject_node_kind(clauses: &Clauses) -> anyhow::Result<()> {
+    let clause = if clauses
+        .where_predicates
+        .iter()
+        .any(|p| p.field == NODE_KIND)
+    {
+        "WHERE"
+    } else if clauses
+        .order_by
+        .as_ref()
+        .is_some_and(|o| o.field == NODE_KIND)
+    {
+        "ORDER BY"
+    } else if matches!(clauses.group_by, Some(GroupBy::Field(ref f)) if f == NODE_KIND) {
+        "GROUP BY"
+    } else {
+        return Ok(());
+    };
+    anyhow::bail!("{}", node_kind_refusal(clause));
+}
+
 /// Why a `node_kind` predicate is refused, and what to write instead.
+///
+/// The example stays language-agnostic on purpose: the grammar kind an agent
+/// would have written is `function_definition` in C and `function_item` in
+/// Rust, and this crate knows about neither.
 fn node_kind_refusal(clause: &str) -> String {
     format!(
         "{clause} node_kind is not answerable: node_kind is the raw tree-sitter \
-         kind and no indexed row stores it, so the query could only report \
-         absence. Use fql_kind, the universal kind, which is stored — \
-         fql_kind = 'function' rather than node_kind = 'function_definition'."
+         grammar kind and no indexed row stores it, so the query could only \
+         report absence. Use fql_kind, the universal kind, which is stored — \
+         fql_kind = 'function' rather than node_kind = '<the grammar's own \
+         name for a function>'."
     )
 }
 
@@ -61,8 +95,10 @@ impl ColumnarStorage {
         // GROUP BY and ORDER BY name fast-paths short-circuit the pipeline. The
         // count-based GROUP BY paths are only valid when source paths are unique;
         // duplicates overcount, so fall through to the deduplicating pipeline.
+        reject_node_kind(clauses)?;
         self.reject_unknown_where_fields(clauses)?;
         self.reject_unknown_order_by_field(clauses)?;
+        self.reject_unknown_group_by_field(clauses)?;
         let no_dup_paths = !self.overlay.has_duplicate_paths();
         if group_by_kind_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
             return Ok(self.fast_group_by_kind(clauses));
@@ -107,9 +143,6 @@ impl ColumnarStorage {
     fn reject_unknown_where_fields(&self, clauses: &Clauses) -> anyhow::Result<()> {
         for pred in &clauses.where_predicates {
             let field = pred.field.as_str();
-            if field == NODE_KIND {
-                anyhow::bail!("{}", node_kind_refusal("WHERE"));
-            }
             if crate::filter::CORE_WHERE_FIELDS.contains(&field) {
                 continue;
             }
@@ -153,9 +186,6 @@ impl ColumnarStorage {
             return Ok(());
         };
         let field = order.field.as_str();
-        if field == NODE_KIND {
-            anyhow::bail!("{}", node_kind_refusal("ORDER BY"));
-        }
         if crate::filter::SORTABLE_SYMBOL_FIELDS.contains(&field) {
             return Ok(());
         }
@@ -183,6 +213,38 @@ impl ColumnarStorage {
         );
     }
 
+    /// Stage 0 — fail fast on a GROUP BY field that no row can resolve.
+    ///
+    /// `apply_group_by` keys a row it cannot resolve to the empty string, so
+    /// an unknown field does not produce no groups: it produces exactly one,
+    /// named `(empty)`, whose count is the entire result set. That reads like
+    /// an answer. The accepted set matches the WHERE and ORDER BY checks — a
+    /// core field, a known enrichment field of any registered language, or an
+    /// extra column stored by some segment of this index.
+    fn reject_unknown_group_by_field(&self, clauses: &Clauses) -> anyhow::Result<()> {
+        let Some(GroupBy::Field(ref field)) = clauses.group_by else {
+            return Ok(());
+        };
+        let field = field.as_str();
+        if crate::filter::CORE_WHERE_FIELDS.contains(&field)
+            || crate::filter::SORTABLE_SYMBOL_FIELDS.contains(&field)
+            || crate::storage::legacy::is_known_enrichment_field(field)
+            || self.segments.iter().any(|s| s.has_extra_col(field))
+            || self
+                .dirty
+                .added
+                .iter()
+                .any(|ds| ds.reader.has_extra_col(field))
+        {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "unknown GROUP BY field '{field}': no indexed row carries it, so \
+             every symbol would fall into one empty-named group holding the \
+             whole result.  Group by a core field (file, fql_kind, name, \
+             language, …) or an enrichment field."
+        );
+    }
     /// Stage 4b (BUG-006 U3): overwrite each row's `usages_count` with the
     /// workspace-total usage-site count from the overlay usages aggregate.
     ///

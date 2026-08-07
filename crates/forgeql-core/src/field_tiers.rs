@@ -680,6 +680,13 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         // engine, because the legacy in-memory index does store it per row
         // and filters on it correctly — this table describes the indexed
         // backend, which is the one every session queries.
+        //
+        // Refused in WHERE, ORDER BY and GROUP BY on `FIND symbols`, `FIND
+        // globals`, `FIND usages` and `FIND files`. `SHOW outline`, `SHOW
+        // members` and `SHOW callees` still accept it and drop every row in
+        // silence: those three answer with a JSON value rather than a Result,
+        // so refusing there is a signature change that belongs with the wider
+        // decision about the other unserved names below.
         source: Source::Absent,
         serving: REFUSED_ALL,
         gaps: &[],

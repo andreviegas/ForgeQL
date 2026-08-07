@@ -13,7 +13,7 @@ use anyhow::Result;
 use crate::{
     ast::{query, show},
     engine::{ForgeQLEngine, reject_text_filter},
-    ir::{Clauses, SortDirection},
+    ir::{Clauses, GroupBy, SortDirection},
     result::FileEntry,
     storage::StorageEngine,
     workspace::Workspace,
@@ -97,6 +97,24 @@ impl ForgeQLEngine {
         clauses: &Clauses,
     ) -> Result<serde_json::Value> {
         reject_text_filter(clauses)?;
+        // A file row carries no node_kind either, and unlike SHOW outline /
+        // members / callees this verb can return an error rather than a JSON
+        // value, so the same refusal is affordable here.
+        if clauses
+            .where_predicates
+            .iter()
+            .any(|p| p.field == "node_kind")
+            || clauses
+                .order_by
+                .as_ref()
+                .is_some_and(|o| o.field == "node_kind")
+            || matches!(clauses.group_by, Some(GroupBy::Field(ref f)) if f == "node_kind")
+        {
+            anyhow::bail!(
+                "node_kind is not answerable on FIND files: a file row carries \
+                 no kind at all. Filter on path, name, extension or size."
+            );
+        }
         let glob = clauses.in_glob.as_deref().unwrap_or("**");
         let indexed_opt = engine.indexed_files();
         let fast_path_ext: Option<&str> = indexed_opt.as_ref().and_then(|indexed| {
