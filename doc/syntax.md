@@ -282,16 +282,20 @@ FIND files [clauses]
 > is tracked by path and size alone and holds text like anything else — and one
 > created inside this session, which no committed structure knows about yet, is
 > read from the path the session recorded for it. The set read is exactly what
-> `FIND files` lists, minus ForgeQL's own runtime artifacts — so a file that
-> reaches the worktree without passing through ForgeQL, one a build step wrote,
-> is read by neither until it is indexed; the two answer over one universe, and
-> that is the boundary of "knows about". Binary files — a
+> `FIND files` lists, minus ForgeQL's own runtime artifacts, and two things are
+> outside it for good: a file excluded by `.gitignore`, `.ignore` or
+> `.forgeql-ignore`, which nothing here ever enumerates, and one that reaches
+> the worktree without passing through ForgeQL — a build step's output, say —
+> which is in neither list until it is indexed. That pair is the boundary of
+> "knows about", and it is the same pair for both commands. Binary files — a
 > NUL byte near the start, the line `grep` draws — are not searched: an object
 > file or an index blob embeds symbol names, and a site there is bytes no sweep
 > should rewrite. A byte-order mark is believed before that check, so UTF-16
-> text is read rather than taken for an object file — but only where a mark
-> declares it; UTF-16 written without one is indistinguishable from binary and
-> stays unsearched. Everything else is decoded leniently, so a file that is text
+> text is read rather than taken for an object file — but only UTF-16, and only
+> where a mark declares it. UTF-16 without a mark cannot be told from a compiled
+> object, and UTF-32 is not decoded at all even when its mark declares it; both
+> are skipped as binary, which is a boundary and not a claim about what those
+> files hold. Everything else is decoded leniently, so a file that is text
 > apart from a stray byte in a legacy encoding still answers on every line that
 > holds the name; a file that exists and cannot be read is counted and named in
 > the `hint` rather than passed over in silence, while one the index lists and
@@ -303,12 +307,15 @@ FIND files [clauses]
 > every byte after the edit. Any `CHANGE`, `INSERT` or `DELETE` targeting a node
 > or line range in such a file is **refused with an error naming the encoding**,
 > never attempted, and so is a `COPY LINES` or `MOVE LINES` whose destination is
-> one — the payload it splices in is UTF-8.
-> Overwriting the whole file with
-> `CHANGE NODE '<file_hex>' WITH ...` leaves no mixed encoding behind and is
-> allowed — that is the way to convert one. Reading such a line back is bounded
-> the same way: `SHOW` renders the raw bytes, so the decode reaches the site
-> list and not the display.
+> one — the payload it splices in is UTF-8. That covers replacing the file
+> whole: a whole-file `CHANGE NODE '<file_hex>' WITH ...` is lowered to a line
+> range like any other, and a line range over UTF-16 does not even reach the
+> last byte, so it is refused too. **There is no in-place conversion.** To
+> convert one, delete the file and write it again — `DELETE NODE`, then
+> `INSERT NODE FOR`, then `INSERT AFTER NODE` — or edit it outside ForgeQL and
+> let the reindex pick it up. Reading such a line back is bounded the same way:
+> `SHOW` renders the raw bytes, so the decode reaches the site list and not the
+> display.
 >
 > Every tier's sites are **merged**, none is a fallback for another coming back
 > empty. One corpus stores the same name several ways at once — C keeps

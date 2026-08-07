@@ -252,6 +252,60 @@ fn copying_lines_into_a_utf16_destination_is_refused_and_writes_nothing() {
     );
 }
 
+/// `MOVE LINES` reaches a cross-file destination through its own branch, not
+/// through the one `COPY LINES` uses. The defect being fixed was "a destination
+/// reached by a separate offset calculation", so each calculation needs its own
+/// pin or the next one added comes back unguarded.
+#[test]
+fn moving_lines_into_a_utf16_destination_is_refused_and_writes_nothing() {
+    let mut t = read_universe_workspace();
+    let before = std::fs::read(t.workspace().join("wide.txt")).expect("fixture");
+    let source_before = std::fs::read(t.workspace().join("notes.txt")).expect("fixture");
+
+    let err = t.err("MOVE LINES 1-1 OF 'notes.txt' TO 'wide.txt'");
+
+    assert!(
+        err.contains("UTF-16LE"),
+        "the destination is UTF-16 and the payload is UTF-8: {err}"
+    );
+    assert_eq!(
+        std::fs::read(t.workspace().join("wide.txt")).expect("fixture"),
+        before,
+        "a refused move must leave the destination exactly as it was"
+    );
+    assert_eq!(
+        std::fs::read(t.workspace().join("notes.txt")).expect("fixture"),
+        source_before,
+        "and must not have removed the lines from the source either"
+    );
+}
+
+/// Replacing the whole file is refused too, so the docs must not offer it as
+/// the way to convert one. A whole-file `CHANGE NODE` is lowered to a line
+/// range, and a line range in UTF-16 does not even cover the file: scanning for
+/// `0x0A` finds the newline byte but stops one byte short of the code unit it
+/// belongs to, so the "whole file" it computes is missing its last byte.
+#[test]
+fn replacing_a_utf16_file_whole_is_refused_as_well() {
+    let mut t = read_universe_workspace();
+    let before = std::fs::read(t.workspace().join("wide.txt")).expect("fixture");
+
+    let (handle, rev) = t.file_handle("wide.txt");
+    let err = t.err(&format!(
+        "CHANGE NODE '{handle}' IF REV '{rev}' WITH 'converted to utf-8'"
+    ));
+
+    assert!(
+        err.contains("UTF-16LE"),
+        "a whole-file replacement is a line range like any other: {err}"
+    );
+    assert_eq!(
+        std::fs::read(t.workspace().join("wide.txt")).expect("fixture"),
+        before,
+        "a refused replacement must leave the file exactly as it was"
+    );
+}
+
 /// A directory is not a file the read pass can open. Recording one would make
 /// every later query report an unreadable file that is not missing anything,
 /// and list the directory without the trailing slash that marks it.

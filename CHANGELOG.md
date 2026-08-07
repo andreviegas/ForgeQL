@@ -48,9 +48,10 @@ A byte-order mark is believed before that binary check, so **UTF-16 text is
 searched** rather than mistaken for an object file: every ASCII character in
 UTF-16 carries a NUL byte, which is exactly what the check looks for, so
 without this a plain UTF-16 document answered zero over lines it visibly holds.
-Only a mark counts — UTF-16 written without one cannot be told apart from a
-compiled object, and guessing from NUL density would let an object file arm a
-sweep, so it stays unsearched and this is said plainly rather than left to be
+Only a mark counts, and only UTF-16 — UTF-16 written without one cannot be told
+apart from a compiled object, and guessing from NUL density would let an object
+file arm a sweep; UTF-32 is not decoded at all, even where its own mark declares
+it. Both stay unsearched, and this is said plainly rather than left to be
 discovered.
 
 **A UTF-16 site can be found and cannot be rewritten in place.** A line
@@ -62,10 +63,13 @@ a file is now refused with an error naming the encoding, and so is a
 `COPY LINES` or `MOVE LINES` whose destination is one — those reach a
 destination through a separate offset calculation, and they are the edit verbs
 for exactly the non-indexed files this release added to the search universe.
-Overwriting the whole
-file leaves no mixed encoding behind and is still allowed, which is how to
-convert one. Reading such a line back is bounded the same way: `SHOW` renders
-the raw bytes, so the decode reaches the site list and not the display.
+Replacing the file whole is refused with them: a whole-file `CHANGE NODE` is
+lowered to a line range like any other, and a line range over UTF-16 does not
+even reach the last byte, so there is **no in-place conversion** — converting
+one means deleting it and writing it again, or editing it outside ForgeQL and
+letting the reindex pick it up. Reading such a line back is bounded the same
+way: `SHOW` renders the raw bytes, so the decode reaches the site list and not
+the display.
 
 One class of file was still outside that set: one **created during the session**
 whose extension no plugin claims. It produces no segment, and the list of
@@ -80,7 +84,9 @@ the answer over it is complete rather than short.
 The universe now has one stated edge rather than an unstated one: a file that
 reaches the worktree without passing through ForgeQL — written by a build step,
 say — is in no segment, no file list and no session record until it is indexed,
-so `FIND files` does not list it and the read pass does not open it. The two
+and a file excluded by `.gitignore`, `.ignore` or `.forgeql-ignore` is never in
+any of them at all. `FIND files` excludes exactly the same two, so it does not
+list what the read pass does not open. The two
 answer over one set, and that set is what "every file the workspace knows
 about" means everywhere the phrase appears.
 

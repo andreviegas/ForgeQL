@@ -352,28 +352,34 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// lines no recorder ever tokenised. The files read are those that produced
     /// symbols, those known by path and size alone, those reindexed this
     /// session, and those this session created whose extension no plugin claims
-    /// — so a name living only in a `.gitignore` is found too. A file that
-    /// reaches the worktree without passing through ForgeQL, written by a build
-    /// step say, is in none of those until it is indexed, and `FIND files` does
-    /// not list it either: the two answer over one universe. No site is dropped
-    /// for being expensive to reach.
+    /// — so a name living only in a `.gitignore` is found too. Two files are
+    /// outside that set for good: one excluded by `.gitignore`, `.ignore` or
+    /// `.forgeql-ignore`, which nothing here ever enumerates, and one that
+    /// reaches the worktree without passing through ForgeQL — written by a
+    /// build step, say — which is in none of them until it is indexed.
+    /// `FIND files` excludes exactly the same two: the pair answer over one
+    /// universe. No site is dropped for being expensive to reach.
     ///
     /// Two boundaries, both declared rather than silent. Binary is not
     /// searched: a NUL byte near the start means these bytes are not text, and
     /// a site in an object file would arm a sweep on bytes no editor should
     /// rewrite. A byte-order mark is believed before that check, so UTF-16 text
-    /// is read rather than mistaken for an object file — but only where a mark
-    /// declares it; UTF-16 written without one is indistinguishable from binary
-    /// and is not searched. Everything else is decoded leniently, so one byte
-    /// in a legacy encoding does not blank the lines around it.
+    /// is read rather than mistaken for an object file — but only UTF-16, and
+    /// only where a mark declares it. UTF-16 written without a mark cannot be
+    /// told from a compiled object, and UTF-32 is not decoded at all even when
+    /// its mark declares it; both are skipped as binary, which is a boundary
+    /// and not a finding about the file. Everything else is decoded leniently,
+    /// so one byte in a legacy encoding does not blank the lines around it.
     ///
     /// A UTF-16 site can be found and cannot be rewritten in place. A line
     /// boundary there is not a byte boundary, so splicing UTF-8 into it by
     /// offset would shift every byte after the edit; the mutation is refused
-    /// with an error naming the encoding, never attempted. A whole-file
-    /// replacement, which leaves no mixed encoding behind, is still allowed.
-    /// Reading such a line back is bounded too: `SHOW` renders the file's raw
-    /// bytes, so the decoding here reaches the site list and not the display.
+    /// with an error naming the encoding, never attempted. That covers
+    /// replacing the file whole, because a whole-file `CHANGE NODE` is lowered
+    /// to a line range like any other — converting one means deleting it and
+    /// writing it again, or editing it outside ForgeQL. Reading such a line
+    /// back is bounded too: `SHOW` renders the file's raw bytes, so the
+    /// decoding here reaches the site list and not the display.
     ///
     /// An identifier is matched on token boundaries and anything carrying a
     /// character outside that alphabet is matched literally, so reading the
