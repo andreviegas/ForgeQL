@@ -87,10 +87,13 @@ The universe now has one stated edge rather than an unstated one: a file that
 reaches the worktree without passing through ForgeQL — written by a build step,
 say — is in no segment, no file list and no session record until it is indexed,
 and a file excluded by `.gitignore`, `.ignore` or `.forgeql-ignore` is in none
-of them at all — unless this session created or mutated it, since a mutation
-records the path directly, so it is listed and searched until the next commit
-and not after. `FIND files` excludes exactly the same two, so it does not
-list what the read pass does not open. The two
+of them at all — unless this session touched it, since a mutation records the
+path it wrote without consulting any ignore rule: a path no plugin claims is
+then listed and searched until the next commit and not after, while one whose
+extension a plugin claims gets a segment instead, and a segment is carried
+through the commit, so that file stays in both from then on. `FIND files`
+excludes exactly the same two on the same terms, so it does not list what the
+read pass does not open. The two
 answer over one set, and that set is what "every file the workspace knows
 about" means everywhere the phrase appears.
 

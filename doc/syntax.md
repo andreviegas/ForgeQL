@@ -285,12 +285,14 @@ FIND files [clauses]
 > `FIND files` lists, minus ForgeQL's own runtime artifacts, and two things are
 > outside it: a file excluded by `.gitignore`, `.ignore` or `.forgeql-ignore`,
 > which nothing here enumerates and indexing never adds — unless this session
-> created or mutated it, since a mutation records the path directly, so it is
-> listed and searched until the next commit and not after — and one that
-> reaches the worktree without passing through ForgeQL at all, a build step's
-> output say, which is in neither list until it is indexed. That pair is the
-> boundary of "knows about", and it is the same pair on the same terms for both
-> commands. Binary files — a
+> touched it, since a mutation records the path it wrote without consulting any
+> ignore rule: a path no plugin claims is then listed and searched until the
+> next commit and not after, while one whose extension a plugin claims gets a
+> segment instead, and a segment is carried through the commit, so that file
+> stays in both from then on — and one that reaches the worktree without
+> passing through ForgeQL at all, a build step's output say, which is in
+> neither list until it is indexed. That pair is the boundary of "knows about",
+> and it is the same pair on the same terms for both commands. Binary files — a
 > NUL byte near the start, the line `grep` draws — are not searched: an object
 > file or an index blob embeds symbol names, and a site there is bytes no sweep
 > should rewrite. A byte-order mark is believed before that check, so UTF-16

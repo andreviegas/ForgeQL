@@ -355,13 +355,16 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// — so a name living only in a `.gitignore` is found too. Two files are
     /// outside that set: one excluded by `.gitignore`, `.ignore` or
     /// `.forgeql-ignore`, which nothing here enumerates and indexing never
-    /// adds — unless this session created or mutated it, since a mutation
-    /// records the path directly, so it is listed and searched until the next
-    /// commit and not after — and one that reaches the worktree without
-    /// passing through ForgeQL at all, written by a build step say, which is
-    /// in none of them until it is indexed. `FIND files` excludes exactly the
-    /// same two, on the same terms: the pair answer over one universe. No site
-    /// is dropped for being expensive to reach.
+    /// adds — unless this session touched it, since a mutation records the
+    /// path it wrote without consulting any ignore rule: a path no plugin
+    /// claims is then listed and searched until the next commit and not after,
+    /// while one whose extension a plugin claims gets a segment instead, and a
+    /// segment is carried through the commit, so that file stays in both from
+    /// then on — and one that reaches the worktree without passing through
+    /// ForgeQL at all, written by a build step say, which is in none of them
+    /// until it is indexed. `FIND files` excludes exactly the same two, on the
+    /// same terms: the pair answer over one universe. No site is dropped for
+    /// being expensive to reach.
     ///
     /// Two boundaries, both declared rather than silent. Binary is not
     /// searched: a NUL byte near the start means these bytes are not text, and

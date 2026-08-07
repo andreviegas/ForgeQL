@@ -64,6 +64,20 @@ fn read_universe_workspace() -> common::TestSession {
     }
     write("wide.txt", &wide);
 
+    // An ignore rule and a file it excludes. The rule has to be live for the
+    // test below to mean anything: that test asserts a file under this
+    // directory IS searched when the session creates it, and an assertion that
+    // something is present proves nothing if the exclusion never applied.
+    // `.forgeql-ignore` rather than `.gitignore` because the walker only reads
+    // git's ignore files inside a git repository, and this workspace is not
+    // one.
+    write(".forgeql-ignore", b"generated/\n");
+    std::fs::create_dir_all(dir.path().join("generated")).expect("fixture dir");
+    write(
+        "generated/preexisting.conf",
+        b"CONFIG_IDLE=k_sleep_forever\n",
+    );
+
     common::columnar_session_in(dir)
 }
 
@@ -336,6 +350,41 @@ fn a_utf16_file_can_be_converted_by_replacing_every_byte() {
     );
 }
 
+/// An ignored file is outside the universe — except when this session touched
+/// it, because a mutation records the path it wrote without consulting any
+/// ignore rule. That exception is an *inclusion*, so the eight places that
+/// state it are promising sites will be returned; only a test keeps that
+/// promise honest if the record site ever grows a filter.
+///
+/// Both halves are asserted together on purpose. Without the first, the second
+/// proves nothing: a rule that never applied would let the file through for
+/// the wrong reason.
+#[test]
+fn an_ignored_file_is_outside_the_universe_until_this_session_touches_it() {
+    let mut t = read_universe_workspace();
+
+    let found = files(&query(&mut t, &format!("FIND usages OF '{NEEDLE}'")));
+    assert!(
+        !found.contains(&"generated/preexisting.conf".to_owned()),
+        "the ignore rule is live, which is what makes the next half mean \
+         something: {found:?}"
+    );
+
+    // Written in one raw-text mutation rather than created and appended to by
+    // handle: an ignored path has no handle to append to, which is a fact
+    // about node addressing and not about the read pass this is testing.
+    mutate(
+        &mut t,
+        &format!("CHANGE FILE 'generated/session.conf' WITH 'CONFIG_IDLE={NEEDLE}'"),
+    );
+
+    let found = files(&query(&mut t, &format!("FIND usages OF '{NEEDLE}'")));
+    assert!(
+        found.contains(&"generated/session.conf".to_owned()),
+        "a mutation records the path directly, ignore rule or not: {found:?}"
+    );
+}
+
 /// A directory is not a file the read pass can open. Recording one would make
 /// every later query report an unreadable file that is not missing anything,
 /// and list the directory without the trailing slash that marks it.
@@ -343,11 +392,11 @@ fn a_utf16_file_can_be_converted_by_replacing_every_byte() {
 fn creating_a_directory_does_not_add_it_to_the_files_that_are_read() {
     let mut t = read_universe_workspace();
 
-    mutate(&mut t, "INSERT NODE FOR 'generated/'");
+    mutate(&mut t, "INSERT NODE FOR 'subsys/'");
 
     let q = query(&mut t, &format!("FIND usages OF '{NEEDLE}'"));
     assert!(
-        !files(&q).contains(&"generated".to_owned()),
+        !files(&q).contains(&"subsys".to_owned()),
         "a directory holds no lines: {:?}",
         files(&q)
     );
