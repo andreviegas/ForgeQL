@@ -848,6 +848,13 @@ fn holds(line: &str, needle: &str, whole_token: bool) -> bool {
     // test would call `é` a separator and report that line, and `MATCHING WORD`
     // — which rewrites on the `regex` crate's `\b` — would then decline to
     // rewrite a site the query had listed.
+    //
+    // The two agree on every alphabet a name is written in, not on every code
+    // point: `regex`'s `\w` and `is_alphanumeric` part company over combining
+    // marks, non-decimal numerals and connector punctuation other than `_`. A
+    // name built from those would be listed here and declined by the sweep, or
+    // the reverse. No site is lost either way — the disagreement is about
+    // where a token ends, not about which files were read.
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
     line.match_indices(needle).any(|(start, _)| {
         let before = line[..start].chars().next_back();
