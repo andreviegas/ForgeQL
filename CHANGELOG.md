@@ -6,6 +6,53 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.150.0] — 2026-08-07 — regex and LIKE are answered from a field's values, not its rows
+
+### Fixed
+
+- **`WHERE <enrichment field> = '<value>'` could return fewer rows than the
+  index holds.** The workspace overlay stores one row bitmap per
+  `field=value`. For the low-cardinality fields carried on the per-file posting
+  list those bitmaps are assembled from the postings — and a file whose
+  distinct-value count for such a field exceeds the per-file budget contributes
+  no postings at all, while still storing the column. Its rows therefore carry
+  values that no bitmap names, and narrowing a query to that bitmap dropped
+  them from the answer without a word. In a two-file workspace where one file
+  opens ten `#if`/`#elif` arms and the other two,
+  `FIND symbols WHERE guard_branch = '0'` returned the second file's two rows
+  and neither of the first file's. Such a file's rows now stay candidates and
+  the row-level filter decides them, so the answer is complete whichever files
+  the budget covered. Fields keyed the other way — by walking each file's rows,
+  which is every field not on the posting list — were never affected and are
+  left alone.
+
+### Changed
+
+- **`MATCHES`, `NOT MATCHES`, `LIKE` and `NOT LIKE` on an indexed enrichment
+  field are now served by an index tier.** The pattern is evaluated against the
+  field's DISTINCT VALUES — a few dozen, corpus-wide — and the matching values'
+  row bitmaps are unioned, so the cost tracks how many values a field has
+  rather than how many rows the corpus holds. Previously only `=` consulted the
+  index and every pattern fell through to materialising all 3,046,476 rows of
+  the reference corpus so the filter could reject them one at a time; the regex
+  itself was never the expense. Arbitrary patterns are fine by construction:
+  the value set is filtered by an opaque predicate, so an alternation or a
+  character class costs exactly what a literal costs.
+
+- **`WHERE name MATCHES '<regex>'` is evaluated against the name index's keys.**
+  The distinct names of a corpus number in the hundreds of thousands where its
+  rows number in the millions, so the regex is asked once per name. The literal
+  prefilter this precedes cannot serve an alternation at all — a match needs
+  the literals of one branch, so intersecting the branches' candidate sets
+  drops every real match — and correctly declined, which meant a full scan.
+  `name MATCHES '^(alpha|beta)$'` measured 2.1 s/query before this change.
+
+Both tiers propose candidates that the row-level filter still verifies, and
+both step aside — back to the complete scan — wherever the value universe
+cannot account for every row: a field the index does not carry, a pattern that
+accepts the empty string (an empty value is never keyed), a name key that is
+not valid UTF-8, or an unreadable bitmap. Rows from files edited in the current
+session are matched after the candidate set is built and are unaffected.
 ## [0.149.2] — 2026-08-07 — asking for an enrichment value that does not exist no longer scans the corpus
 
 ### Fixed

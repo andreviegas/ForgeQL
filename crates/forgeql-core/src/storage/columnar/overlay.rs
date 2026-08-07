@@ -320,6 +320,67 @@ impl Overlay {
         RoaringBitmap::deserialize_from(self.mmap.get(range.clone())?).ok()
     }
 
+    /// Union of the row bitmaps of every recorded value of `field` that
+    /// `accept` returns true for.
+    ///
+    /// This is what lets a pattern predicate cost one test per DISTINCT VALUE
+    /// rather than one per row: the enrichment index is a sorted `field=value`
+    /// key set, so a prefix walk enumerates the field's whole value universe
+    /// and the pattern never has to see a row. The pattern itself is opaque —
+    /// an alternation or a character class is no harder than a literal.
+    ///
+    /// Returns `None` when the overlay records no value at all for `field`, and
+    /// when a bitmap cannot be read. Both mean the index has no opinion; a
+    /// caller that read either as an empty answer would be asserting an absence
+    /// it has not established.
+    #[must_use]
+    pub fn prefilter_enrichment_values(
+        &self,
+        field: &str,
+        accept: &dyn Fn(&str) -> bool,
+    ) -> Option<RoaringBitmap> {
+        let prefix = format!("{field}=");
+        let start = self
+            .enrich_index
+            .partition_point(|(k, _)| k.as_str() < prefix.as_str());
+
+        let mut union = RoaringBitmap::new();
+        let mut recorded = false;
+        for (key, range) in &self.enrich_index[start..] {
+            let Some(value) = key.strip_prefix(prefix.as_str()) else {
+                break;
+            };
+            recorded = true;
+            if accept(value) {
+                let bytes = self.mmap.get(range.clone())?;
+                union |= RoaringBitmap::deserialize_from(bytes).ok()?;
+            }
+        }
+        recorded.then_some(union)
+    }
+
+    /// Union of the postings of every name in the workspace FST that `accept`
+    /// returns true for — the same value-universe trade for `name`, whose
+    /// distinct values number in the hundreds of thousands where its rows
+    /// number in the millions.
+    ///
+    /// Returns `None` if a key is not valid UTF-8: the caller's matcher could
+    /// not have been asked about it, so the walk is not a complete account.
+    #[must_use]
+    pub fn prefilter_name_values(&self, accept: &dyn Fn(&str) -> bool) -> Option<RoaringBitmap> {
+        use fst::Streamer as _;
+
+        let mut union = RoaringBitmap::new();
+        let mut stream = self.name_fst.stream();
+        while let Some((name_bytes, encoded)) = stream.next() {
+            let name = std::str::from_utf8(name_bytes).ok()?;
+            if accept(name) {
+                union |= self.decode_postings(encoded);
+            }
+        }
+        Some(union)
+    }
+
     /// Union global row bitmaps for `field >= threshold` (numeric enrichment fields).
     ///
     /// Returns `None` if no enrichment bitmaps were stored for this field.

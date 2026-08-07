@@ -580,6 +580,16 @@ impl SegmentReader {
         self.extra_col_names.iter().any(|c| c == name)
     }
 
+    /// Whether this segment stores a value→rows posting index for `field`.
+    ///
+    /// False for a field whose distinct-value count here exceeded the
+    /// per-segment budget: the column is still stored, only the index is not,
+    /// so this segment's rows are invisible to any bitmap built from postings.
+    #[must_use]
+    pub(crate) fn posts_field(&self, field: &str) -> bool {
+        self.field_postings.contains_key(field)
+    }
+
     /// Return the hex-encoded content ID of this segment.
     ///
     /// Used by [`DirtyOverlay::staged_hex_ids`] to enumerate the hex IDs of

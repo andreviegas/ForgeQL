@@ -192,9 +192,10 @@ impl ColumnarStorage {
                         |prefix| self.short_prefix_global_bitmap(&prefix),
                     )
                 }
-                ("name", CompareOp::Matches, PredicateValue::String(val)) => {
-                    self.trigram_prefilter_for_regex(val)
-                }
+                ("name", CompareOp::Matches, PredicateValue::String(val)) => self
+                    .name_regex_bitmap(val)
+                    .or_else(|| self.trigram_prefilter_for_regex(val)),
+
                 // Phase 5: enrichment bitmap prefilter (FQOV v7).
                 // Look up global bitmaps for enrichment predicates.
                 (field, CompareOp::Eq, PredicateValue::String(val))
@@ -206,6 +207,16 @@ impl ColumnarStorage {
                     let val_str = if *b { "true" } else { "false" };
                     self.enrichment_eq_bitmap(field, val_str)
                 }
+                // Pattern predicates read the field's distinct values, never
+                // its rows. `name` never reaches here — its own arms are above.
+                (
+                    field,
+                    CompareOp::Like
+                    | CompareOp::Matches
+                    | CompareOp::NotLike
+                    | CompareOp::NotMatches,
+                    PredicateValue::String(val),
+                ) => self.enrichment_pattern_bitmap(field, pred.op, val.as_str()),
                 (field, CompareOp::Gte, PredicateValue::Number(v)) => {
                     self.overlay.prefilter_enrichment_ge(field, *v)
                 }
@@ -248,7 +259,10 @@ impl ColumnarStorage {
     /// governs the `fql_kind` arm above.
     fn enrichment_eq_bitmap(&self, field: &str, value: &str) -> Option<RoaringBitmap> {
         if let Some(bm) = self.overlay.prefilter_enrichment_eq(field, value) {
-            return Some(bm);
+            // The stored bitmap accounts only for segments that posted this
+            // field; one that did not still stores the column, so its rows can
+            // carry the value and must stay candidates.
+            return Some(bm | self.rows_missing_field_postings(field));
         }
         // The arm routing here matches ANY field name, including core row
         // metadata the enrichment index never stores (`language`, `path`,
@@ -264,6 +278,113 @@ impl ColumnarStorage {
         }
         self.no_segment_carries_enrichment_value(field, value)
             .then(RoaringBitmap::new)
+    }
+
+    /// Rows the overlay's per-value bitmaps for `field` cannot speak for.
+    ///
+    /// Only the fields in `POSTING_ENRICHMENT_FIELDS` are keyed FROM postings,
+    /// and a segment whose distinct-value count for one of them exceeded the
+    /// per-segment budget contributes none — while still storing the column, so
+    /// its rows do carry values. Intersecting a candidate set with such a
+    /// bitmap drops them from the answer, so they stay candidates and the
+    /// residual filter decides.
+    ///
+    /// Every OTHER enrichment field is keyed by walking each segment's rows
+    /// (`overlay_builder::collect_numeric_enrichment`), so its key set is
+    /// already complete and needs nothing added. Backfilling one anyway would
+    /// be sound but ruinous: no segment posts those fields, so the condition
+    /// below holds for every segment carrying the column and the candidate set
+    /// becomes the corpus — turning `is_magic = 'true'` and `num_format = 'dec'`
+    /// back into the full scan the bitmap exists to avoid.
+    fn rows_missing_field_postings(&self, field: &str) -> RoaringBitmap {
+        let mut rows = RoaringBitmap::new();
+        if !super::super::segment_builder::POSTING_ENRICHMENT_FIELDS.contains(&field) {
+            return rows;
+        }
+        for (idx, seg) in self.segments.iter().enumerate() {
+            if !seg.posts_field(field) && seg.has_extra_col(field) {
+                let _ = rows.insert_range(self.overlay.segment_row_range(idx));
+            }
+        }
+        rows
+    }
+
+    /// Global candidate bitmap for a `LIKE` / `MATCHES` predicate (or either
+    /// negation) on an enrichment field.
+    ///
+    /// The pattern is evaluated against the field's DISTINCT VALUES and the
+    /// matching values' bitmaps are unioned, so the cost scales with how many
+    /// values the field has rather than with how many rows the corpus holds.
+    /// Returning `None` skips the prefilter and materialises every row.
+    fn enrichment_pattern_bitmap(
+        &self,
+        field: &str,
+        op: CompareOp,
+        pattern: &str,
+    ) -> Option<RoaringBitmap> {
+        // Same refusal as the `Eq` arm above: this routing matches ANY field
+        // name, and core row metadata is served somewhere else entirely. No
+        // second "is this an enrichment field?" probe is needed here — the
+        // value walk below answers `None` for a field it holds no key for,
+        // which is already the fall-back-to-the-scan signal — and skipping it
+        // keeps an unserved field's pattern off a scan of every segment's
+        // column list, once per query.
+        if crate::filter::CORE_WHERE_FIELDS.contains(&field) {
+            return None;
+        }
+
+        let negated = matches!(op, CompareOp::NotLike | CompareOp::NotMatches);
+        let re = if matches!(op, CompareOp::Matches | CompareOp::NotMatches) {
+            Some(regex::Regex::new(pattern).ok()?)
+        } else {
+            None
+        };
+        // Decide values exactly as `filter::eval_predicate` decides rows. This
+        // tier proposes candidates that the filter then verifies, so a matcher
+        // that disagrees by one value drops rows the filter would have kept.
+        let accepts = |value: &str| {
+            re.as_ref().map_or_else(
+                || crate::filter::like_match(value, pattern),
+                |r| r.is_match(value),
+            )
+        };
+
+        // An empty value is never keyed in the enrichment index, so for a
+        // pattern that accepts one the value universe is not a complete account
+        // of what can match. The negated form needs no such guard: it is the
+        // universe MINUS the matches, and a match the walk missed only leaves
+        // its row a candidate.
+        if !negated && accepts("") {
+            return None;
+        }
+
+        let matched = self.overlay.prefilter_enrichment_values(field, &accepts)?;
+        Some(if negated {
+            let mut all = RoaringBitmap::new();
+            let _ = all.insert_range(0..self.overlay.row_count());
+            all - matched
+        } else {
+            matched | self.rows_missing_field_postings(field)
+        })
+    }
+
+    /// Global candidate bitmap for `name MATCHES`, evaluated against the name
+    /// FST's keys — the workspace's distinct names — rather than its rows.
+    ///
+    /// The literal-trigram prefilter this precedes cannot serve an alternation
+    /// at all: a match needs the literals of ONE branch, so intersecting the
+    /// branches' candidate sets drops every real match. It correctly declines
+    /// there, and declining means materialising the whole corpus. Walking the
+    /// FST instead treats the pattern as opaque — asked about each name, once.
+    fn name_regex_bitmap(&self, pattern: &str) -> Option<RoaringBitmap> {
+        let re = regex::Regex::new(pattern).ok()?;
+        // A row with no name is not a key in the FST, so a pattern that accepts
+        // the empty string cannot be answered from the key set.
+        if re.is_match("") {
+            return None;
+        }
+        self.overlay
+            .prefilter_name_values(&|name| re.is_match(name))
     }
 
     /// `true` when `field` is served by the enrichment tier at all: the overlay
