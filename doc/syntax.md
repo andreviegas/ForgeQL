@@ -277,6 +277,14 @@ FIND files [clauses]
 > a name split across separators every part contributes to that labelling, not
 > the cheapest one, since which part a site stored varies by language.
 >
+> **Every file the workspace knows about is read**, not only the ones that
+> produced symbols. A `.gitignore`, or a file whose extension no plugin claims,
+> is tracked by path and size alone and holds text like anything else; the set
+> read is exactly what `FIND files` lists, minus ForgeQL's own runtime
+> artifacts. Two edges worth knowing: bytes that are not UTF-8 are not text and
+> hold no line to match, and a file that cannot be read at all is counted and
+> named in the `hint` rather than passed over in silence.
+>
 > Every tier's sites are **merged**, none is a fallback for another coming back
 > empty. One corpus stores the same name several ways at once — C keeps
 > `pm/device_runtime` inside a whole include-path token, a Python string a few

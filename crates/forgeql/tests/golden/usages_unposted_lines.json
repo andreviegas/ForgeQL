@@ -29,6 +29,26 @@
       "assert": {
         "row_count": 0
       }
+    },
+    {
+      "name": "a_name_living_only_in_a_file_the_index_tracks_by_path_is_found",
+      "use": "zephyr-andre.frozen",
+      "why": "the workspace holds three kinds of file — ones that produced symbols, ones tracked by path and size alone, and ones added this session — and the read pass originally walked only the first and the third. A .gitignore is the second kind, so line 23 of the root one ('cscope.*') was reachable by nothing: 'FIND usages OF cscope' answered zero corpus-wide on the deployed engine, which is what an agent reads as safe to rename. The scope is the root file alone, so the pin does not move when another .gitignore elsewhere mentions the same pattern.",
+      "fql": "FIND usages OF 'cscope' IN '.gitignore'",
+      "assert": {
+        "row_count": 1,
+        "rows": [ { "path": ".gitignore", "line": 23 } ]
+      }
+    },
+    {
+      "name": "a_configuration_file_that_sets_a_flag_is_a_usage_site",
+      "use": "zephyr-andre.frozen",
+      "why": "the case that makes this matter rather than merely tidy. A prj.conf line reading CONFIG_PM_DEVICE_RUNTIME=y is the canonical place a Kconfig option is turned on, and .conf is an extension no plugin claims — so every project configuration enabling a flag was absent from that flag's blast radius, and a rename would have left them all behind. Line 4 of the same file is CONFIG_PM_DEVICE_RUNTIME_DEFAULT_ENABLE=y, which must NOT match: the token boundary has to hold in the newly reachable files too, or reading them would have traded one wrong answer for another.",
+      "fql": "FIND usages OF 'CONFIG_PM_DEVICE_RUNTIME' IN 'samples/subsys/pm/device_pm/prj.conf'",
+      "assert": {
+        "row_count": 1,
+        "rows": [ { "path": "samples/subsys/pm/device_pm/prj.conf", "line": 3 } ]
+      }
     }
   ]
 }

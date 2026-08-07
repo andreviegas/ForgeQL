@@ -376,6 +376,14 @@ impl ColumnarStorage {
     /// not the cheapest one: which piece a site stored varies by language, so
     /// the cheapest is routinely stored nowhere the name appears.
     ///
+    /// The files read are every file the workspace knows about — the ones that
+    /// produced symbols, the ones the index tracks by path and size alone, and
+    /// anything added in this session — which is the same set `FIND files`
+    /// lists, minus ForgeQL's own runtime artifacts. A `.gitignore` or an
+    /// extension no plugin claims holds text like any other file, and skipping
+    /// it would answer a confident zero for a name written there. Bytes that
+    /// are not UTF-8 are not text and hold no line to match.
+    ///
     /// Cost is one read per in-scope file per query, bounded by `IN`/`EXCLUDE`.
     /// Reads nothing stored in a new way, so no cache version moves.
     fn literal_sites(
@@ -409,6 +417,14 @@ impl ColumnarStorage {
             }
         }
 
+        // Every file the workspace knows about, not only the ones that produced
+        // symbols. A file the index tracks by path and size alone — a
+        // `.gitignore`, an extension no plugin claims — holds text like any
+        // other, and leaving it out would answer a confident zero for a name
+        // written in it. `FIND files` lists exactly these three sources, minus
+        // ForgeQL's own runtime artifacts; the search universe is the same set,
+        // for the same reason.
+        //
         // A file outside the query's own `IN`/`EXCLUDE` scope can only produce
         // rows the clause pipeline will drop, so it is never read.
         let mut paths: Vec<std::path::PathBuf> = self
@@ -417,6 +433,13 @@ impl ColumnarStorage {
             .iter()
             .filter(|meta| !self.dirty.shadows(&meta.source_path))
             .map(|meta| meta.source_path.clone())
+            .chain(
+                self.overlay
+                    .file_entries()
+                    .iter()
+                    .map(|(path, _)| path.clone())
+                    .filter(|path| !crate::result::FileEntry::is_runtime_artifact(path)),
+            )
             .chain(self.dirty.added.iter().map(|ds| ds.source_path.clone()))
             .filter(|path| in_scope(path, clauses))
             .collect();
@@ -433,10 +456,17 @@ impl ColumnarStorage {
         let mut sites = Vec::new();
         let mut unread = 0usize;
         for path in &paths {
-            let Ok(text) = std::fs::read_to_string(root.join(path)) else {
+            let Ok(bytes) = std::fs::read(root.join(path)) else {
                 // The sites this file holds are absent from the answer and
                 // nothing else in the response would show that.
                 unread += 1;
+                continue;
+            };
+            // Bytes that are not UTF-8 are not text, and a text query has
+            // nothing to match in them. That is a property of the file rather
+            // than a budget — the universe searched is the workspace's text,
+            // and this is where its edge lies — so it is not an unread file.
+            let Ok(text) = std::str::from_utf8(&bytes) else {
                 continue;
             };
             // Cheap reject before splitting into lines: a whole-token match is

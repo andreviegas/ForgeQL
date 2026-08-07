@@ -31,6 +31,15 @@ bytes found: a site something did record keeps its role — `code`, `comment`,
 `string`, `config`, `doc` — instead of flattening, and only a line nothing
 recorded arrives as `text`.
 
+Every file the workspace knows about is read, not only the ones that produced
+symbols: a `.gitignore`, or any extension no plugin claims, is tracked by path
+and size alone and holds text like anything else. `FIND usages OF 'cscope'`
+answered zero across a three-million-symbol tree whose root `.gitignore` names
+it on line 23 — a zero an agent reads as permission to rename. The set read is
+the same one `FIND files` lists, minus ForgeQL's own runtime artifacts. Bytes
+that are not UTF-8 are not text and hold no line to match; a file that cannot be
+read at all is still counted and named in the response's `hint`.
+
 **Reading files does not widen a query into a substring search.** An identifier
 is matched on token boundaries — a letter, digit or underscore in any script
 continues a token — so `FIND usages OF '256'` still means the token `256` and
@@ -52,13 +61,14 @@ the unfiltered site count for one widely-used configuration flag moves from 140
 to 145, and the five added sites are exactly the ones nothing had recorded.
 
 **Cost, measured.** An A/B run against that corpus, both sides built with the
-same profile, leaves the substring-needle and scan classes below the harness's
-noise floor on the branch exactly as on the baseline — under 200 ms per query
+same profile, leaves all three query shapes below the harness's noise floor on
+the branch exactly as on the baseline — identifier names, names carrying a
+separator, and names no part of which can be a token all under 200 ms per query
 either way, a difference the harness cannot resolve, with the branch reading
-every in-scope file on every query. Not covered by that run: an identifier-name
-query, for which the harness has no class. It shares the identical dominant
-cost — the same read of the same files — and does strictly less work besides,
-so it is bounded by the measured figure rather than measured directly.
+every in-scope file on every query. Reading the whole workspace per query is
+therefore not detectable at this corpus size; a tree large enough to make it so
+would be bounded by `IN` and `EXCLUDE`, which cut the reading and not just the
+rows.
 
 ## [0.153.0] — 2026-08-07 — the guard set fields and `key_path` are indexed
 

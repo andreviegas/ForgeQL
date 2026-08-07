@@ -342,12 +342,15 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// Applies glob filtering and the remaining clause pipeline internally.
     /// Returns the full result set (no truncation).
     ///
-    /// **Complete.** Every line of every in-scope indexed file that holds
-    /// `name` is a row, so an empty result means the corpus does not hold it.
-    /// The authority is the file's own bytes, not the index: the postings
-    /// serve the fast tiers and label what they find, but a site exists
-    /// wherever the text says it does, including on lines no recorder ever
-    /// tokenised. No site is dropped for being expensive to reach.
+    /// **Complete.** Every line of every in-scope file that holds `name` is a
+    /// row, so an empty result means the corpus does not hold it. The authority
+    /// is the file's own bytes, not the index: the postings serve the fast
+    /// tiers and label what they find, but a site exists wherever the text says
+    /// it does, including on lines no recorder ever tokenised. The files read
+    /// are every file the workspace tracks — those that produced symbols, those
+    /// known by path and size alone, and those added this session — so a name
+    /// living only in a `.gitignore` is found too. No site is dropped for being
+    /// expensive to reach.
     ///
     /// An identifier is matched on token boundaries and anything carrying a
     /// character outside that alphabet is matched literally, so reading the
