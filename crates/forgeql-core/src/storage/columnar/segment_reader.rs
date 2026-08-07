@@ -632,6 +632,43 @@ impl SegmentReader {
         self.str_of("language_id", row)
     }
 
+    /// Rows whose stored language satisfies `accepts`.
+    ///
+    /// Exact, not a superset: every row is decided against its own stored
+    /// value. A row whose language is empty is skipped without consulting
+    /// `accepts`, because `SymbolMatch::field_str` reports `None` for it and
+    /// `filter::eval_predicate` fails every operator on an absent field —
+    /// a negation included.
+    ///
+    /// `None` means the language column does not account for this segment's
+    /// rows one-for-one, so nothing here may be concluded and the caller must
+    /// fall back to the complete scan.
+    pub(crate) fn rows_with_language_matching(
+        &self,
+        accepts: &dyn Fn(&str) -> bool,
+    ) -> Option<RoaringBitmap> {
+        let blob = self.blob_bytes("col_language_id");
+        let ids: &[u32] = cast_slice(blob);
+        if ids.len() != self.row_count as usize {
+            return None;
+        }
+        let mut decided: HashMap<u32, bool> = HashMap::new();
+        let mut rows = RoaringBitmap::new();
+        for (row, &id) in ids.iter().enumerate() {
+            let Ok(row) = u32::try_from(row) else {
+                return None;
+            };
+            let keep = *decided.entry(id).or_insert_with(|| {
+                let stored = self.strings.get(id);
+                !stored.is_empty() && accepts(stored)
+            });
+            if keep {
+                let _ = rows.insert(row);
+            }
+        }
+        Some(rows)
+    }
+
     /// Read the 1-based source line for row `row`.
     pub fn line_of(&self, row: u32) -> u32 {
         self.u32_at("line", row)

@@ -196,6 +196,13 @@ impl ColumnarStorage {
                     .name_regex_bitmap(val)
                     .or_else(|| self.trigram_prefilter_for_regex(val)),
 
+                // `language` is a stored per-row column, so it is served from
+                // the column itself rather than from any posting index. It is
+                // matched here, ahead of the enrichment arms, because those
+                // refuse core row fields by name.
+                ("language" | "lang", op, PredicateValue::String(val)) => {
+                    self.core_language_bitmap(*op, val.as_str())
+                }
                 // Phase 5: enrichment bitmap prefilter (FQOV v7).
                 // Look up global bitmaps for enrichment predicates.
                 (field, CompareOp::Eq, PredicateValue::String(val))
@@ -385,6 +392,57 @@ impl ColumnarStorage {
         }
         self.overlay
             .prefilter_name_values(&|name| re.is_match(name))
+    }
+
+    /// Global candidate bitmap for a predicate on `language` / `lang`.
+    ///
+    /// `language` is a core row column, not an enrichment posting, so no index
+    /// tier served it: the query materialised every row in the corpus — full
+    /// `SymbolMatch` and enrichment map apiece — so the residual filter could
+    /// read a field the row already carried. That measured 4.6 s per query on
+    /// a 3M-symbol corpus. Comparing the stored ids instead touches one `u32`
+    /// per row and builds nothing.
+    ///
+    /// The bitmap is EXACT, not merely a superset: every row of every segment
+    /// is decided against its own stored value, and a row whose language is
+    /// empty is skipped because `SymbolMatch::field_str` reports `None` there
+    /// and `filter::eval_predicate` fails every operator — negations included —
+    /// on a field that is absent. So this may also answer an absence: an empty
+    /// bitmap here really does mean no such row exists. A segment whose column
+    /// does not cover its rows one-for-one takes the whole query back to the
+    /// complete scan instead.
+    fn core_language_bitmap(&self, op: CompareOp, value: &str) -> Option<RoaringBitmap> {
+        // Only the string operators are decidable from a stored string; a
+        // numeric comparison on `language` falls through to the scan.
+        let negated = match op {
+            CompareOp::Eq | CompareOp::Like | CompareOp::Matches => false,
+            CompareOp::NotEq | CompareOp::NotLike | CompareOp::NotMatches => true,
+            _ => return None,
+        };
+        let re = if matches!(op, CompareOp::Matches | CompareOp::NotMatches) {
+            Some(regex::Regex::new(value).ok()?)
+        } else {
+            None
+        };
+        // Decide a language exactly as `filter::eval_predicate` decides a row.
+        let accepts = |stored: &str| {
+            let hit = match op {
+                CompareOp::Like | CompareOp::NotLike => crate::filter::like_match(stored, value),
+                CompareOp::Matches | CompareOp::NotMatches => {
+                    re.as_ref().is_some_and(|r| r.is_match(stored))
+                }
+                _ => stored == value,
+            };
+            hit != negated
+        };
+
+        let mut rows = RoaringBitmap::new();
+        for (idx, seg) in self.segments.iter().enumerate() {
+            let local = seg.rows_with_language_matching(&accepts)?;
+            let base = self.overlay.segment_row_range(idx).start;
+            rows.extend(local.iter().map(|row| row + base));
+        }
+        Some(rows)
     }
 
     /// `true` when `field` is served by the enrichment tier at all: the overlay
@@ -999,6 +1057,12 @@ pub(super) fn has_any_indexed_predicate(clauses: &Clauses, overlay: &Overlay) ->
             (pred.field.as_str(), &pred.op),
             ("fql_kind", CompareOp::Eq)
                 | ("name", CompareOp::Eq | CompareOp::Like | CompareOp::Matches)
+                // `language` is served from its stored column, so it is an
+                // indexed predicate even though the overlay holds no key for
+                // it. Without this the path-scoped shape an agent writes most
+                // — `IN 'drivers/**' WHERE language = 'c'` — takes the
+                // seed-every-row branch below and never reaches the tier.
+                | ("language" | "lang", _)
         ) || overlay.has_enrichment_field(&pred.field)
     })
 }

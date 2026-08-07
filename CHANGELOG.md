@@ -6,6 +6,43 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.151.0] — 2026-08-07 — `WHERE language = '<lang>'` reads the language column instead of every row
+
+### Changed
+
+- **`language` / `lang` predicates are served from the stored language
+  column.** Every row already carries its language as a stored value, but no
+  index tier consulted it, so the query materialised the whole corpus — a full
+  result row and enrichment map apiece — for the row-level filter to read a
+  field the row was holding all along. On the 3,046,476-symbol reference corpus
+  that measured 4.6 s per query. Comparing the stored values instead touches
+  one integer per row and constructs nothing. `=`, `!=`, `LIKE`, `NOT LIKE`,
+  `MATCHES` and `NOT MATCHES` all take this path; a numeric comparison on
+  `language` still falls through to the scan.
+
+  Unusually for a fast path, the candidate set it produces is **exact** rather
+  than a superset: every row of every file is decided against its own stored
+  value, so an empty answer is a conclusion the tier is entitled to reach.
+  `FIND symbols WHERE language = 'cobol'` on a corpus with no COBOL now returns
+  nothing without reading a row. A row whose stored language is empty matches
+  nothing at all, negations included, which is what the row-level filter has
+  always done with a field a row does not report. A file whose language column
+  does not account for its rows one-for-one sends the whole query back to the
+  complete scan rather than answering from part of the picture.
+
+Other core row fields were audited and left alone. `name` and `fql_kind`
+already have index tiers, `line` and `usages` have range maps, and `path`,
+`file` and `node_id` are high-cardinality — they need a different kind of index
+and are not this change.
+
+`node_kind` came out of that audit worse than unserved, and this release does
+not fix it: nothing stores it per row, so every row materialised from the index
+reports it as absent, and a query on it answers with false confidence rather
+than slowly. `WHERE node_kind = '<anything>'` returns no rows at all, and
+`WHERE node_kind NOT MATCHES '<anything>'` returns every row. Closing it means
+either storing the field or refusing the predicate outright; until one of those
+lands, do not read a `node_kind` result as evidence of anything.
+
 ## [0.150.0] — 2026-08-07 — regex and LIKE are answered from a field's values, not its rows
 
 ### Fixed
