@@ -2223,6 +2223,12 @@ are interchangeable. Every `WITH 'content'` form also accepts a heredoc block
 (`WITH <<TAG … TAG`, tag all-uppercase on its own line) when the replacement text
 contains quotes.
 
+`CHANGE FILE '<path>' WITH '…'` is also the **one way to rewrite a UTF-16 or
+UTF-32 file**. Every other write is refused on one (see below); this variant
+replaces every byte at once, so it leaves no half of the file in the old
+encoding, and it is not refused. For an indexed file — where `CHANGE FILE` is
+itself refused — delete it and write it again.
+
 ### COPY / MOVE LINES
 
 ```sql
@@ -2235,6 +2241,15 @@ appended when `AT LINE k` is omitted. **COPY** leaves `src` untouched; **MOVE**
 deletes the range from `src` after inserting. Same-file moves are atomic. A
 purely numeric `TO` destination is rejected (write `TO '<path>' AT LINE k`, not
 `TO 3`).
+
+**Encodings.** Both verbs, and every node- or line-scoped `CHANGE`, `INSERT`
+and `DELETE`, are **refused with an error naming the encoding** when the file
+they would write — for `COPY`/`MOVE LINES` that means either end — declares
+UTF-16 or UTF-32 with a byte-order mark. A line boundary there is not a byte
+boundary, so splicing UTF-8 in at an offset found by scanning for `0x0A` would
+shift every byte after the edit. `FIND usages` reads UTF-16 text, so a site in
+one can be found and cannot be rewritten in place; `CHANGE FILE '<path>' WITH
+'…'` replaces every byte and is the way to convert one.
 
 ---
 

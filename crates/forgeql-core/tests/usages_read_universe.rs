@@ -26,7 +26,8 @@ use forgeql_core::result::{ForgeQLResult, QueryResult, ShowContent};
 const NEEDLE: &str = "k_sleep_forever";
 
 /// One file per way a workspace file can reach — or fail to reach — the read
-/// pass. Only `anchor.rs` is here to be indexed; the rest are here to be read.
+/// pass. `anchor.rs` and `legacy.rs` are indexed and so carry postings; the
+/// rest are here to be read.
 fn read_universe_workspace() -> common::TestSession {
     let dir = tempfile::tempdir().expect("tempdir");
     let write = |name: &str, bytes: &[u8]| {
@@ -394,12 +395,28 @@ fn an_ignored_file_is_outside_the_universe_until_this_session_touches_it() {
 fn a_recorded_path_the_worktree_no_longer_holds_is_skipped_in_silence() {
     let mut t = read_universe_workspace();
 
-    // `legacy.rs` is indexed, so it has postings of its own — which is what
-    // makes this test about the postings and not only about the bytes. A
-    // non-indexed file has none, so removing one would prove nothing: the
-    // absence would follow from there being nothing to report in the first
-    // place. Removed behind ForgeQL's back, the way a build step or a checkout
-    // would: the index still lists the path, the bytes are simply gone.
+    // The removal has to take a *posting* with it, not just bytes, or the
+    // assertion below passes on the absence of something that was never there.
+    // So the precondition is asserted rather than assumed: `legacy.rs` is
+    // indexed, and its site comes back labelled `comment`. The needle is all
+    // identifier characters, so the read pass builds no role map for it and
+    // can only ever label a site `text` — a `comment` role is therefore proof
+    // that a recorder posted this line.
+    let before = query(&mut t, &format!("FIND usages OF '{NEEDLE}'"));
+    let legacy_role = before
+        .results
+        .iter()
+        .find(|r| r.path.as_deref() == Some(std::path::Path::new("legacy.rs")))
+        .and_then(|r| r.fields.get("role"))
+        .map(String::as_str);
+    assert_eq!(
+        legacy_role,
+        Some("comment"),
+        "the precondition of this test is that `legacy.rs` has a posting to lose"
+    );
+
+    // Removed behind ForgeQL's back, the way a build step or a checkout would:
+    // the index still lists the path, the bytes are simply gone.
     std::fs::remove_file(t.workspace().join("legacy.rs")).expect("fixture");
 
     let q = query(&mut t, &format!("FIND usages OF '{NEEDLE}'"));

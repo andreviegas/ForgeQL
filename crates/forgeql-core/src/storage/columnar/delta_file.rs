@@ -110,6 +110,27 @@ struct DeltaHeader {
     version: u32,
 }
 
+/// The previous layout, decodable as a prefix of the current one.
+///
+/// Version 4 is version 3 plus a trailing `added_paths`, and bincode reads a
+/// prefix, so a delta one version behind still yields its staged paths and its
+/// removal set — enough to queue the affected files for a fresh index rather
+/// than drop a reconnecting session's uncommitted work on the floor.
+///
+/// It has to be spelled out rather than reusing [`DeltaFile`] with the new
+/// field defaulted: bincode carries no field names, so a `#[serde(default)]`
+/// would read whatever bytes followed as the missing field instead of
+/// recognising their absence.
+#[derive(Debug, Deserialize)]
+struct DeltaV3 {
+    #[allow(dead_code, reason = "decoded to reach the fields after it")]
+    version: u32,
+    #[allow(dead_code, reason = "the staged segments are discarded, not reused")]
+    enrich_ver: u32,
+    staged: Vec<StagedEntry>,
+    removed_paths: Vec<PathBuf>,
+}
+
 /// `bincode`-serialized snapshot of a [`DirtyOverlay`].
 ///
 /// `DirtyOverlay` is not serialized directly — its in-memory indexes are
@@ -220,6 +241,35 @@ impl DeltaFile {
             anyhow::anyhow!("columnar delta at {} is unreadable: {e}", path.display())
         })?;
         if header.version != DELTA_FORMAT_VERSION {
+            // One layout behind is still readable for the part that matters.
+            // Each version so far has added a trailing field, and bincode
+            // decodes a prefix, so the staged paths and the removal set come
+            // out of the older payload intact — and those are exactly what a
+            // session reconnecting across an upgrade needs to re-derive its
+            // uncommitted work. Discarding them would leave the files edited
+            // on disk and every query answering from before the edits, with a
+            // log line as the only trace.
+            if header.version == DELTA_FORMAT_VERSION - 1 {
+                let previous: DeltaV3 = bincode::deserialize_from(&bytes[..]).map_err(|e| {
+                    anyhow::anyhow!(
+                        "columnar delta at {} claims format version {} but does not \
+                         decode as one: {e}",
+                        path.display(),
+                        header.version
+                    )
+                })?;
+                tracing::info!(
+                    delta_version = header.version,
+                    current_version = DELTA_FORMAT_VERSION,
+                    staged = previous.staged.len(),
+                    "columnar delta from the previous layout — staged segments \
+                     discarded, files queued for re-index"
+                );
+                let mut dirty = DirtyOverlay::new();
+                dirty.removed_paths = previous.removed_paths.into_iter().collect();
+                let needs_reindex = previous.staged.into_iter().map(|e| e.source_path).collect();
+                return Ok((dirty, needs_reindex));
+            }
             anyhow::bail!(
                 "columnar delta at {} has format version {} (expected {})",
                 path.display(),
@@ -227,8 +277,8 @@ impl DeltaFile {
                 DELTA_FORMAT_VERSION
             );
         }
-        let file: Self = bincode::deserialize(&bytes)?;
 
+        let file: Self = bincode::deserialize(&bytes)?;
         let mut dirty = DirtyOverlay::new();
         let mut needs_reindex: Vec<PathBuf> = Vec::new();
         // Shadowed paths come from two places. The recorded set is authoritative
@@ -403,13 +453,14 @@ mod tests {
         assert_eq!(needs, vec![PathBuf::from("src/gone.rs")]);
     }
 
-    /// A pre-stamp (format v2) delta is refused outright — bincode would
-    /// misalign the fields.
+    /// A version older than the one layout back that can still be prefix-read
+    /// is refused outright: bincode would misalign the fields, and there is no
+    /// safe way to guess where they start.
     #[test]
     fn older_format_version_is_refused() {
         let tmp = tempfile::tempdir().unwrap();
         let file = DeltaFile {
-            version: DELTA_FORMAT_VERSION - 1,
+            version: DELTA_FORMAT_VERSION - 2,
             enrich_ver: super::super::ENRICH_VER,
             staged: vec![],
             removed_paths: vec![],
@@ -421,13 +472,17 @@ mod tests {
 
     /// The test above writes a current-shaped body with an old version number,
     /// which the version check catches on its own. A *genuinely* older delta
-    /// has a shorter body too, and decoding the struct before the version
-    /// would fail on end-of-input instead — an error the caller cannot tell
-    /// from a corrupt file, so it resets the overlay rather than reporting an
-    /// unreadable format. Adding one field is enough to cause that, so this
-    /// pins the version being read from the head of the payload.
+    /// has a shorter body too, and decoding the struct before the version would
+    /// fail on end-of-input instead — an error the caller cannot tell from a
+    /// corrupt file, so it resets the overlay and queues nothing. Adding one
+    /// field is enough to cause that.
+    ///
+    /// Reading the version from the head of the payload is what makes the
+    /// difference, and it buys more than a better message: the older body is a
+    /// prefix of the current one, so the staged paths come out of it and the
+    /// session can re-derive its uncommitted work instead of losing it.
     #[test]
-    fn a_delta_from_the_previous_layout_is_refused_by_version_not_by_eof() {
+    fn a_delta_from_the_previous_layout_queues_its_paths_instead_of_dropping_them() {
         /// The v3 shape: no `added_paths`.
         #[derive(serde::Serialize)]
         struct DeltaV3 {
@@ -447,13 +502,24 @@ mod tests {
         };
         std::fs::write(&path, bincode::serialize(&old).unwrap()).unwrap();
 
-        let Err(err) = DeltaFile::load(&path, tmp.path()) else {
-            panic!("a previous layout must not load");
-        };
-        let err = err.to_string();
+        let (dirty, needs_reindex) =
+            DeltaFile::load(&path, tmp.path()).expect("a previous layout is readable");
+
+        assert_eq!(
+            needs_reindex,
+            vec![PathBuf::from("src/a.rs")],
+            "the staged paths are what a reconnecting session needs back; dropping \
+             them leaves the file edited on disk and the index answering from before"
+        );
         assert!(
-            err.contains("format version"),
-            "the refusal must name the format, not surface a decode error: {err}"
+            dirty
+                .removed_paths
+                .contains(&PathBuf::from("src/deleted.rs")),
+            "and a deletion still has to shadow its base segment"
+        );
+        assert!(
+            dirty.added.is_empty(),
+            "no segment from a previous layout may be reassembled"
         );
     }
 
