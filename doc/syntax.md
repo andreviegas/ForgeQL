@@ -1091,8 +1091,8 @@ IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY → OFFSET → LIM
 | `HAVING` | Filter after `GROUP BY` aggregation. Operates on `count`. |
 | `IN` | Restrict to files matching glob pattern. |
 | `EXCLUDE` | Remove files matching glob pattern. Repeatable — every `EXCLUDE` clause applies; a row is dropped when **any** pattern matches its path. |
-| `ORDER BY` | Sort results. Default `ASC`. Any filterable field including enrichment fields (numeric values like `shadow_count`, `escape_count` sort numerically). |
-| `GROUP BY` | Aggregate by field. Adds `count` to each group. |
+| `ORDER BY` | Sort results. Default `ASC`. On `FIND symbols` the field must be one a symbol row resolves — `name`, `fql_kind`, `node_id`, `path`/`file`, `language`/`lang`, `line`, `usages`/`count` — or an enrichment field or stored extra column (numeric values like `shadow_count`, `escape_count` sort numerically). Anything else is refused rather than tied and returned in name order: `kind`, `text`/`content` and `node_kind` all fall here, as do the `FIND files` fields `size`, `depth` and `extension`. |
+| `GROUP BY` | Aggregate by field. Adds `count` to each group. Narrower than `ORDER BY`, because grouping keys a row through its **string** fields only: on `FIND symbols` the accepted set is `name`, `fql_kind`, `path`/`file`, `language`/`lang`, `node_id`, plus any enrichment field or stored extra column. `line`, `usages` and `count` are numeric and are refused; so is any name a symbol row cannot resolve, which would otherwise report one group named by the empty string holding every row. |
 | `LIMIT` | Maximum rows returned. Implicit cap of 20 when omitted on `FIND`. On `FIND usages` without `GROUP BY` the unit is **files**, not rows: the cap selects whole files and every site of a selected file is returned. |
 | `OFFSET` | Skip N rows (pagination). On `FIND usages` without `GROUP BY` it skips whole **files**, so a page never splits one file. |
 | `DEPTH` | For `SHOW body`: collapse depth. For `FIND files`: directory tree depth. |

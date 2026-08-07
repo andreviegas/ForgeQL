@@ -15,7 +15,7 @@ use forgeql_core::field_tiers::{
     ALL_OPS, CATCH_ALL_FIELD, Exactness, FIELD_TIERS, FieldTier, Gap, OpClass, Serving, Source,
     Tier, lookup,
 };
-use forgeql_core::filter::{CORE_WHERE_FIELDS, SORTABLE_SYMBOL_FIELDS};
+use forgeql_core::filter::{CORE_WHERE_FIELDS, GROUPABLE_SYMBOL_FIELDS, SORTABLE_SYMBOL_FIELDS};
 use forgeql_core::storage::columnar::{
     POSTING_ENRICHMENT_FIELDS, ZONEMAP_NUMERIC_FIELDS, overlay_budget, posting_budget,
 };
@@ -184,6 +184,12 @@ fn every_validated_field_is_declared() {
         assert!(
             declared.contains(field),
             "{field} passes ORDER BY validation but the table does not name it"
+        );
+    }
+    for &field in GROUPABLE_SYMBOL_FIELDS {
+        assert!(
+            declared.contains(field),
+            "{field} passes GROUP BY validation but the table does not name it"
         );
     }
 }
@@ -569,6 +575,10 @@ fn node_kind_is_refused_on_the_four_find_verbs_that_can_refuse() {
         "FIND usages OF 'sym_0' GROUP BY node_kind",
         "FIND files WHERE node_kind = 'x'",
         "FIND files ORDER BY node_kind LIMIT 5",
+        "FIND files GROUP BY node_kind",
+        "FIND globals ORDER BY node_kind LIMIT 5",
+        "FIND globals GROUP BY node_kind",
+        "FIND usages OF 'sym_0' ORDER BY node_kind LIMIT 5",
     ] {
         let err = t
             .try_fql(fql)
@@ -627,6 +637,18 @@ fn unserved_fields_really_do_match_nothing() {
                 q.results.is_empty(),
                 "{name} now resolves on symbol rows — good, but the table still \
                  declares it Unserved"
+            );
+
+            // The same names in GROUP BY are refused rather than answered:
+            // grouping keys through `field_str` alone, so an unresolvable name
+            // there did not return nothing, it returned one empty-named group
+            // holding every row. WHERE still answers empty, GROUP BY errors,
+            // and the two halves of that split are pinned together.
+            let grouped = format!("FIND symbols GROUP BY {name}");
+            assert!(
+                t.try_fql(&grouped).is_err(),
+                "`{grouped}` answered instead of erroring — an unresolvable \
+                 grouping key fabricates a single empty-named group"
             );
         }
     }

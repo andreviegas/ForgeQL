@@ -146,7 +146,10 @@ impl ClauseTarget for crate::result::OutlineEntry {
     fn field_str(&self, field: &str) -> Option<&str> {
         match field {
             "name" => Some(&self.name),
-            "fql_kind" => Some(&self.fql_kind),
+            // `kind` is what the syntax reference calls this column on an
+            // outline row, so it has to resolve or the documented predicate
+            // reports a confident absence.
+            "fql_kind" | "kind" => Some(&self.fql_kind),
             "path" | "file" => self.path.to_str(),
             _ => None,
         }
@@ -168,7 +171,9 @@ impl ClauseTarget for crate::result::OutlineEntry {
 impl ClauseTarget for crate::result::MemberEntry {
     fn field_str(&self, field: &str) -> Option<&str> {
         match field {
-            "fql_kind" | "type" => Some(&self.fql_kind),
+            // `kind` and `type` are both documented names for this column on
+            // a members row; neither may resolve to nothing.
+            "fql_kind" | "kind" | "type" => Some(&self.fql_kind),
             "text" | "declaration" | "name" => Some(&self.text),
             _ => None,
         }

@@ -60,6 +60,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `SHOW outline … WHERE kind = …` and `SHOW members … WHERE kind = …` matched
+  nothing. The syntax reference documents `kind` as a column on both row types
+  and neither resolved it, so the documented predicate reported a confident
+  absence while `fql_kind` on the same rows worked. Both now resolve it,
+  alongside the `type` alias `SHOW members` already accepted.
+
 - Documentation described `node_kind` as merely "deprecated" for query use in
   the syntax reference, the architecture notes and both agent guides, which
   read as a style preference rather than as a query that cannot work.

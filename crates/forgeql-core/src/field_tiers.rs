@@ -731,8 +731,11 @@ pub const FIELD_TIERS: &[FieldTier] = &[
     // confident zero. `count` is meant as an alias of `usages`; the rest
     // belong to `FIND files`, `FIND globals` or `SHOW` line rows. They are
     // declared rather than fixed here because refusing or aliasing these
-    // documented field names is a contract decision, and each is pinned by a
-    // behavioural test so the day one is fixed this table must be updated.
+    // documented field names is a contract decision. Each is pinned by a
+    // behavioural test: WHERE still answers a confident zero, GROUP BY on the
+    // same name now errors rather than fabricating one empty-named group, and
+    // both halves are pinned, so the day either is fixed this table must be
+    // updated with it.
     FieldTier {
         // A `SHOW outline` / `SHOW members` row column, not an alias of
         // `fql_kind` — the syntax reference documents it on those rows only.
