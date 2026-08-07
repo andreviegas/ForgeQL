@@ -157,7 +157,7 @@ FIND files [clauses]
 |---|---|
 | `FIND symbols` | All indexed AST nodes. Use `WHERE fql_kind = '...'` to narrow. Every row carries a stable `node_id` and a real workspace-total `usages` count of `role = 'code'` sites — `ORDER BY usages DESC` and `WHERE usages > N` work. An exact-name query that finds nothing but whose name *is* used somewhere returns a `hint` saying how many code usage sites exist, so "not declared here" and "not here at all" are distinguishable. |
 | `FIND globals` | Shorthand for `WHERE fql_kind = 'variable'` — file-scope variables, constants, and statics across all supported languages. |
-| `FIND usages OF` | One row per occurrence **site** of the named symbol (name + path + line + `role`), read from occurrence postings collected at index time. Covers both identifier references — including ones without call parentheses, such as function-pointer assignments and type positions — and the name written in comment text, a string literal, a build-file argument, or documentation prose, told apart by `role` (see below). Every row carries its **file's** `node_id` and `rev`, so a site is editable where you read it: `CHANGE NODE '<node_id>(<line>)' IF REV '<rev>' MATCHING WORD 'old' WITH 'new'`. **`LIMIT` counts files, not rows** — see below. `GROUP BY file` gives real per-file counts, `GROUP BY role` sizes the campaign by kind; combine with `IN`/`EXCLUDE`/`WHERE`/`ORDER BY`/`LIMIT`. |
+| `FIND usages OF` | One row per occurrence **site** of the named symbol (name + path + line + `role`). The in-scope indexed files are read and the line's own text decides what is a site, so the answer is complete and an empty one means the corpus does not hold the name; the occurrence postings collected at index time supply the `role`, not the sites. Covers both identifier references — including ones without call parentheses, such as function-pointer assignments and type positions — and the name written in comment text, a string literal, a build-file argument, or documentation prose, told apart by `role` (see below); a line nothing recorded is reported as `text`. An identifier matches on token boundaries, anything carrying a character outside `[A-Za-z0-9_]` matches literally. Every row carries its **file's** `node_id` and `rev`, so a site is editable where you read it: `CHANGE NODE '<node_id>(<line>)' IF REV '<rev>' MATCHING WORD 'old' WITH 'new'`. **`LIMIT` counts files, not rows** — see below. `GROUP BY file` gives real per-file counts, `GROUP BY role` sizes the campaign by kind; combine with `IN`/`EXCLUDE`/`WHERE`/`ORDER BY`/`LIMIT` — and `IN`/`EXCLUDE` narrow the reading as well as the rows. |
 | `FIND callees OF` | Symbols called from inside the named function body. Alias for `SHOW callees OF`. |
 | `FIND files` | Files in the worktree. Supports `WHERE name = '…'` / `name LIKE`, `DEPTH`, `ORDER BY size`, etc. ForgeQL runtime artifacts are hidden from the listing. |
 
@@ -296,9 +296,11 @@ FIND files [clauses]
 > short by something specific, never short because the work looked large.
 >
 > **Matching follows the shape of the name.** An identifier is matched on token
-> boundaries — the same boundary `MATCHING WORD` rewrites on, so a sweep touches
-> exactly the sites the `FIND` listed — and `FIND usages OF '256'` still means
-> the token `256`, never the digits inside `sha256`. A name carrying anything
+> boundaries: a letter, digit or underscore in **any** script continues a token,
+> so `FIND usages OF '256'` means the token `256` and never the digits inside
+> `sha256`, and `k_sleep` is not a site inside `ék_sleep`. That is the rule
+> `MATCHING WORD` rewrites on, so a find and the sweep it arms agree about where
+> a token starts and ends. A name carrying anything
 > outside `[A-Za-z0-9_]` is matched literally, separators and all, which is what
 > makes an include path or a dotted name askable at all.
 >

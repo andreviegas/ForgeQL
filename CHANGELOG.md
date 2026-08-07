@@ -32,11 +32,13 @@ bytes found: a site something did record keeps its role — `code`, `comment`,
 recorded arrives as `text`.
 
 **Reading files does not widen a query into a substring search.** An identifier
-is matched on token boundaries, so `FIND usages OF '256'` still means the token
-`256` and never the digits inside `sha256`. That is the same boundary
-`MATCHING WORD` rewrites on, so a sweep still touches exactly the sites the
-`FIND` listed. A name carrying anything outside `[A-Za-z0-9_]` is matched
-literally, separators and all, which is what makes an include path askable.
+is matched on token boundaries — a letter, digit or underscore in any script
+continues a token — so `FIND usages OF '256'` still means the token `256` and
+never the digits inside `sha256`, and `k_sleep` is not a site inside `ék_sleep`.
+That is the rule `MATCHING WORD` rewrites on, so a find and the sweep it arms
+agree about where a token starts and ends. A name carrying anything outside
+`[A-Za-z0-9_]` is matched literally, separators and all, which is what makes an
+include path askable.
 
 ### Changed
 
