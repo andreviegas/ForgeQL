@@ -52,7 +52,9 @@ pub use delta_file::{DeltaFile, StagedEntry};
 pub use dirty_overlay::DirtyOverlay;
 pub use manifest::Manifest;
 pub use overlay_builder::OverlayBuilder;
-pub use segment_builder::{SegmentBuilder, SymbolRow};
+pub use segment_builder::{
+    POSTING_ENRICHMENT_FIELDS, SegmentBuilder, SymbolRow, overlay_budget, posting_budget,
+};
 pub use segment_reader::SegmentReader;
 pub use shadow_writer::ShadowWriter;
 
@@ -361,7 +363,16 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        an ordinal and shifts every following node in its file — a v62
 ///        segment mis-keys handles wherever a run exists, which in C corpora
 ///        is nearly every file.
-pub const ENRICH_VER: u32 = 63;
+///   64 — the guard set fields (`guard_defines`, `guard_mentions`,
+///        `guard_negates`), `guard_group_id` and `key_path` are written to
+///        each segment's enrichment posting index. They were previously
+///        excluded from it: their distinct-value counts (9k–46k corpus-wide,
+///        measured on a 3M-symbol corpus) blew the single global budget of 8
+///        values per file, which exists for the handful-of-values enums. That
+///        budget is now per field. A v63 segment carries no postings blob for
+///        any of the five, so on one every query on them is a full scan —
+///        which is why this is a version bump and not a query-side change.
+pub const ENRICH_VER: u32 = 64;
 
 /// The filename used for the columnar delta file in the repository root.
 pub const DELTA_FILE_NAME: &str = ".forgeql-columnar-delta";

@@ -64,7 +64,65 @@ pub const POSTING_ENRICHMENT_FIELDS: &[&str] = &[
     "shift_direction",
     "increment_op",
     "increment_style",
+    // ── Set-valued and identifier-shaped fields ──────────────────────────
+    //
+    // These carry thousands of distinct values corpus-wide rather than a
+    // handful, so they are posted under a larger per-field budget (see
+    // `posting_budget`). What is posted is the field's WHOLE value — for the
+    // comma-joined guard sets that is the joined string, exactly what
+    // `filter::eval_predicate` compares an `=` against. Posting the individual
+    // members instead would key something the query layer does not compare,
+    // and both the pattern tier and the absence proof read these postings as
+    // values: a member key would make `guard_defines MATCHES 'A,B'` union
+    // nothing and would call the whole value `A,B` absent.
+    "guard_defines",
+    "guard_mentions",
+    "guard_negates",
+    "guard_group_id",
+    "key_path",
 ];
+
+/// Fields whose distinct-value count runs to thousands rather than to a
+/// handful, measured on a 3,046,476-symbol corpus: `guard_group_id` 45,918,
+/// `key_path` 42,451, `guard_defines` 19,421, `guard_mentions` 10,157,
+/// `guard_negates` 9,032.
+const WIDE_POSTING_FIELDS: &[&str] = &[
+    "guard_defines",
+    "guard_mentions",
+    "guard_negates",
+    "guard_group_id",
+    "key_path",
+];
+
+/// Distinct values one file may carry for `field` before its posting index is
+/// dropped from that file's segment.
+///
+/// The budget bounds stored size; it never bounds an answer. A file over
+/// budget writes no postings blob for the field at all — never a partial one —
+/// and the query path adds every row of such a file back to the candidate set
+/// (`rows_missing_field_postings`), so what the budget decides is which files
+/// get the fast path, not which rows can be found.
+#[must_use]
+pub fn posting_budget(field: &str) -> usize {
+    if WIDE_POSTING_FIELDS.contains(&field) {
+        4096
+    } else {
+        8
+    }
+}
+
+/// Distinct values a field may carry workspace-wide before the overlay drops it.
+///
+/// All-or-nothing, like the per-file budget: the overlay holds every value of a
+/// field or none of it, so a key set is never a partial account of a field.
+#[must_use]
+pub fn overlay_budget(field: &str) -> usize {
+    if WIDE_POSTING_FIELDS.contains(&field) {
+        65_536
+    } else {
+        64
+    }
+}
 /// Numeric columns for which the builder writes `zonemap_<col>.bin`."
 ///
 /// A zone map is an 8-byte file `[min: u32 LE][max: u32 LE]` that lets the
@@ -783,7 +841,6 @@ fn encode_kind_postings(kind_postings: &HashMap<u32, RoaringBitmap>) -> Result<V
 fn encode_enrichment_postings(
     extra_arrays: &[(String, Vec<u32>)],
 ) -> Result<Vec<(String, Vec<u8>)>> {
-    const MAX_CARDINALITY: usize = 8;
     let mut result: Vec<(String, Vec<u8>)> = Vec::new();
 
     for field in POSTING_ENRICHMENT_FIELDS {
@@ -802,7 +859,7 @@ fn encode_enrichment_postings(
             }
         }
 
-        if by_value.is_empty() || by_value.len() > MAX_CARDINALITY {
+        if by_value.is_empty() || by_value.len() > posting_budget(field) {
             continue;
         }
 

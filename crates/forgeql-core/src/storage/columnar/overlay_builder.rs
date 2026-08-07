@@ -30,12 +30,8 @@ use tracing::{debug, info, warn};
 use super::bytes_to_hex;
 use super::overlay::{EnrichEntry, RowPtr, SegmentMeta};
 use super::overlay_writer;
-use super::segment_builder::POSTING_ENRICHMENT_FIELDS;
+use super::segment_builder::{POSTING_ENRICHMENT_FIELDS, overlay_budget};
 use super::segment_reader::SegmentReader;
-
-/// Maximum number of distinct values tracked per enrichment field before the
-/// field is pruned from the overlay to keep the blob size manageable.
-const MAX_ENRICH_BUCKETS: usize = 64;
 
 /// Builds a workspace overlay from a set of per-file segments.
 pub struct OverlayBuilder {
@@ -442,8 +438,9 @@ impl OverlayBuilder {
     }
 
     /// Category 1 of step 5.5: boolean flags + string enums sourced from each
-    /// segment's `field_postings`.  Fields exceeding `MAX_ENRICH_BUCKETS`
-    /// distinct values are pruned (and their already-collected keys dropped).
+    /// segment's `field_postings`.  A field exceeding its `overlay_budget`
+    /// distinct values is pruned entirely (its already-collected keys are
+    /// dropped too), so a key set is never a partial account of a field.
     fn collect_posting_enrichment(
         segs: &[(PathBuf, String, SegmentReader)],
         row_offsets: &[u32],
@@ -466,7 +463,7 @@ impl OverlayBuilder {
                     }
                     let seen = field_seen.entry(field_name.clone()).or_default();
                     if !seen.contains(value_str) {
-                        if seen.len() >= MAX_ENRICH_BUCKETS {
+                        if seen.len() >= overlay_budget(field_name) {
                             let _ = pruned_fields.insert(field_name.clone());
                             let pfx = format!("{field_name}=");
                             enrich_raw.retain(|k, _| !k.starts_with(&pfx));
@@ -516,7 +513,7 @@ impl OverlayBuilder {
                     }
                     let seen = field_seen.entry(field_name.clone()).or_default();
                     if !seen.contains(&value_str) {
-                        if seen.len() >= MAX_ENRICH_BUCKETS {
+                        if seen.len() >= overlay_budget(&field_name) {
                             let _ = pruned_fields.insert(field_name.clone());
                             let pfx = format!("{field_name}=");
                             enrich_raw.retain(|k, _| !k.starts_with(&pfx));

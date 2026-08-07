@@ -586,7 +586,7 @@ impl SegmentReader {
     /// per-segment budget: the column is still stored, only the index is not,
     /// so this segment's rows are invisible to any bitmap built from postings.
     #[must_use]
-    pub(crate) fn posts_field(&self, field: &str) -> bool {
+    pub fn posts_field(&self, field: &str) -> bool {
         self.field_postings.contains_key(field)
     }
 

@@ -674,14 +674,20 @@ inside that item carry none; a block row (`comment_block`, `array_block`,
 members rather than being walked, and carries none either.
 
 ```sql
+-- These fields hold a comma-joined SET, and every operator compares the whole
+-- joined value: `= 'CONFIG_NET'` means "guarded by CONFIG_NET and nothing
+-- else". `(^|,)…(,|$)` is the exact membership test, and is served by the same
+-- index as `=`. (`LIKE '%CONFIG_NET%'` is a substring test — it also matches
+-- CONFIG_NET_TCP.)
+
 -- All code that REQUIRES CONFIG_NET
-FIND symbols WHERE guard_defines LIKE '%CONFIG_NET%'
+FIND symbols WHERE guard_defines MATCHES '(^|,)CONFIG_NET(,|$)'
 
 -- All code compiled when CONFIG_NET is ABSENT
-FIND symbols WHERE guard_negates LIKE '%CONFIG_NET%'
+FIND symbols WHERE guard_negates MATCHES '(^|,)CONFIG_NET(,|$)'
 
 -- Both directions
-FIND symbols WHERE guard_mentions LIKE '%CONFIG_NET%'
+FIND symbols WHERE guard_mentions MATCHES '(^|,)CONFIG_NET(,|$)'
 
 -- Unconditionally compiled code
 FIND symbols WHERE guard = ''

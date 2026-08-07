@@ -1527,14 +1527,20 @@ groups with the same condition written on one.
 **Example queries:**
 
 ```sql
--- All code that REQUIRES CONFIG_BT
-FIND symbols WHERE guard_defines LIKE '%CONFIG_BT%'
+-- All code that REQUIRES CONFIG_BT — exact membership.
+-- `(^|,)` and `(,|$)` pin the flag to a whole element of the set, so this
+-- does NOT also return code guarded by CONFIG_BT_HCI.
+FIND symbols WHERE guard_defines MATCHES '(^|,)CONFIG_BT(,|$)'
 
 -- All code compiled when CONFIG_BT is ABSENT
-FIND symbols WHERE guard_negates LIKE '%CONFIG_BT%'
+FIND symbols WHERE guard_negates MATCHES '(^|,)CONFIG_BT(,|$)'
 
 -- All code that MENTIONS CONFIG_BT (either direction)
-FIND symbols WHERE guard_mentions LIKE '%CONFIG_BT%'
+FIND symbols WHERE guard_mentions MATCHES '(^|,)CONFIG_BT(,|$)'
+
+-- Any flag whose name STARTS with CONFIG_BT, deliberately including
+-- CONFIG_BT_HCI and friends
+FIND symbols WHERE guard_mentions MATCHES '(^|,)CONFIG_BT'
 
 -- Unconditionally compiled code only
 FIND symbols WHERE guard = ''
@@ -1542,6 +1548,17 @@ FIND symbols WHERE guard = ''
 -- Count symbols per guard define
 FIND symbols GROUP BY guard ORDER BY count DESC
 ```
+
+**`=` on a set-valued field means the WHOLE joined value, not membership.**
+`guard_defines`, `guard_negates` and `guard_mentions` each hold a
+comma-joined set, and every operator compares against that joined string:
+`guard_defines = 'CONFIG_BT'` matches only a row guarded by CONFIG_BT *and
+nothing else*, never one guarded by `CONFIG_BT && CONFIG_SMP` (whose value is
+`CONFIG_BT,CONFIG_SMP`). Use the `MATCHES '(^|,)…(,|$)'` form above for
+membership — it is exact, and it is served by the same index as `=`, so it
+costs no more. `LIKE '%CONFIG_BT%'` also works but is a substring test: it
+matches `CONFIG_BT_HCI` too, which is occasionally what you want and more
+often not.
 
 **Structural exclusivity:** Two symbols with the same `guard_group_id` and
 different `guard_branch` are definitively mutually exclusive — they are in
@@ -1758,11 +1775,13 @@ FIND symbols
 ### Guard analysis pipeline
 
 ```sql
--- All code gated on a specific config option
-FIND symbols WHERE guard_defines LIKE '%CONFIG_BT%'
+-- All code gated on a specific config option. These fields hold a
+-- comma-joined SET, so `=` would mean "guarded by this and nothing else";
+-- `(^|,)…(,|$)` is the exact membership test.
+FIND symbols WHERE guard_defines MATCHES '(^|,)CONFIG_BT(,|$)'
 
 -- Code compiled only when a feature is ABSENT
-FIND symbols WHERE guard_negates LIKE '%CONFIG_SMP%'
+FIND symbols WHERE guard_negates MATCHES '(^|,)CONFIG_SMP(,|$)'
 
 -- Large functions in #else branches (often forgotten)
 FIND symbols

@@ -6,6 +6,45 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.153.0] — 2026-08-07 — the guard set fields and `key_path` are indexed
+
+Re-indexing is required: this release changes what a segment stores, so the
+cache version moves and every source is re-indexed on first use.
+
+### Changed
+
+- **`guard_defines`, `guard_mentions`, `guard_negates`, `guard_group_id` and
+  `key_path` now have a serving index.** They were excluded from the posting
+  index by a single global budget of eight distinct values per file, which
+  exists for fields like `naming` that have a handful of values. These five do
+  not: measured on a 3,046,476-symbol corpus they carry 45,918 / 42,451 /
+  19,421 / 10,157 / 9,032 distinct values. Every query on them therefore
+  materialised the whole corpus so the row-level filter could read a field the
+  row already carried. The budget is now per field, and these five are indexed
+  under one sized for them.
+
+  What is indexed is each field's **whole value**. The guard fields hold a
+  comma-joined set, and every operator has always compared that joined string,
+  so the index keys the same thing the query compares. Indexing the individual
+  members instead would key something nothing compares against — and would
+  break two existing behaviours silently, since both read these keys as values:
+  a regex spanning a comma would match no key and return nothing, and a whole
+  value that is not a member would be reported absent.
+
+- **Membership on a set-valued field has an exact spelling, now documented.**
+  `guard_defines = 'CONFIG_BT'` means "guarded by CONFIG_BT *and nothing
+  else*" — it has never meant membership, and still does not. For membership
+  use `guard_defines MATCHES '(^|,)CONFIG_BT(,|$)'`, which is exact, is served
+  by the same index, and does not also match `CONFIG_BT_HCI` the way the
+  previously documented `LIKE '%CONFIG_BT%'` does. The recipes in
+  `doc/syntax.md` and `doc/agents/forgeql.agent.md` were using the substring
+  form and have been corrected.
+
+A file whose distinct-value count for one of these fields exceeds the per-file
+budget writes no index for it — never a partial one — and every row of such a
+file stays a candidate, so the answer is complete whichever files the budget
+covered. The whole-workspace budget is all-or-nothing in the same way: the
+merged index holds every value of a field or none of it.
 ## [0.151.0] — 2026-08-07 — `WHERE language = '<lang>'` reads the language column instead of every row
 
 ### Changed
