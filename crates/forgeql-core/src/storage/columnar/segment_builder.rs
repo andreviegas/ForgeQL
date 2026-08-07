@@ -83,7 +83,7 @@ pub const POSTING_ENRICHMENT_FIELDS: &[&str] = &[
 ];
 
 /// Fields whose distinct-value count runs to thousands rather than to a
-/// handful, measured on a 3,046,476-symbol corpus: `guard_group_id` 45,918,
+/// handful, measured on a 3,062,139-symbol corpus: `guard_group_id` 45,918,
 /// `key_path` 42,451, `guard_defines` 19,421, `guard_mentions` 10,157,
 /// `guard_negates` 9,032.
 const WIDE_POSTING_FIELDS: &[&str] = &[

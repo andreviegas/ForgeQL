@@ -17,7 +17,7 @@ cache version moves and every source is re-indexed on first use.
   `key_path` now have a serving index.** They were excluded from the posting
   index by a single global budget of eight distinct values per file, which
   exists for fields like `naming` that have a handful of values. These five do
-  not: measured on a 3,046,476-symbol corpus they carry 45,918 / 42,451 /
+  not: measured on a 3,062,139-symbol corpus they carry 45,918 / 42,451 /
   19,421 / 10,157 / 9,032 distinct values. Every query on them therefore
   materialised the whole corpus so the row-level filter could read a field the
   row already carried. The budget is now per field, and these five are indexed

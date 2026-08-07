@@ -297,10 +297,16 @@ fn a_file_over_its_field_budget_still_answers_completely() {
 fn an_uncommitted_row_is_found_by_a_set_field_query() {
     // Session-born rows reach the answer in their own stage, downstream of the
     // candidate bitmap; a tier that narrows the bitmap must not hide one.
+    //
+    // OMEGA appears in no committed file, so the overlay holds no key for it.
+    // That is the case posting these fields newly made reachable: the absence
+    // proof could not conclude anything about them before (no postings blob
+    // meant no proof), and now it can answer an empty bitmap. It must not do so
+    // while an uncommitted row carries the value.
     let (tmp, mut storage) = workspace(&[("a_sets.cpp", SETS.to_owned())]);
 
     let abs = tmp.path().join("work").join("c_new.cpp");
-    fs::write(&abs, "#if defined(ALPHA)\nint dirty_alpha;\n#endif\n").expect("write c_new.cpp");
+    fs::write(&abs, "#if defined(OMEGA)\nint dirty_omega;\n#endif\n").expect("write c_new.cpp");
     let table = index_at_path(&CppLanguage, &abs);
     let staging = tmp.path().join("staging").join("c_new");
     let mut builder = SegmentBuilder::new("test", &[0x77u8; 8]);
@@ -325,9 +331,9 @@ fn an_uncommitted_row_is_found_by_a_set_field_query() {
         String::new(), // replaces nothing: a new file, not an edit
     );
 
-    let got = found(&storage, "guard_defines", CompareOp::Eq, "ALPHA");
+    let got = found(&storage, "guard_defines", CompareOp::Eq, "OMEGA");
     assert!(
-        got.iter().any(|n| n == "dirty_alpha"),
-        "an uncommitted row must be found by a set-field query; got {got:?}"
+        got.iter().any(|n| n == "dirty_omega"),
+        "a value carried only by an uncommitted row must not be answered absent; got {got:?}"
     );
 }

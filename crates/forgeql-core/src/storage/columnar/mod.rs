@@ -367,7 +367,7 @@ pub type HashFn = std::sync::Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync + 'stati
 ///        `guard_negates`), `guard_group_id` and `key_path` are written to
 ///        each segment's enrichment posting index. They were previously
 ///        excluded from it: their distinct-value counts (9k–46k corpus-wide,
-///        measured on a 3M-symbol corpus) blew the single global budget of 8
+///        measured on a 3,062,139-symbol corpus) blew the single global budget of 8
 ///        values per file, which exists for the handful-of-values enums. That
 ///        budget is now per field. A v63 segment carries no postings blob for
 ///        any of the five, so on one every query on them is a full scan —
