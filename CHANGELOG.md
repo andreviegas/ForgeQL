@@ -36,9 +36,13 @@ symbols: a `.gitignore`, or any extension no plugin claims, is tracked by path
 and size alone and holds text like anything else. `FIND usages OF 'cscope'`
 answered zero across a three-million-symbol tree whose root `.gitignore` names
 it on line 23 — a zero an agent reads as permission to rename. The set read is
-the same one `FIND files` lists, minus ForgeQL's own runtime artifacts. Bytes
-that are not UTF-8 are not text and hold no line to match; a file that cannot be
-read at all is still counted and named in the response's `hint`.
+the same one `FIND files` lists, minus ForgeQL's own runtime artifacts. Binary
+files — a NUL byte near the start, the line `grep` draws — are not searched,
+because an object file or an index blob embeds symbol names and a site there is
+bytes no sweep should rewrite. Everything else decodes leniently, so a file that
+is text apart from a stray byte in a legacy encoding still answers on every line
+that holds the name; a file that cannot be read at all is still counted and
+named in the response's `hint`.
 
 **Reading files does not widen a query into a substring search.** An identifier
 is matched on token boundaries — a letter, digit or underscore in any script
@@ -58,7 +62,10 @@ proportionally less work for an identical answer.
 
 Counts grow wherever the gap was real. On a three-million-symbol embedded tree
 the unfiltered site count for one widely-used configuration flag moves from 140
-to 145, and the five added sites are exactly the ones nothing had recorded.
+to 179, and all thirty-nine added sites are exactly the ones nothing had
+recorded — most of them project configuration files switching that flag on. A
+golden pins those thirty-nine beside the total, so the two have to move
+together and the growth stays accounted for rather than absorbed.
 
 **Cost, measured.** An A/B run against that corpus, both sides built with the
 same profile, leaves all three query shapes below the harness's noise floor on

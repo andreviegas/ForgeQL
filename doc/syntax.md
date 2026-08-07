@@ -281,9 +281,13 @@ FIND files [clauses]
 > produced symbols. A `.gitignore`, or a file whose extension no plugin claims,
 > is tracked by path and size alone and holds text like anything else; the set
 > read is exactly what `FIND files` lists, minus ForgeQL's own runtime
-> artifacts. Two edges worth knowing: bytes that are not UTF-8 are not text and
-> hold no line to match, and a file that cannot be read at all is counted and
-> named in the `hint` rather than passed over in silence.
+> artifacts. Binary files — a NUL byte near the start, the line `grep` draws —
+> are not searched: an object file or an index blob embeds symbol names, and a
+> site there is bytes no sweep should rewrite. Everything else is decoded
+> leniently, so a file that is text apart from a stray byte in a legacy encoding
+> still answers on every line that holds the name, and a file that cannot be
+> read at all is counted and named in the `hint` rather than passed over in
+> silence.
 >
 > Every tier's sites are **merged**, none is a fallback for another coming back
 > empty. One corpus stores the same name several ways at once — C keeps

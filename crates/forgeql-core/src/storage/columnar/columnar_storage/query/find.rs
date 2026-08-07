@@ -381,8 +381,12 @@ impl ColumnarStorage {
     /// anything added in this session — which is the same set `FIND files`
     /// lists, minus ForgeQL's own runtime artifacts. A `.gitignore` or an
     /// extension no plugin claims holds text like any other file, and skipping
-    /// it would answer a confident zero for a name written there. Bytes that
-    /// are not UTF-8 are not text and hold no line to match.
+    /// it would answer a confident zero for a name written there. Binary — a
+    /// NUL byte near the start, the line `grep` draws — is not searched, since
+    /// an object file or an index blob embeds symbol names it would be wrong to
+    /// hand to a sweep. Everything else decodes leniently, so a file that is
+    /// text apart from a stray legacy byte still answers on every line that
+    /// holds the name.
     ///
     /// Cost is one read per in-scope file per query, bounded by `IN`/`EXCLUDE`.
     /// Reads nothing stored in a new way, so no cache version moves.
@@ -462,13 +466,23 @@ impl ColumnarStorage {
                 unread += 1;
                 continue;
             };
-            // Bytes that are not UTF-8 are not text, and a text query has
-            // nothing to match in them. That is a property of the file rather
-            // than a budget — the universe searched is the workspace's text,
-            // and this is where its edge lies — so it is not an unread file.
-            let Ok(text) = std::str::from_utf8(&bytes) else {
+            // Binary is not searched, on the line `grep` and `git` draw: a NUL
+            // byte near the start means these bytes are not a text file. It
+            // matters here because a compiled object or an index blob embeds
+            // the ASCII of a symbol name, so reporting one as a usage site
+            // would put bytes no editor should rewrite into a `FOUND` set and
+            // arm a sweep on them.
+            if bytes.iter().take(BINARY_SNIFF).any(|b| *b == 0) {
                 continue;
-            };
+            }
+            // Everything else is decoded leniently rather than strictly. A file
+            // that is text apart from one byte in a legacy encoding is still
+            // text, and every other line in it can hold the name verbatim;
+            // rejecting the whole file for that byte would answer a confident
+            // zero over bytes that do contain it, and silently, since the file
+            // read fine. Valid UTF-8 — every source file — is borrowed here,
+            // not copied.
+            let text = String::from_utf8_lossy(&bytes);
             // Cheap reject before splitting into lines: a whole-token match is
             // a substring match too.
             if !text.contains(needle) {
@@ -750,6 +764,14 @@ fn is_core_alphabet(text: &str) -> bool {
 /// A recorder drops a one-character token, so anything shorter is never in the
 /// index and could only ever propose nothing.
 const MIN_PIECE_LEN: usize = 2;
+
+/// How much of a file is inspected before calling it binary.
+///
+/// The rule `grep` and `git` use: a NUL byte in the first few kilobytes means
+/// these bytes are not text. Reading further buys nothing — a file that is text
+/// for 8 kB and binary afterwards does not exist in practice, and the check
+/// runs once per file per query.
+const BINARY_SNIFF: usize = 8000;
 
 /// A single occurrence: the file it sits in, its 1-based line, and the role it
 /// was recorded under — `code` for a resolved identifier, the stored mention
