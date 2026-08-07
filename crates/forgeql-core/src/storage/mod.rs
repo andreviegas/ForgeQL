@@ -347,18 +347,38 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// is the file's own bytes, not the index: the postings serve the fast
     /// tiers and label what they find, but a site exists wherever the text says
     /// it does, including on lines no recorder ever tokenised. The files read
-    /// are every file the workspace tracks — those that produced symbols, those
-    /// known by path and size alone, and those added this session — so a name
+    /// are every file the workspace tracks — those that produced symbols,
+    /// those known by path and size alone, those reindexed this session, and
+    /// those this session created whose extension no plugin claims — so a name
     /// living only in a `.gitignore` is found too. No site is dropped for being
     /// expensive to reach.
+    ///
+    /// Two boundaries, both declared rather than silent. Binary is not
+    /// searched: a NUL byte near the start means these bytes are not text, and
+    /// a site in an object file would arm a sweep on bytes no editor should
+    /// rewrite. A byte-order mark is believed before that check, so UTF-16 text
+    /// is read rather than mistaken for an object file — but only where a mark
+    /// declares it; UTF-16 written without one is indistinguishable from binary
+    /// and is not searched. Everything else is decoded leniently, so one byte
+    /// in a legacy encoding does not blank the lines around it.
+    ///
+    /// A UTF-16 site can be found and cannot be rewritten in place. A line
+    /// boundary there is not a byte boundary, so splicing UTF-8 into it by
+    /// offset would shift every byte after the edit; the mutation is refused
+    /// with an error naming the encoding, never attempted. A whole-file
+    /// replacement, which leaves no mixed encoding behind, is still allowed.
+    /// Reading such a line back is bounded too: `SHOW` renders the file's raw
+    /// bytes, so the decoding here reaches the site list and not the display.
     ///
     /// An identifier is matched on token boundaries and anything carrying a
     /// character outside that alphabet is matched literally, so reading the
     /// files widens no name into a substring search.
     ///
     /// The `Option<String>` beside the rows is not a budget or a ceiling: it
-    /// names a specific thing that went wrong, a file that could not be read,
-    /// so the sites it holds are known to be absent instead of silently so.
+    /// names a specific thing that went wrong, a file that exists and could not
+    /// be read, so the sites it holds are known to be absent instead of
+    /// silently so. A path the index lists but the worktree no longer holds is
+    /// not that case — it has no bytes, so the answer over it is complete.
     fn find_usages(
         &self,
         name: &str,

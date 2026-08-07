@@ -69,6 +69,17 @@ pub struct DirtyOverlay {
     /// identical bytes and therefore share a content hash, and shadowing the one
     /// that changed must not blank out the one that did not.
     pub removed_paths: HashSet<PathBuf>,
+
+    /// Workspace-relative paths of files this session touched that produced no
+    /// segment — an extension no plugin claims.
+    ///
+    /// The persistent overlay's file-only entries are a snapshot of the
+    /// workspace as it was indexed, so a file *created* in-session is in
+    /// neither them nor `added`, and nothing else in the storage layer would
+    /// know it exists until the next commit. `FIND files` and the `FIND usages`
+    /// read pass union this set with the other two, or they answer a confident
+    /// zero over bytes that are on disk.
+    pub added_paths: HashSet<PathBuf>,
 }
 
 impl DirtyOverlay {
@@ -78,13 +89,14 @@ impl DirtyOverlay {
         Self::default()
     }
 
-    /// `true` when no segments have been added and no blobs removed.
+    /// `true` when this session has added no segment, recorded no non-indexed
+    /// path, and removed nothing.
     ///
     /// When `true`, `ColumnarStorage` can skip all dirty-overlay logic for
     /// maximum query performance — identical to pre-PhaseFT1 behaviour.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.added.is_empty() && self.removed_paths.is_empty()
+        self.added.is_empty() && self.added_paths.is_empty() && self.removed_paths.is_empty()
     }
 
     /// Whether the persistent segment for this source path is shadowed.
@@ -140,6 +152,23 @@ impl DirtyOverlay {
             .position(|ds| ds.source_path == source_path)?;
         let removed = self.added.remove(pos);
         Some(removed.replaces_hex)
+    }
+
+    /// Record a workspace-relative path that this session touched but that no
+    /// language plugin claims, so it produces no segment.
+    ///
+    /// Called by `reindex_files` for exactly the files it would otherwise skip.
+    pub fn add_path(&mut self, source_path: PathBuf) {
+        let _ = self.added_paths.insert(source_path);
+    }
+
+    /// Drop any path-only entry for `source_path`.
+    ///
+    /// Called before re-recording it, so a file that stops existing — or stops
+    /// being non-indexed, because it was renamed into a claimed extension —
+    /// leaves no entry behind pointing at bytes that are gone.
+    pub fn forget_path(&mut self, source_path: &Path) {
+        let _ = self.added_paths.remove(source_path);
     }
 
     #[must_use]

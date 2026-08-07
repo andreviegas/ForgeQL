@@ -181,6 +181,9 @@ fn resolve_matching(
     word_boundary: bool,
 ) -> Result<FileEdit> {
     let source = crate::workspace::file_io::read_bytes(abs_path)?;
+    if let Some(encoding) = wide_encoding(&source) {
+        bail!("{rel_path}: {}", wide_encoding_refusal(encoding));
+    }
     let text =
         std::str::from_utf8(&source).map_err(|e| anyhow!("{rel_path}: not valid UTF-8: {e}"))?;
 
@@ -236,6 +239,12 @@ pub(super) fn matching_edits_in_range(
     word_boundary: bool,
     range: std::ops::Range<usize>,
 ) -> Result<Vec<ByteRangeEdit>> {
+    // `source` is the whole file, so the mark is visible here even when
+    // `range` starts past it. Same reason as `lines_to_byte_range`: the
+    // replacement would be UTF-8 bytes spliced into UTF-16.
+    if let Some(encoding) = wide_encoding(source) {
+        bail!("{}", wide_encoding_refusal(encoding));
+    }
     let slice = source
         .get(range.clone())
         .ok_or_else(|| anyhow!("byte range {range:?} out of bounds"))?;
@@ -307,6 +316,36 @@ fn resolve_delete(rel_path: &str, abs_path: &Path) -> Result<FileEdit> {
 // Line-range → byte-range helper
 // -----------------------------------------------------------------------
 
+/// The encoding these bytes declare, when it is one whose line boundaries are
+/// not byte boundaries.
+///
+/// Only a byte-order mark counts. Guessing from NUL density would misread a
+/// compiled object, and a wrong answer here either refuses a legitimate edit
+/// or performs a destructive one.
+fn wide_encoding(source: &[u8]) -> Option<&'static str> {
+    match source {
+        [0xFF, 0xFE, 0x00, 0x00, ..] => Some("UTF-32LE"),
+        [0x00, 0x00, 0xFE, 0xFF, ..] => Some("UTF-32BE"),
+        [0xFF, 0xFE, ..] => Some("UTF-16LE"),
+        [0xFE, 0xFF, ..] => Some("UTF-16BE"),
+        _ => None,
+    }
+}
+
+/// Why a partial edit into such a file is refused, and what to do instead.
+///
+/// Stated in full because the agent reaching this has just been shown a site
+/// in the file by `FIND usages`: without the reason, a refusal on a line the
+/// query quoted back reads as a defect rather than as the boundary it is.
+fn wide_encoding_refusal(encoding: &str) -> String {
+    format!(
+        "refusing to edit: this file is {encoding}, where a line boundary is not a byte \
+         boundary — splicing UTF-8 text into it by byte offset would shift every byte after \
+         the edit and destroy the file. `FIND usages` reads {encoding} text, so a site in one \
+         can be found but not rewritten in place. Convert the file to UTF-8 first; a \
+         whole-file `CHANGE NODE '<file_hex>' WITH ...` replaces every byte and is allowed."
+    )
+}
 /// Convert 1-based inclusive line range to byte offsets.
 ///
 /// Returns `(byte_start, byte_end)` where `byte_start` is the offset of the
@@ -320,6 +359,16 @@ pub(crate) fn lines_to_byte_range(
     start_line: usize,
     end_line: usize,
 ) -> Result<(usize, usize)> {
+    // A line boundary is only a byte boundary if the bytes are ASCII-
+    // compatible. In UTF-16 a newline is two bytes and so is every letter, so
+    // scanning for `0x0A` lands inside a code unit: the range would look
+    // spliceable, the UTF-8 text written into it would shift everything after
+    // the edit by a byte, and the file would be silently destroyed. `FIND
+    // usages` now reads UTF-16 text and hands back the file's own handle, so a
+    // site in one can be quoted straight into an edit — refuse the write.
+    if let Some(encoding) = wide_encoding(source) {
+        bail!("{}", wide_encoding_refusal(encoding));
+    }
     if start_line == 0 {
         bail!("line numbers are 1-based, got start=0");
     }

@@ -41,8 +41,37 @@ files — a NUL byte near the start, the line `grep` draws — are not searched,
 because an object file or an index blob embeds symbol names and a site there is
 bytes no sweep should rewrite. Everything else decodes leniently, so a file that
 is text apart from a stray byte in a legacy encoding still answers on every line
-that holds the name; a file that cannot be read at all is still counted and
+that holds the name; a file that exists and cannot be read is still counted and
 named in the response's `hint`.
+
+A byte-order mark is believed before that binary check, so **UTF-16 text is
+searched** rather than mistaken for an object file: every ASCII character in
+UTF-16 carries a NUL byte, which is exactly what the check looks for, so
+without this a plain UTF-16 document answered zero over lines it visibly holds.
+Only a mark counts — UTF-16 written without one cannot be told apart from a
+compiled object, and guessing from NUL density would let an object file arm a
+sweep, so it stays unsearched and this is said plainly rather than left to be
+discovered.
+
+**A UTF-16 site can be found and cannot be rewritten in place.** A line
+boundary there is two bytes, not one, so splicing UTF-8 text into it by byte
+offset would shift every byte after the edit and destroy the file — and nothing
+previously stopped that, because the line-to-byte conversion scans for `0x0A`
+and finds one. Any node- or line-scoped `CHANGE`, `INSERT` or `DELETE` on such
+a file is now refused with an error naming the encoding. Overwriting the whole
+file leaves no mixed encoding behind and is still allowed, which is how to
+convert one. Reading such a line back is bounded the same way: `SHOW` renders
+the raw bytes, so the decode reaches the site list and not the display.
+
+One class of file was still outside that set: one **created during the session**
+whose extension no plugin claims. It produces no segment, and the list of
+non-indexed files is a snapshot taken when the workspace was indexed — so
+between writing a new `prj.conf` and committing it, the file was in nothing the
+search enumerated and every query over it answered zero. The session now records
+those paths, and both `FIND files` and the read pass include them. A path the
+index lists but the worktree no longer holds — a file deleted in the session —
+is skipped without comment instead of counted as unreadable: it has no bytes, so
+the answer over it is complete rather than short.
 
 **Reading files does not widen a query into a substring search.** An identifier
 is matched on token boundaries — a letter, digit or underscore in any script

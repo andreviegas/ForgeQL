@@ -79,12 +79,20 @@ impl ColumnarStorage {
                 self.dirty.remove_path(rel_path.clone());
             }
             drop(self.dirty.remove_stale_for_path(&rel_path));
+            self.dirty.forget_path(&rel_path);
 
             if !path.exists() {
                 continue;
             }
 
+            // No plugin claims this extension, so the file produces no segment.
+            // It is still a workspace file holding text: `.conf`, `.gitignore`,
+            // a README. The persistent overlay tracks the ones that existed when
+            // it was built, but one created in this session is in nothing at all
+            // until the next commit — record its path so the file list and the
+            // `FIND usages` read pass can still see it.
             let Some(lang) = self.lang_registry.language_for_path(path) else {
+                self.dirty.add_path(rel_path);
                 continue;
             };
 

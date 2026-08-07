@@ -97,13 +97,14 @@ pub(crate) fn staged_segment_path(
 /// the `enrich_ver` stamp so a delta written by a previous index-output
 /// generation is detected as a whole and its files re-indexed, instead of
 /// each staged entry silently failing its (version-suffixed) file-name lookup.
-const DELTA_FORMAT_VERSION: u32 = 3;
+/// Version 4 added `added_paths`, the non-indexed files this session created.
+const DELTA_FORMAT_VERSION: u32 = 4;
 
 /// `bincode`-serialized snapshot of a [`DirtyOverlay`].
 ///
 /// `DirtyOverlay` is not serialized directly — its in-memory indexes are
-/// rebuilt from the staging segment files on load.  Only the content-ID list
-/// and the removed-path set need to persist.
+/// rebuilt from the staging segment files on load.  Only the content-ID list,
+/// the removed-path set and the non-indexed paths need to persist.
 ///
 /// [`DirtyOverlay`]: super::dirty_overlay::DirtyOverlay
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -131,6 +132,10 @@ pub struct DeltaFile {
     /// Source paths of persistent overlay segments hidden from queries.
     /// Corresponds to `DirtyOverlay::removed_paths`.
     pub removed_paths: Vec<PathBuf>,
+    /// Workspace-relative paths of files this session touched that no language
+    /// plugin claims. Version-independent, like `removed_paths`: no index
+    /// output is involved, so a delta from an earlier generation keeps them.
+    pub added_paths: Vec<PathBuf>,
 }
 
 impl DeltaFile {
@@ -154,6 +159,7 @@ impl DeltaFile {
                 })
                 .collect(),
             removed_paths: dirty.removed_paths.iter().cloned().collect(),
+            added_paths: dirty.added_paths.iter().cloned().collect(),
         };
         let bytes = bincode::serialize(&file)?;
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
@@ -180,7 +186,9 @@ impl DeltaFile {
     /// (`replaces_hex` → `removed_paths`), which would resurface the base
     /// segment's pre-edit rows for that path — reindexing the returned paths
     /// is what restores correctness, so callers must not ignore them.
-    /// `removed_paths` (deleted files) are version-independent and always kept.
+    /// `removed_paths` (deleted files) and `added_paths` (files this session
+    /// created that no plugin claims) hold no index output, so they are
+    /// version-independent and always kept.
     ///
     /// # Errors
     /// Returns `Err` if the file cannot be read or bincode decoding fails.
@@ -209,6 +217,7 @@ impl DeltaFile {
         // staged entries re-derive the changed-file half, since a staged segment
         // that replaces a base segment always shadows its own path.
         dirty.removed_paths = file.removed_paths.into_iter().collect();
+        dirty.added_paths = file.added_paths.into_iter().collect();
 
         if file.enrich_ver != super::ENRICH_VER {
             tracing::info!(
@@ -327,6 +336,7 @@ mod tests {
                 entry("src/b.rs", "bbbb", ""),
             ],
             removed_paths: vec![PathBuf::from("src/deleted.rs")],
+            added_paths: vec![PathBuf::from("build.conf")],
         };
         let path = write_delta(tmp.path(), &file);
 
@@ -340,6 +350,12 @@ mod tests {
                 .removed_paths
                 .contains(&PathBuf::from("src/deleted.rs")),
             "deletions are version-independent and must survive"
+        );
+        assert!(
+            dirty.added_paths.contains(&PathBuf::from("build.conf")),
+            "a non-indexed path holds no index output, so a generation change \
+             cannot invalidate it — restoring it only after the mismatch check \
+             would lose it and the file would stop being searched"
         );
         assert_eq!(
             needs,
@@ -359,6 +375,7 @@ mod tests {
             enrich_ver: super::super::ENRICH_VER,
             staged: vec![entry("src/gone.rs", "cccc", "beef")],
             removed_paths: vec![],
+            added_paths: vec![],
         };
         let path = write_delta(tmp.path(), &file);
 
@@ -377,6 +394,7 @@ mod tests {
             enrich_ver: super::super::ENRICH_VER,
             staged: vec![],
             removed_paths: vec![],
+            added_paths: vec![],
         };
         let path = write_delta(tmp.path(), &file);
         assert!(DeltaFile::load(&path, tmp.path()).is_err());
@@ -392,6 +410,7 @@ mod tests {
             enrich_ver: super::super::ENRICH_VER - 1,
             staged: vec![entry("src/a.rs", "aaaa", "")],
             removed_paths: vec![],
+            added_paths: vec![],
         };
         let path = write_delta(tmp.path(), &file);
         assert!(DeltaFile::read_valid_segment_names(&path).is_empty());

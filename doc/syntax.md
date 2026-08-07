@@ -279,15 +279,31 @@ FIND files [clauses]
 >
 > **Every file the workspace knows about is read**, not only the ones that
 > produced symbols. A `.gitignore`, or a file whose extension no plugin claims,
-> is tracked by path and size alone and holds text like anything else; the set
-> read is exactly what `FIND files` lists, minus ForgeQL's own runtime
-> artifacts. Binary files — a NUL byte near the start, the line `grep` draws —
-> are not searched: an object file or an index blob embeds symbol names, and a
-> site there is bytes no sweep should rewrite. Everything else is decoded
-> leniently, so a file that is text apart from a stray byte in a legacy encoding
-> still answers on every line that holds the name, and a file that cannot be
-> read at all is counted and named in the `hint` rather than passed over in
-> silence.
+> is tracked by path and size alone and holds text like anything else — and one
+> created inside this session, which no committed structure knows about yet, is
+> read from the path the session recorded for it. The set read is exactly what
+> `FIND files` lists, minus ForgeQL's own runtime artifacts. Binary files — a
+> NUL byte near the start, the line `grep` draws — are not searched: an object
+> file or an index blob embeds symbol names, and a site there is bytes no sweep
+> should rewrite. A byte-order mark is believed before that check, so UTF-16
+> text is read rather than taken for an object file — but only where a mark
+> declares it; UTF-16 written without one is indistinguishable from binary and
+> stays unsearched. Everything else is decoded leniently, so a file that is text
+> apart from a stray byte in a legacy encoding still answers on every line that
+> holds the name; a file that exists and cannot be read is counted and named in
+> the `hint` rather than passed over in silence, while one the index lists and
+> the worktree no longer holds is simply skipped — it has no bytes, so nothing
+> about it is missing.
+>
+> A UTF-16 site is found and cannot be rewritten in place. A line boundary
+> there is not a byte boundary, so splicing UTF-8 into it by offset would shift
+> every byte after the edit; any `CHANGE`, `INSERT` or `DELETE` targeting a node
+> or line range in such a file is **refused with an error naming the encoding**,
+> never attempted. Overwriting the whole file with
+> `CHANGE NODE '<file_hex>' WITH ...` leaves no mixed encoding behind and is
+> allowed — that is the way to convert one. Reading such a line back is bounded
+> the same way: `SHOW` renders the raw bytes, so the decode reaches the site
+> list and not the display.
 >
 > Every tier's sites are **merged**, none is a fallback for another coming back
 > empty. One corpus stores the same name several ways at once — C keeps

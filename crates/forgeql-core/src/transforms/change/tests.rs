@@ -33,6 +33,39 @@ fn lines_to_byte_range_zero_start_error() {
     assert!(lines_to_byte_range(source, 0, 1).is_err());
 }
 
+/// A byte scan for `0x0A` finds something in UTF-16 — it just is not a line
+/// boundary. The range would look spliceable and the write would shift every
+/// byte after it, so it is refused. Both halves matter: refusing too widely
+/// would stop legitimate edits on a file that is merely not valid UTF-8.
+#[test]
+fn a_line_range_is_refused_on_utf16_and_allowed_on_a_stray_legacy_byte() {
+    let mut little_endian = vec![0xFF, 0xFE];
+    for unit in "aaa\nbbb\n".encode_utf16() {
+        little_endian.extend_from_slice(&unit.to_le_bytes());
+    }
+    let err = lines_to_byte_range(&little_endian, 1, 1)
+        .expect_err("a UTF-8 splice into UTF-16 must never be planned");
+    assert!(
+        err.to_string().contains("UTF-16LE"),
+        "the refusal must name the encoding, or it reads as a defect: {err}"
+    );
+
+    let mut big_endian = vec![0xFE, 0xFF];
+    for unit in "aaa\nbbb\n".encode_utf16() {
+        big_endian.extend_from_slice(&unit.to_be_bytes());
+    }
+    assert!(lines_to_byte_range(&big_endian, 1, 1).is_err());
+
+    // Not valid UTF-8, but ASCII-compatible: `0x0A` is exactly a line boundary
+    // here, so splicing is sound and this must keep working.
+    let mut legacy = b"caf".to_vec();
+    legacy.push(0xE9);
+    legacy.extend_from_slice(b"\nsecond\n");
+    let (start, end) = lines_to_byte_range(&legacy, 2, 2)
+        .expect("a legacy byte does not move the line boundaries");
+    assert_eq!(&legacy[start..end], b"second\n");
+}
+
 #[test]
 fn lines_to_byte_range_end_before_start_error() {
     let source = b"hello\nworld\n";

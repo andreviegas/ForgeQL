@@ -1,4 +1,5 @@
 //! `FIND symbols` / `FIND usages` / indexed-files queries for [`ColumnarStorage`].
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -422,12 +423,14 @@ impl ColumnarStorage {
         }
 
         // Every file the workspace knows about, not only the ones that produced
-        // symbols. A file the index tracks by path and size alone — a
-        // `.gitignore`, an extension no plugin claims — holds text like any
-        // other, and leaving it out would answer a confident zero for a name
-        // written in it. `FIND files` lists exactly these three sources, minus
-        // ForgeQL's own runtime artifacts; the search universe is the same set,
-        // for the same reason.
+        // symbols. Four sources, and a name can live in any of them: a
+        // committed segment; a file the index tracks by path and size alone (a
+        // `.gitignore`, an extension no plugin claims); a file this session
+        // reindexed; and a file this session created whose extension no plugin
+        // claims — that last one is in no committed structure at all until the
+        // next commit, so the dirty overlay records its path and nothing else.
+        // `FIND files` lists exactly these four, minus ForgeQL's own runtime
+        // artifacts; the search universe is the same set, for the same reason.
         //
         // A file outside the query's own `IN`/`EXCLUDE` scope can only produce
         // rows the clause pipeline will drop, so it is never read.
@@ -445,6 +448,13 @@ impl ColumnarStorage {
                     .filter(|path| !crate::result::FileEntry::is_runtime_artifact(path)),
             )
             .chain(self.dirty.added.iter().map(|ds| ds.source_path.clone()))
+            .chain(
+                self.dirty
+                    .added_paths
+                    .iter()
+                    .filter(|path| !crate::result::FileEntry::is_runtime_artifact(path))
+                    .cloned(),
+            )
             .filter(|path| in_scope(path, clauses))
             .collect();
         paths.sort_unstable();
@@ -460,29 +470,28 @@ impl ColumnarStorage {
         let mut sites = Vec::new();
         let mut unread = 0usize;
         for path in &paths {
-            let Ok(bytes) = std::fs::read(root.join(path)) else {
-                // The sites this file holds are absent from the answer and
-                // nothing else in the response would show that.
-                unread += 1;
+            let bytes = match std::fs::read(root.join(path)) {
+                Ok(bytes) => bytes,
+                // A path the index still lists but the worktree no longer has —
+                // a file deleted in this session, whose entry no dirty-overlay
+                // shadow covers because it never had a segment to shadow. There
+                // are no bytes, so there are no sites, and the answer over it is
+                // complete rather than short.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                // Anything else — a permission, an I/O fault — leaves the sites
+                // this file holds absent from the answer, and nothing else in
+                // the response would show that.
+                Err(_) => {
+                    unread += 1;
+                    continue;
+                }
+            };
+            // Bytes that are not text hold no sites. `decode_text` draws that
+            // line and applies the file's own declared encoding; see its doc.
+            let Some(text) = decode_text(&bytes) else {
                 continue;
             };
-            // Binary is not searched, on the line `grep` and `git` draw: a NUL
-            // byte near the start means these bytes are not a text file. It
-            // matters here because a compiled object or an index blob embeds
-            // the ASCII of a symbol name, so reporting one as a usage site
-            // would put bytes no editor should rewrite into a `FOUND` set and
-            // arm a sweep on them.
-            if bytes.iter().take(BINARY_SNIFF).any(|b| *b == 0) {
-                continue;
-            }
-            // Everything else is decoded leniently rather than strictly. A file
-            // that is text apart from one byte in a legacy encoding is still
-            // text, and every other line in it can hold the name verbatim;
-            // rejecting the whole file for that byte would answer a confident
-            // zero over bytes that do contain it, and silently, since the file
-            // read fine. Valid UTF-8 — every source file — is borrowed here,
-            // not copied.
-            let text = String::from_utf8_lossy(&bytes);
+
             // Cheap reject before splitting into lines: a whole-token match is
             // a substring match too.
             if !text.contains(needle) {
@@ -510,7 +519,8 @@ impl ColumnarStorage {
         let mut entries = Vec::with_capacity(
             segs.len()
                 .saturating_add(file_only.len())
-                .saturating_add(self.dirty.added.len()),
+                .saturating_add(self.dirty.added.len())
+                .saturating_add(self.dirty.added_paths.len()),
         );
 
         // Base: persistent overlay segments with mmap-cached sizes.
@@ -519,25 +529,8 @@ impl ColumnarStorage {
             if self.dirty.shadows(&seg.source_path) {
                 continue;
             }
-            let ext = seg
-                .source_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_string();
             let size = u64::from(self.overlay.file_size(idx));
-            let depth = Some(seg.source_path.components().count());
-            entries.push(crate::result::FileEntry {
-                path: seg.source_path.clone(),
-                extension: ext,
-                size,
-                depth,
-                count: None,
-                error_count: None,
-                parse_coverage: None,
-                node_id: None,
-                rev: None,
-            });
+            entries.push(plain_file_entry(&seg.source_path, size));
         }
 
         // File-only entries (FQOV v8+): non-indexed workspace files tracked
@@ -549,56 +542,38 @@ impl ColumnarStorage {
             if crate::result::FileEntry::is_runtime_artifact(rel_path) {
                 continue;
             }
-            let ext = rel_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_string();
-            let depth = Some(rel_path.components().count());
-            entries.push(crate::result::FileEntry {
-                path: rel_path.clone(),
-                extension: ext,
-                size: u64::from(*size),
-                depth,
-                count: None,
-                error_count: None,
-                parse_coverage: None,
-                node_id: None,
-                rev: None,
-            });
+            entries.push(plain_file_entry(rel_path, u64::from(*size)));
         }
 
         // Overlay: dirty segments (files changed in this session).
         // Read actual on-disk size — only 1 syscall per mutated file.
         for ds in &self.dirty.added {
-            let ext = ds
-                .source_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_string();
-            let size = self
-                .worktree_root
-                .join(&ds.source_path)
-                .metadata()
-                .map(|m| m.len())
-                .unwrap_or(0);
-            let depth = Some(ds.source_path.components().count());
-            entries.push(crate::result::FileEntry {
-                path: ds.source_path.clone(),
-                extension: ext,
-                size,
-                depth,
-                count: None,
-                error_count: None,
-                parse_coverage: None,
-                node_id: None,
-                rev: None,
-            });
+            let size = self.on_disk_size(&ds.source_path);
+            entries.push(plain_file_entry(&ds.source_path, size));
+        }
+
+        // Overlay: files this session touched whose extension no plugin claims,
+        // so they produced no segment. One created in-session is in no
+        // committed structure at all, so without this it is listed by nothing.
+        for rel_path in &self.dirty.added_paths {
+            if crate::result::FileEntry::is_runtime_artifact(rel_path) {
+                continue;
+            }
+            let size = self.on_disk_size(rel_path);
+            entries.push(plain_file_entry(rel_path, size));
         }
 
         dedupe_file_entries(&mut entries);
         entries
+    }
+
+    /// On-disk byte length of a workspace-relative path, `0` when it cannot be
+    /// stat'd. One syscall.
+    fn on_disk_size(&self, rel_path: &Path) -> u64 {
+        self.worktree_root
+            .join(rel_path)
+            .metadata()
+            .map_or(0, |m| m.len())
     }
 }
 
@@ -770,7 +745,8 @@ const MIN_PIECE_LEN: usize = 2;
 /// The rule `grep` and `git` use: a NUL byte in the first few kilobytes means
 /// these bytes are not text. Reading further buys nothing — a file that is text
 /// for 8 kB and binary afterwards does not exist in practice, and the check
-/// runs once per file per query.
+/// runs once per file per query. A file that declared UTF-16 with a byte-order
+/// mark never reaches this check — see [`decode_text`].
 const BINARY_SNIFF: usize = 8000;
 
 /// A single occurrence: the file it sits in, its 1-based line, and the role it
@@ -834,6 +810,58 @@ fn holds(line: &str, needle: &str, whole_token: bool) -> bool {
     })
 }
 
+/// Decode a workspace file for searching, or `None` when these bytes are not
+/// text and hold no sites.
+///
+/// A byte-order mark is the file declaring its own encoding, so it is believed
+/// before anything is guessed. That is what makes UTF-16 searchable at all:
+/// every ASCII character in it carries a NUL byte, so the sniff below — the
+/// line `grep` and `git` draw — would otherwise call a plain UTF-16 document a
+/// compiled object and answer zero over lines it plainly holds.
+///
+/// Without a mark there is nothing separating UTF-16 from an object file, and
+/// the sniff decides. BOM-less UTF-16 is therefore not searched; that is a
+/// boundary, not a finding about the file. Refusing to guess is deliberate:
+/// treating NUL-heavy bytes as text would put a compiled object's embedded
+/// symbol names into a `FOUND` set and arm a sweep on bytes no editor should
+/// rewrite.
+fn decode_text(bytes: &[u8]) -> Option<Cow<'_, str>> {
+    match bytes {
+        // UTF-32 declares itself with a UTF-16 mark and two more NULs. Nothing
+        // here decodes it, and reading it as UTF-16 would invent text.
+        [0xFF, 0xFE, 0x00, 0x00, ..] | [0x00, 0x00, 0xFE, 0xFF, ..] => None,
+        [0xFF, 0xFE, rest @ ..] => Some(Cow::Owned(decode_utf16(rest, u16::from_le_bytes))),
+        [0xFE, 0xFF, rest @ ..] => Some(Cow::Owned(decode_utf16(rest, u16::from_be_bytes))),
+        // A UTF-8 mark is dropped rather than kept, so a name at the very start
+        // of the first line is not preceded by a stray U+FEFF.
+        [0xEF, 0xBB, 0xBF, rest @ ..] => Some(String::from_utf8_lossy(rest)),
+        _ if bytes.iter().take(BINARY_SNIFF).any(|b| *b == 0) => None,
+        // Everything else is decoded leniently rather than strictly. A file
+        // that is text apart from one byte in a legacy encoding is still text,
+        // and every other line in it can hold the name verbatim; rejecting the
+        // whole file for that byte would answer a confident zero over bytes
+        // that do contain it, and silently, since the file read fine. Valid
+        // UTF-8 — every source file — is borrowed here, not copied.
+        _ => Some(String::from_utf8_lossy(bytes)),
+    }
+}
+
+/// Decode UTF-16 code units of one endianness.
+///
+/// A trailing odd byte and an unpaired surrogate both become U+FFFD instead of
+/// ending the read: one malformed unit must not stop the rest of the file from
+/// answering, for the same reason the lossy UTF-8 path exists.
+fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> String {
+    let units = bytes.chunks_exact(2).map(|pair| unit([pair[0], pair[1]]));
+    let mut out: String = char::decode_utf16(units)
+        .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .collect();
+    if !bytes.len().is_multiple_of(2) {
+        out.push(char::REPLACEMENT_CHARACTER);
+    }
+    out
+}
+
 /// What to say when a candidate file could not be read.
 ///
 /// Whatever sites it holds are missing from the answer, and nothing else in the
@@ -886,6 +914,28 @@ fn dedupe_symbol_matches(results: &mut Vec<SymbolMatch>) {
     results.retain(|r| seen.insert((r.name.clone(), r.fql_kind.clone(), r.path.clone(), r.line)));
 }
 
+/// A [`FileEntry`] carrying only what a path and a size can say: no symbol
+/// count, no parse coverage, no handle.
+///
+/// [`FileEntry`]: crate::result::FileEntry
+fn plain_file_entry(path: &Path, size: u64) -> crate::result::FileEntry {
+    crate::result::FileEntry {
+        path: path.to_path_buf(),
+        extension: path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_string(),
+        size,
+        depth: Some(path.components().count()),
+        count: None,
+        error_count: None,
+        parse_coverage: None,
+        node_id: None,
+        rev: None,
+    }
+}
+
 /// Deduplicate file entries on path, keeping the freshest occurrence.
 ///
 /// The list is built persistent → file-only → dirty, so for a duplicated
@@ -904,7 +954,7 @@ fn dedupe_file_entries(entries: &mut Vec<crate::result::FileEntry>) {
 mod tests {
     use std::path::Path;
 
-    use super::{Clauses, dedupe_file_entries, holds, in_scope, needle_pieces};
+    use super::{Clauses, decode_text, dedupe_file_entries, holds, in_scope, needle_pieces};
     use crate::result::FileEntry;
 
     #[test]
@@ -978,6 +1028,78 @@ mod tests {
 
         // The same haystack, asked literally, does not care about boundaries.
         assert!(holds("    hash = sha256(buf);", "256", false));
+    }
+
+    /// UTF-16 encodes every ASCII character with a NUL byte, so the sniff that
+    /// keeps object files out would keep a plain document out with them. The
+    /// mark is what tells the two apart.
+    #[test]
+    fn a_declared_utf16_document_is_text_and_an_undeclared_one_is_not() {
+        let little_endian = |s: &str| {
+            let mut out = vec![0xFF, 0xFE];
+            for unit in s.encode_utf16() {
+                out.extend_from_slice(&unit.to_le_bytes());
+            }
+            out
+        };
+        let big_endian = |s: &str| {
+            let mut out = vec![0xFE, 0xFF];
+            for unit in s.encode_utf16() {
+                out.extend_from_slice(&unit.to_be_bytes());
+            }
+            out
+        };
+
+        assert_eq!(
+            decode_text(&little_endian("CONFIG_IDLE=y\n")).as_deref(),
+            Some("CONFIG_IDLE=y\n"),
+            "a little-endian mark is the file declaring its own encoding"
+        );
+        assert_eq!(
+            decode_text(&big_endian("CONFIG_IDLE=y\n")).as_deref(),
+            Some("CONFIG_IDLE=y\n"),
+            "and so is a big-endian one"
+        );
+
+        // Same bytes, mark removed: nothing separates this from an object file.
+        let mut undeclared = little_endian("CONFIG_IDLE=y\n");
+        let _: Vec<u8> = undeclared.drain(..2).collect();
+        assert!(
+            decode_text(&undeclared).is_none(),
+            "without a declaration the NUL bytes decide, and guessing would let \
+             a compiled object arm a sweep"
+        );
+
+        // A UTF-16 mark followed by two NULs is UTF-32, which nothing here
+        // decodes; reading it as UTF-16 would invent text.
+        assert!(decode_text(&[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00]).is_none());
+    }
+
+    /// The other side of the same line, and the two halves of the lenient
+    /// decode that sits behind it.
+    #[test]
+    fn a_nul_means_binary_but_a_stray_legacy_byte_does_not() {
+        let mut object = vec![0x00, 0x01, 0x02];
+        object.extend_from_slice(b"k_sleep\n");
+        assert!(
+            decode_text(&object).is_none(),
+            "an object file embeds the ASCII of its symbol names"
+        );
+
+        let mut legacy = b"// caf".to_vec();
+        legacy.push(0xE9);
+        legacy.extend_from_slice(b"\nk_sleep();\n");
+        let text = decode_text(&legacy).expect("one legacy byte does not make a file binary");
+        assert!(
+            text.contains("k_sleep"),
+            "the other lines are plain ASCII and must still answer: {text:?}"
+        );
+
+        // A UTF-8 mark is dropped, so a name at the very start of the file is
+        // not preceded by a stray U+FEFF.
+        let mut marked = vec![0xEF, 0xBB, 0xBF];
+        marked.extend_from_slice(b"k_sleep\n");
+        assert_eq!(decode_text(&marked).as_deref(), Some("k_sleep\n"));
     }
 
     /// The prune must expand a bare directory the way the clause pipeline does.
