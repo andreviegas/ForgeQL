@@ -436,7 +436,7 @@ changes.
 
 ## fql_kind Values
 
-`fql_kind` is the language-agnostic kind field. Raw `node_kind` values (tree-sitter grammar names) are language-specific, and no row of the indexed backend every session queries stores them — so `WHERE`, `ORDER BY` and `GROUP BY` on `node_kind` are **refused** on `FIND symbols`, `FIND globals`, `FIND usages` and `FIND files`, rather than reporting a confident absence. (`SHOW outline`/`members`/`callees` still accept it and match nothing.) Use `fql_kind`.
+`fql_kind` is the language-agnostic kind field. Raw `node_kind` values (tree-sitter grammar names) are language-specific, and no row of the indexed backend every session queries stores them — so `WHERE`, `ORDER BY` and `GROUP BY` on `node_kind` are **refused** on `FIND symbols`, `FIND globals`, `FIND usages` and `FIND files`, rather than reporting a confident absence. (`SHOW outline`/`members`/`callees`, and `FIND callees OF` which is an alias for the last, still accept it and match nothing.) Use `fql_kind`.
 
 | `fql_kind` | Matches |
 |---|---|

@@ -314,7 +314,7 @@ const GAP_COVERAGE: &[(Gap, &str)] = &[
     (
         Gap::DirtySession,
         "query_set_valued_fields::an_uncommitted_row_is_found_by_a_set_field_query \
-     and query_core_field_tier's dirty case",
+     and query_core_field_tier::an_uncommitted_row_is_found_by_a_language_predicate",
     ),
     (
         Gap::ShortColumn,
@@ -347,19 +347,43 @@ fn every_declared_gap_is_covered() {
              test reaches its fallback, or why none can"
         );
     }
+    // Every suite a coverage note is allowed to point at. A note naming a
+    // test that has been renamed or deleted is worse than no note: it reads
+    // like proof and is not, which is the shape this whole file exists to
+    // catch.
+    let suites = concat!(
+        include_str!("field_tier_table.rs"),
+        include_str!("query_set_valued_fields.rs"),
+        include_str!("query_core_field_tier.rs"),
+    );
     for (gap, note) in GAP_COVERAGE {
-        // A note either names a test or says NOT CONSTRUCTIBLE and why.
-        // "" and a vague hand-wave are the two ways this list stops meaning
-        // anything, so both are refused here.
-        assert!(
-            note.contains("NOT CONSTRUCTIBLE") || note.contains('_'),
-            "{gap:?}: the coverage note must name a test function or begin \
-             NOT CONSTRUCTIBLE with the reason, got: {note}"
-        );
         assert!(
             !gap.fallback().is_empty(),
             "{gap:?} names no fallback mechanism"
         );
+        if note.contains("NOT CONSTRUCTIBLE") {
+            continue;
+        }
+        // A note may qualify a test by suite (`suite::test_name`); the suite
+        // is a module path, not a function, so only the last segment names
+        // something a `fn` line can be found for.
+        let named: Vec<&str> = note
+            .split(|c: char| c.is_whitespace() || ",;()`".contains(c))
+            .filter_map(|t| t.rsplit("::").next())
+            .filter(|t| t.contains('_') && t.len() > 12)
+            .collect();
+        assert!(
+            !named.is_empty(),
+            "{gap:?}: the coverage note must name the test that reaches its \
+             fallback, or begin NOT CONSTRUCTIBLE with the reason, got: {note}"
+        );
+        for test_name in named {
+            assert!(
+                suites.contains(&format!("fn {test_name}(")),
+                "{gap:?}: the note names `{test_name}`, which no suite defines \
+                 — it was renamed or deleted and the note still reads like proof"
+            );
+        }
     }
 }
 
@@ -559,12 +583,21 @@ fn node_kind_is_refused_on_the_four_find_verbs_that_can_refuse() {
 
     // The stated boundary, asserted rather than assumed: this verb routes to
     // SHOW callees, which answers with a value and has nowhere to put an
-    // error, so it accepts the field and matches nothing. If that ever starts
-    // erroring, the docs claiming otherwise have to move with it.
+    // error, so it accepts the field and matches nothing.
+    //
+    // `is_ok()` alone would not catch the boundary moving: that path turns
+    // every failure into an error payload rather than an `Err`, so the answer
+    // itself has to be inspected. This fixture's `sym_0` is `return 0;`, so
+    // the word "error" cannot appear in a legitimate callees answer for it.
+    let answered = match t.try_fql("FIND callees OF 'sym_0' WHERE node_kind = 'x'") {
+        Ok(ForgeQLResult::Show(v)) => format!("{v:?}"),
+        other => panic!("FIND callees answered unexpectedly: {other:?}"),
+    };
     assert!(
-        t.try_fql("FIND callees OF 'sym_0' WHERE node_kind = 'x'")
-            .is_ok(),
-        "FIND callees now refuses node_kind — the documented boundary moved"
+        !answered.contains("error"),
+        "FIND callees now reports an error for node_kind — the documented \
+         boundary moved, and the four docs saying it accepts the field have \
+         to move with it: {answered}"
     );
 }
 

@@ -22,14 +22,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SHOW members` and `SHOW callees` answer with a value rather than an error
   and still accept the field, matching nothing. Serving it would mean storing
   it, which is an index-output change and is not part of this release.
-- `FIND symbols` and `FIND globals` refuse a `GROUP BY` on a field no indexed
-  row carries, rather than answering it. Grouping previously reported exactly
-  one group, named by the empty string, holding every row — a shape
-  indistinguishable from a real result. The accepted set is the same one
-  `WHERE` and `ORDER BY` already used: a core field, an enrichment field of any
-  registered language, or an extra column some segment stores. `FIND files`
-  groups file rows and is unchanged apart from `node_kind`; `FIND usages`
-  groups occurrence rows, where `role` and `file` are the useful keys.
+- `FIND symbols` and `FIND globals` refuse a `GROUP BY` on a field a symbol row
+  cannot resolve, rather than answering it. Grouping previously reported
+  exactly one group, named by the empty string, holding every row — a shape
+  indistinguishable from a real result, and one that `GROUP BY size`,
+  `GROUP BY kind` and `GROUP BY marker` all produced. Grouping keys a row
+  through its string fields only, so the accepted set is exactly those: `name`,
+  `fql_kind`, `path`/`file`, `language`/`lang`, `node_id`, any enrichment field,
+  and any extra column a segment stores. `line`, `usages` and `count` are
+  numeric and are not groupable; `size`, `depth` and `extension` belong to
+  `FIND files`, which groups file rows through its own path and is unchanged
+  apart from `node_kind`. `FIND usages` groups occurrence rows, where `role`
+  and `file` are the useful keys.
+- `ORDER BY kind` on `FIND symbols` is refused rather than silently sorted by
+  name. `kind` is a `SHOW outline` / `SHOW members` column, not an alias of
+  `fql_kind` on a symbol row: it resolved on no row, so every symbol tied and
+  the result came back in alphabetical order under a "top N by kind" label.
 - `text` and `content` are refused in `ORDER BY` and `GROUP BY` as well as in
   `WHERE`. They were already rejected in `WHERE` on FIND queries for the same
   reason — no row of a FIND result carries source text — but the other two

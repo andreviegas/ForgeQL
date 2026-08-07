@@ -69,16 +69,19 @@ pub const CORE_WHERE_FIELDS: &[&str] = &[
 
 /// Fields that can order a `FIND symbols` result directly.
 ///
-/// Each resolves on every `SymbolMatch` via `field_str` / `field_num`.
-/// File- and outline-only fields (`size`, `depth`, `extension`) are
-/// deliberately absent — they never carry a per-symbol value, so ordering
-/// symbols by them is meaningless.  The columnar backend rejects an ORDER BY
-/// field that is neither listed here, a known enrichment field, nor a
-/// materialised extra column, rather than silently falling back to name order.
+/// Each resolves on every `SymbolMatch` via `field_str` / `field_num`, and
+/// that is the entry condition: a name that resolves on no row ties every
+/// symbol and hands back name order under a "top N by <field>" label, which
+/// is why `kind` is absent — it is an outline/members column, not an alias
+/// of `fql_kind` on a symbol row. File- and outline-only fields (`size`,
+/// `depth`, `extension`) are absent for the same reason. `node_kind` stays
+/// listed because the legacy backend does resolve it; the columnar backend
+/// refuses it separately. The columnar backend rejects an ORDER BY field
+/// that is neither listed here, a known enrichment field, nor a materialised
+/// extra column, rather than silently falling back to name order.
 pub const SORTABLE_SYMBOL_FIELDS: &[&str] = &[
     "name",
     "fql_kind",
-    "kind",
     "node_kind",
     "node_id",
     "path",
@@ -88,6 +91,29 @@ pub const SORTABLE_SYMBOL_FIELDS: &[&str] = &[
     "line",
     "usages",
     "count",
+];
+
+/// Fields that can group a `FIND symbols` result directly.
+///
+/// Narrower than [`SORTABLE_SYMBOL_FIELDS`], and for a sharper reason.
+/// `apply_group_by` keys each row through `field_str` alone and defaults an
+/// unresolved one to the empty string, so grouping on a name a symbol row
+/// cannot resolve does not return nothing — it returns exactly one group,
+/// named by the empty string, holding every row. That reads like an answer.
+/// The entry condition is therefore literal: the name must be one
+/// `SymbolMatch::field_str` resolves. `line`, `usages` and `count` resolve
+/// only through `field_num` and so are absent; enrichment fields and stored
+/// extra columns are accepted separately, by the backend that knows it has
+/// them.
+pub const GROUPABLE_SYMBOL_FIELDS: &[&str] = &[
+    "name",
+    "fql_kind",
+    "node_kind",
+    "node_id",
+    "path",
+    "file",
+    "language",
+    "lang",
 ];
 
 // -----------------------------------------------------------------------

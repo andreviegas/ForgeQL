@@ -226,8 +226,7 @@ impl ColumnarStorage {
             return Ok(());
         };
         let field = field.as_str();
-        if crate::filter::CORE_WHERE_FIELDS.contains(&field)
-            || crate::filter::SORTABLE_SYMBOL_FIELDS.contains(&field)
+        if crate::filter::GROUPABLE_SYMBOL_FIELDS.contains(&field)
             || crate::storage::legacy::is_known_enrichment_field(field)
             || self.segments.iter().any(|s| s.has_extra_col(field))
             || self
@@ -239,10 +238,12 @@ impl ColumnarStorage {
             return Ok(());
         }
         anyhow::bail!(
-            "unknown GROUP BY field '{field}': no indexed row carries it, so \
-             every symbol would fall into one empty-named group holding the \
-             whole result.  Group by a core field (file, fql_kind, name, \
-             language, …) or an enrichment field."
+            "GROUP BY '{field}' cannot be answered: a symbol row does not \
+             resolve that name, so every symbol would fall into one \
+             empty-named group holding the whole result.  Group by \
+             name, fql_kind, file, language or node_id, or by any enrichment \
+             field.  'line', 'usages' and 'count' are numeric and are not \
+             groupable; 'size', 'depth' and 'extension' belong to FIND files."
         );
     }
     /// Stage 4b (BUG-006 U3): overwrite each row's `usages_count` with the
