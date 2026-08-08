@@ -46,7 +46,24 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   opts back into every node, so had `kind` not been carried into that decision
   it would have filtered the structural tree while `fql_kind` filtered the
   file — `WHERE kind = 'guard'` answering zero where `WHERE fql_kind = 'guard'`
-  answers three, for the same file and the same field.
+  answers three, for the same file and the same field. `GROUP BY` resolves the
+  alias in one place for the same reason: grouping has two implementations,
+  one the backend runs for `fql_kind` and a generic one for everything else,
+  so the alias is spelled to its canonical name as the clause is parsed rather
+  than taught to each. Left to the generic path it rendered `"(empty)",9`
+  where `GROUP BY fql_kind` rendered three real groups — the fabricated group
+  this release exists to refuse, reintroduced at the renderer.
+- `GROUP BY node_id` groups by the handle instead of collapsing. The projection
+  that builds each row's group key read the enrichment map for any field it did
+  not name explicitly, and `node_id` is not in it, so every row keyed to the
+  empty string. It now falls back to the same row resolver `WHERE` and
+  `ORDER BY` use, so a field the grouping check admits cannot arrive at the
+  renderer unresolved. Rows that carry no handle — kinds the index does not
+  make addressable — still group under `(empty)`, which is the honest key for
+  a row that has none.
+- The `ORDER BY` and `GROUP BY` refusal messages list the accepted fields from
+  the same constants that decide acceptance, rather than restating them. Both
+  lists had already drifted from the fields this release added.
 - `text` and `content` are refused in `ORDER BY` and `GROUP BY` as well as in
   `WHERE`. They were already rejected in `WHERE` on FIND queries for the same
   reason — no row of a FIND result carries source text — but the other two

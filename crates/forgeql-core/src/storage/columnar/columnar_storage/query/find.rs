@@ -27,6 +27,22 @@ use crate::storage::columnar::segment_builder::ZONEMAP_NUMERIC_FIELDS;
 /// that does store it.
 const NODE_KIND: &str = "node_kind";
 
+/// Render an accepted-field list for a refusal message, straight from the
+/// const that decides acceptance.
+///
+/// A refusal that names the alternatives is only useful while the names are
+/// the real ones, and a hand-written list drifts the moment a field is added.
+/// [`NODE_KIND`] is dropped because it is refused before either check runs, so
+/// offering it would point the agent at another error.
+fn accepted_list(fields: &[&str]) -> String {
+    fields
+        .iter()
+        .filter(|f| **f != NODE_KIND)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Refuse a `node_kind` predicate wherever one can reach this backend.
 ///
 /// `WHERE`, `ORDER BY` and `GROUP BY` all have to be checked, and for the same
@@ -203,13 +219,19 @@ impl ColumnarStorage {
         {
             return Ok(());
         }
+        // Listed from the const rather than restated, so the set an agent is
+        // told about cannot drift from the set actually accepted. `node_kind`
+        // is filtered out: it is in the const for the legacy backend and is
+        // refused here before this check runs, so naming it would offer a
+        // field that errors.
+        let sortable = accepted_list(crate::filter::SORTABLE_SYMBOL_FIELDS);
         anyhow::bail!(
             "unknown ORDER BY field '{field}': it is not a sortable symbol field \
              and no indexed row carries an enrichment column with that name, so \
              every symbol would tie and fall back to name order.  Sortable \
-             fields: name, fql_kind, path, file, line, usages, count, plus any \
-             enrichment field (lines, param_count, branch_count, …).  'size' and \
-             'depth' apply to FIND files, not FIND symbols."
+             fields: {sortable}, plus any enrichment field (lines, param_count, \
+             branch_count, …).  'size' and 'depth' apply to FIND files, not \
+             FIND symbols."
         );
     }
 
@@ -237,13 +259,14 @@ impl ColumnarStorage {
         {
             return Ok(());
         }
+        let groupable = accepted_list(crate::filter::GROUPABLE_SYMBOL_FIELDS);
         anyhow::bail!(
             "GROUP BY '{field}' cannot be answered: a symbol row does not \
              resolve that name, so every symbol would fall into one \
              empty-named group holding the whole result.  Group by \
-             name, fql_kind, file, language or node_id, or by any enrichment \
-             field.  'line', 'usages' and 'count' are numeric and are not \
-             groupable; 'size', 'depth' and 'extension' belong to FIND files."
+             {groupable}, or by any enrichment field.  'line', 'usages' and \
+             'count' are numeric and are not groupable; 'size', 'depth' and \
+             'extension' belong to FIND files."
         );
     }
     /// Stage 4b (BUG-006 U3): overwrite each row's `usages_count` with the

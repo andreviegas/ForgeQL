@@ -243,10 +243,24 @@ impl SymbolRow {
             group_key: ctx.group_by_field.and_then(|field| match field {
                 "language" | "lang" => row.language.clone(),
                 "node_kind" => row.node_kind.clone(),
-                "fql_kind" => row.fql_kind.clone(),
+                "fql_kind" | "kind" => row.fql_kind.clone(),
                 "name" => Some(row.name.clone()),
                 "file" | "path" => row.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
-                _ => row.fields.get(field).cloned(),
+                // The raw handle, deliberately — not the surfaced block alias
+                // used for the `node_id` column below. The collapse pass keys
+                // rows through `field_str`, which reads the raw handle, and
+                // the alias can map two distinct handles onto one string: key
+                // the render differently and the two groups the collapse
+                // emitted merge into one rendered line, so the count no longer
+                // matches the lines. One key on both sides or neither.
+                "node_id" => row.node_id.clone(),
+                // The enrichment map is not the whole row. A groupable field
+                // this arm list does not name resolves through the same
+                // `ClauseTarget` the WHERE and ORDER BY clauses use, so a
+                // field the grouping check admits cannot arrive here
+                // unresolved and be keyed as one `(empty)` group holding
+                // every row.
+                _ => crate::filter::ClauseTarget::field_str(row, field).map(str::to_owned),
             }),
             role: row.fields.get("role").cloned(),
             node_id: surface_block_alias(row),

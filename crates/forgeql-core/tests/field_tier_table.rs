@@ -736,6 +736,72 @@ fn kind_answers_exactly_as_fql_kind_does() {
     );
 }
 
+/// A `GROUP BY` this release declares groupable must render real groups, not
+/// one fabricated group holding everything.
+///
+/// CSV is the default output format, and the compact renderer keys each row
+/// through `group_key`, falling back to the literal `(empty)` when the row
+/// could not resolve the field. That is exactly the shape the columnar
+/// backend's own refusal text calls out as indistinguishable from an answer —
+/// so a field admitted to `GROUPABLE_SYMBOL_FIELDS` has to survive the render
+/// too, or the refusal was traded for a fabrication one layer further out.
+#[test]
+fn newly_groupable_fields_render_real_groups() {
+    let mut t = guarded_workspace(3);
+    let mut csv = |fql: &str| forgeql_core::compact::to_compact(&t.exec(fql));
+
+    // `kind` is an alias of `fql_kind`: the two spellings must render the
+    // same groups, not merely both render something.
+    let by_alias = csv("FIND symbols GROUP BY kind");
+    let by_canonical = csv("FIND symbols GROUP BY fql_kind");
+    assert!(
+        !by_canonical.contains("(empty)"),
+        "`GROUP BY fql_kind` itself fabricated a group, so this proves nothing:\n{by_canonical}"
+    );
+    assert_eq!(
+        by_alias, by_canonical,
+        "`GROUP BY kind` must render the same groups as `GROUP BY fql_kind`"
+    );
+
+    // `node_id` is groupable by the same table and collapsed the same way.
+    //
+    // A row that genuinely carries no handle — a kind the index does not make
+    // addressable — still groups under `(empty)`, and that is an honest key
+    // for "this row has no node_id". The defect was every row landing there
+    // because the projection resolved the field for none of them.
+    // Counted against the ungrouped result rather than asserted to be "more
+    // than one": a handle is unique per node, so every row that carries one
+    // is its own group, and every row that does not belongs to `(empty)`.
+    // Anything looser passes while most rows still fail to resolve.
+    let by_node_id = csv("FIND symbols GROUP BY node_id");
+    let ungrouped = query(&mut t, "FIND symbols LIMIT 1000");
+    let with_handle = ungrouped
+        .results
+        .iter()
+        .filter(|r| r.node_id.is_some())
+        .count();
+    let without_handle = ungrouped.results.len() - with_handle;
+
+    let resolved_groups = by_node_id
+        .lines()
+        .filter(|l| l.starts_with("\"n") && l.contains('.'))
+        .count();
+    assert_eq!(
+        resolved_groups, with_handle,
+        "every row carrying a handle must be its own group; \
+         {with_handle} rows have one and {resolved_groups} groups resolved:\n{by_node_id}"
+    );
+
+    let empty_count: usize = by_node_id
+        .lines()
+        .find_map(|l| l.strip_prefix("\"(empty)\","))
+        .map_or(0, |n| n.trim().parse().unwrap_or(0));
+    assert_eq!(
+        empty_count, without_handle,
+        "`(empty)` must hold exactly the rows that carry no handle:\n{by_node_id}"
+    );
+}
+
 /// The set of rows an outline predicate can act on must not depend on which
 /// spelling of the kind field the predicate uses.
 ///
