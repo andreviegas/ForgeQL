@@ -26,9 +26,10 @@ impl ForgeQLEngine {
         clauses: &Clauses,
     ) -> serde_json::Value {
         let context_lines = clauses.depth.unwrap_or(DEFAULT_CONTEXT_LINES);
+        let lookup = crate::filter::clauses_for_lookup::<crate::result::SourceLine>(clauses);
         engine
-            .resolve_symbol(symbol, clauses, workspace.root())
-            .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
+            .resolve_symbol(symbol, &lookup, workspace.root())
+            .and_then(|opt| opt.ok_or_else(|| super::lookup_missed(symbol, &lookup)))
             .and_then(|loc| {
                 let bytes = read_bytes_for_show(workspace, &loc)?;
                 show::show_context(
@@ -51,9 +52,10 @@ impl ForgeQLEngine {
         symbol: &str,
         clauses: &Clauses,
     ) -> serde_json::Value {
+        let lookup = crate::filter::clauses_for_lookup::<crate::result::SourceLine>(clauses);
         engine
-            .resolve_symbol(symbol, clauses, workspace.root())
-            .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
+            .resolve_symbol(symbol, &lookup, workspace.root())
+            .and_then(|opt| opt.ok_or_else(|| super::lookup_missed(symbol, &lookup)))
             .and_then(|loc| {
                 let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
                 let req = show::ShowRequest {
@@ -79,9 +81,10 @@ impl ForgeQLEngine {
         symbol: &str,
         clauses: &Clauses,
     ) -> serde_json::Value {
+        let lookup = crate::filter::clauses_for_lookup::<crate::result::SourceLine>(clauses);
         engine
-            .resolve_body_symbol(symbol, clauses, workspace.root())
-            .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
+            .resolve_body_symbol(symbol, &lookup, workspace.root())
+            .and_then(|opt| opt.ok_or_else(|| super::lookup_missed(symbol, &lookup)))
             .and_then(|loc| {
                 let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
                 let req = show::ShowRequest {

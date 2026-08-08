@@ -135,6 +135,30 @@ pub fn reject_unresolvable_fields<T: ClauseTarget>(
     for pred in &clauses.where_predicates {
         check_clause_field::<T>(verb, "WHERE", &pred.field, ClauseKind::Where)?;
     }
+    reject_unresolvable_shaping_fields::<T>(verb, clauses)
+}
+
+/// Refuse an `ORDER BY`, `GROUP BY` or `HAVING` naming a field this row shape
+/// cannot resolve.
+///
+/// The half of [`reject_unresolvable_fields`] that applies to a verb whose
+/// `WHERE` is shared with a symbol lookup. Those three clauses are not shared:
+/// no resolver reads them, so they can only ever be answered from the returned
+/// rows, and the row shape is the whole universe of names they may use — the
+/// same standard a filter-only verb is held to. `WHERE` on such a verb is
+/// split instead, by [`clauses_for_rows`] and [`clauses_for_lookup`].
+///
+/// # Errors
+///
+/// Returns an error naming the field, the clause and the row shape when the
+/// clause names something the shape cannot resolve.
+pub fn reject_unresolvable_shaping_fields<T: ClauseTarget>(
+    verb: &str,
+    clauses: &Clauses,
+) -> anyhow::Result<()> {
+    if T::OPEN_FIELDS {
+        return Ok(());
+    }
     if let Some(ref order) = clauses.order_by {
         check_clause_field::<T>(verb, "ORDER BY", &order.field, ClauseKind::AfterGrouping)?;
     }
@@ -202,28 +226,22 @@ fn is_post_group(field: &str) -> bool {
 /// Refuse a clause naming a field the table itself declares unanswerable.
 ///
 /// This is the check for the verbs whose clause is NOT only a row filter.
-/// `SHOW members`, `SHOW callees` and the reading verbs pass the same clause to
-/// the storage engine to pick which symbol `OF` names, and then apply it again
-/// to the rows that came back. Gating those on their own row shape would refuse
-/// `SHOW members OF 'Foo' WHERE language = 'cpp'`, which the legacy backend
-/// answers by scoping the lookup. So what is refused there is only what no row
-/// of any shape can answer: the [`crate::field_tiers::refused_fields`] set —
-/// `node_kind`, whose value nothing in the index stores, and the names
-/// belonging to another shape (`size`, `depth`, `extension`, `signature`,
-/// `marker`, `declaration`) that reached these verbs only because
-/// `CORE_WHERE_FIELDS` is a union.
+/// `SHOW members`, `SHOW callees` and the reading verbs pass one clause to two
+/// consumers — the lookup that picks which symbol `OF` names, and the rows that
+/// come back — so neither shape alone is the universe of legitimate names, and
+/// the row-shape check would refuse `SHOW members OF 'Foo' WHERE language =
+/// 'cpp'`, the documented way to disambiguate a name across languages. What is
+/// refused here is only what NEITHER consumer can answer: the
+/// [`crate::field_tiers::refused_fields`] set — `node_kind`, whose value
+/// nothing in the index stores, and the names belonging to some third shape
+/// (`size`, `depth`, `extension`, `signature`, `marker`, `declaration`) that
+/// reached these verbs only because `CORE_WHERE_FIELDS` is a union.
 ///
-/// KNOWN DEFECT, not fixed here and not hidden either: on the columnar backend
-/// — the one every session queries — resolution does not evaluate these
-/// predicates at all (`query/resolve.rs` applies only posted-enrichment `=`),
-/// so `WHERE language = 'cpp'` scopes nothing and then filters every returned
-/// row away, because a members row and a source line carry no `language`. The
-/// answer is an empty one for a symbol that exists. Refusing it here would
-/// break the legacy backend, where the predicate does scope the lookup;
-/// dropping it before the row filter would answer as though it had been
-/// applied, which is worse. The fix belongs in the resolver — evaluate the
-/// predicate per candidate, as `storage/legacy/resolve.rs` already does — and
-/// until it lands this check deliberately leaves the predicate alone.
+/// It runs on the whole clause, before [`clauses_for_rows`] and
+/// [`clauses_for_lookup`] split the `WHERE` between the two consumers. That
+/// order is deliberate: a refused name would otherwise fall to the lookup half
+/// and be reported as a symbol nothing matched, when the honest answer is that
+/// the field cannot be asked about at all.
 ///
 /// Minus what THIS shape carries, which is the other half of the rule. The
 /// table's verdict is about symbol rows, and several of those names are the
@@ -303,6 +321,97 @@ fn reject_if_refused<T: ClauseTarget>(
         anyhow::bail!("{}", tier.refusal(written, clause, verb));
     }
     Ok(())
+}
+
+// -----------------------------------------------------------------------
+// Splitting a clause between the lookup and the rows
+// -----------------------------------------------------------------------
+
+/// Whether a clause naming `written` can be answered from a `T` row.
+///
+/// An open shape answers `true` for every name: it cannot enumerate itself, so
+/// it never claims a name is beyond it.
+fn answers_on<T: ClauseTarget>(written: &str) -> bool {
+    if T::OPEN_FIELDS {
+        return true;
+    }
+    let field = crate::field_tiers::canonical(written);
+    T::STR_FIELDS.contains(&field) || T::NUM_FIELDS.contains(&field)
+}
+
+/// The half of a `SHOW … OF 'name'` `WHERE` clause the returned rows answer.
+///
+/// `SHOW members`, `SHOW callees` and the reading verbs hand one clause to two
+/// consumers: the lookup that decides which symbol `OF` names, and the rows
+/// that come back from it. The two carry different fields, and giving the whole
+/// clause to both is what made `SHOW members OF 'Foo' WHERE language = 'cpp'`
+/// answer zero for a C++ `Foo` — the lookup ignored the predicate and then
+/// every members row, which carries no `language`, failed it.
+///
+/// So each predicate goes to exactly one consumer, decided by the row shape:
+/// a name the rows carry filters the rows, and a name they do not carry is
+/// aimed at the symbol and travels to the lookup as [`clauses_for_lookup`].
+/// Together the two halves are the whole clause — no predicate is dropped, and
+/// none is applied twice.
+///
+/// `WHERE` only. `ORDER BY`, `GROUP BY` and `HAVING` shape the answer and never
+/// the lookup, which reads none of them, so they stay whole and are checked
+/// against the row shape by [`reject_unresolvable_shaping_fields`].
+#[must_use]
+pub fn clauses_for_rows<T: ClauseTarget>(clauses: &Clauses) -> Clauses {
+    let mut out = clauses.clone();
+    out.where_predicates.retain(|p| answers_on::<T>(&p.field));
+    out
+}
+
+/// The half of the same clause only the addressed symbol answers.
+///
+/// The complement of [`clauses_for_rows`], and the thing the storage engine's
+/// `resolve_*` methods are given. A candidate must satisfy every predicate
+/// handed over here, so a name no candidate row carries excludes them all and
+/// the lookup fails — which is reported as a lookup that matched nothing, not
+/// as an empty answer.
+///
+/// `ORDER BY`, `GROUP BY` and `HAVING` are stripped rather than passed through:
+/// no resolver reads them, and leaving them on a value named "what the lookup
+/// gets" would suggest otherwise.
+#[must_use]
+pub fn clauses_for_lookup<T: ClauseTarget>(clauses: &Clauses) -> Clauses {
+    let mut out = clauses.clone();
+    out.where_predicates.retain(|p| !answers_on::<T>(&p.field));
+    out.order_by = None;
+    out.group_by = None;
+    out.having_predicates.clear();
+    out
+}
+
+/// Render a predicate list back as the clause an agent wrote, for a message
+/// that has to say which filter excluded everything.
+#[must_use]
+pub fn describe_predicates(predicates: &[crate::ir::Predicate]) -> String {
+    predicates
+        .iter()
+        .map(|p| {
+            let op = match p.op {
+                CompareOp::Eq => "=",
+                CompareOp::NotEq => "!=",
+                CompareOp::Like => "LIKE",
+                CompareOp::NotLike => "NOT LIKE",
+                CompareOp::Matches => "MATCHES",
+                CompareOp::NotMatches => "NOT MATCHES",
+                CompareOp::Gt => ">",
+                CompareOp::Gte => ">=",
+                CompareOp::Lt => "<",
+                CompareOp::Lte => "<=",
+            };
+            match &p.value {
+                PredicateValue::String(s) => format!("WHERE {} {op} '{s}'", p.field),
+                PredicateValue::Number(n) => format!("WHERE {} {op} {n}", p.field),
+                PredicateValue::Bool(b) => format!("WHERE {} {op} {b}", p.field),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // -----------------------------------------------------------------------

@@ -54,10 +54,46 @@ fn split_qualified_name(name: &str) -> Option<(&str, &str)> {
 // Public resolvers
 // -----------------------------------------------------------------------
 
+/// The message when a name exists but every candidate for it was filtered away.
+///
+/// Names the clause that did it, not merely that a clause existed: an agent
+/// told only "filters removed everything" has to guess which of `IN`,
+/// `EXCLUDE` and `WHERE` to relax. The columnar backend words the same
+/// situation from `ForgeQLEngine::lookup_missed`, and both name the predicate.
+fn eliminated_by_filters(name: &str, clauses: &Clauses) -> String {
+    use std::fmt::Write;
+
+    let mut hint = format!(
+        "symbol '{name}' exists in the index \
+         but all candidates were eliminated by filters."
+    );
+    if let Some(ref glob) = clauses.in_glob {
+        let _ = write!(hint, " IN '{glob}' excluded all matches.");
+    }
+    for glob in &clauses.exclude_globs {
+        let _ = write!(hint, " EXCLUDE '{glob}' removed matches.");
+    }
+    if !clauses.where_predicates.is_empty() {
+        let _ = write!(
+            hint,
+            " {} filtered all remaining candidates.",
+            crate::filter::describe_predicates(&clauses.where_predicates)
+        );
+    }
+    let _ = write!(
+        hint,
+        " Try removing filters or use \
+         FIND symbols WHERE name = '{name}' to see all occurrences."
+    );
+    hint
+}
+
 /// Resolve a symbol name to a single [`IndexRow`] using SHOW command clauses.
 ///
 /// 1. Finds all definition rows matching `name` in the index.
-/// 2. Filters by `IN`/`EXCLUDE` globs and `WHERE` predicates from `clauses`.
+/// 2. Filters by `IN`/`EXCLUDE` globs and `WHERE` predicates from `clauses` —
+///    which, for a SHOW verb, is the lookup half its caller split off, never
+///    the whole clause the agent wrote.
 /// 3. If the surviving candidates span multiple languages, returns an error
 ///    asking the user to disambiguate with `WHERE language = '...'` or
 ///    `IN '*.ext'`.
@@ -109,8 +145,16 @@ pub(super) fn resolve_symbol<'a>(
         );
     }
 
-    // Single candidate — fast path, skip filtering.
-    if candidates.len() == 1 {
+    // Single candidate — skip filtering only when there is nothing to filter
+    // by. A lone candidate is still a candidate: `WHERE language = 'python'`
+    // against the one C++ definition of a name has to exclude it, not wave it
+    // through for having been unambiguous, and the same goes for an `IN` that
+    // names a directory it does not live in.
+    if candidates.len() == 1
+        && clauses.where_predicates.is_empty()
+        && clauses.in_glob.is_none()
+        && clauses.exclude_globs.is_empty()
+    {
         return Ok(candidates[0]);
     }
 
@@ -128,26 +172,7 @@ pub(super) fn resolve_symbol<'a>(
         .collect();
 
     if filtered.is_empty() {
-        use std::fmt::Write;
-        let mut hint = format!(
-            "symbol '{name}' exists in the index \
-             but all candidates were eliminated by filters."
-        );
-        if let Some(ref glob) = clauses.in_glob {
-            let _ = write!(hint, " IN '{glob}' excluded all matches.");
-        }
-        for glob in &clauses.exclude_globs {
-            let _ = write!(hint, " EXCLUDE '{glob}' removed matches.");
-        }
-        if !clauses.where_predicates.is_empty() {
-            hint.push_str(" WHERE predicates filtered all remaining candidates.");
-        }
-        let _ = write!(
-            hint,
-            " Try removing filters or use \
-             FIND symbols WHERE name = '{name}' to see all occurrences."
-        );
-        bail!("{hint}");
+        bail!("{}", eliminated_by_filters(name, clauses));
     }
 
     // Prefer actual definitions (non-empty fql_kind) over reference-only

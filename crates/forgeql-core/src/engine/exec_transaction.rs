@@ -718,11 +718,6 @@ impl ForgeQLEngine {
         let session = self.require_session(sid)?;
         let worktree = session.worktree_path.clone();
 
-        let diff = match of {
-            Some(rev) => git::commit_diff(&worktree, rev)?,
-            None => git::worktree_diff(&worktree)?,
-        };
-
         // Split the predicates: `text` targets diff lines, everything else
         // targets the file rows.
         let (text_preds, row_preds): (Vec<_>, Vec<_>) = clauses
@@ -734,13 +729,20 @@ impl ForgeQLEngine {
         let mut row_clauses = clauses.clone();
         row_clauses.where_predicates = row_preds;
 
-        // `text` is gone from `row_clauses` by now — it filters diff lines, not
-        // file rows. Everything left has to be a field a diff row carries, or
-        // the filter drops every file and reports an empty diff.
+        // Refused before the diff is computed. `text` is gone from
+        // `row_clauses` by now — it filters diff lines, not file rows — and
+        // everything left has to be a field a diff row carries, or the filter
+        // drops every file and reports an empty diff. Checking first means the
+        // refusal does not depend on there being a diff to compute.
         crate::filter::reject_unresolvable_fields::<crate::result::DiffFileEntry>(
             "SHOW DIFF",
             &row_clauses,
         )?;
+
+        let diff = match of {
+            Some(rev) => git::commit_diff(&worktree, rev)?,
+            None => git::worktree_diff(&worktree)?,
+        };
         let mut rows: Vec<crate::result::DiffFileEntry> = diff
             .iter()
             .map(|f| crate::result::DiffFileEntry {

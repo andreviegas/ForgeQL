@@ -4,6 +4,7 @@ use roaring::RoaringBitmap;
 
 use std::path::Path;
 
+use crate::filter::eval_predicate;
 use crate::ir::{Clauses, CompareOp, PredicateValue};
 use crate::storage::SymbolLocation;
 use crate::storage::columnar::columnar_storage::ColumnarStorage;
@@ -20,8 +21,9 @@ impl ColumnarStorage {
     /// Algorithm:
     /// 1. Split qualified name (`Owner::member` / `Owner.member`).
     /// 2. FST name lookup via the overlay bitmap.
-    /// 3. Filter candidates by enclosing-type and IN/EXCLUDE glob. WHERE
-    ///    predicates are NOT applied — they filter SHOW output, not resolution.
+    /// 3. Filter candidates by enclosing-type, IN/EXCLUDE glob, and every
+    ///    `WHERE` predicate in `clauses` — which for a SHOW verb is the lookup
+    ///    half its caller split off, never the whole clause the agent wrote.
     /// 4. Collect two lists — `all` (every passing candidate) and `preferred`
     ///    (candidates whose `fql_kind` is in `prefer_kinds`, if given).
     /// 5. Pick: last preferred candidate → last definition candidate → last overall.
@@ -153,9 +155,9 @@ impl ColumnarStorage {
             let Some(seg) = self.segments.get(seg_idx as usize) else {
                 continue;
             };
-            if self.overlay.segments().get(seg_idx as usize).is_none() {
+            let Some(meta) = self.overlay.segments().get(seg_idx as usize) else {
                 continue;
-            }
+            };
             // Enrichment-postings prefilter — bitmap intersection per allowlisted
             // field before any per-row work.  Mirrors the same step in materialize_all.
             let local_rows = seg.prefilter_enrichment_postings(local_rows.clone(), clauses);
@@ -174,11 +176,32 @@ impl ColumnarStorage {
                     continue;
                 }
 
-                // WHERE predicates on a SHOW statement filter the output rows
-                // (body lines, callees, members), never the addressed symbol
-                // row itself — evaluating them against the candidate row turned
-                // every filtered SHOW into a false symbol-not-found, so none
-                // are applied during resolution.
+                // A `WHERE` predicate on a SHOW statement has two possible
+                // consumers — the rows the verb returns, and this lookup — and
+                // the caller has already decided which. What arrives here is
+                // the half `filter::clauses_for_lookup` kept: the names the
+                // returned rows cannot carry, which are therefore about the
+                // symbol. A candidate must satisfy all of them.
+                //
+                // Applying the whole clause here is what an earlier version
+                // could not do, and why it applied none: `WHERE text MATCHES
+                // '…'` on `SHOW body` names a source line, no candidate row
+                // carries `text`, and every candidate was dropped — a false
+                // symbol-not-found for a symbol that exists. Splitting the
+                // clause first is what makes evaluating it here correct.
+                if !clauses.where_predicates.is_empty() {
+                    let Some(row) = seg.materialize_one_row(local_row, meta.source_path.as_path())
+                    else {
+                        continue;
+                    };
+                    if !clauses
+                        .where_predicates
+                        .iter()
+                        .all(|pred| eval_predicate(&row, pred))
+                    {
+                        continue;
+                    }
+                }
                 let fql_kind_str = seg.fql_kind_of(local_row);
                 all.push((seg_idx, local_row));
                 if let Some(kinds) = prefer_kinds
@@ -251,6 +274,23 @@ impl ColumnarStorage {
                         != owner
                 {
                     continue;
+                }
+
+                // The same split as the persistent path above: what reached the
+                // lookup is the half the returned rows cannot answer, so a
+                // candidate must satisfy all of it.
+                if !clauses.where_predicates.is_empty() {
+                    let Some(row) = ds.reader.materialize_one_row(local_row, &ds.source_path)
+                    else {
+                        continue;
+                    };
+                    if !clauses
+                        .where_predicates
+                        .iter()
+                        .all(|pred| eval_predicate(&row, pred))
+                    {
+                        continue;
+                    }
                 }
                 let fql_kind_str = ds.reader.fql_kind_of(local_row);
                 let line_num = ds.reader.line_of(local_row);

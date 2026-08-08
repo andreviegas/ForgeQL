@@ -306,3 +306,33 @@ impl ClauseTarget for crate::result::CallGraphEntry {
         self.path.as_deref()
     }
 }
+
+impl ClauseTarget for crate::result::CommitRow {
+    const ROW: &'static str = "a commit row";
+    // The two printed columns, and the whole row. A commit carries no path, no
+    // line and no kind, so every other name is refused here rather than
+    // resolving to nothing on every row.
+    const STR_FIELDS: &'static [&'static str] = &["hash", "subject"];
+    const NUM_FIELDS: &'static [&'static str] = &[];
+    const OPEN_FIELDS: bool = false;
+
+    fn field_str(&self, field: &str) -> Option<&str> {
+        match field {
+            "hash" => Some(&self.0.name),
+            "subject" => self.0.fields.get("subject").map(String::as_str),
+            _ => None,
+        }
+    }
+
+    fn field_num(&self, _field: &str) -> Option<i64> {
+        None
+    }
+
+    fn path(&self) -> Option<&Path> {
+        None
+    }
+
+    fn set_count(&mut self, count: usize) {
+        self.0.count = Some(count);
+    }
+}

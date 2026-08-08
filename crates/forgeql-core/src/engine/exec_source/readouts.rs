@@ -10,7 +10,7 @@
 use anyhow::Result;
 
 use crate::result::{
-    ForgeQLResult, QueryResult, SessionStats, ShowContent, SourceOpResult, SymbolMatch,
+    CommitRow, ForgeQLResult, QueryResult, SessionStats, ShowContent, SourceOpResult, SymbolMatch,
 };
 
 use crate::engine::{ForgeQLEngine, require_session_id};
@@ -96,26 +96,30 @@ impl ForgeQLEngine {
         let base_ref = session.branch.clone();
         let find_limit = session.output_config().find_limit;
 
-        let commits = crate::git::commits_since(&worktree, &base_ref)?;
+        // A commit is not a symbol. Filtered through the open symbol shape
+        // these rows accepted `WHERE path LIKE '%src%'` — a name no commit row
+        // carries — and answered a confident zero; `CommitRow` is the closed
+        // shape that refuses it instead.
+        //
+        // Before the history is read, so the refusal does not depend on there
+        // being a readable worktree to read it from.
+        crate::filter::reject_unresolvable_fields::<CommitRow>("SHOW COMMITS", clauses)?;
 
-        let mut results: Vec<SymbolMatch> = commits
+        let commits = crate::git::commits_since(&worktree, &base_ref)?;
+        let mut rows: Vec<CommitRow> = commits
             .into_iter()
-            .map(|(hash, subject)| SymbolMatch {
-                name: hash,
-                node_kind: Some("commit".to_string()),
-                fql_kind: None,
-                language: None,
-                path: None,
-                line: None,
-                usages_count: None,
-                fields: std::collections::HashMap::from([("subject".to_string(), subject)]),
-                count: None,
-                node_id: None,
-                rev: None,
+            .map(|(hash, subject)| {
+                CommitRow(SymbolMatch {
+                    name: hash,
+                    node_kind: Some("commit".to_string()),
+                    fields: std::collections::HashMap::from([("subject".to_string(), subject)]),
+                    ..SymbolMatch::default()
+                })
             })
             .collect();
 
-        crate::filter::apply_clauses(&mut results, clauses);
+        crate::filter::apply_clauses(&mut rows, clauses);
+        let mut results: Vec<SymbolMatch> = rows.into_iter().map(|row| row.0).collect();
         let total = results.len();
         if clauses.limit.is_none() {
             results.truncate(find_limit);

@@ -22,7 +22,9 @@ use anyhow::{Result, bail};
 
 use crate::{
     ast::parse_cache::{CachedParse, sha1_of_bytes},
-    filter::{reject_refused_fields, reject_unresolvable_fields},
+    filter::{
+        reject_refused_fields, reject_unresolvable_fields, reject_unresolvable_shaping_fields,
+    },
     ir::{Backend, Clauses, ForgeQLIR},
     result::{ForgeQLResult, ShowContent},
     session::Session,
@@ -60,6 +62,25 @@ fn read_bytes_for_show(workspace: &Workspace, location: &SymbolLocation) -> Resu
     }
 }
 
+/// The error when `SHOW … OF 'name'` addressed nothing.
+///
+/// The lookup half of the clause is part of the answer. "This name does not
+/// exist" and "no candidate for this name satisfies the clause you wrote" are
+/// two different facts, and an agent told only the first for the second will
+/// go and check its spelling instead of its filter. Neither is a refusal —
+/// every field named was one something could answer; they just excluded
+/// everything between them.
+pub(super) fn lookup_missed(symbol: &str, lookup: &Clauses) -> anyhow::Error {
+    if lookup.where_predicates.is_empty() {
+        anyhow::anyhow!("symbol '{symbol}' not found")
+    } else {
+        anyhow::anyhow!(
+            "no symbol '{symbol}' matches {}",
+            crate::filter::describe_predicates(&lookup.where_predicates)
+        )
+    }
+}
+
 /// Extract the `backend` selector from any supported SHOW / `FindFiles` op.
 ///
 /// Returns `Backend::Default` for any op that does not carry a backend field
@@ -87,6 +108,12 @@ impl ForgeQLEngine {
         let backend = backend_for_show_op(op);
         let (workspace, engine) = self.require_workspace_and_engine_for(session_id, backend)?;
 
+        // Before anything is looked up or read. A clause naming a field this
+        // verb cannot answer is a fact about the query, and reporting it as
+        // "no symbol matches" — which is what happens once a doomed predicate
+        // reaches the lookup — would make it read as a fact about the code.
+        Self::reject_show_clause_fields(op)?;
+
         let json = self.dispatch_show_op(session_id, op, &workspace, engine)?;
 
         // Check for error responses.
@@ -99,34 +126,37 @@ impl ForgeQLEngine {
 
         // Apply the full clause pipeline (WHERE, ORDER BY, LIMIT, OFFSET, …) to
         // structured list results: outline, members, and call graph entries.
-        // It can refuse: a clause naming a field the row shape cannot carry is
-        // an error, not an empty result.
-        Self::apply_list_clauses(&mut show_result.content, op)?;
+        // It cannot refuse — every field was checked before dispatch.
+        Self::apply_list_clauses(&mut show_result.content, op);
 
         // Extract clauses for ShowContent::Lines variants.
         let show_clauses: Option<&Clauses> = match op {
             ForgeQLIR::ShowBody { clauses, .. }
             | ForgeQLIR::ShowLines { clauses, .. }
-            | ForgeQLIR::ShowContext { clauses, .. } => Some(clauses),
+            | ForgeQLIR::ShowContext { clauses, .. }
+            | ForgeQLIR::ShowSignature { clauses, .. } => Some(clauses),
             _ => None,
         };
 
         // Apply WHERE predicates BEFORE the line caps so queries like
         // `SHOW body OF 'fn' WHERE text MATCHES 'TODO'` filter over the full
         // function body, not just the first N lines.
-        //
-        // Only the table check here, not the row-shape one: this clause was
-        // also handed to the symbol lookup, so a source line's own field list
-        // is not the universe of legitimate names. `reject_refused_fields`
-        // documents the defect that leaves standing — on the columnar backend
-        // the lookup evaluates none of these predicates, so a disambiguating
-        // `WHERE language = '…'` scopes nothing and then filters away every
-        // line of the body it did find.
         if let (ShowContent::Lines { lines, .. }, Some(clauses)) =
             (&mut show_result.content, show_clauses)
         {
-            reject_refused_fields::<crate::result::SourceLine>("a SHOW that reads lines", clauses)?;
-            for predicate in &clauses.where_predicates {
+            // `SHOW LINES` names a file and `SHOW NODE` a handle — neither
+            // resolves a name, and `exec_show_lines` is handed no clause at
+            // all — so their whole clause belongs to these lines. `SHOW body`,
+            // `SHOW context` and `SHOW signature` address a symbol, so their
+            // `WHERE` was split before the lookup ran and only the row half
+            // belongs here. Both were checked before dispatch.
+            let row_clauses = if matches!(op, ForgeQLIR::ShowLines { .. }) {
+                clauses.clone()
+            } else {
+                crate::filter::clauses_for_rows::<crate::result::SourceLine>(clauses)
+            };
+
+            for predicate in &row_clauses.where_predicates {
                 let pred = predicate.clone();
                 lines.retain(|line| crate::filter::eval_predicate(line, &pred));
             }
@@ -142,6 +172,59 @@ impl ForgeQLEngine {
         Self::apply_show_lines_cap(&mut show_result, show_clauses, budget_max);
 
         Ok(ForgeQLResult::Show(show_result))
+    }
+
+    /// Refuse a clause this verb cannot answer, before anything is looked up.
+    ///
+    /// Every SHOW verb that carries a clause is named here with the row shape
+    /// it answers over, so that adding a verb without deciding how its fields
+    /// are checked is a visible omission rather than a silent one. Which check
+    /// applies depends on how many consumers the clause has:
+    ///
+    /// - One consumer — `SHOW outline`, `SHOW NODE`, `SHOW LINES` and
+    ///   `FIND files` name a file, a handle or a path, so nothing resolves a
+    ///   symbol and the row shape is the whole universe of legitimate names.
+    ///   Every clause is held to it.
+    /// - Two consumers — `SHOW members`, `SHOW callees` and the reading verbs
+    ///   also address a symbol. Their `WHERE` is split between the lookup and
+    ///   the rows, so it is checked only against the table's refused set: what
+    ///   neither consumer can answer. `ORDER BY`, `GROUP BY` and `HAVING`
+    ///   reach no lookup, so those are held to the row shape as above.
+    ///
+    /// The verbs absent from this list carry a clause too, and are checked
+    /// where they execute: `SHOW MORE` in `exec_show::more`, `SHOW COMMITS` in
+    /// `exec_source::readouts`, `SHOW DIFF` in `exec_transaction`, and
+    /// `FIND symbols`/`FIND usages` in the columnar backend's own Stage 0,
+    /// which alone can see which enrichment columns a segment stored.
+    fn reject_show_clause_fields(op: &ForgeQLIR) -> Result<()> {
+        use crate::result::{CallGraphEntry, FileEntry, MemberEntry, OutlineEntry, SourceLine};
+
+        match op {
+            ForgeQLIR::ShowOutline { clauses, .. } => {
+                reject_unresolvable_fields::<OutlineEntry>("SHOW outline", clauses)
+            }
+            ForgeQLIR::FindFiles { clauses, .. } => {
+                reject_unresolvable_fields::<FileEntry>("FIND files", clauses)
+            }
+            ForgeQLIR::ShowNode { clauses, .. } | ForgeQLIR::ShowLines { clauses, .. } => {
+                reject_unresolvable_fields::<SourceLine>("SHOW NODE / SHOW LINES", clauses)
+            }
+            ForgeQLIR::ShowMembers { clauses, .. } => {
+                reject_refused_fields::<MemberEntry>("SHOW members", clauses)?;
+                reject_unresolvable_shaping_fields::<MemberEntry>("SHOW members", clauses)
+            }
+            ForgeQLIR::ShowCallees { clauses, .. } => {
+                reject_refused_fields::<CallGraphEntry>("SHOW callees", clauses)?;
+                reject_unresolvable_shaping_fields::<CallGraphEntry>("SHOW callees", clauses)
+            }
+            ForgeQLIR::ShowBody { clauses, .. }
+            | ForgeQLIR::ShowContext { clauses, .. }
+            | ForgeQLIR::ShowSignature { clauses, .. } => {
+                reject_refused_fields::<SourceLine>("a SHOW that reads lines", clauses)?;
+                reject_unresolvable_shaping_fields::<SourceLine>("a SHOW that reads lines", clauses)
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Dispatch a `SHOW`/`FIND files` op to the matching backend handler,
@@ -204,43 +287,35 @@ impl ForgeQLEngine {
 
     /// Apply the clause pipeline to structured list results (outline / members /
     /// call graph).  Lines results are handled separately (cap-aware) by the caller.
-    fn apply_list_clauses(content: &mut ShowContent, op: &ForgeQLIR) -> Result<()> {
+    fn apply_list_clauses(content: &mut ShowContent, op: &ForgeQLIR) {
         match (content, op) {
             (ShowContent::Outline { entries }, ForgeQLIR::ShowOutline { clauses, .. }) => {
-                // The one listing verb whose clause only filters: `SHOW outline
-                // OF` names a file, so nothing here resolves a symbol and the
-                // row's own field list is the whole universe of legitimate
-                // names.
-                reject_unresolvable_fields::<crate::result::OutlineEntry>("SHOW outline", clauses)?;
+                // The fields were checked before dispatch; this only filters.
                 crate::filter::apply_clauses_keep_order(entries, clauses);
             }
             (ShowContent::Members { members, .. }, ForgeQLIR::ShowMembers { clauses, .. }) => {
-                // Only the table check: this clause was also handed to the
-                // symbol lookup, so the row's own field list is not the
-                // universe of legitimate names. See `reject_refused_fields`
-                // for the defect that leaves standing.
-                reject_refused_fields::<crate::result::MemberEntry>("SHOW members", clauses)?;
-                crate::filter::apply_clauses(members, clauses);
+                // Only the row half: the lookup already took the predicates a
+                // members row cannot answer, so re-applying them here is what
+                // emptied the answer for a symbol that exists.
+                let row_clauses =
+                    crate::filter::clauses_for_rows::<crate::result::MemberEntry>(clauses);
+                crate::filter::apply_clauses(members, &row_clauses);
             }
             (ShowContent::CallGraph { entries, .. }, ForgeQLIR::ShowCallees { clauses, .. }) => {
-                // Same dual purpose as `SHOW members`, same check.
-                reject_refused_fields::<crate::result::CallGraphEntry>("SHOW callees", clauses)?;
+                let mut row_clauses =
+                    crate::filter::clauses_for_rows::<crate::result::CallGraphEntry>(clauses);
                 // Default sort for callees is by call-site line (ascending) so
                 // the output reflects call order.  An explicit ORDER BY wins.
-                if clauses.order_by.is_none() {
-                    let mut effective = clauses.clone();
-                    effective.order_by = Some(crate::ir::OrderBy {
+                if row_clauses.order_by.is_none() {
+                    row_clauses.order_by = Some(crate::ir::OrderBy {
                         field: "line".to_string(),
                         direction: crate::ir::SortDirection::Asc,
                     });
-                    crate::filter::apply_clauses(entries, &effective);
-                } else {
-                    crate::filter::apply_clauses(entries, clauses);
                 }
+                crate::filter::apply_clauses(entries, &row_clauses);
             }
             _ => {}
         }
-        Ok(())
     }
 
     /// Get a cached parse for a symbol location, with bare-repo fallback.

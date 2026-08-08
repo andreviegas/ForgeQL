@@ -1193,47 +1193,237 @@ fn any_where_opens_the_outline_universe_not_only_a_kind_predicate() {
     );
 }
 
-#[test]
-fn a_resolve_predicate_still_empties_the_rows_it_scoped() {
-    // A DEFECT PIN, not an invariant — and the reason this release does not
-    // claim to have fixed it.
-    //
-    // `SHOW members`, `SHOW callees` and the reading verbs hand the same clause
-    // to the storage engine to pick which symbol `OF` names, and then apply it
-    // again to the rows that came back. A members row and a source line carry
-    // no `language`, so `WHERE language = 'cpp'` — the documented way to
-    // disambiguate a type two languages both define — returns nothing at all
-    // for a type that exists and IS C++.
-    //
-    // Two ways to make that wrong were tried and rejected. Refusing the
-    // predicate breaks the legacy backend, where it really does scope the
-    // lookup. Dropping it before the row filter answers as though it had been
-    // applied — verified against the built binary, `WHERE language = 'rust'`
-    // then returned the C++ members, which is a false positive in place of a
-    // false negative. The fix belongs in the columnar resolver, which today
-    // evaluates only posted-enrichment `=` predicates during resolution.
-    //
-    // Both spellings are asserted because that is what tells the two failure
-    // modes apart: if the predicate were being discarded, the 'rust' case would
-    // answer with the C++ members instead of none.
-    let mut t = typed_workspace();
+/// A workspace where two languages define the same names, on either backend.
+///
+/// `Point` is a struct in both files with a different set of members, and
+/// `shared_fn` is a function in both with a different set of callees. That
+/// difference is what makes a `WHERE language` assertion falsifiable: a
+/// predicate that is DISCARDED rather than applied still answers — with the
+/// other language's rows — and only looking at which rows came back can tell
+/// the two apart. Both earlier attempts at this fix shipped one of those two
+/// failure modes behind a green gate.
+fn two_language_workspace(columnar: bool) -> common::TestSession {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("a_shapes.cpp"),
+        "struct Point {\n    int x;\n    int y;\n};\n\
+         int helper_a(void) { return 1; }\n\
+         int helper_b(void) { return 2; }\n\
+         int shared_fn(void) {\n    return helper_a() + helper_b();\n}\n",
+    )
+    .expect("write cpp fixture");
+    std::fs::write(
+        dir.path().join("b_shapes.rs"),
+        "pub struct Point {\n    pub only_rust_field: u32,\n}\n\
+         pub fn helper_c() -> u32 {\n    3\n}\n\
+         pub fn shared_fn() -> u32 {\n    helper_c()\n}\n",
+    )
+    .expect("write rust fixture");
+    if columnar {
+        common::columnar_session_in(dir)
+    } else {
+        common::legacy_session_in(dir)
+    }
+}
 
-    let baseline = member_count(&mut t, "SHOW members OF 'Point'");
-    assert!(baseline > 0, "fixture has no members to lose");
-    for lang in ["cpp", "rust"] {
+/// The declaration text of every member a `SHOW members` answered with.
+fn member_texts(t: &mut common::TestSession, fql: &str) -> Vec<String> {
+    match t.try_fql(fql).unwrap_or_else(|e| panic!("`{fql}`: {e}")) {
+        ForgeQLResult::Show(show) => match show.content {
+            forgeql_core::result::ShowContent::Members { members, .. } => {
+                members.iter().map(|m| m.text.clone()).collect()
+            }
+            other => panic!("`{fql}` did not answer with members: {other:?}"),
+        },
+        other => panic!("`{fql}` did not answer with a show result: {other:?}"),
+    }
+}
+
+/// The name of every callee a `SHOW callees` answered with.
+fn callee_names(t: &mut common::TestSession, fql: &str) -> Vec<String> {
+    match t.try_fql(fql).unwrap_or_else(|e| panic!("`{fql}`: {e}")) {
+        ForgeQLResult::Show(show) => match show.content {
+            forgeql_core::result::ShowContent::CallGraph { entries, .. } => {
+                entries.iter().map(|e| e.name.clone()).collect()
+            }
+            other => panic!("`{fql}` did not answer with a call graph: {other:?}"),
+        },
+        other => panic!("`{fql}` did not answer with a show result: {other:?}"),
+    }
+}
+
+/// The text of every source line a reading verb answered with.
+fn line_texts(t: &mut common::TestSession, fql: &str) -> Vec<String> {
+    match t.try_fql(fql).unwrap_or_else(|e| panic!("`{fql}`: {e}")) {
+        ForgeQLResult::Show(show) => match show.content {
+            forgeql_core::result::ShowContent::Lines { lines, .. } => {
+                lines.iter().map(|l| l.text.clone()).collect()
+            }
+            other => panic!("`{fql}` did not answer with lines: {other:?}"),
+        },
+        other => panic!("`{fql}` did not answer with a show result: {other:?}"),
+    }
+}
+
+/// The error a query answered with, or a panic naming the query that answered.
+fn refusal(t: &mut common::TestSession, fql: &str) -> String {
+    t.try_fql(fql)
+        .err()
+        .unwrap_or_else(|| panic!("`{fql}` answered instead of erroring"))
+        .to_string()
+}
+
+#[test]
+fn a_lookup_predicate_scopes_the_symbol_it_addresses() {
+    // `SHOW members OF 'Point'` is ambiguous where two languages both define
+    // `Point`. `WHERE language = '…'` is the documented way to say which, and
+    // it has to reach the LOOKUP: a members row carries no `language`, so
+    // applying it to the rows instead answers with none — a confident zero for
+    // a type that exists.
+    //
+    // Every assertion below names a row that only one of the two candidates
+    // could have produced. That is deliberate: an assertion that only counts
+    // rows, or only checks the echoed symbol name, passes whether the
+    // predicate scoped the lookup or was thrown away.
+    for columnar in [false, true] {
+        let backend = if columnar { "columnar" } else { "legacy" };
+        let mut t = two_language_workspace(columnar);
+
+        let mut langs: Vec<String> = query(&mut t, "FIND symbols WHERE name = 'Point'")
+            .results
+            .iter()
+            .filter_map(|r| r.language.clone())
+            .collect();
+        langs.sort_unstable();
+        langs.dedup();
         assert_eq!(
-            member_count(
-                &mut t,
-                &format!("SHOW members OF 'Point' WHERE language = '{lang}'")
-            ),
-            0,
-            "the defect this pins has been fixed for language = '{lang}' — good, \
-             but the docs and CHANGELOG that describe it have to move with it"
+            langs,
+            vec!["cpp".to_string(), "rust".to_string()],
+            "{backend}: the fixture no longer defines Point in exactly cpp and rust"
+        );
+
+        // Members: each language's own fields, and none of the other's.
+        let cpp = member_texts(&mut t, "SHOW members OF 'Point' WHERE language = 'cpp'");
+        assert!(
+            cpp.iter().any(|m| m.contains("int x")),
+            "{backend}: the C++ Point was not the one resolved: {cpp:?}"
+        );
+        assert!(
+            !cpp.iter().any(|m| m.contains("only_rust_field")),
+            "{backend}: the predicate was discarded — the Rust Point answered: {cpp:?}"
+        );
+
+        let rust = member_texts(&mut t, "SHOW members OF 'Point' WHERE language = 'rust'");
+        assert!(
+            rust.iter().any(|m| m.contains("only_rust_field")),
+            "{backend}: the Rust Point was not the one resolved: {rust:?}"
+        );
+        assert!(
+            !rust.iter().any(|m| m.contains("int x")),
+            "{backend}: the predicate was discarded — the C++ Point answered: {rust:?}"
+        );
+
+        // Callees: the same, through a different row shape.
+        let cpp_calls = callee_names(&mut t, "SHOW callees OF 'shared_fn' WHERE language = 'cpp'");
+        assert!(
+            cpp_calls.iter().any(|c| c == "helper_a") && !cpp_calls.iter().any(|c| c == "helper_c"),
+            "{backend}: SHOW callees resolved the wrong shared_fn: {cpp_calls:?}"
+        );
+        let rust_calls = callee_names(
+            &mut t,
+            "SHOW callees OF 'shared_fn' WHERE language = 'rust'",
+        );
+        assert!(
+            rust_calls.iter().any(|c| c == "helper_c")
+                && !rust_calls.iter().any(|c| c == "helper_a"),
+            "{backend}: SHOW callees resolved the wrong shared_fn: {rust_calls:?}"
+        );
+
+        // And through the reading verbs, whose rows are source lines.
+        let rust_body = line_texts(
+            &mut t,
+            "SHOW body OF 'shared_fn' DEPTH 99 WHERE language = 'rust'",
+        );
+        assert!(
+            rust_body.iter().any(|l| l.contains("helper_c"))
+                && !rust_body.iter().any(|l| l.contains("helper_a")),
+            "{backend}: SHOW body resolved the wrong shared_fn: {rust_body:?}"
+        );
+
+        // Both halves of one clause, at once: the lookup picks the Rust Point,
+        // then the row half filters its members. Neither half alone can
+        // produce this answer.
+        let split = member_texts(
+            &mut t,
+            "SHOW members OF 'Point' WHERE language = 'rust' WHERE text LIKE '%only_rust_field%'",
+        );
+        assert_eq!(
+            split.len(),
+            1,
+            "{backend}: the clause did not split between the lookup and the rows: {split:?}"
+        );
+
+        // Three outcomes, three distinguishable answers. A language nothing
+        // defines is a lookup that matched nothing — a fact about the
+        // workspace — and must not read as a refusal.
+        let missed = refusal(&mut t, "SHOW members OF 'Point' WHERE language = 'python'");
+        assert!(
+            missed.contains("'Point'") && missed.contains("WHERE language = 'python'"),
+            "{backend}: a scoped-away symbol did not name itself and the clause \
+             that excluded it: {missed}"
+        );
+        assert!(
+            !missed.contains("cannot be answered"),
+            "{backend}: a scoped-away symbol read as a refusal: {missed}"
+        );
+
+        // A field no shape can answer is a fact about the query.
+        let refused = refusal(&mut t, "SHOW members OF 'Point' WHERE size > 1");
+        assert!(
+            refused.contains("cannot be answered"),
+            "{backend}: an unanswerable field did not refuse: {refused}"
         );
     }
+}
 
-    // What DOES work, and must keep working: a predicate the row itself
-    // carries filters the rows and nothing else.
+#[test]
+fn only_where_is_split_between_the_lookup_and_the_rows() {
+    // The asymmetry, stated as a test because it is otherwise invisible.
+    //
+    // `WHERE` has two possible consumers, so a name the rows cannot carry is
+    // legitimate — it is about the symbol. `ORDER BY`, `GROUP BY` and `HAVING`
+    // have one: no resolver reads them. So the same field name is accepted in
+    // one clause and refused in the other three, and that is not an
+    // inconsistency but the difference between scoping a lookup and shaping an
+    // answer.
+    let mut t = two_language_workspace(true);
+
+    assert!(
+        !member_texts(&mut t, "SHOW members OF 'Point' WHERE language = 'rust'").is_empty(),
+        "WHERE language must reach the lookup"
+    );
+
+    for fql in [
+        "SHOW members OF 'Point' ORDER BY language",
+        "SHOW members OF 'Point' GROUP BY language",
+        "SHOW members OF 'Point' HAVING language = 'rust'",
+        "SHOW callees OF 'shared_fn' ORDER BY language",
+        "SHOW body OF 'shared_fn' GROUP BY language",
+    ] {
+        let err = refusal(&mut t, fql);
+        assert!(
+            err.contains("cannot be answered"),
+            "`{fql}` was not held to the row shape: {err}"
+        );
+    }
+}
+
+#[test]
+fn the_row_half_of_a_split_clause_still_filters() {
+    // What the split must not break: a predicate the rows DO carry keeps
+    // filtering them, and never reaches the lookup to scope it away.
+    let mut t = typed_workspace();
+
     let body = line_count(&mut t, "SHOW body OF 'point_sum' DEPTH 99");
     assert!(body > 0, "fixture body is empty");
     let matching = line_count(
@@ -1245,6 +1435,7 @@ fn a_resolve_predicate_still_empties_the_rows_it_scoped() {
         "the filtering half of the clause stopped working: {matching} of {body} lines"
     );
 
+    let baseline = member_count(&mut t, "SHOW members OF 'Point'");
     let fields = member_count(&mut t, "SHOW members OF 'Point' WHERE kind = 'field'");
     assert!(
         fields > 0 && fields <= baseline,
@@ -1257,28 +1448,12 @@ fn a_resolve_predicate_still_empties_the_rows_it_scoped() {
         "SHOW callees OF 'point_sum' WHERE marker = 'x'",
         "SHOW body OF 'point_sum' WHERE declaration = 'x'",
     ] {
-        let err = t
-            .try_fql(fql)
-            .err()
-            .unwrap_or_else(|| panic!("`{fql}` answered instead of erroring"));
+        let err = refusal(&mut t, fql);
         assert!(
-            err.to_string().contains("cannot be answered"),
+            err.contains("cannot be answered"),
             "`{fql}` failed for the wrong reason: {err}"
         );
     }
-
-    // `SHOW signature` renders one line and applies no `WHERE` at all.
-    let mut guarded = guarded_workspace(2);
-    let signature = format!(
-        "{:?}",
-        guarded
-            .try_fql("SHOW signature OF 'sym_0' WHERE name = 'nothing_matches_this'")
-            .expect("SHOW signature refused a clause it is documented to ignore")
-    );
-    assert!(
-        signature.contains("sym_0"),
-        "SHOW signature applied the clause instead of ignoring it: {signature}"
-    );
 }
 
 /// How many member rows a `SHOW members` answered with — the number the
@@ -1302,4 +1477,169 @@ fn line_count(t: &mut common::TestSession, fql: &str) -> usize {
         },
         other => panic!("`{fql}` did not answer with a show result: {other:?}"),
     }
+}
+
+// ── Every clause-carrying verb, read off the IR rather than remembered ──────
+
+/// Every `ForgeQLIR` variant that carries a clause, read off the declaration.
+///
+/// Reading it rather than restating it is the point. `SHOW COMMITS` carries a
+/// clause, filters rows with it, and was missing from two hand-written
+/// enumerations of exactly this set — so it filtered `SymbolMatch` rows whose
+/// `path`, `line` and `fql_kind` are all `None` and answered a confident zero
+/// to `WHERE path LIKE '%src%'`. A list derived from the enum cannot omit a
+/// verb; a list written from memory already did.
+fn clause_carrying_variants() -> Vec<String> {
+    let src = include_str!("../src/ir.rs");
+    let body = src
+        .split_once("pub enum ForgeQLIR {")
+        .expect("ir.rs no longer declares `pub enum ForgeQLIR`")
+        .1;
+
+    let mut variants = Vec::new();
+    let mut current: Option<String> = None;
+    let mut chunk = String::new();
+    let finish = |current: &mut Option<String>, chunk: &mut String, out: &mut Vec<String>| {
+        if let Some(name) = current.take()
+            && chunk.contains("clauses: Clauses")
+        {
+            out.push(name);
+        }
+        chunk.clear();
+    };
+
+    for line in body.lines() {
+        if line == "}" {
+            break;
+        }
+        let opens_variant = line
+            .strip_prefix("    ")
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_uppercase()));
+        if opens_variant {
+            finish(&mut current, &mut chunk, &mut variants);
+            current = Some(
+                line.trim_start()
+                    .split(|c: char| !c.is_ascii_alphanumeric())
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+        }
+        chunk.push_str(line);
+        chunk.push('\n');
+    }
+    finish(&mut current, &mut chunk, &mut variants);
+
+    variants.sort_unstable();
+    variants
+}
+
+/// One row per clause-carrying verb: a query naming a field that verb's rows
+/// cannot answer, which must therefore be refused rather than answered.
+///
+/// `None` is an exemption, and it has to be written here with its reason
+/// beside it. That is the difference this table is for: a verb nobody thought
+/// about is a missing row and fails the test, not a silent gap.
+///
+/// `<NODE>` is substituted with a real handle from the fixture.
+const CLAUSE_FIELD_PROBES: &[(&str, Option<&str>)] = &[
+    // A mutation. Its clause selects the lines to rewrite, so probing it here
+    // would edit the fixture; `CHANGE NODE … MATCHING` is covered by the
+    // mutation suites.
+    ("ChangeContent", None),
+    ("FindFiles", Some("FIND files WHERE usages > 1")),
+    ("FindSymbols", Some("FIND symbols WHERE size > 1")),
+    (
+        "FindUsages",
+        Some("FIND usages OF 'shared_fn' WHERE size > 1"),
+    ),
+    ("ShowBody", Some("SHOW body OF 'shared_fn' WHERE size > 1")),
+    (
+        "ShowCallees",
+        Some("SHOW callees OF 'shared_fn' WHERE size > 1"),
+    ),
+    ("ShowCommits", Some("SHOW COMMITS WHERE path LIKE '%src%'")),
+    (
+        "ShowContext",
+        Some("SHOW context OF 'shared_fn' WHERE size > 1"),
+    ),
+    ("ShowDiff", Some("SHOW DIFF WHERE size > 1")),
+    (
+        "ShowLines",
+        Some("SHOW LINES 1-2 OF 'a_shapes.cpp' WHERE language = 'cpp'"),
+    ),
+    (
+        "ShowMembers",
+        Some("SHOW members OF 'Point' WHERE size > 1"),
+    ),
+    ("ShowMore", Some("SHOW MORE WHERE size > 1")),
+    (
+        "ShowNode",
+        Some("SHOW NODE '<NODE>' WHERE language = 'cpp'"),
+    ),
+    (
+        "ShowOutline",
+        Some("SHOW outline OF 'a_shapes.cpp' WHERE usages > 1"),
+    ),
+    (
+        "ShowSignature",
+        Some("SHOW signature OF 'shared_fn' WHERE size > 1"),
+    ),
+];
+
+#[test]
+fn every_clause_carrying_verb_decides_how_its_fields_are_checked() {
+    let declared = clause_carrying_variants();
+    let mut probed: Vec<String> = CLAUSE_FIELD_PROBES
+        .iter()
+        .map(|(variant, _)| (*variant).to_string())
+        .collect();
+    probed.sort_unstable();
+
+    assert_eq!(
+        declared, probed,
+        "a verb carrying a clause is missing from CLAUSE_FIELD_PROBES (or listed there \
+         and gone from the IR). Add it with the query that must be refused, or with \
+         None and the reason it cannot be probed here"
+    );
+
+    let mut t = two_language_workspace(true);
+    let (node, _rev) = t.file_handle("a_shapes.cpp");
+
+    for (variant, probe) in CLAUSE_FIELD_PROBES {
+        let Some(probe) = probe else { continue };
+        let fql = probe.replace("<NODE>", &node);
+        let err = refusal(&mut t, &fql);
+        assert!(
+            err.contains("cannot be answered"),
+            "{variant}: `{fql}` must be refused, not answered with nothing — got: {err}"
+        );
+    }
+}
+
+#[test]
+fn find_usages_refuses_a_field_its_rows_cannot_carry() {
+    // `FIND usages` never went through `find_symbols`, so the columnar
+    // backend's index-aware Stage 0 checks were unreachable from it: an
+    // unknown field answered zero sites while `FIND symbols` and `FIND globals`
+    // errored on the same name. All three clauses, because each fails
+    // differently — a `WHERE` matches nothing, an `ORDER BY` silently ties, a
+    // `GROUP BY` fabricates one group holding every row.
+    let mut t = two_language_workspace(true);
+
+    for fql in [
+        "FIND usages OF 'shared_fn' WHERE zzz_not_a_field = 'x'",
+        "FIND usages OF 'shared_fn' ORDER BY zzz_not_a_field",
+        "FIND usages OF 'shared_fn' GROUP BY zzz_not_a_field",
+    ] {
+        let err = refusal(&mut t, fql);
+        assert!(
+            err.contains("zzz_not_a_field"),
+            "`{fql}` did not name the field it could not answer: {err}"
+        );
+    }
+
+    // And the verb still answers what it can.
+    let sites = query(&mut t, "FIND usages OF 'helper_c'");
+    assert!(sites.total > 0, "FIND usages stopped finding real sites");
 }

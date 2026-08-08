@@ -37,6 +37,12 @@ impl ForgeQLEngine {
         let sid = require_session_id(session_id)?;
         let root = self.require_session(sid)?.worktree_path.clone();
 
+        // Before the buffer is read, not after: a clause naming a field a
+        // source line cannot carry is unanswerable whether or not this session
+        // has paged anything yet, and reporting the missing buffer instead
+        // hides it until the day someone happens to have one.
+        crate::filter::reject_unresolvable_fields::<SourceLine>("SHOW MORE", clauses)?;
+
         let buffer = crate::showmore::read_buffer_n(&root, *last)
             .map_err(|e| anyhow::anyhow!("reading SHOW MORE buffer: {e}"))?
             .ok_or_else(|| {
@@ -71,9 +77,8 @@ impl ForgeQLEngine {
         // buffered output (e.g. `SHOW MORE WHERE text MATCHES 'error|fail'`).
         //
         // These lines came out of a buffer, so nothing here resolves a symbol
-        // and the row shape IS the universe: a field a source line does not
-        // carry is refused rather than silently emptying the window.
-        crate::filter::reject_unresolvable_fields::<SourceLine>("SHOW MORE", clauses)?;
+        // and the row shape IS the universe — which is why the whole clause was
+        // refusable above, before the buffer was even read.
         for predicate in &clauses.where_predicates {
             let pred = predicate.clone();
             lines.retain(|line| crate::filter::eval_predicate(line, &pred));

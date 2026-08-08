@@ -262,6 +262,20 @@ any seam yourself. Steps marked `commit_gate: true` in `.forgeql.yaml` must pass
 
 Source line filtering runs **before** the 40-line cap.
 
+A `WHERE` on a verb that names a symbol — `SHOW body`, `SHOW context`,
+`SHOW signature`, `SHOW members`, `SHOW callees`, `FIND callees OF` — is **split
+between two consumers**: a field the returned rows carry (above) filters those
+rows, and a field they do not carry scopes the lookup instead, so
+`SHOW members OF 'Foo' WHERE language = 'cpp'` answers with the C++ `Foo`'s
+members. If nothing satisfies the lookup half you get
+`no symbol 'Foo' matches WHERE …` rather than an empty answer. `ORDER BY`,
+`GROUP BY` and `HAVING` are never split — no lookup reads them, so they must
+name a field the returned rows carry, and `SHOW members OF 'Foo' ORDER BY
+language` is refused even though the `WHERE` form is accepted. On the `SHOW`
+verbs a misspelt field cannot be told from an unmatched one: it reaches the
+lookup, matches nothing, and reports that — only `FIND symbols`/`globals`/
+`usages` can name it as unknown.
+
 ## fql_kind Values
 
 **Always use `fql_kind` in WHERE clauses** (or `kind`, its alias, answered wherever `fql_kind` is). `fql_kind` is language-agnostic and works identically across C++, Rust, and any future language. Raw `node_kind` values (tree-sitter grammar names) are language-specific, and no row of the indexed backend every session queries stores them — so `WHERE`, `ORDER BY` and `GROUP BY` on `node_kind` are **refused** on every verb that filters rows (`FIND symbols`, `FIND globals`, `FIND usages`, `FIND files`, `FIND callees OF`, `SHOW outline`, `SHOW members`, `SHOW callees`), rather than reporting a confident absence.

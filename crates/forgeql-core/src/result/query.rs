@@ -135,6 +135,20 @@ pub struct SymbolMatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rev: Option<String>,
 }
+
+/// A `SHOW COMMITS` row: the commit hash and its subject line, and nothing else.
+///
+/// It travels as a [`SymbolMatch`] because that is what a `QueryResult` carries
+/// and what the CSV renderer reads, but a commit is not a symbol — it has no
+/// path, no line, no kind, no language — so the clause pipeline sees it through
+/// this wrapper instead of through the open symbol shape. Filtered as a symbol
+/// row it accepted `WHERE path LIKE '%src%'` and answered a confident zero,
+/// because an open shape cannot refuse a name it does not carry.
+///
+/// The two fields are the two printed columns: `hash` and `subject`.
+#[derive(Debug, Clone)]
+pub struct CommitRow(pub SymbolMatch);
+
 // -----------------------------------------------------------------------
 // Query context — carries query-level metadata for row projection
 // -----------------------------------------------------------------------

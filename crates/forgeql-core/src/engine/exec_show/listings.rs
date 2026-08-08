@@ -13,7 +13,6 @@ use anyhow::Result;
 use crate::{
     ast::{query, show},
     engine::ForgeQLEngine,
-    filter::reject_unresolvable_fields,
     ir::{Clauses, SortDirection},
     result::FileEntry,
     storage::StorageEngine,
@@ -40,9 +39,13 @@ impl ForgeQLEngine {
         symbol: &str,
         clauses: &Clauses,
     ) -> Result<serde_json::Value> {
+        // One clause, two consumers: the lookup that decides which `Foo` this
+        // is, and the members rows it returns. Each predicate goes to the one
+        // that can answer it, and `WHERE language = 'cpp'` reaches the lookup.
+        let lookup = crate::filter::clauses_for_lookup::<crate::result::MemberEntry>(clauses);
         let loc = engine
-            .resolve_type_symbol(symbol, clauses, workspace.root())?
-            .ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found"))?;
+            .resolve_type_symbol(symbol, &lookup, workspace.root())?
+            .ok_or_else(|| super::lookup_missed(symbol, &lookup))?;
         let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
         let req = show::ShowRequest {
             cached: &cached,
@@ -67,9 +70,13 @@ impl ForgeQLEngine {
         symbol: &str,
         clauses: &Clauses,
     ) -> Result<serde_json::Value> {
+        // Same split as `SHOW members`: `WHERE name LIKE '%alloc%'` names a
+        // callee row and filters the call list, `WHERE language = 'rust'` names
+        // no callee row and so is about the function being read.
+        let lookup = crate::filter::clauses_for_lookup::<crate::result::CallGraphEntry>(clauses);
         let loc = engine
-            .resolve_body_symbol(symbol, clauses, workspace.root())?
-            .ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found"))?;
+            .resolve_body_symbol(symbol, &lookup, workspace.root())?
+            .ok_or_else(|| super::lookup_missed(symbol, &lookup))?;
         let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
         let req = show::ShowRequest {
             cached: &cached,
@@ -89,11 +96,9 @@ impl ForgeQLEngine {
         engine: &dyn StorageEngine,
         clauses: &Clauses,
     ) -> Result<serde_json::Value> {
-        // A file row is a closed shape, so every field a clause can name is
-        // known here and anything else is refused rather than answered with
-        // nothing. That covers `node_kind` — a file row has no kind at all —
-        // and `lang`, `fql_kind`, `usages` and every other symbol-row field.
-        reject_unresolvable_fields::<FileEntry>("FIND files", clauses)?;
+        // Fields were refused before dispatch, against the closed file-row
+        // shape: `node_kind` (a file row has no kind at all), `lang`,
+        // `fql_kind`, `usages` and every other symbol-row name.
         let glob = clauses.in_glob.as_deref().unwrap_or("**");
         let indexed_opt = engine.indexed_files();
         let fast_path_ext: Option<&str> = indexed_opt.as_ref().and_then(|indexed| {

@@ -6,6 +6,81 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.157.0] — 2026-08-08 — one clause, two consumers: WHERE is split between the lookup and the rows
+
+### Fixed
+
+- `SHOW members OF 'Foo' WHERE language = 'cpp'` answered with nothing for a
+  type that exists. These verbs — `SHOW members`, `SHOW callees`, `FIND callees
+  OF`, `SHOW body`, `SHOW context`, `SHOW signature` — hand one clause to two
+  consumers: the lookup that decides which `Foo` was meant, and the rows that
+  come back from it. The clause went whole to both. The lookup evaluated none of
+  it, and then every returned row failed a predicate naming a field it does not
+  carry, so the answer was empty. Zero members for a type that has members is
+  the same confident absence the previous release set out to remove, arriving by
+  a different route.
+
+  Each predicate now reaches exactly one consumer, decided by the row shape: a
+  field the returned rows carry filters those rows, and a field they do not
+  carry goes to the lookup, which evaluates it against every candidate.
+  `SHOW members OF 'Point' WHERE language = 'rust'` returns the Rust `Point`'s
+  members and `WHERE language = 'cpp'` the C++ one's, and the two answers
+  differ. Nothing is dropped and nothing is applied twice. Both backends do
+  this; the indexed one applied no `WHERE` at all during resolution before, and
+  pays for it now only when the lookup's half of the clause is non-empty.
+
+- When no candidate satisfies the lookup the answer says so —
+  `no symbol 'Point' matches WHERE language = 'python'` — naming the clause that
+  excluded it. A name that does not exist and a name that exists but was scoped
+  away are different facts, and an agent told only "not found" for the second
+  goes and checks its spelling instead of its filter. Neither reads as a
+  refusal.
+
+- A lone candidate is no longer waved through unfiltered. Where a name had
+  exactly one definition, `IN` and `WHERE` were skipped as an optimisation, so
+  `SHOW body OF 'f' WHERE language = 'python'` returned the C++ `f`, and an `IN`
+  naming a directory it does not live in returned it too.
+
+- `SHOW COMMITS` accepted `WHERE path LIKE '%src%'` and answered a confident
+  zero. It filtered commit rows through the symbol shape, which carries `path`,
+  `line` and `fql_kind` — all empty on a commit — and, being open-ended, could
+  refuse nothing. Commits now have their own closed shape, `hash` and `subject`,
+  and any other name is refused with those two named.
+
+- `SHOW NODE` and `SHOW LINES` address bytes by handle or by path, so nothing
+  resolves a name and their whole clause belongs to the lines they return.
+  `SHOW NODE '<id>' WHERE language = 'cpp'` is refused rather than silently
+  emptying the node.
+
+### Changed
+
+- Every clause field is checked **before** the verb does its work: before the
+  lookup runs, before a diff is computed, before the paging buffer is read,
+  before the commit history is opened. A check that ran afterwards arrived as
+  "no symbol matches" or "could not open worktree" — a fact about the code or
+  the workspace standing in for a fact about the query.
+
+- `ORDER BY`, `GROUP BY` and `HAVING` are never split. No lookup reads them, so
+  on every verb they must name a field the returned rows carry:
+  `SHOW members OF 'Foo' ORDER BY language` is refused while
+  `WHERE language = 'cpp'` is accepted. The asymmetry is deliberate, and is now
+  stated in the same sentence as the split wherever the split appears.
+
+- `SHOW signature` applies its clause like the other reading verbs rather than
+  ignoring it.
+
+- One limit, stated alongside the claims rather than elsewhere: only
+  `FIND symbols`, `FIND globals` and `FIND usages` can tell an unknown field
+  from an unmatched one, because only they see which enrichment columns the
+  index stored. On a `SHOW`, a misspelt field reaches the lookup, satisfies no
+  candidate, and is reported as a lookup that matched nothing.
+
+- A test reads the list of clause-carrying verbs out of the command IR instead
+  of restating it, and requires each to be named together with the query it must
+  refuse. `SHOW COMMITS` had been missing from two hand-written copies of that
+  set; a verb added without a decision about how its fields are checked now
+  fails the suite rather than shipping unchecked.
+
 ## [0.156.0] — 2026-08-08 — a field a query cannot answer is refused, on every verb
 
 ### Changed
