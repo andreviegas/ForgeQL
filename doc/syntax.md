@@ -69,7 +69,8 @@ USE source_name.<commit-hash> AS 'alias'   -- base the session on an immutable c
 SHOW SOURCES
 
 SHOW BRANCHES
-SHOW COMMITS [clauses]    -- this session's commits since its base (newest first)
+SHOW COMMITS [clauses]    -- this session's commits since its base (newest first);
+                          -- clauses may name `hash` and `subject` only
 
 SHOW VERSION
 ```
@@ -405,7 +406,8 @@ SHOW MORE [LAST-k] [HEAD n | TAIL n | n-m] [clauses]
 | `SHOW outline OF` | Structural tree of a file. A bare outline lists only **structural declarations** (functions, classes, structs, enums, traits, unions, namespaces, modules, type aliases, macros); each entry carries a **`depth`** so the compact output reads as an indented tree in source order. `ALL` — **or any `WHERE`** — opens the outline to every node, so a filter never searches a smaller tree than the one it is written against. `depth` counts the ancestors that were listed, so the same node reports a smaller depth in the structural tree than in the full one; it does not vary with which field the predicate names. Passing a `<node_id>` instead of a file path scopes the outline to that node's subtree. Supports `ORDER BY`, `LIMIT`, `OFFSET`. |
 | `SHOW members OF` | Member declarations of a class/struct/enum: fields, methods, enumerators. Every row carries its `node_id` **and `rev`**, so a member is mutable where you read it. Supports `WHERE fql_kind = '...'`, `ORDER BY`, `LIMIT`, `OFFSET`. |
 | `SHOW context OF` | Surrounding lines of a symbol definition. `DEPTH N` controls how many context lines (default 5). |
-| `SHOW callees OF` | All symbols called from inside the named function body. |
+| `SHOW callees OF` | All symbols called from inside the named function body. A `WHERE` on `name` or `line` filters the call list. `path`/`file` is the file the calls sit in — the resolved function's own — so every row carries the same value and it scopes **which** function `OF` meant instead of filtering the list. |
+| `SHOW COMMITS` | The commits this session's branch carries since its base, newest first. A commit row carries `hash` and `subject` and nothing else, so those are the only names its clauses may use; anything else is refused, naming them. |
 | `SHOW NODE '<id>'` | `CONTENT` (default) prints the node's source; `METADATA` returns its `FIND NODE` record. A node-relative line offset — `'<id>(n)'` or `'<id>(n-m)'` — narrows `CONTENT` to a single line or inclusive range within the node's own span (1-based). |
 | `SHOW MORE` | Pages the session's last buffered output. When a command's output is too large to return inline (e.g. `VERIFY build`), ForgeQL returns a window and buffers the full output; `SHOW MORE` retrieves the rest without re-running the command. |
 

@@ -251,13 +251,15 @@ any seam yourself. Steps marked `commit_gate: true` in `.forgeql.yaml` must pass
 
 `MATCHES` / `NOT MATCHES` use Rust `regex` crate syntax. Prefix `(?i)` for case-insensitive matching.
 
-`SHOW body`, `SHOW NODE`, and `SHOW context` accept `WHERE` on source lines:
+`SHOW body`, `SHOW NODE`, `SHOW LINES`, `SHOW context`, `SHOW MORE` and
+`SHOW signature` accept `WHERE` on source lines — on `SHOW signature` the line
+half filters the single rendered line:
 - `text` — line content (supports `=`, `LIKE`, `MATCHES`)
 - `line` — 1-based line number
 
 `SHOW callees` accepts `WHERE` on call graph entries:
 - `name` — called symbol name
-- `path` / `file` — file containing the call
+- `path` / `file` — the file the call sits in, which is the resolved function's own file, so it scopes **which** function `OF` meant rather than filtering the call list
 - `line` — line number of the call
 
 Source line filtering runs **before** the 40-line cap.

@@ -47,6 +47,24 @@ pub trait ClauseTarget {
     /// stronger claim: the two lists above are the whole universe, and any
     /// other name is refused on sight rather than matching nothing.
     const OPEN_FIELDS: bool;
+
+    /// Fields this row carries whose value comes from the symbol the verb
+    /// addressed rather than from the row itself.
+    ///
+    /// A `SHOW callees` row's `path` is the file the *call* sits in, and every
+    /// call in one answer sits inside the single function that was resolved —
+    /// so every row carries the same value, and filtering rows by it can only
+    /// ever keep all of them or none. Written by an agent it means "the
+    /// `shared_fn` in this file", which is a question for the lookup.
+    ///
+    /// Such a field is given to BOTH consumers: the lookup, which it genuinely
+    /// narrows, and the rows, where it is a no-op once the lookup has honoured
+    /// it. Membership here is not "the rows also carry this name" — `line` on
+    /// a source line is carried by a symbol row too, and `SHOW body OF 'f'
+    /// WHERE line > 10` means the lines, not a definition starting after line
+    /// 10. It is the narrower claim that the row's value is a property of the
+    /// resolved symbol.
+    const LOOKUP_FIELDS: &'static [&'static str] = &[];
     /// Return the string value of a named field, or `None` if unknown.
     fn field_str(&self, field: &str) -> Option<&str>;
 
@@ -348,11 +366,16 @@ fn answers_on<T: ClauseTarget>(written: &str) -> bool {
 /// answer zero for a C++ `Foo` — the lookup ignored the predicate and then
 /// every members row, which carries no `language`, failed it.
 ///
-/// So each predicate goes to exactly one consumer, decided by the row shape:
-/// a name the rows carry filters the rows, and a name they do not carry is
-/// aimed at the symbol and travels to the lookup as [`clauses_for_lookup`].
-/// Together the two halves are the whole clause — no predicate is dropped, and
-/// none is applied twice.
+/// So each predicate goes to the consumer that can answer it, decided by the
+/// row shape: a name the rows carry filters the rows, and a name they do not
+/// carry is aimed at the symbol and travels to the lookup as
+/// [`clauses_for_lookup`]. Together the two halves are the whole clause — no
+/// predicate is dropped. The one name that reaches both is a
+/// [`ClauseTarget::LOOKUP_FIELDS`] entry, whose value on every row is a
+/// property of the resolved symbol: applying it to the rows after the lookup
+/// honoured it is a no-op, and NOT giving it to the lookup left
+/// `SHOW callees OF 'f' WHERE path = '…'` answering zero whenever the file
+/// named was not the one the lookup happened to pick.
 ///
 /// `WHERE` only. `ORDER BY`, `GROUP BY` and `HAVING` shape the answer and never
 /// the lookup, which reads none of them, so they stay whole and are checked
@@ -378,7 +401,10 @@ pub fn clauses_for_rows<T: ClauseTarget>(clauses: &Clauses) -> Clauses {
 #[must_use]
 pub fn clauses_for_lookup<T: ClauseTarget>(clauses: &Clauses) -> Clauses {
     let mut out = clauses.clone();
-    out.where_predicates.retain(|p| !answers_on::<T>(&p.field));
+    out.where_predicates.retain(|p| {
+        !answers_on::<T>(&p.field)
+            || T::LOOKUP_FIELDS.contains(&crate::field_tiers::canonical(&p.field))
+    });
     out.order_by = None;
     out.group_by = None;
     out.having_predicates.clear();

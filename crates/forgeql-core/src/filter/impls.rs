@@ -284,6 +284,11 @@ impl ClauseTarget for crate::result::SourceLine {
 impl ClauseTarget for crate::result::CallGraphEntry {
     const ROW: &'static str = "a callees row";
     const STR_FIELDS: &'static [&'static str] = &["name", "path"];
+    // Every call in one answer sits inside the single function that was
+    // resolved, so every row reports that function's file and a row filter on
+    // `path` can only keep all of them or none. What the agent meant is which
+    // `f` — so it goes to the lookup as well.
+    const LOOKUP_FIELDS: &'static [&'static str] = &["path"];
     const NUM_FIELDS: &'static [&'static str] = &["line"];
     const OPEN_FIELDS: bool = false;
 

@@ -229,13 +229,13 @@ Applied in order: `IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY
 - `WHERE name MATCHES '^(get|set)_'`
 - `WHERE text MATCHES '(?i)TODO|FIXME'`
 
-`SHOW body`, `SHOW NODE`, and `SHOW context` also support `WHERE` on source line content:
+`SHOW body`, `SHOW NODE`, `SHOW LINES`, `SHOW context`, `SHOW MORE` and `SHOW signature` also support `WHERE` on source line content — on `SHOW signature` the line half filters the single rendered line:
 - `text` — line content (supports `LIKE`, `MATCHES`, `=`)
 - `line` — 1-based line number
 
 `SHOW callees` supports `WHERE` on call graph entries:
 - `name` — called symbol name
-- `path` / `file` — file containing the call
+- `path` / `file` — the file the call sits in, which is the resolved function's own file, so it scopes **which** function `OF` meant rather than filtering the call list
 - `line` — 1-based line number of the call
 
 Filtering on source lines runs **before** the 40-line cap, so the full function body is searched even when not all lines are returned.

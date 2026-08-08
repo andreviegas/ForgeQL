@@ -1339,6 +1339,27 @@ fn a_lookup_predicate_scopes_the_symbol_it_addresses() {
             "{backend}: SHOW callees resolved the wrong shared_fn: {rust_calls:?}"
         );
 
+        // A field BOTH shapes carry, where the row's value comes from the
+        // resolved symbol. Every callee row reports the caller's own file, so
+        // filtering rows by `path` can only keep all of them or none — and
+        // routing it to the rows alone answered zero whenever the lookup had
+        // picked the other language's `shared_fn`.
+        let by_cpp_path = callee_names(
+            &mut t,
+            "SHOW callees OF 'shared_fn' WHERE path LIKE '%a_shapes.cpp'",
+        );
+        assert!(
+            by_cpp_path.iter().any(|c| c == "helper_a"),
+            "{backend}: WHERE path did not reach the lookup: {by_cpp_path:?}"
+        );
+        let by_rust_path = callee_names(
+            &mut t,
+            "SHOW callees OF 'shared_fn' WHERE path LIKE '%b_shapes.rs'",
+        );
+        assert!(
+            by_rust_path.iter().any(|c| c == "helper_c"),
+            "{backend}: WHERE path did not reach the lookup: {by_rust_path:?}"
+        );
         // And through the reading verbs, whose rows are source lines.
         let rust_body = line_texts(
             &mut t,
