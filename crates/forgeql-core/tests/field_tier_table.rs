@@ -1478,11 +1478,32 @@ fn a_glob_scopes_the_lookup_when_the_rows_have_no_file_of_their_own() {
         format!("SHOW NODE '{node}' IN 'nowhere/**'"),
         "SHOW LINES 1-2 OF 'a_shapes.cpp' IN 'nowhere/**'".to_string(),
         "SHOW MORE IN 'nowhere/**'".to_string(),
+        "SHOW COMMITS IN 'nowhere/**'".to_string(),
+        "SHOW COMMITS EXCLUDE 'doc/**'".to_string(),
     ] {
         let err = refusal(&mut t, &fql);
         assert!(
             err.contains("IN / EXCLUDE cannot be answered"),
             "`{fql}` accepted a glob it does nothing with: {err}"
+        );
+    }
+
+    // Sorting and grouping are the same class one clause further on: a line
+    // answer comes back in source order and nothing sorts it, so an accepted
+    // `ORDER BY` was read by nothing — and because `LIMIT` *is* honoured, that
+    // silence paged from the wrong end rather than doing nothing at all.
+    for fql in [
+        "SHOW body OF 'shared_fn' DEPTH 99 ORDER BY line DESC LIMIT 2",
+        "SHOW body OF 'shared_fn' DEPTH 99 GROUP BY text",
+        "SHOW context OF 'shared_fn' HAVING count > 1",
+        "SHOW LINES 1-2 OF 'a_shapes.cpp' ORDER BY line DESC",
+        &format!("SHOW NODE '{node}' ORDER BY line DESC"),
+        "SHOW MORE ORDER BY line DESC",
+    ] {
+        let err = refusal(&mut t, fql);
+        assert!(
+            err.contains("nothing here to shape"),
+            "`{fql}` accepted a clause nothing applies: {err}"
         );
     }
 }

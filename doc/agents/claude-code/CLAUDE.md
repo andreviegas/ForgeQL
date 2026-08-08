@@ -273,14 +273,22 @@ field they do not carry scopes the lookup instead, so
 members. `IN`/`EXCLUDE` go to the lookup too on the verbs whose rows have no
 file of their own. If nothing satisfies the lookup half you get
 `no symbol 'Foo' matches WHERE …` rather than an empty answer. `ORDER BY`,
-`GROUP BY` and `HAVING` are never split — no lookup reads them, so they must
-name a field the returned rows carry, and `SHOW members OF 'Foo' ORDER BY
-language` is refused even though the `WHERE` form is accepted.
+`GROUP BY` and `HAVING` are never split — no lookup reads them, so on
+`SHOW members` and `SHOW callees` they must name a field the returned rows
+carry, and `SHOW members OF 'Foo' ORDER BY language` is refused even though the
+`WHERE` form is accepted.
 
-`SHOW signature` is the exception on both counts: it renders one line rather
-than a row set, so its whole clause goes to the lookup, and `ORDER BY`,
-`GROUP BY`, `HAVING` and a `WHERE` on a line-only field (`text`, `marker`,
-`rev`) are refused there because there is nothing to shape or filter.
+`SHOW signature` is the exception: it renders one line rather than a row set, so
+its whole clause goes to the lookup, and a `WHERE` on a line-only field
+(`text`, `marker`, `rev`) is refused there because there is nothing to filter.
+
+`ORDER BY`, `GROUP BY` and `HAVING` are refused outright on every verb that
+answers with source lines — `SHOW body`, `SHOW context`, `SHOW signature`,
+`SHOW NODE`, `SHOW LINES`, `SHOW MORE`. Those answer in source order and sort
+not at all, so accepting them would have paged from the wrong end under a
+`LIMIT`. `IN`/`EXCLUDE` are refused on the four verbs that resolve no name and
+whose rows carry no path — `SHOW NODE`, `SHOW LINES`, `SHOW MORE`,
+`SHOW COMMITS` — where a glob has nothing to scope and nothing to match.
 
 On the `SHOW` verbs a misspelt field cannot be told from an unmatched one: it
 reaches the lookup, matches nothing, and reports that — only `FIND symbols`/

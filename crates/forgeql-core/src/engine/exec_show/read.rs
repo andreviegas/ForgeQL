@@ -219,6 +219,7 @@ impl ForgeQLEngine {
             "SHOW NODE",
             clauses,
         )?;
+        Self::reject_line_shaping("SHOW NODE", clauses)?;
         Self::reject_globs("SHOW NODE", clauses)?;
 
         // A node_id may carry a node-relative line offset suffix — `id(n)` or

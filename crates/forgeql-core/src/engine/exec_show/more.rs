@@ -42,6 +42,7 @@ impl ForgeQLEngine {
         // has paged anything yet, and reporting the missing buffer instead
         // hides it until the day someone happens to have one.
         crate::filter::reject_unresolvable_fields::<SourceLine>("SHOW MORE", clauses)?;
+        Self::reject_line_shaping("SHOW MORE", clauses)?;
         Self::reject_globs("SHOW MORE", clauses)?;
 
         let buffer = crate::showmore::read_buffer_n(&root, *last)

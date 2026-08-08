@@ -58,6 +58,22 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SHOW NODE '<id>' WHERE language = 'cpp'` is refused rather than silently
   emptying the node.
 
+- `ORDER BY`, `GROUP BY` and `HAVING` are refused on every verb that answers
+  with source lines — `SHOW body`, `SHOW context`, `SHOW signature`,
+  `SHOW NODE`, `SHOW LINES`, `SHOW MORE`. Those answer in source order and
+  nothing sorts, groups or aggregates them, so the clauses were accepted and
+  read by nothing; because `LIMIT` *is* honoured, that silence produced a wrong
+  answer rather than an inert one — `SHOW body OF 'f' DEPTH 99 ORDER BY line
+  DESC LIMIT 4` handed back the first four lines, the opposite page to the one
+  asked for.
+
+- `IN` and `EXCLUDE` are refused on the verbs that resolve no name and whose
+  rows carry no path — `SHOW NODE`, `SHOW LINES`, `SHOW MORE`, `SHOW COMMITS`.
+  A glob there has neither a lookup to scope nor a row path to match. On
+  `SHOW COMMITS` it was worse than inert: every commit row failed the path
+  filter, so `SHOW COMMITS IN 'crates/**'` answered zero — the same confident
+  absence that the closed commit shape had just been introduced to stop.
+
 ### Changed
 
 - Every clause field is checked **before** the verb does its work: before the
@@ -73,9 +89,11 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stated in the same sentence as the split wherever the split appears.
 
 - `SHOW signature` no longer ignores its clause. It renders one line rather than
-  a row set, so there is nothing in its answer to filter: the clause scopes
-  which symbol is resolved, and a field only a source-line row carries — `text`,
-  `marker`, `rev` — is refused there rather than accepted and quietly discarded.
+  a row set, so it has no row consumer at all: the whole clause reaches the
+  lookup — including `line` and `node_id`, which a source line and a symbol row
+  both carry and which a split would have handed to a row half that does not
+  exist — and a field only a source-line row carries (`text`, `marker`, `rev`)
+  is refused rather than accepted and quietly discarded.
 
 - One limit, stated alongside the claims rather than elsewhere: only
   `FIND symbols`, `FIND globals` and `FIND usages` can tell an unknown field

@@ -215,6 +215,7 @@ impl ForgeQLEngine {
             }
             ForgeQLIR::ShowLines { clauses, .. } => {
                 reject_unresolvable_fields::<SourceLine>("SHOW LINES", clauses)?;
+                Self::reject_line_shaping("SHOW LINES", clauses)?;
                 Self::reject_globs("SHOW LINES", clauses)
             }
             ForgeQLIR::ShowMembers { clauses, .. } => {
@@ -227,7 +228,7 @@ impl ForgeQLEngine {
             }
             ForgeQLIR::ShowBody { clauses, .. } | ForgeQLIR::ShowContext { clauses, .. } => {
                 reject_refused_fields::<SourceLine>("a SHOW that reads lines", clauses)?;
-                reject_unresolvable_shaping_fields::<SourceLine>("a SHOW that reads lines", clauses)
+                Self::reject_line_shaping("a SHOW that reads lines", clauses)
             }
             ForgeQLIR::ShowSignature { clauses, .. } => {
                 reject_refused_fields::<SourceLine>("SHOW signature", clauses)?;
@@ -237,6 +238,31 @@ impl ForgeQLEngine {
         }
     }
 
+    /// Refuse `ORDER BY` / `GROUP BY` / `HAVING` on a verb that answers with
+    /// source lines.
+    ///
+    /// Nothing sorts, groups or aggregates a line result: the pipeline between
+    /// the `WHERE` filter and the line caps applies none of them. They were
+    /// accepted anyway, and because `LIMIT` *is* honoured the silence produced
+    /// a wrong answer rather than an inert one — `SHOW body OF 'f' DEPTH 99
+    /// ORDER BY line DESC LIMIT 4` handed back the first four lines, the
+    /// opposite page to the one asked for.
+    ///
+    /// Refusing is the mechanical answer: the engine applies a clause or says it
+    /// cannot. Filtering a line result still works, because `WHERE` is applied.
+    pub(in crate::engine) fn reject_line_shaping(verb: &str, clauses: &Clauses) -> Result<()> {
+        if clauses.order_by.is_some()
+            || clauses.group_by.is_some()
+            || !clauses.having_predicates.is_empty()
+        {
+            bail!(
+                "ORDER BY, GROUP BY and HAVING cannot be answered on {verb}: it answers with \
+                 source lines in source order, so there is nothing here to shape. Filter them \
+                 with WHERE, or use FIND symbols, whose rows sort and group."
+            );
+        }
+        Ok(())
+    }
     /// Refuse a `SHOW signature` clause that has nothing to act on.
     ///
     /// A signature is one rendered line, not a row set. There is no row half at
@@ -256,19 +282,7 @@ impl ForgeQLEngine {
         use crate::filter::ClauseTarget as _;
         use crate::result::{SourceLine, SymbolMatch};
 
-        // There are no rows to order, group or filter after grouping, so these
-        // three can only be accepted and do nothing.
-        if clauses.order_by.is_some()
-            || clauses.group_by.is_some()
-            || !clauses.having_predicates.is_empty()
-        {
-            bail!(
-                "ORDER BY, GROUP BY and HAVING cannot be answered on SHOW signature: it renders \
-                 one line rather than a row set, so there is nothing here to shape. Use SHOW body \
-                 OF, whose rows are source lines."
-            );
-        }
-
+        Self::reject_line_shaping("SHOW signature", clauses)?;
         for pred in &clauses.where_predicates {
             let field = crate::field_tiers::canonical(&pred.field);
             let on_a_line =
@@ -295,7 +309,7 @@ impl ForgeQLEngine {
     /// buffer whose lines came from wherever the earlier command looked. So
     /// there is no lookup for a glob to scope and no row path for it to match,
     /// and nothing in the pipeline reads it: it was accepted and wholly inert.
-    fn reject_globs(verb: &str, clauses: &Clauses) -> Result<()> {
+    pub(in crate::engine) fn reject_globs(verb: &str, clauses: &Clauses) -> Result<()> {
         if clauses.in_glob.is_some() || !clauses.exclude_globs.is_empty() {
             bail!(
                 "IN / EXCLUDE cannot be answered on {verb}: it addresses lines that are already \

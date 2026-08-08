@@ -104,6 +104,10 @@ impl ForgeQLEngine {
         // Before the history is read, so the refusal does not depend on there
         // being a readable worktree to read it from.
         crate::filter::reject_unresolvable_fields::<CommitRow>("SHOW COMMITS", clauses)?;
+        // And a glob for the same reason: a commit row has no path, and no name
+        // was resolved for one to scope, so `IN 'crates/**'` could only drop
+        // every commit — the confident zero `CommitRow` exists to stop.
+        Self::reject_globs("SHOW COMMITS", clauses)?;
 
         let commits = crate::git::commits_since(&worktree, &base_ref)?;
         let mut rows: Vec<CommitRow> = commits
