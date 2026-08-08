@@ -52,10 +52,14 @@ impl ForgeQLEngine {
         symbol: &str,
         clauses: &Clauses,
     ) -> serde_json::Value {
-        let lookup = crate::filter::clauses_for_lookup::<crate::result::SourceLine>(clauses);
+        // The whole clause, not the split half: a signature is one rendered
+        // line rather than a row set, so there is no row consumer to give
+        // anything to. Splitting here would hand the row side `line` and
+        // `node_id` — carried by a line row and a symbol row alike — and then
+        // drop them, since nothing ever filters a signature.
         engine
-            .resolve_symbol(symbol, &lookup, workspace.root())
-            .and_then(|opt| opt.ok_or_else(|| super::lookup_missed(symbol, &lookup)))
+            .resolve_symbol(symbol, clauses, workspace.root())
+            .and_then(|opt| opt.ok_or_else(|| super::lookup_missed(symbol, clauses)))
             .and_then(|loc| {
                 let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
                 let req = show::ShowRequest {
@@ -215,6 +219,7 @@ impl ForgeQLEngine {
             "SHOW NODE",
             clauses,
         )?;
+        Self::reject_globs("SHOW NODE", clauses)?;
 
         // A node_id may carry a node-relative line offset suffix — `id(n)` or
         // `id(n-m)`. METADATA describes the whole node, so an offset is only

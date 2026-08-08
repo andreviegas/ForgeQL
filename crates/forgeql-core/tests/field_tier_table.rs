@@ -1468,6 +1468,23 @@ fn a_glob_scopes_the_lookup_when_the_rows_have_no_file_of_their_own() {
             "{backend}: IN emptied a body it should have scoped: {lines:?}"
         );
     }
+
+    // And on the verbs that resolve no name, a glob has neither a lookup to
+    // scope nor a row path to match, so it is refused rather than accepted and
+    // left wholly inert.
+    let mut t = two_language_workspace(true);
+    let (node, _rev) = t.file_handle("a_shapes.cpp");
+    for fql in [
+        format!("SHOW NODE '{node}' IN 'nowhere/**'"),
+        "SHOW LINES 1-2 OF 'a_shapes.cpp' IN 'nowhere/**'".to_string(),
+        "SHOW MORE IN 'nowhere/**'".to_string(),
+    ] {
+        let err = refusal(&mut t, &fql);
+        assert!(
+            err.contains("IN / EXCLUDE cannot be answered"),
+            "`{fql}` accepted a glob it does nothing with: {err}"
+        );
+    }
 }
 
 #[test]
@@ -1489,7 +1506,22 @@ fn show_signature_refuses_a_field_it_has_no_rows_to_filter() {
         );
     }
 
-    // What the clause CAN do there is scope the lookup, and still does.
+    // And there are no rows to shape either.
+    for fql in [
+        "SHOW signature OF 'shared_fn' ORDER BY line",
+        "SHOW signature OF 'shared_fn' GROUP BY name",
+        "SHOW signature OF 'shared_fn' HAVING count > 1",
+    ] {
+        let err = refusal(&mut t, fql);
+        assert!(
+            err.contains("nothing here to shape"),
+            "`{fql}` was accepted and ignored instead of refused: {err}"
+        );
+    }
+
+    // What the clause CAN do there is scope the lookup, and still does — for
+    // every field a symbol row carries, including the two a source line
+    // carries too. Splitting the clause here would have dropped exactly those.
     let rust = format!(
         "{:?}",
         t.try_fql("SHOW signature OF 'shared_fn' WHERE language = 'rust'")
@@ -1498,6 +1530,13 @@ fn show_signature_refuses_a_field_it_has_no_rows_to_filter() {
     assert!(
         rust.contains("u32"),
         "SHOW signature resolved the wrong shared_fn: {rust}"
+    );
+
+    let missed = refusal(&mut t, "SHOW signature OF 'shared_fn' WHERE line = 99999");
+    assert!(
+        missed.contains("WHERE line = 99999"),
+        "a field both a line and a symbol row carry was swallowed rather than \
+         given to the lookup: {missed}"
     );
 }
 #[test]

@@ -266,18 +266,25 @@ refused there and the rest of its clause scopes the lookup:
 Source line filtering runs **before** the 40-line cap.
 
 A `WHERE` on a verb that names a symbol — `SHOW body`, `SHOW context`,
-`SHOW signature`, `SHOW members`, `SHOW callees`, `FIND callees OF` — is **split
-between two consumers**: a field the returned rows carry (above) filters those
-rows, and a field they do not carry scopes the lookup instead, so
+`SHOW members`, `SHOW callees`, `FIND callees OF` — is **split between two
+consumers**: a field the returned rows carry (above) filters those rows, and a
+field they do not carry scopes the lookup instead, so
 `SHOW members OF 'Foo' WHERE language = 'cpp'` answers with the C++ `Foo`'s
-members. If nothing satisfies the lookup half you get
+members. `IN`/`EXCLUDE` go to the lookup too on the verbs whose rows have no
+file of their own. If nothing satisfies the lookup half you get
 `no symbol 'Foo' matches WHERE …` rather than an empty answer. `ORDER BY`,
 `GROUP BY` and `HAVING` are never split — no lookup reads them, so they must
 name a field the returned rows carry, and `SHOW members OF 'Foo' ORDER BY
-language` is refused even though the `WHERE` form is accepted. On the `SHOW`
-verbs a misspelt field cannot be told from an unmatched one: it reaches the
-lookup, matches nothing, and reports that — only `FIND symbols`/`globals`/
-`usages` can name it as unknown.
+language` is refused even though the `WHERE` form is accepted.
+
+`SHOW signature` is the exception on both counts: it renders one line rather
+than a row set, so its whole clause goes to the lookup, and `ORDER BY`,
+`GROUP BY`, `HAVING` and a `WHERE` on a line-only field (`text`, `marker`,
+`rev`) are refused there because there is nothing to shape or filter.
+
+On the `SHOW` verbs a misspelt field cannot be told from an unmatched one: it
+reaches the lookup, matches nothing, and reports that — only `FIND symbols`/
+`globals`/`usages` can name it as unknown.
 
 ## fql_kind Values
 

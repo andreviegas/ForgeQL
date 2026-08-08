@@ -214,7 +214,8 @@ impl ForgeQLEngine {
                 reject_unresolvable_fields::<FileEntry>("FIND files", clauses)
             }
             ForgeQLIR::ShowLines { clauses, .. } => {
-                reject_unresolvable_fields::<SourceLine>("SHOW LINES", clauses)
+                reject_unresolvable_fields::<SourceLine>("SHOW LINES", clauses)?;
+                Self::reject_globs("SHOW LINES", clauses)
             }
             ForgeQLIR::ShowMembers { clauses, .. } => {
                 reject_refused_fields::<MemberEntry>("SHOW members", clauses)?;
@@ -230,27 +231,43 @@ impl ForgeQLEngine {
             }
             ForgeQLIR::ShowSignature { clauses, .. } => {
                 reject_refused_fields::<SourceLine>("SHOW signature", clauses)?;
-                Self::reject_line_only_fields(clauses)
+                Self::reject_signature_clause_fields(clauses)
             }
             _ => Ok(()),
         }
     }
 
-    /// Refuse a `SHOW signature` clause field that only a source-line row can
-    /// carry.
+    /// Refuse a `SHOW signature` clause that has nothing to act on.
     ///
-    /// A signature is one rendered line, not a row set, so nothing here filters
-    /// rows and the whole clause can only scope which symbol was resolved. A
-    /// name a line row carries and a symbol row does not — `text`, `marker`,
-    /// `rev` — therefore has nothing to act on, and saying so beats accepting
-    /// it and answering as though it had been applied.
+    /// A signature is one rendered line, not a row set. There is no row half at
+    /// all here: the whole clause goes to the lookup, so `ORDER BY`, `GROUP BY`
+    /// and `HAVING` have nothing to shape, and a `WHERE` naming a field a line
+    /// row carries and a symbol row does not — `text`, `marker`, `rev` — has
+    /// nothing to filter. Saying so beats accepting them and answering as
+    /// though they had been applied.
     ///
-    /// The set is derived rather than listed: what a source line resolves,
-    /// minus what a symbol row resolves. A name on both, such as `line` or
-    /// `node_id`, still scopes the lookup and is left alone.
-    fn reject_line_only_fields(clauses: &Clauses) -> Result<()> {
+    /// The `WHERE` set is derived rather than listed: what a source line
+    /// resolves, minus what a symbol row resolves. A name on both, such as
+    /// `line` or `node_id`, is a name the lookup can use, and reaches it —
+    /// which is why this verb hands the resolver its clause whole rather than
+    /// the split half, whose row side would be a phantom that silently
+    /// swallowed exactly those two names.
+    fn reject_signature_clause_fields(clauses: &Clauses) -> Result<()> {
         use crate::filter::ClauseTarget as _;
         use crate::result::{SourceLine, SymbolMatch};
+
+        // There are no rows to order, group or filter after grouping, so these
+        // three can only be accepted and do nothing.
+        if clauses.order_by.is_some()
+            || clauses.group_by.is_some()
+            || !clauses.having_predicates.is_empty()
+        {
+            bail!(
+                "ORDER BY, GROUP BY and HAVING cannot be answered on SHOW signature: it renders \
+                 one line rather than a row set, so there is nothing here to shape. Use SHOW body \
+                 OF, whose rows are source lines."
+            );
+        }
 
         for pred in &clauses.where_predicates {
             let field = crate::field_tiers::canonical(&pred.field);
@@ -266,6 +283,24 @@ impl ForgeQLEngine {
                     pred.field
                 );
             }
+        }
+        Ok(())
+    }
+
+    /// Refuse `IN` / `EXCLUDE` on a verb that resolves no name and whose rows
+    /// carry no path.
+    ///
+    /// A glob is a statement about a file. `SHOW LINES` and `SHOW NODE` were
+    /// already given the file — by path or by handle — and `SHOW MORE` pages a
+    /// buffer whose lines came from wherever the earlier command looked. So
+    /// there is no lookup for a glob to scope and no row path for it to match,
+    /// and nothing in the pipeline reads it: it was accepted and wholly inert.
+    fn reject_globs(verb: &str, clauses: &Clauses) -> Result<()> {
+        if clauses.in_glob.is_some() || !clauses.exclude_globs.is_empty() {
+            bail!(
+                "IN / EXCLUDE cannot be answered on {verb}: it addresses lines that are already \
+                 located, so a glob has no lookup to scope and no row path to match."
+            );
         }
         Ok(())
     }
