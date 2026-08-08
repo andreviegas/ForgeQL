@@ -521,9 +521,12 @@ impl ForgeQLEngine {
         // output is windowed and buffered for `SHOW MORE` at the single CSV
         // render boundary (mcp.rs::finalize_csv).
         if let Some(clauses) = clauses
-            && clauses.limit.is_some()
+            && (clauses.limit.is_some() || clauses.offset.is_some())
         {
-            // Agent gave an explicit LIMIT — honour OFFSET + LIMIT.
+            // OFFSET is honoured on its own, not only beside a LIMIT. Gating
+            // the pair on `limit.is_some()` meant `SHOW body OF 'f' OFFSET 40`
+            // returned lines 1-40 — precisely the page it asked to skip — and
+            // every other verb applies OFFSET unconditionally.
             if let ShowContent::Lines { lines, .. } = &mut show_result.content {
                 let offset = clauses.offset.unwrap_or(0);
                 if offset > 0 && offset < total {

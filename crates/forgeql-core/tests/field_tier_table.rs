@@ -1506,6 +1506,51 @@ fn a_glob_scopes_the_lookup_when_the_rows_have_no_file_of_their_own() {
             "`{fql}` accepted a clause nothing applies: {err}"
         );
     }
+
+    // DEPTH is the same shape once more: three verbs read it and the parser
+    // hands it to all fifteen. On `SHOW outline`, whose rows carry a literal
+    // `depth` column, `DEPTH 2` reads as a depth-limited tree and returned the
+    // whole one.
+    for fql in [
+        "SHOW outline OF 'a_shapes.cpp' DEPTH 2",
+        "SHOW members OF 'Point' DEPTH 2",
+        "SHOW callees OF 'shared_fn' DEPTH 2",
+        "FIND symbols WHERE name = 'Point' DEPTH 2",
+        "FIND usages OF 'helper_c' DEPTH 2",
+        "SHOW COMMITS DEPTH 2",
+    ] {
+        let err = refusal(&mut t, fql);
+        assert!(
+            err.contains("DEPTH cannot be answered"),
+            "`{fql}` accepted a DEPTH nothing reads: {err}"
+        );
+    }
+    // And the three that do read it still do.
+    assert!(
+        !line_texts(&mut t, "SHOW body OF 'shared_fn' DEPTH 99").is_empty(),
+        "DEPTH stopped working on the verb whose collapse level it is"
+    );
+
+    // A mutation reads no clause at all, and is the worst place to ignore one.
+    let err = refusal(&mut t, "CHANGE FILE 'a_shapes.cpp' WITH 'x' LIMIT 5");
+    assert!(
+        err.contains("reads no clause"),
+        "CHANGE FILE accepted a clause that scopes nothing: {err}"
+    );
+
+    // OFFSET on its own is honoured, not silently dropped for want of a LIMIT.
+    let whole = line_texts(&mut t, "SHOW body OF 'shared_fn' DEPTH 99");
+    let skipped = line_texts(&mut t, "SHOW body OF 'shared_fn' DEPTH 99 OFFSET 1");
+    assert_eq!(
+        skipped.len(),
+        whole.len() - 1,
+        "OFFSET without a LIMIT was read by nothing: {skipped:?} vs {whole:?}"
+    );
+    assert_eq!(
+        skipped.first(),
+        whole.get(1),
+        "OFFSET returned the page it was asked to skip"
+    );
 }
 
 #[test]
@@ -1685,10 +1730,12 @@ fn clause_carrying_variants() -> Vec<String> {
 ///
 /// `<NODE>` is substituted with a real handle from the fixture.
 const CLAUSE_FIELD_PROBES: &[(&str, Option<&str>)] = &[
-    // A mutation. Its clause selects the lines to rewrite, so probing it here
-    // would edit the fixture; `CHANGE NODE … MATCHING` is covered by the
-    // mutation suites.
-    ("ChangeContent", None),
+    (
+        "ChangeContent",
+        // `CHANGE FILE` reads no clause: the range it rewrites lives in its
+        // target, not here. The probe refuses, so it edits nothing.
+        Some("CHANGE FILE 'a_shapes.cpp' WITH 'x' LIMIT 5"),
+    ),
     ("FindFiles", Some("FIND files WHERE usages > 1")),
     ("FindSymbols", Some("FIND symbols WHERE size > 1")),
     (
@@ -1755,7 +1802,7 @@ fn every_clause_carrying_verb_decides_how_its_fields_are_checked() {
         let fql = probe.replace("<NODE>", &node);
         let err = refusal(&mut t, &fql);
         assert!(
-            err.contains("cannot be answered"),
+            err.contains("cannot be answered") || err.contains("reads no clause"),
             "{variant}: `{fql}` must be refused, not answered with nothing — got: {err}"
         );
     }

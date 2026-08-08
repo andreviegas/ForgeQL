@@ -738,6 +738,7 @@ impl ForgeQLEngine {
             "SHOW DIFF",
             &row_clauses,
         )?;
+        crate::filter::reject_depth("SHOW DIFF", clauses)?;
 
         let diff = match of {
             Some(rev) => git::commit_diff(&worktree, rev)?,

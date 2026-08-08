@@ -189,6 +189,60 @@ pub fn reject_unresolvable_shaping_fields<T: ClauseTarget>(
     Ok(())
 }
 
+/// Refuse a `DEPTH` clause on a verb that does not read it.
+///
+/// Three verbs consume it: `SHOW body` as its collapse level, `SHOW context` as
+/// its context window, and `FIND files` as a directory-tree depth. The parser
+/// folds it into the universal clause block for every verb, so everywhere else
+/// it was accepted and read by nothing — most misleadingly on `SHOW outline`,
+/// whose rows carry a literal `depth` column, so `SHOW outline OF 'f' DEPTH 2`
+/// reads as a request for a depth-limited tree and returned the whole one.
+///
+/// # Errors
+///
+/// Returns an error naming the verb and the three that do read `DEPTH`.
+pub fn reject_depth(verb: &str, clauses: &Clauses) -> anyhow::Result<()> {
+    if clauses.depth.is_some() {
+        anyhow::bail!(
+            "DEPTH cannot be answered on {verb}: nothing here reads it. It is a collapse level \
+             on SHOW body OF, a context window on SHOW context OF, and a tree depth on FIND files."
+        );
+    }
+    Ok(())
+}
+
+/// Refuse any universal clause on a verb that reads none of them.
+///
+/// The parser accepts the clause block wherever the grammar allows it, which
+/// includes verbs that never consult it. `CHANGE FILE` is one: the line range
+/// it rewrites travels in its `ChangeTarget`, so a `WHERE`, `LIMIT` or `IN`
+/// written beside it changed nothing. On a mutation that is the worst place for
+/// a clause to be ignored — an agent that believes it scoped an edit and did
+/// not has written to more than it meant to.
+///
+/// # Errors
+///
+/// Returns an error naming the verb when any clause element is present.
+pub fn reject_clause_block(verb: &str, clauses: &Clauses) -> anyhow::Result<()> {
+    let empty = clauses.where_predicates.is_empty()
+        && clauses.having_predicates.is_empty()
+        && clauses.order_by.is_none()
+        && clauses.group_by.is_none()
+        && clauses.in_glob.is_none()
+        && clauses.exclude_globs.is_empty()
+        && clauses.limit.is_none()
+        && clauses.offset.is_none()
+        && clauses.depth.is_none();
+    if !empty {
+        anyhow::bail!(
+            "{verb} reads no clause: WHERE, IN, EXCLUDE, ORDER BY, GROUP BY, HAVING, LIMIT, \
+             OFFSET and DEPTH are all ignored here, and it edits, so a clause that looks like \
+             it scopes the edit and does not is refused. Address the span you mean directly."
+        );
+    }
+    Ok(())
+}
+
 /// Which accessors a clause can reach a row through.
 #[derive(Clone, Copy)]
 enum ClauseKind {

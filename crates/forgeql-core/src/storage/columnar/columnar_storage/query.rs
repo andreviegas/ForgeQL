@@ -83,6 +83,7 @@ impl StorageEngine for ColumnarStorage {
         // nor any segment carries can only report absence here as well. They
         // live on `find_symbols_impl`, which this verb does not go through.
         crate::filter::reject_refused_fields::<SymbolMatch>("FIND usages", clauses)?;
+        crate::filter::reject_depth("FIND usages", clauses)?;
         self.reject_unknown_where_fields(clauses)?;
         self.reject_unknown_order_by_field(clauses)?;
         self.reject_unknown_group_by_field(clauses)?;

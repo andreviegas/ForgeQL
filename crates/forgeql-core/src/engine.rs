@@ -428,7 +428,16 @@ impl ForgeQLEngine {
             ForgeQLIR::FindFiles { .. } => self.exec_find_files(sid, op),
 
             // --- Mutations ---
-            ForgeQLIR::ChangeContent { .. } => self.exec_mutation(sid, op, true),
+            ForgeQLIR::ChangeContent { clauses, .. } => {
+                // The parser accepts the universal clause block here, and
+                // nothing downstream reads it: the line range a `CHANGE FILE`
+                // rewrites lives in its `ChangeTarget`, not in `clauses`. A
+                // clause on a mutation is therefore accepted and read by
+                // nothing — and it is a mutation, so answering as though a
+                // filter had been applied would edit more than was asked.
+                crate::filter::reject_clause_block("CHANGE FILE", clauses)?;
+                self.exec_mutation(sid, op, true)
+            }
             ForgeQLIR::ChangeNode { .. } => self.exec_change_node(sid, op),
             ForgeQLIR::ChangeNodeMatching { .. } => self.exec_change_node_matching(sid, op),
             ForgeQLIR::ChangeNodesFound { .. } => self.exec_change_nodes_found(sid, op),

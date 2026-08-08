@@ -74,6 +74,23 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   filter, so `SHOW COMMITS IN 'crates/**'` answered zero — the same confident
   absence that the closed commit shape had just been introduced to stop.
 
+- `OFFSET` without a `LIMIT` was read by nothing on a line answer, so
+  `SHOW body OF 'f' DEPTH 99 OFFSET 40` returned lines 1-40 — exactly the page
+  it asked to skip. The pair had been gated on the `LIMIT` being present; every
+  other verb applies `OFFSET` on its own, and now so does this one.
+
+- `DEPTH` is read by three verbs — `SHOW body` (collapse depth), `SHOW context`
+  (context window) and `FIND files` (tree depth) — and the parser handed it to
+  all fifteen, so everywhere else it was accepted and read by nothing. It is
+  refused there now. `SHOW outline` was the misleading one: its rows carry a
+  `depth` column of their own, so `SHOW outline OF 'f' DEPTH 2` read as a
+  request for a depth-limited tree and returned the whole one.
+
+- `CHANGE FILE` accepted the whole universal clause block and read none of it —
+  the range it rewrites travels in its target, not its clause. On a mutation
+  that is the worst place to ignore one: an agent that believed it had scoped
+  an edit had not. Any clause there is now refused.
+
 ### Changed
 
 - Every clause field is checked **before** the verb does its work: before the

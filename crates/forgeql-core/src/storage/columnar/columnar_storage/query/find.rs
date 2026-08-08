@@ -77,6 +77,7 @@ impl ColumnarStorage {
         // count-based GROUP BY paths are only valid when source paths are unique;
         // duplicates overcount, so fall through to the deduplicating pipeline.
         crate::filter::reject_refused_fields::<SymbolMatch>("FIND symbols", clauses)?;
+        crate::filter::reject_depth("FIND symbols", clauses)?;
         self.reject_unknown_where_fields(clauses)?;
         self.reject_unknown_order_by_field(clauses)?;
         self.reject_unknown_group_by_field(clauses)?;

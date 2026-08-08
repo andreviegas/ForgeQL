@@ -108,6 +108,7 @@ impl ForgeQLEngine {
         // was resolved for one to scope, so `IN 'crates/**'` could only drop
         // every commit — the confident zero `CommitRow` exists to stop.
         Self::reject_globs("SHOW COMMITS", clauses)?;
+        crate::filter::reject_depth("SHOW COMMITS", clauses)?;
 
         let commits = crate::git::commits_since(&worktree, &base_ref)?;
         let mut rows: Vec<CommitRow> = commits

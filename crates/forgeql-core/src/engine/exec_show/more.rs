@@ -44,6 +44,7 @@ impl ForgeQLEngine {
         crate::filter::reject_unresolvable_fields::<SourceLine>("SHOW MORE", clauses)?;
         Self::reject_line_shaping("SHOW MORE", clauses)?;
         Self::reject_globs("SHOW MORE", clauses)?;
+        crate::filter::reject_depth("SHOW MORE", clauses)?;
 
         let buffer = crate::showmore::read_buffer_n(&root, *last)
             .map_err(|e| anyhow::anyhow!("reading SHOW MORE buffer: {e}"))?

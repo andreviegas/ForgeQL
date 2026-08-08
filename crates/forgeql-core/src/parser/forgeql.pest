@@ -3,7 +3,10 @@
 // Design:
 //   • Silent rules (prefixed _) are consumed but never appear in the parse tree.
 //   • Every command that accepts filtering/sorting/pagination accepts the same
-//     `clauses` block.  Inapplicable clauses are silently ignored by the engine.
+//     `clauses` block.  The parser accepts it; each verb then either APPLIES a
+//     clause or REFUSES it — nothing is silently ignored.  See
+//     ForgeQLEngine::reject_line_shaping / reject_globs / filter::reject_depth
+//     for where that is enforced.
 //   • The clause set is open: new clauses can be added without changing any
 //     existing command grammar rule.
 
@@ -357,9 +360,10 @@ commit_stmt = { "COMMIT" ~ "MESSAGE" ~ content_value }
 // -----------------------------------------------------------------------
 // Universal clause block
 //
-// Accepted by every command.  Inapplicable clauses are silently ignored
-// by the execution engine.  The clause set is open: new clauses may be
-// added here without changing any existing command grammar rule.
+// Accepted by every command.  A command that does not read a given clause
+// REFUSES it rather than ignoring it, so a clause an agent writes either
+// changes the answer or says it cannot.  The clause set is open: new clauses
+// may be added here without changing any existing command grammar rule.
 // -----------------------------------------------------------------------
 
 clauses = {

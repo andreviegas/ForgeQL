@@ -208,7 +208,8 @@ impl ForgeQLEngine {
 
         match op {
             ForgeQLIR::ShowOutline { clauses, .. } => {
-                reject_unresolvable_fields::<OutlineEntry>("SHOW outline", clauses)
+                reject_unresolvable_fields::<OutlineEntry>("SHOW outline", clauses)?;
+                crate::filter::reject_depth("SHOW outline", clauses)
             }
             ForgeQLIR::FindFiles { clauses, .. } => {
                 reject_unresolvable_fields::<FileEntry>("FIND files", clauses)
@@ -216,15 +217,18 @@ impl ForgeQLEngine {
             ForgeQLIR::ShowLines { clauses, .. } => {
                 reject_unresolvable_fields::<SourceLine>("SHOW LINES", clauses)?;
                 Self::reject_line_shaping("SHOW LINES", clauses)?;
-                Self::reject_globs("SHOW LINES", clauses)
+                Self::reject_globs("SHOW LINES", clauses)?;
+                crate::filter::reject_depth("SHOW LINES", clauses)
             }
             ForgeQLIR::ShowMembers { clauses, .. } => {
                 reject_refused_fields::<MemberEntry>("SHOW members", clauses)?;
-                reject_unresolvable_shaping_fields::<MemberEntry>("SHOW members", clauses)
+                reject_unresolvable_shaping_fields::<MemberEntry>("SHOW members", clauses)?;
+                crate::filter::reject_depth("SHOW members", clauses)
             }
             ForgeQLIR::ShowCallees { clauses, .. } => {
                 reject_refused_fields::<CallGraphEntry>("SHOW callees", clauses)?;
-                reject_unresolvable_shaping_fields::<CallGraphEntry>("SHOW callees", clauses)
+                reject_unresolvable_shaping_fields::<CallGraphEntry>("SHOW callees", clauses)?;
+                crate::filter::reject_depth("SHOW callees", clauses)
             }
             ForgeQLIR::ShowBody { clauses, .. } | ForgeQLIR::ShowContext { clauses, .. } => {
                 reject_refused_fields::<SourceLine>("a SHOW that reads lines", clauses)?;
@@ -232,7 +236,8 @@ impl ForgeQLEngine {
             }
             ForgeQLIR::ShowSignature { clauses, .. } => {
                 reject_refused_fields::<SourceLine>("SHOW signature", clauses)?;
-                Self::reject_signature_clause_fields(clauses)
+                Self::reject_signature_clause_fields(clauses)?;
+                crate::filter::reject_depth("SHOW signature", clauses)
             }
             _ => Ok(()),
         }

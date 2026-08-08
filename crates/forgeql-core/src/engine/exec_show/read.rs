@@ -221,6 +221,7 @@ impl ForgeQLEngine {
         )?;
         Self::reject_line_shaping("SHOW NODE", clauses)?;
         Self::reject_globs("SHOW NODE", clauses)?;
+        crate::filter::reject_depth("SHOW NODE", clauses)?;
 
         // A node_id may carry a node-relative line offset suffix — `id(n)` or
         // `id(n-m)`. METADATA describes the whole node, so an offset is only
