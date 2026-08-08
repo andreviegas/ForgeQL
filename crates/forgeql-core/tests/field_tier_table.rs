@@ -606,10 +606,12 @@ fn build_workspace(branches: usize, plus_unguarded: bool) -> common::TestSession
 /// for would move their numbers.
 fn typed_workspace() -> common::TestSession {
     let dir = tempfile::tempdir().expect("tempdir");
+    // `point_sum` is deliberately several lines long: a one-line body makes
+    // "the filter returned fewer lines than the whole body" unfalsifiable.
     std::fs::write(
         dir.path().join("shapes.cpp"),
         "struct Point {\n    int x;\n    int y;\n};\n\
-         int point_sum(void) { return 0; }\n",
+         int point_sum(void) {\n    int total = 0;\n    total = total + 1;\n    return total;\n}\n",
     )
     .expect("write fixture");
     common::columnar_session_in(dir)
@@ -1192,43 +1194,57 @@ fn any_where_opens_the_outline_universe_not_only_a_kind_predicate() {
 }
 
 #[test]
-fn a_clause_that_also_resolves_a_symbol_is_not_gated_by_the_row_shape() {
-    // The stated boundary, asserted rather than assumed — and the one place the
-    // row-shape refusal deliberately does not reach.
+fn a_resolve_predicate_scopes_the_lookup_without_emptying_the_result() {
+    // `SHOW members`, `SHOW callees` and the reading verbs use one clause
+    // twice: the storage engine applies it to SYMBOL rows to decide which
+    // symbol `OF` names, and the same predicates then reach the rows that came
+    // back. A members row carries no `language`, so `WHERE language = 'cpp'` —
+    // the documented way to disambiguate a type two languages both define —
+    // resolved the right type and then dropped every one of its members.
     //
-    // `SHOW members`, `SHOW callees`, `SHOW body`, `SHOW context` and
-    // `SHOW NODE` all use the same clause twice: to pick which symbol to
-    // resolve, and then to filter what comes back. `WHERE language = 'cpp'`
-    // disambiguates a name two languages both define, and the resolving half
-    // runs against symbol rows, whose field set is open — so a members row not
-    // carrying `language` is not evidence the query is wrong. Gating those
-    // verbs on their own row shape refused a working query, which is how this
-    // test came to exist: the gate was green and the live engine was not.
-    //
-    // What they DO refuse is what no row of any shape can answer.
-    //
-    // `SHOW signature` is the same shape with the filtering half absent: it
-    // renders one line and applies no `WHERE` at all.
-    let mut typed = typed_workspace();
-    for fql in [
-        "SHOW members OF 'Point' WHERE language = 'cpp'",
-        "SHOW callees OF 'point_sum' WHERE language = 'cpp'",
-        "SHOW body OF 'point_sum' WHERE language = 'cpp'",
-    ] {
-        let answer = typed
-            .try_fql(fql)
-            .unwrap_or_else(|e| panic!("`{fql}` was refused: {e}"));
-        assert!(
-            format!("{answer:?}").contains("Point") || format!("{answer:?}").contains("point_sum"),
-            "`{fql}` answered nothing: {answer:?}"
-        );
-    }
+    // Asserting on ROW COUNTS, not on the answer's text: the response envelope
+    // echoes the symbol that was asked for even when the row set is empty, so
+    // `contains("Point")` holds on a zero-row answer and cannot fail on the
+    // regression it names. That is how the first version of this test passed
+    // while the engine was wrong.
+    let mut t = typed_workspace();
+
+    let baseline = member_count(&mut t, "SHOW members OF 'Point'");
+    assert!(baseline > 0, "fixture has no members to lose");
+    assert_eq!(
+        member_count(&mut t, "SHOW members OF 'Point' WHERE language = 'cpp'"),
+        baseline,
+        "a predicate that only scoped the type lookup must not filter its members"
+    );
+
+    let body = line_count(&mut t, "SHOW body OF 'point_sum' DEPTH 99");
+    assert!(body > 0, "fixture body is empty");
+    assert_eq!(
+        line_count(
+            &mut t,
+            "SHOW body OF 'point_sum' DEPTH 99 WHERE language = 'cpp'"
+        ),
+        body,
+        "a predicate that only scoped the symbol lookup must not filter its lines"
+    );
+
+    // The filtering half still filters, and to fewer rows than the whole body.
+    let matching = line_count(
+        &mut t,
+        "SHOW body OF 'point_sum' DEPTH 99 WHERE text MATCHES 'return'",
+    );
+    assert!(
+        matching > 0 && matching < body,
+        "the filtering half of the clause stopped working: {matching} of {body} lines"
+    );
+
+    // And what neither half can answer is refused, not silently ignored.
     for fql in [
         "SHOW members OF 'Point' WHERE size > 1",
         "SHOW callees OF 'point_sum' WHERE marker = 'x'",
         "SHOW body OF 'point_sum' WHERE declaration = 'x'",
     ] {
-        let err = typed
+        let err = t
             .try_fql(fql)
             .err()
             .unwrap_or_else(|| panic!("`{fql}` answered instead of erroring"));
@@ -1238,24 +1254,39 @@ fn a_clause_that_also_resolves_a_symbol_is_not_gated_by_the_row_shape() {
         );
     }
 
-    let mut t = guarded_workspace(2);
-    let filtered = format!(
-        "{:?}",
-        t.try_fql("SHOW body OF 'sym_0' WHERE text MATCHES 'return'")
-            .expect("the filtering half of the clause stopped working")
-    );
-    assert!(
-        filtered.contains("return"),
-        "the filtering half of the clause stopped working: {filtered}"
-    );
-
+    // `SHOW signature` renders one line and applies no `WHERE` at all.
+    let mut guarded = guarded_workspace(2);
     let signature = format!(
         "{:?}",
-        t.try_fql("SHOW signature OF 'sym_0' WHERE name = 'nothing_matches_this'")
+        guarded
+            .try_fql("SHOW signature OF 'sym_0' WHERE name = 'nothing_matches_this'")
             .expect("SHOW signature refused a clause it is documented to ignore")
     );
     assert!(
         signature.contains("sym_0"),
         "SHOW signature applied the clause instead of ignoring it: {signature}"
     );
+}
+
+/// How many member rows a `SHOW members` answered with — the number the
+/// envelope's echoed symbol name says nothing about.
+fn member_count(t: &mut common::TestSession, fql: &str) -> usize {
+    match t.try_fql(fql).unwrap_or_else(|e| panic!("`{fql}`: {e}")) {
+        ForgeQLResult::Show(show) => match show.content {
+            forgeql_core::result::ShowContent::Members { members, .. } => members.len(),
+            other => panic!("`{fql}` did not answer with members: {other:?}"),
+        },
+        other => panic!("`{fql}` did not answer with a show result: {other:?}"),
+    }
+}
+
+/// How many source lines a reading verb answered with.
+fn line_count(t: &mut common::TestSession, fql: &str) -> usize {
+    match t.try_fql(fql).unwrap_or_else(|e| panic!("`{fql}`: {e}")) {
+        ForgeQLResult::Show(show) => match show.content {
+            forgeql_core::result::ShowContent::Lines { lines, .. } => lines.len(),
+            other => panic!("`{fql}` did not answer with lines: {other:?}"),
+        },
+        other => panic!("`{fql}` did not answer with a show result: {other:?}"),
+    }
 }

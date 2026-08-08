@@ -77,7 +77,15 @@ impl StorageEngine for ColumnarStorage {
         // all, and none of the other refused names either, so the same refusal
         // `FIND symbols` gives has to be given here rather than letting the
         // clause filter drop every row in silence.
+        //
+        // The same three Stage 0 checks too, and for the same reason: an
+        // occurrence row is a symbol row with a `role`, so a field neither it
+        // nor any segment carries can only report absence here as well. They
+        // live on `find_symbols_impl`, which this verb does not go through.
         crate::filter::reject_refused_fields::<SymbolMatch>("FIND usages", clauses)?;
+        self.reject_unknown_where_fields(clauses)?;
+        self.reject_unknown_order_by_field(clauses)?;
+        self.reject_unknown_group_by_field(clauses)?;
         Ok(self.find_usages_impl(name, clauses, root))
     }
 

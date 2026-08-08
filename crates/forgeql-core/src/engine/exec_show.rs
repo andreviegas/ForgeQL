@@ -22,7 +22,7 @@ use anyhow::{Result, bail};
 
 use crate::{
     ast::parse_cache::{CachedParse, sha1_of_bytes},
-    filter::{reject_refused_fields, reject_unresolvable_fields},
+    filter::{reject_unresolvable_fields, without_resolve_only_predicates},
     ir::{Backend, Clauses, ForgeQLIR},
     result::{ForgeQLResult, ShowContent},
     session::Session,
@@ -115,21 +115,23 @@ impl ForgeQLEngine {
         // `SHOW body OF 'fn' WHERE text MATCHES 'TODO'` filter over the full
         // function body, not just the first N lines.
         //
-        // These verbs are NOT gated against the source-line row shape, and
-        // deliberately: their `WHERE` does two jobs. It picks which symbol to
-        // resolve — `SHOW body OF 'process' WHERE language = 'rust'` is how an
-        // agent disambiguates a name two languages both define — and it filters
-        // the lines that come back. The first half runs against symbol rows,
-        // whose field set is open, so no closed declaration can say which names
-        // are legitimate here. A name that is neither leaves every line
-        // standing rather than dropping them all, which is the same shape
-        // `SHOW signature` has. What IS refused is what no row of any shape can
-        // answer — the table's own refused set.
+        // The same clause already ran once, against symbol rows, to decide
+        // which symbol `OF` names — `SHOW body OF 'process' WHERE language =
+        // 'rust'` is how an agent disambiguates a name two languages both
+        // define. A source line carries no `language`, so re-applying that
+        // predicate here dropped every line of the body it had just found.
+        // Those predicates are partitioned out; what is left is what a line can
+        // answer, and anything that is neither is refused rather than silently
+        // matching nothing.
         if let (ShowContent::Lines { lines, .. }, Some(clauses)) =
             (&mut show_result.content, show_clauses)
         {
-            reject_refused_fields::<crate::result::SourceLine>("a SHOW that reads lines", clauses)?;
-            for predicate in &clauses.where_predicates {
+            let kept = without_resolve_only_predicates::<crate::result::SourceLine>(clauses);
+            reject_unresolvable_fields::<crate::result::SourceLine>(
+                "a SHOW that reads lines",
+                &kept,
+            )?;
+            for predicate in &kept.where_predicates {
                 let pred = predicate.clone();
                 lines.retain(|line| crate::filter::eval_predicate(line, &pred));
             }
@@ -218,29 +220,29 @@ impl ForgeQLEngine {
                 crate::filter::apply_clauses_keep_order(entries, clauses);
             }
             (ShowContent::Members { members, .. }, ForgeQLIR::ShowMembers { clauses, .. }) => {
-                // Not the row-shape check: this clause also picked which type to
-                // resolve, and `WHERE language = 'cpp'` disambiguating a name two
-                // languages both define is a working query the members row itself
-                // cannot carry. What is refused here is what no row of any shape
-                // can answer.
-                reject_refused_fields::<crate::result::MemberEntry>("SHOW members", clauses)?;
-                crate::filter::apply_clauses(members, clauses);
+                // This clause also picked which type to resolve, and those
+                // predicates must not run again over rows that cannot carry
+                // them — a members row has no `language`, so re-applying the
+                // predicate that found the type drops every member of it.
+                let kept = without_resolve_only_predicates::<crate::result::MemberEntry>(clauses);
+                reject_unresolvable_fields::<crate::result::MemberEntry>("SHOW members", &kept)?;
+                crate::filter::apply_clauses(members, &kept);
             }
             (ShowContent::CallGraph { entries, .. }, ForgeQLIR::ShowCallees { clauses, .. }) => {
-                // Same dual purpose as `SHOW members`, same check.
-                reject_refused_fields::<crate::result::CallGraphEntry>("SHOW callees", clauses)?;
+                // Same dual purpose as `SHOW members`, same partition.
+                let kept =
+                    without_resolve_only_predicates::<crate::result::CallGraphEntry>(clauses);
+                reject_unresolvable_fields::<crate::result::CallGraphEntry>("SHOW callees", &kept)?;
                 // Default sort for callees is by call-site line (ascending) so
                 // the output reflects call order.  An explicit ORDER BY wins.
-                if clauses.order_by.is_none() {
-                    let mut effective = clauses.clone();
+                let mut effective = kept;
+                if effective.order_by.is_none() {
                     effective.order_by = Some(crate::ir::OrderBy {
                         field: "line".to_string(),
                         direction: crate::ir::SortDirection::Asc,
                     });
-                    crate::filter::apply_clauses(entries, &effective);
-                } else {
-                    crate::filter::apply_clauses(entries, clauses);
                 }
+                crate::filter::apply_clauses(entries, &effective);
             }
             _ => {}
         }

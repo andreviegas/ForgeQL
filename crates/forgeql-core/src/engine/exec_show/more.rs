@@ -69,6 +69,11 @@ impl ForgeQLEngine {
 
         // WHERE text predicates filter the windowed lines — free grep over the
         // buffered output (e.g. `SHOW MORE WHERE text MATCHES 'error|fail'`).
+        //
+        // These lines came out of a buffer, so nothing here resolves a symbol
+        // and the row shape IS the universe: a field a source line does not
+        // carry is refused rather than silently emptying the window.
+        crate::filter::reject_unresolvable_fields::<SourceLine>("SHOW MORE", clauses)?;
         for predicate in &clauses.where_predicates {
             let pred = predicate.clone();
             lines.retain(|line| crate::filter::eval_predicate(line, &pred));

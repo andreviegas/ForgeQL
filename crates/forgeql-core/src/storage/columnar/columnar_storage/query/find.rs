@@ -126,7 +126,7 @@ impl ColumnarStorage {
     /// through to answer a confident zero on a row that carries none of them.
     /// [`reject_refused_fields`] runs first and gives those six, and
     /// `node_kind`, a message that says where they ARE answered.
-    fn reject_unknown_where_fields(&self, clauses: &Clauses) -> anyhow::Result<()> {
+    pub(super) fn reject_unknown_where_fields(&self, clauses: &Clauses) -> anyhow::Result<()> {
         for pred in &clauses.where_predicates {
             let field = crate::field_tiers::canonical(&pred.field);
             if resolves_on_symbol_row(field) {
@@ -169,7 +169,7 @@ impl ColumnarStorage {
     /// alphabetical rows mislabelled as "top N by <field>".  Fail loudly
     /// instead — matching the legacy backend's `validate_order_by_field`
     /// contract.
-    fn reject_unknown_order_by_field(&self, clauses: &Clauses) -> anyhow::Result<()> {
+    pub(super) fn reject_unknown_order_by_field(&self, clauses: &Clauses) -> anyhow::Result<()> {
         let Some(ref order) = clauses.order_by else {
             return Ok(());
         };
@@ -214,7 +214,7 @@ impl ColumnarStorage {
     /// [`ClauseTarget::STR_FIELDS`](crate::filter::ClauseTarget::STR_FIELDS) —
     /// `line`, `usages` and `count` are numeric and are not groupable — plus a
     /// known enrichment field or an extra column stored by some segment.
-    fn reject_unknown_group_by_field(&self, clauses: &Clauses) -> anyhow::Result<()> {
+    pub(super) fn reject_unknown_group_by_field(&self, clauses: &Clauses) -> anyhow::Result<()> {
         let Some(GroupBy::Field(ref field)) = clauses.group_by else {
             return Ok(());
         };

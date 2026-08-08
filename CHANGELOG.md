@@ -42,25 +42,30 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   renders a single line rather than building a row set, so it applies no
   `WHERE` and refuses none either.
 
-- Two checks, because the verbs are not alike. What **no** row of any shape can
-  answer is refused everywhere, read straight from the field table. The
-  stricter check — refuse any field this verb's own rows do not carry, and say
-  which they do — runs only where the clause *only* filters: `FIND files`,
-  `SHOW outline`, `SHOW DIFF`, and the `FIND` verbs over symbol rows, where the
-  columnar backend does it with the stored enrichment columns in hand. It does
-  not run on `SHOW members`, `SHOW callees` or the reading verbs, because their
-  clause also picks which symbol to resolve: `SHOW members OF 'Foo' WHERE
-  language = 'cpp'` disambiguates a type two languages both define, and a
-  members row carries no `language`. Gating those on their row shape refused a
-  working query — caught by driving the built binary, with the test suite green.
+- A clause that also picks which symbol to resolve no longer filters the rows
+  with the predicate that did the picking. `SHOW body OF 'process' WHERE
+  language = 'rust'` and `SHOW members OF 'Foo' WHERE language = 'cpp'` are the
+  documented way to disambiguate a name two languages both define: the storage
+  engine applies the predicate to SYMBOL rows to choose the symbol, and the
+  same predicate then reached the lines or members that came back — which carry
+  no `language` — and dropped every one of them. A confident zero on a symbol
+  that exists, which is the shape this release is about. Those predicates are
+  partitioned out before the row filter runs, the way `SHOW DIFF` already
+  partitions `text` out of its file-row clauses; what is left is what the rows
+  can answer, and a name that is neither is refused rather than silently
+  matching nothing. `SHOW members`, `SHOW callees`, `FIND callees OF`, `SHOW
+  body`, `SHOW context` and `SHOW NODE` all work this way. `FIND files`,
+  `SHOW outline`, `SHOW MORE`, `SHOW DIFF` and the `FIND` verbs over symbol
+  rows resolve nothing, so their clause is checked against their row shape
+  outright.
 
 - `FIND files` refuses a `GROUP BY` on a field a file row cannot resolve,
   closing the last path that fabricated a group. Grouping keys a row through
   one string accessor and defaults an unresolved name to the empty string, so
   `FIND files GROUP BY lang` reported exactly one group, named by the empty
   string, whose count was every file. The same check now covers `SHOW outline`,
-  `SHOW members`, `SHOW callees` and `SHOW DIFF`, each against its own row
-  shape.
+  `SHOW MORE` and `SHOW DIFF` — the other verbs whose clause only filters —
+  each against its own row shape.
 
 - `SHOW outline` opens its full set of nodes for **any** `WHERE`, not only for a
   predicate on the kind field. Which field the predicate named used to decide
