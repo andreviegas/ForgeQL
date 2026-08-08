@@ -199,61 +199,31 @@ fn is_post_group(field: &str) -> bool {
     crate::field_tiers::lookup(field).is_some_and(|tier| tier.post_group)
 }
 
-/// Drop the predicates that were only ever for the symbol lookup.
-///
-/// `SHOW members`, `SHOW callees` and the reading verbs use one clause twice:
-/// the storage engine applies it to SYMBOL rows to decide which symbol `OF`
-/// names, and then the same predicates reach the rows that came back. Those
-/// rows are members, call sites or source lines, and they carry none of the
-/// symbol fields — so `SHOW members OF 'Foo' WHERE language = 'cpp'`, the
-/// documented way to disambiguate a type two languages both define, resolved
-/// the right type and then dropped every one of its members. A confident zero
-/// on a symbol that exists, which is the exact shape this whole change is
-/// about.
-///
-/// So the predicate that did its work during resolution is removed before the
-/// row filter runs, the way `SHOW DIFF` already partitions `text` out of its
-/// file-row clauses. What is left is only what these rows can answer — and
-/// anything that is neither is left in deliberately, so the row-shape check
-/// refuses it instead of silently matching nothing.
-///
-/// A field the table refuses is never treated as resolve-only, whatever the
-/// symbol row claims: `node_kind` is listed on a symbol row because the legacy
-/// backend resolves it, and letting that exempt it would un-refuse it here.
-#[must_use]
-pub fn without_resolve_only_predicates<T: ClauseTarget>(clauses: &Clauses) -> Clauses {
-    let mut kept = clauses.clone();
-    kept.where_predicates
-        .retain(|pred| !is_resolve_only::<T>(&pred.field));
-    kept
-}
-
-/// Whether this predicate has already been answered, by the symbol lookup.
-fn is_resolve_only<T: ClauseTarget>(written: &str) -> bool {
-    let field = crate::field_tiers::canonical(written);
-    if T::STR_FIELDS.contains(&field) || T::NUM_FIELDS.contains(&field) {
-        return false;
-    }
-    if crate::field_tiers::lookup(field).is_some_and(crate::field_tiers::FieldTier::is_refused) {
-        return false;
-    }
-    let symbol_row = crate::result::SymbolMatch::STR_FIELDS.contains(&field)
-        || crate::result::SymbolMatch::NUM_FIELDS.contains(&field);
-    symbol_row || crate::storage::legacy::is_known_enrichment_field(field)
-}
-
 /// Refuse a clause naming a field the table itself declares unanswerable.
 ///
-/// This is the check for verbs whose clause does more than filter. `SHOW
-/// members`, `SHOW callees` and the reading verbs use the same clause to pick
-/// which symbol to resolve — `SHOW members OF 'Foo' WHERE language = 'cpp'`
-/// disambiguates a type two languages both define — so their rows' own field
-/// list is not the universe of legitimate names, and gating on it refuses a
-/// working query. What can be refused there is what no row of any shape can
-/// answer: the [`crate::field_tiers::refused_fields`] set — `node_kind`, whose
-/// value nothing in the index stores, and the names belonging to another shape
-/// (`size`, `depth`, `extension`, `signature`, `marker`, `declaration`) that
-/// reached these verbs only because `CORE_WHERE_FIELDS` is a union.
+/// This is the check for the verbs whose clause is NOT only a row filter.
+/// `SHOW members`, `SHOW callees` and the reading verbs pass the same clause to
+/// the storage engine to pick which symbol `OF` names, and then apply it again
+/// to the rows that came back. Gating those on their own row shape would refuse
+/// `SHOW members OF 'Foo' WHERE language = 'cpp'`, which the legacy backend
+/// answers by scoping the lookup. So what is refused there is only what no row
+/// of any shape can answer: the [`crate::field_tiers::refused_fields`] set —
+/// `node_kind`, whose value nothing in the index stores, and the names
+/// belonging to another shape (`size`, `depth`, `extension`, `signature`,
+/// `marker`, `declaration`) that reached these verbs only because
+/// `CORE_WHERE_FIELDS` is a union.
+///
+/// KNOWN DEFECT, not fixed here and not hidden either: on the columnar backend
+/// — the one every session queries — resolution does not evaluate these
+/// predicates at all (`query/resolve.rs` applies only posted-enrichment `=`),
+/// so `WHERE language = 'cpp'` scopes nothing and then filters every returned
+/// row away, because a members row and a source line carry no `language`. The
+/// answer is an empty one for a symbol that exists. Refusing it here would
+/// break the legacy backend, where the predicate does scope the lookup;
+/// dropping it before the row filter would answer as though it had been
+/// applied, which is worse. The fix belongs in the resolver — evaluate the
+/// predicate per candidate, as `storage/legacy/resolve.rs` already does — and
+/// until it lands this check deliberately leaves the predicate alone.
 ///
 /// Minus what THIS shape carries, which is the other half of the rule. The
 /// table's verdict is about symbol rows, and several of those names are the

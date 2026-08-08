@@ -1194,41 +1194,48 @@ fn any_where_opens_the_outline_universe_not_only_a_kind_predicate() {
 }
 
 #[test]
-fn a_resolve_predicate_scopes_the_lookup_without_emptying_the_result() {
-    // `SHOW members`, `SHOW callees` and the reading verbs use one clause
-    // twice: the storage engine applies it to SYMBOL rows to decide which
-    // symbol `OF` names, and the same predicates then reach the rows that came
-    // back. A members row carries no `language`, so `WHERE language = 'cpp'` —
-    // the documented way to disambiguate a type two languages both define —
-    // resolved the right type and then dropped every one of its members.
+fn a_resolve_predicate_still_empties_the_rows_it_scoped() {
+    // A DEFECT PIN, not an invariant — and the reason this release does not
+    // claim to have fixed it.
     //
-    // Asserting on ROW COUNTS, not on the answer's text: the response envelope
-    // echoes the symbol that was asked for even when the row set is empty, so
-    // `contains("Point")` holds on a zero-row answer and cannot fail on the
-    // regression it names. That is how the first version of this test passed
-    // while the engine was wrong.
+    // `SHOW members`, `SHOW callees` and the reading verbs hand the same clause
+    // to the storage engine to pick which symbol `OF` names, and then apply it
+    // again to the rows that came back. A members row and a source line carry
+    // no `language`, so `WHERE language = 'cpp'` — the documented way to
+    // disambiguate a type two languages both define — returns nothing at all
+    // for a type that exists and IS C++.
+    //
+    // Two ways to make that wrong were tried and rejected. Refusing the
+    // predicate breaks the legacy backend, where it really does scope the
+    // lookup. Dropping it before the row filter answers as though it had been
+    // applied — verified against the built binary, `WHERE language = 'rust'`
+    // then returned the C++ members, which is a false positive in place of a
+    // false negative. The fix belongs in the columnar resolver, which today
+    // evaluates only posted-enrichment `=` predicates during resolution.
+    //
+    // Both spellings are asserted because that is what tells the two failure
+    // modes apart: if the predicate were being discarded, the 'rust' case would
+    // answer with the C++ members instead of none.
     let mut t = typed_workspace();
 
     let baseline = member_count(&mut t, "SHOW members OF 'Point'");
     assert!(baseline > 0, "fixture has no members to lose");
-    assert_eq!(
-        member_count(&mut t, "SHOW members OF 'Point' WHERE language = 'cpp'"),
-        baseline,
-        "a predicate that only scoped the type lookup must not filter its members"
-    );
+    for lang in ["cpp", "rust"] {
+        assert_eq!(
+            member_count(
+                &mut t,
+                &format!("SHOW members OF 'Point' WHERE language = '{lang}'")
+            ),
+            0,
+            "the defect this pins has been fixed for language = '{lang}' — good, \
+             but the docs and CHANGELOG that describe it have to move with it"
+        );
+    }
 
+    // What DOES work, and must keep working: a predicate the row itself
+    // carries filters the rows and nothing else.
     let body = line_count(&mut t, "SHOW body OF 'point_sum' DEPTH 99");
     assert!(body > 0, "fixture body is empty");
-    assert_eq!(
-        line_count(
-            &mut t,
-            "SHOW body OF 'point_sum' DEPTH 99 WHERE language = 'cpp'"
-        ),
-        body,
-        "a predicate that only scoped the symbol lookup must not filter its lines"
-    );
-
-    // The filtering half still filters, and to fewer rows than the whole body.
     let matching = line_count(
         &mut t,
         "SHOW body OF 'point_sum' DEPTH 99 WHERE text MATCHES 'return'",
@@ -1238,7 +1245,13 @@ fn a_resolve_predicate_scopes_the_lookup_without_emptying_the_result() {
         "the filtering half of the clause stopped working: {matching} of {body} lines"
     );
 
-    // And what neither half can answer is refused, not silently ignored.
+    let fields = member_count(&mut t, "SHOW members OF 'Point' WHERE kind = 'field'");
+    assert!(
+        fields > 0 && fields <= baseline,
+        "a members-row field must filter members, not empty them: {fields} of {baseline}"
+    );
+
+    // And what neither the rows nor any other shape can answer is refused.
     for fql in [
         "SHOW members OF 'Point' WHERE size > 1",
         "SHOW callees OF 'point_sum' WHERE marker = 'x'",

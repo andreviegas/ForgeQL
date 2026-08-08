@@ -42,22 +42,27 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   renders a single line rather than building a row set, so it applies no
   `WHERE` and refuses none either.
 
-- A clause that also picks which symbol to resolve no longer filters the rows
-  with the predicate that did the picking. `SHOW body OF 'process' WHERE
-  language = 'rust'` and `SHOW members OF 'Foo' WHERE language = 'cpp'` are the
-  documented way to disambiguate a name two languages both define: the storage
-  engine applies the predicate to SYMBOL rows to choose the symbol, and the
-  same predicate then reached the lines or members that came back — which carry
-  no `language` — and dropped every one of them. A confident zero on a symbol
-  that exists, which is the shape this release is about. Those predicates are
-  partitioned out before the row filter runs, the way `SHOW DIFF` already
-  partitions `text` out of its file-row clauses; what is left is what the rows
-  can answer, and a name that is neither is refused rather than silently
-  matching nothing. `SHOW members`, `SHOW callees`, `FIND callees OF`, `SHOW
-  body`, `SHOW context` and `SHOW NODE` all work this way. `FIND files`,
-  `SHOW outline`, `SHOW MORE`, `SHOW DIFF` and the `FIND` verbs over symbol
-  rows resolve nothing, so their clause is checked against their row shape
-  outright.
+- The two checks reach different sets of verbs, and both say which. `FIND
+  files`, `SHOW outline`, `SHOW MORE`, `SHOW DIFF` and the `FIND` verbs over
+  symbol rows resolve nothing, so their clause is only ever a row filter and
+  every field their rows cannot carry is refused, with the ones they do carry
+  listed. `SHOW members`, `SHOW callees`, `FIND callees OF`, `SHOW body`, `SHOW
+  context` and `SHOW NODE` hand the same clause to the symbol lookup as well,
+  so gating on their row shape would refuse `SHOW members OF 'Foo' WHERE
+  language = 'cpp'`, which the legacy backend answers by scoping the lookup.
+  Those verbs refuse only what no row of any shape can answer.
+
+- **Known, unfixed, and now pinned by a test:** on the columnar backend — the
+  one every session queries — the symbol lookup evaluates none of those
+  predicates (only posted-enrichment `=`), so `SHOW members OF 'Foo' WHERE
+  language = 'cpp'` scopes nothing and then filters away every member of the
+  type it did find. An empty answer for a symbol that exists. It is left alone
+  deliberately: refusing it breaks the legacy backend, where the predicate does
+  scope the lookup, and dropping it before the row filter answers as though it
+  had been applied — measured, `WHERE language = 'rust'` then returned the C++
+  members, a false positive traded for a false negative. The fix belongs in the
+  resolver, evaluating the predicate per candidate as the legacy backend
+  already does.
 
 - `FIND files` refuses a `GROUP BY` on a field a file row cannot resolve,
   closing the last path that fabricated a group. Grouping keys a row through
