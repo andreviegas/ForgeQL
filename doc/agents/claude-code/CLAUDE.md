@@ -79,7 +79,7 @@ The local workspace may be empty — never fall back to local filesystem tools (
 
 ## Efficiency
 
-- All commands accept `WHERE`, `GROUP BY`, `ORDER BY`, `LIMIT`, `OFFSET` — combine freely.
+- All commands accept `WHERE`, `GROUP BY`, `ORDER BY`, `LIMIT`, `OFFSET` — but a verb that cannot apply one refuses it rather than ignoring it. The verbs that answer with source lines (`SHOW body`, `SHOW context`, `SHOW signature`, `SHOW NODE`, `SHOW LINES`, `SHOW MORE`) refuse `ORDER BY`/`GROUP BY`/`HAVING`; `SHOW NODE`/`SHOW LINES`/`SHOW MORE`/`SHOW COMMITS` refuse `IN`/`EXCLUDE`; only `SHOW body`, `SHOW context` and `FIND files` accept `DEPTH`; `CHANGE FILE` accepts no clause at all.
 - `IN 'src'` and `IN 'crates/'` auto-expand to `IN 'src/**'` — bare directory paths are always safe.
 - Multiple `WHERE` clauses combine as AND. `AND` is an accepted synonym for a repeated `WHERE`, so `WHERE fql_kind = 'function' AND lines > 10` parses and runs identically to two `WHERE` clauses.
 - FIND defaults to 20 rows without LIMIT.

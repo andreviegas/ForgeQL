@@ -1066,8 +1066,8 @@ SHOW MORE HEAD 40
 
 ## Universal Clauses
 
-Every command accepts these clauses. Inapplicable clauses are silently ignored.
-Multiple `WHERE` clauses combine with implicit AND. `AND` is accepted as a synonym for a repeated `WHERE` (e.g. `WHERE a = 1 AND b > 2`).
+Every command accepts these clauses, and each then either APPLIES a clause or REFUSES it — none is silently ignored. What each verb refuses is stated in the rows below: the line-answering verbs (`SHOW body`, `SHOW context`, `SHOW signature`, `SHOW NODE`, `SHOW LINES`, `SHOW MORE`) refuse `ORDER BY`, `GROUP BY` and `HAVING`; `SHOW NODE`, `SHOW LINES`, `SHOW MORE` and `SHOW COMMITS` refuse `IN` and `EXCLUDE`; every verb but `SHOW body`, `SHOW context` and `FIND files` refuses `DEPTH`; and `CHANGE FILE` refuses the block entirely, since it reads none of it.
+Multiple `WHERE` clauses combine with implicit AND. `AND` is an accepted synonym for a repeated `WHERE` (e.g. `WHERE a = 1 AND b > 2`).
 
 Engine applies clauses in this fixed pipeline order, regardless of written order:
 

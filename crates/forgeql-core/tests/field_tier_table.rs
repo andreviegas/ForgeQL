@@ -1518,6 +1518,9 @@ fn a_glob_scopes_the_lookup_when_the_rows_have_no_file_of_their_own() {
         "FIND symbols WHERE name = 'Point' DEPTH 2",
         "FIND usages OF 'helper_c' DEPTH 2",
         "SHOW COMMITS DEPTH 2",
+        "SHOW LINES 1-2 OF 'a_shapes.cpp' DEPTH 2",
+        "SHOW signature OF 'shared_fn' DEPTH 2",
+        "SHOW DIFF DEPTH 2",
     ] {
         let err = refusal(&mut t, fql);
         assert!(
@@ -1532,6 +1535,23 @@ fn a_glob_scopes_the_lookup_when_the_rows_have_no_file_of_their_own() {
     );
 
     // A mutation reads no clause at all, and is the worst place to ignore one.
+    for fql in [
+        "CHANGE FILE 'a_shapes.cpp' WITH 'x' LIMIT 5",
+        "CHANGE FILE 'a_shapes.cpp' WITH 'x' OFFSET 5",
+        "CHANGE FILE 'a_shapes.cpp' WITH 'x' WHERE name = 'y'",
+        "CHANGE FILE 'a_shapes.cpp' WITH 'x' IN 'nowhere/**'",
+        "CHANGE FILE 'a_shapes.cpp' WITH 'x' EXCLUDE 'nowhere/**'",
+        "CHANGE FILE 'a_shapes.cpp' WITH 'x' ORDER BY name",
+        "CHANGE FILE 'a_shapes.cpp' WITH 'x' GROUP BY name",
+        "CHANGE FILE 'a_shapes.cpp' WITH 'x' HAVING count > 1",
+        "CHANGE FILE 'a_shapes.cpp' WITH 'x' DEPTH 2",
+    ] {
+        let err = refusal(&mut t, fql);
+        assert!(
+            err.contains("reads no clause") || err.contains("DEPTH cannot be answered"),
+            "`{fql}` accepted a clause that scopes nothing on a mutation: {err}"
+        );
+    }
     let err = refusal(&mut t, "CHANGE FILE 'a_shapes.cpp' WITH 'x' LIMIT 5");
     assert!(
         err.contains("reads no clause"),
