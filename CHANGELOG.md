@@ -41,7 +41,12 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   answer produced a query that matched nothing. It is an alias of `fql_kind`
   on all three, in `WHERE`, `ORDER BY` and `GROUP BY`, and on `FIND symbols`
   it reaches the same kind bitmap `fql_kind` does rather than falling to a
-  scan.
+  scan. On `SHOW outline` the two spellings also open the same set of rows:
+  the default outline lists structural declarations only and a kind predicate
+  opts back into every node, so had `kind` not been carried into that decision
+  it would have filtered the structural tree while `fql_kind` filtered the
+  file — `WHERE kind = 'guard'` answering zero where `WHERE fql_kind = 'guard'`
+  answers three, for the same file and the same field.
 - `text` and `content` are refused in `ORDER BY` and `GROUP BY` as well as in
   `WHERE`. They were already rejected in `WHERE` on FIND queries for the same
   reason — no row of a FIND result carries source text — but the other two

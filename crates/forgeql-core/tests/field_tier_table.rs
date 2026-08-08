@@ -735,3 +735,59 @@ fn kind_answers_exactly_as_fql_kind_does() {
         "`{alias}` and `{canonical}` must select the same entries"
     );
 }
+
+/// The set of rows an outline predicate can act on must not depend on which
+/// spelling of the kind field the predicate uses.
+///
+/// `SHOW outline` lists structural declarations only; a `fql_kind` predicate
+/// opts back into every node so the filter has the full tree to act on.
+/// `kind` is documented as the same field, so it has to open the same
+/// universe — otherwise one spelling searches the whole file and the other
+/// searches a subset, and the narrower one answers zero for a node that is
+/// plainly there.
+///
+/// Pinned on a kind the structural tree does **not** contain, derived from the
+/// fixture rather than hardcoded. A structural kind cannot detect this: it is
+/// present in both universes, so the two spellings agree whether or not the
+/// wider one was opened.
+#[test]
+fn kind_opens_the_same_outline_universe_as_fql_kind() {
+    fn values(rendered: &str, key: &str) -> Vec<String> {
+        let needle = format!("{key}: \"");
+        let mut found: Vec<String> = rendered
+            .split(needle.as_str())
+            .skip(1)
+            .filter_map(|s| s.split('"').next().map(str::to_owned))
+            .collect();
+        found.sort_unstable();
+        found
+    }
+
+    let mut t = guarded_workspace(3);
+    let mut render = |fql: &str| format!("{:?}", t.try_fql(fql).expect("query"));
+
+    let mut structural = values(&render("SHOW outline OF 'guards.cpp'"), "fql_kind");
+    structural.dedup();
+    let mut every = values(&render("SHOW outline OF 'guards.cpp' ALL"), "fql_kind");
+    every.dedup();
+
+    let outside = every
+        .into_iter()
+        .find(|k| !structural.contains(k))
+        .expect("ALL adds no kind beyond the structural tree here, so this proves nothing");
+
+    let alias = format!("SHOW outline OF 'guards.cpp' WHERE kind = '{outside}'");
+    let canonical = format!("SHOW outline OF 'guards.cpp' WHERE fql_kind = '{outside}'");
+    let from_alias = values(&render(&alias), "name");
+    let from_canonical = values(&render(&canonical), "name");
+
+    assert!(
+        !from_canonical.is_empty(),
+        "`{canonical}` selected nothing, so this proves nothing"
+    );
+    assert_eq!(
+        from_alias, from_canonical,
+        "`kind` must open the same outline universe as `fql_kind`: a kind outside \
+         the structural tree ('{outside}') has to be reachable under both spellings"
+    );
+}

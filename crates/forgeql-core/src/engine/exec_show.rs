@@ -154,11 +154,13 @@ impl ForgeQLEngine {
                 // Default outline is structural-only. An explicit `ALL`, or a
                 // `WHERE fql_kind = …` predicate, opts back into every node so
                 // the post-hoc clause filter still has the full set to act on.
+                // `kind` is the same field under another spelling, so it must
+                // open the same universe: two spellings the syntax documents as
+                // identical cannot answer over different row sets.
                 let show_all = *all
-                    || clauses
-                        .where_predicates
-                        .iter()
-                        .any(|p| p.field == "fql_kind" || p.field == "node_kind");
+                    || clauses.where_predicates.iter().any(|p| {
+                        p.field == "fql_kind" || p.field == "kind" || p.field == "node_kind"
+                    });
                 Self::exec_show_outline(workspace, engine, file, show_all)
             }
             ForgeQLIR::ShowMembers {
