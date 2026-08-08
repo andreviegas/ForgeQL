@@ -6,6 +6,97 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.156.0] — 2026-08-08 — a field a query cannot answer is refused, on every verb
+
+### Changed
+
+- A `WHERE`, `ORDER BY`, `GROUP BY` or `HAVING` naming a field the verb's rows
+  cannot carry now returns an error naming the field and where it *is*
+  answered. It never returns zero rows. Zero rows is a claim about the corpus;
+  an error is a fact about the query, and the two are indistinguishable in the
+  answer. Seven names had been accepted and answered a confident zero on
+  `FIND symbols` — `count`, `size`, `depth`, `extension`/`ext`, `signature`,
+  `marker` and `declaration` — because the list validation consulted is a union
+  across every result shape, so membership said the name exists *somewhere* and
+  nothing about the query in hand. Each verb is now checked against the shape it
+  actually returns: `size`, `depth` and `extension` belong to a `FIND files`
+  row, `marker` to a `SHOW` line row, `declaration` to a `SHOW members` row, and
+  every refusal says so.
+
+- `count` is the one name whose answer depends on the clause rather than the
+  operator: the grouping pass is what writes it, so `HAVING count >= 2` and
+  `ORDER BY count DESC` read a real number and a `WHERE` on it — which runs
+  before grouping — reads nothing on every row. It is answered in the first two
+  and refused in the third, with a message that says which to use.
+
+- `SHOW outline`, `SHOW members`, `SHOW callees` and `FIND callees OF` can
+  refuse at all. They answered with a JSON value and had no channel for an
+  error, so a clause naming a field their rows cannot carry was accepted and
+  dropped every row in silence — `SHOW callees OF 'f' WHERE fql_kind = 'x'`
+  returned an empty call graph rather than saying a call site has no kind. They
+  return a `Result` now, and the `node_kind` refusal that previously stopped at
+  the four `FIND` verbs reaches every verb that carries a clause but one:
+  `FIND symbols`, `FIND globals`, `FIND usages`, `FIND files`, `FIND callees
+  OF`, `SHOW outline`, `SHOW members`, `SHOW callees`, `SHOW body`, `SHOW
+  context` and `SHOW NODE`. `SHOW signature` is the exception and stays one: it
+  renders a single line rather than building a row set, so it applies no
+  `WHERE` and refuses none either.
+
+- Two checks, because the verbs are not alike. What **no** row of any shape can
+  answer is refused everywhere, read straight from the field table. The
+  stricter check — refuse any field this verb's own rows do not carry, and say
+  which they do — runs only where the clause *only* filters: `FIND files`,
+  `SHOW outline`, `SHOW DIFF`, and the `FIND` verbs over symbol rows, where the
+  columnar backend does it with the stored enrichment columns in hand. It does
+  not run on `SHOW members`, `SHOW callees` or the reading verbs, because their
+  clause also picks which symbol to resolve: `SHOW members OF 'Foo' WHERE
+  language = 'cpp'` disambiguates a type two languages both define, and a
+  members row carries no `language`. Gating those on their row shape refused a
+  working query — caught by driving the built binary, with the test suite green.
+
+- `FIND files` refuses a `GROUP BY` on a field a file row cannot resolve,
+  closing the last path that fabricated a group. Grouping keys a row through
+  one string accessor and defaults an unresolved name to the empty string, so
+  `FIND files GROUP BY lang` reported exactly one group, named by the empty
+  string, whose count was every file. The same check now covers `SHOW outline`,
+  `SHOW members`, `SHOW callees` and `SHOW DIFF`, each against its own row
+  shape.
+
+- `SHOW outline` opens its full set of nodes for **any** `WHERE`, not only for a
+  predicate on the kind field. Which field the predicate named used to decide
+  which rows existed: `WHERE fql_kind = 'guard'` searched every node in the file
+  while `WHERE name = 'x'` searched only the structural tree, so a comment or a
+  guard region named `x` was reported absent. It also made `depth` — which
+  counts the ancestors that were listed — vary between two predicates on the
+  same file. A filter now never searches a smaller tree than the one it is
+  written against.
+
+- Field aliases are resolved in one place, from one table. `kind`, `file`,
+  `lang`, `ext` and `content` are spelled to their canonical names by
+  `field_tiers::canonical`, and every comparison that asks "is this clause
+  naming *that* field" — the kind fast path, the `GROUP BY` fast path, the
+  grouping renderer, the outline universe, the row resolvers, the diff line
+  filter — goes through it. Each of those previously carried its own list, and
+  an alias known to one and not another is how `WHERE kind = 'guard'` came to
+  answer zero where `WHERE fql_kind = 'guard'` answered three, on the same file
+  and the same field. Adding an alias is now a one-line change to the table, and
+  a test drives every alias in it through both spellings and compares the
+  answers.
+
+- The key column of a `GROUP BY` keeps the spelling you wrote — `GROUP BY file`
+  still heads its column `file` — while the grouping itself runs on the
+  canonical field, so an alias and its canonical name always produce the same
+  groups under different labels. Grouping on the kind is the one case with no
+  key column at all: the compact layout already groups a symbol listing by
+  kind, so `GROUP BY fql_kind` and `GROUP BY kind` both render in that layout.
+
+### Fixed
+
+- `SHOW DIFF WHERE content LIKE '%x%'` filtered file rows instead of diff lines.
+  Only the exact spelling `text` was routed to the line filter, so the alias
+  fell through to the row filter, which no diff row resolves, and every file was
+  dropped.
+
 ## [0.155.0] — 2026-08-07 — `node_kind` is refused instead of silently matching nothing
 
 ### Changed

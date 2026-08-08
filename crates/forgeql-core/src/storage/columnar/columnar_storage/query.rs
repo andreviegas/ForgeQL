@@ -74,9 +74,10 @@ impl StorageEngine for ColumnarStorage {
         root: &Path,
     ) -> Result<(Vec<SymbolMatch>, Option<String>)> {
         // An occurrence row is a line, not a node: it carries no node_kind at
-        // all, so the same refusal `FIND symbols` gives has to be given here
-        // rather than letting the clause filter drop every row in silence.
-        super::query::find::reject_node_kind(clauses)?;
+        // all, and none of the other refused names either, so the same refusal
+        // `FIND symbols` gives has to be given here rather than letting the
+        // clause filter drop every row in silence.
+        crate::filter::reject_refused_fields::<SymbolMatch>("FIND usages", clauses)?;
         Ok(self.find_usages_impl(name, clauses, root))
     }
 

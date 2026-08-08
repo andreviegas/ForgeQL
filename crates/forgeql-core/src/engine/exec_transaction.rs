@@ -729,11 +729,18 @@ impl ForgeQLEngine {
             .where_predicates
             .iter()
             .cloned()
-            .partition(|p| p.field == "text");
+            .partition(|p| crate::field_tiers::canonical(&p.field) == "text");
 
         let mut row_clauses = clauses.clone();
         row_clauses.where_predicates = row_preds;
 
+        // `text` is gone from `row_clauses` by now — it filters diff lines, not
+        // file rows. Everything left has to be a field a diff row carries, or
+        // the filter drops every file and reports an empty diff.
+        crate::filter::reject_unresolvable_fields::<crate::result::DiffFileEntry>(
+            "SHOW DIFF",
+            &row_clauses,
+        )?;
         let mut rows: Vec<crate::result::DiffFileEntry> = diff
             .iter()
             .map(|f| crate::result::DiffFileEntry {

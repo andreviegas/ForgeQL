@@ -13,9 +13,10 @@ use std::fmt::Write as _;
 
 use forgeql_core::field_tiers::{
     ALL_OPS, CATCH_ALL_FIELD, Exactness, FIELD_TIERS, FieldTier, Gap, OpClass, Serving, Source,
-    Tier, lookup,
+    Then, Tier, canonical, lookup, refused_fields,
 };
-use forgeql_core::filter::{CORE_WHERE_FIELDS, GROUPABLE_SYMBOL_FIELDS, SORTABLE_SYMBOL_FIELDS};
+use forgeql_core::filter::{CORE_WHERE_FIELDS, ClauseTarget};
+use forgeql_core::result::{CallGraphEntry, FileEntry, MemberEntry, OutlineEntry, SymbolMatch};
 use forgeql_core::storage::columnar::{
     POSTING_ENRICHMENT_FIELDS, ZONEMAP_NUMERIC_FIELDS, overlay_budget, posting_budget,
 };
@@ -78,8 +79,8 @@ fn a_tier_that_can_stand_aside_names_what_takes_over() {
     for row in FIELD_TIERS {
         for serving in row.serving {
             match serving.tier {
-                Tier::Scan | Tier::Refused | Tier::Unserved => assert!(
-                    serving.then.is_none(),
+                Tier::Scan | Tier::Refused => assert!(
+                    serving.then == Then::Nothing,
                     "{}: {:?} has nothing to fall through to",
                     row.field,
                     serving.tier
@@ -89,9 +90,9 @@ fn a_tier_that_can_stand_aside_names_what_takes_over() {
                 | Tier::ValueUniverse
                 | Tier::NumericIndex
                 | Tier::ZoneMap => assert!(
-                    serving.then.is_some(),
-                    "{}: {:?} stands aside for fields it cannot key, so the row \
-                     must name what runs instead",
+                    serving.then != Then::Nothing,
+                    "{}: {:?} proposes candidates, so the row must name what \
+                     decides them",
                     row.field,
                     serving.tier
                 ),
@@ -180,16 +181,84 @@ fn every_validated_field_is_declared() {
              serves it — that gap is where every defect in this campaign lived"
         );
     }
-    for &field in SORTABLE_SYMBOL_FIELDS {
+    for field in symbol_row_fields() {
         assert!(
             declared.contains(field),
-            "{field} passes ORDER BY validation but the table does not name it"
+            "{field} resolves on a symbol row but the table does not name it"
         );
     }
-    for &field in GROUPABLE_SYMBOL_FIELDS {
+}
+
+/// One `Shape` per `ClauseTarget` implementation: what that row answers to.
+struct Shape {
+    row: &'static str,
+    str_fields: &'static [&'static str],
+    num_fields: &'static [&'static str],
+}
+
+impl Shape {
+    const fn of<T: ClauseTarget>() -> Self {
+        Self {
+            row: T::ROW,
+            str_fields: T::STR_FIELDS,
+            num_fields: T::NUM_FIELDS,
+        }
+    }
+
+    fn resolves(&self, field: &str) -> bool {
+        self.str_fields.contains(&field) || self.num_fields.contains(&field)
+    }
+}
+
+/// Every `ClauseTarget` implementation there is — all eight, both backends'
+/// symbol rows included.
+///
+/// Written out rather than derived, because it cannot be derived: nothing
+/// enumerates a trait's implementors. So this is the set a reader has to check
+/// against `filter/impls.rs` by hand, and the one place a ninth shape would be
+/// missed.
+fn row_shapes() -> Vec<Shape> {
+    vec![
+        Shape::of::<SymbolMatch>(),
+        Shape::of::<forgeql_core::ast::index::RowRef<'_>>(),
+        Shape::of::<FileEntry>(),
+        Shape::of::<OutlineEntry>(),
+        Shape::of::<MemberEntry>(),
+        Shape::of::<CallGraphEntry>(),
+        Shape::of::<forgeql_core::result::SourceLine>(),
+        Shape::of::<forgeql_core::result::DiffFileEntry>(),
+    ]
+}
+
+/// Every field name a symbol row resolves, both accessors.
+fn symbol_row_fields() -> Vec<&'static str> {
+    SymbolMatch::STR_FIELDS
+        .iter()
+        .chain(SymbolMatch::NUM_FIELDS)
+        .copied()
+        .collect()
+}
+
+#[test]
+fn every_name_the_union_accepts_is_carried_somewhere_or_refused() {
+    // `CORE_WHERE_FIELDS` is a union across result shapes, and a union member
+    // that no shape carries and no row refuses is exactly the defect this
+    // campaign is about: accepted by validation, resolved by nothing, answered
+    // with a confident zero. Being refused is the other honest outcome, and
+    // `signature` is the one name in that position — no result shape carries
+    // it, and `SHOW signature OF` is what answers instead. The canonical
+    // spelling is what is looked up, because that is what reaches a row.
+    let shapes = row_shapes();
+    for &field in CORE_WHERE_FIELDS {
+        let name = canonical(field);
+        let carried = shapes.iter().any(|s| s.resolves(name));
+        let refused = lookup(name).is_some_and(FieldTier::is_refused);
         assert!(
-            declared.contains(field),
-            "{field} passes GROUP BY validation but the table does not name it"
+            carried || refused,
+            "'{field}' is accepted by WHERE validation, resolves on no row shape \
+             — not {} — and no table row refuses it. Either a shape should carry \
+             it, or the table should refuse it, or the union should not list it.",
+            shapes.iter().map(|s| s.row).collect::<Vec<_>>().join(", ")
         );
     }
 }
@@ -200,9 +269,10 @@ fn no_row_is_invented() {
     // engine really has, or the table drifts in the other direction and
     // starts documenting fields that do not exist.
     let zone_map_columns: BTreeSet<&str> = ZONEMAP_NUMERIC_FIELDS.iter().map(|&(c, _)| c).collect();
+    let symbol_fields = symbol_row_fields();
     for row in rows_except_catch_all() {
         let known = CORE_WHERE_FIELDS.contains(&row.field)
-            || SORTABLE_SYMBOL_FIELDS.contains(&row.field)
+            || symbol_fields.contains(&row.field)
             || POSTING_ENRICHMENT_FIELDS.contains(&row.field)
             || row.column.is_some_and(|c| zone_map_columns.contains(c));
         assert!(
@@ -215,45 +285,60 @@ fn no_row_is_invented() {
 
 // ── Exactness: which tiers are allowed to conclude an absence ──────────────
 
+/// The sources a `SupersetProvenAbsent` proof may name, keyed by the module
+/// prefix the declaration writes.
+///
+/// A proof named in the table and absent from the code is a claim with nothing
+/// behind it, and checking only that the string is non-empty checked nothing.
+const PROOF_SOURCES: &[(&str, &str)] = &[(
+    "fast_paths",
+    include_str!("../src/storage/columnar/columnar_storage/fast_paths.rs"),
+)];
+
 #[test]
 fn only_a_tier_that_reads_every_row_may_call_a_value_absent() {
-    // The Q1 defect, as a rule. A tier assembled from keys sees only what was
-    // keyed, so an empty result from it is "no candidates", never "no rows" —
-    // unless a per-segment proof has separately established the absence. A
-    // tier that compares each row against that row's own stored value is a
-    // different thing and may conclude.
+    // The Q1 defect, as a rule — and as a function rather than a permission
+    // list. A tier assembled from keys sees only what was keyed, so an empty
+    // result from it is "no candidates", never "no rows", unless a per-segment
+    // proof has separately established the absence. `Exactness::of` decides
+    // which of those a `(tier, then)` pair is; the table may not choose.
     for row in FIELD_TIERS {
         for s in row.serving {
-            let legal = matches!(
-                (s.tier, s.exactness),
-                (Tier::Refused | Tier::Unserved, Exactness::NotApplicable)
-                    | (
-                        Tier::Scan | Tier::StoredColumn | Tier::NameFst | Tier::KindBitmap,
-                        Exactness::Exact,
-                    )
-                    | (
-                        Tier::KeyBitmap
-                            | Tier::ValueUniverse
-                            | Tier::NumericIndex
-                            | Tier::ZoneMap
-                            | Tier::Trigram
-                            | Tier::NamePrefix
-                            | Tier::NameFst,
+            let required = Exactness::of(s.tier, s.then);
+            let legal = s.exactness == required
+                || matches!(
+                    (required, s.exactness, s.tier),
+                    (
                         Exactness::Superset,
+                        Exactness::SupersetProvenAbsent(_),
+                        Tier::KeyBitmap,
                     )
-                    | (Tier::KeyBitmap, Exactness::SupersetProvenAbsent(_))
-            );
+                );
             assert!(
                 legal,
-                "{}: {:?} declared {:?} — a tier built from keys cannot be exact, \
+                "{}: {:?} then {:?} declared {:?}, but that pair can only be \
+                 {required:?} — a structure built from keys cannot be exact, \
                  and one that reads every row does not need a proof",
-                row.field, s.tier, s.exactness
+                row.field, s.tier, s.then, s.exactness
             );
             if let Exactness::SupersetProvenAbsent(proof) = s.exactness {
+                let (module, func) = proof.split_once("::").unwrap_or_else(|| {
+                    panic!("{}: proof '{proof}' is not module::function", row.field)
+                });
+                let src = PROOF_SOURCES
+                    .iter()
+                    .find(|(m, _)| *m == module)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{}: proof '{proof}' names module '{module}', which this \
+                             test does not read — add its source to PROOF_SOURCES",
+                            row.field
+                        )
+                    })
+                    .1;
                 assert!(
-                    !proof.is_empty(),
-                    "{}: a key-derived tier may only conclude an absence through a \
-                     named proof",
+                    src.contains(&format!("fn {func}(")),
+                    "{}: proof '{proof}' names a function {module} does not define",
                     row.field
                 );
             }
@@ -262,17 +347,37 @@ fn only_a_tier_that_reads_every_row_may_call_a_value_absent() {
 }
 
 #[test]
-fn a_refused_or_unserved_field_promises_no_serving() {
+fn the_exactness_of_a_pair_is_decided_by_what_follows_it() {
+    // The rule above is only worth having if the two relationships a `Then`
+    // can express actually differ. They do, and on the same tier: a name FST
+    // that filters is exact, and the same FST with a fallback is not — which
+    // is the pairing the old permission matrix allowed either way round.
+    assert_eq!(
+        Exactness::of(Tier::NameFst, Then::Nothing),
+        Exactness::Exact
+    );
+    assert_eq!(
+        Exactness::of(Tier::NameFst, Then::Fallback(Tier::Trigram)),
+        Exactness::Superset
+    );
+    assert_eq!(
+        Exactness::of(Tier::KeyBitmap, Then::Filters(Tier::Scan)),
+        Exactness::Superset,
+        "a filter decides the candidates but cannot make an empty candidate \
+         set into an absence"
+    );
+    assert_eq!(
+        Exactness::of(Tier::StoredColumn, Then::Filters(Tier::Scan)),
+        Exactness::Exact
+    );
+}
+
+#[test]
+fn a_refused_field_promises_no_serving() {
     for row in FIELD_TIERS {
-        let dead = row
-            .serving
-            .iter()
-            .any(|s| matches!(s.tier, Tier::Refused | Tier::Unserved));
-        if dead {
+        if row.serving.iter().any(|s| s.tier == Tier::Refused) {
             assert!(
-                row.serving
-                    .iter()
-                    .all(|s| matches!(s.tier, Tier::Refused | Tier::Unserved)),
+                row.is_refused(),
                 "{}: a field cannot be served for some operators and refused for \
                  others without saying which",
                 row.field
@@ -283,6 +388,51 @@ fn a_refused_or_unserved_field_promises_no_serving() {
                 row.field
             );
         }
+    }
+}
+
+#[test]
+fn every_refused_field_says_where_it_is_answered_or_that_nothing_does() {
+    // A refusal that only says no leaves the agent to guess, and the guesses
+    // are the same names again. `elsewhere` is what makes the message useful,
+    // and `None` is a claim in its own right: nothing answers this anywhere.
+    for row in refused_fields() {
+        let message = row.refusal(row.field, "WHERE", "FIND symbols");
+        assert!(
+            message.contains(row.field),
+            "{}: the refusal does not name the field the agent wrote",
+            row.field
+        );
+        match row.elsewhere {
+            Some(elsewhere) => assert!(
+                message.contains(elsewhere),
+                "{}: the table says it is answered by '{elsewhere}' and the \
+                 refusal does not say so",
+                row.field
+            ),
+            None => assert!(
+                message.contains("internal storage column"),
+                "{}: nothing answers it, and the refusal should say that \
+                 rather than point nowhere",
+                row.field
+            ),
+        }
+    }
+}
+
+#[test]
+fn the_written_spelling_survives_into_the_refusal() {
+    // An error that renames the field the agent typed is an error about a
+    // different query. `ext` and `content` are the two aliases of refused
+    // fields, so they are the two that can go wrong.
+    for (written, canonical_name) in [("ext", "extension"), ("content", "text")] {
+        let row = lookup(written).expect("alias is declared");
+        assert_eq!(row.field, canonical_name);
+        let message = row.refusal(written, "WHERE", "FIND symbols");
+        assert!(
+            message.contains(written),
+            "the refusal for '{written}' does not mention it: {message}"
+        );
     }
 }
 
@@ -449,6 +599,22 @@ fn build_workspace(branches: usize, plus_unguarded: bool) -> common::TestSession
     common::columnar_session_in(dir)
 }
 
+/// A workspace holding one type, for the verbs that need a type symbol.
+///
+/// Its own file rather than an addition to the guarded fixture: the budget and
+/// pattern tests count what that fixture contains, and a struct nobody asked
+/// for would move their numbers.
+fn typed_workspace() -> common::TestSession {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("shapes.cpp"),
+        "struct Point {\n    int x;\n    int y;\n};\n\
+         int point_sum(void) { return 0; }\n",
+    )
+    .expect("write fixture");
+    common::columnar_session_in(dir)
+}
+
 /// The `guard_branch` value the row named `name` actually carries, read off an
 /// unfiltered scan so the test never assumes how branches are numbered.
 fn branch_value_of(t: &mut common::TestSession, name: &str) -> String {
@@ -541,7 +707,10 @@ fn a_pattern_answers_the_rows_the_filter_would_accept() {
 fn refused_fields_error_rather_than_answering_nothing() {
     let mut t = guarded_workspace(2);
     for row in FIELD_TIERS {
-        if !row.serving.iter().any(|s| s.tier == Tier::Refused) {
+        // `count` is refused in a `WHERE` and answered in an `ORDER BY`, so it
+        // is not one field this loop can assert about; its own test covers the
+        // split.
+        if !row.is_refused_everywhere() {
             continue;
         }
         for name in std::iter::once(row.field).chain(row.aliases.iter().copied()) {
@@ -560,32 +729,34 @@ fn refused_fields_error_rather_than_answering_nothing() {
     }
 }
 
-/// The refusal has to hold on every verb that reaches this backend, not only
-/// on the one it was written for — and the verbs it does NOT reach have to be
-/// named, not left to be discovered.
+/// The refusal has to hold on every verb that accepts a clause, not only on
+/// the one it was written for.
 ///
 /// `FIND usages` builds occurrence rows that carry no kind at all, and `FIND
-/// files` builds file rows that carry none either; both used to run the
-/// clause filter over those rows and return a confident empty answer. `FIND
-/// callees OF` is an alias for `SHOW callees OF` and answers with a value
-/// rather than a Result, so it still accepts the field and matches nothing —
-/// asserted here so the boundary moves only deliberately.
+/// files` builds file rows that carry none either; both used to run the clause
+/// filter over those rows and return a confident empty answer. `SHOW outline`,
+/// `SHOW members`, `SHOW callees` and `FIND callees OF` used to answer with a
+/// JSON value and had no channel to refuse through at all — they have one now,
+/// and this is what says so.
 #[test]
-fn node_kind_is_refused_on_the_four_find_verbs_that_can_refuse() {
+fn node_kind_is_refused_on_every_verb_that_accepts_a_clause() {
     let mut t = guarded_workspace(2);
     for fql in [
         "FIND symbols WHERE node_kind = 'x'",
         "FIND symbols ORDER BY node_kind LIMIT 5",
         "FIND symbols GROUP BY node_kind",
         "FIND globals WHERE node_kind = 'x'",
+        "FIND globals ORDER BY node_kind LIMIT 5",
+        "FIND globals GROUP BY node_kind",
         "FIND usages OF 'sym_0' WHERE node_kind = 'x'",
+        "FIND usages OF 'sym_0' ORDER BY node_kind LIMIT 5",
         "FIND usages OF 'sym_0' GROUP BY node_kind",
         "FIND files WHERE node_kind = 'x'",
         "FIND files ORDER BY node_kind LIMIT 5",
         "FIND files GROUP BY node_kind",
-        "FIND globals ORDER BY node_kind LIMIT 5",
-        "FIND globals GROUP BY node_kind",
-        "FIND usages OF 'sym_0' ORDER BY node_kind LIMIT 5",
+        "SHOW outline OF 'guards.cpp' WHERE node_kind = 'x'",
+        "SHOW callees OF 'sym_0' WHERE node_kind = 'x'",
+        "FIND callees OF 'sym_0' WHERE node_kind = 'x'",
     ] {
         let err = t
             .try_fql(fql)
@@ -593,72 +764,117 @@ fn node_kind_is_refused_on_the_four_find_verbs_that_can_refuse() {
             .unwrap_or_else(|| panic!("`{fql}` answered instead of erroring"));
         let msg = err.to_string();
         assert!(
-            msg.contains("node_kind") && msg.contains("fql_kind") || msg.contains("no kind at all"),
-            "`{fql}` was refused without saying what to write instead: {msg}"
+            msg.contains("node_kind"),
+            "`{fql}` was refused without naming the field: {msg}"
         );
     }
 
-    // The stated boundary, asserted rather than assumed: this verb routes to
-    // SHOW callees, which answers with a value and has nowhere to put an
-    // error, so it accepts the field and matches nothing.
-    //
-    // `is_ok()` alone would not catch the boundary moving: that path turns
-    // every failure into an error payload rather than an `Err`, so the answer
-    // itself has to be inspected. This fixture's `sym_0` is `return 0;`, so
-    // the word "error" cannot appear in a legitimate callees answer for it.
-    let answered = match t.try_fql("FIND callees OF 'sym_0' WHERE node_kind = 'x'") {
-        Ok(ForgeQLResult::Show(v)) => format!("{v:?}"),
-        other => panic!("FIND callees answered unexpectedly: {other:?}"),
-    };
-    assert!(
-        !answered.contains("error"),
-        "FIND callees now reports an error for node_kind — the documented \
-         boundary moved, and the four docs saying it accepts the field have \
-         to move with it: {answered}"
-    );
+    // The verbs that need a type symbol, on a fixture that has one.
+    let mut typed = typed_workspace();
+    for fql in [
+        "SHOW members OF 'Point' WHERE node_kind = 'x'",
+        "SHOW members OF 'Point' ORDER BY node_kind",
+        "SHOW outline OF 'shapes.cpp' GROUP BY node_kind",
+    ] {
+        let err = typed
+            .try_fql(fql)
+            .err()
+            .unwrap_or_else(|| panic!("`{fql}` answered instead of erroring"));
+        assert!(
+            err.to_string().contains("node_kind"),
+            "`{fql}` was refused without naming the field: {err}"
+        );
+    }
 }
 
 #[test]
-fn unserved_fields_really_do_match_nothing() {
-    // This test documents a defect rather than an invariant: each of these
-    // names passes validation, resolves on no symbol row, and so answers a
-    // confident zero. It exists so the family cannot grow quietly, and so
-    // that the day one of them is fixed — by refusing it, or by resolving it
-    // — this fails and the table has to be brought along.
+fn a_refusal_reaches_the_caller_as_an_error_not_an_answer() {
+    // `SHOW outline`, `SHOW members`, `SHOW callees` and `FIND callees` used to
+    // hand back a JSON value with nowhere to put a refusal, so a clause naming
+    // a field their rows cannot carry was accepted and dropped every row in
+    // silence. This is the pin on that channel: an `Err`, not an empty answer,
+    // and not an `Ok` carrying an error payload.
+    let mut t = typed_workspace();
+    for (fql, field) in [
+        // `SHOW outline` filters and nothing else, so its row shape IS the
+        // universe and `usages` is refused on that ground alone.
+        ("SHOW outline OF 'shapes.cpp' WHERE usages > 0", "usages"),
+        // `SHOW members` / `SHOW callees` also resolve a symbol, so what they
+        // refuse is what no row of any shape can answer.
+        ("SHOW members OF 'Point' WHERE size > 1", "size"),
+        ("SHOW callees OF 'point_sum' WHERE marker = 'x'", "marker"),
+        (
+            "FIND callees OF 'point_sum' ORDER BY declaration",
+            "declaration",
+        ),
+    ] {
+        match t.try_fql(fql) {
+            Err(e) => assert!(
+                e.to_string().contains(field),
+                "`{fql}` was refused without naming '{field}': {e}"
+            ),
+            Ok(answer) => panic!("`{fql}` answered instead of erroring: {answer:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_refused_field_errors_in_every_clause_that_cannot_answer_it() {
+    // The contract, driven from the table: a clause naming a declared-but-
+    // unanswerable field errors. It never returns zero rows, because zero rows
+    // is a claim about the corpus and an error is a fact about the query.
+    //
+    // Every alias is exercised too — `ext` and `content` reach these rows only
+    // through the alias table, and an alias that slips past validation is the
+    // same false absence under another spelling.
     let mut t = guarded_workspace(3);
     let populated = query(&mut t, "FIND symbols LIMIT 10");
     assert!(!populated.results.is_empty(), "fixture indexed nothing");
 
-    for row in FIELD_TIERS {
-        if !row.serving.iter().any(|s| s.tier == Tier::Unserved) {
-            continue;
-        }
+    for row in refused_fields() {
         for name in std::iter::once(row.field).chain(row.aliases.iter().copied()) {
-            // `!= 'zzz'` matches every row that can resolve the field at all,
-            // so an empty answer is proof the row cannot resolve it.
-            let q = query(
-                &mut t,
-                &format!("FIND symbols WHERE {name} != 'zzz' LIMIT 10"),
-            );
-            assert!(
-                q.results.is_empty(),
-                "{name} now resolves on symbol rows — good, but the table still \
-                 declares it Unserved"
-            );
-
-            // The same names in GROUP BY are refused rather than answered:
-            // grouping keys through `field_str` alone, so an unresolvable name
-            // there did not return nothing, it returned one empty-named group
-            // holding every row. WHERE still answers empty, GROUP BY errors,
-            // and the two halves of that split are pinned together.
-            let grouped = format!("FIND symbols GROUP BY {name}");
-            assert!(
-                t.try_fql(&grouped).is_err(),
-                "`{grouped}` answered instead of erroring — an unresolvable \
-                 grouping key fabricates a single empty-named group"
-            );
+            for fql in [
+                format!("FIND symbols WHERE {name} != 'zzz' LIMIT 10"),
+                format!("FIND symbols GROUP BY {name}"),
+            ] {
+                let err = t
+                    .try_fql(&fql)
+                    .err()
+                    .unwrap_or_else(|| panic!("`{fql}` answered instead of erroring"));
+                assert!(
+                    err.to_string().contains(name),
+                    "`{fql}` was refused without naming the field: {err}"
+                );
+            }
         }
     }
+}
+
+#[test]
+fn count_is_refused_before_the_grouping_pass_and_answered_after_it() {
+    // The one field whose answer depends on the clause, not the operator.
+    // `GROUP BY file ORDER BY count DESC` is the documented shape and has to
+    // keep working; `WHERE count >= 2` before any grouping reads nothing on
+    // every row, and used to return an empty answer for that reason.
+    let mut t = guarded_workspace(3);
+
+    let grouped = query(
+        &mut t,
+        "FIND symbols WHERE fql_kind = 'function' GROUP BY path ORDER BY count DESC",
+    );
+    assert!(
+        !grouped.results.is_empty(),
+        "ORDER BY count after GROUP BY must still answer"
+    );
+
+    let err = t
+        .try_fql("FIND symbols WHERE count >= 2 LIMIT 10")
+        .expect_err("WHERE count answered instead of erroring");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("count") && msg.contains("HAVING"),
+        "the refusal should send the agent to HAVING: {msg}"
+    );
 }
 
 #[test]
@@ -743,15 +959,17 @@ fn kind_answers_exactly_as_fql_kind_does() {
 /// through `group_key`, falling back to the literal `(empty)` when the row
 /// could not resolve the field. That is exactly the shape the columnar
 /// backend's own refusal text calls out as indistinguishable from an answer —
-/// so a field admitted to `GROUPABLE_SYMBOL_FIELDS` has to survive the render
-/// too, or the refusal was traded for a fabrication one layer further out.
+/// so a field the grouping check admits has to survive the render too, or the
+/// refusal was traded for a fabrication one layer further out.
 #[test]
 fn newly_groupable_fields_render_real_groups() {
     let mut t = guarded_workspace(3);
     let mut csv = |fql: &str| forgeql_core::compact::to_compact(&t.exec(fql));
 
     // `kind` is an alias of `fql_kind`: the two spellings must render the
-    // same groups, not merely both render something.
+    // same groups, not merely both render something. Grouping on the kind is
+    // the one case with no key column at all — the compact layout already
+    // groups a symbol listing by kind — so what is compared is the group rows.
     let by_alias = csv("FIND symbols GROUP BY kind");
     let by_canonical = csv("FIND symbols GROUP BY fql_kind");
     assert!(
@@ -759,8 +977,25 @@ fn newly_groupable_fields_render_real_groups() {
         "`GROUP BY fql_kind` itself fabricated a group, so this proves nothing:\n{by_canonical}"
     );
     assert_eq!(
-        by_alias, by_canonical,
+        group_lines(&by_alias),
+        group_lines(&by_canonical),
         "`GROUP BY kind` must render the same groups as `GROUP BY fql_kind`"
+    );
+    // Where there IS a key column — every grouping but the kind one — it is
+    // labelled with the spelling the agent wrote, while the grouping itself
+    // runs on the canonical field. `path` and `file` are the pair that proves
+    // both halves: same groups, different label.
+    let by_path = csv("FIND symbols GROUP BY path");
+    let by_file = csv("FIND symbols GROUP BY file");
+    assert_eq!(
+        group_lines(&by_path),
+        group_lines(&by_file),
+        "`GROUP BY file` must render the same groups as `GROUP BY path`"
+    );
+    assert!(
+        by_file.contains("\"file\"") && by_path.contains("\"path\""),
+        "the key column must be labelled with the spelling the agent \
+         wrote:\n{by_file}\n{by_path}"
     );
 
     // `node_id` is groupable by the same table and collapsed the same way.
@@ -800,6 +1035,61 @@ fn newly_groupable_fields_render_real_groups() {
         empty_count, without_handle,
         "`(empty)` must hold exactly the rows that carry no handle:\n{by_node_id}"
     );
+}
+
+/// The group rows of a grouped CSV answer, without the two header lines.
+///
+/// The second header line is the key column's label, which is the spelling the
+/// agent wrote and so differs between an alias and its canonical name by
+/// design. Comparing whole CSVs would call that a difference in the answer.
+fn group_lines(csv: &str) -> Vec<&str> {
+    csv.lines().skip(2).collect()
+}
+
+#[test]
+fn every_alias_answers_exactly_as_its_canonical_name_does() {
+    // Driven from the table rather than from one hard-coded pair. The failure
+    // this guards against is not hypothetical: `kind` reached the grouping
+    // renderer unresolved and rendered one `(empty)` group where `fql_kind`
+    // rendered three, because the alias was known to one implementation of
+    // grouping and not to the other. A second alias added to `FIELD_TIERS`
+    // reproduces that the moment any resolver is taught names one at a time.
+    let mut t = guarded_workspace(3);
+
+    for row in FIELD_TIERS {
+        for &alias in row.aliases {
+            for (with_alias, with_canonical) in [
+                (
+                    format!("FIND symbols GROUP BY {alias}"),
+                    format!("FIND symbols GROUP BY {}", row.field),
+                ),
+                (
+                    format!("FIND symbols WHERE {alias} != 'zzz' LIMIT 50"),
+                    format!("FIND symbols WHERE {} != 'zzz' LIMIT 50", row.field),
+                ),
+            ] {
+                match (t.try_fql(&with_alias), t.try_fql(&with_canonical)) {
+                    (Err(_), Err(_)) => {}
+                    (Ok(a), Ok(c)) => {
+                        let a = forgeql_core::compact::to_compact(&a);
+                        let c = forgeql_core::compact::to_compact(&c);
+                        assert_eq!(
+                            group_lines(&a),
+                            group_lines(&c),
+                            "`{with_alias}` and `{with_canonical}` are the same query \
+                             written two ways and answered differently"
+                        );
+                    }
+                    (a, c) => panic!(
+                        "`{with_alias}` and `{with_canonical}` disagree about whether \
+                         the query is answerable at all: {} vs {}",
+                        if a.is_ok() { "answered" } else { "refused" },
+                        if c.is_ok() { "answered" } else { "refused" },
+                    ),
+                }
+            }
+        }
+    }
 }
 
 /// The set of rows an outline predicate can act on must not depend on which
@@ -855,5 +1145,117 @@ fn kind_opens_the_same_outline_universe_as_fql_kind() {
         from_alias, from_canonical,
         "`kind` must open the same outline universe as `fql_kind`: a kind outside \
          the structural tree ('{outside}') has to be reachable under both spellings"
+    );
+}
+
+#[test]
+fn any_where_opens_the_outline_universe_not_only_a_kind_predicate() {
+    // Which field the predicate named used to decide which rows existed. A
+    // `WHERE name` searched the structural tree while a `WHERE fql_kind`
+    // searched the file, so a non-structural node was absent from one and
+    // present in the other — and `depth`, which counts the listed ancestors,
+    // differed for the same node between the two.
+    //
+    // The fixture's guard regions are the non-structural rows: `#if` and
+    // `#elif` are not declarations, so a bare outline omits them. The needle is
+    // the rendered field, not the bare word: the fixture's file is called
+    // `guards.cpp`, so `contains("guard")` is true of every answer.
+    const GUARD_ROW: &str = r#"fql_kind: "guard""#;
+
+    let mut t = guarded_workspace(3);
+    let render =
+        |t: &mut common::TestSession, fql: &str| format!("{:?}", t.try_fql(fql).expect("query"));
+
+    let bare = render(&mut t, "SHOW outline OF 'guards.cpp'");
+    assert!(
+        !bare.contains(GUARD_ROW),
+        "a bare outline should list structural declarations only, so this \
+         proves nothing:\n{bare}"
+    );
+
+    let by_kind = render(
+        &mut t,
+        "SHOW outline OF 'guards.cpp' WHERE fql_kind = 'guard'",
+    );
+    assert!(
+        by_kind.contains(GUARD_ROW),
+        "a kind predicate has always opened the full set:\n{by_kind}"
+    );
+
+    // The predicate that used not to: `line` names no kind at all.
+    let by_line = render(&mut t, "SHOW outline OF 'guards.cpp' WHERE line >= 1");
+    assert!(
+        by_line.contains(GUARD_ROW),
+        "a WHERE on a field other than the kind must open the same set — a \
+         filter that cannot see a row cannot report it:\n{by_line}"
+    );
+}
+
+#[test]
+fn a_clause_that_also_resolves_a_symbol_is_not_gated_by_the_row_shape() {
+    // The stated boundary, asserted rather than assumed — and the one place the
+    // row-shape refusal deliberately does not reach.
+    //
+    // `SHOW members`, `SHOW callees`, `SHOW body`, `SHOW context` and
+    // `SHOW NODE` all use the same clause twice: to pick which symbol to
+    // resolve, and then to filter what comes back. `WHERE language = 'cpp'`
+    // disambiguates a name two languages both define, and the resolving half
+    // runs against symbol rows, whose field set is open — so a members row not
+    // carrying `language` is not evidence the query is wrong. Gating those
+    // verbs on their own row shape refused a working query, which is how this
+    // test came to exist: the gate was green and the live engine was not.
+    //
+    // What they DO refuse is what no row of any shape can answer.
+    //
+    // `SHOW signature` is the same shape with the filtering half absent: it
+    // renders one line and applies no `WHERE` at all.
+    let mut typed = typed_workspace();
+    for fql in [
+        "SHOW members OF 'Point' WHERE language = 'cpp'",
+        "SHOW callees OF 'point_sum' WHERE language = 'cpp'",
+        "SHOW body OF 'point_sum' WHERE language = 'cpp'",
+    ] {
+        let answer = typed
+            .try_fql(fql)
+            .unwrap_or_else(|e| panic!("`{fql}` was refused: {e}"));
+        assert!(
+            format!("{answer:?}").contains("Point") || format!("{answer:?}").contains("point_sum"),
+            "`{fql}` answered nothing: {answer:?}"
+        );
+    }
+    for fql in [
+        "SHOW members OF 'Point' WHERE size > 1",
+        "SHOW callees OF 'point_sum' WHERE marker = 'x'",
+        "SHOW body OF 'point_sum' WHERE declaration = 'x'",
+    ] {
+        let err = typed
+            .try_fql(fql)
+            .err()
+            .unwrap_or_else(|| panic!("`{fql}` answered instead of erroring"));
+        assert!(
+            err.to_string().contains("cannot be answered"),
+            "`{fql}` failed for the wrong reason: {err}"
+        );
+    }
+
+    let mut t = guarded_workspace(2);
+    let filtered = format!(
+        "{:?}",
+        t.try_fql("SHOW body OF 'sym_0' WHERE text MATCHES 'return'")
+            .expect("the filtering half of the clause stopped working")
+    );
+    assert!(
+        filtered.contains("return"),
+        "the filtering half of the clause stopped working: {filtered}"
+    );
+
+    let signature = format!(
+        "{:?}",
+        t.try_fql("SHOW signature OF 'sym_0' WHERE name = 'nothing_matches_this'")
+            .expect("SHOW signature refused a clause it is documented to ignore")
+    );
+    assert!(
+        signature.contains("sym_0"),
+        "SHOW signature applied the clause instead of ignoring it: {signature}"
     );
 }

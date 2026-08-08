@@ -24,11 +24,12 @@
 //! which states their serving path exactly; the table is total over the
 //! universe because of that row, not in spite of it.
 //!
-//! A field name that belongs to another row type (`FIND files`, `FIND
-//! globals`, `SHOW` line rows) appears here only where `CORE_WHERE_FIELDS`
-//! names it, and its row describes what that name does on a **symbol** row —
-//! which for most of them is [`Tier::Unserved`], the defect family this table
-//! was built to surface.
+//! A field name that belongs to another row type (`FIND files`, `SHOW members`,
+//! `SHOW` line rows) appears here only where `CORE_WHERE_FIELDS` names it, and
+//! its row describes what that name does on a **symbol** row — which for all
+//! of them is [`Tier::Refused`], with [`FieldTier::elsewhere`] naming the verb
+//! that does answer it. That family was the defect this table was built to
+//! surface: each of those names was accepted and answered a confident zero.
 //!
 //! # This table is declarative
 //!
@@ -121,14 +122,37 @@ pub enum Tier {
     /// No index: every row is read and handed to the row-level filter. Slow
     /// and complete — the honest default, not a failure.
     Scan,
-    /// Validation rejects the predicate rather than answering it.
+    /// Validation refuses the predicate rather than answering it.
+    ///
+    /// A field is refused when no row of the queried shape can carry a value
+    /// for it: either nothing in the index stores it (`node_kind`) or the name
+    /// belongs to a different row shape entirely (`size`, `declaration`).
+    /// Either way the only answer available is a false absence, so the query
+    /// errors and [`FieldTier::elsewhere`] names where the field IS answered.
     Refused,
-    /// Accepted by validation, carried by no symbol row, and therefore matched
-    /// by nothing: a confident wrong answer. Every row declaring this is a
-    /// known defect, pinned by a test in `tests/field_tier_table.rs`.
-    Unserved,
 }
 
+/// What follows a tier, and in which of the two possible relationships.
+///
+/// One field used to carry both, spelled `Option<Tier>`, and the two mean
+/// opposite things about whether the first tier's empty answer is an absence.
+/// `KeyBitmap → Scan` proposes candidates the scan then decides, so the bitmap
+/// alone proves nothing; `NameFst → Trigram` is a substitute for a predicate
+/// the FST declined, so the pair is only as exact as the substitute. Written
+/// as one `Option`, both read the same and neither could be checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Then {
+    /// Nothing follows. This tier's answer is the answer.
+    Nothing,
+    /// The tier proposes candidates and this structure decides each one. The
+    /// final rows are right either way; what the declared exactness is about
+    /// is the tier's OWN empty answer, which a filter cannot rescue — there is
+    /// nothing to filter — so a filter leaves that claim exactly as it was.
+    Filters(Tier),
+    /// The tier may decline the predicate outright; this answers instead. The
+    /// pair is only as exact as whichever of the two is weaker.
+    Fallback(Tier),
+}
 /// Whether a tier's answer is the answer, or only a set of candidates.
 ///
 /// This is the field that decides whether an empty result may be reported as
@@ -147,6 +171,65 @@ pub enum Exactness {
     SupersetProvenAbsent(&'static str),
     /// No tier runs, so the question does not arise.
     NotApplicable,
+}
+
+impl Tier {
+    /// What this structure alone can conclude from an empty answer.
+    ///
+    /// The dividing line is whether the structure looked at rows or at keys.
+    /// A scan and a stored column compare each row against its own value, so
+    /// an empty result is the answer. Everything assembled from keys — a
+    /// posting list, a trigram set, a zone map — saw only what was keyed, and
+    /// what was not keyed is not what is not there.
+    #[must_use]
+    pub const fn intrinsic_exactness(self) -> Exactness {
+        match self {
+            Self::Refused => Exactness::NotApplicable,
+            // Two ways to be exact. A scan and a stored column decide every
+            // row against that row's own value; a name FST and a kind bitmap
+            // are lookups over a key set complete by construction, because
+            // every indexed row contributed its name and its kind.
+            Self::Scan | Self::StoredColumn | Self::NameFst | Self::KindBitmap => Exactness::Exact,
+            // Assembled from keys that a budget, an empty value or a dirty
+            // session can leave out.
+            Self::NamePrefix
+            | Self::Trigram
+            | Self::KeyBitmap
+            | Self::ValueUniverse
+            | Self::NumericIndex
+            | Self::ZoneMap => Exactness::Superset,
+        }
+    }
+}
+
+impl Exactness {
+    /// The one exactness a `(tier, then)` pair may declare.
+    ///
+    /// This is a function, not a permission list, and that is the point. The
+    /// matrix it replaced allowed `NameFst` under both `Exact` and `Superset`
+    /// and so could not catch either being wrong — `name` is served by the FST
+    /// for `=` and by the FST-or-trigram pair for a regex, and only one of
+    /// those may conclude an absence.
+    ///
+    /// A `KeyBitmap` may declare [`Exactness::SupersetProvenAbsent`] wherever
+    /// this returns [`Exactness::Superset`]: the proof is an additional check,
+    /// not a different tier.
+    #[must_use]
+    pub const fn of(tier: Tier, then: Then) -> Self {
+        match then {
+            // Nothing else runs, or what runs decides each candidate the tier
+            // proposed — either way the claim being made is the tier's own.
+            Then::Nothing | Then::Filters(_) => tier.intrinsic_exactness(),
+            // The follower may answer the predicate instead, so the pair is
+            // only as strong as whichever of the two is weaker.
+            Then::Fallback(other) => {
+                match (tier.intrinsic_exactness(), other.intrinsic_exactness()) {
+                    (Self::Exact, Self::Exact) => Self::Exact,
+                    _ => Self::Superset,
+                }
+            }
+        }
+    }
 }
 
 /// Something a tier cannot see, and the mechanism that covers it.
@@ -231,11 +314,13 @@ pub struct Serving {
     pub ops: &'static [OpClass],
     /// The structure that answers them.
     pub tier: Tier,
-    /// The structure that takes over when the primary stands aside — a short
-    /// literal falling through to trigrams, a regex the FST cannot walk, a
-    /// field with no keys. `None` means the primary always answers.
-    pub then: Option<Tier>,
-    /// Whether that structure's answer is the answer.
+    /// What follows the primary structure, and how — see [`Then`]. This is
+    /// half of what fixes `exactness`: a filter leaves the primary's own
+    /// exactness intact, a fallback drags the pair down to the weaker of the
+    /// two, and `Nothing` leaves the primary alone with the answer.
+    pub then: Then,
+    /// Whether the pair's answer is the answer — determined, not chosen: see
+    /// [`Exactness::of`].
     pub exactness: Exactness,
     /// The cost of asking, on the reference corpus.
     pub measured: Measured,
@@ -271,6 +356,21 @@ pub struct FieldTier {
     pub gaps: &'static [Gap],
     /// The distinct-value budgets, for fields whose keys have any.
     pub budget: Option<Budget>,
+    /// Where the name IS answered, for a field this row refuses.
+    ///
+    /// A refusal that only says no leaves the agent to guess; every refused
+    /// row either names the verb or clause that does answer the name, or says
+    /// `None` because nothing does. The refusal messages are built from this,
+    /// so the table is what an agent is told, not a second description of it.
+    pub elsewhere: Option<&'static str>,
+    /// Whether `GROUP BY` is what populates the value.
+    ///
+    /// `count` is the only such field: it is written onto a row by the
+    /// grouping pass, so `HAVING` and `ORDER BY` — which run after it — read a
+    /// real number, while a `WHERE`, which runs before it, reads nothing on
+    /// every row and matches none of them. One name, answerable in two clauses
+    /// and refused in the third.
+    pub post_group: bool,
 }
 
 impl FieldTier {
@@ -279,6 +379,54 @@ impl FieldTier {
     pub fn matches(&self, name: &str) -> bool {
         self.field == name || self.aliases.contains(&name)
     }
+
+    /// Whether every operator class on this field is refused as a predicate
+    /// before the grouping pass, and as a grouping key.
+    ///
+    /// True for `count` too — the serving column describes a predicate, and
+    /// before grouping `count` is empty on every row. See
+    /// [`is_refused_everywhere`](FieldTier::is_refused_everywhere) for the
+    /// stronger claim.
+    #[must_use]
+    pub fn is_refused(&self) -> bool {
+        self.serving.iter().all(|s| s.tier == Tier::Refused)
+    }
+
+    /// Whether this field is refused in every clause, `HAVING` and `ORDER BY`
+    /// included.
+    ///
+    /// [`is_refused`](FieldTier::is_refused) alone is not that claim: it is
+    /// true for `count`, which a `WHERE` cannot answer and a `HAVING` can.
+    #[must_use]
+    pub fn is_refused_everywhere(&self) -> bool {
+        self.is_refused() && !self.post_group
+    }
+
+    /// The error an agent sees for a refused field, in the clause that named
+    /// it and on the verb it was written against.
+    ///
+    /// `written` is the spelling the agent used, which may be an alias: an
+    /// error that silently renames the field the agent typed is an error about
+    /// a different query.
+    #[must_use]
+    pub fn refusal(&self, written: &str, clause: &str, verb: &str) -> String {
+        let Some(elsewhere) = self.elsewhere else {
+            return format!(
+                "{clause} {written} cannot be answered on {verb}: {written} is an \
+                 internal storage column and no clause can name it."
+            );
+        };
+        let why = match self.source {
+            Source::Absent => {
+                "no indexed row stores it at all, so the query could only report absence"
+            }
+            Source::Aggregate => {
+                "no row carries it until GROUP BY writes it, and WHERE runs before that"
+            }
+            _ => "no row of this result carries it, so the query could only report absence",
+        };
+        format!("{clause} {written} cannot be answered on {verb}: {why}. Use {elsewhere}.")
+    }
 }
 
 /// Every operator class answered by the complete row scan — no index, and no
@@ -286,7 +434,7 @@ impl FieldTier {
 const SCAN_ALL: &[Serving] = &[Serving {
     ops: ALL_OPS,
     tier: Tier::Scan,
-    then: None,
+    then: Then::Nothing,
     exactness: Exactness::Exact,
     measured: Measured::Unmeasured,
 }];
@@ -295,16 +443,7 @@ const SCAN_ALL: &[Serving] = &[Serving {
 const REFUSED_ALL: &[Serving] = &[Serving {
     ops: ALL_OPS,
     tier: Tier::Refused,
-    then: None,
-    exactness: Exactness::NotApplicable,
-    measured: Measured::Unmeasured,
-}];
-
-/// Every operator class silently matching nothing — the defect family.
-const UNSERVED_ALL: &[Serving] = &[Serving {
-    ops: ALL_OPS,
-    tier: Tier::Unserved,
-    then: None,
+    then: Then::Nothing,
     exactness: Exactness::NotApplicable,
     measured: Measured::Unmeasured,
 }];
@@ -315,7 +454,7 @@ const UNSERVED_ALL: &[Serving] = &[Serving {
 const ENRICH_EQ: Serving = Serving {
     ops: &[OpClass::Eq],
     tier: Tier::KeyBitmap,
-    then: Some(Tier::Scan),
+    then: Then::Filters(Tier::Scan),
     exactness: Exactness::SupersetProvenAbsent("fast_paths::no_segment_carries_enrichment_value"),
     measured: Measured::Unmeasured,
 };
@@ -329,7 +468,7 @@ const ENRICH_PATTERN: Serving = Serving {
         OpClass::NotMatches,
     ],
     tier: Tier::ValueUniverse,
-    then: Some(Tier::Scan),
+    then: Then::Filters(Tier::Scan),
     exactness: Exactness::Superset,
     measured: Measured::Unmeasured,
 };
@@ -338,7 +477,7 @@ const ENRICH_PATTERN: Serving = Serving {
 const ENRICH_ORD: Serving = Serving {
     ops: &[OpClass::Ord],
     tier: Tier::NumericIndex,
-    then: Some(Tier::Scan),
+    then: Then::Filters(Tier::Scan),
     exactness: Exactness::Superset,
     measured: Measured::Unmeasured,
 };
@@ -347,7 +486,7 @@ const ENRICH_ORD: Serving = Serving {
 const ENRICH_NE: Serving = Serving {
     ops: &[OpClass::Ne],
     tier: Tier::Scan,
-    then: None,
+    then: Then::Nothing,
     exactness: Exactness::Exact,
     measured: Measured::Unmeasured,
 };
@@ -381,6 +520,8 @@ const fn posted(field: &'static str, per_file: usize, per_workspace: usize) -> F
             per_file,
             per_workspace,
         }),
+        elsewhere: None,
+        post_group: false,
     }
 }
 
@@ -389,21 +530,21 @@ const NAME_SERVING: &[Serving] = &[
     Serving {
         ops: &[OpClass::Eq],
         tier: Tier::NameFst,
-        then: None,
+        then: Then::Nothing,
         exactness: Exactness::Exact,
         measured: Measured::Unmeasured,
     },
     Serving {
         ops: &[OpClass::Like],
         tier: Tier::NamePrefix,
-        then: Some(Tier::Trigram),
+        then: Then::Fallback(Tier::Trigram),
         exactness: Exactness::Superset,
         measured: Measured::Unmeasured,
     },
     Serving {
         ops: &[OpClass::Matches],
         tier: Tier::NameFst,
-        then: Some(Tier::Trigram),
+        then: Then::Fallback(Tier::Trigram),
         exactness: Exactness::Superset,
         measured: Measured::At {
             ms_per_query: 200,
@@ -420,7 +561,7 @@ const NAME_SERVING: &[Serving] = &[
             OpClass::Ord,
         ],
         tier: Tier::Scan,
-        then: None,
+        then: Then::Nothing,
         exactness: Exactness::Exact,
         measured: Measured::Unmeasured,
     },
@@ -431,7 +572,7 @@ const FQL_KIND_SERVING: &[Serving] = &[
     Serving {
         ops: &[OpClass::Eq],
         tier: Tier::KindBitmap,
-        then: None,
+        then: Then::Nothing,
         exactness: Exactness::Exact,
         measured: Measured::Unmeasured,
     },
@@ -445,7 +586,7 @@ const FQL_KIND_SERVING: &[Serving] = &[
             OpClass::Ord,
         ],
         tier: Tier::Scan,
-        then: None,
+        then: Then::Nothing,
         exactness: Exactness::Exact,
         measured: Measured::Unmeasured,
     },
@@ -465,7 +606,7 @@ const LANGUAGE_SERVING: &[Serving] = &[
             OpClass::NotMatches,
         ],
         tier: Tier::StoredColumn,
-        then: Some(Tier::Scan),
+        then: Then::Filters(Tier::Scan),
         exactness: Exactness::Exact,
         measured: Measured::At {
             ms_per_query: 200,
@@ -477,7 +618,7 @@ const LANGUAGE_SERVING: &[Serving] = &[
     Serving {
         ops: &[OpClass::Ord],
         tier: Tier::Scan,
-        then: None,
+        then: Then::Nothing,
         exactness: Exactness::Exact,
         measured: Measured::Unmeasured,
     },
@@ -489,7 +630,7 @@ const ZONE_MAP_SERVING: &[Serving] = &[
     Serving {
         ops: &[OpClass::Eq, OpClass::Ord],
         tier: Tier::ZoneMap,
-        then: Some(Tier::Scan),
+        then: Then::Filters(Tier::Scan),
         exactness: Exactness::Superset,
         measured: Measured::Unmeasured,
     },
@@ -502,7 +643,7 @@ const ZONE_MAP_SERVING: &[Serving] = &[
             OpClass::NotMatches,
         ],
         tier: Tier::Scan,
-        then: None,
+        then: Then::Nothing,
         exactness: Exactness::Exact,
         measured: Measured::Unmeasured,
     },
@@ -553,6 +694,31 @@ const GUARD_DEFINES_SERVING: &[Serving] = &[
     ENRICH_NE,
 ];
 
+/// A field the symbol query refuses outright.
+///
+/// `source` records why — [`Source::Absent`] when nothing stores the value at
+/// all, [`Source::OtherRowType`] when the name belongs to a different row
+/// shape — and `elsewhere` names where it IS answered, so the refusal can
+/// point somewhere instead of only saying no.
+const fn refused(
+    field: &'static str,
+    aliases: &'static [&'static str],
+    source: Source,
+    elsewhere: Option<&'static str>,
+) -> FieldTier {
+    FieldTier {
+        field,
+        aliases,
+        column: None,
+        source,
+        serving: REFUSED_ALL,
+        gaps: &[],
+        budget: None,
+        elsewhere,
+        post_group: false,
+    }
+}
+
 /// Every field with a declared serving path.
 ///
 /// In the order an agent meets them: the core row fields, then the enrichment
@@ -572,6 +738,8 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         serving: NAME_SERVING,
         gaps: &[Gap::EmptyValue, Gap::DirtySession],
         budget: None,
+        elsewhere: None,
+        post_group: false,
     },
     FieldTier {
         field: "fql_kind",
@@ -581,6 +749,8 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         serving: FQL_KIND_SERVING,
         gaps: &[Gap::DirtySession],
         budget: None,
+        elsewhere: None,
+        post_group: false,
     },
     FieldTier {
         field: "language",
@@ -590,6 +760,8 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         serving: LANGUAGE_SERVING,
         gaps: &[Gap::ShortColumn, Gap::DirtySession],
         budget: None,
+        elsewhere: None,
+        post_group: false,
     },
     FieldTier {
         field: "path",
@@ -601,6 +773,8 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         serving: SCAN_ALL,
         gaps: &[],
         budget: None,
+        elsewhere: None,
+        post_group: false,
     },
     FieldTier {
         field: "line",
@@ -610,6 +784,8 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         serving: ZONE_MAP_SERVING,
         gaps: &[Gap::DirtySession],
         budget: None,
+        elsewhere: None,
+        post_group: false,
     },
     FieldTier {
         field: "usages",
@@ -619,6 +795,8 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         serving: ZONE_MAP_SERVING,
         gaps: &[Gap::DirtySession],
         budget: None,
+        elsewhere: None,
+        post_group: false,
     },
     FieldTier {
         field: "node_id",
@@ -628,6 +806,8 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         serving: SCAN_ALL,
         gaps: &[],
         budget: None,
+        elsewhere: None,
+        post_group: false,
     },
     FieldTier {
         field: "body",
@@ -639,6 +819,23 @@ pub const FIELD_TIERS: &[FieldTier] = &[
         serving: SCAN_ALL,
         gaps: &[],
         budget: None,
+        elsewhere: None,
+        post_group: false,
+    },
+    FieldTier {
+        field: "role",
+        aliases: &[],
+        column: None,
+        // Written onto an occurrence row by the read pass that finds the site,
+        // from the line's own text and the posting that labels it. Not an
+        // index column, so nothing narrows a predicate on it: the row-level
+        // filter decides, and it decides every row.
+        source: Source::MaterialisedText,
+        serving: SCAN_ALL,
+        gaps: &[],
+        budget: None,
+        elsewhere: None,
+        post_group: false,
     },
     // `value` and `type` are named in CORE_WHERE_FIELDS but resolve through
     // the enrichment extras like any other enrichment column, so they are
@@ -654,6 +851,8 @@ pub const FIELD_TIERS: &[FieldTier] = &[
             per_file: 8,
             per_workspace: 64,
         }),
+        elsewhere: None,
+        post_group: false,
     },
     FieldTier {
         field: "type",
@@ -666,139 +865,97 @@ pub const FIELD_TIERS: &[FieldTier] = &[
             per_file: 8,
             per_workspace: 64,
         }),
+        elsewhere: None,
+        post_group: false,
     },
-    // ── Refused: accepted nowhere, and told so ───────────────────────────
-    FieldTier {
-        field: "node_kind",
-        aliases: &[],
-        column: None,
-        // The raw tree-sitter kind is computed during parsing and kept by no
-        // row of the columnar index, so it can only ever be reported absent.
-        // Refusing the predicate is the whole of its serving path until
-        // something stores it, which is an index-output change. The refusal
-        // lives in the columnar backend's own Stage 0 rather than at the
-        // engine, because the legacy in-memory index does store it per row
-        // and filters on it correctly — this table describes the indexed
-        // backend, which is the one every session queries.
-        //
-        // Refused in WHERE, ORDER BY and GROUP BY on `FIND symbols`, `FIND
-        // globals`, `FIND usages` and `FIND files`. `SHOW outline`, `SHOW
-        // members` and `SHOW callees` still accept it and drop every row in
-        // silence: those three answer with a JSON value rather than a Result,
-        // so refusing there is a signature change that belongs with the wider
-        // decision about the other unserved names below.
-        source: Source::Absent,
-        serving: REFUSED_ALL,
-        gaps: &[],
-        budget: None,
-    },
-    FieldTier {
-        field: "text",
-        aliases: &["content"],
-        column: None,
-        source: Source::OtherRowType,
-        serving: REFUSED_ALL,
-        gaps: &[],
-        budget: None,
-    },
-    // Two zone-mapped columns with no query field at all: the zone maps prune
-    // segments for node-span lookups, and validation refuses a WHERE on them
-    // because they are neither core WHERE fields nor enrichment columns.
-    // They are declared so the zone-map list and this table agree as sets.
-    FieldTier {
-        field: "byte_start",
-        aliases: &[],
-        column: Some("byte_start"),
-        source: Source::CoreColumn,
-        serving: REFUSED_ALL,
-        gaps: &[],
-        budget: None,
-    },
-    FieldTier {
-        field: "byte_end",
-        aliases: &[],
-        column: Some("byte_end"),
-        source: Source::CoreColumn,
-        serving: REFUSED_ALL,
-        gaps: &[],
-        budget: None,
-    },
-    // ── Unserved: accepted, carried by no symbol row, matching nothing ───
+    // ── Refused: no symbol row can carry these, and the query says so ─────
     //
-    // Each of these is a live false absence on `FIND symbols`: validation
-    // waves it through because CORE_WHERE_FIELDS is a union across every row
-    // type, the symbol row cannot resolve it, and the query answers a
-    // confident zero. `count` is meant as an alias of `usages`; the rest
-    // belong to `FIND files`, `FIND globals` or `SHOW` line rows. They are
-    // declared rather than fixed here because refusing or aliasing these
-    // documented field names is a contract decision. Each is pinned by a
-    // behavioural test: WHERE still answers a confident zero, GROUP BY on the
-    // same name now errors rather than fabricating one empty-named group, and
-    // both halves are pinned, so the day either is fixed this table must be
-    // updated with it.
+    // Each of these was a live false absence on `FIND symbols`: validation
+    // waved it through because `CORE_WHERE_FIELDS` is a union across every row
+    // type, the symbol row could not resolve it, and the query answered a
+    // confident zero. They are refused instead, with a message naming the
+    // field and `elsewhere` — because zero rows is a claim about the corpus
+    // and an error is a fact about the query.
+    //
+    // The raw tree-sitter kind is computed during parsing and kept by no row
+    // of the columnar index, so it can only ever be reported absent. Serving
+    // it would mean storing it, which is an index-output change. The refusal
+    // lives in the columnar backend's own Stage 0 rather than at the engine,
+    // because the legacy in-memory index does store it per row and filters on
+    // it correctly — this table describes the indexed backend, which is the
+    // one every session queries.
+    refused(
+        "node_kind",
+        &[],
+        Source::Absent,
+        Some("fql_kind, the universal kind, which is stored"),
+    ),
+    refused(
+        "text",
+        &["content"],
+        Source::OtherRowType,
+        Some("SHOW body / SHOW NODE '<id>' WHERE text MATCHES '…', whose rows are source lines"),
+    ),
+    // Two zone-mapped columns with no query field at all: the zone maps prune
+    // segments for node-span lookups, and no clause may name them. They are
+    // declared so the zone-map list and this table agree as sets.
     FieldTier {
-        field: "count",
-        aliases: &[],
-        column: None,
-        source: Source::OtherRowType,
-        serving: UNSERVED_ALL,
-        gaps: &[],
-        budget: None,
+        column: Some("byte_start"),
+        ..refused("byte_start", &[], Source::CoreColumn, None)
     },
     FieldTier {
-        field: "size",
-        aliases: &[],
-        column: None,
-        source: Source::OtherRowType,
-        serving: UNSERVED_ALL,
-        gaps: &[],
-        budget: None,
+        column: Some("byte_end"),
+        ..refused("byte_end", &[], Source::CoreColumn, None)
     },
+    // `count` is the one name that is refused in one clause and answered in
+    // two: see `FieldTier::post_group`.
     FieldTier {
-        field: "depth",
-        aliases: &[],
-        column: None,
-        source: Source::OtherRowType,
-        serving: UNSERVED_ALL,
-        gaps: &[],
-        budget: None,
+        post_group: true,
+        ..refused(
+            "count",
+            &[],
+            Source::Aggregate,
+            Some(
+                "HAVING count or ORDER BY count, which run after the grouping pass that writes it",
+            ),
+        )
     },
-    FieldTier {
-        field: "extension",
-        aliases: &["ext"],
-        column: None,
-        source: Source::OtherRowType,
-        serving: UNSERVED_ALL,
-        gaps: &[],
-        budget: None,
-    },
-    FieldTier {
-        field: "signature",
-        aliases: &[],
-        column: None,
-        source: Source::OtherRowType,
-        serving: UNSERVED_ALL,
-        gaps: &[],
-        budget: None,
-    },
-    FieldTier {
-        field: "marker",
-        aliases: &[],
-        column: None,
-        source: Source::OtherRowType,
-        serving: UNSERVED_ALL,
-        gaps: &[],
-        budget: None,
-    },
-    FieldTier {
-        field: "declaration",
-        aliases: &[],
-        column: None,
-        source: Source::OtherRowType,
-        serving: UNSERVED_ALL,
-        gaps: &[],
-        budget: None,
-    },
+    refused(
+        "size",
+        &[],
+        Source::OtherRowType,
+        Some("FIND files, whose rows carry a byte size"),
+    ),
+    refused(
+        "depth",
+        &[],
+        Source::OtherRowType,
+        Some("FIND files and SHOW outline, whose rows carry a depth"),
+    ),
+    refused(
+        "extension",
+        &["ext"],
+        Source::OtherRowType,
+        Some("FIND files, whose rows carry an extension"),
+    ),
+    refused(
+        "signature",
+        &[],
+        Source::OtherRowType,
+        Some("SHOW signature OF '<name>', which renders one"),
+    ),
+    refused(
+        "marker",
+        &[],
+        Source::OtherRowType,
+        Some("SHOW body / SHOW NODE '<id>', whose line rows carry a marker"),
+    ),
+    refused(
+        "declaration",
+        &[],
+        Source::OtherRowType,
+        Some("SHOW members OF '<type>', whose rows carry a declaration"),
+    ),
     // ── Enrichment fields carrying per-segment posting lists ─────────────
     //
     // The budgets are repeated here rather than computed from
@@ -892,6 +1049,8 @@ pub const CATCH_ALL_FIELD: FieldTier = FieldTier {
         per_file: 8,
         per_workspace: 64,
     }),
+    elsewhere: None,
+    post_group: false,
 };
 
 /// The declared serving path for `field`, by canonical name or alias, falling
@@ -907,4 +1066,27 @@ pub fn lookup(field: &str) -> Option<&'static FieldTier> {
     FIELD_TIERS
         .iter()
         .find(|t| t.field != CATCH_ALL_FIELD.field && t.matches(field))
+}
+
+/// The canonical spelling of `field`, or `field` unchanged when the table does
+/// not know the name.
+///
+/// Two spellings the DSL documents as identical must be answered identically,
+/// and this is what makes that mechanical: every place that compares a clause
+/// field to a canonical name compares this instead, so an alias added to
+/// [`FIELD_TIERS`] reaches all of them at once. The alternative — teaching
+/// each comparison its own alias list — is how `WHERE kind = 'guard'` came to
+/// answer zero where `WHERE fql_kind = 'guard'` answered three, on the same
+/// file and the same field.
+///
+/// The written spelling is what the result is LABELLED with; only the routing
+/// is canonicalised. `GROUP BY file` still heads its key column `file`.
+#[must_use]
+pub fn canonical(field: &str) -> &str {
+    lookup(field).map_or(field, |tier| tier.field)
+}
+
+/// Every field the symbol query refuses outright, in table order.
+pub fn refused_fields() -> impl Iterator<Item = &'static FieldTier> {
+    FIELD_TIERS.iter().filter(|tier| tier.is_refused())
 }

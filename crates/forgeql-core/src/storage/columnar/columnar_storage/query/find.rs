@@ -6,7 +6,7 @@ use std::path::Path;
 use roaring::RoaringBitmap;
 
 use crate::ast::trigram::TRIGRAM_WIDTH;
-use crate::filter::apply_clauses;
+use crate::filter::{ClauseTarget as _, apply_clauses};
 use crate::ir::{Clauses, CompareOp, GroupBy, PredicateValue};
 use crate::result::SymbolMatch;
 use crate::storage::columnar::columnar_storage::fast_paths::{
@@ -17,74 +17,39 @@ use crate::storage::columnar::columnar_storage::fast_paths::{
 use crate::storage::columnar::columnar_storage::{ColumnarStorage, SubstringIndex};
 use crate::storage::columnar::segment_builder::ZONEMAP_NUMERIC_FIELDS;
 
-/// The one field name a `FIND` on this backend accepts and cannot answer.
-///
-/// It is the raw tree-sitter kind, computed while parsing to drive kind
-/// mapping. The legacy backend keeps it on every row; the columnar row layout
-/// has no column for it, so every materialised row reports it absent and a
-/// predicate would match nothing while its negation matched everything. It
-/// stays in `CORE_WHERE_FIELDS` because that list is shared with the backend
-/// that does store it.
-const NODE_KIND: &str = "node_kind";
-
 /// Render an accepted-field list for a refusal message, straight from the
-/// const that decides acceptance.
+/// declaration that decides acceptance.
 ///
 /// A refusal that names the alternatives is only useful while the names are
 /// the real ones, and a hand-written list drifts the moment a field is added.
-/// [`NODE_KIND`] is dropped because it is refused before either check runs, so
-/// offering it would point the agent at another error.
-fn accepted_list(fields: &[&str]) -> String {
+/// Fields this backend refuses outright are dropped: offering one would point
+/// the agent at another error. `count` survives the filter, because a refusal
+/// about `ORDER BY` should still offer the field `ORDER BY` accepts.
+fn accepted_list<'a>(fields: impl IntoIterator<Item = &'a str>) -> String {
     fields
-        .iter()
-        .filter(|f| **f != NODE_KIND)
-        .copied()
+        .into_iter()
+        .filter(|f| {
+            !crate::field_tiers::lookup(f)
+                .is_some_and(crate::field_tiers::FieldTier::is_refused_everywhere)
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-/// Refuse a `node_kind` predicate wherever one can reach this backend.
+/// Every field name a symbol row resolves, in one sequence.
 ///
-/// `WHERE`, `ORDER BY` and `GROUP BY` all have to be checked, and for the same
-/// reason: none of them can be answered from a field no row carries, and each
-/// fails a different way. `WHERE` matches nothing while its negation matches
-/// everything; `ORDER BY` ties every row and silently falls back to name
-/// order; `GROUP BY` keys every row to the empty string and reports one
-/// fabricated group whose count is the whole result set.
-pub(super) fn reject_node_kind(clauses: &Clauses) -> anyhow::Result<()> {
-    let clause = if clauses
-        .where_predicates
+/// Both accessors, because a clause reaches a row through either: `line` and
+/// `usages` are numbers and `name` is a string, and all three sort.
+fn symbol_row_fields() -> impl Iterator<Item = &'static str> {
+    SymbolMatch::STR_FIELDS
         .iter()
-        .any(|p| p.field == NODE_KIND)
-    {
-        "WHERE"
-    } else if clauses
-        .order_by
-        .as_ref()
-        .is_some_and(|o| o.field == NODE_KIND)
-    {
-        "ORDER BY"
-    } else if matches!(clauses.group_by, Some(GroupBy::Field(ref f)) if f == NODE_KIND) {
-        "GROUP BY"
-    } else {
-        return Ok(());
-    };
-    anyhow::bail!("{}", node_kind_refusal(clause));
+        .chain(SymbolMatch::NUM_FIELDS)
+        .copied()
 }
 
-/// Why a `node_kind` predicate is refused, and what to write instead.
-///
-/// The example stays language-agnostic on purpose: the grammar kind an agent
-/// would have written is `function_definition` in C and `function_item` in
-/// Rust, and this crate knows about neither.
-fn node_kind_refusal(clause: &str) -> String {
-    format!(
-        "{clause} node_kind is not answerable: node_kind is the raw tree-sitter \
-         grammar kind and no indexed row stores it, so the query could only \
-         report absence. Use fql_kind, the universal kind, which is stored — \
-         fql_kind = 'function' rather than node_kind = '<the grammar's own \
-         name for a function>'."
-    )
+/// Whether a symbol row resolves `field` through either accessor.
+fn resolves_on_symbol_row(field: &str) -> bool {
+    symbol_row_fields().any(|f| f == field)
 }
 
 impl ColumnarStorage {
@@ -111,7 +76,7 @@ impl ColumnarStorage {
         // GROUP BY and ORDER BY name fast-paths short-circuit the pipeline. The
         // count-based GROUP BY paths are only valid when source paths are unique;
         // duplicates overcount, so fall through to the deduplicating pipeline.
-        reject_node_kind(clauses)?;
+        crate::filter::reject_refused_fields::<SymbolMatch>("FIND symbols", clauses)?;
         self.reject_unknown_where_fields(clauses)?;
         self.reject_unknown_order_by_field(clauses)?;
         self.reject_unknown_group_by_field(clauses)?;
@@ -146,20 +111,25 @@ impl ColumnarStorage {
 
     /// Stage 0 — fail fast on WHERE fields that cannot match anything.
     ///
-    /// A field is accepted when it is a core field, a known enrichment field
-    /// of any registered language, or an enrichment column stored by at least
-    /// one segment (persistent or dirty) of this index.  Anything else — a
-    /// typo or an invented field — is rejected with guidance instead of
-    /// silently matching nothing after a full-index scan.
+    /// A field is accepted when a symbol row resolves it
+    /// ([`ClauseTarget::STR_FIELDS`](crate::filter::ClauseTarget::STR_FIELDS)
+    /// and its numeric twin), when it is a known enrichment field of any
+    /// registered language, or when at least one segment of this index
+    /// (persistent or dirty) stores an enrichment column with that name.
+    /// Anything else — a typo, an invented field, or a real field belonging to
+    /// another row shape — is rejected with guidance instead of silently
+    /// matching nothing after a full-index scan.
     ///
-    /// [`NODE_KIND`] is checked first because it is the one name that passes
-    /// the core-field test and still cannot match: it is in
-    /// `CORE_WHERE_FIELDS` for the legacy backend, which does store it per
-    /// row, while nothing in this index does.
+    /// The accepted set is the row's own declaration, not `CORE_WHERE_FIELDS`.
+    /// That list is a union across every result shape, so gating on it let
+    /// `size`, `depth`, `extension`, `signature`, `marker` and `declaration`
+    /// through to answer a confident zero on a row that carries none of them.
+    /// [`reject_refused_fields`] runs first and gives those six, and
+    /// `node_kind`, a message that says where they ARE answered.
     fn reject_unknown_where_fields(&self, clauses: &Clauses) -> anyhow::Result<()> {
         for pred in &clauses.where_predicates {
-            let field = pred.field.as_str();
-            if crate::filter::CORE_WHERE_FIELDS.contains(&field) {
+            let field = crate::field_tiers::canonical(&pred.field);
+            if resolves_on_symbol_row(field) {
                 continue;
             }
             if crate::storage::legacy::is_known_enrichment_field(field) {
@@ -176,13 +146,14 @@ impl ColumnarStorage {
             {
                 continue;
             }
+            let core = accepted_list(symbol_row_fields());
             anyhow::bail!(
-                "unknown WHERE field '{field}': it is not a core field and no \
-                 indexed row carries an enrichment column with that name, so it \
-                 can never match.  Core fields: name, fql_kind, path, file, \
-                 line, usages, language, extension, size, depth.  To search \
-                 file contents use SHOW LINES OF '<file>' WHERE text MATCHES \
-                 '…' on specific files instead of FIND symbols."
+                "unknown WHERE field '{field}': it is not a field a symbol row \
+                 carries and no indexed row carries an enrichment column with \
+                 that name, so it can never match.  Symbol-row fields: {core}, \
+                 plus any enrichment field.  To search file contents use SHOW \
+                 LINES OF '<file>' WHERE text MATCHES '…' on specific files \
+                 instead of FIND symbols."
             );
         }
         Ok(())
@@ -190,19 +161,20 @@ impl ColumnarStorage {
 
     /// Reject an `ORDER BY` on a field that can never sort a symbol row.
     ///
-    /// A field orders symbols only if it is a sortable core field, a known
-    /// enrichment field, or a materialised extra column somewhere in this
-    /// index.  Anything else (e.g. `size` / `depth`, which belong to
-    /// `FIND files`) produces `None` for every row, so the comparator would
-    /// silently fall back to name order and hand the agent alphabetical rows
-    /// mislabelled as "top N by <field>".  Fail loudly instead — matching the
-    /// legacy backend's `validate_order_by_field` contract.
+    /// A field orders symbols only if the row resolves it through either
+    /// accessor, it is a known enrichment field, or it is a materialised extra
+    /// column somewhere in this index.  Anything else (e.g. `size` / `depth`,
+    /// which belong to `FIND files`) produces `None` for every row, so the
+    /// comparator would silently fall back to name order and hand the agent
+    /// alphabetical rows mislabelled as "top N by <field>".  Fail loudly
+    /// instead — matching the legacy backend's `validate_order_by_field`
+    /// contract.
     fn reject_unknown_order_by_field(&self, clauses: &Clauses) -> anyhow::Result<()> {
         let Some(ref order) = clauses.order_by else {
             return Ok(());
         };
-        let field = order.field.as_str();
-        if crate::filter::SORTABLE_SYMBOL_FIELDS.contains(&field) {
+        let field = crate::field_tiers::canonical(&order.field);
+        if resolves_on_symbol_row(field) {
             return Ok(());
         }
         if crate::storage::legacy::is_known_enrichment_field(field) {
@@ -219,19 +191,16 @@ impl ColumnarStorage {
         {
             return Ok(());
         }
-        // Listed from the const rather than restated, so the set an agent is
-        // told about cannot drift from the set actually accepted. `node_kind`
-        // is filtered out: it is in the const for the legacy backend and is
-        // refused here before this check runs, so naming it would offer a
-        // field that errors.
-        let sortable = accepted_list(crate::filter::SORTABLE_SYMBOL_FIELDS);
+        // Listed from the declaration rather than restated, so the set an agent
+        // is told about cannot drift from the set actually accepted.
+        let sortable = accepted_list(symbol_row_fields());
         anyhow::bail!(
-            "unknown ORDER BY field '{field}': it is not a sortable symbol field \
-             and no indexed row carries an enrichment column with that name, so \
-             every symbol would tie and fall back to name order.  Sortable \
-             fields: {sortable}, plus any enrichment field (lines, param_count, \
-             branch_count, …).  'size' and 'depth' apply to FIND files, not \
-             FIND symbols."
+            "unknown ORDER BY field '{field}': it is not a field a symbol row \
+             carries and no indexed row carries an enrichment column with that \
+             name, so every symbol would tie and fall back to name order.  \
+             Sortable fields: {sortable}, plus any enrichment field (lines, \
+             param_count, branch_count, …).  'size' and 'depth' apply to FIND \
+             files, not FIND symbols."
         );
     }
 
@@ -240,15 +209,17 @@ impl ColumnarStorage {
     /// `apply_group_by` keys a row it cannot resolve to the empty string, so
     /// an unknown field does not produce no groups: it produces exactly one,
     /// named `(empty)`, whose count is the entire result set. That reads like
-    /// an answer. The accepted set matches the WHERE and ORDER BY checks — a
-    /// core field, a known enrichment field of any registered language, or an
-    /// extra column stored by some segment of this index.
+    /// an answer. Grouping keys a row through `field_str` alone, so the
+    /// accepted core set is exactly
+    /// [`ClauseTarget::STR_FIELDS`](crate::filter::ClauseTarget::STR_FIELDS) —
+    /// `line`, `usages` and `count` are numeric and are not groupable — plus a
+    /// known enrichment field or an extra column stored by some segment.
     fn reject_unknown_group_by_field(&self, clauses: &Clauses) -> anyhow::Result<()> {
         let Some(GroupBy::Field(ref field)) = clauses.group_by else {
             return Ok(());
         };
-        let field = field.as_str();
-        if crate::filter::GROUPABLE_SYMBOL_FIELDS.contains(&field)
+        let field = crate::field_tiers::canonical(field);
+        if SymbolMatch::STR_FIELDS.contains(&field)
             || crate::storage::legacy::is_known_enrichment_field(field)
             || self.segments.iter().any(|s| s.has_extra_col(field))
             || self
@@ -259,7 +230,7 @@ impl ColumnarStorage {
         {
             return Ok(());
         }
-        let groupable = accepted_list(crate::filter::GROUPABLE_SYMBOL_FIELDS);
+        let groupable = accepted_list(SymbolMatch::STR_FIELDS.iter().copied());
         anyhow::bail!(
             "GROUP BY '{field}' cannot be answered: a symbol row does not \
              resolve that name, so every symbol would fall into one \
@@ -269,6 +240,7 @@ impl ColumnarStorage {
              'extension' belong to FIND files."
         );
     }
+
     /// Stage 4b (BUG-006 U3): overwrite each row's `usages_count` with the
     /// workspace-total usage-site count from the overlay usages aggregate.
     ///

@@ -216,8 +216,8 @@ fn unknown_where_field_is_rejected_with_guidance() {
         "error should name the field: {msg}"
     );
     assert!(
-        msg.contains("Core fields"),
-        "error should list core fields: {msg}"
+        msg.contains("Symbol-row fields"),
+        "error should list the fields a symbol row does carry: {msg}"
     );
 }
 
@@ -246,7 +246,7 @@ fn order_by_unsortable_field_is_rejected() {
         .expect_err("ORDER BY size on symbols must be rejected");
     let msg = err.to_string();
     assert!(
-        msg.contains("unknown ORDER BY field 'size'"),
+        msg.contains("ORDER BY size"),
         "error should name the field: {msg}"
     );
     assert!(

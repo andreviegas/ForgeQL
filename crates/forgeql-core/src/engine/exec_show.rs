@@ -22,6 +22,7 @@ use anyhow::{Result, bail};
 
 use crate::{
     ast::parse_cache::{CachedParse, sha1_of_bytes},
+    filter::{reject_refused_fields, reject_unresolvable_fields},
     ir::{Backend, Clauses, ForgeQLIR},
     result::{ForgeQLResult, ShowContent},
     session::Session,
@@ -98,7 +99,9 @@ impl ForgeQLEngine {
 
         // Apply the full clause pipeline (WHERE, ORDER BY, LIMIT, OFFSET, …) to
         // structured list results: outline, members, and call graph entries.
-        Self::apply_list_clauses(&mut show_result.content, op);
+        // It can refuse: a clause naming a field the row shape cannot carry is
+        // an error, not an empty result.
+        Self::apply_list_clauses(&mut show_result.content, op)?;
 
         // Extract clauses for ShowContent::Lines variants.
         let show_clauses: Option<&Clauses> = match op {
@@ -111,9 +114,21 @@ impl ForgeQLEngine {
         // Apply WHERE predicates BEFORE the line caps so queries like
         // `SHOW body OF 'fn' WHERE text MATCHES 'TODO'` filter over the full
         // function body, not just the first N lines.
+        //
+        // These verbs are NOT gated against the source-line row shape, and
+        // deliberately: their `WHERE` does two jobs. It picks which symbol to
+        // resolve — `SHOW body OF 'process' WHERE language = 'rust'` is how an
+        // agent disambiguates a name two languages both define — and it filters
+        // the lines that come back. The first half runs against symbol rows,
+        // whose field set is open, so no closed declaration can say which names
+        // are legitimate here. A name that is neither leaves every line
+        // standing rather than dropping them all, which is the same shape
+        // `SHOW signature` has. What IS refused is what no row of any shape can
+        // answer — the table's own refused set.
         if let (ShowContent::Lines { lines, .. }, Some(clauses)) =
             (&mut show_result.content, show_clauses)
         {
+            reject_refused_fields::<crate::result::SourceLine>("a SHOW that reads lines", clauses)?;
             for predicate in &clauses.where_predicates {
                 let pred = predicate.clone();
                 lines.retain(|line| crate::filter::eval_predicate(line, &pred));
@@ -151,27 +166,31 @@ impl ForgeQLEngine {
             ForgeQLIR::ShowOutline {
                 file, all, clauses, ..
             } => {
-                // Default outline is structural-only. An explicit `ALL`, or a
-                // `WHERE fql_kind = …` predicate, opts back into every node so
-                // the post-hoc clause filter still has the full set to act on.
-                // `kind` is the same field under another spelling, so it must
-                // open the same universe: two spellings the syntax documents as
-                // identical cannot answer over different row sets.
-                let show_all = *all
-                    || clauses.where_predicates.iter().any(|p| {
-                        p.field == "fql_kind" || p.field == "kind" || p.field == "node_kind"
-                    });
-                Self::exec_show_outline(workspace, engine, file, show_all)
+                // A bare outline lists structural declarations only; `ALL` —
+                // or ANY `WHERE` — opens every node so the post-hoc clause
+                // filter has the full set to act on.
+                //
+                // Any, not just a kind predicate. Which field the predicate
+                // named used to decide the universe, so `WHERE fql_kind =
+                // 'guard'` searched the file and `WHERE name = 'x'` searched
+                // only the structural tree — two predicates on one verb,
+                // answering over different row sets, and reporting different
+                // `depth` for the same node because depth counts the ancestors
+                // that were listed. A filter that cannot see a row cannot
+                // report it, which is a false absence however the row set is
+                // explained.
+                let show_all = *all || !clauses.where_predicates.is_empty();
+                Self::exec_show_outline(workspace, engine, file, show_all)?
             }
             ForgeQLIR::ShowMembers {
                 symbol, clauses, ..
-            } => self.exec_show_members(session_id, workspace, engine, symbol, clauses),
+            } => self.exec_show_members(session_id, workspace, engine, symbol, clauses)?,
             ForgeQLIR::ShowBody {
                 symbol, clauses, ..
             } => self.exec_show_body(session_id, workspace, engine, symbol, clauses),
             ForgeQLIR::ShowCallees {
                 symbol, clauses, ..
-            } => self.exec_show_callees(session_id, workspace, engine, symbol, clauses),
+            } => self.exec_show_callees(session_id, workspace, engine, symbol, clauses)?,
             ForgeQLIR::ShowLines {
                 file,
                 start_line,
@@ -188,15 +207,28 @@ impl ForgeQLEngine {
 
     /// Apply the clause pipeline to structured list results (outline / members /
     /// call graph).  Lines results are handled separately (cap-aware) by the caller.
-    fn apply_list_clauses(content: &mut ShowContent, op: &ForgeQLIR) {
+    fn apply_list_clauses(content: &mut ShowContent, op: &ForgeQLIR) -> Result<()> {
         match (content, op) {
             (ShowContent::Outline { entries }, ForgeQLIR::ShowOutline { clauses, .. }) => {
+                // The one listing verb whose clause only filters: `SHOW outline
+                // OF` names a file, so nothing here resolves a symbol and the
+                // row's own field list is the whole universe of legitimate
+                // names.
+                reject_unresolvable_fields::<crate::result::OutlineEntry>("SHOW outline", clauses)?;
                 crate::filter::apply_clauses_keep_order(entries, clauses);
             }
             (ShowContent::Members { members, .. }, ForgeQLIR::ShowMembers { clauses, .. }) => {
+                // Not the row-shape check: this clause also picked which type to
+                // resolve, and `WHERE language = 'cpp'` disambiguating a name two
+                // languages both define is a working query the members row itself
+                // cannot carry. What is refused here is what no row of any shape
+                // can answer.
+                reject_refused_fields::<crate::result::MemberEntry>("SHOW members", clauses)?;
                 crate::filter::apply_clauses(members, clauses);
             }
             (ShowContent::CallGraph { entries, .. }, ForgeQLIR::ShowCallees { clauses, .. }) => {
+                // Same dual purpose as `SHOW members`, same check.
+                reject_refused_fields::<crate::result::CallGraphEntry>("SHOW callees", clauses)?;
                 // Default sort for callees is by call-site line (ascending) so
                 // the output reflects call order.  An explicit ORDER BY wins.
                 if clauses.order_by.is_none() {
@@ -212,6 +244,7 @@ impl ForgeQLEngine {
             }
             _ => {}
         }
+        Ok(())
     }
 
     /// Get a cached parse for a symbol location, with bare-repo fallback.

@@ -167,8 +167,14 @@ impl ColumnarStorage {
         let mut result: Option<RoaringBitmap> = path_floor;
 
         for pred in &clauses.where_predicates {
-            let Some(kind_bm) = (match (pred.field.as_str(), &pred.op, &pred.value) {
-                ("fql_kind" | "kind", CompareOp::Eq, PredicateValue::String(val)) => {
+            // Canonical, so an alias reaches the same structure the canonical
+            // spelling does. `WHERE kind = 'x'` used to fall past the kind
+            // bitmap into the enrichment arms, which answer a core row field
+            // by asking whether any segment stores an enrichment column of
+            // that name — a question whose "no" is not absence.
+            let field = crate::field_tiers::canonical(&pred.field);
+            let Some(kind_bm) = (match (field, &pred.op, &pred.value) {
+                ("fql_kind", CompareOp::Eq, PredicateValue::String(val)) => {
                     // When the kind is absent in every segment, return an empty
                     // bitmap immediately rather than None.  None would fall
                     // through to the full-table scan, causing ~8 s regressions
@@ -200,13 +206,13 @@ impl ColumnarStorage {
                 // the column itself rather than from any posting index. It is
                 // matched here, ahead of the enrichment arms, because those
                 // refuse core row fields by name.
-                ("language" | "lang", op, PredicateValue::String(val)) => {
+                ("language", op, PredicateValue::String(val)) => {
                     self.core_language_bitmap(*op, val.as_str())
                 }
                 // Phase 5: enrichment bitmap prefilter (FQOV v7).
                 // Look up global bitmaps for enrichment predicates.
                 (field, CompareOp::Eq, PredicateValue::String(val))
-                    if field != "fql_kind" && field != "kind" && field != "name" =>
+                    if field != "fql_kind" && field != "name" =>
                 {
                     self.enrichment_eq_bitmap(field, val.as_str())
                 }
@@ -917,7 +923,12 @@ pub(super) fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: b
     if !dirty_empty {
         return false;
     }
-    if !matches!(&clauses.group_by, Some(GroupBy::Field(f)) if f == "file" || f == "path") {
+    // Canonical on both sides, here and in every other eligibility test: a
+    // spelling that misses the fast path is answered by the slow pipeline, so
+    // the failure is silent and shows up only as a latency number.
+    if !matches!(&clauses.group_by, Some(GroupBy::Field(f))
+        if crate::field_tiers::canonical(f) == "path")
+    {
         return false;
     }
     // Phase 1: eligible if no where predicates, OR if all where predicates
@@ -931,7 +942,7 @@ pub(super) fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: b
     }
     clauses.where_predicates.iter().all(|pred| {
         matches!(
-            (pred.field.as_str(), &pred.op),
+            (crate::field_tiers::canonical(&pred.field), &pred.op),
             ("fql_kind", CompareOp::Eq)
                 | ("name", CompareOp::Eq | CompareOp::Like | CompareOp::Matches)
         )
@@ -943,7 +954,8 @@ pub(super) fn group_by_file_fast_path_eligible(clauses: &Clauses, dirty_empty: b
 pub(super) fn group_by_kind_fast_path_eligible(clauses: &Clauses, dirty_empty: bool) -> bool {
     dirty_empty
         && clauses.where_predicates.is_empty()
-        && matches!(&clauses.group_by, Some(GroupBy::Field(f)) if f == "fql_kind")
+        && matches!(&clauses.group_by, Some(GroupBy::Field(f))
+            if crate::field_tiers::canonical(f) == "fql_kind")
 }
 
 /// Returns `(kind_str, true)` when `ORDER BY name ASC LIMIT N` with a single
@@ -970,7 +982,7 @@ pub(super) fn order_by_name_kind_fast_path(clauses: &Clauses) -> Option<&str> {
         return None;
     }
     let pred = &clauses.where_predicates[0];
-    if pred.field != "fql_kind" || pred.op != CompareOp::Eq {
+    if crate::field_tiers::canonical(&pred.field) != "fql_kind" || pred.op != CompareOp::Eq {
         return None;
     }
     if let PredicateValue::String(ref kind) = pred.value {
@@ -998,7 +1010,7 @@ pub(super) fn order_by_name_kind_desc_fast_path(clauses: &Clauses) -> Option<&st
         return None;
     }
     let pred = &clauses.where_predicates[0];
-    if pred.field != "fql_kind" || pred.op != CompareOp::Eq {
+    if crate::field_tiers::canonical(&pred.field) != "fql_kind" || pred.op != CompareOp::Eq {
         return None;
     }
     if let PredicateValue::String(ref kind) = pred.value {
@@ -1066,7 +1078,7 @@ pub(super) fn order_by_name_desc_fast_path(clauses: &Clauses) -> bool {
 pub(super) fn has_any_indexed_predicate(clauses: &Clauses, overlay: &Overlay) -> bool {
     clauses.where_predicates.iter().any(|pred| {
         matches!(
-            (pred.field.as_str(), &pred.op),
+            (crate::field_tiers::canonical(&pred.field), &pred.op),
             ("fql_kind", CompareOp::Eq)
                 | ("name", CompareOp::Eq | CompareOp::Like | CompareOp::Matches)
                 // `language` is served from its stored column, so it is an
@@ -1074,7 +1086,7 @@ pub(super) fn has_any_indexed_predicate(clauses: &Clauses, overlay: &Overlay) ->
                 // it. Without this the path-scoped shape an agent writes most
                 // — `IN 'drivers/**' WHERE language = 'c'` — takes the
                 // seed-every-row branch below and never reaches the tier.
-                | ("language" | "lang", _)
+                | ("language", _)
         ) || overlay.has_enrichment_field(&pred.field)
     })
 }

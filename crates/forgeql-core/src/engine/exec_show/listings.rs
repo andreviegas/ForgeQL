@@ -12,8 +12,9 @@ use anyhow::Result;
 
 use crate::{
     ast::{query, show},
-    engine::{ForgeQLEngine, reject_text_filter},
-    ir::{Clauses, GroupBy, SortDirection},
+    engine::ForgeQLEngine,
+    filter::reject_unresolvable_fields,
+    ir::{Clauses, SortDirection},
     result::FileEntry,
     storage::StorageEngine,
     workspace::Workspace,
@@ -27,10 +28,8 @@ impl ForgeQLEngine {
         engine: &dyn StorageEngine,
         file: &str,
         all: bool,
-    ) -> serde_json::Value {
-        engine
-            .show_outline_for_file(workspace, file, all)
-            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+    ) -> Result<serde_json::Value> {
+        engine.show_outline_for_file(workspace, file, all)
     }
 
     pub(super) fn exec_show_members(
@@ -40,27 +39,24 @@ impl ForgeQLEngine {
         engine: &dyn StorageEngine,
         symbol: &str,
         clauses: &Clauses,
-    ) -> serde_json::Value {
-        engine
-            .resolve_type_symbol(symbol, clauses, workspace.root())
-            .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
-            .and_then(|loc| {
-                let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
-                let req = show::ShowRequest {
-                    cached: &cached,
-                    path: &loc.path,
-                    byte_range_start: loc.byte_range.start,
-                    hint_line: Some(loc.line).filter(|&l| l > 0),
-                    workspace,
-                    symbol,
-                    lang_registry: &self.lang_registry,
-                    ordinal: None,
-                };
-                let mut json = show::show_members(&req)?;
-                stamp_member_handles(engine, workspace, &loc.path, &mut json);
-                Ok(json)
-            })
-            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+    ) -> Result<serde_json::Value> {
+        let loc = engine
+            .resolve_type_symbol(symbol, clauses, workspace.root())?
+            .ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found"))?;
+        let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
+        let req = show::ShowRequest {
+            cached: &cached,
+            path: &loc.path,
+            byte_range_start: loc.byte_range.start,
+            hint_line: Some(loc.line).filter(|&l| l > 0),
+            workspace,
+            symbol,
+            lang_registry: &self.lang_registry,
+            ordinal: None,
+        };
+        let mut json = show::show_members(&req)?;
+        stamp_member_handles(engine, workspace, &loc.path, &mut json);
+        Ok(json)
     }
 
     pub(super) fn exec_show_callees(
@@ -70,25 +66,22 @@ impl ForgeQLEngine {
         engine: &dyn StorageEngine,
         symbol: &str,
         clauses: &Clauses,
-    ) -> serde_json::Value {
-        engine
-            .resolve_body_symbol(symbol, clauses, workspace.root())
-            .and_then(|opt| opt.ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found")))
-            .and_then(|loc| {
-                let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
-                let req = show::ShowRequest {
-                    cached: &cached,
-                    path: &loc.path,
-                    byte_range_start: loc.byte_range.start,
-                    hint_line: Some(loc.line).filter(|&l| l > 0),
-                    workspace,
-                    symbol,
-                    lang_registry: &self.lang_registry,
-                    ordinal: None,
-                };
-                show::show_callees(&req)
-            })
-            .unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+    ) -> Result<serde_json::Value> {
+        let loc = engine
+            .resolve_body_symbol(symbol, clauses, workspace.root())?
+            .ok_or_else(|| anyhow::anyhow!("symbol '{symbol}' not found"))?;
+        let cached = self.get_or_parse_for_show(session_id, workspace, &loc)?;
+        let req = show::ShowRequest {
+            cached: &cached,
+            path: &loc.path,
+            byte_range_start: loc.byte_range.start,
+            hint_line: Some(loc.line).filter(|&l| l > 0),
+            workspace,
+            symbol,
+            lang_registry: &self.lang_registry,
+            ordinal: None,
+        };
+        show::show_callees(&req)
     }
 
     pub(super) fn exec_show_find_files(
@@ -96,25 +89,11 @@ impl ForgeQLEngine {
         engine: &dyn StorageEngine,
         clauses: &Clauses,
     ) -> Result<serde_json::Value> {
-        reject_text_filter(clauses)?;
-        // A file row carries no node_kind either, and unlike SHOW outline /
-        // members / callees this verb can return an error rather than a JSON
-        // value, so the same refusal is affordable here.
-        if clauses
-            .where_predicates
-            .iter()
-            .any(|p| p.field == "node_kind")
-            || clauses
-                .order_by
-                .as_ref()
-                .is_some_and(|o| o.field == "node_kind")
-            || matches!(clauses.group_by, Some(GroupBy::Field(ref f)) if f == "node_kind")
-        {
-            anyhow::bail!(
-                "node_kind is not answerable on FIND files: a file row carries \
-                 no kind at all. Filter on path, name, extension or size."
-            );
-        }
+        // A file row is a closed shape, so every field a clause can name is
+        // known here and anything else is refused rather than answered with
+        // nothing. That covers `node_kind` — a file row has no kind at all —
+        // and `lang`, `fql_kind`, `usages` and every other symbol-row field.
+        reject_unresolvable_fields::<FileEntry>("FIND files", clauses)?;
         let glob = clauses.in_glob.as_deref().unwrap_or("**");
         let indexed_opt = engine.indexed_files();
         let fast_path_ext: Option<&str> = indexed_opt.as_ref().and_then(|indexed| {

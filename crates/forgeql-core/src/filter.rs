@@ -22,6 +22,31 @@ mod impls;
 /// - [`field_num`](ClauseTarget::field_num) — numeric comparisons
 /// - [`path`](ClauseTarget::path) — glob include / exclude
 pub trait ClauseTarget {
+    /// What this row is called when a clause names a field it cannot carry.
+    const ROW: &'static str;
+
+    /// Field names [`field_str`](ClauseTarget::field_str) resolves.
+    ///
+    /// Canonical spellings only. A clause field is put through
+    /// [`crate::field_tiers::canonical`] before it reaches a row, so an alias
+    /// declared in `FIELD_TIERS` needs no entry here — and cannot be listed
+    /// here without also being declared there.
+    const STR_FIELDS: &'static [&'static str];
+
+    /// Field names [`field_num`](ClauseTarget::field_num) resolves, on the
+    /// same terms.
+    const NUM_FIELDS: &'static [&'static str];
+
+    /// Whether a name in neither list may still resolve on some row.
+    ///
+    /// True only for a row carrying an open enrichment map, where the set
+    /// depends on which language plugins are registered and on what the
+    /// segments actually stored — so whether an unlisted name can match is a
+    /// question only the backend holding the index can answer, and
+    /// [`reject_unresolvable_fields`] declines to answer it. False is the
+    /// stronger claim: the two lists above are the whole universe, and any
+    /// other name is refused on sight rather than matching nothing.
+    const OPEN_FIELDS: bool;
     /// Return the string value of a named field, or `None` if unknown.
     fn field_str(&self, field: &str) -> Option<&str>;
 
@@ -36,10 +61,22 @@ pub trait ClauseTarget {
     fn set_count(&mut self, _count: usize) {}
 }
 
-/// Core (non-enrichment) WHERE field names across FIND / SHOW result shapes.
+/// Every core (non-enrichment) WHERE field name, unioned across FIND / SHOW
+/// result shapes.
 ///
-/// One shared universe so the engine's empty-result hint and the columnar
-/// backend's unknown-field guard can never disagree about which fields exist.
+/// It is a union, and that is the one thing to remember about it: no single
+/// query answers all of these, so membership here says a name exists SOMEWHERE
+/// and nothing about the verb in hand. Using it as a per-verb gate is what let
+/// `FIND symbols WHERE size > 100` through to answer a confident zero — `size`
+/// belongs to a file row. Each verb gates on the row shape it actually
+/// returns: [`ClauseTarget::STR_FIELDS`] / [`ClauseTarget::NUM_FIELDS`] for the
+/// closed shapes, and the columnar backend's own Stage 0 for symbol rows,
+/// which alone can see the enrichment columns a segment stored.
+///
+/// What it is still for: the engine's empty-result hint, which asks only
+/// whether a name is plausible anywhere before blaming a typo, and the
+/// enrichment-bitmap guard in `fast_paths`, which must never read "no segment
+/// stores a column by that name" as absence for a name served elsewhere.
 pub const CORE_WHERE_FIELDS: &[&str] = &[
     "name",
     "fql_kind",
@@ -67,57 +104,193 @@ pub const CORE_WHERE_FIELDS: &[&str] = &[
     "declaration",
 ];
 
-/// Fields that can order a `FIND symbols` result directly.
+/// Refuse a clause naming a field this row shape cannot resolve.
 ///
-/// Each resolves on every `SymbolMatch` via `field_str` / `field_num`, and
-/// that is the entry condition: a name that resolves on no row ties every
-/// symbol and hands back name order under a "top N by <field>" label. File-
-/// and outline-only fields (`size`, `depth`, `extension`) are absent for that
-/// reason. `kind` is present because it is an alias of `fql_kind` — it is
-/// also the key a symbol row is printed under in JSON output, so a query
-/// naming it has to work. `node_kind` stays listed because the legacy backend
-/// does resolve it; the columnar backend refuses it separately. The columnar
-/// backend rejects an ORDER BY field
-/// that is neither listed here, a known enrichment field, nor a materialised
-/// extra column, rather than silently falling back to name order.
-pub const SORTABLE_SYMBOL_FIELDS: &[&str] = &[
-    "name",
-    "fql_kind",
-    "kind",
-    "node_kind",
-    "node_id",
-    "path",
-    "file",
-    "language",
-    "lang",
-    "line",
-    "usages",
-    "count",
-];
+/// Only closed row shapes are checked — those whose [`ClauseTarget::STR_FIELDS`]
+/// and [`ClauseTarget::NUM_FIELDS`] are the whole universe. A row carrying an
+/// open enrichment map returns `Ok(())` here and is checked by the backend
+/// holding the index, which is the only thing that can say whether an unlisted
+/// name is stored by some segment.
+///
+/// The clause matters as much as the field. `apply_group_by` keys a row
+/// through `field_str` alone, so a numeric-only field groups every row under
+/// the empty string and reports one fabricated group holding the whole result;
+/// `order_cmp` falls back to name order when a field resolves on no row, and
+/// hands back alphabetical rows labelled "top N by <field>"; a `WHERE` on a
+/// field `GROUP BY` has not written yet matches nothing at all. Three clauses,
+/// three different shapes of wrong answer, one cause.
+///
+/// # Errors
+///
+/// Returns an error naming the field, the clause and the row shape when the
+/// clause names something the shape cannot resolve. That is the contract: a
+/// query that cannot be answered errors, and never returns zero rows.
+pub fn reject_unresolvable_fields<T: ClauseTarget>(
+    verb: &str,
+    clauses: &Clauses,
+) -> anyhow::Result<()> {
+    if T::OPEN_FIELDS {
+        return Ok(());
+    }
+    for pred in &clauses.where_predicates {
+        check_clause_field::<T>(verb, "WHERE", &pred.field, ClauseKind::Where)?;
+    }
+    if let Some(ref order) = clauses.order_by {
+        check_clause_field::<T>(verb, "ORDER BY", &order.field, ClauseKind::AfterGrouping)?;
+    }
+    if let Some(GroupBy::Field(ref field)) = clauses.group_by {
+        check_clause_field::<T>(verb, "GROUP BY", field, ClauseKind::Group)?;
+    }
+    for pred in &clauses.having_predicates {
+        check_clause_field::<T>(verb, "HAVING", &pred.field, ClauseKind::AfterGrouping)?;
+    }
+    Ok(())
+}
 
-/// Fields that can group a `FIND symbols` result directly.
+/// Which accessors a clause can reach a row through.
+#[derive(Clone, Copy)]
+enum ClauseKind {
+    /// Runs before the grouping pass: both accessors, minus anything grouping
+    /// is what writes.
+    Where,
+    /// Keys the row: `field_str` only.
+    Group,
+    /// Runs after the grouping pass: both accessors, grouping's own output
+    /// included.
+    AfterGrouping,
+}
+
+fn check_clause_field<T: ClauseTarget>(
+    verb: &str,
+    clause: &str,
+    written: &str,
+    kind: ClauseKind,
+) -> anyhow::Result<()> {
+    let field = crate::field_tiers::canonical(written);
+    let post_group = is_post_group(field);
+    let available: Vec<&str> = match kind {
+        ClauseKind::Group => T::STR_FIELDS.to_vec(),
+        ClauseKind::Where => T::STR_FIELDS
+            .iter()
+            .chain(T::NUM_FIELDS)
+            .copied()
+            .filter(|f| !is_post_group(f))
+            .collect(),
+        ClauseKind::AfterGrouping => T::STR_FIELDS.iter().chain(T::NUM_FIELDS).copied().collect(),
+    };
+    if available.contains(&field) {
+        return Ok(());
+    }
+    // `count` is refused in one clause and answered in two, so the row's field
+    // list cannot explain it — the table's own wording does.
+    if post_group && let Some(tier) = crate::field_tiers::lookup(field) {
+        anyhow::bail!("{}", tier.refusal(written, clause, verb));
+    }
+    anyhow::bail!(
+        "{clause} {written} cannot be answered on {verb}: {row} carries no field \
+         of that name, so the query could only report absence. Available: {list}.",
+        row = T::ROW,
+        list = available.join(", "),
+    );
+}
+
+/// Whether the grouping pass is what writes this field onto a row.
+fn is_post_group(field: &str) -> bool {
+    crate::field_tiers::lookup(field).is_some_and(|tier| tier.post_group)
+}
+
+/// Refuse a clause naming a field the table itself declares unanswerable.
 ///
-/// Narrower than [`SORTABLE_SYMBOL_FIELDS`], and for a sharper reason.
-/// `apply_group_by` keys each row through `field_str` alone and defaults an
-/// unresolved one to the empty string, so grouping on a name a symbol row
-/// cannot resolve does not return nothing — it returns exactly one group,
-/// named by the empty string, holding every row. That reads like an answer.
-/// The entry condition is therefore literal: the name must be one
-/// `SymbolMatch::field_str` resolves, aliases included. `line`, `usages` and
-/// `count` resolve only through `field_num` and so are absent; enrichment
-/// extra columns are accepted separately, by the backend that knows it has
-/// them.
-pub const GROUPABLE_SYMBOL_FIELDS: &[&str] = &[
-    "name",
-    "fql_kind",
-    "kind",
-    "node_kind",
-    "node_id",
-    "path",
-    "file",
-    "language",
-    "lang",
-];
+/// This is the check for verbs whose clause does more than filter. `SHOW
+/// members`, `SHOW callees` and the reading verbs use the same clause to pick
+/// which symbol to resolve — `SHOW members OF 'Foo' WHERE language = 'cpp'`
+/// disambiguates a type two languages both define — so their rows' own field
+/// list is not the universe of legitimate names, and gating on it refuses a
+/// working query. What can be refused there is what no row of any shape can
+/// answer: the [`crate::field_tiers::refused_fields`] set — `node_kind`, whose
+/// value nothing in the index stores, and the names belonging to another shape
+/// (`size`, `depth`, `extension`, `signature`, `marker`, `declaration`) that
+/// reached these verbs only because `CORE_WHERE_FIELDS` is a union.
+///
+/// Minus what THIS shape carries, which is the other half of the rule. The
+/// table's verdict is about symbol rows, and several of those names are the
+/// canonical field of some other shape: `text` and `marker` on a source line,
+/// `declaration` on a members row. Refusing `SHOW body OF 'f' WHERE text
+/// MATCHES '…'` because a symbol row has no `text` would refuse the documented
+/// way to use the verb. The exemption applies only to a CLOSED shape — an open
+/// one cannot say what it carries, and `node_kind` is listed on a symbol row
+/// precisely because the legacy backend resolves it.
+///
+/// Reading the set from the table rather than restating it is the point: a name
+/// added there is refused everywhere without a second edit, which is how this
+/// family grew unnoticed in the first place.
+///
+/// All four clauses are checked, and for the same reason — none can be answered
+/// from a field no row carries — but each fails a different way, so each is
+/// worth refusing separately. `WHERE` matches nothing while its negation
+/// matches everything; `ORDER BY` ties every row and silently falls back to
+/// name order; `GROUP BY` keys every row to the empty string and reports one
+/// fabricated group whose count is the whole result set.
+///
+/// `count` is the one name whose answer depends on the clause: the grouping
+/// pass is what writes it, so `HAVING count` and `ORDER BY count` read a real
+/// number while a `WHERE` on it reads nothing on every row.
+///
+/// # Errors
+///
+/// Returns the table's own refusal wording for the first clause field that is
+/// declared unanswerable.
+pub fn reject_refused_fields<T: ClauseTarget>(verb: &str, clauses: &Clauses) -> anyhow::Result<()> {
+    for pred in &clauses.where_predicates {
+        reject_if_refused::<T>(&pred.field, "WHERE", verb, BeforeGrouping::Yes)?;
+    }
+    if let Some(ref order) = clauses.order_by {
+        reject_if_refused::<T>(&order.field, "ORDER BY", verb, BeforeGrouping::No)?;
+    }
+    if let Some(GroupBy::Field(ref field)) = clauses.group_by {
+        reject_if_refused::<T>(field, "GROUP BY", verb, BeforeGrouping::Yes)?;
+    }
+    for pred in &clauses.having_predicates {
+        reject_if_refused::<T>(&pred.field, "HAVING", verb, BeforeGrouping::No)?;
+    }
+    Ok(())
+}
+
+/// Whether the clause runs before the grouping pass that writes `count`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BeforeGrouping {
+    Yes,
+    No,
+}
+
+fn reject_if_refused<T: ClauseTarget>(
+    written: &str,
+    clause: &str,
+    verb: &str,
+    before_grouping: BeforeGrouping,
+) -> anyhow::Result<()> {
+    let field = crate::field_tiers::canonical(written);
+    // What this shape carries, it can answer — whatever the table says about
+    // the shape the table describes. Only a closed shape may claim this: an
+    // open one does not know its own field set.
+    if !T::OPEN_FIELDS && (T::STR_FIELDS.contains(&field) || T::NUM_FIELDS.contains(&field)) {
+        return Ok(());
+    }
+    let Some(tier) = crate::field_tiers::lookup(written) else {
+        return Ok(());
+    };
+    if tier.post_group {
+        return if before_grouping == BeforeGrouping::Yes {
+            Err(anyhow::anyhow!(tier.refusal(written, clause, verb)))
+        } else {
+            Ok(())
+        };
+    }
+    if tier.is_refused() {
+        anyhow::bail!("{}", tier.refusal(written, clause, verb));
+    }
+    Ok(())
+}
 
 // -----------------------------------------------------------------------
 // Glob matching
@@ -195,6 +368,12 @@ fn path_glob_matches(path: &Path, pattern: &str) -> bool {
 
 /// Evaluate a single predicate against a `ClauseTarget` item.
 pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicate) -> bool {
+    // An alias is spelled to its canonical name once, here, where the field
+    // name meets the row. Every caller reaches a row through this function, so
+    // the resolvers below — and the eight `field_str` implementations — only
+    // ever see canonical names, and an alias added to `FIELD_TIERS` needs no
+    // second entry anywhere.
+    let field = crate::field_tiers::canonical(&predicate.field);
     match predicate.op {
         // ---- String / LIKE operators ----
         CompareOp::Like => {
@@ -202,16 +381,14 @@ pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicat
                 PredicateValue::String(s) => s.as_str(),
                 _ => return false,
             };
-            item.field_str(&predicate.field)
-                .is_some_and(|v| like_match(v, pat))
+            item.field_str(field).is_some_and(|v| like_match(v, pat))
         }
         CompareOp::NotLike => {
             let pat = match &predicate.value {
                 PredicateValue::String(s) => s.as_str(),
                 _ => return true,
             };
-            item.field_str(&predicate.field)
-                .is_some_and(|v| !like_match(v, pat))
+            item.field_str(field).is_some_and(|v| !like_match(v, pat))
         }
         // ---- Regex MATCHES operators ----
         CompareOp::Matches => {
@@ -222,8 +399,7 @@ pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicat
             let Ok(re) = Regex::new(pat) else {
                 return false;
             };
-            item.field_str(&predicate.field)
-                .is_some_and(|v| re.is_match(v))
+            item.field_str(field).is_some_and(|v| re.is_match(v))
         }
         CompareOp::NotMatches => {
             let pat = match &predicate.value {
@@ -233,32 +409,27 @@ pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicat
             let Ok(re) = Regex::new(pat) else {
                 return true;
             };
-            item.field_str(&predicate.field)
-                .is_some_and(|v| !re.is_match(v))
+            item.field_str(field).is_some_and(|v| !re.is_match(v))
         }
         CompareOp::Eq => match &predicate.value {
-            PredicateValue::String(s) => item
-                .field_str(&predicate.field)
-                .is_some_and(|v| v == s.as_str()),
-            PredicateValue::Number(n) => item.field_num(&predicate.field).is_some_and(|v| v == *n),
+            PredicateValue::String(s) => item.field_str(field).is_some_and(|v| v == s.as_str()),
+            PredicateValue::Number(n) => item.field_num(field).is_some_and(|v| v == *n),
             PredicateValue::Bool(_) => false,
         },
         CompareOp::NotEq => match &predicate.value {
-            PredicateValue::String(s) => item
-                .field_str(&predicate.field)
-                .is_some_and(|v| v != s.as_str()),
-            PredicateValue::Number(n) => item.field_num(&predicate.field).is_some_and(|v| v != *n),
+            PredicateValue::String(s) => item.field_str(field).is_some_and(|v| v != s.as_str()),
+            PredicateValue::Number(n) => item.field_num(field).is_some_and(|v| v != *n),
             PredicateValue::Bool(_) => false,
         },
         // ---- Numeric operators ----
         CompareOp::Gt => numeric_rhs(&predicate.value)
-            .is_some_and(|rhs| item.field_num(&predicate.field).is_some_and(|v| v > rhs)),
+            .is_some_and(|rhs| item.field_num(field).is_some_and(|v| v > rhs)),
         CompareOp::Gte => numeric_rhs(&predicate.value)
-            .is_some_and(|rhs| item.field_num(&predicate.field).is_some_and(|v| v >= rhs)),
+            .is_some_and(|rhs| item.field_num(field).is_some_and(|v| v >= rhs)),
         CompareOp::Lt => numeric_rhs(&predicate.value)
-            .is_some_and(|rhs| item.field_num(&predicate.field).is_some_and(|v| v < rhs)),
+            .is_some_and(|rhs| item.field_num(field).is_some_and(|v| v < rhs)),
         CompareOp::Lte => numeric_rhs(&predicate.value)
-            .is_some_and(|rhs| item.field_num(&predicate.field).is_some_and(|v| v <= rhs)),
+            .is_some_and(|rhs| item.field_num(field).is_some_and(|v| v <= rhs)),
     }
 }
 
@@ -291,7 +462,7 @@ pub(crate) const TOPK_THRESHOLD: usize = 1_000;
 pub(crate) fn order_cmp<T: ClauseTarget>(a: &T, b: &T, clauses: &Clauses) -> Ordering {
     // Primary key — only when an explicit ORDER BY clause is present.
     if let Some(ref order_by) = clauses.order_by {
-        let field = order_by.field.as_str();
+        let field = crate::field_tiers::canonical(&order_by.field);
         let primary = if let (Some(va), Some(vb)) = (a.field_num(field), b.field_num(field)) {
             match order_by.direction {
                 SortDirection::Desc => vb.cmp(&va),
@@ -591,7 +762,11 @@ fn apply_group_by<T: ClauseTarget>(results: &mut Vec<T>, clauses: &Clauses) {
     let Some(GroupBy::Field(ref field)) = clauses.group_by else {
         return;
     };
-    let field = field.clone();
+    // Canonical, for the same reason `eval_predicate` canonicalises: the key
+    // is read through `field_str`, and two spellings of one field must key the
+    // same groups. The WRITTEN spelling still labels the column — `GROUP BY
+    // file` heads its key column `file`, not `path`.
+    let field = crate::field_tiers::canonical(field).to_owned();
     // Pass 1: count occurrences per group key.
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for item in results.iter() {

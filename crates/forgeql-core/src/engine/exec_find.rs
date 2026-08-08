@@ -34,8 +34,16 @@ impl ForgeQLEngine {
         }
 
         let metric_hint = detect_metric_hint(clauses);
+        // `fql_kind` is the one grouping the compact renderer has its own
+        // layout for, so it is deliberately NOT named here. Canonical, because
+        // `GROUP BY kind` is the same grouping: naming it here sent the alias
+        // down the generic layout and rendered `"function",3` where `fql_kind`
+        // rendered `"function","[function,,0,3]"` — the same groups, two
+        // different answers.
         let group_by_field = match &clauses.group_by {
-            Some(GroupBy::Field(f)) if f != "fql_kind" => Some(f.clone()),
+            Some(GroupBy::Field(f)) if crate::field_tiers::canonical(f) != "fql_kind" => {
+                Some(f.clone())
+            }
             _ => None,
         };
         // A misspelled field and a name that only exists as a usage are
@@ -213,7 +221,9 @@ impl ForgeQLEngine {
             total,
             metric_hint: None,
             group_by_field: match &clauses.group_by {
-                Some(GroupBy::Field(f)) if f != "fql_kind" => Some(f.clone()),
+                Some(GroupBy::Field(f)) if crate::field_tiers::canonical(f) != "fql_kind" => {
+                    Some(f.clone())
+                }
                 _ => None,
             },
             hint: Self::withheld_hint(withheld)

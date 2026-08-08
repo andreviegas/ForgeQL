@@ -52,16 +52,13 @@ pub(super) fn parse_clauses(pairs: pest::iterators::Pairs<'_, Rule>) -> Clauses 
             }
             Rule::group_clause => {
                 clauses.group_by = pair.into_inner().next().map(|p| {
-                    // `kind` is an alias of `fql_kind`, and grouping has two
-                    // implementations: the backend groups a `fql_kind` request
-                    // natively, anything else falls to the generic pass over
-                    // the projected rows. An alias resolved separately in each
-                    // is an alias that renders differently in each, so it is
-                    // spelled away here instead — one canonical name reaches
-                    // every consumer downstream.
-                    let field = p.as_str();
-                    let field = if field == "kind" { "fql_kind" } else { field };
-                    GroupBy::Field(field.to_string())
+                    // The WRITTEN spelling is kept, deliberately. It is what
+                    // labels the key column — `GROUP BY file` heads its column
+                    // `file`, not `path` — and every consumer that has to
+                    // agree about WHICH field this is puts it through
+                    // `field_tiers::canonical` first, so one alias table
+                    // serves both the routing and the label.
+                    GroupBy::Field(p.as_str().to_string())
                 });
             }
             Rule::limit_clause => {
