@@ -131,10 +131,11 @@ same profile, leaves all three query shapes below the harness's noise floor on
 the branch exactly as on the baseline — identifier names, names carrying a
 separator, and names no part of which can be a token all under 200 ms per query
 either way, a difference the harness cannot resolve, with the branch reading
-every in-scope file on every query. What "in-scope" was for those three classes
-is the harness's business and not stated here, so read the number as: the read
-pass did not move any of the shapes the harness measures. Reading the whole
-workspace per query is not detectable at this corpus size; a tree large enough
+every in-scope file on every query. Those three classes carry no `IN` scope, so
+the shape measured is the whole-workspace one — the worst case, not a narrowed
+one — and the query used to confirm the read actually happens returns 179 sites
+on that corpus where the postings alone return 140. Reading the whole workspace
+per query is therefore not detectable at this corpus size; a tree large enough
 to make it so would be bounded by `IN` and `EXCLUDE`, which cut the reading and
 not just the rows.
 
