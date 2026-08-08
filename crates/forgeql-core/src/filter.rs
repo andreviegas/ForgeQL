@@ -377,13 +377,23 @@ fn answers_on<T: ClauseTarget>(written: &str) -> bool {
 /// `SHOW callees OF 'f' WHERE path = '…'` answering zero whenever the file
 /// named was not the one the lookup happened to pick.
 ///
-/// `WHERE` only. `ORDER BY`, `GROUP BY` and `HAVING` shape the answer and never
-/// the lookup, which reads none of them, so they stay whole and are checked
-/// against the row shape by [`reject_unresolvable_shaping_fields`].
+/// `WHERE` and the globs. `ORDER BY`, `GROUP BY` and `HAVING` shape the answer
+/// and never the lookup, which reads none of them, so they stay whole and are
+/// checked against the row shape by [`reject_unresolvable_shaping_fields`].
 #[must_use]
 pub fn clauses_for_rows<T: ClauseTarget>(clauses: &Clauses) -> Clauses {
     let mut out = clauses.clone();
     out.where_predicates.retain(|p| answers_on::<T>(&p.field));
+    // `IN` and `EXCLUDE` are a statement about a file, and a row with no file
+    // of its own cannot be the one they are about: a members row and a source
+    // line both report `None` for their path, so retaining the globs here
+    // dropped every row and `SHOW members OF 'Foo' IN 'crates/**'` answered
+    // zero for a type that lives there. The globs stay in the lookup half,
+    // which is what they were always describing — the file the symbol is in.
+    if !answers_on::<T>("path") {
+        out.in_glob = None;
+        out.exclude_globs.clear();
+    }
     out
 }
 

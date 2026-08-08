@@ -129,12 +129,14 @@ impl ForgeQLEngine {
         // It cannot refuse — every field was checked before dispatch.
         Self::apply_list_clauses(&mut show_result.content, op);
 
-        // Extract clauses for ShowContent::Lines variants.
+        // Extract clauses for ShowContent::Lines variants. `SHOW signature` is
+        // absent on purpose: it renders one line rather than a row set, so it
+        // never produces `Lines` and has nothing here to filter — its clause is
+        // refused or given to the lookup, in `reject_show_clause_fields`.
         let show_clauses: Option<&Clauses> = match op {
             ForgeQLIR::ShowBody { clauses, .. }
             | ForgeQLIR::ShowLines { clauses, .. }
-            | ForgeQLIR::ShowContext { clauses, .. }
-            | ForgeQLIR::ShowSignature { clauses, .. } => Some(clauses),
+            | ForgeQLIR::ShowContext { clauses, .. } => Some(clauses),
             _ => None,
         };
 
@@ -181,18 +183,23 @@ impl ForgeQLEngine {
     /// are checked is a visible omission rather than a silent one. Which check
     /// applies depends on how many consumers the clause has:
     ///
-    /// - One consumer — `SHOW outline`, `SHOW NODE`, `SHOW LINES` and
-    ///   `FIND files` name a file, a handle or a path, so nothing resolves a
-    ///   symbol and the row shape is the whole universe of legitimate names.
-    ///   Every clause is held to it.
-    /// - Two consumers — `SHOW members`, `SHOW callees` and the reading verbs
-    ///   also address a symbol. Their `WHERE` is split between the lookup and
-    ///   the rows, so it is checked only against the table's refused set: what
-    ///   neither consumer can answer. `ORDER BY`, `GROUP BY` and `HAVING`
-    ///   reach no lookup, so those are held to the row shape as above.
+    /// - One consumer — `SHOW outline`, `SHOW LINES` and `FIND files` name a
+    ///   file or a path, so nothing resolves a symbol and the row shape is the
+    ///   whole universe of legitimate names. Every clause is held to it.
+    /// - Two consumers — `SHOW members`, `SHOW callees`, `SHOW body` and
+    ///   `SHOW context` also address a symbol. Their `WHERE` is split between
+    ///   the lookup and the rows, so it is checked only against the table's
+    ///   refused set: what neither consumer can answer. `ORDER BY`, `GROUP BY`
+    ///   and `HAVING` reach no lookup, so those are held to the row shape.
+    /// - No rows at all — `SHOW signature` renders one line rather than a row
+    ///   set, so its clause can only scope the lookup and a field that only a
+    ///   line row carries is refused outright.
     ///
     /// The verbs absent from this list carry a clause too, and are checked
-    /// where they execute: `SHOW MORE` in `exec_show::more`, `SHOW COMMITS` in
+    /// where they execute, each before the work it gates: `SHOW NODE` in
+    /// `exec_show::read` (it never reaches `exec_show` as itself — CONTENT
+    /// arrives re-synthesised as `SHOW LINES`, and METADATA returns before
+    /// that), `SHOW MORE` in `exec_show::more`, `SHOW COMMITS` in
     /// `exec_source::readouts`, `SHOW DIFF` in `exec_transaction`, and
     /// `FIND symbols`/`FIND usages` in the columnar backend's own Stage 0,
     /// which alone can see which enrichment columns a segment stored.
@@ -206,8 +213,8 @@ impl ForgeQLEngine {
             ForgeQLIR::FindFiles { clauses, .. } => {
                 reject_unresolvable_fields::<FileEntry>("FIND files", clauses)
             }
-            ForgeQLIR::ShowNode { clauses, .. } | ForgeQLIR::ShowLines { clauses, .. } => {
-                reject_unresolvable_fields::<SourceLine>("SHOW NODE / SHOW LINES", clauses)
+            ForgeQLIR::ShowLines { clauses, .. } => {
+                reject_unresolvable_fields::<SourceLine>("SHOW LINES", clauses)
             }
             ForgeQLIR::ShowMembers { clauses, .. } => {
                 reject_refused_fields::<MemberEntry>("SHOW members", clauses)?;
@@ -217,14 +224,50 @@ impl ForgeQLEngine {
                 reject_refused_fields::<CallGraphEntry>("SHOW callees", clauses)?;
                 reject_unresolvable_shaping_fields::<CallGraphEntry>("SHOW callees", clauses)
             }
-            ForgeQLIR::ShowBody { clauses, .. }
-            | ForgeQLIR::ShowContext { clauses, .. }
-            | ForgeQLIR::ShowSignature { clauses, .. } => {
+            ForgeQLIR::ShowBody { clauses, .. } | ForgeQLIR::ShowContext { clauses, .. } => {
                 reject_refused_fields::<SourceLine>("a SHOW that reads lines", clauses)?;
                 reject_unresolvable_shaping_fields::<SourceLine>("a SHOW that reads lines", clauses)
             }
+            ForgeQLIR::ShowSignature { clauses, .. } => {
+                reject_refused_fields::<SourceLine>("SHOW signature", clauses)?;
+                Self::reject_line_only_fields(clauses)
+            }
             _ => Ok(()),
         }
+    }
+
+    /// Refuse a `SHOW signature` clause field that only a source-line row can
+    /// carry.
+    ///
+    /// A signature is one rendered line, not a row set, so nothing here filters
+    /// rows and the whole clause can only scope which symbol was resolved. A
+    /// name a line row carries and a symbol row does not — `text`, `marker`,
+    /// `rev` — therefore has nothing to act on, and saying so beats accepting
+    /// it and answering as though it had been applied.
+    ///
+    /// The set is derived rather than listed: what a source line resolves,
+    /// minus what a symbol row resolves. A name on both, such as `line` or
+    /// `node_id`, still scopes the lookup and is left alone.
+    fn reject_line_only_fields(clauses: &Clauses) -> Result<()> {
+        use crate::filter::ClauseTarget as _;
+        use crate::result::{SourceLine, SymbolMatch};
+
+        for pred in &clauses.where_predicates {
+            let field = crate::field_tiers::canonical(&pred.field);
+            let on_a_line =
+                SourceLine::STR_FIELDS.contains(&field) || SourceLine::NUM_FIELDS.contains(&field);
+            let on_a_symbol = SymbolMatch::STR_FIELDS.contains(&field)
+                || SymbolMatch::NUM_FIELDS.contains(&field);
+            if on_a_line && !on_a_symbol {
+                bail!(
+                    "WHERE {} cannot be answered on SHOW signature: it renders one line rather \
+                     than a row set, so there is nothing here to filter. Use SHOW body OF, whose \
+                     rows are source lines.",
+                    pred.field
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Dispatch a `SHOW`/`FIND files` op to the matching backend handler,

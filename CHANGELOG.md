@@ -20,14 +20,20 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the same confident absence the previous release set out to remove, arriving by
   a different route.
 
-  Each predicate now reaches exactly one consumer, decided by the row shape: a
-  field the returned rows carry filters those rows, and a field they do not
-  carry goes to the lookup, which evaluates it against every candidate.
+  Each predicate now reaches the consumer that can answer it, decided by the
+  row shape: a field the returned rows carry filters those rows, and one they
+  do not carry goes to the lookup, which evaluates it against every candidate.
   `SHOW members OF 'Point' WHERE language = 'rust'` returns the Rust `Point`'s
   members and `WHERE language = 'cpp'` the C++ one's, and the two answers
-  differ. Nothing is dropped and nothing is applied twice. Both backends do
-  this; the indexed one applied no `WHERE` at all during resolution before, and
-  pays for it now only when the lookup's half of the clause is non-empty.
+  differ. No predicate is dropped. The only kind that reaches both consumers is
+  a field the rows carry whose value comes from the resolved symbol rather than
+  the row — `path` on a callees row, since every call sits in the resolved
+  function's own file — where filtering the rows by it could only keep all of
+  them or none, and scoping the lookup by it is what was meant. `IN` and
+  `EXCLUDE` go the same way on the verbs whose rows carry no file of their own.
+  Both backends do this; the indexed one previously applied no `WHERE` at all
+  during resolution, and pays for it now only when the lookup's half is
+  non-empty.
 
 - When no candidate satisfies the lookup the answer says so —
   `no symbol 'Point' matches WHERE language = 'python'` — naming the clause that
@@ -66,8 +72,10 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WHERE language = 'cpp'` is accepted. The asymmetry is deliberate, and is now
   stated in the same sentence as the split wherever the split appears.
 
-- `SHOW signature` applies its clause like the other reading verbs rather than
-  ignoring it.
+- `SHOW signature` no longer ignores its clause. It renders one line rather than
+  a row set, so there is nothing in its answer to filter: the clause scopes
+  which symbol is resolved, and a field only a source-line row carries — `text`,
+  `marker`, `rev` — is refused there rather than accepted and quietly discarded.
 
 - One limit, stated alongside the claims rather than elsewhere: only
   `FIND symbols`, `FIND globals` and `FIND usages` can tell an unknown field

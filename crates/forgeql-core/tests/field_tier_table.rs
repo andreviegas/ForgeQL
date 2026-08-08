@@ -1440,6 +1440,67 @@ fn only_where_is_split_between_the_lookup_and_the_rows() {
 }
 
 #[test]
+fn a_glob_scopes_the_lookup_when_the_rows_have_no_file_of_their_own() {
+    // `IN` and `EXCLUDE` are a statement about a file, and a members row and a
+    // source line both report no path at all — so retaining the globs in the
+    // row half dropped every row, and `SHOW members OF 'Point' IN '…'` answered
+    // zero for a type that lives exactly there. The same confident absence the
+    // `WHERE` split removes, arriving through the glob instead.
+    for columnar in [false, true] {
+        let backend = if columnar { "columnar" } else { "legacy" };
+        let mut t = two_language_workspace(columnar);
+
+        let scoped = member_texts(&mut t, "SHOW members OF 'Point' IN 'b_shapes.rs'");
+        assert!(
+            scoped.iter().any(|m| m.contains("only_rust_field")),
+            "{backend}: IN emptied the rows instead of scoping the lookup: {scoped:?}"
+        );
+
+        let cpp = member_texts(&mut t, "SHOW members OF 'Point' IN 'a_shapes.cpp'");
+        assert!(
+            cpp.iter().any(|m| m.contains("int x")),
+            "{backend}: IN did not scope the lookup to the C++ Point: {cpp:?}"
+        );
+
+        let lines = line_texts(&mut t, "SHOW body OF 'shared_fn' DEPTH 99 IN 'b_shapes.rs'");
+        assert!(
+            lines.iter().any(|l| l.contains("helper_c")),
+            "{backend}: IN emptied a body it should have scoped: {lines:?}"
+        );
+    }
+}
+
+#[test]
+fn show_signature_refuses_a_field_it_has_no_rows_to_filter() {
+    // `SHOW signature` renders one line rather than a row set, so a predicate
+    // naming a field only a source line carries has nothing to act on. Saying
+    // so beats accepting it and answering as though it had been applied — the
+    // failure mode this release exists to remove, in its quietest form.
+    let mut t = two_language_workspace(true);
+
+    for fql in [
+        "SHOW signature OF 'shared_fn' WHERE text LIKE '%nothing%'",
+        "SHOW signature OF 'shared_fn' WHERE marker = 'x'",
+    ] {
+        let err = refusal(&mut t, fql);
+        assert!(
+            err.contains("nothing here to filter"),
+            "`{fql}` was accepted and ignored instead of refused: {err}"
+        );
+    }
+
+    // What the clause CAN do there is scope the lookup, and still does.
+    let rust = format!(
+        "{:?}",
+        t.try_fql("SHOW signature OF 'shared_fn' WHERE language = 'rust'")
+            .expect("a lookup-scoping predicate must still be accepted")
+    );
+    assert!(
+        rust.contains("u32"),
+        "SHOW signature resolved the wrong shared_fn: {rust}"
+    );
+}
+#[test]
 fn the_row_half_of_a_split_clause_still_filters() {
     // What the split must not break: a predicate the rows DO carry keeps
     // filtering them, and never reaches the lookup to scope it away.
@@ -1596,7 +1657,9 @@ const CLAUSE_FIELD_PROBES: &[(&str, Option<&str>)] = &[
     ("ShowMore", Some("SHOW MORE WHERE size > 1")),
     (
         "ShowNode",
-        Some("SHOW NODE '<NODE>' WHERE language = 'cpp'"),
+        // METADATA returns before the CONTENT path re-synthesises `SHOW LINES`,
+        // so this form reaches the check only where `exec_show_node` runs it.
+        Some("SHOW NODE '<NODE>' METADATA WHERE language = 'cpp'"),
     ),
     (
         "ShowOutline",

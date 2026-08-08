@@ -206,6 +206,16 @@ impl ForgeQLEngine {
         };
         let sid = require_session_id(session_id)?;
 
+        // `SHOW NODE` never reaches `exec_show` as itself — CONTENT gets there
+        // only by being re-synthesised as `ShowLines` below, and METADATA
+        // returns before that — so the check has to run here or not at all.
+        // Both forms address bytes by handle: nothing resolves a name, so the
+        // whole clause can only be answered from the node's own lines.
+        crate::filter::reject_unresolvable_fields::<crate::result::SourceLine>(
+            "SHOW NODE",
+            clauses,
+        )?;
+
         // A node_id may carry a node-relative line offset suffix — `id(n)` or
         // `id(n-m)`. METADATA describes the whole node, so an offset is only
         // meaningful for CONTENT; resolve the base node either way.

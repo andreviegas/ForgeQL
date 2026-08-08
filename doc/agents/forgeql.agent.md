@@ -229,7 +229,7 @@ Applied in order: `IN → EXCLUDE → WHERE → GROUP BY → HAVING → ORDER BY
 - `WHERE name MATCHES '^(get|set)_'`
 - `WHERE text MATCHES '(?i)TODO|FIXME'`
 
-`SHOW body`, `SHOW NODE`, `SHOW LINES`, `SHOW context`, `SHOW MORE` and `SHOW signature` also support `WHERE` on source line content — on `SHOW signature` the line half filters the single rendered line:
+`SHOW body`, `SHOW NODE`, `SHOW LINES`, `SHOW context` and `SHOW MORE` also support `WHERE` on source line content. `SHOW signature` does not — it renders one line rather than a row set, so a field only a line carries (`text`, `marker`, `rev`) is refused there and the rest of its clause scopes the lookup:
 - `text` — line content (supports `LIKE`, `MATCHES`, `=`)
 - `line` — 1-based line number
 
