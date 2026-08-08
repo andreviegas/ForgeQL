@@ -1,131 +1,278 @@
 {
-  "suite": "clause_pipeline",
-  "description": "Clause-pipeline semantics on the frozen Zephyr corpus: how WHERE, IN, GROUP BY, HAVING, ORDER BY, OFFSET and LIMIT compose, and what SHOW LINES does with a range and a text filter. These are DSL mechanics rather than enrichment values, so each case stacks the clauses it is about instead of testing one at a time.",
-  "cases": [
+ "suite": "clause_pipeline",
+ "description": "Clause-pipeline semantics on the frozen Zephyr corpus: how WHERE, IN, GROUP BY, HAVING, ORDER BY, OFFSET and LIMIT compose, and what SHOW LINES does with a range and a text filter. These are DSL mechanics rather than enrichment values, so each case stacks the clauses it is about instead of testing one at a time.",
+ "cases": [
+  {
+   "name": "where_clauses_stack_and_and_is_a_synonym",
+   "use": "zephyr-andre.frozen",
+   "steps": [
     {
-      "name": "where_clauses_stack_and_and_is_a_synonym",
-      "use": "zephyr-andre.frozen",
-      "steps": [
-        {
-          "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name = 'runq_add' IN 'kernel/sched.c'",
-          "assert": { "row_count": 1, "rows": [ { "name": "runq_add", "line": 80 } ] }
-        },
-        {
-          "fql": "FIND symbols WHERE fql_kind = 'function' AND name = 'runq_add' IN 'kernel/sched.c'",
-          "assert": { "row_count": 1, "rows": [ { "name": "runq_add", "line": 80 } ] }
-        }
+     "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name = 'runq_add' IN 'kernel/sched.c'",
+     "assert": {
+      "row_count": 1,
+      "rows": [
+       {
+        "name": "runq_add",
+        "line": 80
+       }
       ]
+     }
     },
     {
-      "name": "unqualified_name_match_is_exact_not_a_prefix",
-      "use": "zephyr-andre.frozen",
-      "fql": "FIND symbols WHERE name = 'k_mutex_lock'",
-      "assert": {
-        "row_count": 1,
-        "total": 1,
-        "rows": [ { "name": "k_mutex_lock", "path": "include/zephyr/kernel.h", "line": 3525, "kind": "field" } ]
-      }
-    },
-    {
-      "name": "order_by_line_asc_windows_the_first_five",
-      "use": "zephyr-andre.frozen",
-      "fql": "FIND symbols WHERE fql_kind = 'function' IN 'kernel/sched.c' ORDER BY line ASC LIMIT 5",
-      "assert": {
-        "row_count": 5,
-        "ordered": { "by": "line", "dir": "asc" },
-        "all_same": "path",
-        "rows": [
-          { "name": "thread_runq", "line": 51 },
-          { "name": "curr_cpu_runq", "line": 71 },
-          { "name": "runq_add", "line": 80 },
-          { "name": "runq_remove", "line": 88 },
-          { "name": "runq_yield", "line": 96 }
-        ]
-      }
-    },
-    {
-      "name": "order_by_name_asc_with_offset_shifts_the_window",
-      "use": "zephyr-andre.frozen",
-      "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 3 OFFSET 5",
-      "assert": { "row_count": 3, "all_same": "name" }
-    },
-    {
-      "name": "in_glob_scopes_the_search_and_order_by_name_picks_the_first",
-      "use": "zephyr-andre.frozen",
-      "fql": "FIND symbols WHERE fql_kind = 'function' IN 'modules/hal_silabs/**' ORDER BY name ASC LIMIT 1",
-      "assert": {
-        "row_count": 1,
-        "rows": [
-          {
-            "name": "AGC_IRQHandler",
-            "path": "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c",
-            "line": 64
-          }
-        ]
-      }
-    },
-    {
-      "name": "group_by_kind_having_filters_the_aggregate_and_orders_by_count",
-      "use": "zephyr-andre.frozen",
-      "fql": "FIND symbols GROUP BY fql_kind IN 'arch/arc/**' HAVING count >= 100 ORDER BY count DESC",
-      "assert": {
-        "row_count": 10,
-        "ordered": { "by": "count", "dir": "desc" },
-        "rows": [ { "name": "variable", "count": 810 } ]
-      }
-    },
-    {
-      "name": "group_by_file_scoped_by_in_path_orders_by_count_desc",
-      "use": "zephyr-andre.frozen",
-      "fql": "FIND symbols WHERE fql_kind = 'function' GROUP BY file IN 'subsys/**' ORDER BY count DESC LIMIT 3",
-      "assert": { "row_count": 3, "ordered": { "by": "count", "dir": "desc" } }
-    },
-    {
-      "name": "find_files_orders_by_size_desc",
-      "use": "zephyr-andre.frozen",
-      "fql": "FIND files WHERE extension = 'c' ORDER BY size DESC LIMIT 3",
-      "assert": {
-        "row_count": 3,
-        "ordered": { "by": "size", "dir": "desc" },
-        "rows": [
-          {
-            "path": "tests/bluetooth/controller/ctrl_isoal/src/sub_sets/isoal_test_rx.c",
-            "size": 482433
-          }
-        ]
-      }
-    },
-    {
-      "name": "show_lines_range_then_like_then_regex_narrow_the_same_window",
-      "use": "zephyr-andre.frozen",
-      "steps": [
-        {
-          "fql": "SHOW LINES 51-55 OF 'kernel/sched.c'",
-          "assert": {
-            "row_count": 5,
-            "ordered": { "by": "line", "dir": "asc" },
-            "rows": [
-              { "line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)" },
-              { "line": 52, "text": "{" },
-              { "line": 53, "text": "#ifdef CONFIG_SCHED_CPU_MASK_PIN_ONLY" }
-            ]
-          }
-        },
-        {
-          "fql": "SHOW LINES 51-75 OF 'kernel/sched.c' WHERE text LIKE '%runq%'",
-          "assert": { "row_count": 5, "ordered": { "by": "line", "dir": "asc" } }
-        },
-        {
-          "fql": "SHOW LINES 51-75 OF 'kernel/sched.c' WHERE text MATCHES 'void \\*\\w+_runq'",
-          "assert": {
-            "row_count": 2,
-            "rows": [
-              { "line": 51, "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)" },
-              { "line": 71, "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)" }
-            ]
-          }
-        }
+     "fql": "FIND symbols WHERE fql_kind = 'function' AND name = 'runq_add' IN 'kernel/sched.c'",
+     "assert": {
+      "row_count": 1,
+      "rows": [
+       {
+        "name": "runq_add",
+        "line": 80
+       }
       ]
+     }
     }
-  ]
+   ]
+  },
+  {
+   "name": "unqualified_name_match_is_exact_not_a_prefix",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE name = 'k_mutex_lock'",
+   "assert": {
+    "row_count": 1,
+    "total": 1,
+    "rows": [
+     {
+      "name": "k_mutex_lock",
+      "path": "include/zephyr/kernel.h",
+      "line": 3525,
+      "kind": "field"
+     }
+    ]
+   }
+  },
+  {
+   "name": "order_by_line_asc_windows_the_first_five",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' IN 'kernel/sched.c' ORDER BY line ASC LIMIT 5",
+   "assert": {
+    "row_count": 5,
+    "ordered": {
+     "by": "line",
+     "dir": "asc"
+    },
+    "all_same": "path",
+    "rows": [
+     {
+      "name": "thread_runq",
+      "line": 51
+     },
+     {
+      "name": "curr_cpu_runq",
+      "line": 71
+     },
+     {
+      "name": "runq_add",
+      "line": 80
+     },
+     {
+      "name": "runq_remove",
+      "line": 88
+     },
+     {
+      "name": "runq_yield",
+      "line": 96
+     }
+    ]
+   }
+  },
+  {
+   "name": "order_by_name_asc_with_offset_shifts_the_window",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY name ASC LIMIT 3 OFFSET 5",
+   "assert": {
+    "row_count": 3,
+    "all_same": "name"
+   }
+  },
+  {
+   "name": "in_glob_scopes_the_search_and_order_by_name_picks_the_first",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' IN 'modules/hal_silabs/**' ORDER BY name ASC LIMIT 1",
+   "assert": {
+    "row_count": 1,
+    "rows": [
+     {
+      "name": "AGC_IRQHandler",
+      "path": "modules/hal_silabs/simplicity_sdk/src/blob_stubs.c",
+      "line": 64
+     }
+    ]
+   }
+  },
+  {
+   "name": "group_by_kind_having_filters_the_aggregate_and_orders_by_count",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols GROUP BY fql_kind IN 'arch/arc/**' HAVING count >= 100 ORDER BY count DESC",
+   "assert": {
+    "row_count": 10,
+    "ordered": {
+     "by": "count",
+     "dir": "desc"
+    },
+    "rows": [
+     {
+      "name": "variable",
+      "count": 810
+     }
+    ]
+   }
+  },
+  {
+   "name": "group_by_file_scoped_by_in_path_orders_by_count_desc",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' GROUP BY file IN 'subsys/**' ORDER BY count DESC LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "ordered": {
+     "by": "count",
+     "dir": "desc"
+    }
+   }
+  },
+  {
+   "name": "find_files_orders_by_size_desc",
+   "use": "zephyr-andre.frozen",
+   "fql": "FIND files WHERE extension = 'c' ORDER BY size DESC LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "ordered": {
+     "by": "size",
+     "dir": "desc"
+    },
+    "rows": [
+     {
+      "path": "tests/bluetooth/controller/ctrl_isoal/src/sub_sets/isoal_test_rx.c",
+      "size": 482433
+     }
+    ]
+   }
+  },
+  {
+   "name": "show_lines_range_then_like_then_regex_narrow_the_same_window",
+   "use": "zephyr-andre.frozen",
+   "steps": [
+    {
+     "fql": "SHOW LINES 51-55 OF 'kernel/sched.c'",
+     "assert": {
+      "row_count": 5,
+      "ordered": {
+       "by": "line",
+       "dir": "asc"
+      },
+      "rows": [
+       {
+        "line": 51,
+        "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"
+       },
+       {
+        "line": 52,
+        "text": "{"
+       },
+       {
+        "line": 53,
+        "text": "#ifdef CONFIG_SCHED_CPU_MASK_PIN_ONLY"
+       }
+      ]
+     }
+    },
+    {
+     "fql": "SHOW LINES 51-75 OF 'kernel/sched.c' WHERE text LIKE '%runq%'",
+     "assert": {
+      "row_count": 5,
+      "ordered": {
+       "by": "line",
+       "dir": "asc"
+      }
+     }
+    },
+    {
+     "fql": "SHOW LINES 51-75 OF 'kernel/sched.c' WHERE text MATCHES 'void \\*\\w+_runq'",
+     "assert": {
+      "row_count": 2,
+      "rows": [
+       {
+        "line": 51,
+        "text": "static ALWAYS_INLINE void *thread_runq(struct k_thread *thread)"
+       },
+       {
+        "line": 71,
+        "text": "static ALWAYS_INLINE void *curr_cpu_runq(void)"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "name": "limit_does_not_falsify_the_total",
+   "description": "LIMIT bounds delivery, never the search. `total` is the count of everything that matched, so an agent can tell a full answer from a first page. Under the fetch cap `total` collapses to the page size, which reads as 'this is all of it'.",
+   "use": "zephyr-andre.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "the segment fetch cap (fast_paths.rs fetch_cap_for) stops opening segments at limit+1 whenever there is no ORDER BY/GROUP BY, so LIMIT changes the answer rather than the page: it truncates the reported total, skips past the fetched rows for OFFSET, and varies which rows are fetched at all",
+   "fql": "FIND symbols WHERE fql_kind = 'if' WHERE line >= 100 WHERE line <= 105 LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "total": 1848
+   }
+  },
+  {
+   "name": "offset_beyond_the_limit_still_returns_a_full_page",
+   "description": "Paging past the first page. 1848 rows match, so OFFSET 100 LIMIT 5 is an ordinary page in the middle and must hold 5 rows. Deliberately without ORDER BY: ORDER BY disables the fetch cap, which is why every pre-existing OFFSET case in this suite misses the defect.",
+   "use": "zephyr-andre.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "the segment fetch cap (fast_paths.rs fetch_cap_for) stops opening segments at limit+1 whenever there is no ORDER BY/GROUP BY, so LIMIT changes the answer rather than the page: it truncates the reported total, skips past the fetched rows for OFFSET, and varies which rows are fetched at all",
+   "fql": "FIND symbols WHERE fql_kind = 'if' WHERE line >= 100 WHERE line <= 105 LIMIT 5 OFFSET 100",
+   "assert": {
+    "row_count": 5
+   }
+  },
+  {
+   "name": "offset_below_the_limit_still_fills_the_page",
+   "description": "The same defect one step smaller: the cap fetches limit+1 rows, so an OFFSET inside that window short-changes the page instead of emptying it. OFFSET 3 LIMIT 5 must still return 5 rows, not 3.",
+   "use": "zephyr-andre.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "the segment fetch cap (fast_paths.rs fetch_cap_for) stops opening segments at limit+1 whenever there is no ORDER BY/GROUP BY, so LIMIT changes the answer rather than the page: it truncates the reported total, skips past the fetched rows for OFFSET, and varies which rows are fetched at all",
+   "fql": "FIND symbols WHERE fql_kind = 'if' WHERE line >= 100 WHERE line <= 105 LIMIT 5 OFFSET 3",
+   "assert": {
+    "row_count": 5
+   }
+  },
+  {
+   "name": "limit_returns_a_prefix_of_the_unlimited_answer",
+   "description": "A small LIMIT must return the FIRST rows of the answer, not a different sample of it. These three are the leading rows of the same query run unbounded (total 1848). Under the cap a small LIMIT opens fewer segments and returns rows that vanish when the LIMIT is raised, so sampling then widening loses what it already showed.",
+   "use": "zephyr-andre.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "the segment fetch cap (fast_paths.rs fetch_cap_for) stops opening segments at limit+1 whenever there is no ORDER BY/GROUP BY, so LIMIT changes the answer rather than the page: it truncates the reported total, skips past the fetched rows for OFFSET, and varies which rows are fetched at all",
+   "fql": "FIND symbols WHERE fql_kind = 'if' WHERE line >= 100 WHERE line <= 105 LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "rows": [
+     {
+      "name": "(!!(a&(b<<c)))",
+      "path": "soc/microchip/sam/common/clk-system.c",
+      "line": 103
+     },
+     {
+      "name": "(!((a>=b&&a<=c)||a==d||a==e||a==f))",
+      "path": "drivers/spi/spi_renesas_ra.c",
+      "line": 100
+     },
+     {
+      "name": "(!(a&b))",
+      "path": "drivers/ethernet/phy/phy_microchip_ksz8081.c",
+      "line": 100
+     }
+    ]
+   }
+  }
+ ]
 }
