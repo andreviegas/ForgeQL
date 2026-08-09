@@ -15,22 +15,26 @@
 //! [0..4]           b"FQOV"            magic
 //! [4..8]           schema_version: u32 = 3 (little-endian)
 //! [8..16]          generation: u64 (little-endian)
-//! [16..20]         toc_count: u32 = 9
+//! [16..20]         toc_count: u32 = 13
 //! [20..24]         _reserved: u32 = 0
-//! [24..24+9*64]    9 × 64-byte TocEntry records
-//! [600..]          blob data (absolute offsets from TocEntry)
+//! [24..24+13*64]   13 × 64-byte TocEntry records
+//! [856..]          blob data (absolute offsets from TocEntry)
 //! ```
 //!
 //! Named blobs (TOC order):
-//! 1. `row_table`       — `[RowPtr]` flat array (zero-copy via `cast_slice`)
-//! 2. `kind_strings`    — concatenated UTF-8 kind name bytes
-//! 3. `kind_index`      — `[KindEntry]` sorted by kind name (binary search)
-//! 4. `bitmap_data`     — all serialised `RoaringBitmap` bytes (kinds + trigrams)
-//! 5. `trigram_index`   — `[TrigramEntry]` sorted by trigram bytes
-//! 6. `name_fst`        — FST bytes for name → postings lookup
-//! 7. `name_postings`   — flat `[u32]` global row IDs
-//! 8. `segments`        — `[SegmentRecord]` fixed-size per-segment metadata
-//! 9. `segment_strings` — concatenated path + hex-id UTF-8 strings
+//! 1. `row_table`         — `[RowPtr]` flat array (zero-copy via `cast_slice`)
+//! 2. `kind_strings`      — concatenated UTF-8 kind name bytes
+//! 3. `kind_index`        — `[KindEntry]` sorted by kind name (binary search)
+//! 4. `bitmap_data`       — all serialised `RoaringBitmap` bytes (kinds + trigrams)
+//! 5. `trigram_index`     — `[TrigramEntry]` sorted by trigram bytes
+//! 6. `name_fst`          — FST bytes for name → postings lookup
+//! 7. `name_postings`     — flat `[u32]` global row IDs
+//! 8. `segments`          — `[SegmentRecord]` fixed-size per-segment metadata
+//! 9. `segment_strings`   — concatenated path + hex-id UTF-8 strings
+//! 10. `index_files`      — `[u32]` cached file sizes for indexed files (`FIND files` fast-path)
+//! 11. `enrich_bitmaps`   — sorted `[EnrichEntry]` array + keys + bitmaps for enrichment prefiltering
+//! 12. `file_entries`     — non-indexed workspace files as path+size pairs
+//! 13. `usages_count_fst` — FST mapping symbol name → total usage-site count
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -48,7 +52,7 @@ mod format;
 pub use format::*;
 mod parse;
 use parse::{
-    build_segment_offsets, decode_segment_metas, open_blobs, parse_enrich_index,
+    EnrichIndexLayout, build_segment_offsets, decode_segment_metas, open_blobs, parse_enrich_index,
     parse_file_entries, parse_header,
 };
 
@@ -88,11 +92,15 @@ pub struct Overlay {
     trigram_index_range: Range<usize>,
     name_postings_range: Range<usize>,
     index_files_range: Range<usize>,
-    /// Pre-parsed enrichment index: sorted `(key, bitmap_mmap_range)` pairs.
+    /// Byte-range layout of the (already sorted) `enrich_bitmaps` blob.
     ///
-    /// key = `"field=value"` (byte-lexicographic order).
-    /// The mmap range refers to the serialised `RoaringBitmap` within `mmap`.
-    enrich_index: Vec<(String, Range<usize>)>,
+    /// `enrich_entries_range` / `enrich_keys_range` bound the `[EnrichEntry]`
+    /// array and the key-string region; `enrich_bitmap_base` is the mmap
+    /// offset each entry's `bitmap_offset` is relative to. Binary-searched
+    /// directly at query time -- no key is ever decoded into an owned `String`.
+    enrich_entries_range: Range<usize>,
+    enrich_keys_range: Range<usize>,
+    enrich_bitmap_base: usize,
     /// All non-indexed workspace files tracked for `FIND files` fast-path.
     ///
     /// Parsed at `open()` time from the `file_entries` blob (FQOV v8+).
@@ -223,9 +231,14 @@ impl Overlay {
         // Format: [u32 count][repeated: [u32 size][u16 path_len][u8; path_len]]
         let file_entries = parse_file_entries(mmap.get(file_entries_range).unwrap_or(&[]));
 
-        // Parse enrichment bitmaps blob (Phase 5 / FQOV v7).
-        // Build enrich_index: sorted (key, bitmap_mmap_range) pairs.
-        let enrich_index = parse_enrich_index(
+        // Parse enrichment bitmaps blob (Phase 5 / FQOV v7): locate the
+        // sorted [EnrichEntry] array, key region, and bitmap base -- zero-copy,
+        // Overlay binary-searches the mmap'd array directly at query time.
+        let EnrichIndexLayout {
+            entries: enrich_entries_range,
+            keys: enrich_keys_range,
+            bitmap_base: enrich_bitmap_base,
+        } = parse_enrich_index(
             mmap.get(enrich_bitmaps_range.clone()).unwrap_or(&[]),
             enrich_bitmaps_range.start,
         );
@@ -242,7 +255,9 @@ impl Overlay {
             trigram_index_range,
             name_postings_range,
             index_files_range,
-            enrich_index,
+            enrich_entries_range,
+            enrich_keys_range,
+            enrich_bitmap_base,
             file_entries,
             has_duplicate_paths,
             name_fst,
@@ -290,18 +305,39 @@ impl Overlay {
     // Phase 5: enrichment bitmap prefiltering (FQOV v7)
     // ─────────────────────────────────────────────────────────────────────
 
+    /// Zero-copy view of the `enrich_bitmaps` blob: the sorted `[EnrichEntry]`
+    /// array and the key-string region it indexes into.
+    fn enrich_entries(&self) -> (&[EnrichEntry], &[u8]) {
+        let entries = cast_slice(
+            self.mmap
+                .get(self.enrich_entries_range.clone())
+                .unwrap_or(&[]),
+        );
+        let keys = self.mmap.get(self.enrich_keys_range.clone()).unwrap_or(&[]);
+        (entries, keys)
+    }
+
+    /// The `"field=value"` key bytes for one entry, resolved against `keys`.
+    /// An out-of-range offset (a malformed blob) resolves to `""`, which
+    /// sorts before every real key rather than panicking.
+    fn enrich_key<'a>(keys: &'a [u8], e: &EnrichEntry) -> &'a [u8] {
+        let start = e.key_offset as usize;
+        let end = start + e.key_len as usize;
+        keys.get(start..end).unwrap_or(&[])
+    }
+
     /// Returns `true` if any enrichment bitmap entry exists for `field`.
     ///
     /// Used to check predicate eligibility without deserialising bitmaps.
     #[must_use]
     pub fn has_enrichment_field(&self, field: &str) -> bool {
+        let (entries, keys) = self.enrich_entries();
         let prefix = format!("{field}=");
-        let pos = self
-            .enrich_index
-            .partition_point(|(k, _)| k.as_str() < prefix.as_str());
-        self.enrich_index
+        let prefix_bytes = prefix.as_bytes();
+        let pos = entries.partition_point(|e| Self::enrich_key(keys, e) < prefix_bytes);
+        entries
             .get(pos)
-            .is_some_and(|(k, _)| k.starts_with(&prefix))
+            .is_some_and(|e| Self::enrich_key(keys, e).starts_with(prefix_bytes))
     }
 
     /// Look up the global row bitmap for `field = value`.
@@ -309,15 +345,17 @@ impl Overlay {
     /// Returns `None` if no bitmap was stored for this (field, value) pair.
     #[must_use]
     pub fn prefilter_enrichment_eq(&self, field: &str, value: &str) -> Option<RoaringBitmap> {
+        let (entries, keys) = self.enrich_entries();
         let target = format!("{field}={value}");
-        let pos = self
-            .enrich_index
-            .partition_point(|(k, _)| k.as_str() < target.as_str());
-        let (key, range) = self.enrich_index.get(pos)?;
-        if key != &target {
+        let target_bytes = target.as_bytes();
+        let pos = entries.partition_point(|e| Self::enrich_key(keys, e) < target_bytes);
+        let e = entries.get(pos)?;
+        if Self::enrich_key(keys, e) != target_bytes {
             return None;
         }
-        RoaringBitmap::deserialize_from(self.mmap.get(range.clone())?).ok()
+        let start = self.enrich_bitmap_base + e.bitmap_offset as usize;
+        let end = start + e.bitmap_len as usize;
+        RoaringBitmap::deserialize_from(self.mmap.get(start..end)?).ok()
     }
 
     /// Union of the row bitmaps of every recorded value of `field` that
@@ -339,20 +377,26 @@ impl Overlay {
         field: &str,
         accept: &dyn Fn(&str) -> bool,
     ) -> Option<RoaringBitmap> {
+        let (entries, keys) = self.enrich_entries();
         let prefix = format!("{field}=");
-        let start = self
-            .enrich_index
-            .partition_point(|(k, _)| k.as_str() < prefix.as_str());
+        let prefix_bytes = prefix.as_bytes();
+        let start = entries.partition_point(|e| Self::enrich_key(keys, e) < prefix_bytes);
 
         let mut union = RoaringBitmap::new();
         let mut recorded = false;
-        for (key, range) in &self.enrich_index[start..] {
-            let Some(value) = key.strip_prefix(prefix.as_str()) else {
+        for e in &entries[start..] {
+            let key = Self::enrich_key(keys, e);
+            let Some(value_bytes) = key.strip_prefix(prefix_bytes) else {
                 break;
+            };
+            let Ok(value) = std::str::from_utf8(value_bytes) else {
+                continue;
             };
             recorded = true;
             if accept(value) {
-                let bytes = self.mmap.get(range.clone())?;
+                let bm_start = self.enrich_bitmap_base + e.bitmap_offset as usize;
+                let bm_end = bm_start + e.bitmap_len as usize;
+                let bytes = self.mmap.get(bm_start..bm_end)?;
                 union |= RoaringBitmap::deserialize_from(bytes).ok()?;
             }
         }
@@ -386,20 +430,23 @@ impl Overlay {
     /// Returns `None` if no enrichment bitmaps were stored for this field.
     #[must_use]
     pub fn prefilter_enrichment_ge(&self, field: &str, threshold: i64) -> Option<RoaringBitmap> {
+        let (entries, keys) = self.enrich_entries();
         let prefix = format!("{field}=");
-        let pos = self
-            .enrich_index
-            .partition_point(|(k, _)| k.as_str() < prefix.as_str());
+        let prefix_bytes = prefix.as_bytes();
+        let pos = entries.partition_point(|e| Self::enrich_key(keys, e) < prefix_bytes);
         let mut result: Option<RoaringBitmap> = None;
-        for (key, range) in self.enrich_index.get(pos..).unwrap_or(&[]) {
-            if !key.starts_with(&prefix) {
+        for e in entries.get(pos..).unwrap_or(&[]) {
+            let key = Self::enrich_key(keys, e);
+            let Some(value_bytes) = key.strip_prefix(prefix_bytes) else {
                 break;
-            }
-            let value_str = key.get(prefix.len()..).unwrap_or("");
+            };
+            let value_str = std::str::from_utf8(value_bytes).unwrap_or("");
             if let Ok(v) = value_str.parse::<i64>()
                 && v >= threshold
             {
-                let Some(bm_bytes) = self.mmap.get(range.clone()) else {
+                let bm_start = self.enrich_bitmap_base + e.bitmap_offset as usize;
+                let bm_end = bm_start + e.bitmap_len as usize;
+                let Some(bm_bytes) = self.mmap.get(bm_start..bm_end) else {
                     continue;
                 };
                 if let Ok(bm) = RoaringBitmap::deserialize_from(bm_bytes) {
@@ -418,20 +465,23 @@ impl Overlay {
     /// Returns `None` if no enrichment bitmaps were stored for this field.
     #[must_use]
     pub fn prefilter_enrichment_le(&self, field: &str, threshold: i64) -> Option<RoaringBitmap> {
+        let (entries, keys) = self.enrich_entries();
         let prefix = format!("{field}=");
-        let pos = self
-            .enrich_index
-            .partition_point(|(k, _)| k.as_str() < prefix.as_str());
+        let prefix_bytes = prefix.as_bytes();
+        let pos = entries.partition_point(|e| Self::enrich_key(keys, e) < prefix_bytes);
         let mut result: Option<RoaringBitmap> = None;
-        for (key, range) in self.enrich_index.get(pos..).unwrap_or(&[]) {
-            if !key.starts_with(&prefix) {
+        for e in entries.get(pos..).unwrap_or(&[]) {
+            let key = Self::enrich_key(keys, e);
+            let Some(value_bytes) = key.strip_prefix(prefix_bytes) else {
                 break;
-            }
-            let value_str = key.get(prefix.len()..).unwrap_or("");
+            };
+            let value_str = std::str::from_utf8(value_bytes).unwrap_or("");
             if let Ok(v) = value_str.parse::<i64>()
                 && v <= threshold
             {
-                let Some(bm_bytes) = self.mmap.get(range.clone()) else {
+                let bm_start = self.enrich_bitmap_base + e.bitmap_offset as usize;
+                let bm_end = bm_start + e.bitmap_len as usize;
+                let Some(bm_bytes) = self.mmap.get(bm_start..bm_end) else {
                     continue;
                 };
                 if let Ok(bm) = RoaringBitmap::deserialize_from(bm_bytes) {

@@ -7,7 +7,6 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
-use bytemuck::cast_slice;
 
 use super::{
     EnrichEntry, HEADER_LEN, KindEntry, MAGIC, RowPtr, SCHEMA_VERSION, SegmentMeta, SegmentRecord,
@@ -102,16 +101,33 @@ pub(super) fn parse_file_entries(blob: &[u8]) -> Vec<(PathBuf, u32)> {
     result
 }
 
-/// Parse the `enrich_bitmaps` blob into sorted `(key, mmap_range)` pairs.
+/// Byte-range layout of the (already sorted) `enrich_bitmaps` blob: the
+/// `[EnrichEntry]` array, the key-string region, and the base offset of the
+/// bitmap-data region -- all absolute offsets into the overlay mmap.
 ///
-/// `blob_base` is the absolute byte offset of `blob` within the mmap, used to
-/// compute absolute ranges for the serialised `RoaringBitmap` data.
+/// Zero-copy: no entry is decoded here. `Overlay` binary-searches the mmap'd
+/// array directly at query time instead of walking an owned `Vec<(String,
+/// Range<usize>)>` built from it.
+pub(super) struct EnrichIndexLayout {
+    pub(super) entries: Range<usize>,
+    pub(super) keys: Range<usize>,
+    pub(super) bitmap_base: usize,
+}
+
+/// Locate the `[EnrichEntry]` array, the key-string region, and the
+/// bitmap-data base within the `enrich_bitmaps` blob.
 ///
-/// Gracefully skips malformed entries rather than failing.
-pub(super) fn parse_enrich_index(blob: &[u8], blob_base: usize) -> Vec<(String, Range<usize>)> {
-    let mut result: Vec<(String, Range<usize>)> = Vec::new();
+/// `blob_base` is the absolute byte offset of `blob` within the mmap, used
+/// to compute absolute ranges. Returns an empty layout (no entries) if the
+/// blob header is missing or the declared lengths overrun the blob.
+pub(super) fn parse_enrich_index(blob: &[u8], blob_base: usize) -> EnrichIndexLayout {
+    let empty = EnrichIndexLayout {
+        entries: blob_base..blob_base,
+        keys: blob_base..blob_base,
+        bitmap_base: blob_base,
+    };
     if blob.len() < 8 {
-        return result;
+        return empty;
     }
     let entry_count = blob
         .get(0..4)
@@ -124,29 +140,13 @@ pub(super) fn parse_enrich_index(blob: &[u8], blob_base: usize) -> Vec<(String, 
     let entry_bytes = std::mem::size_of::<EnrichEntry>();
     let entries_end = 8 + entry_count * entry_bytes;
     if blob.len() < entries_end + key_data_len {
-        return result;
+        return empty;
     }
-    let Some(entries_slice) = blob.get(8..entries_end) else {
-        return result;
-    };
-    let entries: &[EnrichEntry] = cast_slice(entries_slice);
-    let Some(key_data) = blob.get(entries_end..entries_end + key_data_len) else {
-        return result;
-    };
-    let bitmap_base = blob_base + entries_end + key_data_len;
-    for e in entries {
-        let k_start = e.key_offset as usize;
-        let k_end = k_start + e.key_len as usize;
-        let Some(key_bytes) = key_data.get(k_start..k_end) else {
-            continue;
-        };
-        if let Ok(key) = std::str::from_utf8(key_bytes) {
-            let b_start = bitmap_base + e.bitmap_offset as usize;
-            let b_end = b_start + e.bitmap_len as usize;
-            result.push((key.to_owned(), b_start..b_end));
-        }
+    EnrichIndexLayout {
+        entries: blob_base + 8..blob_base + entries_end,
+        keys: blob_base + entries_end..blob_base + entries_end + key_data_len,
+        bitmap_base: blob_base + entries_end + key_data_len,
     }
-    result
 }
 /// Parse TOC entries field-by-field from the mmap.
 ///
