@@ -1,0 +1,26 @@
+{
+ "suite": "dedupe_row_identity",
+ "description": "What identifies a row to FIND's duplicate collapsing. FIND removes duplicates on (name, fql_kind, path, line) and nothing else, so two different nodes that agree on all four are indistinguishable to it and the second is dropped. Nothing about the position of a node within its line takes part in that key. The fixture line `if n <= 1 { return 1; }` holds two separate integer literals, both named `1`, both `number`, both on line 27: the index stores two rows, SHOW outline returns two rows, and FIND returns one. Both cases below query the identical row set so that neither can drift away from the other. The distinction the key needs is position, not kind. Both literals are `integer_literal`, so widening the key to the raw node kind -- the obvious next step, and the key the legacy backend already uses -- collapses them in exactly the same way. `byte_start` is what separates them; it is stored per row and reaches no result row, so a fix has to project it as well as key on it.",
+ "cases": [
+  {
+   "name": "the_outline_returns_both_literals_the_line_holds",
+   "description": "The control, and the reason the case below is a defect rather than a matter of opinion. SHOW outline does not deduplicate, so it reports what the index actually stores: two rows. Its predicates are deliberately identical to the FIND case's, so a drift in the fixture that changed how many rows are named `1` on this line would land here too, instead of leaving the case below asserting a number that had quietly stopped being right. It also runs against the same corpus, so an unregistered corpus cannot masquerade as the expected failure below.",
+   "use": "forgeql-pub.frozen",
+   "fql": "SHOW outline OF 'tests/fixtures/canonical/canonical.rs' ALL WHERE fql_kind = 'number' WHERE name = '1' WHERE line = 27",
+   "assert": {
+    "row_count": 2
+   }
+  },
+  {
+   "name": "find_returns_every_row_the_index_holds",
+   "description": "The same two rows, asked for through FIND. A search is answerable only if it returns what the index holds; here it returns half. Both literals are distinct nodes at distinct byte offsets, and no query recovers the second one through FIND, so a count taken from FIND undercounts wherever two nodes share the key. Absence is not affected: the first row under each key is always kept, so a match can never collapse to nothing. The disambiguator the key lacks is position. `byte_start` separates these two rows and node kind does not, because both are integer literals -- `long a = 10; long b = 10;` on one line collapses the same way.",
+   "use": "forgeql-pub.frozen",
+   "enforcement": "expect_fail",
+   "expect_fail_reason": "dedupe_symbol_matches keys on (name, fql_kind, path, line) with no byte offset or column, so two nodes differing only in their position within a line are one key and the second row is dropped; the legacy backend keys on (name_id, path_id, node_kind_id, line) and drops it too, so putting a position in the key changes what FIND returns rather than restoring a lost behaviour, and widening the key alone is not the whole fix -- byte_start is a stored segment column but reaches no result row, so the two rows would come back countable and still identical on the wire, and the change that promotes this case has to surface the disambiguator as well",
+   "fql": "FIND symbols IN 'tests/fixtures/canonical/canonical.rs' WHERE fql_kind = 'number' WHERE name = '1' WHERE line = 27",
+   "assert": {
+    "row_count": 2
+   }
+  }
+ ]
+}
