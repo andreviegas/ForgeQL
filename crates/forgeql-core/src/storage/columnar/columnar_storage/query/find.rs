@@ -81,7 +81,7 @@ impl ColumnarStorage {
         self.reject_unknown_where_fields(clauses)?;
         self.reject_unknown_order_by_field(clauses)?;
         self.reject_unknown_group_by_field(clauses)?;
-        let no_dup_paths = !self.overlay.has_duplicate_paths();
+        let no_dup_paths = !self.overlay().has_duplicate_paths();
         if group_by_kind_fast_path_eligible(clauses, self.dirty.is_empty()) && no_dup_paths {
             return Ok(self.fast_group_by_kind(clauses));
         }
@@ -146,7 +146,7 @@ impl ColumnarStorage {
             if crate::storage::legacy::is_known_enrichment_field(field) {
                 continue;
             }
-            if self.segments.iter().any(|s| s.has_extra_col(field)) {
+            if self.segments().iter().any(|s| s.has_extra_col(field)) {
                 continue;
             }
             if self
@@ -191,7 +191,7 @@ impl ColumnarStorage {
         if crate::storage::legacy::is_known_enrichment_field(field) {
             return Ok(());
         }
-        if self.segments.iter().any(|s| s.has_extra_col(field)) {
+        if self.segments().iter().any(|s| s.has_extra_col(field)) {
             return Ok(());
         }
         if self
@@ -232,7 +232,7 @@ impl ColumnarStorage {
         let field = crate::field_tiers::canonical(field);
         if SymbolMatch::STR_FIELDS.contains(&field)
             || crate::storage::legacy::is_known_enrichment_field(field)
-            || self.segments.iter().any(|s| s.has_extra_col(field))
+            || self.segments().iter().any(|s| s.has_extra_col(field))
             || self
                 .dirty
                 .added
@@ -260,7 +260,7 @@ impl ColumnarStorage {
     /// materialised row, before LIMIT — bounded by the candidate set size.
     pub(in super::super) fn stamp_usage_counts(&self, results: &mut [SymbolMatch]) {
         for row in results.iter_mut() {
-            let count = self.overlay.usage_count(&row.name);
+            let count = self.overlay().usage_count(&row.name);
             row.usages_count = Some(usize::try_from(count).unwrap_or(usize::MAX));
         }
     }
@@ -400,7 +400,7 @@ impl ColumnarStorage {
 
         let index = self.substring_index.get_or_init(|| {
             let mut tokens = self
-                .overlay
+                .overlay()
                 .usage_tokens_where(|token| !is_core_alphabet(token));
             tokens.sort_unstable();
             tokens.dedup();
@@ -448,11 +448,11 @@ impl ColumnarStorage {
         const ROLE_CODE: &str = "code";
 
         let mut sites = Vec::new();
-        for (idx, meta) in self.overlay.segments().iter().enumerate() {
+        for (idx, meta) in self.overlay().segments().iter().enumerate() {
             if self.dirty.shadows(&meta.source_path) {
                 continue;
             }
-            let Some(seg) = self.segments.get(idx) else {
+            let Some(seg) = self.segments().get(idx) else {
                 continue;
             };
             for line in seg.lookup_usage_lines(token) {
@@ -564,13 +564,13 @@ impl ColumnarStorage {
         // A file outside the query's own `IN`/`EXCLUDE` scope can only produce
         // rows the clause pipeline will drop, so it is never read.
         let mut paths: Vec<std::path::PathBuf> = self
-            .overlay
+            .overlay()
             .segments()
             .iter()
             .filter(|meta| !self.dirty.shadows(&meta.source_path))
             .map(|meta| meta.source_path.clone())
             .chain(
-                self.overlay
+                self.overlay()
                     .file_entries()
                     .iter()
                     .map(|(path, _)| path.clone())
@@ -660,8 +660,8 @@ impl ColumnarStorage {
     }
 
     pub(super) fn indexed_files_impl(&self) -> Vec<crate::result::FileEntry> {
-        let segs = self.overlay.segments();
-        let file_only = self.overlay.file_entries();
+        let segs = self.overlay().segments();
+        let file_only = self.overlay().file_entries();
         let mut entries = Vec::with_capacity(
             segs.len()
                 .saturating_add(file_only.len())
@@ -675,7 +675,7 @@ impl ColumnarStorage {
             if self.dirty.shadows(&seg.source_path) {
                 continue;
             }
-            let size = u64::from(self.overlay.file_size(idx));
+            let size = u64::from(self.overlay().file_size(idx));
             entries.push(plain_file_entry(&seg.source_path, size));
         }
 
@@ -737,17 +737,17 @@ impl ColumnarStorage {
         }
         let need = fast_path_need(clauses);
         let mut results = if order_by_name_fast_path(clauses) {
-            self.overlay.stream_names_asc(need, &self.segments)
+            self.overlay().stream_names_asc(need, self.segments())
         } else if order_by_name_desc_fast_path(clauses) {
-            self.overlay.stream_names_desc(need, &self.segments)
+            self.overlay().stream_names_desc(need, self.segments())
         } else if let Some(kind) = order_by_name_kind_fast_path(clauses) {
-            let kind_bm = self.overlay.prefilter_kind(kind)?;
-            self.overlay
-                .stream_names_asc_kind_filtered(need, &kind_bm, &self.segments)
+            let kind_bm = self.overlay().prefilter_kind(kind)?;
+            self.overlay()
+                .stream_names_asc_kind_filtered(need, &kind_bm, self.segments())
         } else if let Some(kind) = order_by_name_kind_desc_fast_path(clauses) {
-            let kind_bm = self.overlay.prefilter_kind(kind)?;
-            self.overlay
-                .stream_names_desc_kind_filtered(need, &kind_bm, &self.segments)
+            let kind_bm = self.overlay().prefilter_kind(kind)?;
+            self.overlay()
+                .stream_names_desc_kind_filtered(need, &kind_bm, self.segments())
         } else {
             return None;
         };
@@ -764,11 +764,11 @@ impl ColumnarStorage {
     /// prefilter, group by segment, then IN / EXCLUDE path prune.
     fn build_candidate_segments(&self, clauses: &Clauses) -> HashMap<u32, RoaringBitmap> {
         let has_path_filter = clauses.in_glob.is_some() || !clauses.exclude_globs.is_empty();
-        if has_path_filter && !has_any_indexed_predicate(clauses, &self.overlay) {
+        if has_path_filter && !has_any_indexed_predicate(clauses, self.overlay()) {
             let mut map: HashMap<u32, RoaringBitmap> = HashMap::new();
-            for (idx, meta) in self.overlay.segments().iter().enumerate() {
+            for (idx, meta) in self.overlay().segments().iter().enumerate() {
                 if passes_resolve_glob(&meta.source_path, clauses)
-                    && let (Some(seg), Ok(seg_idx)) = (self.segments.get(idx), u32::try_from(idx))
+                    && let (Some(seg), Ok(seg_idx)) = (self.segments().get(idx), u32::try_from(idx))
                 {
                     let _ = map.insert(seg_idx, (0..seg.row_count).collect());
                 }
@@ -784,7 +784,7 @@ impl ColumnarStorage {
                 .as_deref()
                 .and_then(glob_to_path_prefix)
                 .map(|prefix| {
-                    let row_range = self.overlay.path_row_range(prefix);
+                    let row_range = self.overlay().path_row_range(prefix);
                     row_range.collect::<RoaringBitmap>()
                 });
             let candidates = self.prefilter_global(clauses, path_floor);
@@ -810,7 +810,7 @@ impl ColumnarStorage {
     ) {
         if !self.dirty.is_empty() {
             by_segment.retain(|&seg_idx, _| {
-                self.overlay
+                self.overlay()
                     .segments()
                     .get(seg_idx as usize)
                     .is_none_or(|meta| !self.dirty.shadows(&meta.source_path))

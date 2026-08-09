@@ -22,6 +22,7 @@ use crate::ast::index::IndexStats;
 use crate::ast::lang::LanguageRegistry;
 
 use super::dirty_overlay::DirtyOverlay;
+use super::open_cache::SharedOpen;
 use super::overlay::Overlay;
 use super::segment_reader::SegmentReader;
 
@@ -40,10 +41,17 @@ pub struct ColumnarStorage {
     /// Worktree root; used to resolve absolute source file paths and strip
     /// prefixes when computing relative paths for `DirtyOverlay`.
     worktree_root: PathBuf,
-    /// Per-segment readers in the same order as `overlay.segments()`.
-    segments: Vec<Arc<SegmentReader>>,
-    /// Workspace overlay shared across sessions on the same commit SHA.
-    overlay: Arc<Overlay>,
+    /// The committed half of this commit's index, shared with every other
+    /// session on the same commit.
+    ///
+    /// Held as the whole cache entry rather than as copies of its contents, and
+    /// that is load-bearing rather than tidiness: the shared-open cache tracks
+    /// entries weakly, so a session holding only clones of the overlay and the
+    /// readers keeps *those* alive while letting the entry die. The next
+    /// session then finds nothing to reuse and decodes its own. The cache was
+    /// exactly that dead until an integration test that deletes the files
+    /// between two opens caught it.
+    shared: Arc<SharedOpen>,
     /// Per-session in-RAM mutations on top of the persistent overlay.
     ///
     /// Always empty at session start. Populated by PhaseFT2 `reindex_files`.
@@ -98,26 +106,26 @@ struct SubstringIndex {
 }
 
 impl ColumnarStorage {
-    /// Create a new `ColumnarStorage` from an open overlay and its segments.
+    /// Create a `ColumnarStorage` over an already-open shared entry.
     ///
-    /// `segments` **must** be in the same order as `overlay.segments()`.
+    /// This is the path [`Self::warm_or_open`] uses, and the only one that
+    /// shares: the entry is taken whole rather than unpacked, and holding it is
+    /// what keeps this commit's decode available to the next session on it.
     #[must_use]
-    pub fn new(
+    pub fn from_shared(
         worktree_root: PathBuf,
-        segments: Vec<Arc<SegmentReader>>,
-        overlay: Arc<Overlay>,
+        shared: Arc<SharedOpen>,
         lang_registry: Arc<LanguageRegistry>,
     ) -> Self {
         let staging_dir = worktree_root.join(super::STAGING_DIR_NAME);
         let delta_path = worktree_root.join(super::DELTA_FILE_NAME);
         let stats = IndexStats {
-            rows: overlay.row_count() as usize,
+            rows: shared.overlay.row_count() as usize,
             ..IndexStats::default()
         };
         Self {
             worktree_root,
-            segments,
-            overlay,
+            shared,
             dirty: DirtyOverlay::new(),
             staging_dir,
             lang_registry,
@@ -126,6 +134,50 @@ impl ColumnarStorage {
             pending_reindex: Vec::new(),
             substring_index: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Create a `ColumnarStorage` over a decode this caller owns outright.
+    ///
+    /// The overlay and readers are wrapped in an entry of their own — one no
+    /// cache published and nothing else can find. A session built this way
+    /// therefore shares with nobody, and so does the next one built the same
+    /// way. That is correct for tests and benchmarks that assemble an overlay
+    /// by hand, and wrong for anything on a real session's path, which must
+    /// come through [`Self::warm_or_open`]. `segments` **must** be in the same
+    /// order as `overlay.segments()`.
+    #[must_use]
+    pub fn new(
+        worktree_root: PathBuf,
+        segments: Vec<Arc<SegmentReader>>,
+        overlay: Arc<Overlay>,
+        lang_registry: Arc<LanguageRegistry>,
+    ) -> Self {
+        Self::from_shared(
+            worktree_root,
+            Arc::new(SharedOpen { overlay, segments }),
+            lang_registry,
+        )
+    }
+
+    /// The workspace overlay for this session's commit.
+    fn overlay(&self) -> &Arc<Overlay> {
+        &self.shared.overlay
+    }
+
+    /// Per-segment readers, in the same order as `overlay().segments()`.
+    fn segments(&self) -> &[Arc<SegmentReader>] {
+        &self.shared.segments
+    }
+
+    /// The shared cache entry backing this session.
+    ///
+    /// Exposed so a test can prove two sessions on one commit were handed the
+    /// same decode rather than equal copies of one — the property this type
+    /// exists to provide and the one a green suite is least likely to notice
+    /// losing.
+    #[must_use]
+    pub const fn shared_entry(&self) -> &Arc<SharedOpen> {
+        &self.shared
     }
 }
 

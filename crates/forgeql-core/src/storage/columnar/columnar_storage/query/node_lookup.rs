@@ -14,17 +14,17 @@ use crate::storage::columnar::segment_reader::SegmentReader;
 impl ColumnarStorage {
     /// Build a [`SymbolLocation`] from a single segment row.
     ///
-    /// `seg_idx` indexes into both `self.segments` and
-    /// `self.overlay.segments()` (they are kept in the same order by
-    /// [`ColumnarStorage::new`]).
+    /// `seg_idx` indexes into both `self.segments()` and
+    /// `self.overlay().segments()`, which are kept in the same order by the
+    /// shared entry they both come from.
     pub(super) fn location_for_row(
         &self,
         seg_idx: u32,
         local_row: u32,
         root: &Path,
     ) -> SymbolLocation {
-        let seg = &self.segments[seg_idx as usize];
-        let seg_meta = &self.overlay.segments()[seg_idx as usize];
+        let seg = &self.segments()[seg_idx as usize];
+        let seg_meta = &self.overlay().segments()[seg_idx as usize];
         // Absolute path: join worktree root with the segment's workspace-relative path.
         let path = root.join(&seg_meta.source_path);
         let byte_start = seg.byte_start_of(local_row) as usize;
@@ -149,11 +149,11 @@ impl ColumnarStorage {
         // prefer its byte positions via a name + fql_kind proximity lookup, since
         // the committed byte_end can be stale after a prior edit shifted bytes.
         if let Some(seg_idx) = self
-            .overlay
+            .overlay()
             .seg_idx_for_node_id_prefix(hex_prefix)
             .map(|i| i as usize)
-            && let Some(seg) = self.segments.get(seg_idx)
-            && self.overlay.segments().get(seg_idx).is_some()
+            && let Some(seg) = self.segments().get(seg_idx)
+            && self.overlay().segments().get(seg_idx).is_some()
             && let Some(local_row) =
                 (0..seg.row_count).find(|&r| seg.ordinal_of(r) == Some(ordinal))
         {
@@ -219,8 +219,8 @@ impl ColumnarStorage {
                 hits.push(ds.source_path.clone());
             }
         }
-        hits.extend(self.overlay.seg_paths_for_node_id_prefix(hex));
-        for (path, _) in self.overlay.file_entries() {
+        hits.extend(self.overlay().seg_paths_for_node_id_prefix(hex));
+        for (path, _) in self.overlay().file_entries() {
             if crate::storage::path_node::path_matches_hex(path, hex) {
                 hits.push(path.clone());
             }
@@ -248,8 +248,8 @@ impl ColumnarStorage {
         seg_idx: usize,
         local_row: u32,
     ) -> Option<FindNodeResult> {
-        let seg = self.segments.get(seg_idx)?;
-        let seg_meta = self.overlay.segments().get(seg_idx)?;
+        let seg = self.segments().get(seg_idx)?;
+        let seg_meta = self.overlay().segments().get(seg_idx)?;
 
         let name_str = seg.name_of(local_row);
         let fql_kind_str = seg.fql_kind_of(local_row);
@@ -341,12 +341,12 @@ impl ColumnarStorage {
         }
         // Fallback: committed overlay.
         let seg_idx = self
-            .overlay
+            .overlay()
             .segments()
             .iter()
             .position(|s| s.source_path.to_str() == Some(rel_path))?;
-        let seg = self.segments.get(seg_idx)?;
-        let seg_meta = self.overlay.segments().get(seg_idx)?;
+        let seg = self.segments().get(seg_idx)?;
+        let seg_meta = self.overlay().segments().get(seg_idx)?;
         let local_row = (0..seg.row_count).find(|&r| seg.line_of(r) as usize == line)?;
         Some(seg_meta.node_id(seg.ordinal_of(local_row).unwrap_or(0)))
     }
@@ -388,12 +388,12 @@ impl ColumnarStorage {
             }
         }
         let seg_idx = self
-            .overlay
+            .overlay()
             .segments()
             .iter()
             .position(|s| s.source_path.to_str() == Some(rel_path))?;
-        let seg = self.segments.get(seg_idx)?;
-        let seg_meta = self.overlay.segments().get(seg_idx)?;
+        let seg = self.segments().get(seg_idx)?;
+        let seg_meta = self.overlay().segments().get(seg_idx)?;
         let row = pick(seg)?;
         Some(seg_meta.node_id(seg.ordinal_of(row)?))
     }
@@ -510,7 +510,7 @@ impl ColumnarStorage {
         }
 
         let Some(seg_idx) = self
-            .overlay
+            .overlay()
             .segments()
             .iter()
             .position(|s| s.source_path.to_str() == Some(rel_path))
@@ -521,8 +521,8 @@ impl ColumnarStorage {
             return Vec::new();
         }
         let (Some(seg), Some(seg_meta)) = (
-            self.segments.get(seg_idx),
-            self.overlay.segments().get(seg_idx),
+            self.segments().get(seg_idx),
+            self.overlay().segments().get(seg_idx),
         ) else {
             return Vec::new();
         };
@@ -595,11 +595,11 @@ impl ColumnarStorage {
         {
             return gather(&ds.reader);
         }
-        self.overlay
+        self.overlay()
             .segments()
             .iter()
             .position(|s| s.source_path.to_str() == Some(rel_path))
-            .and_then(|seg_idx| self.segments.get(seg_idx))
+            .and_then(|seg_idx| self.segments().get(seg_idx))
             .map(|seg| gather(seg))
             .unwrap_or_default()
     }

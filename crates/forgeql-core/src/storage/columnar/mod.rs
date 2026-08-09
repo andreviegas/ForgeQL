@@ -37,6 +37,7 @@ pub mod delta_file;
 pub mod dirty_overlay;
 pub mod gc;
 pub mod manifest;
+pub mod open_cache;
 pub mod overlay;
 pub mod overlay_builder;
 pub mod overlay_lock;

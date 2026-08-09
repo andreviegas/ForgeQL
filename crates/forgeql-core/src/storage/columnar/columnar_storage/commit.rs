@@ -12,6 +12,7 @@ use crate::ast::lang::LanguageRegistry;
 use super::super::build_context::ColumnarBuildContext;
 use super::super::delta_file::DeltaFile;
 use super::super::dirty_overlay::DirtyOverlay;
+use super::super::open_cache::{self, SharedOpen};
 use super::super::overlay::Overlay;
 use super::super::overlay_builder::OverlayBuilder;
 use super::super::overlay_lock::OverlayLock;
@@ -47,12 +48,11 @@ impl ColumnarStorage {
 
         // Fast path: overlay already on disk and readable.
         if overlay_path.exists() {
-            if let Ok(overlay) = Overlay::open(&overlay_path) {
+            if let Ok(shared) = Self::shared_open(ctx, &overlay_path) {
                 debug!(%commit_sha, "columnar warm_or_open: overlay found, fast-path load");
                 return Ok(Self::finish_open(
-                    ctx,
                     worktree_path,
-                    overlay,
+                    shared,
                     lang_registry,
                     commit_sha,
                 ));
@@ -70,12 +70,11 @@ impl ColumnarStorage {
             Ok(_lock) => {
                 // Re-check: a peer may have built the overlay while we waited.
                 if overlay_path.exists() {
-                    if let Ok(overlay) = Overlay::open(&overlay_path) {
+                    if let Ok(shared) = Self::shared_open(ctx, &overlay_path) {
                         debug!(%commit_sha, "columnar warm_or_open: peer built overlay under lock");
                         return Ok(Self::finish_open(
-                            ctx,
                             worktree_path,
-                            overlay,
+                            shared,
                             Arc::clone(&lang_registry),
                             commit_sha,
                         ));
@@ -89,29 +88,73 @@ impl ColumnarStorage {
         }
 
         // Open whatever we built (or what was there before — best-effort).
-        let overlay = Overlay::open(&overlay_path)
+        let shared = Self::shared_open(ctx, &overlay_path)
             .map_err(|e| anyhow!("overlay open failed for {commit_sha}: {e}"))?;
         Ok(Self::finish_open(
-            ctx,
             worktree_path,
-            overlay,
+            shared,
             lang_registry,
             commit_sha,
         ))
     }
 
-    /// Open the freshly built (or pre-existing) `overlay`: load its segments,
-    /// construct the `ColumnarStorage`, and best-effort load the dirty delta.
+    /// Opens the committed half of the index at `overlay_path`, reusing the
+    /// copy another session already holds when there is one.
+    ///
+    /// The overlay and its segment readers are immutable once opened and every
+    /// file behind them is content-addressed, so one key names one content —
+    /// see [`open_cache`] for why that makes sharing sound and what it does
+    /// *not* cover.
+    pub fn shared_open(
+        ctx: &crate::storage::ColumnarBuildContext,
+        overlay_path: &Path,
+    ) -> Result<Arc<SharedOpen>> {
+        open_cache::shared_open(&Self::open_key(ctx, overlay_path), || {
+            let overlay = Overlay::open(overlay_path)?;
+            let segments = Self::open_segments_from_overlay(ctx, &overlay);
+            // `open_segments_from_overlay` drops a reader it cannot open, and
+            // the vector it returns is indexed positionally by the overlay's
+            // own `segment_idx`. A dropped reader therefore shifts every later
+            // index, so such a session does not merely read fewer rows — it
+            // reads some rows against the wrong file's reader. That is a
+            // pre-existing hazard and not this cache's to fix, but it is
+            // emphatically not a state to hand to every session that follows:
+            // today the next session opens the files again and may get a whole
+            // set, and sharing a short one would make the misalignment
+            // permanent for that commit.
+            let complete = segments.len() == overlay.segments().len();
+            Ok(open_cache::Opened {
+                value: SharedOpen { overlay, segments },
+                shareable: complete,
+            })
+        })
+    }
+
+    /// The cache key naming one commit's committed half.
+    ///
+    /// Both halves are required. A build context keeps its overlay directory
+    /// and its segment directory as independent settings, so the overlay path
+    /// alone does not say where the readers were opened from, and keying on it
+    /// alone would serve one context's readers to another's session.
+    #[must_use]
+    pub fn open_key(
+        ctx: &crate::storage::ColumnarBuildContext,
+        overlay_path: &Path,
+    ) -> open_cache::OpenKey {
+        (overlay_path.to_path_buf(), ctx.versioned_segments_root())
+    }
+
+    /// Wrap already-open shared state in a session's own `ColumnarStorage`:
+    /// take a handle on the shared overlay and segment readers, then
+    /// best-effort load this session's dirty delta on top.
     /// Shared by all three return paths of `warm_or_open`.
     fn finish_open(
-        ctx: &ColumnarBuildContext,
         worktree_path: PathBuf,
-        overlay: Arc<Overlay>,
+        shared: Arc<SharedOpen>,
         lang_registry: Arc<LanguageRegistry>,
         commit_sha: &str,
     ) -> Self {
-        let segments = Self::open_segments_from_overlay(ctx, &overlay);
-        let mut storage = Self::new(worktree_path, segments, overlay, lang_registry);
+        let mut storage = Self::from_shared(worktree_path, shared, lang_registry);
         if let Err(e) = storage.load_delta() {
             tracing::warn!(%commit_sha, "columnar warm_or_open: delta load failed (non-fatal): {e}");
         }
@@ -212,8 +255,11 @@ impl ColumnarStorage {
 
     /// Open all segment readers referenced by `overlay`.
     ///
-    /// Segments that cannot be opened are silently skipped — the overlay
-    /// is still usable for queries that target other segments.
+    /// Segments that cannot be opened are silently skipped. Note what that
+    /// costs: the returned vector is indexed positionally by the overlay's own
+    /// `segment_idx`, so a skipped reader shifts every later index and the
+    /// result is not a smaller correct answer but a misaligned one. Callers
+    /// that can tell should treat a short vector as a degraded open.
     fn open_segments_from_overlay(
         ctx: &crate::storage::ColumnarBuildContext,
         overlay: &Arc<Overlay>,
@@ -246,7 +292,7 @@ impl ColumnarStorage {
     /// Look up the `hex_content_id` of the persistent overlay segment for a
     /// given worktree-relative path, if one exists.
     pub(super) fn path_to_hex_content_id(&self, rel_path: &Path) -> Option<String> {
-        self.overlay
+        self.overlay()
             .segments()
             .iter()
             .find(|m| m.source_path == rel_path)
@@ -344,20 +390,21 @@ impl ColumnarStorage {
         //    All segments are re-opened fresh from the bare repo after promotion.
         let new_overlay_path = ctx.overlay_path_for(new_commit_oid);
         let builder =
-            OverlayBuilder::from_merge(&self.overlay, &self.dirty, ctx, &self.worktree_root);
+            OverlayBuilder::from_merge(self.overlay(), &self.dirty, ctx, &self.worktree_root);
         builder.build_and_persist(&new_overlay_path)?;
 
-        // 3. Swap to the new overlay (Overlay::open returns Arc<Overlay>).
-        let new_overlay = Overlay::open(&new_overlay_path)
+        // 3. Swap to the new overlay. Routed through the shared cache rather
+        //    than opening directly: this commit is the one every later session
+        //    will attach to, so an uncached decode here is the one most likely
+        //    to be paid for twice.
+        let opened = Self::shared_open(ctx, &new_overlay_path)
             .with_context(|| format!("open new overlay at {}", new_overlay_path.display()))?;
-        let new_segments = Self::open_segments_from_overlay(ctx, &new_overlay);
-        self.overlay = new_overlay;
         // The substring dictionary was built from the overlay being replaced,
         // and the committed tokens have just left `dirty` too — without this a
         // partial substring query would silently under-report them.
         self.substring_index = std::sync::OnceLock::new();
-        self.segments = new_segments;
-        self.stats.rows = self.overlay.row_count() as usize;
+        self.stats.rows = opened.overlay.row_count() as usize;
+        self.shared = opened;
 
         // 4. Clear dirty state and staging directory.
         self.dirty = DirtyOverlay::new();

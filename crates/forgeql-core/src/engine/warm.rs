@@ -28,9 +28,8 @@ use crate::ast::lang::LanguageRegistry;
 use crate::config::{WarmPolicy, WarmPolicyKind};
 use crate::git::{source::Source, worktree};
 use crate::session::Session;
-use crate::storage::HashFn;
 use crate::storage::columnar::overlay::Overlay;
-use crate::storage::git_sha1_provider::git_blob_sha1;
+use crate::storage::columnar::{ColumnarStorage, open_cache};
 
 /// One snapshot to warm — a (`branch`, `commit_sha`) pair.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,18 +160,19 @@ pub fn warm_snapshot(
     data_dir: &Path,
     lang_registry: &Arc<LanguageRegistry>,
 ) -> Result<()> {
-    // Fast path: overlay already exists and opens cleanly.
-    let sha = &target.commit_sha;
-    let overlay_path = bare_repo
-        .join("forgeql")
-        .join("overlays")
-        .join(format!(
-            "git-sha1-v{}",
-            crate::storage::columnar::ENRICH_VER
-        ))
-        .join(&sha[..2])
-        .join(format!("{}.bin", &sha[2..]));
-    if overlay_path.exists() && Overlay::open(&overlay_path).is_ok() {
+    // Fast path: overlay already exists and opens cleanly. This ASKS the shared
+    // cache rather than opening through it. `spawn_warm` runs one warmer thread
+    // per source, so decoding the committed half to answer a yes/no question
+    // would build one full working set per source at start-up — the same
+    // concurrent multi-copy decode the cache exists to prevent, just moved
+    // earlier. A cached entry answers for free; otherwise fall back to opening
+    // the overlay alone, which is the cheap half and what this always did.
+    let warm_ctx = crate::storage::ColumnarBuildContext::for_bare_repo(bare_repo);
+    let overlay_path = warm_ctx.overlay_path_for(&target.commit_sha);
+    if overlay_path.exists()
+        && (open_cache::peek(&ColumnarStorage::open_key(&warm_ctx, &overlay_path)).is_some()
+            || Overlay::open(&overlay_path).is_ok())
+    {
         debug!(
             source = %source_name,
             commit = %target.commit_sha,
@@ -211,14 +211,8 @@ pub fn warm_snapshot(
         );
 
         // Configure shadow-write so build_index emits segments and overlay.
-        let segments_dir = bare_repo.join("forgeql").join("segments");
-        let overlays_dir = bare_repo.join("forgeql").join("overlays");
-        let hash_fn: HashFn = Arc::new(|b: &[u8]| git_blob_sha1(b).to_vec());
-        session.set_columnar_build(crate::storage::ColumnarBuildContext::new(
-            segments_dir,
-            overlays_dir,
-            "git-sha1",
-            hash_fn,
+        session.set_columnar_build(crate::storage::ColumnarBuildContext::for_bare_repo(
+            bare_repo,
         ));
 
         // build_index rebuilds the legacy index; warm_or_open then builds

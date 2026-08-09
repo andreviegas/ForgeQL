@@ -175,12 +175,12 @@ impl ColumnarStorage {
             .find(|ds| ds.source_path == *rel_path)
             .map(|ds| ds.reader.as_ref())
             .or_else(|| {
-                self.overlay
+                self.overlay()
                     .segments()
                     .iter()
                     .enumerate()
                     .find(|(_, m)| m.source_path == *rel_path)
-                    .and_then(|(idx, _)| self.segments.get(idx).map(Arc::as_ref))
+                    .and_then(|(idx, _)| self.segments().get(idx).map(Arc::as_ref))
             });
         seg.map_or_else(Vec::new, |seg| {
             (0..seg.row_count)

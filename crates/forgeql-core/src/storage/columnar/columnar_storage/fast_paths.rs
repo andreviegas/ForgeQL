@@ -88,7 +88,7 @@ impl ColumnarStorage {
             .as_deref()
             .and_then(glob_to_path_prefix)
             .map(|prefix| {
-                let row_range = self.overlay.path_row_range(prefix);
+                let row_range = self.overlay().path_row_range(prefix);
                 row_range.collect::<RoaringBitmap>()
             });
 
@@ -100,14 +100,14 @@ impl ColumnarStorage {
             None
         };
 
-        for (idx, meta) in self.overlay.segments().iter().enumerate() {
+        for (idx, meta) in self.overlay().segments().iter().enumerate() {
             if !passes_resolve_glob(&meta.source_path, clauses) {
                 continue;
             }
             let count = candidates
                 .as_ref()
                 .map_or(meta.dedup_row_count as usize, |cand| {
-                    let range = self.overlay.segment_row_range(idx);
+                    let range = self.overlay().segment_row_range(idx);
                     usize::try_from(cand.range_cardinality(range)).unwrap_or(usize::MAX)
                 });
             if count > 0 {
@@ -146,19 +146,19 @@ impl ColumnarStorage {
         let path_mask: Option<RoaringBitmap> =
             if clauses.in_glob.is_some() || !clauses.exclude_globs.is_empty() {
                 let bm: RoaringBitmap = self
-                    .overlay
+                    .overlay()
                     .segments()
                     .iter()
                     .enumerate()
                     .filter(|(_, meta)| passes_resolve_glob(&meta.source_path, clauses))
-                    .flat_map(|(seg_idx, _)| self.overlay.segment_row_range(seg_idx))
+                    .flat_map(|(seg_idx, _)| self.overlay().segment_row_range(seg_idx))
                     .collect();
                 Some(bm)
             } else {
                 None
             };
 
-        let kind_counts = self.overlay.kind_global_counts(path_mask.as_ref());
+        let kind_counts = self.overlay().kind_global_counts(path_mask.as_ref());
         let mut results: Vec<SymbolMatch> = kind_counts
             .into_iter()
             .map(|(kind, count)| SymbolMatch {
@@ -216,10 +216,10 @@ impl ColumnarStorage {
                     // bitmap immediately rather than None.  None would fall
                     // through to the full-table scan, causing ~8 s regressions
                     // for unknown-kind queries.  See Phase 06d, Root cause 1.
-                    Some(self.overlay.prefilter_kind(val).unwrap_or_default())
+                    Some(self.overlay().prefilter_kind(val).unwrap_or_default())
                 }
                 ("name", CompareOp::Eq, PredicateValue::String(val)) => {
-                    let bm = self.overlay.lookup_name_bitmap(val);
+                    let bm = self.overlay().lookup_name_bitmap(val);
                     if bm.is_empty() {
                         Some(RoaringBitmap::new())
                     } else {
@@ -276,19 +276,19 @@ impl ColumnarStorage {
                 // for every field that is not posted, so this costs nothing
                 // there.
                 (field, CompareOp::Gte, PredicateValue::Number(v)) => self
-                    .overlay
+                    .overlay()
                     .prefilter_enrichment_ge(field, *v)
                     .map(|bm| bm | self.rows_missing_field_postings(field)),
                 (field, CompareOp::Gt, PredicateValue::Number(v)) => self
-                    .overlay
+                    .overlay()
                     .prefilter_enrichment_ge(field, v + 1)
                     .map(|bm| bm | self.rows_missing_field_postings(field)),
                 (field, CompareOp::Lte, PredicateValue::Number(v)) => self
-                    .overlay
+                    .overlay()
                     .prefilter_enrichment_le(field, *v)
                     .map(|bm| bm | self.rows_missing_field_postings(field)),
                 (field, CompareOp::Lt, PredicateValue::Number(v)) => self
-                    .overlay
+                    .overlay()
                     .prefilter_enrichment_le(field, v - 1)
                     .map(|bm| bm | self.rows_missing_field_postings(field)),
                 _ => None,
@@ -301,7 +301,7 @@ impl ColumnarStorage {
             });
         }
 
-        result.unwrap_or_else(|| (0..self.overlay.row_count()).collect())
+        result.unwrap_or_else(|| (0..self.overlay().row_count()).collect())
     }
 
     /// Global candidate bitmap for an `Eq` predicate on an enrichment field.
@@ -320,7 +320,7 @@ impl ColumnarStorage {
     /// false negative rather than a slow query. The same reasoning already
     /// governs the `fql_kind` arm above.
     fn enrichment_eq_bitmap(&self, field: &str, value: &str) -> Option<RoaringBitmap> {
-        if let Some(bm) = self.overlay.prefilter_enrichment_eq(field, value) {
+        if let Some(bm) = self.overlay().prefilter_enrichment_eq(field, value) {
             // The stored bitmap accounts only for segments that posted this
             // field; one that did not still stores the column, so its rows can
             // carry the value and must stay candidates.
@@ -363,9 +363,9 @@ impl ColumnarStorage {
         if !super::super::segment_builder::POSTING_ENRICHMENT_FIELDS.contains(&field) {
             return rows;
         }
-        for (idx, seg) in self.segments.iter().enumerate() {
+        for (idx, seg) in self.segments().iter().enumerate() {
             if !seg.posts_field(field) && seg.has_extra_col(field) {
-                let _ = rows.insert_range(self.overlay.segment_row_range(idx));
+                let _ = rows.insert_range(self.overlay().segment_row_range(idx));
             }
         }
         rows
@@ -420,10 +420,12 @@ impl ColumnarStorage {
             return None;
         }
 
-        let matched = self.overlay.prefilter_enrichment_values(field, &accepts)?;
+        let matched = self
+            .overlay()
+            .prefilter_enrichment_values(field, &accepts)?;
         Some(if negated {
             let mut all = RoaringBitmap::new();
-            let _ = all.insert_range(0..self.overlay.row_count());
+            let _ = all.insert_range(0..self.overlay().row_count());
             all - matched
         } else {
             matched | self.rows_missing_field_postings(field)
@@ -445,7 +447,7 @@ impl ColumnarStorage {
         if re.is_match("") {
             return None;
         }
-        self.overlay
+        self.overlay()
             .prefilter_name_values(&|name| re.is_match(name))
     }
 
@@ -492,9 +494,9 @@ impl ColumnarStorage {
         };
 
         let mut rows = RoaringBitmap::new();
-        for (idx, seg) in self.segments.iter().enumerate() {
+        for (idx, seg) in self.segments().iter().enumerate() {
             let local = seg.rows_with_language_matching(&accepts)?;
-            let base = self.overlay.segment_row_range(idx).start;
+            let base = self.overlay().segment_row_range(idx).start;
             rows.extend(local.iter().map(|row| row + base));
         }
         Some(rows)
@@ -506,8 +508,8 @@ impl ColumnarStorage {
     /// A core row field is served by neither, and the segments' silence about
     /// it must never be read as absence.
     fn is_enrichment_field(&self, field: &str) -> bool {
-        self.overlay.has_enrichment_field(field)
-            || self.segments.iter().any(|seg| seg.has_extra_col(field))
+        self.overlay().has_enrichment_field(field)
+            || self.segments().iter().any(|seg| seg.has_extra_col(field))
     }
 
     /// Whether no persistent row anywhere carries `field = value`.
@@ -528,7 +530,7 @@ impl ColumnarStorage {
     /// Runs only on the miss path, whose current cost is a full-corpus scan,
     /// and short-circuits on the first segment that carries the value.
     fn no_segment_carries_enrichment_value(&self, field: &str, value: &str) -> bool {
-        self.segments
+        self.segments()
             .iter()
             .all(|seg| seg.proves_enrichment_value_absent(field, value))
     }
@@ -582,7 +584,7 @@ impl ColumnarStorage {
             if lit.len() < 3 {
                 continue;
             }
-            let Some(bm) = self.overlay.name_substring_candidates(lit) else {
+            let Some(bm) = self.overlay().name_substring_candidates(lit) else {
                 continue;
             };
             acc = Some(match acc {
@@ -607,9 +609,9 @@ impl ColumnarStorage {
         let mut result = RoaringBitmap::new();
         let mut any_had_index = false;
         let mut seg_base: u32 = 0;
-        for (seg_idx, seg) in self.segments.iter().enumerate() {
+        for (seg_idx, seg) in self.segments().iter().enumerate() {
             let row_count = self
-                .overlay
+                .overlay()
                 .segments()
                 .get(seg_idx)
                 .map_or(seg.row_count, |m| m.row_count);
@@ -641,7 +643,7 @@ impl ColumnarStorage {
             return None;
         }
         let mut allowed = HashSet::new();
-        for (idx, meta) in self.overlay.segments().iter().enumerate() {
+        for (idx, meta) in self.overlay().segments().iter().enumerate() {
             if passes_resolve_glob(&meta.source_path, clauses)
                 && let Ok(seg_idx) = u32::try_from(idx)
             {
@@ -672,7 +674,7 @@ impl ColumnarStorage {
     ) -> Option<HashSet<u32>> {
         let mut any_zone_map = false;
         let mut allowed: HashSet<u32> = HashSet::new();
-        for (idx, seg) in self.segments.iter().enumerate() {
+        for (idx, seg) in self.segments().iter().enumerate() {
             let Some(&(min, max)) = seg.zone_maps.get(col) else {
                 // No zone map for this segment — cannot prune, include it.
                 if let Ok(seg_idx) = u32::try_from(idx) {
@@ -706,7 +708,7 @@ impl ColumnarStorage {
             if let Some(RowPtr {
                 segment_idx,
                 local_row_idx,
-            }) = self.overlay.resolve_global(global_id)
+            }) = self.overlay().resolve_global(global_id)
             {
                 let _ = by_segment
                     .entry(segment_idx)
@@ -791,7 +793,7 @@ impl ColumnarStorage {
     fn ordered_segments(&self, by_segment: &HashMap<u32, RoaringBitmap>) -> Vec<u32> {
         let mut seg_order: Vec<u32> = by_segment.keys().copied().collect();
         seg_order.sort_by_key(|&idx| {
-            self.overlay
+            self.overlay()
                 .segments()
                 .get(idx as usize)
                 .map(|m| m.source_path.clone())
@@ -843,8 +845,8 @@ impl ColumnarStorage {
         seg_predicates: &[crate::ir::Predicate],
     ) -> Option<Vec<SymbolMatch>> {
         let local_rows = by_segment.get(&seg_idx)?;
-        let seg = self.segments.get(seg_idx as usize)?;
-        let seg_meta = self.overlay.segments().get(seg_idx as usize)?;
+        let seg = self.segments().get(seg_idx as usize)?;
+        let seg_meta = self.overlay().segments().get(seg_idx as usize)?;
 
         // Stage 3a — narrow the local row set using per-segment enrichment
         // posting bitmaps before materialisation.  Falls back to the full local

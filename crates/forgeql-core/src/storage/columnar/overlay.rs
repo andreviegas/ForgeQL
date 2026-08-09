@@ -6,8 +6,13 @@
 //!
 //! The overlay merges N per-file segments into a single queryable index
 //! shared across all [`ColumnarStorage`] sessions on the same commit SHA.
-//! Multiple sessions mmap the same file; the OS reference-counts physical
-//! pages so RSS does not multiply by session count.
+//! Two things are shared, and they are shared by different mechanisms: the
+//! file is mmapped, so the OS reference-counts its physical pages, and the
+//! structures decoded on top of it — this type and its segment readers, which
+//! are private heap and used to be rebuilt per session — are opened once per
+//! commit by [`open_cache`](super::open_cache) and handed to each session.
+//! Neither multiplies with session count. A session's uncommitted edits are
+//! not part of either: they stay in its own `DirtyOverlay`.
 //!
 //! # FQOV file format (schema_version 15)
 //!

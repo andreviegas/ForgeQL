@@ -12,8 +12,6 @@ use std::sync::Arc;
 use anyhow::Result;
 use tracing::info;
 
-use crate::storage::git_sha1_provider::git_blob_sha1;
-
 use crate::{
     git::{self as git, worktree},
     result::{ForgeQLResult, SourceOpResult},
@@ -147,17 +145,12 @@ impl ForgeQLEngine {
     }
 
     /// Configure columnar shadow-write on `session` when a `.forgeql.yaml` is
-    /// present. Wraps `git_blob_sha1` behind `HashFn` so `ShadowWriter` stays
-    /// decoupled from the concrete provider type.
+    /// present. The store layout and content-hash choice live on
+    /// [`ColumnarBuildContext::for_bare_repo`], so this and the background
+    /// warmer cannot drift apart — they key the same shared-open cache.
     fn configure_columnar_build(session: &mut Session, repo_path: &std::path::Path) {
-        let segments_dir = repo_path.join("forgeql").join("segments");
-        let hash_fn: crate::storage::HashFn = Arc::new(|b: &[u8]| git_blob_sha1(b).to_vec());
-        let overlays_dir = repo_path.join("forgeql").join("overlays");
-        session.set_columnar_build(crate::storage::ColumnarBuildContext::new(
-            segments_dir,
-            overlays_dir,
-            "git-sha1",
-            hash_fn,
+        session.set_columnar_build(crate::storage::ColumnarBuildContext::for_bare_repo(
+            repo_path,
         ));
     }
 
@@ -380,14 +373,23 @@ impl ForgeQLEngine {
     /// the multi-GB legacy table. Cold path: load the legacy table so the
     /// shadow-writer can build the overlay, then install columnar and drop legacy.
     fn load_session_index(&self, session: &mut Session) -> Result<()> {
-        let columnar_warm = if let Some(ctx) = session.columnar_build() {
+        // Ask the shared cache, and KEEP what it hands back. Binding the entry
+        // is the whole point: it must outlive the `warm_or_open` below, which
+        // is what turns this probe's decode into that session's decode rather
+        // than a second one. Nothing else holds an entry — the cache tracks
+        // them weakly and retains nothing — so letting this fall out of scope
+        // as a temporary frees it immediately and makes the first session on a
+        // commit decode the committed half twice.
+        let warm_entry = session.columnar_build().and_then(|ctx| {
             let commit =
                 crate::session::Session::get_head_oid(&session.worktree_path).unwrap_or_default();
             let path = ctx.overlay_path_for(&commit);
-            path.exists() && crate::storage::columnar::overlay::Overlay::open(&path).is_ok()
-        } else {
-            false
-        };
+            if !path.exists() {
+                return None;
+            }
+            crate::storage::columnar::ColumnarStorage::shared_open(ctx, &path).ok()
+        });
+        let columnar_warm = warm_entry.is_some();
 
         if !columnar_warm {
             // Cold path: load legacy index (reuses the on-disk cache when HEAD matches).

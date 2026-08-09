@@ -47,7 +47,7 @@ impl ColumnarStorage {
             return Some(loc);
         }
 
-        let global_bm = self.overlay.lookup_name_bitmap(lookup_name);
+        let global_bm = self.overlay().lookup_name_bitmap(lookup_name);
         if global_bm.is_empty() {
             return None;
         }
@@ -56,7 +56,7 @@ impl ColumnarStorage {
         // Iterate segments in alphabetical source-path order for deterministic output.
         let mut seg_order: Vec<u32> = by_segment.keys().copied().collect();
         seg_order.sort_by_key(|&idx| {
-            self.overlay
+            self.overlay()
                 .segments()
                 .get(idx as usize)
                 .map(|m| m.source_path.clone())
@@ -65,7 +65,7 @@ impl ColumnarStorage {
         // Stage 2d — drop persistent segments shadowed by the dirty overlay.
         if !self.dirty.is_empty() {
             seg_order.retain(|&seg_idx| {
-                self.overlay
+                self.overlay()
                     .segments()
                     .get(seg_idx as usize)
                     .is_none_or(|meta| !self.dirty.shadows(&meta.source_path))
@@ -152,10 +152,10 @@ impl ColumnarStorage {
             let Some(local_rows) = by_segment.get(&seg_idx) else {
                 continue;
             };
-            let Some(seg) = self.segments.get(seg_idx as usize) else {
+            let Some(seg) = self.segments().get(seg_idx as usize) else {
                 continue;
             };
-            let Some(meta) = self.overlay.segments().get(seg_idx as usize) else {
+            let Some(meta) = self.overlay().segments().get(seg_idx as usize) else {
                 continue;
             };
             // Enrichment-postings prefilter — bitmap intersection per allowlisted
@@ -225,7 +225,7 @@ impl ColumnarStorage {
         if preferred.is_empty() {
             all.iter()
                 .rposition(|&(si, lr)| {
-                    self.segments
+                    self.segments()
                         .get(si as usize)
                         .is_some_and(|s| !s.fql_kind_of(lr).is_empty())
                 })

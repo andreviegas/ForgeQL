@@ -81,6 +81,16 @@ impl ColumnarBuildContext {
             .join(super::segment_rel_path(source_path, hex_content_id))
     }
 
+    /// Root directory this `ENRICH_VER`'s segments live under.
+    ///
+    /// Part of the shared-open cache key: the overlay directory and the segment
+    /// directory are independent settings, so the overlay path alone does not
+    /// say where a commit's segment readers came from.
+    #[must_use]
+    pub fn versioned_segments_root(&self) -> PathBuf {
+        self.segments_dir.join(self.versioned_provider())
+    }
+
     /// Path to the overlay file for a given snapshot hex (e.g. commit SHA).
     ///
     /// Returns `<overlays_dir>/<provider_id>-v<N>/<hex[0..2]>/<hex[2..]>.bin`.
@@ -90,6 +100,26 @@ impl ColumnarBuildContext {
             .join(self.versioned_provider())
             .join(&snapshot_hex[..2])
             .join(format!("{}.bin", &snapshot_hex[2..]))
+    }
+
+    /// The context for a bare repository's own segment and overlay stores.
+    ///
+    /// The store layout, the provider id and the content-hash function are one
+    /// decision, not three, and every caller that opens a real repository has to
+    /// make the same one — a session attaching, and the background warmer. They
+    /// must agree exactly: the shared-open cache is keyed on the segment root
+    /// this produces, so two callers that disagree would decode the same commit
+    /// twice and never see each other's entry.
+    #[must_use]
+    pub fn for_bare_repo(bare_repo: &Path) -> Self {
+        let hash_fn: crate::storage::HashFn =
+            Arc::new(|b: &[u8]| crate::storage::git_sha1_provider::git_blob_sha1(b).to_vec());
+        Self::new(
+            bare_repo.join("forgeql").join("segments"),
+            bare_repo.join("forgeql").join("overlays"),
+            "git-sha1",
+            hash_fn,
+        )
     }
 
     /// Path to the versioned manifest file.

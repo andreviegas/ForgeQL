@@ -64,11 +64,11 @@ impl ColumnarStorage {
         all: bool,
     ) -> Vec<serde_json::Value> {
         let mut results: Vec<serde_json::Value> = Vec::new();
-        if let Some(seg_idx) = self.overlay.seg_idx_for_node_id_prefix(hex) {
+        if let Some(seg_idx) = self.overlay().seg_idx_for_node_id_prefix(hex) {
             let seg_idx = seg_idx as usize;
             if let (Some(seg), Some(seg_meta)) = (
-                self.segments.get(seg_idx),
-                self.overlay.segments().get(seg_idx),
+                self.segments().get(seg_idx),
+                self.overlay().segments().get(seg_idx),
             ) {
                 let abs_path = root.join(&seg_meta.source_path);
                 let rel_path = workspace.relative(&abs_path).display().to_string();
@@ -119,7 +119,7 @@ impl ColumnarStorage {
         let mut results: Vec<serde_json::Value> = Vec::new();
         let mut committed_paths: std::collections::HashSet<String> =
             std::collections::HashSet::new();
-        for (seg_idx, seg_meta) in self.overlay.segments().iter().enumerate() {
+        for (seg_idx, seg_meta) in self.overlay().segments().iter().enumerate() {
             if !crate::ast::query::glob_matches(&seg_meta.source_path, file) {
                 continue;
             }
@@ -135,7 +135,7 @@ impl ColumnarStorage {
             {
                 continue;
             }
-            let seg = &self.segments[seg_idx];
+            let seg = &self.segments()[seg_idx];
             let abs_path = root.join(&seg_meta.source_path);
             let rel_path = workspace.relative(&abs_path).display().to_string();
             let _ = committed_paths.insert(seg_meta.source_path.to_string_lossy().into_owned());
