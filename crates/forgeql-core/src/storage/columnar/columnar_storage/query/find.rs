@@ -105,6 +105,16 @@ impl ColumnarStorage {
             self.stamp_usage_counts(&mut dirty_results);
             results.append(&mut dirty_results);
         }
+        // Stage 4 — deduplicate on (name, fql_kind, path, line). This runs
+        // unconditionally, and an earlier attempt to skip it was wrong: the
+        // dirty overlay and two segments sharing a source path are NOT the only
+        // sources of duplicates. A single file's row table can already hold two
+        // rows sharing all four key fields. Skipping the pass when the overlay
+        // reports unique paths and no dirty rows makes `overlay_query_parity`
+        // return 266 rows where its baseline returns 264, on a fixture whose two
+        // segments have different paths and no dirty overlay. The mechanism
+        // behind those rows is not established here; the counterexample is
+        // enough to keep the pass unconditional.
         dedupe_symbol_matches(&mut results);
         apply_clauses(&mut results, clauses);
         Ok(results)
@@ -1046,15 +1056,79 @@ fn in_scope(path: &Path, clauses: &Clauses) -> bool {
 /// Mirrors the legacy backend, which deduplicates on
 /// `(name_id, path_id, node_kind_id, line)`. The columnar result does not store
 /// raw `node_kind`, so `fql_kind` is the closest available approximation.
+///
+/// The key is hashed rather than cloned. An owned-key set copied `name`,
+/// `fql_kind` and a whole `PathBuf` alongside `line` for every candidate row,
+/// and held all four for the whole deduplication pass, on top of the results
+/// vector it was scanning. It now stores a 64-bit hash of those four fields
+/// instead, and confirms every hash hit against the fields themselves, so the
+/// output is exactly what the owned-key set produced: a collision costs a
+/// field comparison against each row already kept under that hash, never a
+/// wrong answer in either direction.
 fn dedupe_symbol_matches(results: &mut Vec<SymbolMatch>) {
-    type DedupeKey = (
-        String,
-        Option<String>,
-        Option<std::path::PathBuf>,
-        Option<usize>,
-    );
-    let mut seen: HashSet<DedupeKey> = HashSet::new();
-    results.retain(|r| seen.insert((r.name.clone(), r.fql_kind.clone(), r.path.clone(), r.line)));
+    fn key_hash(r: &SymbolMatch) -> u64 {
+        use std::hash::{Hash as _, Hasher as _};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        r.name.hash(&mut hasher);
+        r.fql_kind.hash(&mut hasher);
+        r.path.hash(&mut hasher);
+        r.line.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    dedupe_with(results, key_hash);
+}
+
+/// The deduplication itself, over a caller-supplied key hash.
+///
+/// Split out only so a test can drive it with a hash that collides on purpose.
+/// No row can ever be dropped by a collision -- `same_key` gates every drop and
+/// compares all four fields exactly -- so what the `collided` list protects is
+/// the other direction: without it, a duplicate whose hash collides with an
+/// earlier row carrying a different key is not recognised as already kept, and
+/// is emitted twice. That branch is unreachable from real data, so without a
+/// way to force a collision it would be pinned by nothing.
+fn dedupe_with(results: &mut Vec<SymbolMatch>, hash_of: impl Fn(&SymbolMatch) -> u64) {
+    use std::collections::hash_map::Entry;
+
+    fn same_key(a: &SymbolMatch, b: &SymbolMatch) -> bool {
+        a.line == b.line && a.name == b.name && a.fql_kind == b.fql_kind && a.path == b.path
+    }
+
+    // `first` maps a key hash to the first row kept under it. `collided` holds
+    // the rare row whose hash matched an earlier one carrying a different key;
+    // it stays empty unless a collision actually happens, and it is what stops
+    // a later duplicate of that row from being emitted a second time.
+    let mut first: HashMap<u64, usize> = HashMap::with_capacity(results.len());
+    let mut collided: Vec<(u64, usize)> = Vec::new();
+    let mut keep = vec![false; results.len()];
+
+    for (i, row) in results.iter().enumerate() {
+        let hash = hash_of(row);
+        let already_kept = first
+            .get(&hash)
+            .and_then(|&j| results.get(j))
+            .is_some_and(|prev| same_key(prev, row))
+            || collided
+                .iter()
+                .any(|&(h, ci)| h == hash && results.get(ci).is_some_and(|p| same_key(p, row)));
+        if already_kept {
+            continue;
+        }
+        match first.entry(hash) {
+            Entry::Vacant(slot) => {
+                let _first_under_this_hash = slot.insert(i);
+            }
+            Entry::Occupied(_) => collided.push((hash, i)),
+        }
+        if let Some(slot) = keep.get_mut(i) {
+            *slot = true;
+        }
+    }
+
+    let mut keep_iter = keep.into_iter();
+    results.retain(|_| keep_iter.next().unwrap_or(true));
 }
 
 /// A [`FileEntry`] carrying only what a path and a size can say: no symbol
@@ -1097,8 +1171,143 @@ fn dedupe_file_entries(entries: &mut Vec<crate::result::FileEntry>) {
 mod tests {
     use std::path::Path;
 
-    use super::{Clauses, decode_text, dedupe_file_entries, holds, in_scope, needle_pieces};
-    use crate::result::FileEntry;
+    use super::{
+        Clauses, decode_text, dedupe_file_entries, dedupe_symbol_matches, dedupe_with, holds,
+        in_scope, needle_pieces,
+    };
+    use crate::result::{FileEntry, SymbolMatch};
+
+    #[test]
+    fn a_hash_collision_does_not_let_a_duplicate_through() {
+        // Every row lands in one bucket, so every candidate is decided through
+        // the collision path -- the branch real data cannot reach. The repeats
+        // are `a`, which `first` holds, AND `b`, which lives only in `collided`:
+        // without the `b` repeat the test passes whether or not `collided`
+        // exists, because `first` alone catches the `a`. Delete either
+        // `collided.push` or the `collided` scan and the trailing `b` is not
+        // recognised as already kept, so it is emitted twice and this fails.
+        let mut rows = vec![
+            sym("a", "function", "src/x.rs", 1),
+            sym("b", "function", "src/x.rs", 1),
+            sym("c", "function", "src/x.rs", 1),
+            sym("a", "function", "src/x.rs", 1),
+            sym("b", "function", "src/x.rs", 1),
+        ];
+        dedupe_with(&mut rows, |_| 0);
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    fn sym(name: &str, kind: &str, path: &str, line: usize) -> SymbolMatch {
+        SymbolMatch {
+            name: name.to_owned(),
+            fql_kind: Some(kind.to_owned()),
+            path: Some(std::path::PathBuf::from(path)),
+            line: Some(line),
+            ..SymbolMatch::default()
+        }
+    }
+
+    #[test]
+    fn an_exact_duplicate_collapses_to_its_first_occurrence() {
+        let mut rows = vec![
+            sym("a", "function", "src/x.rs", 1),
+            sym("b", "function", "src/x.rs", 2),
+            sym("a", "function", "src/x.rs", 1),
+        ];
+        dedupe_symbol_matches(&mut rows);
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn two_rows_differing_in_any_single_key_field_both_survive() {
+        // Each pair is checked twice. Under the real hash it proves the two
+        // rows stay apart end to end. Under a forced collision it proves the
+        // field list in `same_key` is what keeps them apart -- and only that
+        // second pass can: with the real hash, deleting a field from `same_key`
+        // still leaves the rows in different buckets, so `first` never compares
+        // them and the pair survives anyway. Narrowing `key_hash` stays
+        // unpinnable by output -- dropping a field from it only creates a
+        // collision that `same_key` then resolves correctly. Widening it IS
+        // pinned: add `language` to the hash and
+        // `a_field_outside_the_key_does_not_keep_a_duplicate_alive` fails,
+        // because its two rows then land in different buckets and both survive.
+        let base = sym("a", "function", "src/x.rs", 1);
+        for (field, other) in [
+            ("name", sym("b", "function", "src/x.rs", 1)),
+            ("fql_kind", sym("a", "struct", "src/x.rs", 1)),
+            ("path", sym("a", "function", "src/y.rs", 1)),
+            ("line", sym("a", "function", "src/x.rs", 2)),
+        ] {
+            let mut rows = vec![base.clone(), other.clone()];
+            dedupe_symbol_matches(&mut rows);
+            assert_eq!(
+                rows.len(),
+                2,
+                "rows differing only in `{field}` were collapsed under the real hash"
+            );
+
+            let mut rows = vec![base.clone(), other];
+            dedupe_with(&mut rows, |_| 0);
+            assert_eq!(
+                rows.len(),
+                2,
+                "`same_key` stopped separating rows that differ only in `{field}`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_field_outside_the_key_does_not_keep_a_duplicate_alive() {
+        // `language` is not part of the key: rows alike in all four key fields
+        // are one row however much else differs. Pins the key's membership from
+        // the other side, so widening it silently is a failure too.
+        let mut first = sym("a", "function", "src/x.rs", 1);
+        let mut second = sym("a", "function", "src/x.rs", 1);
+        first.language = Some("rust".to_owned());
+        second.language = Some("cpp".to_owned());
+        let mut rows = vec![first, second];
+        dedupe_symbol_matches(&mut rows);
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn an_absent_key_field_is_a_value_not_a_wildcard() {
+        // `fql_kind`, `path` and `line` are Options. A row missing one must
+        // match only another row missing the same one -- never every row.
+        //
+        // Checked twice for the same reason as the field-list test: under the
+        // real hash the present-fields row lands in its own bucket, so a
+        // `same_key` treating `None` as a wildcard is never consulted for it
+        // and this passes regardless. Only the forced collision puts the
+        // absent-field rows and the present-field row through `same_key`.
+        let rows = || {
+            vec![
+                SymbolMatch {
+                    name: "a".to_owned(),
+                    ..SymbolMatch::default()
+                },
+                SymbolMatch {
+                    name: "a".to_owned(),
+                    ..SymbolMatch::default()
+                },
+                sym("a", "function", "src/x.rs", 1),
+            ]
+        };
+
+        let mut real = rows();
+        dedupe_symbol_matches(&mut real);
+        assert_eq!(real.len(), 2, "the two all-absent rows did not collapse");
+
+        let mut collided = rows();
+        dedupe_with(&mut collided, |_| 0);
+        assert_eq!(
+            collided.len(),
+            2,
+            "`same_key` treated an absent field as a wildcard"
+        );
+    }
 
     #[test]
     fn needle_pieces_splits_at_every_non_identifier_character() {
