@@ -6,7 +6,7 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.158.0] — 2026-08-08 — a segment's columns are found once, not once per value
+## [0.158.0] — 2026-08-09 — a segment's columns are found once, not once per value
 
 ### Changed
 
