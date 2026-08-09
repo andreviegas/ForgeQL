@@ -16,6 +16,16 @@
   measured for timing does not exercise this code path (it reads the
   unrelated kind-bitmap index instead), so no timing claim is made here.
 
+- Reading that index in place makes its ordering load-bearing, so the blob
+  is now validated once when the file is opened: every key must lie inside
+  the key region and must not sort before its predecessor. A blob that
+  fails is refused whole: the enrichment tier then reports no opinion and
+  those queries fall back to reading the segments — slower, never fewer
+  rows — rather than a single corrupt entry silently misdirecting a binary
+  search past its well-formed neighbours. This can only trigger on an overlay file
+  truncated or damaged on disk -- never on one this build wrote -- and
+  costs one allocation-free pass over the entries at open.
+
 - Also corrected the file's own module doc, which had drifted three format
   revisions out of date: it still described a 9-blob, 600-byte table of
   contents, and still gave the header's schema version as 3. The format in

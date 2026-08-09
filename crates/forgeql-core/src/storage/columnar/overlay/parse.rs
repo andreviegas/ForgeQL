@@ -355,3 +355,130 @@ pub(super) fn validate_blob_layout(
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytemuck::cast_slice_mut;
+
+    /// A 4-byte-aligned blob offset, as every real one is: the writer rounds
+    /// each blob start up to a multiple of 4.
+    const BLOB_BASE: usize = 64;
+
+    fn entry(key_offset: u32, key_len: u16) -> EnrichEntry {
+        EnrichEntry {
+            key_offset,
+            key_len,
+            _pad: 0,
+            bitmap_offset: 0,
+            bitmap_len: 0,
+        }
+    }
+
+    /// Lay out an `enrich_bitmaps` blob the way the writer does, in a buffer
+    /// whose first byte is 4-byte aligned.
+    ///
+    /// The alignment is load-bearing rather than incidental: the entry array
+    /// is read with `cast_slice`, which panics rather than returns on a
+    /// misaligned pointer. A bare `Vec<u8>` is only guaranteed byte
+    /// alignment, so a test built on one could fail for a reason no overlay
+    /// file can reproduce.
+    fn blob_words(entries: &[EnrichEntry], key_data: &[u8], bitmaps: &[u8]) -> Vec<u32> {
+        let entry_count = u32::try_from(entries.len()).expect("test entry count fits u32");
+        let key_data_len = u32::try_from(key_data.len()).expect("test key data fits u32");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&entry_count.to_le_bytes());
+        bytes.extend_from_slice(&key_data_len.to_le_bytes());
+        bytes.extend_from_slice(cast_slice(entries));
+        bytes.extend_from_slice(key_data);
+        bytes.extend_from_slice(bitmaps);
+        let mut words = vec![0u32; bytes.len().div_ceil(4)];
+        cast_slice_mut::<u32, u8>(&mut words)[..bytes.len()].copy_from_slice(&bytes);
+        words
+    }
+
+    fn blob(words: &[u32]) -> &[u8] {
+        cast_slice(words)
+    }
+
+    /// The layout handed back when the blob is refused: three empty regions
+    /// at the blob base, so every lookup finds nothing rather than searching
+    /// over entries that cannot be trusted.
+    #[track_caller]
+    fn assert_rejected(layout: &EnrichIndexLayout) {
+        assert_eq!(layout.entries, BLOB_BASE..BLOB_BASE);
+        assert_eq!(layout.keys, BLOB_BASE..BLOB_BASE);
+        assert_eq!(layout.bitmap_base, BLOB_BASE);
+    }
+
+    #[test]
+    fn enrich_index_locates_the_entry_key_and_bitmap_regions() {
+        let words = blob_words(&[entry(0, 3), entry(3, 3)], b"a=1b=2", &[7, 7, 7, 7]);
+        let layout = parse_enrich_index(blob(&words), BLOB_BASE);
+
+        // 8-byte header, then 2 x 16-byte entries, then 6 bytes of keys.
+        assert_eq!(layout.entries, BLOB_BASE + 8..BLOB_BASE + 40);
+        assert_eq!(layout.keys, BLOB_BASE + 40..BLOB_BASE + 46);
+        assert_eq!(layout.bitmap_base, BLOB_BASE + 46);
+    }
+
+    #[test]
+    fn enrich_index_accepts_a_blob_that_holds_no_entries() {
+        // An index with nothing in it is well-formed, not malformed. It must
+        // resolve to real (empty) regions past the header rather than to the
+        // rejection sentinel, so a change that started refusing a valid empty
+        // blob could not pass by looking identical to a corrupt one.
+        let words = blob_words(&[], &[], &[]);
+        let layout = parse_enrich_index(blob(&words), BLOB_BASE);
+
+        assert_eq!(layout.entries, BLOB_BASE + 8..BLOB_BASE + 8);
+        assert_eq!(layout.keys, BLOB_BASE + 8..BLOB_BASE + 8);
+        assert_eq!(layout.bitmap_base, BLOB_BASE + 8);
+    }
+
+    #[test]
+    fn enrich_index_rejects_entries_that_are_out_of_order() {
+        // "b=2" ahead of "a=1". Every lookup binary-searches this array with
+        // `partition_point`, whose result is unspecified over an unsorted
+        // sequence, so one bad entry disqualifies the whole blob.
+        let words = blob_words(&[entry(0, 3), entry(3, 3)], b"b=2a=1", &[]);
+        assert_rejected(&parse_enrich_index(blob(&words), BLOB_BASE));
+    }
+
+    #[test]
+    fn enrich_index_accepts_two_entries_sharing_a_key() {
+        // Only a strict decrease breaks the search. Equal neighbours keep
+        // `partition_point` well defined, so they must not be rejected.
+        let words = blob_words(&[entry(0, 3), entry(0, 3)], b"a=1", &[]);
+        let layout = parse_enrich_index(blob(&words), BLOB_BASE);
+
+        assert_eq!(layout.entries, BLOB_BASE + 8..BLOB_BASE + 40);
+    }
+
+    #[test]
+    fn enrich_index_rejects_a_key_reaching_past_the_key_region() {
+        // Six bytes of key data, but the second entry claims bytes 3..12.
+        let words = blob_words(&[entry(0, 3), entry(3, 9)], b"a=1b=2", &[]);
+        assert_rejected(&parse_enrich_index(blob(&words), BLOB_BASE));
+    }
+
+    #[test]
+    fn enrich_index_rejects_a_key_offset_far_outside_the_blob() {
+        let words = blob_words(&[entry(u32::MAX, 1)], b"a=1", &[]);
+        assert_rejected(&parse_enrich_index(blob(&words), BLOB_BASE));
+    }
+
+    #[test]
+    fn enrich_index_rejects_a_blob_truncated_mid_entry() {
+        // The header still declares two entries; the file holds one.
+        let words = blob_words(&[entry(0, 3), entry(3, 3)], b"a=1b=2", &[]);
+        let truncated = &blob(&words)[..8 + std::mem::size_of::<EnrichEntry>()];
+
+        assert_rejected(&parse_enrich_index(truncated, BLOB_BASE));
+    }
+
+    #[test]
+    fn enrich_index_rejects_a_blob_too_short_to_hold_a_header() {
+        assert_rejected(&parse_enrich_index(&[0, 0, 0, 0], BLOB_BASE));
+    }
+}
