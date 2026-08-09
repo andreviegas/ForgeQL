@@ -228,7 +228,7 @@ fn parse_job_stmt(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, Fo
                 .next()
                 .map(|l| unquote(l.as_str()))
                 .ok_or_else(|| ForgeError::DslParse("job start: expected step label".into()))?;
-            let args = inner.map(|l| unquote(l.as_str())).collect();
+            let args = inner.map(unwrap_content).collect::<Result<Vec<_>, _>>()?;
             Ok(ForgeQLIR::JobStart { label, args })
         }
         Rule::job_status => {
@@ -383,7 +383,7 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
                 .next()
                 .map(|l| unquote(l.as_str()))
                 .ok_or_else(|| ForgeError::DslParse("verify: expected step name".into()))?;
-            let args = inner.map(|l| unquote(l.as_str())).collect();
+            let args = inner.map(unwrap_content).collect::<Result<Vec<_>, _>>()?;
             Ok(ForgeQLIR::VerifyBuild { step, args })
         }
 
@@ -393,7 +393,7 @@ fn parse_statement(pair: pest::iterators::Pair<'_, Rule>) -> Result<ForgeQLIR, F
                 .next()
                 .map(|l| unquote(l.as_str()))
                 .ok_or_else(|| ForgeError::DslParse("run: expected step name".into()))?;
-            let args = inner.map(|l| unquote(l.as_str())).collect();
+            let args = inner.map(unwrap_content).collect::<Result<Vec<_>, _>>()?;
             Ok(ForgeQLIR::Run { step, args })
         }
 

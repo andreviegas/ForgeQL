@@ -131,4 +131,4 @@ Wrap mutations in a transaction and gate the commit:
       VERIFY build 'test'          -- or JOB START 'test' for long gates
     COMMIT MESSAGE 'fix: ...'
 
-Verify steps marked `commit_gate: true` in `.forgeql.yaml` must pass **after** the last edit or COMMIT is refused — re-run the gate after every fix. For long-running gates use `JOB START '<step>'` (returns a job id; poll with `JOB STATUS <id>`) instead of blocking on `VERIFY`.
+Verify steps marked `commit_gate: true` in `.forgeql.yaml` must pass **after** the last edit or COMMIT is refused — re-run the gate after every fix. For long-running gates use `JOB START '<step>'` (returns a job id; poll with `JOB STATUS <id>`) instead of blocking on `VERIFY`. A step argument may be written as a heredoc (`<<TAG … TAG`) instead of a quoted literal — necessary to pass prose, since a quoted argument cannot contain the quote that delimits it.

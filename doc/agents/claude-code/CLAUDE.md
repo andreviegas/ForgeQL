@@ -173,6 +173,8 @@ BEGIN TRANSACTION 'name'
 COMMIT MESSAGE 'msg'
 VERIFY build 'step'      -- synchronous; grep the buffered log: SHOW MORE WHERE text MATCHES '^error|-->'
 JOB START 'step'         -- background job for long gates; JOB STATUS <id> / JOB LIST
+VERIFY build 'step' <<TAG … TAG   -- a step argument may be a heredoc; a quoted
+                                  -- one cannot hold the quote that delimits it
 ROLLBACK [TRANSACTION 'name']
 ```
 

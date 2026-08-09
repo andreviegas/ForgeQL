@@ -609,7 +609,7 @@ that holds across languages, and the engine will not guess one.
 
 #### Heredoc syntax
 
-Every `WITH 'content'` form also accepts a heredoc block as the replacement text:
+Every `WITH 'content'` form accepts a heredoc block as the replacement text, and so do `COMMIT MESSAGE` and the arguments of `VERIFY build`, `RUN` and `JOB START`:
 
 ```sql
 -- Replace a whole node
@@ -629,7 +629,7 @@ DELETE NODE '<node_id>' IF REV 'h0123456789abcdef'
 |---|---|
 | Opening tag | `<<TAG` immediately after `WITH` — tag must be **all-uppercase** (e.g. `RUST`, `CODE`, `END`) |
 | Closing tag | Must appear on its **own line** with **no leading whitespace**, matching the opening tag exactly |
-| Body | May contain any characters — single quotes, double quotes, embedded ForgeQL keywords — without escaping |
+| Body | May contain any characters — single quotes, double quotes, embedded ForgeQL keywords — without escaping. One exception: a line that is itself all-uppercase is read as a closing tag, so a body containing a bare `TODO` or `NOTE` line ends early and the statement is refused for a tag mismatch. Choose a tag, or indent such a line. |
 | Purpose | Prefer over `'…'` when the replacement contains single quotes (Rust char literals, lifetimes, C-style string escapes) |
 
 ---
@@ -873,20 +873,20 @@ never record an unvalidated tree.
 ### VERIFY, RUN, and Background JOBs
 
 ```sql
-VERIFY build 'step' ['arg']…
+VERIFY build 'step' ['arg' | <<TAG … TAG]…
 
-RUN 'template' ['arg']…
+RUN 'template' ['arg' | <<TAG … TAG]…
 
-JOB START 'step' ['arg']…
+JOB START 'step' ['arg' | <<TAG … TAG]…
 JOB STATUS '<job-id>'
 JOB LIST
 ```
 
 | Command | Effect |
 |---|---|
-| `VERIFY build` | Run a named step from `.forgeql.yaml` `verify_steps` and wait for it. The command executes on the background job pool — the engine is never blocked while it runs — but the response is synchronous: `success` + `output`, exactly as before. If the run outlives the step's `timeout_secs`, the response degrades to a `job_started` row with the id to poll. Does **not** auto-rollback on failure. Steps may declare typed positional params (`params: [{ name: target, type: ident }]`); each `$name` in the step's command is substituted after arity and type validation, so a value can never inject shell syntax. |
-| `RUN` | Run a named allowlisted command template from `.forgeql.yaml` `run_steps`, waiting the same way as `VERIFY build`. `ident` args substitute into the command; `string` args bind to the subprocess stdin and are never spliced into the shell. |
-| `JOB START` | Run a verify step as a detached **background job** — returns a job id immediately instead of blocking the request. Use for long test gates. Accepts the same typed positional args as `VERIFY build`. A `commit_gate: true` step run this way satisfies the commit gate when the job completes — unless an edit happened while it ran, in which case the gate stays blocked (the run tested stale sources). |
+| `VERIFY build` | Run a named step from `.forgeql.yaml` `verify_steps` and wait for it. The command executes on the background job pool — the engine is never blocked while it runs — but the response is synchronous: `success` + `output`, exactly as before. If the run outlives the step's `timeout_secs`, the response degrades to a `job_started` row with the id to poll. Does **not** auto-rollback on failure. Steps may declare typed positional params (`params: [{ name: target, type: ident }]`); each `$name` in the step's command is substituted after arity and type validation, so a value can never inject shell syntax. Any argument may be written as a heredoc (`<<TAG … TAG`) instead of a quoted literal — necessary for prose, since a quoted argument cannot contain the quote that delimits it and there is no escape for either. |
+| `RUN` | Run a named allowlisted command template from `.forgeql.yaml` `run_steps`, waiting the same way as `VERIFY build`. `ident` args substitute into the command; `string` args bind to the subprocess stdin and are never spliced into the shell. Any argument may be written as a heredoc (`<<TAG … TAG`) instead of a quoted literal — necessary for prose, since a quoted argument cannot contain the quote that delimits it and there is no escape for either. |
+| `JOB START` | Run a verify step as a detached **background job** — returns a job id immediately instead of blocking the request. Use for long test gates. Accepts the same typed positional args as `VERIFY build`, heredocs included. A `commit_gate: true` step run this way satisfies the commit gate when the job completes — unless an edit happened while it ran, in which case the gate stays blocked (the run tested stale sources). |
 | `JOB STATUS` / `JOB LIST` | Poll one job's state and output, or list all jobs. Polling also folds finished gate jobs into the commit gate. Responses carry a `hint` row with the next step (poll again, or the `SHOW MORE` grep recipe on failure). |
 
 Background jobs run through a **bounded worker pool**: at most

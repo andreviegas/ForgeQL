@@ -52,7 +52,7 @@ The right way to find and read code:
   - Relocate: `MOVE NODES FOUND IF REV '<master>' TO 'dir/'` · `COPY NODES FOUND TO 'dir/'` (ungated)
   - A truncated FIND issues no master rev and every FOUND verb refuses — widen the `LIMIT` and look again. Any FIND replaces FOUND; any mutation clears it.
 - Rename = aim, then sweep: `FIND usages OF 'old'` → `CHANGE NODES FOUND IF REV '<master>' MATCHING 'old' WITH 'new'`
-- Gate then commit: `BEGIN TRANSACTION` → edits → `VERIFY build 'step'` (or `JOB START 'step'` for long gates; poll `JOB STATUS <id>`) → `COMMIT MESSAGE 'msg'`. Steps marked `commit_gate: true` must pass after the last edit or COMMIT is refused.
+- Gate then commit: `BEGIN TRANSACTION` → edits → `VERIFY build 'step'` (or `JOB START 'step'` for long gates; poll `JOB STATUS <id>`) → `COMMIT MESSAGE 'msg'`. Steps marked `commit_gate: true` must pass after the last edit or COMMIT is refused. A step argument may be a heredoc (`<<TAG … TAG`) rather than a quoted literal — needed for prose, since a quoted argument cannot hold the quote that delimits it.
 - Raw-text `CHANGE FILE` / line-range copy/move: non-indexed files only (see the syntax reference).
 
 ## Efficiency
