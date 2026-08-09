@@ -18,6 +18,8 @@
 
 - Also corrected the file's own module doc, which had drifted three format
   revisions out of date: it still described a 9-blob, 600-byte table of
-  contents. The format in use has 13 named blobs behind an 856-byte
-  header + TOC region; the doc now lists all thirteen, including the four
-  it had never mentioned.
+  contents, and still gave the header's schema version as 3. The format in
+  use has 13 named blobs behind an 856-byte header + TOC region, and a
+  schema version of 15 -- a value the reader refuses to open a file without.
+  The doc now lists all thirteen blobs, including the four it had never
+  mentioned.

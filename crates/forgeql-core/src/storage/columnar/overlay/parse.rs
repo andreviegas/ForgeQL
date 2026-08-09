@@ -6,12 +6,12 @@
 use std::ops::Range;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, ensure};
-
 use super::{
     EnrichEntry, HEADER_LEN, KindEntry, MAGIC, RowPtr, SCHEMA_VERSION, SegmentMeta, SegmentRecord,
     TOC_COUNT, TOC_ENTRY_NAME_LEN, TOC_ENTRY_SIZE, TocEntry, TrigramEntry,
 };
+use anyhow::{Context, Result, ensure};
+use bytemuck::cast_slice;
 
 /// Parse the fixed-size FQOV v3 file header; return the TOC entry count.
 pub(super) fn parse_header(mmap: &[u8]) -> Result<usize> {
@@ -119,7 +119,10 @@ pub(super) struct EnrichIndexLayout {
 ///
 /// `blob_base` is the absolute byte offset of `blob` within the mmap, used
 /// to compute absolute ranges. Returns an empty layout (no entries) if the
-/// blob header is missing or the declared lengths overrun the blob.
+/// blob header is missing, the declared lengths overrun the blob, or any
+/// entry's key falls outside the key region or out of sorted order --
+/// `Overlay` trusts this layout for a raw binary search, so a malformed
+/// blob is rejected wholesale rather than silently searched over.
 pub(super) fn parse_enrich_index(blob: &[u8], blob_base: usize) -> EnrichIndexLayout {
     let empty = EnrichIndexLayout {
         entries: blob_base..blob_base,
@@ -142,6 +145,37 @@ pub(super) fn parse_enrich_index(blob: &[u8], blob_base: usize) -> EnrichIndexLa
     if blob.len() < entries_end + key_data_len {
         return empty;
     }
+
+    // Validate every entry's key range and the overall sort order before
+    // handing out the layout: `Overlay` binary-searches this array in place
+    // with `partition_point`, which is only correct over a fully sorted,
+    // in-bounds sequence. A single corrupt or out-of-order entry could
+    // otherwise silently misdirect the search past its well-formed
+    // neighbours. This can only fail on a truncated or tampered overlay
+    // file -- never on one this build's own writer produced -- and costs
+    // one pass over `entry_count` small structs, no allocation.
+    let Some(entries_slice) = blob.get(8..entries_end) else {
+        return empty;
+    };
+    let entries: &[EnrichEntry] = cast_slice(entries_slice);
+    let Some(key_data) = blob.get(entries_end..entries_end + key_data_len) else {
+        return empty;
+    };
+    let mut prev_key: &[u8] = &[];
+    for e in entries {
+        let k_start = e.key_offset as usize;
+        let Some(k_end) = k_start.checked_add(e.key_len as usize) else {
+            return empty;
+        };
+        let Some(key) = key_data.get(k_start..k_end) else {
+            return empty;
+        };
+        if key < prev_key {
+            return empty;
+        }
+        prev_key = key;
+    }
+
     EnrichIndexLayout {
         entries: blob_base + 8..blob_base + entries_end,
         keys: blob_base + entries_end..blob_base + entries_end + key_data_len,

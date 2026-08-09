@@ -9,11 +9,15 @@
 //! Multiple sessions mmap the same file; the OS reference-counts physical
 //! pages so RSS does not multiply by session count.
 //!
-//! # FQOV v3 file format
+//! # FQOV file format (schema_version 15)
+//!
+//! The `v3` in the constant names below (`HEADER_V3_LEN`) is the TOC layout
+//! generation, not this field. `schema_version` carries `SCHEMA_VERSION` from
+//! `overlay/format.rs`, and `parse_header` refuses any file whose value differs.
 //!
 //! ```text
 //! [0..4]           b"FQOV"            magic
-//! [4..8]           schema_version: u32 = 3 (little-endian)
+//! [4..8]           schema_version: u32 = 15 (little-endian)
 //! [8..16]          generation: u64 (little-endian)
 //! [16..20]         toc_count: u32 = 13
 //! [20..24]         _reserved: u32 = 0
