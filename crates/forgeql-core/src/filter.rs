@@ -950,7 +950,7 @@ pub fn apply_where_predicates<T: ClauseTarget>(
             (&predicate.op, &predicate.value)
         {
             let is_matches = predicate.op == CompareOp::Matches;
-            let field = predicate.field.clone();
+            let field = crate::field_tiers::canonical(&predicate.field).to_owned();
 
             // Fast path: ".{N,}" ↔ len >= N (no newlines assumed in the target
             // field, which holds for structural enrichment values such as

@@ -497,6 +497,96 @@ fn not_matches_regex() {
 }
 
 #[test]
+fn matches_alias_field_canonicalizes() {
+    // `file` is an alias for `path` (see field_tiers.rs FIELD_TIERS). Every
+    // operator canonicalises the field before reading a row through
+    // `field_str` except this one used to skip it, so an alias silently
+    // resolved to zero matches instead of erroring or matching. The alias
+    // run must answer exactly like the canonical run.
+    let items = vec![
+        make_symbol("setPeakLevel", "Function", 3),
+        make_symbol("getBaseLevel", "Function", 5),
+        make_symbol("init_motor", "Function", 1),
+    ];
+
+    let mut via_alias = items.clone();
+    apply_clauses(
+        &mut via_alias,
+        &Clauses {
+            where_predicates: vec![Predicate {
+                field: "file".into(),
+                op: CompareOp::Matches,
+                value: PredicateValue::String("setPeakLevel".into()),
+            }],
+            ..Default::default()
+        },
+    );
+
+    let mut via_canonical = items;
+    apply_clauses(
+        &mut via_canonical,
+        &Clauses {
+            where_predicates: vec![Predicate {
+                field: "path".into(),
+                op: CompareOp::Matches,
+                value: PredicateValue::String("setPeakLevel".into()),
+            }],
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(via_alias.len(), 1);
+    assert_eq!(via_alias[0].name, "setPeakLevel");
+    let alias_names: Vec<&str> = via_alias.iter().map(|s| s.name.as_str()).collect();
+    let canonical_names: Vec<&str> = via_canonical.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(alias_names, canonical_names);
+}
+
+#[test]
+fn not_matches_alias_field_canonicalizes() {
+    // NOT MATCHES is where an unresolved alias is dangerous in the other
+    // direction: `field_str` returns None for every row, `is_some_and` is
+    // false, and `false == is_matches(false)` is true, so every row would
+    // silently pass instead of the intended ones being excluded.
+    let items = vec![
+        make_symbol("setPeakLevel", "Function", 3),
+        make_symbol("getBaseLevel", "Function", 5),
+        make_symbol("init_motor", "Function", 1),
+    ];
+
+    let mut via_alias = items.clone();
+    apply_clauses(
+        &mut via_alias,
+        &Clauses {
+            where_predicates: vec![Predicate {
+                field: "file".into(),
+                op: CompareOp::NotMatches,
+                value: PredicateValue::String("setPeakLevel".into()),
+            }],
+            ..Default::default()
+        },
+    );
+
+    let mut via_canonical = items;
+    apply_clauses(
+        &mut via_canonical,
+        &Clauses {
+            where_predicates: vec![Predicate {
+                field: "path".into(),
+                op: CompareOp::NotMatches,
+                value: PredicateValue::String("setPeakLevel".into()),
+            }],
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(via_alias.len(), 2);
+    let alias_names: Vec<&str> = via_alias.iter().map(|s| s.name.as_str()).collect();
+    let canonical_names: Vec<&str> = via_canonical.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(alias_names, canonical_names);
+}
+
+#[test]
 fn matches_invalid_regex_returns_false() {
     let mut items = vec![make_symbol("foo", "Function", 1)];
     let clauses = Clauses {
