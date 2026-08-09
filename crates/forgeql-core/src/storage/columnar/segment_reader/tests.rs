@@ -559,3 +559,318 @@ fn every_col_blob_the_builder_writes_is_reachable_by_name() {
         "every col_* blob in the TOC must be one of the 13 fixed columns or an enrichment column"
     );
 }
+
+// ── row view: the pre-materialisation filter ─────────────────────────────
+
+/// Three rows chosen so that every arm of `RowField` is exercised on a row
+/// that has a value and on one that does not: `beta` has no `param_count` and
+/// line `0`, `gamma` has neither a kind nor a language.
+fn segment_for_row_view() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let seg = tmp.path().join("seg.fqsf");
+    let content_id = [0x71_u8; 20];
+    let mut b = SegmentBuilder::new("test", &content_id);
+    let r0 = b.emit_row(SymbolRow {
+        name: "alpha",
+        fql_kind: "function",
+        language: "rust",
+        line: 12,
+        byte_start: 0,
+        byte_end: 10,
+        usages_count: 0,
+    });
+    b.set_field(r0, "param_count", "2");
+    let _r1 = b.emit_row(SymbolRow {
+        name: "beta",
+        fql_kind: "struct",
+        language: "rust",
+        line: 0,
+        byte_start: 0,
+        byte_end: 10,
+        usages_count: 0,
+    });
+    let r2 = b.emit_row(SymbolRow {
+        name: "gamma",
+        fql_kind: "",
+        language: "",
+        line: 99,
+        byte_start: 0,
+        byte_end: 10,
+        usages_count: 0,
+    });
+    b.set_field(r2, "param_count", "10");
+    b.flush(&seg).expect("flush");
+    (tmp, seg)
+}
+
+fn predicate(field: &str, op: CompareOp, value: PredicateValue) -> Predicate {
+    Predicate {
+        field: field.to_owned(),
+        op,
+        value,
+    }
+}
+
+/// The claim the whole pre-materialisation filter rests on: a predicate
+/// answered from the columns answers exactly what the row it would have built
+/// answers. A disagreement in one direction returns a row that should have
+/// been filtered out; in the other it loses a row for good, which no later
+/// stage can recover. So both sides are driven over every arm and every
+/// operator the split lets through, and any difference fails here.
+#[test]
+fn a_row_view_answers_a_prefilterable_predicate_as_the_built_row_does() {
+    let (_tmp, seg) = segment_for_row_view();
+    let reader = SegmentReader::open(&seg).expect("open");
+    let path = PathBuf::from("src/lib.rs");
+    let all: RoaringBitmap = (0..reader.row_count).collect();
+    let built = reader.materialize_rows(&all, Some(&path));
+    assert_eq!(built.len(), 3, "fixture must materialise every row");
+
+    let probes = vec![
+        predicate(
+            "name",
+            CompareOp::Eq,
+            PredicateValue::String("alpha".to_owned()),
+        ),
+        predicate(
+            "name",
+            CompareOp::NotEq,
+            PredicateValue::String("alpha".to_owned()),
+        ),
+        predicate(
+            "name",
+            CompareOp::Like,
+            PredicateValue::String("%a".to_owned()),
+        ),
+        predicate(
+            "name",
+            CompareOp::NotLike,
+            PredicateValue::String("%a".to_owned()),
+        ),
+        predicate(
+            "fql_kind",
+            CompareOp::Eq,
+            PredicateValue::String("function".to_owned()),
+        ),
+        // The empty string is how a segment spells "this row has no kind", and
+        // a built row reports it as absent rather than as "".
+        predicate(
+            "fql_kind",
+            CompareOp::Eq,
+            PredicateValue::String(String::new()),
+        ),
+        predicate(
+            "language",
+            CompareOp::Eq,
+            PredicateValue::String("rust".to_owned()),
+        ),
+        predicate(
+            "path",
+            CompareOp::Eq,
+            PredicateValue::String("src/lib.rs".to_owned()),
+        ),
+        predicate(
+            "path",
+            CompareOp::Like,
+            PredicateValue::String("src/%".to_owned()),
+        ),
+        // Line `0` is likewise absence, not a line number.
+        predicate("line", CompareOp::Eq, PredicateValue::Number(0)),
+        predicate("line", CompareOp::Gte, PredicateValue::Number(12)),
+        predicate("line", CompareOp::Lte, PredicateValue::Number(12)),
+        predicate("line", CompareOp::Gt, PredicateValue::Number(0)),
+        predicate("line", CompareOp::Lt, PredicateValue::Number(99)),
+        predicate("param_count", CompareOp::Eq, PredicateValue::Number(2)),
+        predicate("param_count", CompareOp::Gte, PredicateValue::Number(2)),
+        predicate("param_count", CompareOp::Lt, PredicateValue::Number(10)),
+        predicate(
+            "param_count",
+            CompareOp::Eq,
+            PredicateValue::String("2".to_owned()),
+        ),
+        predicate("param_count", CompareOp::NotEq, PredicateValue::Number(2)),
+    ];
+
+    for p in &probes {
+        let field = crate::field_tiers::canonical(&p.field);
+        assert!(
+            reader.answers_field(field, true),
+            "probe '{field}' is not prefilterable, so this test would prove nothing about it"
+        );
+        for (row, built_row) in built.iter().enumerate() {
+            let row = u32::try_from(row).expect("row index");
+            let view = SegRowRef {
+                seg: &reader,
+                row,
+                source_path: Some(&path),
+            };
+            assert_eq!(
+                crate::filter::eval_predicate(&view, p),
+                crate::filter::eval_predicate(built_row, p),
+                "row {row} disagrees on {} {:?} {:?}",
+                p.field,
+                p.op,
+                p.value
+            );
+        }
+    }
+}
+
+/// A field a built row answers from a struct field of its own is never
+/// answered from a column, because the column and the struct do not agree:
+/// `usages` is overwritten from the workspace overlay after materialisation,
+/// `node_id` is built during it, `node_kind` is not stored at all, and `count`
+/// is assigned later still by GROUP BY.
+#[test]
+fn fields_a_built_row_answers_from_its_struct_are_not_answered_from_columns() {
+    let (_tmp, seg) = segment_for_row_view();
+    let reader = SegmentReader::open(&seg).expect("open");
+    for field in ["usages", "node_id", "node_kind", "count"] {
+        assert!(
+            !reader.answers_field(field, true),
+            "'{field}' must fall back to the filter that runs on built rows"
+        );
+    }
+    // `path` is the caller's, so it is answerable only when the caller gave one.
+    assert!(reader.answers_field("path", true));
+    assert!(!reader.answers_field("path", false));
+    // A field no column of this segment holds is not answered either.
+    assert!(!reader.answers_field("has_doc", true));
+}
+
+/// An enrichment column named after one of those fields makes the two
+/// disagree — the built row would read the struct, the row view the column —
+/// so such a segment answers no fixed field at all. Enrichment columns it
+/// does not collide with keep working.
+#[test]
+fn an_enrichment_column_named_after_a_struct_field_disables_the_fixed_answers() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let seg = tmp.path().join("seg.fqsf");
+    let content_id = [0x33_u8; 20];
+    let mut b = SegmentBuilder::new("test", &content_id);
+    let row = b.emit_row(SymbolRow {
+        name: "alpha",
+        fql_kind: "function",
+        language: "rust",
+        line: 12,
+        byte_start: 0,
+        byte_end: 10,
+        usages_count: 0,
+    });
+    b.set_field(row, "usages", "7");
+    b.set_field(row, "param_count", "2");
+    b.flush(&seg).expect("flush");
+
+    let reader = SegmentReader::open(&seg).expect("open");
+    for field in ["name", "fql_kind", "language", "line", "path", "usages"] {
+        assert!(
+            !reader.answers_field(field, true),
+            "a segment carrying an enrichment column named 'usages' must not answer '{field}'"
+        );
+    }
+    assert!(
+        reader.answers_field("param_count", true),
+        "a column that collides with nothing is still answered"
+    );
+}
+
+/// `STRUCT_BACKED_FIELDS` is a hand-written list, and the argument that it is
+/// complete is not restated here — it is derived and re-derived on every run.
+///
+/// For every field name a symbol row declares, a segment is built whose
+/// enrichment column carries that very name with a value the row's own struct
+/// field cannot hold. Wherever the row view claims to answer such a field, its
+/// answer must equal the built row's. A struct arm added to `SymbolMatch`
+/// later without a matching entry in `STRUCT_BACKED_FIELDS` would be read from
+/// the column early and from the struct late, and the two would disagree here.
+#[test]
+fn a_column_named_after_any_declared_field_answers_as_the_built_row_or_not_at_all() {
+    // Fixed columns are stored as `col_<name>` too, so a declared field that
+    // collides with one can never be given an enrichment column. Learn which
+    // names those are from a real segment rather than listing them again.
+    let (_probe_tmp, probe) = make_segment(&[("probe", "function", 1)]);
+    let fixed_blobs: Vec<String> = SegmentReader::open(&probe)
+        .expect("open")
+        .blobs
+        .keys()
+        .cloned()
+        .collect();
+
+    let declared: Vec<&str> = <SymbolMatch as crate::filter::ClauseTarget>::STR_FIELDS
+        .iter()
+        .chain(<SymbolMatch as crate::filter::ClauseTarget>::NUM_FIELDS)
+        .copied()
+        .collect();
+    assert!(!declared.is_empty(), "a symbol row declares field names");
+
+    let path = PathBuf::from("src/lib.rs");
+    let mut compared = 0_usize;
+    for field in declared {
+        if fixed_blobs.contains(&format!("col_{field}")) {
+            // The shadowing case cannot arise for this name, but the fixed
+            // answer it stands for must still be one the guard covers.
+            assert!(
+                STRUCT_BACKED_FIELDS.contains(&field),
+                "'{field}' names a fixed column but no guard covers it"
+            );
+            continue;
+        }
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let seg = tmp.path().join("seg.fqsf");
+        let content_id = [0x5E_u8; 20];
+        let mut b = SegmentBuilder::new("test", &content_id);
+        let row = b.emit_row(SymbolRow {
+            name: "alpha",
+            fql_kind: "function",
+            language: "rust",
+            line: 12,
+            byte_start: 0,
+            byte_end: 10,
+            usages_count: 0,
+        });
+        b.set_field(row, field, "77");
+        b.flush(&seg).expect("flush");
+
+        let reader = SegmentReader::open(&seg).expect("open");
+        let all: RoaringBitmap = (0..reader.row_count).collect();
+        let built = reader.materialize_rows(&all, Some(&path));
+        let view = SegRowRef {
+            seg: &reader,
+            row: 0,
+            source_path: Some(&path),
+        };
+
+        let probes = [
+            predicate(
+                field,
+                CompareOp::Eq,
+                PredicateValue::String("77".to_owned()),
+            ),
+            predicate(field, CompareOp::Eq, PredicateValue::Number(77)),
+            predicate(field, CompareOp::Gte, PredicateValue::Number(77)),
+            predicate(
+                field,
+                CompareOp::Like,
+                PredicateValue::String("%7".to_owned()),
+            ),
+        ];
+        for p in &probes {
+            let canonical = crate::field_tiers::canonical(&p.field);
+            if !reader.answers_field(canonical, true) {
+                continue;
+            }
+            compared += 1;
+            assert_eq!(
+                crate::filter::eval_predicate(&view, p),
+                crate::filter::eval_predicate(&built[0], p),
+                "a column named '{field}' is answered early but not as the built row answers it"
+            );
+        }
+    }
+
+    assert!(
+        compared > 0,
+        "no declared field was actually answered early, so this proved nothing"
+    );
+}

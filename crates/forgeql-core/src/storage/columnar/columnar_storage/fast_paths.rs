@@ -5,11 +5,14 @@ use std::path::{Path, PathBuf};
 use roaring::RoaringBitmap;
 
 use crate::ast::query::glob_matches;
-use crate::filter::{TOPK_THRESHOLD, apply_clauses, collect_top_k, eval_predicate, order_cmp};
+use crate::filter::{
+    TOPK_THRESHOLD, apply_clauses, collect_top_k, eval_predicate, eval_predicate_on, order_cmp,
+};
 use crate::ir::{Clauses, CompareOp, GroupBy, OrderBy, PredicateValue, SortDirection};
 use crate::result::SymbolMatch;
 
 use super::super::overlay::{Overlay, RowPtr};
+use super::super::segment_reader::{SegRowRef, SegmentReader};
 use super::ColumnarStorage;
 
 /// Over-fetch factor for the running top-K trim in [`ColumnarStorage::materialize_all`].
@@ -31,6 +34,40 @@ fn find_max_rows() -> usize {
         Some(n) => n,
         None => DEFAULT_FIND_MAX_ROWS,
     }
+}
+
+/// Split a segment's residual `WHERE` into the predicates a row view answers
+/// from the columns and the ones that have to wait for materialised rows.
+///
+/// The split is by construction, so every predicate is in exactly one half and
+/// none can be lost between them. A predicate lands on the late side when
+/// [`SegmentReader::answers_field`] declines its field — `usages`, which is
+/// stamped from the workspace overlay only after materialisation; `node_id`,
+/// which is built during it; or a field no column of this segment holds — and
+/// also when the operator is a regex, because `apply_where_predicates`
+/// compiles the pattern once for a whole batch while a per-row evaluation
+/// would recompile it for every row.
+fn split_seg_predicates<'p>(
+    seg: &SegmentReader,
+    predicates: &'p [crate::ir::Predicate],
+    has_path: bool,
+) -> (
+    Vec<(&'p str, &'p crate::ir::Predicate)>,
+    Vec<crate::ir::Predicate>,
+) {
+    let mut early = Vec::new();
+    let mut late = Vec::new();
+    for predicate in predicates {
+        let field = crate::field_tiers::canonical(&predicate.field);
+        if matches!(predicate.op, CompareOp::Matches | CompareOp::NotMatches)
+            || !seg.answers_field(field, has_path)
+        {
+            late.push(predicate.clone());
+        } else {
+            early.push((field, predicate));
+        }
+    }
+    (early, late)
 }
 
 impl ColumnarStorage {
@@ -817,21 +854,52 @@ impl ColumnarStorage {
             return None;
         }
 
+        // Stage 3b — test the residual WHERE against the segment's columns and
+        // materialise only the rows that survive it.  Building a row is the
+        // dominant cost of a filtered scan, and a row the predicate is going to
+        // reject is a row that never needed building.
+        //
+        // `late` holds what a row view cannot answer, and it is not dropped:
+        // every predicate is in exactly one of the two halves and `late` runs
+        // against the built rows below, exactly as the whole set used to.
+        let source_path = seg_meta.source_path.as_path();
+        let (early, late) = split_seg_predicates(seg, seg_predicates, true);
+        let narrowed = if early.is_empty() {
+            narrowed
+        } else {
+            narrowed
+                .iter()
+                .filter(|&row| {
+                    let view = SegRowRef {
+                        seg,
+                        row,
+                        source_path: Some(source_path),
+                    };
+                    early
+                        .iter()
+                        .all(|(field, predicate)| eval_predicate_on(&view, field, predicate))
+                })
+                .collect()
+        };
+        if narrowed.is_empty() {
+            return None;
+        }
+
         // Pass the relative source path so IN/EXCLUDE glob matching in
         // apply_clauses works against the same relative paths the legacy backend
         // stores.  Do NOT join with worktree_root here.
-        let mut seg_results = seg.materialize_rows(&narrowed, Some(&seg_meta.source_path));
+        let mut seg_results = seg.materialize_rows(&narrowed, Some(source_path));
 
         // Stamp workspace usage counts before any predicate or top-K decision:
         // the per-segment `usages_count` column is a stale always-zero legacy
         // field, so WHERE usages / ORDER BY usages must see the overlay value.
         self.stamp_usage_counts(&mut seg_results);
 
-        // Apply WHERE predicates per-segment so that only matching rows count
+        // Apply the residual WHERE per-segment so that only matching rows count
         // toward the fetch cap and the accumulated working set — non-matching
         // rows are dropped before they can pile up across segments.
-        if !seg_predicates.is_empty() {
-            crate::filter::apply_where_predicates(&mut seg_results, seg_predicates);
+        if !late.is_empty() {
+            crate::filter::apply_where_predicates(&mut seg_results, &late);
         }
 
         // Trim within this segment to avoid overshooting the fetch budget.
@@ -1102,3 +1170,7 @@ pub(super) fn passes_resolve_glob(relative_path: &Path, clauses: &Clauses) -> bo
         .any(|glob| glob_matches(relative_path, glob));
     in_ok && excl_ok
 }
+
+#[cfg(test)]
+#[expect(clippy::expect_used, reason = "test code")]
+mod tests;

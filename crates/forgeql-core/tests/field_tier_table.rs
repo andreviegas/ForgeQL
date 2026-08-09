@@ -210,13 +210,22 @@ impl Shape {
     }
 }
 
-/// Every `ClauseTarget` implementation there is — all eight, both backends'
+/// Every `ClauseTarget` implementation a query result can be, both backends'
 /// symbol rows included.
 ///
 /// Written out rather than derived, because it cannot be derived: nothing
 /// enumerates a trait's implementors. So this is the set a reader has to check
-/// against `filter/impls.rs` by hand, and the one place a ninth shape would be
-/// missed.
+/// against `filter/impls.rs` by hand, and the one place a missing result shape
+/// would go unnoticed.
+///
+/// Two implementations there are deliberately absent. `CommitRow` is a git
+/// listing, not a queryable row shape. `SegRowRef` is a segment row viewed in
+/// place, used only to test a residual `WHERE` before the row is built: it is
+/// never validated against, and it is crate-private, so a test outside the
+/// crate cannot name it. What matters about it is not which names it declares
+/// but that it answers them exactly as the `SymbolMatch` it stands in for —
+/// pinned by `a_row_view_answers_a_prefilterable_predicate_as_the_built_row_does`
+/// in `storage::columnar::segment_reader::tests`.
 fn row_shapes() -> Vec<Shape> {
     vec![
         Shape::of::<SymbolMatch>(),

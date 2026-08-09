@@ -277,6 +277,99 @@ impl FixedColumns {
     }
 }
 
+/// Clause fields a materialised row answers from a `SymbolMatch` struct field
+/// rather than from its enrichment map.
+///
+/// A segment storing an enrichment column under one of these names would be
+/// read from the map by a built row and from the column by a row view — two
+/// different answers to one clause. Such a segment turns the fixed-column
+/// answers off entirely rather than pick between them.
+const STRUCT_BACKED_FIELDS: &[&str] = &[
+    "name",
+    "node_kind",
+    "fql_kind",
+    "language",
+    "path",
+    "node_id",
+    "usages",
+    "count",
+    "line",
+];
+
+/// Which column answers a clause field on a row of a segment.
+///
+/// One resolver serves both consumers — the caller deciding whether a
+/// predicate can be answered before any row is built, and the row view reading
+/// the value — so the two cannot drift into a field claimed answerable that
+/// then resolves to nothing.
+pub(crate) enum RowField {
+    /// The name column.
+    Name,
+    /// The fql_kind column; the empty string reads as absent.
+    FqlKind,
+    /// The language column; the empty string reads as absent.
+    Language,
+    /// The path the caller supplied for this segment's file.
+    Path,
+    /// The line column; `0` reads as absent.
+    Line,
+    /// An enrichment column, already resolved to its byte range.
+    Extra(ColRange),
+    /// Nothing on this row answers the field, so the predicate naming it is
+    /// not answered early — it runs against the materialised rows instead.
+    Unanswerable,
+}
+
+/// One row of one segment, viewed in place.
+///
+/// Implements [`crate::filter::ClauseTarget`] so a residual `WHERE` can be
+/// evaluated against the columns before any row is built. It owns nothing:
+/// every string it yields is borrowed from the segment's mapping.
+pub(crate) struct SegRowRef<'a> {
+    /// The segment holding the row.
+    pub(crate) seg: &'a SegmentReader,
+    /// Row index within that segment.
+    pub(crate) row: u32,
+    /// Path of the file the segment was built from, as the caller spells it.
+    pub(crate) source_path: Option<&'a Path>,
+}
+
+impl SegRowRef<'_> {
+    /// The row's value for the canonical clause field `field`, as a string.
+    pub(crate) fn str_value(&self, field: &str) -> Option<&str> {
+        match self.seg.row_field(field, self.source_path.is_some()) {
+            RowField::Name => Some(self.seg.name_of(self.row)),
+            RowField::FqlKind => non_empty(self.seg.fql_kind_of(self.row)),
+            RowField::Language => non_empty(self.seg.language_of(self.row)),
+            RowField::Path => self.source_path.and_then(Path::to_str),
+            RowField::Extra(range) => self.seg.opt_str_in(range, self.row),
+            RowField::Line | RowField::Unanswerable => None,
+        }
+    }
+
+    /// The row's value for the canonical clause field `field`, as a number.
+    pub(crate) fn num_value(&self, field: &str) -> Option<i64> {
+        match self.seg.row_field(field, self.source_path.is_some()) {
+            RowField::Line => match self.seg.line_of(self.row) {
+                0 => None,
+                line => Some(i64::from(line)),
+            },
+            RowField::Extra(range) => self.seg.opt_str_in(range, self.row)?.parse().ok(),
+            RowField::Name
+            | RowField::FqlKind
+            | RowField::Language
+            | RowField::Path
+            | RowField::Unanswerable => None,
+        }
+    }
+}
+
+/// `None` for the empty string, which is how a fixed string column spells a
+/// value the row does not have.
+const fn non_empty(s: &str) -> Option<&str> {
+    if s.is_empty() { None } else { Some(s) }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SegmentReader
 // ─────────────────────────────────────────────────────────────────────────────
@@ -312,6 +405,14 @@ pub struct SegmentReader {
     /// Enrichment columns from the header blob, in header order, each paired
     /// with the byte range its `col_<name>` blob occupies in `mmap`.
     extra_cols: Vec<(String, ColRange)>,
+    /// Whether any enrichment column is named after a field a materialised row
+    /// answers from a struct field rather than from its enrichment map.
+    ///
+    /// True is the unusual case and switches every fixed-column answer in
+    /// [`SegmentReader::row_field`] off, so such a segment falls back to
+    /// filtering built rows rather than answering a clause from a column the
+    /// built row would not have consulted.
+    extra_shadows_fixed: bool,
     strings: StringPool,
     pub(crate) kind_postings: HashMap<u32, RoaringBitmap>,
     pub(crate) field_postings: HashMap<String, HashMap<u32, RoaringBitmap>>,
@@ -415,7 +516,7 @@ impl SegmentReader {
         // is resolved once here; reading a row then costs an index into the
         // mapping, with no column name to format and no TOC lookup to hash.
         let fixed = FixedColumns::resolve(&blobs);
-        let extra_cols = hdr
+        let extra_cols: Vec<(String, ColRange)> = hdr
             .extra_col_names
             .into_iter()
             .map(|name| {
@@ -423,6 +524,12 @@ impl SegmentReader {
                 (name, range)
             })
             .collect();
+        // A row view may answer a fixed column directly only while no
+        // enrichment column shares that column's clause name — see
+        // `STRUCT_BACKED_FIELDS`.
+        let extra_shadows_fixed = extra_cols
+            .iter()
+            .any(|(name, _)| STRUCT_BACKED_FIELDS.contains(&name.as_str()));
 
         Ok(Self {
             mmap,
@@ -433,6 +540,7 @@ impl SegmentReader {
             provider_id: hdr.provider_id,
             content_id: hdr.content_id,
             extra_cols,
+            extra_shadows_fixed,
             strings,
             kind_postings,
             field_postings,
@@ -861,18 +969,7 @@ impl SegmentReader {
     /// Returns `None` when the column is absent or the row's slot is `NULL`
     /// (encoded as `u32::MAX` in the segment).
     pub fn extra_field_str(&self, col: &str, row: u32) -> Option<&str> {
-        let blob = self.col_bytes(self.col_range(col));
-        if blob.is_empty() {
-            return None;
-        }
-        let slice: &[u32] = cast_slice(blob);
-        let id = slice.get(row as usize).copied()?;
-        if id == u32::MAX {
-            None
-        } else {
-            let s = self.strings.get(id);
-            if s.is_empty() { None } else { Some(s) }
-        }
+        self.opt_str_in(self.col_range(col), row)
     }
 
     /// Collect all enrichment field values for `row` into a `HashMap`.
@@ -952,6 +1049,75 @@ impl SegmentReader {
     fn str_in(&self, range: ColRange, row: u32) -> &str {
         let id = self.u32_in(range, row);
         self.strings.get(id)
+    }
+
+    /// Byte range of the enrichment column named `col`, or `None` when this
+    /// segment stores no such column.
+    ///
+    /// Unlike [`Self::col_range`] this never falls back to a fixed column: a
+    /// clause naming `line` must not be answered by reading the line column as
+    /// a string id.
+    fn extra_col_range(&self, col: &str) -> Option<ColRange> {
+        self.extra_cols
+            .iter()
+            .find(|(name, _)| name == col)
+            .map(|(_, range)| *range)
+    }
+
+    /// Resolve a string-id column to its pool string at `row`, reporting an
+    /// unset slot (`u32::MAX`) and the empty string as absent.
+    ///
+    /// Those are the same two conditions under which `materialize_rows` leaves
+    /// the column out of a row's enrichment map, so a clause evaluated here and
+    /// the same clause evaluated on the built row see the same value.
+    fn opt_str_in(&self, range: ColRange, row: u32) -> Option<&str> {
+        let blob = self.col_bytes(range);
+        if blob.is_empty() {
+            return None;
+        }
+        let slice: &[u32] = cast_slice(blob);
+        let id = slice.get(row as usize).copied()?;
+        if id == u32::MAX {
+            return None;
+        }
+        non_empty(self.strings.get(id))
+    }
+
+    /// Which column of this segment answers the canonical clause field
+    /// `field`, given whether the caller supplied the file's path.
+    ///
+    /// The names a materialised row answers from its own struct are
+    /// deliberately [`RowField::Unanswerable`]: `node_kind` is never stored in
+    /// a segment, `node_id` is built during materialisation, `usages` is
+    /// overwritten from the workspace overlay afterwards, and `count` is
+    /// assigned later still by GROUP BY. A predicate on one of them is left to
+    /// run against the built rows rather than answered from a column.
+    pub(crate) fn row_field(&self, field: &str, has_path: bool) -> RowField {
+        if !STRUCT_BACKED_FIELDS.contains(&field) {
+            return self
+                .extra_col_range(field)
+                .map_or(RowField::Unanswerable, RowField::Extra);
+        }
+        if self.extra_shadows_fixed {
+            return RowField::Unanswerable;
+        }
+        match field {
+            "name" => RowField::Name,
+            "fql_kind" => RowField::FqlKind,
+            "language" => RowField::Language,
+            "line" => RowField::Line,
+            "path" if has_path => RowField::Path,
+            _ => RowField::Unanswerable,
+        }
+    }
+
+    /// Whether a row view over this segment answers `field` at all.
+    ///
+    /// A caller filters a predicate before materialisation only when this is
+    /// true; a predicate it is false for is not dropped, it is left for the
+    /// filter that runs on the built rows.
+    pub(crate) fn answers_field(&self, field: &str, has_path: bool) -> bool {
+        !matches!(self.row_field(field, has_path), RowField::Unanswerable)
     }
 
     /// Look up a string-pool entry by ID.

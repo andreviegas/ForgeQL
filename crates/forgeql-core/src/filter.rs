@@ -581,11 +581,29 @@ fn path_glob_matches(path: &Path, pattern: &str) -> bool {
 /// Evaluate a single predicate against a `ClauseTarget` item.
 pub fn eval_predicate<T: ClauseTarget>(item: &T, predicate: &crate::ir::Predicate) -> bool {
     // An alias is spelled to its canonical name once, here, where the field
-    // name meets the row. Every caller reaches a row through this function, so
-    // the resolvers below — and the eight `field_str` implementations — only
-    // ever see canonical names, and an alias added to `FIELD_TIERS` needs no
-    // second entry anywhere.
-    let field = crate::field_tiers::canonical(&predicate.field);
+    // name meets the row. Every caller reaches a row through this function or
+    // the one below, so the resolvers — and the `field_str` implementations —
+    // only ever see canonical names, and an alias added to `FIELD_TIERS` needs
+    // no second entry anywhere.
+    eval_predicate_on(
+        item,
+        crate::field_tiers::canonical(&predicate.field),
+        predicate,
+    )
+}
+
+/// [`eval_predicate`] with the field name already spelled to its canonical
+/// form.
+///
+/// A caller testing one predicate against many rows canonicalises once and
+/// calls this per row, so the table walk behind
+/// [`crate::field_tiers::canonical`] stays a per-predicate cost instead of
+/// becoming a per-row one.
+pub(crate) fn eval_predicate_on<T: ClauseTarget>(
+    item: &T,
+    field: &str,
+    predicate: &crate::ir::Predicate,
+) -> bool {
     match predicate.op {
         // ---- String / LIKE operators ----
         CompareOp::Like => {

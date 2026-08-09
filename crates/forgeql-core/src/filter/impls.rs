@@ -341,3 +341,32 @@ impl ClauseTarget for crate::result::CommitRow {
         self.0.count = Some(count);
     }
 }
+
+/// A segment row read in place, before any `SymbolMatch` is built.
+///
+/// Every arm here must answer exactly what the materialised row would answer,
+/// because the caller filters with this view and then materialises only the
+/// survivors — a difference is a missing result, not a slow one. The agreement
+/// is kept by `SegmentReader::row_field`, which is also what decides whether a
+/// predicate may be filtered early at all; a field it declines is not dropped,
+/// it is left to the filter that runs on the built rows.
+impl ClauseTarget for crate::storage::columnar::segment_reader::SegRowRef<'_> {
+    const ROW: &'static str = "a symbol row";
+    const STR_FIELDS: &'static [&'static str] = &["name", "fql_kind", "language", "path"];
+    const NUM_FIELDS: &'static [&'static str] = &["line"];
+    // Enrichment columns: which names a segment carries depends on the
+    // registered language plugins and on what that segment stored.
+    const OPEN_FIELDS: bool = true;
+
+    fn field_str(&self, field: &str) -> Option<&str> {
+        self.str_value(field)
+    }
+
+    fn field_num(&self, field: &str) -> Option<i64> {
+        self.num_value(field)
+    }
+
+    fn path(&self) -> Option<&Path> {
+        self.source_path
+    }
+}
