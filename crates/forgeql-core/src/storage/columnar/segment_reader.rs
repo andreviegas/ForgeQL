@@ -19,7 +19,6 @@
     clippy::doc_markdown,              // binary format identifiers and O-notation in docs
     clippy::must_use_candidate,        // reader accessors; callers decide whether to use results
     clippy::ref_option,                // &Option<Mmap> helper signatures are clear as-is
-    clippy::unused_self,               // u32_of dispatches on col+row, not self; retained as method for symmetry
 )]
 
 use std::collections::{BTreeMap, HashMap};
@@ -198,6 +197,87 @@ impl StringPool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Column ranges — resolved once at open
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Byte range `(start, end)` of a blob within the segment mmap.
+///
+/// A column the segment does not store resolves to `(0, 0)`, which slices to an
+/// empty blob — exactly what a missing TOC entry used to yield — so an absent
+/// column still reads as `0` / `u32::MAX` / `None`, never a panic.
+type ColRange = (usize, usize);
+
+/// Byte ranges of the columns every row read touches.
+///
+/// A column's bytes never move for the life of the mmap, so naming one per
+/// access — formatting `col_<name>` and hashing it, for every column of every
+/// row — bought nothing. The ranges are resolved once here at open and the
+/// accessors index the mapping directly, the way [`StringPool`] already holds
+/// its own two blob ranges.
+struct FixedColumns {
+    name_id: ColRange,
+    fql_kind_id: ColRange,
+    language_id: ColRange,
+    line: ColRange,
+    byte_start: ColRange,
+    byte_end: ColRange,
+    usages_count: ColRange,
+    ordinal: ColRange,
+    parent_ordinal: ColRange,
+    rev: ColRange,
+    first_child_ordinal: ColRange,
+    next_sibling_ordinal: ColRange,
+    prev_sibling_ordinal: ColRange,
+}
+
+impl FixedColumns {
+    /// Resolve every fixed column against the segment's TOC.
+    fn resolve(blobs: &HashMap<String, (usize, usize)>) -> Self {
+        let at = |name: &str| blobs.get(name).copied().unwrap_or((0, 0));
+        Self {
+            name_id: at("col_name_id"),
+            fql_kind_id: at("col_fql_kind_id"),
+            language_id: at("col_language_id"),
+            line: at("col_line"),
+            byte_start: at("col_byte_start"),
+            byte_end: at("col_byte_end"),
+            usages_count: at("col_usages_count"),
+            ordinal: at("col_ordinal"),
+            parent_ordinal: at("col_parent_ordinal"),
+            rev: at("col_rev"),
+            first_child_ordinal: at("col_first_child_ordinal"),
+            next_sibling_ordinal: at("col_next_sibling_ordinal"),
+            prev_sibling_ordinal: at("col_prev_sibling_ordinal"),
+        }
+    }
+
+    /// Range of the fixed column spelled `col`, or the empty range when `col`
+    /// names none of them.
+    ///
+    /// Every `col_*` blob a segment holds is either a fixed column or an
+    /// enrichment column, so this and the enrichment list together reach every
+    /// blob the old format-and-hash lookup could.
+    fn by_short_name(&self, col: &str) -> ColRange {
+        match col {
+            "name_id" => self.name_id,
+            "fql_kind_id" => self.fql_kind_id,
+            "language_id" => self.language_id,
+            "line" => self.line,
+            "byte_start" => self.byte_start,
+            "byte_end" => self.byte_end,
+            "usages_count" => self.usages_count,
+            "ordinal" => self.ordinal,
+            "parent_ordinal" => self.parent_ordinal,
+            "rev" => self.rev,
+            "first_child_ordinal" => self.first_child_ordinal,
+            "next_sibling_ordinal" => self.next_sibling_ordinal,
+            "prev_sibling_ordinal" => self.prev_sibling_ordinal,
+            _ => (0, 0),
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SegmentReader
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -218,6 +298,9 @@ pub struct SegmentReader {
     mmap: Arc<Mmap>,
     /// TOC: blob name → `(start, end)` byte offsets within `mmap`.
     blobs: HashMap<String, (usize, usize)>,
+    /// Byte ranges of the fixed columns, resolved once at open so that reading
+    /// a row costs an index into the mapping and nothing else.
+    fixed: FixedColumns,
     /// Absolute path of the opened `.fqsf` file (for diagnostics).
     pub path: PathBuf,
     /// Number of rows stored in this segment.
@@ -226,8 +309,9 @@ pub struct SegmentReader {
     pub provider_id: String,
     /// Raw content ID bytes (length matches the provider's hash width).
     pub content_id: Vec<u8>,
-    /// Enrichment column names discovered from the header blob.
-    extra_col_names: Vec<String>,
+    /// Enrichment columns from the header blob, in header order, each paired
+    /// with the byte range its `col_<name>` blob occupies in `mmap`.
+    extra_cols: Vec<(String, ColRange)>,
     strings: StringPool,
     pub(crate) kind_postings: HashMap<u32, RoaringBitmap>,
     pub(crate) field_postings: HashMap<String, HashMap<u32, RoaringBitmap>>,
@@ -326,14 +410,29 @@ impl SegmentReader {
             let _ = mention_fsts.insert(role.to_owned(), fst);
         }
 
+        // ── 9. Column ranges ──────────────────────────────────────────────
+        // A column's bytes never move for the life of the mmap, so every range
+        // is resolved once here; reading a row then costs an index into the
+        // mapping, with no column name to format and no TOC lookup to hash.
+        let fixed = FixedColumns::resolve(&blobs);
+        let extra_cols = hdr
+            .extra_col_names
+            .into_iter()
+            .map(|name| {
+                let range = blobs.get(&format!("col_{name}")).copied().unwrap_or((0, 0));
+                (name, range)
+            })
+            .collect();
+
         Ok(Self {
             mmap,
             blobs,
+            fixed,
             path: path.to_owned(),
             row_count: hdr.row_count,
             provider_id: hdr.provider_id,
             content_id: hdr.content_id,
-            extra_col_names: hdr.extra_col_names,
+            extra_cols,
             strings,
             kind_postings,
             field_postings,
@@ -571,13 +670,13 @@ impl SegmentReader {
     /// Return the number of enrichment (extra) column names stored in this segment.
     #[must_use]
     pub const fn extra_col_count(&self) -> usize {
-        self.extra_col_names.len()
+        self.extra_cols.len()
     }
 
     /// Whether this segment stores an enrichment column named `name`.
     #[must_use]
     pub fn has_extra_col(&self, name: &str) -> bool {
-        self.extra_col_names.iter().any(|c| c == name)
+        self.extra_cols.iter().any(|(c, _)| c == name)
     }
 
     /// Whether this segment stores a value→rows posting index for `field`.
@@ -605,31 +704,31 @@ impl SegmentReader {
 
     /// Read the symbol name for row `row`.
     pub fn name_of(&self, row: u32) -> &str {
-        self.str_of("name_id", row)
+        self.str_in(self.fixed.name_id, row)
     }
 
     /// Read the raw string-pool ID for the `name` column at `row`.
     ///
     /// Used by [`super::overlay_builder`] to build dedup keys without string allocation.
     pub(crate) fn name_id_of(&self, row: u32) -> u32 {
-        self.u32_at("name_id", row)
+        self.u32_in(self.fixed.name_id, row)
     }
 
     /// Read the raw string-pool ID for the `fql_kind` column at `row`.
     ///
     /// Used by [`super::overlay_builder`] to build dedup keys without string allocation.
     pub(crate) fn fql_kind_id_of(&self, row: u32) -> u32 {
-        self.u32_at("fql_kind_id", row)
+        self.u32_in(self.fixed.fql_kind_id, row)
     }
 
     /// Read the FQL kind string for row `row`.
     pub fn fql_kind_of(&self, row: u32) -> &str {
-        self.str_of("fql_kind_id", row)
+        self.str_in(self.fixed.fql_kind_id, row)
     }
 
     /// Read the language string for row `row`.
     pub fn language_of(&self, row: u32) -> &str {
-        self.str_of("language_id", row)
+        self.str_in(self.fixed.language_id, row)
     }
 
     /// Rows whose stored language satisfies `accepts`.
@@ -647,7 +746,7 @@ impl SegmentReader {
         &self,
         accepts: &dyn Fn(&str) -> bool,
     ) -> Option<RoaringBitmap> {
-        let blob = self.blob_bytes("col_language_id");
+        let blob = self.col_bytes(self.fixed.language_id);
         let ids: &[u32] = cast_slice(blob);
         if ids.len() != self.row_count as usize {
             return None;
@@ -671,22 +770,22 @@ impl SegmentReader {
 
     /// Read the 1-based source line for row `row`.
     pub fn line_of(&self, row: u32) -> u32 {
-        self.u32_at("line", row)
+        self.u32_in(self.fixed.line, row)
     }
 
     /// Read the byte-range start for row `row`.
     pub fn byte_start_of(&self, row: u32) -> u32 {
-        self.u32_at("byte_start", row)
+        self.u32_in(self.fixed.byte_start, row)
     }
 
     /// Read the byte-range end for row `row`.
     pub fn byte_end_of(&self, row: u32) -> u32 {
-        self.u32_at("byte_end", row)
+        self.u32_in(self.fixed.byte_end, row)
     }
 
     /// Read the usages count for row `row`.
     pub fn usages_count_of(&self, row: u32) -> u32 {
-        self.u32_at("usages_count", row)
+        self.u32_in(self.fixed.usages_count, row)
     }
 
     /// Read the stable node ordinal for row `row`.
@@ -694,7 +793,7 @@ impl SegmentReader {
     /// Returns `None` when the column is absent or the slot is the null
     /// sentinel (`u32::MAX`).
     pub fn ordinal_of(&self, row: u32) -> Option<u32> {
-        let blob = self.blob_bytes("col_ordinal");
+        let blob = self.col_bytes(self.fixed.ordinal);
         if blob.is_empty() {
             return None;
         }
@@ -707,7 +806,7 @@ impl SegmentReader {
 
     /// Read the parent ordinal for `row` (`u32::MAX` = top-level node).
     pub fn parent_ordinal_of(&self, row: u32) -> u32 {
-        let blob = self.blob_bytes("col_parent_ordinal");
+        let blob = self.col_bytes(self.fixed.parent_ordinal);
         if blob.is_empty() {
             return u32::MAX;
         }
@@ -718,7 +817,7 @@ impl SegmentReader {
     /// Read the rev handle for `row` (first 8 bytes of SHA-256 of node bytes, LE u64).
     /// Returns `0` for analysis-only rows or when the column is absent.
     pub fn rev_of(&self, row: u32) -> u64 {
-        let blob = self.blob_bytes("col_rev");
+        let blob = self.col_bytes(self.fixed.rev);
         let start = row as usize * 8;
         let end = start + 8;
         if blob.len() < end {
@@ -729,7 +828,7 @@ impl SegmentReader {
 
     /// Read the first-child ordinal for `row` (`u32::MAX` = no children).
     pub fn first_child_ordinal_of(&self, row: u32) -> u32 {
-        let blob = self.blob_bytes("col_first_child_ordinal");
+        let blob = self.col_bytes(self.fixed.first_child_ordinal);
         if blob.is_empty() {
             return u32::MAX;
         }
@@ -739,7 +838,7 @@ impl SegmentReader {
 
     /// Read the next-sibling ordinal for `row` (`u32::MAX` = no next sibling).
     pub fn next_sibling_ordinal_of(&self, row: u32) -> u32 {
-        let blob = self.blob_bytes("col_next_sibling_ordinal");
+        let blob = self.col_bytes(self.fixed.next_sibling_ordinal);
         if blob.is_empty() {
             return u32::MAX;
         }
@@ -749,7 +848,7 @@ impl SegmentReader {
 
     /// Read the prev-sibling ordinal for `row` (`u32::MAX` = no prev sibling).
     pub fn prev_sibling_ordinal_of(&self, row: u32) -> u32 {
-        let blob = self.blob_bytes("col_prev_sibling_ordinal");
+        let blob = self.col_bytes(self.fixed.prev_sibling_ordinal);
         if blob.is_empty() {
             return u32::MAX;
         }
@@ -762,7 +861,7 @@ impl SegmentReader {
     /// Returns `None` when the column is absent or the row's slot is `NULL`
     /// (encoded as `u32::MAX` in the segment).
     pub fn extra_field_str(&self, col: &str, row: u32) -> Option<&str> {
-        let blob = self.blob_bytes(&format!("col_{col}"));
+        let blob = self.col_bytes(self.col_range(col));
         if blob.is_empty() {
             return None;
         }
@@ -782,8 +881,8 @@ impl SegmentReader {
     /// single row.  Returns an empty map when no enrichment columns are present.
     pub(crate) fn enrichment_for_row(&self, row: u32) -> HashMap<String, String> {
         let mut map = HashMap::new();
-        for col_name in &self.extra_col_names {
-            let blob = self.blob_bytes(&format!("col_{col_name}"));
+        for (col_name, range) in &self.extra_cols {
+            let blob = self.col_bytes(*range);
             if blob.is_empty() {
                 continue;
             }
@@ -813,10 +912,35 @@ impl SegmentReader {
         &self.mmap[start..end]
     }
 
+    /// The bytes of a column whose range was resolved at open.
+    ///
+    /// A column the segment does not store resolved to `(0, 0)`, which slices
+    /// to the same empty blob a missing TOC entry used to yield.
+    fn col_bytes(&self, range: ColRange) -> &[u8] {
+        &self.mmap[range.0..range.1]
+    }
+
+    /// A resolved column's bytes viewed as `u32` values; empty when absent.
+    fn col_u32(&self, range: ColRange) -> &[u32] {
+        cast_slice(self.col_bytes(range))
+    }
+
+    /// Byte range of the `col_<col>` blob, resolved at open.
+    ///
+    /// Enrichment columns first — every caller names one of those — then the
+    /// fixed columns, so every `col_*` blob a segment holds stays reachable by
+    /// name, exactly as when the name was formatted and hashed per access.
+    fn col_range(&self, col: &str) -> ColRange {
+        if let Some((_, range)) = self.extra_cols.iter().find(|(name, _)| name == col) {
+            return *range;
+        }
+        self.fixed.by_short_name(col)
+    }
+
     /// Return a u32 column value at `row`.
-    /// `col` is the short column name (without the `col_` prefix).
-    pub(crate) fn u32_at(&self, col: &str, row: u32) -> u32 {
-        let blob = self.blob_bytes(&format!("col_{col}"));
+    /// `0` when the column is absent or `row` is past its end.
+    fn u32_in(&self, range: ColRange, row: u32) -> u32 {
+        let blob = self.col_bytes(range);
         if blob.is_empty() {
             return 0;
         }
@@ -825,8 +949,8 @@ impl SegmentReader {
     }
 
     /// Resolve a string-id column to its pool string at `row`.
-    fn str_of(&self, col: &str, row: u32) -> &str {
-        let id = self.u32_at(col, row);
+    fn str_in(&self, range: ColRange, row: u32) -> &str {
+        let id = self.u32_in(range, row);
         self.strings.get(id)
     }
 
@@ -944,26 +1068,48 @@ impl SegmentReader {
         rows: &RoaringBitmap,
         source_path: Option<&Path>,
     ) -> Vec<SymbolMatch> {
+        // Every column this batch reads is resolved once, here: a column's
+        // range is a property of the segment, not of the row being read, so
+        // nothing below the loop needs to name a column again.
+        let name_ids = self.col_u32(self.fixed.name_id);
+        let kind_ids = self.col_u32(self.fixed.fql_kind_id);
+        let language_ids = self.col_u32(self.fixed.language_id);
+        let lines = self.col_u32(self.fixed.line);
+        let usage_counts = self.col_u32(self.fixed.usages_count);
+        let extras: Vec<(&str, &[u32])> = self
+            .extra_cols
+            .iter()
+            .map(|(col_name, range)| (col_name.as_str(), self.col_u32(*range)))
+            .collect();
+
         rows.iter()
             .map(|row| {
-                let name = self.str_of("name_id", row).to_owned();
-                let fql_kind = self.str_of("fql_kind_id", row).to_owned();
-                let language = self.str_of("language_id", row).to_owned();
-                let line = self.u32_at("line", row);
-                let usages = self.u32_at("usages_count", row);
+                let idx = row as usize;
+                let name = self
+                    .strings
+                    .get(name_ids.get(idx).copied().unwrap_or(0))
+                    .to_owned();
+                let fql_kind = self
+                    .strings
+                    .get(kind_ids.get(idx).copied().unwrap_or(0))
+                    .to_owned();
+                let language = self
+                    .strings
+                    .get(language_ids.get(idx).copied().unwrap_or(0))
+                    .to_owned();
+                let line = lines.get(idx).copied().unwrap_or(0);
+                let usages = usage_counts.get(idx).copied().unwrap_or(0);
 
                 let mut fields: HashMap<String, String> = HashMap::new();
-                for col_name in &self.extra_col_names {
-                    let blob = self.blob_bytes(&format!("col_{col_name}"));
-                    if blob.is_empty() {
+                for (col_name, ids) in &extras {
+                    if ids.is_empty() {
                         continue;
                     }
-                    let slice: &[u32] = cast_slice(blob);
-                    if let Some(&id) = slice.get(row as usize) {
+                    if let Some(&id) = ids.get(idx) {
                         if id != u32::MAX {
                             let s = self.strings.get(id);
                             if !s.is_empty() {
-                                let _ = fields.insert(col_name.clone(), s.to_owned());
+                                let _ = fields.insert((*col_name).to_owned(), s.to_owned());
                             }
                         }
                     }
@@ -1014,15 +1160,15 @@ impl SegmentReader {
             return None;
         }
         let row = local_row_idx;
-        let name = self.str_of("name_id", row).to_owned();
-        let fql_kind = self.str_of("fql_kind_id", row).to_owned();
-        let language = self.str_of("language_id", row).to_owned();
-        let line = self.u32_at("line", row);
-        let usages = self.u32_at("usages_count", row);
+        let name = self.str_in(self.fixed.name_id, row).to_owned();
+        let fql_kind = self.str_in(self.fixed.fql_kind_id, row).to_owned();
+        let language = self.str_in(self.fixed.language_id, row).to_owned();
+        let line = self.u32_in(self.fixed.line, row);
+        let usages = self.u32_in(self.fixed.usages_count, row);
 
         let mut fields: HashMap<String, String> = HashMap::new();
-        for col_name in &self.extra_col_names {
-            let blob = self.blob_bytes(&format!("col_{col_name}"));
+        for (col_name, range) in &self.extra_cols {
+            let blob = self.col_bytes(*range);
             if blob.is_empty() {
                 continue;
             }

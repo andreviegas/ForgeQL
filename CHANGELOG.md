@@ -6,6 +6,41 @@ ForgeQL uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.158.0] — 2026-08-08 — a segment's columns are found once, not once per value
+
+### Changed
+
+- Reading rows out of a columnar segment named its columns as it went. Every
+  value of every row built the string `col_<name>` and looked that name up in
+  the segment's table of contents: five allocations and five hash lookups per
+  row for the fixed columns, and one more of each for every enrichment column
+  on top of them. Nothing being looked up had moved since the file was mapped,
+  and a query that returns three million rows repeated the lookup three million
+  times.
+
+  A segment now locates its columns once, when the file is opened, and every
+  accessor indexes the mapping directly from the byte range resolved then. The
+  enrichment columns are resolved once per batch of rows instead of once per
+  row. The mapping itself is untouched — the index is still navigated in place,
+  with no copy — and the answers are identical: same rows, same order, same
+  totals. What changed is the cost of producing an answer, not what the answer
+  says.
+
+  Measured on a three-million-symbol corpus, this is a saving of time and not
+  of memory. Queries run 1.7x to 5.1x faster depending on how many rows they
+  materialise — a whole-corpus scan 2.1x, a scan filtered to one node kind
+  2.9x, that scan narrowed further by line range 5.1x, and name-ordered
+  streaming 1.7x. Peak resident memory does not move: the strings this removes
+  were built and dropped within a single column read, so they cost processor
+  time rather than footprint, and what a large answer holds in memory is the
+  rows themselves.
+
+  A column a segment does not store resolves to the empty range, which reads
+  exactly as a missing table-of-contents entry did: `0`, `u32::MAX`, or no
+  value, never a failure. Segments written by an older version, which can lack
+  a column entirely, are covered by a test that drives every accessor down that
+  path rather than by the hope that some corpus still contains one.
+
 ## [0.157.0] — 2026-08-08 — one clause, two consumers: WHERE is split between the lookup and the rows
 
 ### Fixed

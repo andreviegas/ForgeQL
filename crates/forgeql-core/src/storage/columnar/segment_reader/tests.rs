@@ -403,3 +403,159 @@ fn open_nonmonotone_string_pool_returns_err() {
     }
     // blob not found — test passes vacuously (shouldn't happen with real segments)
 }
+
+// ── absent columns ────────────────────────────────────────────────────────
+
+/// A segment written before a column existed simply has no TOC entry for it.
+/// Resolution at open must turn that into the empty range, so nothing
+/// downstream has to notice a missing key.
+#[test]
+fn a_column_absent_from_the_toc_resolves_to_the_empty_range() {
+    let cols = FixedColumns::resolve(&HashMap::new());
+    for (label, range) in [
+        ("name_id", cols.name_id),
+        ("fql_kind_id", cols.fql_kind_id),
+        ("language_id", cols.language_id),
+        ("line", cols.line),
+        ("byte_start", cols.byte_start),
+        ("byte_end", cols.byte_end),
+        ("usages_count", cols.usages_count),
+        ("ordinal", cols.ordinal),
+        ("parent_ordinal", cols.parent_ordinal),
+        ("rev", cols.rev),
+        ("first_child_ordinal", cols.first_child_ordinal),
+        ("next_sibling_ordinal", cols.next_sibling_ordinal),
+        ("prev_sibling_ordinal", cols.prev_sibling_ordinal),
+    ] {
+        assert_eq!(
+            range,
+            (0, 0),
+            "absent column {label} must resolve to the empty range"
+        );
+        assert_eq!(cols.by_short_name(label), (0, 0));
+    }
+    assert_eq!(cols.by_short_name("not_a_column"), (0, 0));
+}
+
+/// Every accessor must answer an absent column with the default it gave when
+/// the column was named and looked up per access — `0` / `u32::MAX` / `None`,
+/// never a panic. The builder always writes the fixed columns, so no real
+/// segment reaches this path; the empty ranges are installed here instead of
+/// hoping the corpus contains an old enough segment.
+#[test]
+fn accessors_on_an_absent_column_return_their_documented_default() {
+    let (_tmp, seg) = make_segment(&[("alpha", "function", 7)]);
+    let mut reader = SegmentReader::open(&seg).expect("open");
+    assert_eq!(
+        reader.line_of(0),
+        7,
+        "control: the column is present to begin with"
+    );
+
+    reader.fixed = FixedColumns::resolve(&HashMap::new());
+    reader.extra_cols.clear();
+    // A column the header names but whose blob never reached the TOC: the name
+    // is known, the range is empty, and the value must read as absent.
+    reader.extra_cols.push(("phantom".to_owned(), (0, 0)));
+
+    assert_eq!(reader.line_of(0), 0);
+    assert_eq!(reader.byte_start_of(0), 0);
+    assert_eq!(reader.byte_end_of(0), 0);
+    assert_eq!(reader.usages_count_of(0), 0);
+    assert_eq!(reader.name_id_of(0), 0);
+    assert_eq!(reader.fql_kind_id_of(0), 0);
+    assert_eq!(reader.ordinal_of(0), None);
+    assert_eq!(reader.rev_of(0), 0);
+    assert_eq!(reader.parent_ordinal_of(0), u32::MAX);
+    assert_eq!(reader.first_child_ordinal_of(0), u32::MAX);
+    assert_eq!(reader.next_sibling_ordinal_of(0), u32::MAX);
+    assert_eq!(reader.prev_sibling_ordinal_of(0), u32::MAX);
+    assert_eq!(reader.rows_with_language_matching(&|_| true), None);
+
+    // An absent string-id column reads as string id 0 — what the by-name
+    // lookup returned when it found no blob. Preserved deliberately.
+    assert_eq!(reader.name_of(0), reader.string_of_id(0));
+    assert_eq!(reader.fql_kind_of(0), reader.string_of_id(0));
+    assert_eq!(reader.language_of(0), reader.string_of_id(0));
+
+    assert!(reader.has_extra_col("phantom"));
+    assert_eq!(reader.extra_field_str("phantom", 0), None);
+    assert_eq!(reader.extra_field_str("has_doc", 0), None);
+    assert_eq!(reader.extra_field_str("line", 0), None);
+    assert!(reader.enrichment_for_row(0).is_empty());
+
+    let one = reader
+        .materialize_one_row(0, std::path::Path::new("a.rs"))
+        .expect("row 0 is in range");
+    assert_eq!(one.line, None);
+    assert_eq!(one.node_id, None);
+    assert_eq!(one.rev, None);
+    assert!(one.fields.is_empty());
+
+    let bm: RoaringBitmap = (0u32..1).collect();
+    let all = reader.materialize_rows(&bm, Some(std::path::Path::new("a.rs")));
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].line, None);
+    assert_eq!(all[0].node_id, None);
+    assert_eq!(all[0].rev, None);
+    assert!(all[0].fields.is_empty());
+}
+
+/// The reader's column enumeration must cover every `col_*` blob the builder
+/// writes. `extra_field_str` resolves a name through the enrichment list and
+/// then through `FixedColumns::by_short_name`; a core column added to the
+/// builder but not to that match arm would answer `None` for every row — a
+/// silent absence that compiles clean and that no other test here would catch.
+///
+/// A column that resolves but holds no bytes is still reachable: its TOC entry
+/// starts past the file header, so its range is never `(0, 0)`.
+#[test]
+fn every_col_blob_the_builder_writes_is_reachable_by_name() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let seg = tmp.path().join("seg.fqsf");
+    let content_id = [0x5C_u8; 20];
+    let mut b = SegmentBuilder::new("test", &content_id);
+    let row = b.emit_row(SymbolRow {
+        name: "alpha",
+        fql_kind: "function",
+        language: "rust",
+        line: 1,
+        byte_start: 0,
+        byte_end: 10,
+        usages_count: 0,
+    });
+    // Two enrichment columns, so the loop below walks the `extra_cols` arm of
+    // `col_range` and not only the fixed one.
+    b.set_field(row, "param_count", "2");
+    b.set_field(row, "has_doc", "true");
+    b.flush(&seg).expect("flush");
+
+    let reader = SegmentReader::open(&seg).expect("open");
+    assert_eq!(
+        reader.extra_col_count(),
+        2,
+        "fixture must carry enrichment columns"
+    );
+
+    let mut checked = 0;
+    for name in reader.blobs.keys() {
+        let Some(short) = name.strip_prefix("col_") else {
+            continue;
+        };
+        assert_ne!(
+            reader.col_range(short),
+            (0, 0),
+            "TOC holds blob '{name}' but the reader cannot reach column '{short}' by name"
+        );
+        checked += 1;
+    }
+    // The builder writes the 13 fixed columns unconditionally, plus one blob
+    // per enrichment column. Pinning the sum rather than a floor is what makes
+    // this cover both arms: a column added to either side and forgotten by the
+    // reader's enumeration shows up here as a count that no longer adds up.
+    assert_eq!(
+        checked,
+        13 + reader.extra_col_count(),
+        "every col_* blob in the TOC must be one of the 13 fixed columns or an enrichment column"
+    );
+}

@@ -930,7 +930,7 @@ impl Overlay {
                     && let Some(seg) = segments.get(ptr.segment_idx as usize)
                     && let Some(meta) = self.segments.get(ptr.segment_idx as usize)
                 {
-                    let line = seg.u32_at("line", ptr.local_row_idx);
+                    let line = seg.line_of(ptr.local_row_idx);
                     let path = meta.source_path.to_string_lossy().into_owned();
                     let entry = HeapEntry {
                         name: name_str.clone(),
@@ -987,7 +987,7 @@ impl Overlay {
                     && let Some(seg) = segments.get(ptr.segment_idx as usize)
                     && let Some(meta) = self.segments.get(ptr.segment_idx as usize)
                 {
-                    let line = seg.u32_at("line", ptr.local_row_idx);
+                    let line = seg.line_of(ptr.local_row_idx);
                     let path = meta.source_path.to_string_lossy().into_owned();
                     let entry = HeapEntry {
                         name: name_str.clone(),
