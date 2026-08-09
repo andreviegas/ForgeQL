@@ -696,3 +696,39 @@ a fresh handle. The engine never re-indents (P1): a node lifted out of a block k
 leading whitespace, the boundary diff shows the seam, and you close it with
 `CHANGE NODE '<new_id>(1-n)'`. When you want to control the indent from the start, `INSERT` +
 `DELETE` in a transaction is still the better tool.
+
+## Handback bar — the promotion review runs these lenses; run them yourself first
+
+Every handback that fails the promotion guardian costs a full round-trip. The
+findings so far have all fallen into four classes, so before reporting ANY
+slice done, review your own final hex against them — with your guardian, in a
+fresh session, on the FINAL commit (not mid-stack), and iterate until it
+returns ZERO findings twice in a row (a clean run, then a clean re-run after
+your last fix):
+
+1. **Universe completeness.** Whenever a change defines "everything we
+   search/serve", enumerate every source explicitly — committed segments,
+   shadowed segments, file-only entries, dirty INDEXED adds, dirty
+   NON-indexed adds (unclaimed extensions created in-session), session-born
+   files generally — and for each either prove it is reached (test) or state
+   the boundary in the docs. "The set I didn't think of" is the finding every
+   time.
+2. **Hard-won lessons become tests.** If you hit a failure mode while
+   developing (both halves of a trade-off, a look-alike predicate, a decode
+   that silently drops), the final tree must contain a test that fails on
+   exactly that regression. A lesson recorded only in prose or memory does
+   not survive the next contributor.
+3. **Claims true at the boundary.** Every place a completeness or behaviour
+   claim appears (trait doc, `doc/syntax.md`, `architecture.md`, all four
+   agent docs, the changelog fragment) must state its exclusions IN THE SAME
+   SENTENCE OR CLAUSE — a documented-elsewhere limitation is a hidden one.
+   Grep for the claim wording and fix every site.
+4. **Merge, never gate; prove absence from raw rows.** No tier's answer
+   suppresses another's; anything derived from deduped/overlay structures
+   cannot prove absence or completeness — only raw-row-id keyed data can.
+
+Batching: when a prompt names follow-on work (a second slice, an adjacent
+bug), continue in the same session after the self-review loop clears — one
+report at the end covering each item. Stop early only for: an `ENRICH_VER`
+decision you cannot bench yourself, a design the prompt marks for the
+integrator's review, or evidence that contradicts the prompt.
