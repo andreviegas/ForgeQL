@@ -16,12 +16,22 @@ public repository. They must stand on their own:
 - New code comments follow the same rule: state the invariant or the
   reason, never a ticket number.
 
-## Versioning
+## Versioning — contributors never pick a number
 
-- The `Cargo.toml`/`Cargo.lock` version bump and the matching
-  `CHANGELOG.md` section ship in the same commit as the change itself —
-  never as a separate version-bump commit.
-- Docs-only commits do not need a version bump.
+- **Do not touch `Cargo.toml`, `Cargo.lock`, or any version heading in
+  `CHANGELOG.md`.** Choosing a version requires knowing everything that will
+  ship alongside your change, which only the integrator can see. Two changes
+  in flight that both pick a number mean one of them is wrong: this project
+  has already burned `0.152.0` and renumbered twice that way.
+- **Ship your entry as a fragment.** Add one new file to `changelog.d/`
+  describing what changed, in the same self-contained public language the
+  commit message uses. A fragment is a new file, so two changes in flight
+  never collide on it. See `changelog.d/README.md`.
+- **The integrator releases.** At promotion the version is chosen across
+  everything released together, the fragments are assembled into a dated
+  section of `CHANGELOG.md`, the manifests are bumped, and the fragments are
+  deleted — all in one release commit.
+- Docs-only commits need neither a fragment nor a version bump.
 
 ## Workflow for agents editing this repository
 
