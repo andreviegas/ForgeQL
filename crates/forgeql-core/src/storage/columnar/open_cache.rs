@@ -87,12 +87,14 @@ pub struct Opened<V> {
     pub value: V,
     /// Whether this decode may be shared with later callers.
     ///
-    /// An incomplete decode must say `false`. Opening the committed state skips
-    /// a segment reader it cannot open rather than failing outright, and today
-    /// the next session to arrive opens those files again and recovers on its
-    /// own. Sharing a partial decode would pin the missing rows for every later
-    /// session on that commit instead — a cache is not allowed to make a
-    /// recoverable gap permanent.
+    /// An incomplete decode must say `false`: a cache is not allowed to make a
+    /// recoverable gap permanent, and sharing a partial decode would pin the
+    /// missing rows for every later caller on that key where a fresh open might
+    /// have recovered. The one producer in the tree — opening the committed
+    /// state — fails outright rather than handing back a partial value, so in
+    /// practice it always says `true`. The flag stays because that is a
+    /// property of today's producer, not of this cache, and any less strict one
+    /// still has to answer honestly.
     pub shareable: bool,
 }
 

@@ -19,6 +19,48 @@ use super::super::overlay_lock::OverlayLock;
 use super::super::segment_reader::SegmentReader;
 use super::super::shadow_writer::ShadowWriter;
 use super::ColumnarStorage;
+
+/// An overlay that opened cleanly while naming a segment the disk no longer
+/// holds.
+///
+/// Kept distinct from an unreadable overlay because the two need opposite
+/// responses. An unreadable overlay is removed and rebuilt; an overlay that
+/// reads cleanly is not deleted on the strength of a missing segment. Removing
+/// it is destructive and cannot be undone, and a rebuild is not a dependable
+/// repair to route into unasked: shadow-writing from a merged symbol table does
+/// regenerate a segment that is absent, but the inline path builds the overlay
+/// from the segments already on disk and drops one it cannot read, which is a
+/// smaller index that never says it is smaller. So the open refuses and names
+/// both repairs, and the operator chooses.
+#[derive(Debug)]
+struct IncompleteIndex {
+    /// Worktree-relative path of the file whose segment would not open.
+    source_path: PathBuf,
+    /// Where the open looked for that segment.
+    segment_path: PathBuf,
+    /// The overlay naming it, which is the other end of both repairs.
+    overlay_path: PathBuf,
+    /// Why it would not open.
+    cause: String,
+}
+
+impl std::fmt::Display for IncompleteIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "index incomplete: the segment for {} is missing or unreadable at {} ({}) — \
+             an index missing a segment cannot answer completely. Restore that file, \
+             or remove the index at {} to have it rebuilt on the next open",
+            self.source_path.display(),
+            self.segment_path.display(),
+            self.cause,
+            self.overlay_path.display()
+        )
+    }
+}
+
+impl std::error::Error for IncompleteIndex {}
+
 impl ColumnarStorage {
     /// Open the overlay for `commit_sha`, building it via shadow-write if absent.
     ///
@@ -34,9 +76,12 @@ impl ColumnarStorage {
     /// `legacy` — if `None` the slow-path build is skipped (non-fatal).
     ///
     /// # Errors
-    /// Returns `Err` only for hard failures (lock file I/O, final
-    /// `Overlay::open` after a successful build). Shadow-write failures
-    /// are treated as non-fatal and logged.
+    /// Returns `Err` for hard failures: lock file I/O, the final
+    /// `Overlay::open` after a successful build, and any segment the overlay
+    /// lists that will not open — that last one leaves the index incomplete,
+    /// which cannot be answered from, so the open fails and names both repairs
+    /// rather than rebuilding over it (see [`Self::rebuild_or_refuse`]).
+    /// Shadow-write failures are treated as non-fatal and logged.
     pub fn warm_or_open(
         ctx: &crate::storage::ColumnarBuildContext,
         input: BuildInput<'_>,
@@ -48,18 +93,18 @@ impl ColumnarStorage {
 
         // Fast path: overlay already on disk and readable.
         if overlay_path.exists() {
-            if let Ok(shared) = Self::shared_open(ctx, &overlay_path) {
-                debug!(%commit_sha, "columnar warm_or_open: overlay found, fast-path load");
-                return Ok(Self::finish_open(
-                    worktree_path,
-                    shared,
-                    lang_registry,
-                    commit_sha,
-                ));
+            match Self::shared_open(ctx, &overlay_path) {
+                Ok(shared) => {
+                    debug!(%commit_sha, "columnar warm_or_open: overlay found, fast-path load");
+                    return Ok(Self::finish_open(
+                        worktree_path,
+                        shared,
+                        lang_registry,
+                        commit_sha,
+                    ));
+                }
+                Err(e) => Self::rebuild_or_refuse(e, &overlay_path, commit_sha)?,
             }
-            // Corrupt / schema mismatch — remove and rebuild below.
-            debug!(%commit_sha, "columnar warm_or_open: overlay unreadable, will rebuild");
-            let _ = std::fs::remove_file(&overlay_path);
         }
 
         // Slow path: build under lock.
@@ -70,16 +115,18 @@ impl ColumnarStorage {
             Ok(_lock) => {
                 // Re-check: a peer may have built the overlay while we waited.
                 if overlay_path.exists() {
-                    if let Ok(shared) = Self::shared_open(ctx, &overlay_path) {
-                        debug!(%commit_sha, "columnar warm_or_open: peer built overlay under lock");
-                        return Ok(Self::finish_open(
-                            worktree_path,
-                            shared,
-                            Arc::clone(&lang_registry),
-                            commit_sha,
-                        ));
+                    match Self::shared_open(ctx, &overlay_path) {
+                        Ok(shared) => {
+                            debug!(%commit_sha, "columnar warm_or_open: peer built overlay under lock");
+                            return Ok(Self::finish_open(
+                                worktree_path,
+                                shared,
+                                Arc::clone(&lang_registry),
+                                commit_sha,
+                            ));
+                        }
+                        Err(e) => Self::rebuild_or_refuse(e, &overlay_path, commit_sha)?,
                     }
-                    let _ = std::fs::remove_file(&overlay_path);
                 }
 
                 Self::build_overlay(ctx, input, &worktree_path, &overlay_path, commit_sha);
@@ -111,17 +158,14 @@ impl ColumnarStorage {
     ) -> Result<Arc<SharedOpen>> {
         open_cache::shared_open(&Self::open_key(ctx, overlay_path), || {
             let overlay = Overlay::open(overlay_path)?;
-            let segments = Self::open_segments_from_overlay(ctx, &overlay);
-            // `open_segments_from_overlay` drops a reader it cannot open, and
-            // the vector it returns is indexed positionally by the overlay's
-            // own `segment_idx`. A dropped reader therefore shifts every later
-            // index, so such a session does not merely read fewer rows — it
-            // reads some rows against the wrong file's reader. That is a
-            // pre-existing hazard and not this cache's to fix, but it is
-            // emphatically not a state to hand to every session that follows:
-            // today the next session opens the files again and may get a whole
-            // set, and sharing a short one would make the misalignment
-            // permanent for that commit.
+            let segments = Self::open_segments_from_overlay(ctx, &overlay, overlay_path)?;
+            // `open_segments_from_overlay` fails rather than dropping a reader
+            // it cannot open, so `segments` is positionally aligned with the
+            // overlay's own segment table by the time it reaches here. The
+            // completeness guard stays: it is what stops a misaligned vector
+            // becoming permanent for a commit, and it should go on holding that
+            // line if some later producer of a `SharedOpen` is less strict than
+            // this one.
             let complete = segments.len() == overlay.segments().len();
             Ok(open_cache::Opened {
                 value: SharedOpen { overlay, segments },
@@ -253,23 +297,58 @@ impl ColumnarStorage {
         Ok(())
     }
 
-    /// Open all segment readers referenced by `overlay`.
+    /// Decide what a failed open of an existing overlay means, for both places
+    /// that try one.
     ///
-    /// Segments that cannot be opened are silently skipped. Note what that
-    /// costs: the returned vector is indexed positionally by the overlay's own
-    /// `segment_idx`, so a skipped reader shifts every later index and the
-    /// result is not a smaller correct answer but a misaligned one. Callers
-    /// that can tell should treat a short vector as a degraded open.
+    /// `Ok(())` means the overlay is unusable and has been removed, so the
+    /// caller should rebuild. `Err` means the overlay is fine and a segment it
+    /// names is not, which is refused rather than rebuilt over — see
+    /// [`IncompleteIndex`].
+    ///
+    /// Both call sites go through here so the two cannot drift apart, and so
+    /// one test covers both.
+    ///
+    /// # Errors
+    /// Returns the original error when it is an [`IncompleteIndex`].
+    fn rebuild_or_refuse(e: anyhow::Error, overlay_path: &Path, commit_sha: &str) -> Result<()> {
+        if e.is::<IncompleteIndex>() {
+            return Err(e);
+        }
+        // Corrupt / schema mismatch — remove and rebuild.
+        debug!(%commit_sha, "columnar warm_or_open: overlay unreadable, will rebuild");
+        let _ = std::fs::remove_file(overlay_path);
+        Ok(())
+    }
+
+    /// Open one reader per segment the overlay lists, in the overlay's own order.
+    ///
+    /// # Errors
+    /// Returns `Err` if any listed segment will not open. The returned vector is
+    /// indexed positionally by the overlay's own `segment_idx`, so a dropped
+    /// reader is not a smaller correct answer: it shifts every later index, and
+    /// rows are then served against a different file's reader — right name and
+    /// line, wrong path and content, and a node handle addressing a file the
+    /// query never named. A partial index cannot answer authoritatively, so the
+    /// open fails and names the repairs instead of reading on.
     fn open_segments_from_overlay(
         ctx: &crate::storage::ColumnarBuildContext,
         overlay: &Arc<Overlay>,
-    ) -> Vec<Arc<SegmentReader>> {
+        overlay_path: &Path,
+    ) -> Result<Vec<Arc<SegmentReader>>> {
         overlay
             .segments()
             .iter()
-            .filter_map(|meta| {
-                let dir = ctx.segment_path_for(&meta.source_path, &meta.hex_content_id);
-                SegmentReader::open(&dir).ok().map(Arc::new)
+            .map(|meta| {
+                let path = ctx.segment_path_for(&meta.source_path, &meta.hex_content_id);
+                match SegmentReader::open(&path) {
+                    Ok(reader) => Ok(Arc::new(reader)),
+                    Err(e) => Err(anyhow::Error::new(IncompleteIndex {
+                        source_path: meta.source_path.clone(),
+                        segment_path: path,
+                        overlay_path: overlay_path.to_path_buf(),
+                        cause: e.to_string(),
+                    })),
+                }
             })
             .collect()
     }
