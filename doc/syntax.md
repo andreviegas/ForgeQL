@@ -985,6 +985,29 @@ in every MCP response via the `line_budget` metadata field. Budget files are per
 to `.budgets/{source}@{branch}.json` under the ForgeQL data directory. Expired files
 are auto-deleted on the next `USE` via `sweep_expired()`.
 
+**Result budget:** one `FIND symbols` may materialise about 1.34 million result
+rows — a 2 GiB budget divided by the working cost of a row, plus the one segment
+being materialised when it trips, since the bound is tested once per segment
+rather than once per row. Past that the query is **refused, never truncated**: a
+partial answer that does not announce itself is the silent false negative the
+completeness guarantee exists to prevent, so the error names the remedy instead
+— narrow the scan with `IN 'path/**'` or a more selective `WHERE`, or add a
+`LIMIT`, which bounds the scan only when the query has no `ORDER BY` (ordering
+has to see every row before it can pick the first N). `FORGEQL_FIND_MAX_ROWS`
+overrides the bound in rows and `0` disables it.
+
+That bound is roughly 3.7x lower than the five million rows it replaced, so a
+scan that used to complete can now be refused — a reachability change, not a
+restatement. The case to watch is a `GROUP BY` no fast path accepts: its answer
+is a handful of rows, but it materialises every matching row to get there.
+
+The bound is enforced on the `FIND symbols` scan over the on-disk index and
+nowhere else. `FIND usages` builds its rows in one step on both backends, `FIND
+files` pushes one entry per file with no bound at all, the in-memory backend
+materialises its whole result before any clause applies, and a session's
+uncommitted rows are unioned in after the check — a query answered by one of
+those can still exhaust host memory.
+
 ---
 
 ### EXPORT PATCH

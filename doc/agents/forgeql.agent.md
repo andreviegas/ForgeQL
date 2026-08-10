@@ -112,6 +112,7 @@ FIND symbols
 - FIND defaults to 20 rows without LIMIT. Add LIMIT N to override.
 - Format defaults to CSV (~60% fewer tokens). Use JSON only when parsing fields programmatically.
 - `tokens_approx` is in every response — if large, add WHERE/IN/EXCLUDE or lower LIMIT before the next query.
+- A `FIND symbols` scan that would materialise past the query's 2 GiB result budget (~1.3M rows) is **refused, not truncated** — narrow with `IN`/`WHERE`, or add a `LIMIT`, which bounds the scan only when there is no `ORDER BY` (ordering has to see every row to pick the first N). The bound covers that scan over the on-disk index; `FIND usages`, `FIND files` and the in-memory backend carry none.
 - For magic number exploration: `WHERE num_format = 'dec' WHERE num_value > X WHERE num_value < Y` narrows by semantic domain (timeouts, counts, ASCII ranges) — more surgical than blind GROUP BY.
 - Plan multi-read SHOW operations in advance. If you need context around lines 56, 118, 188 in the same file, check whether one contiguous range covers all three before issuing three separate queries.
 - Every response includes `tokens_approx` — if large, narrow with WHERE, IN, EXCLUDE, or lower LIMIT.

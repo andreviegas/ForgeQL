@@ -76,6 +76,7 @@ alias.
 - SHOW body and SHOW context returning more than 40 lines without explicit LIMIT are capped to the first window (`SHOW MORE` pages the rest). **`SHOW NODE '<id>'` returns a node's full span** — read a located node by its handle, at any size.
 - Format defaults to CSV (~60% fewer tokens).
 - Every response includes `tokens_approx` — if large, narrow with WHERE, IN, EXCLUDE.
+- A `FIND symbols` scan that would materialise past the query's 2 GiB result budget (~1.3M rows) is **refused, not truncated** — narrow with `IN`/`WHERE`, or add a `LIMIT`, which bounds the scan only when there is no `ORDER BY` (ordering has to see every row to pick the first N). The bound covers that scan over the on-disk index; `FIND usages`, `FIND files` and the in-memory backend carry none.
 
 ## Enrichment Fields for Code Quality
 

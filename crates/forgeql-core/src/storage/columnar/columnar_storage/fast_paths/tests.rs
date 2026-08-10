@@ -100,3 +100,31 @@ fn a_path_predicate_waits_for_the_rows_when_the_caller_supplied_no_path() {
     assert_eq!(early.len(), 1);
     assert!(late.is_empty());
 }
+
+/// The row bound is the memory budget divided by the per-row cost, not a
+/// number someone picked.
+///
+/// This is the property that rotted: the bound was a bare `5_000_000` that
+/// outlived several growths of the result row, so by the time anyone checked it
+/// authorised roughly 7.5 GB against a stated budget of 2 GiB. Pinning the
+/// derivation means the next growth of `FIND_BYTES_PER_ROW` moves the bound
+/// instead of quietly widening what a query may spend.
+#[test]
+fn the_row_bound_is_derived_from_the_memory_budget() {
+    let spend = super::DEFAULT_FIND_MAX_ROWS * super::FIND_BYTES_PER_ROW;
+    assert!(
+        spend <= super::FIND_ROW_BUDGET_BYTES,
+        "the bound authorises {spend} bytes against a budget of {}",
+        super::FIND_ROW_BUDGET_BYTES
+    );
+
+    // And it is the *largest* count that fits, which is what tells a derived
+    // bound apart from any smaller number that would also pass the line above.
+    let one_more = (super::DEFAULT_FIND_MAX_ROWS + 1) * super::FIND_BYTES_PER_ROW;
+    assert!(
+        one_more > super::FIND_ROW_BUDGET_BYTES,
+        "one row more than the bound still fits the budget, so the bound is not \
+         derived from it: {one_more} <= {}",
+        super::FIND_ROW_BUDGET_BYTES
+    );
+}

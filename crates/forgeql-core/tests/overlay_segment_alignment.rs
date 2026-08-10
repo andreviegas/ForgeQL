@@ -358,13 +358,20 @@ fn a_missing_segment_is_refused_when_the_rebuild_would_only_drop_it() {
         prebuilt_segment_map: Some(fx.segment_map.clone()),
     });
 
+    let msg = format!("{err:#}");
     assert!(
-        format!("{err:#}").contains(SOURCES[1]),
-        "the error must name the file whose segment is gone: {err:#}"
+        msg.contains(SOURCES[1]),
+        "the error must name the file whose segment is gone: {msg}"
+    );
+    assert!(
+        !msg.contains("a rebuild ran and did not write it back"),
+        "this must be the refusal that runs *no* rebuild — the post-condition's \
+         refusal, raised after a rebuild that produced nothing, leaves the same \
+         outcome behind and would hide the decision entirely: {msg}"
     );
     assert!(
         !missing.exists(),
-        "this rebuild cannot write the segment back, which is why it must not run"
+        "and the segment is still gone, since no rebuild here could have written it"
     );
     assert!(
         fx.overlay_path.exists(),

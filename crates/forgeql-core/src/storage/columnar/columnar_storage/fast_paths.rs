@@ -18,10 +18,44 @@ use super::ColumnarStorage;
 /// Over-fetch factor for the running top-K trim in [`ColumnarStorage::materialize_all`].
 const TOPK_OVER_FETCH: usize = 4;
 
-/// Default hard bound on rows one FIND may materialise before
-/// ORDER/GROUP/LIMIT apply.  At a few hundred bytes per row this keeps peak
-/// query memory in the low gigabytes even on multi-ten-million-symbol indexes.
-const DEFAULT_FIND_MAX_ROWS: usize = 5_000_000;
+/// The memory one `FIND` may spend on materialised result rows.
+///
+/// The bound is a memory budget rather than a row count, because a row count is
+/// the thing that drifts: rows have grown enrichment fields several times and
+/// the count was never revisited. It is written as the budget and the per-row
+/// cost so both are visible to the next person to change either.
+const FIND_ROW_BUDGET_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// Working figure for the cost of one materialised [`SymbolMatch`], including
+/// the heap its `String`s and `HashMap` own rather than just the struct.
+///
+/// Rows vary — a bare occurrence row is smaller, an enrichment-heavy one
+/// larger — and the observed range is 1.5–1.6 KB, of which this takes the
+/// conservative end. It is the number to re-measure when the row grows a field,
+/// not a constant that stays true on its own.
+const FIND_BYTES_PER_ROW: usize = 1_600;
+
+/// Default hard bound on rows one `FIND` may materialise before ORDER/GROUP/LIMIT
+/// apply — the budget above divided by the per-row cost, about 1.34 million.
+///
+/// It is about **3.7x tighter than the five million it replaces**, so a scan
+/// that used to complete can now be refused. That is the intended direction —
+/// the old number was never measured against the row it was bounding — but it
+/// is a reachability change, not a restatement, and where the new line falls on
+/// a multi-million-symbol corpus has not been measured either. A `GROUP BY`
+/// that no fast path accepts is the case to watch: its answer is a handful of
+/// rows but it materialises every matching row to get there.
+///
+/// **What this does not cover.** It is enforced in [`ColumnarStorage::materialize_all`]
+/// only, which is the `FIND symbols` scan over the on-disk index — and there it
+/// is tested after each segment is appended, so the real peak is the budget plus
+/// the one segment being materialised. `FIND usages` builds its rows by `collect`
+/// on both backends, `FIND files` pushes one entry per file with no bound at all,
+/// the legacy in-memory backend materialises its whole result before any clause
+/// applies, and the dirty overlay's rows are unioned in after the check (bounded
+/// in practice by one session's edits). None of those is bounded here; a query
+/// answered by one of them can still exhaust host memory.
+const DEFAULT_FIND_MAX_ROWS: usize = FIND_ROW_BUDGET_BYTES / FIND_BYTES_PER_ROW;
 
 /// Row budget for [`ColumnarStorage::materialize_all`], read per query.
 /// `FORGEQL_FIND_MAX_ROWS` overrides the default; `0` disables the bound.
@@ -771,14 +805,20 @@ impl ColumnarStorage {
             }
 
             // Hard memory bound: refuse to grow past the row budget instead of
-            // exhausting host RAM on an unscoped scan (a 42 M-symbol index can
-            // otherwise materialise >25 GB before ORDER/GROUP/LIMIT applies).
+            // exhausting host RAM on an unscoped scan. Checked between segments,
+            // so the real peak is the budget plus one segment's rows — bounded,
+            // and cheaper than testing it per row.
             if results.len() > max_rows {
                 anyhow::bail!(
-                    "query materialised more than {max_rows} rows before \
-                     ORDER/GROUP/LIMIT.  Narrow the scan with IN 'path/**', a \
-                     more selective WHERE, or an explicit LIMIT — or raise \
-                     FORGEQL_FIND_MAX_ROWS (0 disables the bound)."
+                    "FIND materialised more than {max_rows} rows before \
+                     ORDER/GROUP/LIMIT — about {} GiB of result rows, which is \
+                     the budget in force. Narrow the scan — IN 'path/**', or a \
+                     more selective WHERE — or add a LIMIT, which bounds the \
+                     scan only when the query has no ORDER BY: ordering has to \
+                     see every row before it can pick the first N. \
+                     FORGEQL_FIND_MAX_ROWS overrides the bound in rows; 0 \
+                     disables it.",
+                    max_rows.saturating_mul(FIND_BYTES_PER_ROW) / (1024 * 1024 * 1024)
                 );
             }
         }
