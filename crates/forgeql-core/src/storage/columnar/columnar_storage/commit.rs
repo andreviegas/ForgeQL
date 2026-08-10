@@ -21,17 +21,27 @@ use super::super::shadow_writer::ShadowWriter;
 use super::ColumnarStorage;
 
 /// An overlay that opened cleanly while naming a segment the disk no longer
-/// holds.
+/// holds, where no rebuild reachable from here writes that segment back.
 ///
-/// Kept distinct from an unreadable overlay because the two need opposite
-/// responses. An unreadable overlay is removed and rebuilt; an overlay that
-/// reads cleanly is not deleted on the strength of a missing segment. Removing
-/// it is destructive and cannot be undone, and a rebuild is not a dependable
-/// repair to route into unasked: shadow-writing from a merged symbol table does
-/// regenerate a segment that is absent, but the inline path builds the overlay
-/// from the segments already on disk and drops one it cannot read, which is a
-/// smaller index that never says it is smaller. So the open refuses and names
-/// both repairs, and the operator chooses.
+/// The two ways this can end are told apart by what the caller brought with it,
+/// not by the fault. Shadow-writing from a merged symbol table can write a
+/// segment that is not there, so where one is available the rebuild is allowed
+/// to run and the index is usually repaired. It is only *usually*: the rebuild
+/// skips a segment whose magic bytes are intact even when opening it fails, a
+/// failed flush leaves the path in the map with nothing behind it, and the
+/// assembly step that ends every rebuild drops what it cannot read. So the
+/// caller checks afterwards and raises this if the segment is still not there —
+/// a rebuild running is not the same as a rebuild working, and the difference
+/// between them would be an index one file smaller that never says so.
+///
+/// The other end is a rebuild that could only drop the segment — assembling
+/// from the segments already on disk, which is what runs whenever the caller
+/// carries an inline segment map — or no rebuild at all. Those refuse without
+/// running anything.
+///
+/// A readable overlay is not deleted on the strength of a missing segment in
+/// either direction: removing one is destructive and cannot be undone, and the
+/// repairing rebuild replaces it atomically without needing it gone.
 #[derive(Debug)]
 struct IncompleteIndex {
     /// Worktree-relative path of the file whose segment would not open.
@@ -48,13 +58,14 @@ impl std::fmt::Display for IncompleteIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "index incomplete: the segment for {} is missing or unreadable at {} ({}) — \
-             an index missing a segment cannot answer completely. Restore that file, \
-             or remove the index at {} to have it rebuilt on the next open",
+            "index incomplete: {} names a segment for {} that is missing or \
+             unreadable at {} ({}) — an index missing a segment cannot answer \
+             completely, and no rebuild available here would write it back. Restore \
+             that file, or index this source from scratch",
+            self.overlay_path.display(),
             self.source_path.display(),
             self.segment_path.display(),
-            self.cause,
-            self.overlay_path.display()
+            self.cause
         )
     }
 }
@@ -77,11 +88,12 @@ impl ColumnarStorage {
     ///
     /// # Errors
     /// Returns `Err` for hard failures: lock file I/O, the final
-    /// `Overlay::open` after a successful build, and any segment the overlay
-    /// lists that will not open — that last one leaves the index incomplete,
-    /// which cannot be answered from, so the open fails and names both repairs
-    /// rather than rebuilding over it (see [`Self::rebuild_or_refuse`]).
-    /// Shadow-write failures are treated as non-fatal and logged.
+    /// `Overlay::open` after a successful build, and a segment the overlay
+    /// lists that will not open and that no rebuild reachable from `input`
+    /// writes back — including one a rebuild was allowed to try for and did not
+    /// produce. The overlay is never deleted in that case; see
+    /// [`Self::rebuild_or_refuse`]. Shadow-write failures are otherwise treated
+    /// as non-fatal and logged.
     pub fn warm_or_open(
         ctx: &crate::storage::ColumnarBuildContext,
         input: BuildInput<'_>,
@@ -90,6 +102,13 @@ impl ColumnarStorage {
         lang_registry: Arc<LanguageRegistry>,
     ) -> Result<Self> {
         let overlay_path = ctx.overlay_path_for(commit_sha);
+
+        // A refusal deferred while the rebuild below is given a chance to write
+        // the missing segment back. It is raised after that rebuild unless the
+        // segment is really there: authorising a rebuild is not the same as the
+        // rebuild succeeding, and the difference between the two is a smaller
+        // index that never says it is smaller.
+        let mut deferred_refusal: Option<IncompleteIndex> = None;
 
         // Fast path: overlay already on disk and readable.
         if overlay_path.exists() {
@@ -103,7 +122,14 @@ impl ColumnarStorage {
                         commit_sha,
                     ));
                 }
-                Err(e) => Self::rebuild_or_refuse(e, &overlay_path, commit_sha)?,
+                Err(e) => {
+                    deferred_refusal = Self::rebuild_or_refuse(
+                        e,
+                        &overlay_path,
+                        commit_sha,
+                        Self::rebuild_regenerates_segments(&input),
+                    )?;
+                }
             }
         }
 
@@ -125,7 +151,14 @@ impl ColumnarStorage {
                                 commit_sha,
                             ));
                         }
-                        Err(e) => Self::rebuild_or_refuse(e, &overlay_path, commit_sha)?,
+                        Err(e) => {
+                            deferred_refusal = Self::rebuild_or_refuse(
+                                e,
+                                &overlay_path,
+                                commit_sha,
+                                Self::rebuild_regenerates_segments(&input),
+                            )?;
+                        }
                     }
                 }
 
@@ -137,6 +170,25 @@ impl ColumnarStorage {
         // Open whatever we built (or what was there before — best-effort).
         let shared = Self::shared_open(ctx, &overlay_path)
             .map_err(|e| anyhow!("overlay open failed for {commit_sha}: {e}"))?;
+
+        // The rebuild was allowed to run because it *might* write the missing
+        // segment back. Check that it did. Every way it can fail to — a segment
+        // whose magic bytes survive so shadow-write calls it already valid, a
+        // flush that failed, a source file that could not be read — ends the
+        // same way: the assembly step drops it and this open succeeds over an
+        // index one file smaller, saying nothing. Refuse instead.
+        if let Some(pending) = deferred_refusal
+            && !shared
+                .overlay
+                .segments()
+                .iter()
+                .any(|meta| meta.source_path == pending.source_path)
+        {
+            return Err(anyhow::Error::new(IncompleteIndex {
+                cause: format!("{}; a rebuild ran and did not write it back", pending.cause),
+                ..pending
+            }));
+        }
         Ok(Self::finish_open(
             worktree_path,
             shared,
@@ -205,6 +257,22 @@ impl ColumnarStorage {
         storage
     }
 
+    /// Whether rebuilding from `input` would regenerate a segment that is
+    /// missing, rather than drop it.
+    ///
+    /// This mirrors the branch order in [`Self::build_overlay`] directly below,
+    /// and has to keep mirroring it. The inline prebuilt map wins when both are
+    /// present, and that path builds the overlay from the segments already on
+    /// disk, so one it cannot read is dropped and the index quietly shrinks.
+    /// Shadow-writing from a merged symbol table is the only path that writes a
+    /// segment which is not already valid, and that is what makes it a repair
+    /// rather than a loss.
+    ///
+    /// Two tests hold the two answers apart, so drift here surfaces as a
+    /// failure instead of as a wrong answer.
+    const fn rebuild_regenerates_segments(input: &BuildInput<'_>) -> bool {
+        input.prebuilt_segment_map.is_none() && input.table.is_some()
+    }
     /// Build segments + overlay under the held lock. Prefers the inline fast-path
     /// (segments already written per-file during `build_index`) and falls back to
     /// shadow-writing the merged `SymbolTable`. Best-effort: failures are logged.
@@ -300,24 +368,53 @@ impl ColumnarStorage {
     /// Decide what a failed open of an existing overlay means, for both places
     /// that try one.
     ///
-    /// `Ok(())` means the overlay is unusable and has been removed, so the
-    /// caller should rebuild. `Err` means the overlay is fine and a segment it
-    /// names is not, which is refused rather than rebuilt over — see
-    /// [`IncompleteIndex`].
+    /// `Ok(None)` means the overlay is unusable and has been removed, so the
+    /// caller should rebuild from scratch. `Ok(Some(..))` means the overlay is
+    /// fine, a segment it names is gone, and `can_regenerate` says the rebuild
+    /// the caller is about to run may write that segment again — the caller
+    /// must then check that it actually did, and raise the returned refusal if
+    /// it did not. `Err` is the remaining case: a readable overlay over a
+    /// missing segment with no rebuild here that would write it back, which is
+    /// refused outright. See [`IncompleteIndex`].
     ///
-    /// Both call sites go through here so the two cannot drift apart, and so
-    /// one test covers both.
+    /// A readable overlay is never removed here. Removing one is destructive and
+    /// cannot be undone, and the repairing rebuild does not need it gone: it
+    /// replaces the file atomically.
+    ///
+    /// Both call sites go through here so the two cannot drift apart, and so one
+    /// test covers both.
     ///
     /// # Errors
-    /// Returns the original error when it is an [`IncompleteIndex`].
-    fn rebuild_or_refuse(e: anyhow::Error, overlay_path: &Path, commit_sha: &str) -> Result<()> {
-        if e.is::<IncompleteIndex>() {
-            return Err(e);
+    /// Returns the original error for an [`IncompleteIndex`] no rebuild
+    /// available here would write back.
+    fn rebuild_or_refuse(
+        e: anyhow::Error,
+        overlay_path: &Path,
+        commit_sha: &str,
+        can_regenerate: bool,
+    ) -> Result<Option<IncompleteIndex>> {
+        let incomplete = match e.downcast::<IncompleteIndex>() {
+            Ok(incomplete) => incomplete,
+            Err(other) => {
+                // Corrupt / schema mismatch — remove and rebuild.
+                debug!(%commit_sha, "columnar warm_or_open: overlay unreadable, will rebuild");
+                drop(other);
+                let _ = std::fs::remove_file(overlay_path);
+                return Ok(None);
+            }
+        };
+        if !can_regenerate {
+            return Err(anyhow::Error::new(incomplete));
         }
-        // Corrupt / schema mismatch — remove and rebuild.
-        debug!(%commit_sha, "columnar warm_or_open: overlay unreadable, will rebuild");
-        let _ = std::fs::remove_file(overlay_path);
-        Ok(())
+        // A merged symbol table is available, so the rebuild below may write the
+        // segment that is gone. It is handed back rather than dropped because
+        // "may" is the most that can be said here: shadow-write skips a segment
+        // whose magic bytes are intact even when opening it fails, a flush that
+        // fails leaves the path in the map with nothing behind it, and the
+        // assembly step that follows drops what it cannot read. The caller
+        // checks afterwards that the segment is really there.
+        debug!(%commit_sha, "columnar warm_or_open: segment missing, rebuilding to regenerate it");
+        Ok(Some(incomplete))
     }
 
     /// Open one reader per segment the overlay lists, in the overlay's own order.
@@ -328,8 +425,10 @@ impl ColumnarStorage {
     /// reader is not a smaller correct answer: it shifts every later index, and
     /// rows are then served against a different file's reader — right name and
     /// line, wrong path and content, and a node handle addressing a file the
-    /// query never named. A partial index cannot answer authoritatively, so the
-    /// open fails and names the repairs instead of reading on.
+    /// query never named. A partial index cannot answer authoritatively, so it
+    /// is reported rather than read on from; what the caller does with that —
+    /// regenerate the segment or refuse — is decided in
+    /// [`Self::rebuild_or_refuse`].
     fn open_segments_from_overlay(
         ctx: &crate::storage::ColumnarBuildContext,
         overlay: &Arc<Overlay>,
