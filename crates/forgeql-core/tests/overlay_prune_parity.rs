@@ -158,7 +158,7 @@ fn combined_path_glob_and_enrichment_parity() {
             )
         })
         .collect();
-    let storage = ColumnarStorage::new(
+    let storage = ColumnarStorage::new_unshared(
         fixtures_dir(),
         segments,
         overlay,

@@ -239,7 +239,7 @@ pub fn single_segment_cpp_overlay() -> (
             )
         })
         .collect();
-    let storage = ColumnarStorage::new(
+    let storage = ColumnarStorage::new_unshared(
         fixtures_dir(),
         segs,
         overlay,

@@ -86,7 +86,7 @@ fn workspace(files: &[(&str, String)]) -> (TempDir, ColumnarStorage) {
         })
         .collect();
     let storage =
-        ColumnarStorage::new(root, segs, overlay, Arc::new(LanguageRegistry::new(vec![])));
+        ColumnarStorage::new_unshared(root, segs, overlay, Arc::new(LanguageRegistry::new(vec![])));
     (tmp, storage)
 }
 

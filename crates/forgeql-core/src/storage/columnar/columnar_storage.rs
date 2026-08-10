@@ -146,7 +146,7 @@ impl ColumnarStorage {
     /// come through [`Self::warm_or_open`]. `segments` **must** be in the same
     /// order as `overlay.segments()`.
     #[must_use]
-    pub fn new(
+    pub fn new_unshared(
         worktree_root: PathBuf,
         segments: Vec<Arc<SegmentReader>>,
         overlay: Arc<Overlay>,

@@ -80,7 +80,7 @@ fn rollback_gcs_orphaned_staging_segments() {
                 )
             })
             .collect();
-        ColumnarStorage::new(
+        ColumnarStorage::new_unshared(
             worktree.clone(),
             segs,
             ov,
@@ -235,7 +235,7 @@ fn nested_rollback_restores_correct_delta() {
                 )
             })
             .collect();
-        ColumnarStorage::new(
+        ColumnarStorage::new_unshared(
             worktree.clone(),
             segs,
             ov,
@@ -421,7 +421,7 @@ fn commit_promotes_segments_and_builds_new_overlay() {
             )
         })
         .collect();
-    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, lang_reg);
+    let mut storage = ColumnarStorage::new_unshared(worktree.clone(), segments, overlay, lang_reg);
 
     // Modify file1 and reindex into the staging dir.
     std::fs::write(&file1, "void UpdatedFunc1() {}\nvoid NewFunc() {}\n").expect("update file1");
@@ -609,7 +609,7 @@ fn new_session_hits_promoted_overlay_cache() {
             )
         })
         .collect();
-    let mut storage_a = ColumnarStorage::new(
+    let mut storage_a = ColumnarStorage::new_unshared(
         worktree.clone(),
         segments_a,
         overlay_a,
@@ -652,7 +652,7 @@ fn new_session_hits_promoted_overlay_cache() {
             )
         })
         .collect();
-    let storage_b = ColumnarStorage::new(
+    let storage_b = ColumnarStorage::new_unshared(
         worktree.clone(),
         session_b_segs,
         overlay_b,

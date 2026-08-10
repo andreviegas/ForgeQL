@@ -61,7 +61,7 @@ fn columnar_show_outline_matches_legacy() {
             )
         })
         .collect();
-    let storage = ColumnarStorage::new(
+    let storage = ColumnarStorage::new_unshared(
         fixtures_dir(),
         segments,
         overlay,

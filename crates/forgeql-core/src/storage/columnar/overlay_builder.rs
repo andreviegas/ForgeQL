@@ -74,13 +74,6 @@ impl OverlayBuilder {
     ///
     /// # Errors
     /// Returns `Err` if writing or renaming the overlay file fails fatally.
-    /// Build the overlay and write it atomically to `overlay_path`.
-    ///
-    /// Segments that are missing or unreadable are silently skipped with a
-    /// warning; an overlay with zero segments is not written (returns `Ok`).
-    ///
-    /// # Errors
-    /// Returns `Err` if writing or renaming the overlay file fails fatally.
     pub fn build_and_persist(&self, overlay_path: &Path) -> Result<()> {
         let t_total = std::time::Instant::now();
 

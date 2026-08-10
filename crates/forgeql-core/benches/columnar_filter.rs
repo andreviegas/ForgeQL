@@ -148,7 +148,7 @@ fn build_two_segment_overlay() -> (TempDir, ColumnarStorage) {
         .collect();
 
     let registry = Arc::new(LanguageRegistry::new(vec![]));
-    let storage = ColumnarStorage::new(fixtures_dir(), segments, overlay, registry);
+    let storage = ColumnarStorage::new_unshared(fixtures_dir(), segments, overlay, registry);
     (tmp, storage)
 }
 

@@ -107,7 +107,7 @@ fn is_path_fresh_detects_external_edit() {
         .collect();
 
     let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
-    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+    let mut storage = ColumnarStorage::new_unshared(worktree.clone(), segments, overlay, registry);
 
     let rel = std::path::Path::new("fresh.cpp");
 
@@ -199,7 +199,7 @@ fn purge_removes_file_symbols() {
         .collect();
 
     let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
-    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+    let mut storage = ColumnarStorage::new_unshared(worktree.clone(), segments, overlay, registry);
 
     // Purge file1 — its symbols should vanish.
     storage.purge_file(&file1).expect("purge_file");
@@ -326,7 +326,7 @@ fn reindex_writes_delta_file() {
         .collect();
 
     let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
-    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+    let mut storage = ColumnarStorage::new_unshared(worktree.clone(), segments, overlay, registry);
 
     let delta_path = worktree.join(".forgeql-columnar-delta");
     assert!(!delta_path.exists(), "delta must not exist before reindex");
@@ -438,7 +438,7 @@ fn delta_survives_simulated_restart() {
                 )
             })
             .collect();
-        ColumnarStorage::new(
+        ColumnarStorage::new_unshared(
             worktree.clone(),
             segments,
             overlay,

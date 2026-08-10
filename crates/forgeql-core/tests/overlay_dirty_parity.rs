@@ -150,7 +150,7 @@ fn dirty_overlay_shadows_and_unions() {
         })
         .collect();
 
-    let mut storage = ColumnarStorage::new(
+    let mut storage = ColumnarStorage::new_unshared(
         root.clone(),
         segments,
         overlay,
@@ -296,7 +296,7 @@ fn dirty_overlay_find_usages_shadows_and_unions() {
             )
         })
         .collect();
-    let mut storage = ColumnarStorage::new(
+    let mut storage = ColumnarStorage::new_unshared(
         root.clone(),
         segments,
         overlay,
@@ -420,7 +420,7 @@ fn dirty_overlay_resolve_symbol_shadows_and_unions() {
             )
         })
         .collect();
-    let mut storage = ColumnarStorage::new(
+    let mut storage = ColumnarStorage::new_unshared(
         root.clone(),
         segments,
         overlay,
@@ -531,7 +531,7 @@ fn dirty_overlay_resolve_respects_in_glob_filter() {
             )
         })
         .collect();
-    let mut storage = ColumnarStorage::new(
+    let mut storage = ColumnarStorage::new_unshared(
         root.clone(),
         segments,
         overlay,
@@ -671,7 +671,7 @@ fn dirty_overlay_resolve_uses_alphabetical_not_insertion_order() {
             )
         })
         .collect();
-    let mut storage = ColumnarStorage::new(
+    let mut storage = ColumnarStorage::new_unshared(
         root.clone(),
         segments,
         overlay,
@@ -787,7 +787,7 @@ fn reindex_updates_dirty_overlay() {
         .collect();
 
     let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
-    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+    let mut storage = ColumnarStorage::new_unshared(worktree.clone(), segments, overlay, registry);
 
     // Rewrite file1 with new symbols (SymbolD, SymbolE); SymbolA + SymbolB disappear.
     std::fs::write(&file1, "void SymbolD() {}\nvoid SymbolE() {}\n").expect("rewrite file1");

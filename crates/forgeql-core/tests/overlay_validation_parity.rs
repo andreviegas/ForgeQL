@@ -76,7 +76,7 @@ fn find_node_reports_not_found_for_committed_node_deleted_in_dirty() {
         })
         .collect();
     let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
-    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+    let mut storage = ColumnarStorage::new_unshared(worktree.clone(), segments, overlay, registry);
 
     // Capture OmegaFn's committed node_id while it still exists.
     let committed = storage
@@ -160,7 +160,7 @@ fn show_outline_reflects_dirty_deletions() {
         })
         .collect();
     let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
-    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+    let mut storage = ColumnarStorage::new_unshared(worktree.clone(), segments, overlay, registry);
 
     // Delete BetaFn and reindex so the file gains a dirty segment.
     std::fs::write(&file, "void AlphaFn() {}\nvoid GammaFn() {}\n").expect("rewrite");

@@ -73,7 +73,7 @@ fn find_symbols_matches_regex_alternation() {
         })
         .collect();
     let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
-    let storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+    let storage = ColumnarStorage::new_unshared(worktree.clone(), segments, overlay, registry);
 
     // Parse a real alternation query to obtain its clauses.
     let ops = forgeql_core::parser::parse("FIND symbols WHERE name MATCHES 'AlphaFn|GammaFn'")
@@ -146,7 +146,7 @@ fn find_node_resolves_newly_created_dirty_node() {
         })
         .collect();
     let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
-    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+    let mut storage = ColumnarStorage::new_unshared(worktree.clone(), segments, overlay, registry);
 
     // Add a brand-new function and reindex — ZetaFn lands only in the dirty
     // segment with a fresh ordinal beyond AlphaFn.
@@ -232,7 +232,7 @@ fn find_node_round_trips_after_ordinal_reassignment() {
         })
         .collect();
     let registry = Arc::new(LanguageRegistry::new(vec![Arc::new(CppLanguage)]));
-    let mut storage = ColumnarStorage::new(worktree.clone(), segments, overlay, registry);
+    let mut storage = ColumnarStorage::new_unshared(worktree.clone(), segments, overlay, registry);
 
     // Insert a third IDENTICAL `if (cond) { same(); }` at the front. The second
     // committed if's ordinal is reassigned to the (now) middle if on line 3,

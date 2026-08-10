@@ -67,7 +67,7 @@ fn overlay_find_symbols_matches_legacy_merged() {
         })
         .collect();
 
-    let storage = ColumnarStorage::new(
+    let storage = ColumnarStorage::new_unshared(
         fixtures_dir(),
         segments,
         overlay,
@@ -169,7 +169,7 @@ fn overlay_kind_prefilter_matches_legacy() {
             )
         })
         .collect();
-    let storage = ColumnarStorage::new(
+    let storage = ColumnarStorage::new_unshared(
         fixtures_dir(),
         segs,
         overlay,
@@ -434,7 +434,7 @@ fn overlay_lookup_name_spans_segments() {
             )
         })
         .collect();
-    let _ = ColumnarStorage::new(
+    let _ = ColumnarStorage::new_unshared(
         fixtures_dir(),
         segs,
         overlay,

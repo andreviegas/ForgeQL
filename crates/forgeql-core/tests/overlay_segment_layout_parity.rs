@@ -64,7 +64,8 @@ fn ft5_columnar_index_stats_rows_match_overlay() {
         .collect();
 
     let registry = Arc::new(forgeql_core::ast::lang::LanguageRegistry::new(vec![]));
-    let storage = ColumnarStorage::new(tmp.path().to_path_buf(), segments, overlay, registry);
+    let storage =
+        ColumnarStorage::new_unshared(tmp.path().to_path_buf(), segments, overlay, registry);
 
     // FT5: index_stats() must return Some with rows == overlay.row_count()
     let stats = storage
@@ -135,7 +136,7 @@ fn ft5_session_has_columnar_after_install() {
         .expect("register_local_session");
 
     // Install the pre-built ColumnarStorage.
-    let storage = ColumnarStorage::new(
+    let storage = ColumnarStorage::new_unshared(
         fixtures_dir(),
         segments,
         overlay,

@@ -75,7 +75,7 @@ fn mixed_language_workspace() -> (TempDir, ColumnarStorage) {
         })
         .collect();
     let storage =
-        ColumnarStorage::new(root, segs, overlay, Arc::new(LanguageRegistry::new(vec![])));
+        ColumnarStorage::new_unshared(root, segs, overlay, Arc::new(LanguageRegistry::new(vec![])));
     (tmp, storage)
 }
 
