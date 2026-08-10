@@ -478,7 +478,8 @@ pub(super) fn find_symbols_prefilter(
     let can_early_exit = !has_usages_pred
         && clauses.order_by.is_none()
         && clauses.group_by.is_none()
-        && clauses.offset.is_none();
+        && clauses.offset.is_none()
+        && crate::filter::no_having_after_paging(clauses);
     let early_limit = if can_early_exit {
         clauses.limit.unwrap_or(usize::MAX)
     } else {

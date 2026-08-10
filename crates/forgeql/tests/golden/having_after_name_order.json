@@ -1,6 +1,6 @@
 {
  "suite": "having_after_name_order",
- "description": "A HAVING predicate must decide which rows a page contains, not which of an already-chosen page survives. Ordering by name takes a shortcut the other orderings have no equivalent for: it walks the name index in order and stops once it holds LIMIT rows. That is correct while every filter has already run, and wrong once one has not -- HAVING is applied after the page is cut, so the answer becomes the first LIMIT rows by name minus those failing HAVING, instead of the first LIMIT rows by name that satisfy it. Rows that qualify are never fetched, nothing is truncated in the reply, and no error is raised. The pairs below differ in one keyword at a time so the cause cannot be mistaken: WHERE against HAVING at the same limit, and name-ordering against orderings that materialise before paging.",
+ "description": "A HAVING predicate must decide which rows a page contains, not which of an already-chosen page survives. Ordering by name takes a shortcut the other orderings have no equivalent for: it walks the name index in order and stops once it holds LIMIT rows. That is correct only while every filter has already run. HAVING runs after the page is cut, so while the shortcut was allowed to fire alongside one, the answer was the first LIMIT rows by name minus those failing HAVING instead of the first LIMIT rows by name that satisfy it -- rows that qualify were never fetched, nothing was truncated in the reply, and no error was raised. The name-ordered fast paths and the running top-K trim are now all gated on HAVING being absent, and these cases hold them to it. The pairs below differ in one keyword at a time so a regression cannot be misattributed: WHERE against HAVING at the same limit, and name-ordering against orderings that materialise before paging.",
  "cases": [
   {
    "name": "the_answer_this_suite_measures_against",
@@ -26,11 +26,23 @@
    }
   },
   {
-   "name": "a_having_predicate_survives_the_name_ordered_page",
-   "description": "The same three rows, asked for with HAVING instead of WHERE. A page of three is requested and three qualifying rows exist, so three must come back. The shortcut instead takes the first three functions by name -- none of which is long enough -- and applies HAVING to those, returning nothing at all.",
+   "name": "an_unordered_page_is_chosen_by_the_predicate_too",
+   "description": "The same page with no ORDER BY at all. Ordering by name is not the only early exit: with no ORDER BY and no GROUP BY the scan stops opening segments once it holds LIMIT + 1 rows, and HAVING is applied to those, so the shape failed the same way for a different reason. Rows come back in the default (name, line, path) order, so the same three qualify. A limit far above the answer truncated it here too -- seven rows came back as two.",
    "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "ordering by name walks the name index and stops at LIMIT rows before HAVING has run, so the reply is the first LIMIT rows by name minus those failing HAVING rather than the first LIMIT rows by name that satisfy it; the qualifying rows further along the alphabet are never fetched and nothing in the reply says so",
+   "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 150 LIMIT 3",
+   "assert": {
+    "row_count": 3,
+    "rows": [
+     { "name": "collect_nodes", "line": 358 },
+     { "name": "commit_promotes_segments_and_builds_new_overlay", "line": 3722 },
+     { "name": "dirty_overlay_shadows_and_unions", "line": 1963 }
+    ]
+   }
+  },
+  {
+   "name": "a_having_predicate_survives_the_name_ordered_page",
+   "description": "The same three rows, asked for with HAVING instead of WHERE. A page of three is requested and three qualifying rows exist, so three must come back. While the shortcut was ungated it took the first three functions by name -- none of which is long enough -- applied HAVING to those, and returned nothing at all. This case needs both halves of the fix: gating the name shortcut sends it to the pipeline, where the running top-K trim sheds by name before HAVING runs and would answer nothing just the same, so the trim is gated on HAVING too.",
+   "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 150 ORDER BY name ASC LIMIT 3",
    "assert": {
     "row_count": 3,
@@ -43,10 +55,8 @@
   },
   {
    "name": "a_limit_larger_than_the_answer_still_returns_all_of_it",
-   "description": "A limit far above the seven matching rows cannot bound the answer, so all seven must come back whatever the ordering. Three do: the ones whose names fall inside the window the shortcut stopped at. The other four sort later in the alphabet and are never looked at.",
+   "description": "A limit far above the seven matching rows cannot bound the answer, so all seven must come back whatever the ordering. While the shortcut was ungated only three did -- the ones whose names fell inside the window it stopped at; the other four sort later in the alphabet and were never looked at. This limit is above the top-K trim's threshold, so the trim never armed here and the shortcut alone accounts for the loss.",
    "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "ordering by name walks the name index and stops at LIMIT rows before HAVING has run, so a limit above the size of the answer still truncates it -- the rows that qualify are the ones whose names happen to fall inside the window, not the ones the predicate selects",
    "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 150 ORDER BY name ASC LIMIT 1001",
    "assert": {
     "row_count": 7
@@ -54,10 +64,8 @@
   },
   {
    "name": "reversing_the_order_does_not_change_which_rows_qualify",
-   "description": "The direction of an ORDER BY decides the sequence rows come back in, never which rows are in the answer. Descending must return the same seven as ascending. It returns one -- the single qualifying name that falls inside the window when the walk runs from the other end, which is the clearest statement that the window and not the predicate is choosing the answer.",
+   "description": "The direction of an ORDER BY decides the sequence rows come back in, never which rows are in the answer. Descending must return the same seven as ascending. While the shortcut was ungated it returned one -- the single qualifying name that falls inside the window when the walk runs from the other end, which was the clearest statement that the window and not the predicate was choosing the answer.",
    "use": "forgeql-pub.frozen",
-   "enforcement": "expect_fail",
-   "expect_fail_reason": "ordering by name walks the name index and stops at LIMIT rows before HAVING has run, so reversing the direction changes which rows are reachable inside the window and therefore which rows the answer contains",
    "fql": "FIND symbols WHERE fql_kind = 'function' HAVING lines > 150 ORDER BY name DESC LIMIT 1001",
    "assert": {
     "row_count": 7

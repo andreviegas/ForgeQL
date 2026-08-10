@@ -114,3 +114,55 @@ fn fetch_cap_limit_enrichment_only_no_false_zero() {
         "the returned result must be 'fact'",
     );
 }
+
+/// The same query with `HAVING` in place of `WHERE` — the one keyword that moves
+/// the predicate to after the page has been cut.
+///
+/// A backend that stops reading once it holds `LIMIT` rows answers such a query
+/// with the rows it fetched minus those failing the predicate: nothing at all
+/// here, since the alphabetically first function is not the recursive one. This
+/// exercises that end to end through the engine rather than against a storage
+/// struct directly.
+///
+/// It does **not** cover the in-memory backend's own early exit, however much
+/// its shape suggests otherwise. Removing the `HAVING` condition from
+/// `find_symbols_prefilter::can_early_exit` alone leaves this test green, so
+/// whatever it reaches, it is not that line. The in-memory early exit is
+/// therefore fixed but unpinned: no golden case can reach it either, because
+/// every golden corpus carries a `.forgeql.yaml` and is served by the columnar
+/// backend, whose install drops the in-memory table. Pinning it needs a session
+/// built over a source with no `.forgeql.yaml`, and a fixture whose qualifying
+/// rows fall outside the first `LIMIT` rows in that backend's own scan order —
+/// which is not the alphabetical file order this fixture relies on.
+#[test]
+fn having_after_a_limit_still_selects_the_rows_that_qualify() {
+    let (mut e, sid, _d) = engine_fetchcap_regression();
+
+    // Control: the identical predicate as WHERE, which is filtered while rows
+    // are scanned rather than after the page is chosen.
+    let r_where = exec(
+        &mut e,
+        &sid,
+        "FIND symbols WHERE is_recursive = 'true' LIMIT 1",
+    );
+    let qr_where = common::as_query(&r_where);
+    assert_eq!(
+        qr_where.results.len(),
+        1,
+        "control: as WHERE, a page of one holds the qualifying row"
+    );
+
+    let r_having = exec(
+        &mut e,
+        &sid,
+        "FIND symbols HAVING is_recursive = 'true' LIMIT 1",
+    );
+    let qr_having = common::as_query(&r_having);
+    let names: Vec<&str> = qr_having.results.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(
+        qr_having.results.len(),
+        1,
+        "a page of one must hold a row that satisfies HAVING, got {names:?}"
+    );
+    assert_eq!(names, vec!["fact"], "and it must be the recursive one");
+}

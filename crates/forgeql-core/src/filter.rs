@@ -770,6 +770,27 @@ fn dot_brace_min_len(pattern: &str) -> Option<usize> {
     inner.parse::<usize>().ok()
 }
 
+/// Whether no `HAVING` predicate remains to run after a page has been cut.
+///
+/// Anything that stops reading at `limit + offset` rows — the name-index
+/// streams, the running top-K trim, the segment fetch cap, and the legacy
+/// backend's early exit — is correct only while nothing filters afterwards.
+/// `HAVING` runs in Stage 5, after all of them, so letting one fire alongside a
+/// `HAVING` turns the answer into "the first N by the ordering, minus those that
+/// fail" instead of "the first N by the ordering that pass". The qualifying rows
+/// further along are never fetched, nothing is truncated in the reply, and no
+/// error is raised.
+///
+/// This checks `HAVING` and nothing else, and it is **not** the whole of "no
+/// stage can still remove a row": the Stage 4 dedupe on
+/// `(name, fql_kind, path, line)` also runs after every one of those sites on the
+/// columnar backend, which is a separate open defect — see
+/// `crates/forgeql-core/tests/topk_trim_before_dedupe.rs`. A caller needing that
+/// guarantee has to gate on it as well. `GROUP BY` is excluded separately by
+/// every caller, since it assigns the `count` such a predicate reads.
+pub(crate) const fn no_having_after_paging(clauses: &Clauses) -> bool {
+    clauses.having_predicates.is_empty()
+}
 // -----------------------------------------------------------------------
 // Apply clauses — universal pipeline
 // -----------------------------------------------------------------------

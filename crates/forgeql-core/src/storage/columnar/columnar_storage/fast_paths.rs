@@ -816,15 +816,18 @@ impl ColumnarStorage {
                      more selective WHERE. An ORDER BY <field> LIMIT k also \
                      completes: every segment is still scanned, but a running \
                      top-K trim holds the working set to a few thousand rows, so \
-                     the answer is the true top K (needs k <= 1000, no OFFSET and \
-                     no GROUP BY; the trim sheds rows before duplicates are \
-                     collapsed, so enough rows agreeing on name, fql_kind, path \
-                     and line sorting first can still shorten the page). A bare \
-                     LIMIT is not a substitute — with no \
-                     ORDER BY it bounds the scan by truncating it, so OFFSET \
-                     pages past rows that were never fetched. Under any explicit \
-                     LIMIT the reported total is just the row count returned, \
-                     never the number of rows that matched. \
+                     the answer is the true top K. That needs k <= 1000, no \
+                     OFFSET, no GROUP BY and no HAVING — a HAVING runs after the \
+                     page is cut, so the trim is not armed alongside one and the \
+                     scan is refused here instead. Duplicates are collapsed after \
+                     every place that stops reading early — the trim, the \
+                     name-index streams and the segment fetch cap — so enough \
+                     rows agreeing on name, fql_kind, path and line inside the \
+                     window that was read can still shorten any page. A bare LIMIT is not a substitute — \
+                     with no ORDER BY it bounds the scan by truncating it, so \
+                     OFFSET pages past rows that were never fetched. Under any \
+                     explicit LIMIT the reported total is just the row count \
+                     returned, never the number of rows that matched. \
                      FORGEQL_FIND_MAX_ROWS overrides the bound in rows; 0 \
                      disables it.",
                     max_rows.saturating_mul(FIND_BYTES_PER_ROW) / (1024 * 1024 * 1024)
@@ -850,8 +853,11 @@ impl ColumnarStorage {
         seg_order
     }
 
-    /// Early-exit fetch cap: when there is no ORDER BY / GROUP BY but an explicit
-    /// LIMIT, stop opening segment files once the budget is spent.  It fetches
+    /// Early-exit fetch cap: when there is no ORDER BY / GROUP BY / HAVING but an
+    /// explicit LIMIT, stop opening segment files once the budget is spent.  The
+    /// HAVING condition is not optional: it runs in Stage 5, after this cap has
+    /// already decided which segments were read, so without it the answer is the
+    /// rows fetched minus those failing the predicate.  It fetches
     /// cap+1, which was meant to keep `total > results.len()` a reliable "more
     /// results exist" signal — but that signal does not survive this path:
     /// `apply_ordering` truncates to the LIMIT before `exec_find` takes `total`,
@@ -860,11 +866,19 @@ impl ColumnarStorage {
     /// pages past rows that were never fetched.  Four `expect_fail` cases in
     /// `crates/forgeql/tests/golden/clause_pipeline.json` pin that, and it is why
     /// the row-budget refusal offers an ORDER BY'd LIMIT rather than a bare one.
+    /// The Stage 4 dedupe on `(name, fql_kind, path, line)` also runs after this
+    /// cap and is NOT excluded, so a bare LIMIT can return fewer than LIMIT rows
+    /// where enough of the fetched rows collapse — the same open defect the trim
+    /// and the name-index streams carry, reproduced by
+    /// `crates/forgeql-core/tests/topk_trim_before_dedupe.rs`.
     /// When `limit` is None we deliberately do NOT inject DEFAULT_QUERY_LIMIT
     /// here — exec_find injects an explicit limit before calling find_symbols, so
     /// direct callers (tests) still receive all matching rows.
     fn fetch_cap_for(clauses: &Clauses) -> Option<usize> {
-        if clauses.order_by.is_none() && clauses.group_by.is_none() {
+        if clauses.order_by.is_none()
+            && clauses.group_by.is_none()
+            && crate::filter::no_having_after_paging(clauses)
+        {
             clauses.limit.map(|c| c.saturating_add(1))
         } else {
             None
@@ -872,21 +886,24 @@ impl ColumnarStorage {
     }
 
     /// Running top-K trim budget (Phase 8): set when ORDER BY is present, LIMIT
-    /// is small, OFFSET is zero, and GROUP BY is absent.  Bounds peak result
-    /// memory to O(K * TOPK_OVER_FETCH) by periodically discarding rows that
-    /// cannot make the final top-K.
+    /// is small, OFFSET is zero, and both GROUP BY and HAVING are absent.  Bounds
+    /// peak result memory to O(K * TOPK_OVER_FETCH) by periodically discarding
+    /// rows that cannot make the final top-K.
     ///
-    /// "Cannot make the final top-K" holds only against the ORDER BY.  Rows are
-    /// still removed after this trim has run — Stage 4 collapses duplicates on
-    /// `(name, fql_kind, path, line)`, and Stage 5 applies HAVING and any `count`
-    /// predicate — so a row this trim discards can turn out to have belonged in
-    /// the answer once the survivors it was ranked against collapse into one.
-    /// `crates/forgeql-core/tests/topk_trim_before_dedupe.rs` reproduces that.
+    /// "Cannot make the final top-K" holds only against the ORDER BY, so the trim
+    /// is only sound while nothing else can remove a row afterwards.  HAVING can,
+    /// which is why it is excluded here.  The Stage 4 dedupe on
+    /// `(name, fql_kind, path, line)` also still runs after this trim and is NOT
+    /// excluded: a row this trim discards can turn out to have belonged in the
+    /// answer once the survivors it was ranked against collapse into one.  That
+    /// is an open defect, reproduced by
+    /// `crates/forgeql-core/tests/topk_trim_before_dedupe.rs`.
     fn topk_trim_for(clauses: &Clauses) -> Option<usize> {
         if clauses.order_by.is_some()
             && clauses.group_by.is_none()
             && clauses.offset.unwrap_or(0) == 0
             && clauses.limit.is_some_and(|k| k <= TOPK_THRESHOLD)
+            && crate::filter::no_having_after_paging(clauses)
         {
             clauses.limit
         } else {
@@ -1107,6 +1124,7 @@ pub(super) fn order_by_name_kind_fast_path(clauses: &Clauses) -> Option<&str> {
         || clauses.group_by.is_some()
         || clauses.in_glob.is_some()
         || !clauses.exclude_globs.is_empty()
+        || !crate::filter::no_having_after_paging(clauses)
     {
         return None;
     }
@@ -1136,6 +1154,7 @@ pub(super) fn order_by_name_kind_desc_fast_path(clauses: &Clauses) -> Option<&st
         || clauses.group_by.is_some()
         || clauses.in_glob.is_some()
         || !clauses.exclude_globs.is_empty()
+        || !crate::filter::no_having_after_paging(clauses)
     {
         return None;
     }
@@ -1184,8 +1203,16 @@ pub(super) fn split_qualified_name(name: &str) -> (&str, Option<&str>) {
 /// Return `true` when `ORDER BY name ASC LIMIT N` fast-path is eligible.
 ///
 /// Conditions: ORDER BY name ASC, explicit LIMIT, no GROUP BY, no WHERE
-/// predicates, no path filter.  The caller also gates on the dirty overlay
-/// being empty so dirty rows cannot shadow committed rows with earlier names.
+/// predicates, no path filter, no HAVING.  The caller also gates on the dirty
+/// overlay being empty so dirty rows cannot shadow committed rows with earlier
+/// names.
+///
+/// HAVING is excluded because it runs in Stage 5, after the stream has already
+/// stopped at `limit + offset` rows.  The Stage 4 dedupe runs after the stream
+/// too and is NOT excluded, so this path can still return fewer than LIMIT rows
+/// where enough of the streamed rows agree on `(name, fql_kind, path, line)` —
+/// an open defect it shares with the running top-K trim, reproduced by
+/// `crates/forgeql-core/tests/topk_trim_before_dedupe.rs`.
 pub(super) fn order_by_name_fast_path(clauses: &Clauses) -> bool {
     matches!(
         &clauses.order_by,
@@ -1195,6 +1222,7 @@ pub(super) fn order_by_name_fast_path(clauses: &Clauses) -> bool {
         && clauses.where_predicates.is_empty()
         && clauses.in_glob.is_none()
         && clauses.exclude_globs.is_empty()
+        && crate::filter::no_having_after_paging(clauses)
 }
 
 pub(super) fn order_by_name_desc_fast_path(clauses: &Clauses) -> bool {
@@ -1206,6 +1234,7 @@ pub(super) fn order_by_name_desc_fast_path(clauses: &Clauses) -> bool {
         && clauses.where_predicates.is_empty()
         && clauses.in_glob.is_none()
         && clauses.exclude_globs.is_empty()
+        && crate::filter::no_having_after_paging(clauses)
 }
 
 pub(super) fn has_any_indexed_predicate(clauses: &Clauses, overlay: &Overlay) -> bool {

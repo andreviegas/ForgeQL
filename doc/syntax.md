@@ -995,14 +995,23 @@ completeness guarantee exists to prevent, so the error names the remedy instead
 `ORDER BY <field> LIMIT k` also completes: every segment is still scanned, but a
 running top-K trim holds the working set to a few thousand rows, so the answer is
 the true top K over the whole corpus. That path needs `k` no greater than 1000,
-no `OFFSET` and no `GROUP BY`; outside that gate nothing is trimmed and the query
-is refused as before. One caveat on the ordered form: the trim sheds rows before
-duplicate rows are collapsed, so where enough rows agreeing on `name`, `fql_kind`,
-path and line sort ahead of the distinct ones, the page can come back shorter than
-`k` — reproduced by an ignored test in
-`crates/forgeql-core/tests/topk_trim_before_dedupe.rs`. A bare `LIMIT` is **not** a substitute: with no `ORDER BY`
-it bounds the scan by truncating it, so an `OFFSET` pages past rows that were
-never fetched — a known defect, pinned by four `expect_fail` cases in
+no `OFFSET`, no `GROUP BY` and no `HAVING`; outside that gate nothing is trimmed
+and the query is refused as before. A `HAVING` is deliberately excluded — it runs
+after the page is cut, so a query carrying one is refused here rather than
+answered from a page chosen before the predicate ran.
+
+One caveat, and it is not confined to the ordered form: duplicate rows are
+collapsed *after* every one of the places that stops reading early — the top-K
+trim, the name-index streams and the segment fetch cap — so where enough rows
+agreeing on `name`, `fql_kind`, path and line sit inside the window that was
+read, the page can come back shorter than `k`. That reaches `ORDER BY name`
+through the name-index streams, any ordering through the trim, and an unordered
+`LIMIT` through the fetch cap; it is reproduced by an ignored test in
+`crates/forgeql-core/tests/topk_trim_before_dedupe.rs`.
+
+A bare `LIMIT` is **not** a substitute: with no `ORDER BY` it bounds the scan by
+truncating it, so an `OFFSET` pages past rows that were never fetched — a known
+defect, pinned by four `expect_fail` cases in
 `crates/forgeql/tests/golden/clause_pipeline.json`. Under any explicit `LIMIT`,
 ordered or not, the reported `total` is the returned row count and not the number
 of rows that matched: the `LIMIT` is applied before the `total` is taken.
