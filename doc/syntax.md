@@ -996,7 +996,11 @@ completeness guarantee exists to prevent, so the error names the remedy instead
 running top-K trim holds the working set to a few thousand rows, so the answer is
 the true top K over the whole corpus. That path needs `k` no greater than 1000,
 no `OFFSET` and no `GROUP BY`; outside that gate nothing is trimmed and the query
-is refused as before. A bare `LIMIT` is **not** a substitute: with no `ORDER BY`
+is refused as before. One caveat on the ordered form: the trim sheds rows before
+duplicate rows are collapsed, so where enough rows agreeing on `name`, `fql_kind`,
+path and line sort ahead of the distinct ones, the page can come back shorter than
+`k` — reproduced by an ignored test in
+`crates/forgeql-core/tests/topk_trim_before_dedupe.rs`. A bare `LIMIT` is **not** a substitute: with no `ORDER BY`
 it bounds the scan by truncating it, so an `OFFSET` pages past rows that were
 never fetched — a known defect, pinned by four `expect_fail` cases in
 `crates/forgeql/tests/golden/clause_pipeline.json`. Under any explicit `LIMIT`,

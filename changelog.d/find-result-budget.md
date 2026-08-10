@@ -21,7 +21,9 @@
   `GROUP BY` still scans every segment while a running top-K trim holds the
   working set to a few thousand rows, so that form returns the true top K and
   never reaches the default bound. Outside that gate nothing is trimmed and the
-  query is refused as before.
+  query is refused as before. The ordered form has one hole of its own, described
+  in its own entry: the trim sheds rows before duplicates are collapsed, so the
+  page can come back short.
 - The bound is now documented, in `doc/syntax.md` and in each of the agent
   guides. It was enforced but written down nowhere, so the first an agent knew
   of it was a refusal citing an environment variable it had never been told

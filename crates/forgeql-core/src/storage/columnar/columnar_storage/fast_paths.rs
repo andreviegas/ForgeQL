@@ -817,7 +817,10 @@ impl ColumnarStorage {
                      completes: every segment is still scanned, but a running \
                      top-K trim holds the working set to a few thousand rows, so \
                      the answer is the true top K (needs k <= 1000, no OFFSET and \
-                     no GROUP BY). A bare LIMIT is not a substitute — with no \
+                     no GROUP BY; the trim sheds rows before duplicates are \
+                     collapsed, so enough rows agreeing on name, fql_kind, path \
+                     and line sorting first can still shorten the page). A bare \
+                     LIMIT is not a substitute — with no \
                      ORDER BY it bounds the scan by truncating it, so OFFSET \
                      pages past rows that were never fetched. Under any explicit \
                      LIMIT the reported total is just the row count returned, \
@@ -872,6 +875,13 @@ impl ColumnarStorage {
     /// is small, OFFSET is zero, and GROUP BY is absent.  Bounds peak result
     /// memory to O(K * TOPK_OVER_FETCH) by periodically discarding rows that
     /// cannot make the final top-K.
+    ///
+    /// "Cannot make the final top-K" holds only against the ORDER BY.  Rows are
+    /// still removed after this trim has run — Stage 4 collapses duplicates on
+    /// `(name, fql_kind, path, line)`, and Stage 5 applies HAVING and any `count`
+    /// predicate — so a row this trim discards can turn out to have belonged in
+    /// the answer once the survivors it was ranked against collapse into one.
+    /// `crates/forgeql-core/tests/topk_trim_before_dedupe.rs` reproduces that.
     fn topk_trim_for(clauses: &Clauses) -> Option<usize> {
         if clauses.order_by.is_some()
             && clauses.group_by.is_none()
