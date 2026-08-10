@@ -280,10 +280,14 @@ impl FixedColumns {
 /// Clause fields a materialised row answers from a `SymbolMatch` struct field
 /// rather than from its enrichment map.
 ///
-/// A segment storing an enrichment column under one of these names would be
-/// read from the map by a built row and from the column by a row view — two
-/// different answers to one clause. Such a segment turns the fixed-column
-/// answers off entirely rather than pick between them.
+/// A segment storing an enrichment column under one of these names can make a
+/// built row and a row view disagree, but only where the operator's type does
+/// not match the struct accessor: `WHERE name LIKE …` reads the struct on a
+/// built row, while `WHERE name = 42` falls through to `fields.get("name")` and
+/// finds the shadow column, which the row view would never consult. That one
+/// name therefore stops being answered from a column; the segment's other
+/// fields are unaffected, since a collision on one name says nothing about the
+/// rest.
 const STRUCT_BACKED_FIELDS: &[&str] = &[
     "name",
     "node_kind",
@@ -405,14 +409,6 @@ pub struct SegmentReader {
     /// Enrichment columns from the header blob, in header order, each paired
     /// with the byte range its `col_<name>` blob occupies in `mmap`.
     extra_cols: Vec<(String, ColRange)>,
-    /// Whether any enrichment column is named after a field a materialised row
-    /// answers from a struct field rather than from its enrichment map.
-    ///
-    /// True is the unusual case and switches every fixed-column answer in
-    /// [`SegmentReader::row_field`] off, so such a segment falls back to
-    /// filtering built rows rather than answering a clause from a column the
-    /// built row would not have consulted.
-    extra_shadows_fixed: bool,
     strings: StringPool,
     pub(crate) kind_postings: HashMap<u32, RoaringBitmap>,
     pub(crate) field_postings: HashMap<String, HashMap<u32, RoaringBitmap>>,
@@ -524,13 +520,6 @@ impl SegmentReader {
                 (name, range)
             })
             .collect();
-        // A row view may answer a fixed column directly only while no
-        // enrichment column shares that column's clause name — see
-        // `STRUCT_BACKED_FIELDS`.
-        let extra_shadows_fixed = extra_cols
-            .iter()
-            .any(|(name, _)| STRUCT_BACKED_FIELDS.contains(&name.as_str()));
-
         Ok(Self {
             mmap,
             blobs,
@@ -540,7 +529,6 @@ impl SegmentReader {
             provider_id: hdr.provider_id,
             content_id: hdr.content_id,
             extra_cols,
-            extra_shadows_fixed,
             strings,
             kind_postings,
             field_postings,
@@ -1098,7 +1086,10 @@ impl SegmentReader {
                 .extra_col_range(field)
                 .map_or(RowField::Unanswerable, RowField::Extra);
         }
-        if self.extra_shadows_fixed {
+        // Only the colliding name falls back. An enrichment column named after
+        // one struct-backed field says nothing about the others, so a segment
+        // carrying one still answers every field it does not shadow.
+        if self.extra_col_range(field).is_some() {
             return RowField::Unanswerable;
         }
         match field {

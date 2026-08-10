@@ -77,7 +77,7 @@ fn find_max_rows() -> usize {
 /// none can be lost between them. A predicate lands on the late side when
 /// [`SegmentReader::answers_field`] declines its field — `usages`, which is
 /// stamped from the workspace overlay only after materialisation; `node_id`,
-/// which is built during it; or a field no column of this segment holds — and
+/// which is built during it; a struct-backed name this segment shadows with an enrichment column; or a field no column of this segment holds — and
 /// also when the operator is a regex, because `apply_where_predicates`
 /// compiles the pattern once for a whole batch while a per-row evaluation
 /// would recompile it for every row.
