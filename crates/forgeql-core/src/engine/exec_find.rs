@@ -26,6 +26,10 @@ impl ForgeQLEngine {
         // WITHOUT the implicit DEFAULT_QUERY_LIMIT cap — that is applied below.
         // The columnar backend uses clauses.limit for early-exit in
         // materialize_all, so explicit LIMIT queries avoid a full segment scan.
+        // That early exit is not free: with no ORDER BY it truncates the scan
+        // rather than paging it, so the `total` taken below is the count of rows
+        // FETCHED, not of rows that matched.  It is why the budget refusal no
+        // longer offers a bare LIMIT as a way to bound an oversized scan.
         let mut results = session.engine_for(backend)?.find_symbols(clauses, &root)?;
 
         let total = results.len();

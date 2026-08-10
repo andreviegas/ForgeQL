@@ -991,10 +991,18 @@ being materialised when it trips, since the bound is tested once per segment
 rather than once per row. Past that the query is **refused, never truncated**: a
 partial answer that does not announce itself is the silent false negative the
 completeness guarantee exists to prevent, so the error names the remedy instead
-— narrow the scan with `IN 'path/**'` or a more selective `WHERE`, or add a
-`LIMIT`, which bounds the scan only when the query has no `ORDER BY` (ordering
-has to see every row before it can pick the first N). `FORGEQL_FIND_MAX_ROWS`
-overrides the bound in rows and `0` disables it.
+— narrow the scan with `IN 'path/**'` or a more selective `WHERE`. An
+`ORDER BY <field> LIMIT k` also completes: every segment is still scanned, but a
+running top-K trim holds the working set to a few thousand rows, so the answer is
+the true top K over the whole corpus. That path needs `k` no greater than 1000,
+no `OFFSET` and no `GROUP BY`; outside that gate nothing is trimmed and the query
+is refused as before. A bare `LIMIT` is **not** a substitute: with no `ORDER BY`
+it bounds the scan by truncating it, so an `OFFSET` pages past rows that were
+never fetched — a known defect, pinned by four `expect_fail` cases in
+`crates/forgeql/tests/golden/clause_pipeline.json`. Under any explicit `LIMIT`,
+ordered or not, the reported `total` is the returned row count and not the number
+of rows that matched: the `LIMIT` is applied before the `total` is taken.
+`FORGEQL_FIND_MAX_ROWS` overrides the bound in rows and `0` disables it.
 
 That bound is roughly 3.7x lower than the five million rows it replaced, so a
 scan that used to complete can now be refused — a reachability change, not a

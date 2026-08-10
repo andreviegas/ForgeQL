@@ -813,9 +813,15 @@ impl ColumnarStorage {
                     "FIND materialised more than {max_rows} rows before \
                      ORDER/GROUP/LIMIT — about {} GiB of result rows, which is \
                      the budget in force. Narrow the scan — IN 'path/**', or a \
-                     more selective WHERE — or add a LIMIT, which bounds the \
-                     scan only when the query has no ORDER BY: ordering has to \
-                     see every row before it can pick the first N. \
+                     more selective WHERE. An ORDER BY <field> LIMIT k also \
+                     completes: every segment is still scanned, but a running \
+                     top-K trim holds the working set to a few thousand rows, so \
+                     the answer is the true top K (needs k <= 1000, no OFFSET and \
+                     no GROUP BY). A bare LIMIT is not a substitute — with no \
+                     ORDER BY it bounds the scan by truncating it, so OFFSET \
+                     pages past rows that were never fetched. Under any explicit \
+                     LIMIT the reported total is just the row count returned, \
+                     never the number of rows that matched. \
                      FORGEQL_FIND_MAX_ROWS overrides the bound in rows; 0 \
                      disables it.",
                     max_rows.saturating_mul(FIND_BYTES_PER_ROW) / (1024 * 1024 * 1024)
@@ -842,8 +848,15 @@ impl ColumnarStorage {
     }
 
     /// Early-exit fetch cap: when there is no ORDER BY / GROUP BY but an explicit
-    /// LIMIT, stop opening segment files once the budget is spent.  Fetches cap+1
-    /// so `total > results.len()` stays a reliable "more results exist" signal.
+    /// LIMIT, stop opening segment files once the budget is spent.  It fetches
+    /// cap+1, which was meant to keep `total > results.len()` a reliable "more
+    /// results exist" signal — but that signal does not survive this path:
+    /// `apply_ordering` truncates to the LIMIT before `exec_find` takes `total`,
+    /// so under an explicit LIMIT the two are equal and `total` is the returned
+    /// row count rather than the number of rows that matched.  An OFFSET also
+    /// pages past rows that were never fetched.  Four `expect_fail` cases in
+    /// `crates/forgeql/tests/golden/clause_pipeline.json` pin that, and it is why
+    /// the row-budget refusal offers an ORDER BY'd LIMIT rather than a bare one.
     /// When `limit` is None we deliberately do NOT inject DEFAULT_QUERY_LIMIT
     /// here — exec_find injects an explicit limit before calling find_symbols, so
     /// direct callers (tests) still receive all matching rows.

@@ -64,7 +64,7 @@ The right way to find and read code:
 - SHOW body defaults to DEPTH 0 (signature only). Increment progressively.
 - Format defaults to CSV (~60% fewer tokens).
 - Every response includes tokens_approx — if large, narrow with WHERE, IN, EXCLUDE.
-- A FIND symbols scan that would materialise past the query's 2 GiB result budget (~1.3M rows) is refused, not truncated — narrow with IN/WHERE, or add a LIMIT, which bounds the scan only when there is no ORDER BY (ordering has to see every row to pick the first N). The bound covers that scan over the on-disk index; FIND usages, FIND files and the in-memory backend carry none.
+- A FIND symbols scan that would materialise past the query's 2 GiB result budget (~1.3M rows) is refused, not truncated — narrow with IN/WHERE, or use ORDER BY <field> LIMIT k (k <= 1000, no OFFSET, no GROUP BY): a running top-K trim keeps that form under the budget while still scanning every segment, so the answer is the true top K. A bare LIMIT is not a substitute — with no ORDER BY it truncates the scan rather than paging it, so OFFSET skips rows that were never fetched (a known defect). Under an explicit LIMIT, FIND symbols reports a total that is only the rows returned, not the number that matched (FIND usages deliberately differs — its total is the true site count). The bound covers that scan over the on-disk index; FIND usages, FIND files and the in-memory backend carry none.
 
 ## Enrichment Fields for Code Quality
 

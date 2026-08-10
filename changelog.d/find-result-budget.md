@@ -15,11 +15,13 @@
   disables it.
 - The refusal is unchanged in kind — past the bound a query has always been
   refused rather than truncated, which is what keeps a partial answer from
-  passing for a complete one — but it now names the remedy accurately. Narrow
-  the scan with `IN 'path/**'` or a more selective `WHERE`, or add a `LIMIT`,
-  which bounds the scan only when the query has no `ORDER BY`: ordering has to
-  see every row before it can pick the first N, so a `LIMIT` alongside one saves
-  nothing.
+  passing for a complete one — and it now names two remedies that hold. Narrow
+  the scan with `IN 'path/**'` or a more selective `WHERE`; or order it, since an
+  `ORDER BY <field> LIMIT k` with `k` no greater than 1000, no `OFFSET` and no
+  `GROUP BY` still scans every segment while a running top-K trim holds the
+  working set to a few thousand rows, so that form returns the true top K and
+  never reaches the default bound. Outside that gate nothing is trimmed and the
+  query is refused as before.
 - The bound is now documented, in `doc/syntax.md` and in each of the agent
   guides. It was enforced but written down nowhere, so the first an agent knew
   of it was a refusal citing an environment variable it had never been told
