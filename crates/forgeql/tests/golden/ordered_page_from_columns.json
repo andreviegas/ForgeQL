@@ -1,0 +1,72 @@
+{
+ "suite": "ordered_page_from_columns",
+ "description": "An ORDER BY ... LIMIT page is now chosen from the segments' stored columns and only the winners are built into result rows. That is a cost change and must never be an answer change, so these cases pin the two paths against each other on one corpus. The same ordering is asked for twice, once at a limit that takes the column-ranked path and once above the threshold where it does not, and the smaller page must be a prefix of the larger. A third case asks for an ordering the column-ranked path is not allowed to take, so the exclusion is exercised rather than assumed. Without these, the only thing standing between a divergence and a shipped wrong page is that both paths call the same comparator -- true, but they feed it values from two different readers.",
+ "cases": [
+  {
+   "name": "the_answer_this_suite_measures_against",
+   "description": "Ground truth on the built path. A limit above TOPK_THRESHOLD (1000) leaves no top-K armed, so every matching row is built and sorted whole. Seven functions in this corpus exceed 150 lines, in this order by size. Every case below asks for a prefix of these.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines > 150 ORDER BY lines DESC LIMIT 1001",
+   "assert": {
+    "row_count": 7,
+    "rows": [
+     { "name": "golden_values", "line": 422 },
+     { "name": "find_symbols_prefilter", "line": 297 },
+     { "name": "sms_combinatorial", "line": 1380 },
+     { "name": "collect_nodes", "line": 358 },
+     { "name": "commit_promotes_segments_and_builds_new_overlay", "line": 3722 },
+     { "name": "dirty_overlay_shadows_and_unions", "line": 1963 },
+     { "name": "load_syntax", "line": 156 }
+    ]
+   }
+  },
+  {
+   "name": "a_predicate_no_view_can_answer_keeps_the_page_on_the_built_path",
+   "description": "The ground-truth case with one character changed: LIMIT 5 instead of LIMIT 1001, so a bounded top-K is armed. Its page is still built the old way, and the reason is the exclusion for a predicate a row view cannot answer: WHERE lines > 150 cannot be decided from the columns of a segment that carries no lines column at all, so it is left to run against the built rows, and a row discarded on rank alone might have been the one that survived it. The page must be the first five of the ground truth either way. Keep this passing alongside the case below: the two differ in whether a residual predicate is present and in nothing else, so together they say the exclusion changes the work and not the answer.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines > 150 ORDER BY lines DESC LIMIT 5",
+   "assert": {
+    "row_count": 5,
+    "rows": [
+     { "name": "golden_values", "line": 422 },
+     { "name": "find_symbols_prefilter", "line": 297 },
+     { "name": "sms_combinatorial", "line": 1380 },
+     { "name": "collect_nodes", "line": 358 },
+     { "name": "commit_promotes_segments_and_builds_new_overlay", "line": 3722 }
+    ]
+   }
+  },
+  {
+   "name": "the_running_trim_inside_the_column_ranked_page",
+   "description": "The one case here whose page is chosen from the columns, and the only structural difference from the case above is that its residual WHERE is one every segment can answer from its own columns. ORDER BY lines is admitted even on the many segments holding no lines column at all, because a view and the row it would build both report that field as absent and rank identically on it. Every segment matching more rows than the trim's own threshold therefore picks its contribution before building it, and with the candidate set being every function in the corpus that is nearly all of them. The answer must be the same five rows in the same order as the built-path cases above.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY lines DESC LIMIT 5",
+   "assert": {
+    "row_count": 5,
+    "rows": [
+     { "name": "golden_values", "line": 422 },
+     { "name": "find_symbols_prefilter", "line": 297 },
+     { "name": "sms_combinatorial", "line": 1380 },
+     { "name": "collect_nodes", "line": 358 },
+     { "name": "commit_promotes_segments_and_builds_new_overlay", "line": 3722 }
+    ]
+   }
+  },
+  {
+   "name": "an_ordering_the_columns_cannot_rank_still_answers",
+   "description": "ORDER BY usages is excluded from the column-ranked path by construction, and this case has no other disqualifier -- no residual predicate, an ordering field every segment nominally carries -- so it exercises the exclusion itself. The per-segment usages column is a stale always-zero legacy field and the real workspace count is stamped onto a row only after it is built, so a row view cannot rank by it at all. A regression that let this query onto the column path would rank by a column of zeroes and return five arbitrary rows in tie-breaker order; these five are the most-used symbols in the corpus at 1544 uses each, ordered by the name/line/path tie-breakers among themselves, so both the membership and the order have to survive.",
+   "use": "forgeql-pub.frozen",
+   "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY usages DESC LIMIT 5",
+   "assert": {
+    "row_count": 5,
+    "rows": [
+     { "name": "new", "line": 24 },
+     { "name": "new", "line": 26 },
+     { "name": "new", "line": 26 },
+     { "name": "new", "line": 32 },
+     { "name": "new", "line": 34 }
+    ]
+   }
+  }
+ ]
+}

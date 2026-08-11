@@ -679,13 +679,27 @@ const fn numeric_rhs(value: &PredicateValue) -> Option<i64> {
 /// Beyond this threshold the existing full-sort path is used.
 pub(crate) const TOPK_THRESHOLD: usize = 1_000;
 
+/// The fields [`order_cmp`] falls back to when the ORDER BY field ties, in the
+/// order it consults them.
+///
+/// A caller that wants to reproduce this ordering *without* building rows —
+/// `ColumnarStorage::materialize_top_k` chooses the page from segment columns
+/// read in place — needs every one of these answerable as well as the ORDER BY
+/// field itself. The list lives beside the comparator so that adding a
+/// tie-breaker cannot leave such a caller ordering by fewer fields than the
+/// rows are finally sorted by; `order_cmp_consults_only_the_listed_fields`
+/// fails if the two drift apart.
+pub(crate) const ORDER_TIE_BREAKERS: &[&str] = &["name", "line", "path"];
+
 /// Compare two [`ClauseTarget`] items according to the ORDER BY clause in
 /// `clauses`, including the deterministic `(name, line, path)` tie-breakers.
 ///
 /// This is the single source-of-truth comparator shared by:
 /// - the full sort in `apply_clauses` (step 6), and
 /// - the bounded top-K path (`collect_top_k`), and
-/// - the per-segment running heap in `ColumnarStorage::materialize_all`.
+/// - the running trim in `ColumnarStorage::materialize_all`, which applies it
+///   to built rows, and to `SegRowRef` views of rows not yet built when
+///   `ColumnarStorage::materialize_top_k` chooses the page from the columns.
 ///
 /// Returning [`Ordering::Less`] means `a` sorts *before* `b` (i.e. `a` is
 /// the "better" row that should appear first in the output).

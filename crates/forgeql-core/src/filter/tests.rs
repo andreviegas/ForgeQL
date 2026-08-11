@@ -1200,6 +1200,60 @@ fn apply_clauses_order_by_tiebreaker_is_name() {
     assert_eq!(items[2].name, "zebra");
 }
 
+/// `order_cmp` must consult nothing beyond the ORDER BY field and the
+/// tie-breakers it publishes in [`ORDER_TIE_BREAKERS`].
+///
+/// The pre-materialisation top-K in `ColumnarStorage::materialize_top_k` ranks
+/// segment row views rather than built rows, and decides a segment is eligible
+/// by asking whether it can answer that published list. A tie-breaker added to
+/// the comparator but not to the list would leave that path ranking by fewer
+/// fields than the rows are finally sorted by, which is a wrong page and a
+/// silent one.
+///
+/// So: two rows agreeing on every listed field and differing in every other
+/// field of the row must compare equal.
+#[test]
+fn order_cmp_consults_only_the_published_tie_breakers() {
+    // make_symbol derives the path from the name, so these two agree on all of
+    // name, line and path — the whole of ORDER_TIE_BREAKERS.
+    let mut a = make_symbol("same", "function", 1);
+    a.line = Some(7);
+    let mut b = make_symbol("same", "struct", 999);
+    b.line = Some(7);
+
+    // Every remaining field of the row, given a different value on b.
+    b.node_kind = Some("function_definition".to_owned());
+    b.language = Some("rust".to_owned());
+    b.count = Some(3);
+    b.node_id = Some("nff.0001".to_owned());
+    b.rev = Some("hffffffffffffffff".to_owned());
+    let _ = b.fields.insert("lines".to_owned(), "42".to_owned());
+
+    for field in ORDER_TIE_BREAKERS {
+        let clauses = Clauses {
+            order_by: Some(OrderBy {
+                field: (*field).to_owned(),
+                direction: crate::ir::SortDirection::Asc,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            order_cmp(&a, &b, &clauses),
+            std::cmp::Ordering::Equal,
+            "ORDER BY {field} separated two rows that agree on every field \
+             ORDER_TIE_BREAKERS names, so the comparator reads something the \
+             list does not publish"
+        );
+    }
+
+    assert_eq!(
+        order_cmp(&a, &b, &Clauses::default()),
+        std::cmp::Ordering::Equal,
+        "with no ORDER BY the comparator is the tie-breakers alone, so a field \
+         outside the published list must not order these rows"
+    );
+}
+
 #[test]
 fn apply_clauses_in_glob_no_match_returns_empty() {
     let mut items = vec![

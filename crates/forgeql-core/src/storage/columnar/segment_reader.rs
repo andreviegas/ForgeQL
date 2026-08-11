@@ -1111,6 +1111,36 @@ impl SegmentReader {
         !matches!(self.row_field(field, has_path), RowField::Unanswerable)
     }
 
+    /// Whether a row view over this segment *ranks* `field` the way the row it
+    /// would build ranks it.
+    ///
+    /// Weaker than [`Self::answers_field`] on purpose, and the difference is
+    /// the whole point. Filtering needs a field to be *answerable*: a predicate
+    /// that cannot be decided from the columns has to wait for a row. Ordering
+    /// needs something else — that the two readers *agree* — and two readers
+    /// can agree on a field neither of them answers. `order_cmp` treats an
+    /// absent value as a value, so a segment that simply does not carry an
+    /// enrichment column ranks its rows by the same absence the built rows
+    /// would report, because a built row's enrichment map is filled from these
+    /// same columns and will not carry it either.
+    ///
+    /// What they do *not* agree on is a field the built row fills in from
+    /// somewhere these columns are not. Those are exactly the struct-backed
+    /// names: `usages` arrives from the workspace overlay after materialisation,
+    /// `node_id` is derived from the row's ordinal as the row is built, `count`
+    /// is assigned later still by GROUP BY, and any of the rest that an
+    /// enrichment column has shadowed reads as absent here while the built row
+    /// still reports its own struct field. Every one of those would have a row
+    /// view ranking by nothing where the built row ranks by something.
+    ///
+    /// Gating ordering on `answers_field` instead is not merely conservative,
+    /// it is close to fatal: on a real corpus most segments carry no column for
+    /// any given enrichment field, so a whole-query gate built on it declines
+    /// nearly every query and the cheaper path never runs.
+    pub(crate) fn ranks_field_like_a_built_row(&self, field: &str, has_path: bool) -> bool {
+        self.answers_field(field, has_path) || !STRUCT_BACKED_FIELDS.contains(&field)
+    }
+
     /// Look up a string-pool entry by ID.
     ///
     /// Used by `OverlayBuilder` to resolve per-segment `kind_id` values

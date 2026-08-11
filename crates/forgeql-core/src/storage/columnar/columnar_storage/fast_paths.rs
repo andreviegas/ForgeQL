@@ -70,6 +70,49 @@ fn find_max_rows() -> usize {
     }
 }
 
+/// How many rows the running top-K trim retains once it fires.
+///
+/// Written once because the trim runs in two places — over built rows, and over
+/// row views before any row is built — and a page chosen by two different
+/// retained sizes is two different pages.
+const fn topk_keep(k: usize) -> usize {
+    let over = k.saturating_mul(TOPK_OVER_FETCH / 2);
+    if over > k { over } else { k }
+}
+
+/// The refusal raised when a `FIND` would spend more than the row budget.
+///
+/// Both budget checks quote it: the build-then-trim loop counts rows it has
+/// already built, and the pre-materialisation top-K counts the row views it has
+/// selected to build. That is the same number — one view per row the other path
+/// would hold by the same point in the scan — so the two share this wording
+/// rather than drifting into two descriptions of one bound.
+fn row_budget_exceeded(max_rows: usize) -> anyhow::Error {
+    anyhow::anyhow!(
+        "FIND materialised more than {max_rows} rows before \
+         ORDER/GROUP/LIMIT — about {} GiB of result rows, which is \
+         the budget in force. Narrow the scan — IN 'path/**', or a \
+         more selective WHERE. An ORDER BY <field> LIMIT k also \
+         completes: every segment is still scanned, but a running \
+         top-K trim holds the working set to a few thousand rows, so \
+         the answer is the true top K. That needs k <= 1000, no \
+         OFFSET, no GROUP BY and no HAVING — a HAVING runs after the \
+         page is cut, so the trim is not armed alongside one and the \
+         scan is refused here instead. Duplicates are collapsed after \
+         every place that stops reading early — the trim, the \
+         name-index streams and the segment fetch cap — so enough \
+         rows agreeing on name, fql_kind, path and line inside the \
+         window that was read can still shorten any page. A bare \
+         LIMIT is not a substitute — with no ORDER BY it bounds the \
+         scan by truncating it, so OFFSET pages past rows that were \
+         never fetched. Under any explicit LIMIT the reported total \
+         is just the row count returned, never the number of rows \
+         that matched. FORGEQL_FIND_MAX_ROWS overrides the bound in \
+         rows; 0 disables it.",
+        max_rows.saturating_mul(FIND_BYTES_PER_ROW) / (1024 * 1024 * 1024)
+    )
+}
+
 /// Split a segment's residual `WHERE` into the predicates a row view answers
 /// from the columns and the ones that have to wait for materialised rows.
 ///
@@ -102,6 +145,52 @@ fn split_seg_predicates<'p>(
         }
     }
     (early, late)
+}
+
+/// Whether one segment can rank its own rows the way the rows it builds will be
+/// sorted.
+///
+/// A comparator consults more than the ORDER BY field: every
+/// [`crate::filter::ORDER_TIE_BREAKERS`] entry has to rank the same on a row
+/// view as on the row that view would build, or the ranking is not the same
+/// ranking.
+///
+/// `SegmentReader::ranks_field_like_a_built_row` is what decides that, and it is
+/// deliberately not `answers_field`. A field no column of this segment holds is
+/// absent on the view and absent on the built row alike, and `order_cmp` ranks
+/// by that absence identically on both — whereas a predicate on such a field
+/// genuinely cannot be decided early, which is what `answers_field` is for.
+/// Gating ordering on answerability instead declines nearly every real query,
+/// since most segments carry no column for any given enrichment field.
+///
+/// This says nothing about the residual `WHERE`; that is a property of the rows
+/// a segment matched rather than of the segment, and the caller checks it.
+fn segment_ranks_from_columns(seg: &SegmentReader, order_field: &str) -> bool {
+    std::iter::once(order_field)
+        .chain(crate::filter::ORDER_TIE_BREAKERS.iter().copied())
+        .all(|field| seg.ranks_field_like_a_built_row(field, true))
+}
+
+/// One segment's rows narrowed to what survives everything testable before a
+/// row is built, together with what is left to test once they are.
+///
+/// The two halves travel together because they are decided together:
+/// `split_seg_predicates` puts every residual predicate on exactly one side,
+/// the ones a row view can answer have already been applied to `rows`, and
+/// `late` is precisely the remainder. A caller that keeps one and forgets the
+/// other does not fail loudly — it answers with rows the query excluded.
+struct NarrowedSegment<'a> {
+    /// The segment the rows belong to.
+    seg: &'a SegmentReader,
+    /// The segment's source path as the caller spells it — relative, so that
+    /// IN/EXCLUDE glob matching in `apply_clauses` sees the same paths the
+    /// legacy backend stores. Do NOT join it with the worktree root.
+    source_path: &'a Path,
+    /// Local row indices that survived the postings prefilter and every
+    /// predicate a row view could answer.
+    rows: RoaringBitmap,
+    /// Predicates no row view could answer, still to run on the built rows.
+    late: Vec<crate::ir::Predicate>,
 }
 
 impl ColumnarStorage {
@@ -753,7 +842,15 @@ impl ColumnarStorage {
         by_segment
     }
 
-    /// Stage 3 — materialize rows from each segment.
+    /// Stage 3 — turn the surviving row IDs into result rows.
+    ///
+    /// Segment by segment: narrow to the rows worth building, build them, then
+    /// trim the accumulated working set. For a bounded top-K a segment whose
+    /// ordering its own columns can answer picks its contribution *before*
+    /// building it ([`Self::topk_rows_of_segment`]); every other segment builds
+    /// what it matched, as it always did. Both feed the same running trim, with
+    /// one comparator and one pair of constants between them, so which of the
+    /// two a segment takes changes the work and not the rows.
     pub(super) fn materialize_all(
         &self,
         by_segment: &HashMap<u32, RoaringBitmap>,
@@ -780,16 +877,13 @@ impl ColumnarStorage {
             if fetch_cap.is_some_and(|cap| results.len() >= cap) {
                 break;
             }
-            let Some(mut seg_results) = self.materialize_one_segment(
-                seg_idx,
-                by_segment,
-                clauses,
-                fetch_cap,
-                results.len(),
-                &seg_predicates,
-            ) else {
+            let Some(narrowed) =
+                self.narrow_one_segment(seg_idx, by_segment, clauses, &seg_predicates)
+            else {
                 continue;
             };
+            let mut seg_results =
+                self.materialize_one_segment(&narrowed, clauses, fetch_cap, results.len());
             results.append(&mut seg_results);
 
             // Running top-K trim: shed rows that cannot make the final top-K.
@@ -797,8 +891,7 @@ impl ColumnarStorage {
             if let Some(k) = topk_trim {
                 let trim_at = k.saturating_mul(TOPK_OVER_FETCH);
                 if results.len() > trim_at {
-                    let keep = k.saturating_mul(TOPK_OVER_FETCH / 2).max(k);
-                    results = collect_top_k(std::mem::take(&mut results), keep, |a, b| {
+                    results = collect_top_k(std::mem::take(&mut results), topk_keep(k), |a, b| {
                         order_cmp(a, b, clauses)
                     });
                 }
@@ -809,32 +902,87 @@ impl ColumnarStorage {
             // so the real peak is the budget plus one segment's rows — bounded,
             // and cheaper than testing it per row.
             if results.len() > max_rows {
-                anyhow::bail!(
-                    "FIND materialised more than {max_rows} rows before \
-                     ORDER/GROUP/LIMIT — about {} GiB of result rows, which is \
-                     the budget in force. Narrow the scan — IN 'path/**', or a \
-                     more selective WHERE. An ORDER BY <field> LIMIT k also \
-                     completes: every segment is still scanned, but a running \
-                     top-K trim holds the working set to a few thousand rows, so \
-                     the answer is the true top K. That needs k <= 1000, no \
-                     OFFSET, no GROUP BY and no HAVING — a HAVING runs after the \
-                     page is cut, so the trim is not armed alongside one and the \
-                     scan is refused here instead. Duplicates are collapsed after \
-                     every place that stops reading early — the trim, the \
-                     name-index streams and the segment fetch cap — so enough \
-                     rows agreeing on name, fql_kind, path and line inside the \
-                     window that was read can still shorten any page. A bare LIMIT is not a substitute — \
-                     with no ORDER BY it bounds the scan by truncating it, so \
-                     OFFSET pages past rows that were never fetched. Under any \
-                     explicit LIMIT the reported total is just the row count \
-                     returned, never the number of rows that matched. \
-                     FORGEQL_FIND_MAX_ROWS overrides the bound in rows; 0 \
-                     disables it.",
-                    max_rows.saturating_mul(FIND_BYTES_PER_ROW) / (1024 * 1024 * 1024)
-                );
+                return Err(row_budget_exceeded(max_rows));
             }
         }
         Ok(results)
+    }
+
+    /// The rows of one segment worth building for a bounded top-K, chosen
+    /// before any of them is built.
+    ///
+    /// Building a row is the dominant cost of an ordered scan, and on an
+    /// `ORDER BY … LIMIT k` most rows a segment contributes are discarded by the
+    /// trim moments after they are built. Here the ranking runs on
+    /// [`SegRowRef`]s — the stored columns read in place — with the same
+    /// [`order_cmp`] that sorts the built rows, and only the survivors are
+    /// handed on to be built.
+    ///
+    /// The threshold and the retained size are the trim's own, so the rows this
+    /// sheds are rows the trim would have shed on the very next statement. The
+    /// working set the loop goes on to accumulate is a *superset* of the one it
+    /// accumulated before — a segment now contributes its own top `2k` where it
+    /// used to contribute everything and be cut to `2k` against the segments
+    /// before it — and the true top `k` is inside both, so the page does not
+    /// move.
+    ///
+    /// Returns `None` — the segment contributes everything it matched —
+    /// whenever the choice could differ from the trim's:
+    ///
+    /// - the query is not a bounded top-K, so `topk_trim_for` declined it;
+    /// - the segment matched no more rows than the trim's own threshold, so
+    ///   nothing would have been shed yet;
+    /// - a residual `WHERE` still has to run against this segment's built rows,
+    ///   so a row discarded on rank alone might be the one that survives it;
+    /// - the segment cannot rank an ordering field the way its built rows would
+    ///   (see [`segment_ranks_from_columns`]).
+    ///
+    /// The decision is per segment, and that is not a detail. Made once for the
+    /// whole query it would be hostage to the worst segment in the corpus: a
+    /// single segment carrying an enrichment column named `name` or `path`
+    /// withholds those fields from a row view, and one such segment among
+    /// thirteen was enough to switch this off for every query in a real
+    /// workspace. A segment that cannot rank its own rows now only builds its
+    /// own rows.
+    ///
+    /// What this does not change: the Stage 4 dedupe on
+    /// `(name, fql_kind, path, line)` still runs after the trim, so a window
+    /// filled with rows that later collapse can still shorten a page. That is
+    /// the open defect reproduced by
+    /// `crates/forgeql-core/tests/topk_trim_before_dedupe.rs`; retaining a
+    /// superset can only help it, and it is not fixed here.
+    fn topk_rows_of_segment(
+        narrowed: &NarrowedSegment<'_>,
+        clauses: &Clauses,
+    ) -> Option<RoaringBitmap> {
+        let k = Self::topk_trim_for(clauses)?;
+        if !narrowed.late.is_empty() {
+            return None;
+        }
+        let trim_at = k.saturating_mul(TOPK_OVER_FETCH);
+        if narrowed.rows.len() <= trim_at as u64 {
+            return None;
+        }
+        let order_field = crate::field_tiers::canonical(&clauses.order_by.as_ref()?.field);
+        if !segment_ranks_from_columns(narrowed.seg, order_field) {
+            return None;
+        }
+
+        let views: Vec<SegRowRef<'_>> = narrowed
+            .rows
+            .iter()
+            .map(|row| SegRowRef {
+                seg: narrowed.seg,
+                row,
+                source_path: Some(narrowed.source_path),
+            })
+            .collect();
+        Some(
+            collect_top_k(views, topk_keep(k), |a, b| order_cmp(a, b, clauses))
+                .into_iter()
+                .map(|view| view.row)
+                .collect(),
+        )
     }
 
     /// Segment indices sorted by source path (then line) — matches the legacy
@@ -911,21 +1059,26 @@ impl ColumnarStorage {
         }
     }
 
-    /// Materialise one segment's matching rows: enrichment-posting prefilter →
-    /// row materialisation → usage-count stamping → per-segment WHERE filter →
-    /// fetch-budget trim.  Returns `None` to skip the segment (missing data or
-    /// empty result).
-    fn materialize_one_segment(
+    /// Narrow one segment to the rows worth building, without building any.
+    ///
+    /// This is everything about a segment that can be decided from its stored
+    /// columns: the enrichment-posting prefilter, then the residual `WHERE`
+    /// split into the half a row view can answer — applied here — and the half
+    /// that has to wait for a built row. Building a row is the dominant cost of
+    /// a filtered scan, and a row the predicate is going to reject is a row that
+    /// never needed building.
+    ///
+    /// Returns `None` when the segment contributes nothing: no rows selected for
+    /// it, its reader or metadata missing, or nothing surviving the prefilter.
+    fn narrow_one_segment(
         &self,
         seg_idx: u32,
         by_segment: &HashMap<u32, RoaringBitmap>,
         clauses: &Clauses,
-        fetch_cap: Option<usize>,
-        results_len: usize,
         seg_predicates: &[crate::ir::Predicate],
-    ) -> Option<Vec<SymbolMatch>> {
+    ) -> Option<NarrowedSegment<'_>> {
         let local_rows = by_segment.get(&seg_idx)?;
-        let seg = self.segments().get(seg_idx as usize)?;
+        let seg: &SegmentReader = self.segments().get(seg_idx as usize)?;
         let seg_meta = self.overlay().segments().get(seg_idx as usize)?;
 
         // Stage 3a — narrow the local row set using per-segment enrichment
@@ -937,16 +1090,15 @@ impl ColumnarStorage {
         }
 
         // Stage 3b — test the residual WHERE against the segment's columns and
-        // materialise only the rows that survive it.  Building a row is the
-        // dominant cost of a filtered scan, and a row the predicate is going to
-        // reject is a row that never needed building.
+        // keep only the rows that survive it.
         //
         // `late` holds what a row view cannot answer, and it is not dropped:
         // every predicate is in exactly one of the two halves and `late` runs
         // against the built rows below, exactly as the whole set used to.
         let source_path = seg_meta.source_path.as_path();
         let (early, late) = split_seg_predicates(seg, seg_predicates, true);
-        let narrowed = if early.is_empty() {
+
+        let rows: RoaringBitmap = if early.is_empty() {
             narrowed
         } else {
             narrowed
@@ -963,25 +1115,49 @@ impl ColumnarStorage {
                 })
                 .collect()
         };
-        if narrowed.is_empty() {
+        if rows.is_empty() {
             return None;
         }
 
-        // Pass the relative source path so IN/EXCLUDE glob matching in
-        // apply_clauses works against the same relative paths the legacy backend
-        // stores.  Do NOT join with worktree_root here.
-        let mut seg_results = seg.materialize_rows(&narrowed, Some(source_path));
+        Some(NarrowedSegment {
+            seg,
+            source_path,
+            rows,
+            late,
+        })
+    }
+
+    /// Build one narrowed segment's rows: row materialisation → usage-count
+    /// stamping → the residual WHERE that needed a built row → fetch-budget
+    /// trim.
+    fn materialize_one_segment(
+        &self,
+        narrowed: &NarrowedSegment<'_>,
+        clauses: &Clauses,
+        fetch_cap: Option<usize>,
+        results_len: usize,
+    ) -> Vec<SymbolMatch> {
+        // Choose the rows worth building before building any of them, where the
+        // query lets that be decided from the columns.
+        let pruned = Self::topk_rows_of_segment(narrowed, clauses);
+        let rows = pruned.as_ref().unwrap_or(&narrowed.rows);
+
+        let mut seg_results = narrowed
+            .seg
+            .materialize_rows(rows, Some(narrowed.source_path));
 
         // Stamp workspace usage counts before any predicate or top-K decision:
         // the per-segment `usages_count` column is a stale always-zero legacy
         // field, so WHERE usages / ORDER BY usages must see the overlay value.
+        // That staleness is also why an ordering by `usages` never takes the
+        // pre-materialisation path above — there is nothing there to rank by.
         self.stamp_usage_counts(&mut seg_results);
 
         // Apply the residual WHERE per-segment so that only matching rows count
         // toward the fetch cap and the accumulated working set — non-matching
         // rows are dropped before they can pile up across segments.
-        if !late.is_empty() {
-            crate::filter::apply_where_predicates(&mut seg_results, &late);
+        if !narrowed.late.is_empty() {
+            crate::filter::apply_where_predicates(&mut seg_results, &narrowed.late);
         }
 
         // Trim within this segment to avoid overshooting the fetch budget.
@@ -989,7 +1165,7 @@ impl ColumnarStorage {
             let remaining = cap.saturating_sub(results_len);
             seg_results.truncate(remaining);
         }
-        Some(seg_results)
+        seg_results
     }
 }
 // ─────────────────────────────────────────────────────────────────────────────
