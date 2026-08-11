@@ -324,8 +324,12 @@ pub struct SymbolLocation {
 ///
 /// `total` is the number of rows the clause pipeline was given, not an
 /// independent recount of the corpus, so it is exact only where nothing
-/// stopped reading before the pipeline ran. Each such place says so where it
-/// stops.
+/// stopped reading before the pipeline ran. Two places in the columnar
+/// backend do stop, and their `total` is the size of the page rather than of
+/// the answer: a bare `LIMIT` with no `ORDER BY`, which halts the scan at
+/// `limit + 1` rows, and `ORDER BY name` with a small `LIMIT`, which walks
+/// `limit + offset` keys of the name index and stops. Both are pinned as
+/// `expect_fail` cases in the golden suites, and each says so where it stops.
 #[derive(Debug, Clone, Default)]
 pub struct FindPage {
     /// The rows this query answers with, after `OFFSET` and `LIMIT`.
@@ -423,7 +427,13 @@ pub trait StorageEngine: Send + Sync + 'static {
     /// Returns the page the clauses asked for and, beside it, how many rows
     /// matched before `OFFSET` and `LIMIT` cut that page. `LIMIT` bounds
     /// delivery, never the search, so an implementation must not answer a
-    /// smaller `total` because a smaller page was asked for.
+    /// smaller `total` because a smaller page was asked for — with two
+    /// exceptions in the columnar backend, both places that stop reading and
+    /// can therefore only report what they read: a bare `LIMIT` with no
+    /// `ORDER BY` (`fast_paths::fetch_cap_for`, which halts at `limit + 1`
+    /// rows) and `ORDER BY name` with a small `LIMIT` (the name-index streams,
+    /// which walk `limit + offset` keys and stop). Both are pinned as
+    /// `expect_fail` cases in the golden suites; neither licenses a third.
     fn find_symbols(&self, clauses: &Clauses, root: &Path) -> Result<FindPage>;
 
     /// Execute a `FIND usages OF 'name'` query.

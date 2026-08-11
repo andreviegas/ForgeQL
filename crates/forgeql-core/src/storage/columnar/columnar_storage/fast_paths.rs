@@ -98,17 +98,20 @@ fn row_budget_exceeded(max_rows: usize) -> anyhow::Error {
          completes: every segment is still scanned, but a running \
          top-K trim holds the working set to a few thousand rows, so \
          the answer is the true top K, a full page of it, and a \
-         `total` counting every row that matched rather than only the \
-         ones a page could hold. That needs k <= 1000, no OFFSET, no \
-         GROUP BY and no HAVING — a HAVING runs after the page is \
-         cut, so the trim is not armed alongside one and the scan is \
-         refused here instead. A bare LIMIT is not a substitute — \
-         with no ORDER BY it bounds the scan by truncating it, so \
-         OFFSET pages past rows that were never fetched, duplicates \
-         collapsing afterwards can still shorten the page, and the \
-         reported total is the row count fetched rather than the \
-         number that matched. FORGEQL_FIND_MAX_ROWS overrides the \
-         bound in rows; 0 disables it.",
+         `total` counting every row that matched — except where \
+         <field> is `name` and nothing but an fql_kind equality sits \
+         beside it, which is streamed out of the name index k rows at \
+         a time and reports k as its total, the page itself still \
+         being whole. That needs k <= 1000, no OFFSET, no GROUP BY \
+         and no HAVING — a HAVING runs after the page is cut, so the \
+         trim is not armed alongside one and the scan is refused here \
+         instead. A bare LIMIT is not a substitute — with no ORDER BY \
+         it bounds the scan by truncating it, so OFFSET pages past \
+         rows that were never fetched, duplicates collapsing \
+         afterwards can still shorten the page, and the reported \
+         total is the row count fetched rather than the number that \
+         matched. FORGEQL_FIND_MAX_ROWS overrides the bound in rows; \
+         0 disables it.",
         max_rows.saturating_mul(FIND_BYTES_PER_ROW) / (1024 * 1024 * 1024)
     )
 }
@@ -958,18 +961,7 @@ impl ColumnarStorage {
     ) -> anyhow::Result<(Vec<SymbolMatch>, usize)> {
         let seg_order = self.ordered_segments(by_segment);
         let fetch_cap = Self::fetch_cap_for(clauses);
-        // The running trim discards a row on rank alone, so it is sound only
-        // while every row still in the working set is a distinct answer row.
-        // Each segment's own duplicates are collapsed below before anything is
-        // appended, and a duplicate pair spans two segments only where two
-        // segments carry the same source path — there the per-segment pass
-        // cannot see the pair, so the trim stays off rather than shed a row
-        // that was about to collapse into the survivor it lost to.
-        let topk_trim = if self.overlay().has_duplicate_paths() {
-            None
-        } else {
-            Self::topk_trim_for(clauses)
-        };
+        let topk_trim = self.trim_budget(clauses);
         // Residual WHERE runs per segment so non-matching rows never
         // accumulate.  `count` is excluded: it is only assigned by GROUP BY
         // in Stage 5, so no materialised row carries it yet.
@@ -994,8 +986,13 @@ impl ColumnarStorage {
             else {
                 continue;
             };
-            let (mut seg_results, seg_shed) =
-                self.materialize_one_segment(&narrowed, clauses, fetch_cap, results.len());
+            let (mut seg_results, seg_shed) = self.materialize_one_segment(
+                &narrowed,
+                clauses,
+                topk_trim,
+                fetch_cap,
+                results.len(),
+            );
             shed = shed.saturating_add(seg_shed);
 
             // Collapse this segment's own duplicates before anything can shed
@@ -1071,7 +1068,11 @@ impl ColumnarStorage {
     /// Returns `None` — the segment contributes everything it matched —
     /// whenever the choice could differ from the trim's:
     ///
-    /// - the query is not a bounded top-K, so `topk_trim_for` declined it;
+    /// - `topk_trim` is `None` — the clauses do not allow a bounded top-K, or the
+    ///   workspace is one where shedding on rank is not sound. That decision
+    ///   belongs to [`Self::trim_budget`] and arrives here already made; this
+    ///   function must never re-derive it from `topk_trim_for`, which knows
+    ///   only about the clauses;
     /// - the segment matched no more rows than the trim's own threshold, so
     ///   nothing would have been shed yet;
     /// - a residual `WHERE` still has to run against this segment's built rows,
@@ -1096,8 +1097,9 @@ impl ColumnarStorage {
     fn topk_rows_of_segment(
         narrowed: &NarrowedSegment<'_>,
         clauses: &Clauses,
+        topk_trim: Option<usize>,
     ) -> Option<(RoaringBitmap, usize)> {
-        let k = Self::topk_trim_for(clauses)?;
+        let k = topk_trim?;
         if !narrowed.late.is_empty() {
             return None;
         }
@@ -1187,6 +1189,28 @@ impl ColumnarStorage {
         }
     }
 
+    /// The running trim's budget for this query, or `None` where shedding on
+    /// rank is not sound.
+    ///
+    /// [`Self::topk_trim_for`] answers only whether the *clauses* allow a
+    /// bounded top-K. This adds the workspace condition. Discarding a row on
+    /// rank is sound only while every row still in front of the chooser is a
+    /// distinct answer row, and the collapse that makes that true runs per
+    /// segment — so two segments built from one source path can hold a
+    /// duplicate pair no per-segment collapse can see, and there nothing sheds
+    /// at all.
+    ///
+    /// **Every place that sheds takes this value; none re-derives it.** A
+    /// callee reaching for `topk_trim_for` itself would shed under exactly the
+    /// workspace shape this exists to exclude, and would then report the rows
+    /// it shed as answers when some of them were about to merge into a
+    /// survivor — a `total` counting one answer twice.
+    fn trim_budget(&self, clauses: &Clauses) -> Option<usize> {
+        if self.overlay().has_duplicate_paths() {
+            return None;
+        }
+        Self::topk_trim_for(clauses)
+    }
     /// Running top-K trim budget: set when ORDER BY is present, LIMIT is small,
     /// OFFSET is zero, and both GROUP BY and HAVING are absent.  Bounds peak
     /// result memory to O(K * TOPK_OVER_FETCH) by periodically discarding rows
@@ -1294,12 +1318,13 @@ impl ColumnarStorage {
         &self,
         narrowed: &NarrowedSegment<'_>,
         clauses: &Clauses,
+        topk_trim: Option<usize>,
         fetch_cap: Option<usize>,
         results_len: usize,
     ) -> (Vec<SymbolMatch>, usize) {
         // Choose the rows worth building before building any of them, where the
         // query lets that be decided from the columns.
-        let pruned = Self::topk_rows_of_segment(narrowed, clauses);
+        let pruned = Self::topk_rows_of_segment(narrowed, clauses, topk_trim);
         let (rows, shed) = pruned
             .as_ref()
             .map_or((&narrowed.rows, 0), |(kept, shed)| (kept, *shed));

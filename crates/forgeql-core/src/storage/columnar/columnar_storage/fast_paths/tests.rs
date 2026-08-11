@@ -333,8 +333,12 @@ fn a_predicate_still_to_run_keeps_every_matched_row() {
         rows: rows.clone(),
         late: Vec::new(),
     };
-    let (pruned, _shed) = ColumnarStorage::topk_rows_of_segment(&ready, &clauses)
-        .expect("nine rows is past K * TOPK_OVER_FETCH for K = 1");
+    let (pruned, _shed) = ColumnarStorage::topk_rows_of_segment(
+        &ready,
+        &clauses,
+        ColumnarStorage::topk_trim_for(&clauses),
+    )
+    .expect("nine rows is past K * TOPK_OVER_FETCH for K = 1");
     assert_eq!(
         pruned.len(),
         topk_keep(1) as u64,
@@ -352,7 +356,12 @@ fn a_predicate_still_to_run_keeps_every_matched_row() {
         )],
     };
     assert!(
-        ColumnarStorage::topk_rows_of_segment(&waiting, &clauses).is_none(),
+        ColumnarStorage::topk_rows_of_segment(
+            &waiting,
+            &clauses,
+            ColumnarStorage::topk_trim_for(&clauses)
+        )
+        .is_none(),
         "a predicate still to run must keep every matched row"
     );
 }
@@ -387,7 +396,12 @@ fn nothing_is_shed_below_the_threshold_the_trim_uses() {
         };
         let fires = matched > (k * TOPK_OVER_FETCH) as u64;
         assert_eq!(
-            ColumnarStorage::topk_rows_of_segment(&narrowed, &clauses).is_some(),
+            ColumnarStorage::topk_rows_of_segment(
+                &narrowed,
+                &clauses,
+                ColumnarStorage::topk_trim_for(&clauses)
+            )
+            .is_some(),
             fires,
             "LIMIT {k} over {matched} matched rows: this must shed exactly when \
              the running trim would"
@@ -649,8 +663,12 @@ fn duplicates_collapse_before_the_bounded_choice_sheds_anything() {
         late: Vec::new(),
     };
 
-    let (kept, shed) = ColumnarStorage::topk_rows_of_segment(&narrowed, &clauses)
-        .expect("thirteen rows is past K * TOPK_OVER_FETCH for K = 2");
+    let (kept, shed) = ColumnarStorage::topk_rows_of_segment(
+        &narrowed,
+        &clauses,
+        ColumnarStorage::topk_trim_for(&clauses),
+    )
+    .expect("thirteen rows is past K * TOPK_OVER_FETCH for K = 2");
 
     let mut built = seg.materialize_rows(&kept, Some(source_path));
     let retained = built.len();
@@ -718,7 +736,12 @@ fn a_segment_that_cannot_key_its_own_rows_stays_off_the_view_path() {
         late: Vec::new(),
     };
     assert!(
-        ColumnarStorage::topk_rows_of_segment(&narrowed, &clauses).is_none(),
+        ColumnarStorage::topk_rows_of_segment(
+            &narrowed,
+            &clauses,
+            ColumnarStorage::topk_trim_for(&clauses)
+        )
+        .is_none(),
         "a segment that cannot collapse its own rows must not choose among \
          them either"
     );
