@@ -25,6 +25,14 @@
 //! per-segment bounded choice collapse before they shed as well, and the
 //! sibling case below covers the trim directly by ordering on a field no
 //! stream serves.
+//!
+//! The last two cases are about the one workspace shape in which collapsing
+//! first is still not enough. Two segments built from one source path hold
+//! rows that are duplicates of each other, and neither segment can see that
+//! from inside itself — so a row one of them discards on rank may be the row
+//! the other's copy was going to merge into, and a row it counts as shed may
+//! be counted as shed again by its neighbour. There the engine does not shed
+//! at all. Those cases build that shape and ask what the count comes back as.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -57,25 +65,12 @@ fn seg_path(base: &Path, source_path: &Path, hex: &str) -> PathBuf {
         ))
 }
 
-/// A one-segment index whose lowest-sorting rows are all the same row.
-///
-/// The `dups` rows are byte-distinct nodes agreeing on every field of FIND's
-/// dedupe key, so Stage 4 collapses them to one; their name sorts before every
-/// distinct row, so an ascending ORDER BY puts them at the front of the trim's
-/// retained window.
-fn storage_with_duplicate_heavy_head(dups: usize, distinct: usize) -> (TempDir, ColumnarStorage) {
-    let src = fixtures_dir().join("canonical.cpp");
-    let tmp = TempDir::new().expect("tempdir");
-    let segments_dir = tmp.path().join("segments");
-
-    let content_id: Vec<u8> = vec![0x7A; 8];
-    let hex = content_id.iter().fold(String::new(), |mut acc, b| {
-        use std::fmt::Write as _;
-        let _ = write!(acc, "{b:02x}");
-        acc
-    });
-
-    let mut builder = SegmentBuilder::new("test", &content_id);
+/// Emit the fixture's rows: `dups` rows agreeing on every field of FIND's
+/// dedupe key, so Stage 4 collapses them to one, followed by `distinct` rows
+/// agreeing with nothing. The duplicates sort ahead of the distinct rows on
+/// both `name` and `line`, so an ascending order on either puts the group that
+/// collapses at the front of a trim's retained window.
+fn emit_fixture_rows(builder: &mut SegmentBuilder, dups: usize, distinct: usize) {
     for i in 0..dups {
         let _ = builder.emit_row(SymbolRow {
             name: "aaa_duplicate",
@@ -99,34 +94,101 @@ fn storage_with_duplicate_heavy_head(dups: usize, distinct: usize) -> (TempDir, 
             usages_count: 0,
         });
     }
+}
+
+/// Flush one segment holding the fixture's rows, under a content ID made of
+/// `fill` bytes, and hand that ID back.
+fn flush_segment(segments_dir: &Path, fill: u8, dups: usize, distinct: usize) -> Vec<u8> {
+    let content_id: Vec<u8> = vec![fill; 8];
+    let hex = content_id.iter().fold(String::new(), |mut acc, b| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
+
+    let mut builder = SegmentBuilder::new("test", &content_id);
+    emit_fixture_rows(&mut builder, dups, distinct);
     builder
-        .flush(&seg_path(&segments_dir, Path::new("canonical.cpp"), &hex))
+        .flush(&seg_path(segments_dir, Path::new("canonical.cpp"), &hex))
         .expect("segment flush");
+    content_id
+}
 
-    let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
-    let _ = segment_map.insert(src, content_id);
-    let overlay_path = tmp.path().join("overlays").join("test").join("trim.bin");
-    OverlayBuilder::new("test", segments_dir.clone(), fixtures_dir(), segment_map)
-        .build_and_persist(&overlay_path)
-        .expect("overlay build");
+fn overlay_path(tmp: &TempDir) -> PathBuf {
+    tmp.path().join("overlays").join("test").join("trim.bin")
+}
 
-    let overlay = Overlay::open(&overlay_path).expect("Overlay::open");
+/// Build the overlay over `segment_map` and open a storage on it.
+fn open_storage(
+    tmp: &TempDir,
+    segments_dir: &Path,
+    segment_map: HashMap<PathBuf, Vec<u8>>,
+) -> ColumnarStorage {
+    OverlayBuilder::new(
+        "test",
+        segments_dir.to_path_buf(),
+        fixtures_dir(),
+        segment_map,
+    )
+    .build_and_persist(&overlay_path(tmp))
+    .expect("overlay build");
+
+    let overlay = Overlay::open(&overlay_path(tmp)).expect("Overlay::open");
     let segs: Vec<Arc<SegmentReader>> = overlay
         .segments()
         .iter()
         .map(|m| {
             Arc::new(
-                SegmentReader::open(&seg_path(&segments_dir, &m.source_path, &m.hex_content_id))
+                SegmentReader::open(&seg_path(segments_dir, &m.source_path, &m.hex_content_id))
                     .expect("open segment"),
             )
         })
         .collect();
-    let storage = ColumnarStorage::new_unshared(
+    ColumnarStorage::new_unshared(
         fixtures_dir(),
         segs,
         overlay,
         Arc::new(LanguageRegistry::new(vec![])),
-    );
+    )
+}
+
+/// A one-segment index whose lowest-sorting rows are all the same row.
+fn storage_with_duplicate_heavy_head(dups: usize, distinct: usize) -> (TempDir, ColumnarStorage) {
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let content_id = flush_segment(&segments_dir, 0x7A, dups, distinct);
+
+    let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(fixtures_dir().join("canonical.cpp"), content_id);
+
+    let storage = open_storage(&tmp, &segments_dir, segment_map);
+    (tmp, storage)
+}
+
+/// The same rows again, in TWO segments that report the SAME source path.
+///
+/// A segment is registered under the path of its source, and the overlay
+/// builder relativises that against the worktree root before it becomes the
+/// segment's `source_path` — a key that is already relative passes through
+/// untouched. So the two entries below are distinct keys naming one file, and
+/// the overlay comes out holding two segments whose `source_path` is
+/// `canonical.cpp`. That is the state `Overlay::has_duplicate_paths` reports,
+/// and in it every row of the second segment is a duplicate of a row of the
+/// first, which no single segment can see.
+fn storage_with_one_path_in_two_segments(
+    dups: usize,
+    distinct: usize,
+) -> (TempDir, ColumnarStorage) {
+    let tmp = TempDir::new().expect("tempdir");
+    let segments_dir = tmp.path().join("segments");
+    let first = flush_segment(&segments_dir, 0x7A, dups, distinct);
+    let second = flush_segment(&segments_dir, 0x7B, dups, distinct);
+
+    let mut segment_map: HashMap<PathBuf, Vec<u8>> = HashMap::new();
+    let _ = segment_map.insert(fixtures_dir().join("canonical.cpp"), first);
+    let _ = segment_map.insert(PathBuf::from("canonical.cpp"), second);
+
+    let storage = open_storage(&tmp, &segments_dir, segment_map);
     (tmp, storage)
 }
 
@@ -234,5 +296,95 @@ fn ordering_on_a_field_no_stream_serves_still_returns_a_full_page() {
         DISTINCT + 1,
         "the count beside the page is the size of the answer, so the rows the \
          trim shed on rank are in it and the ones that collapsed are not"
+    );
+}
+
+/// The control for the two-segment fixture, and what makes the case below
+/// about the engine rather than about the fixture: the overlay really does
+/// hold two segments naming one source path, and the answer over them is the
+/// answer over one, because every row of the second collapses into a row of
+/// the first.
+#[test]
+fn two_segments_can_report_one_source_path() {
+    let (tmp, storage) = storage_with_one_path_in_two_segments(DUPS, DISTINCT);
+
+    let overlay = Overlay::open(&overlay_path(&tmp)).expect("Overlay::open");
+    assert_eq!(
+        overlay.segments().len(),
+        2,
+        "the fixture must build two segments"
+    );
+    assert!(
+        overlay.has_duplicate_paths(),
+        "the fixture must reach the overlay state the disarm keys on"
+    );
+
+    let page = storage
+        .find_symbols(&Clauses::default(), Path::new("."))
+        .expect("find_symbols");
+    assert_eq!(
+        page.rows.len(),
+        DISTINCT + 1,
+        "two segments over one path hold one answer, not two"
+    );
+    assert_eq!(page.total, DISTINCT + 1, "and the count agrees with it");
+}
+
+/// Two segments on one path is the one shape in which a segment's own collapse
+/// is not the whole collapse: a row it discards on rank can be the row another
+/// segment's copy was going to merge into, and a row it counts as shed can be
+/// a row another segment counts as shed as well. So nothing may shed there at
+/// all — `trim_budget` returns `None` when the overlay reports duplicate
+/// paths, and both the per-segment bounded choice and the running trim take
+/// that one value rather than deriving their own.
+///
+/// Measured, with the edit that produced the number: delete those three lines
+/// from `trim_budget`, leaving its body as `Self::topk_trim_for(clauses)` (and
+/// `#[allow(clippy::unused_self)]` on it so the lint gate still reaches the
+/// tests), and this case reports `total: 10` against an answer of 7. Each
+/// segment keeps `topk_keep(LIMIT)` of its own seven distinct rows and counts
+/// the remaining three as shed, and the two segments were holding copies of
+/// each other's rows. Nothing else in the tree changes: it is the only case
+/// that notices, because the unit tests in `fast_paths/tests.rs` pass
+/// `topk_trim_for` to the bounded choice directly, which is the ungated value.
+///
+/// The mirror direction is not pinned, and cannot be pinned by asking for an
+/// answer: disarm unconditionally and this still reports 7, because refusing
+/// to shed only ever keeps rows the answer already holds. What that costs is
+/// peak memory on a large scan, which no assertion on a page can see.
+#[test]
+fn duplicate_paths_disarm_the_shedders_so_the_count_stays_honest() {
+    let (_tmp, storage) = storage_with_one_path_in_two_segments(DUPS, DISTINCT);
+
+    let clauses = Clauses {
+        order_by: Some(OrderBy {
+            field: "line".to_owned(),
+            direction: SortDirection::Asc,
+        }),
+        limit: Some(LIMIT),
+        ..Clauses::default()
+    };
+    let page = storage
+        .find_symbols(&clauses, Path::new("."))
+        .expect("find_symbols");
+    let names: Vec<&str> = page.iter().map(|r| r.name.as_str()).collect();
+
+    assert_eq!(
+        page.rows.len(),
+        LIMIT,
+        "ORDER BY line LIMIT {LIMIT} returned a short page: {names:?}"
+    );
+    let unique: HashSet<&str> = names.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        LIMIT,
+        "the page must hold {LIMIT} distinct rows, got {names:?}"
+    );
+    assert_eq!(
+        page.total,
+        DISTINCT + 1,
+        "the count is the size of the answer, and a row shed once by every \
+         segment holding a copy of it is counted more times than the answer \
+         holds rows"
     );
 }

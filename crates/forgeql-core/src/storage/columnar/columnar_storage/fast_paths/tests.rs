@@ -1,4 +1,14 @@
 //! Tests for the module-level helpers in [`super`].
+//!
+//! These call the helpers directly, and the bounded per-segment choice is
+//! called here with `topk_trim_for` — the ungated budget — on purpose, so that
+//! each case sets the value it is testing against. That is deliberate, and it
+//! has a cost worth stating: what the engine passes is `trim_budget`, which
+//! first refuses to shed at all when the overlay reports duplicate source
+//! paths, and no case in this file can observe that refusal. The one that can
+//! is `duplicate_paths_disarm_the_shedders_so_the_count_stays_honest` in
+//! `tests/topk_trim_before_dedupe.rs`; it needs two segments over one path to
+//! exist before it can ask anything, which is why it lives outside this file.
 
 use super::*;
 use crate::ir::Predicate;
