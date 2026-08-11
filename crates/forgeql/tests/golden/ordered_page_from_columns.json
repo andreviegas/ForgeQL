@@ -22,9 +22,9 @@
   },
   {
    "name": "a_predicate_no_view_can_answer_keeps_the_page_on_the_built_path",
-   "description": "The ground-truth case with one character changed: LIMIT 5 instead of LIMIT 1001, so a bounded top-K is armed. Its page is still built the old way, and the reason is the exclusion for a predicate a row view cannot answer: WHERE lines > 150 cannot be decided from the columns of a segment that carries no lines column at all, so it is left to run against the built rows, and a row discarded on rank alone might have been the one that survived it. The page must be the first five of the ground truth either way. Keep this passing alongside the case below: the two differ in whether a residual predicate is present and in nothing else, so together they say the exclusion changes the work and not the answer.",
+   "description": "The case below with one clause added, and that clause is the whole difference. A regular expression is handed to the filter that runs on built rows unconditionally -- it is cheaper compiled once for a batch than once per row -- so `name MATCHES '.'` is a predicate no row view can answer, on every segment, whatever columns it holds. A row discarded on rank alone might have been the one that survived it, so the ranking is not allowed to run and every matched row is built. The predicate matches every non-empty name, so the page is the same page: this pair says the exclusion changes the work and not the answer. An earlier draft used WHERE lines > 150 here and was wrong about why it stayed on the built path -- `lines` is answerable from the column wherever a segment stores one, and the real gate was that the surviving row count fell below the trim's threshold.",
    "use": "forgeql-pub.frozen",
-   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE lines > 150 ORDER BY lines DESC LIMIT 5",
+   "fql": "FIND symbols WHERE fql_kind = 'function' WHERE name MATCHES '.' ORDER BY lines DESC LIMIT 5",
    "assert": {
     "row_count": 5,
     "rows": [
@@ -54,7 +54,7 @@
   },
   {
    "name": "an_ordering_the_columns_cannot_rank_still_answers",
-   "description": "ORDER BY usages is excluded from the column-ranked path by construction, and this case has no other disqualifier -- no residual predicate, an ordering field every segment nominally carries -- so it exercises the exclusion itself. The per-segment usages column is a stale always-zero legacy field and the real workspace count is stamped onto a row only after it is built, so a row view cannot rank by it at all. A regression that let this query onto the column path would rank by a column of zeroes and return five arbitrary rows in tie-breaker order; these five are the most-used symbols in the corpus at 1544 uses each, ordered by the name/line/path tie-breakers among themselves, so both the membership and the order have to survive.",
+   "description": "ORDER BY usages is excluded from the column-ranked path by construction, and this case has no other disqualifier -- no residual predicate, an ordering field every segment nominally carries -- so it exercises the exclusion itself. The per-segment usages column is a stale always-zero legacy field and the real workspace count is stamped onto a row only after it is built, so a row view is not allowed to see it at all: it reports the field absent rather than zero. A regression admitting this query to the column path would therefore rank every row equal and return five arbitrary rows in tie-breaker order. These five are the most-used symbols in the corpus at 1544 uses each, so it is the tie-breakers that order them among themselves -- membership and order both have to survive, and the membership is what a ranking blind to usages would lose.",
    "use": "forgeql-pub.frozen",
    "fql": "FIND symbols WHERE fql_kind = 'function' ORDER BY usages DESC LIMIT 5",
    "assert": {

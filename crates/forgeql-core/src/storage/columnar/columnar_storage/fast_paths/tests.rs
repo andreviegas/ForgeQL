@@ -295,8 +295,8 @@ fn a_segment_that_cannot_rank_its_own_rows_is_kept_off_the_view_path() {
     assert!(
         !segment_ranks_from_columns(&seg, "usages"),
         "the usages column is a stale zero the workspace count replaces after \
-         materialisation, so the view would rank by zero where the built row \
-         ranks by the real count"
+         materialisation, so the view reports it absent -- not zero -- where the \
+         built row reports the real count"
     );
     assert!(
         !segment_ranks_from_columns(&seg, "node_id"),
